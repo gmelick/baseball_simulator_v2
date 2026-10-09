@@ -282,6 +282,27 @@ THREE_WAY_GAME_MARKET_TYPES: tuple[str, ...] = tuple(
     m for m in GAME_MARKET_TYPES if GAME_MARKET_KIND[m] == "three_way"
 )
 
+#: SIM-546, the fifteen markets on the betting card: market_type → the plain
+#: name a reader sees. The API serves these names, so the card and the logs
+#: say the same words.
+GAME_MARKET_NAMES: dict[str, str] = {
+    "moneyline": "Moneyline",
+    "runline": "Run line",
+    "total": "Total",
+    "f1_moneyline": "First inning moneyline",
+    "f5_moneyline": "First five moneyline",
+    "f1_total": "First inning total",
+    "f5_total": "First five total",
+    "f1_runline": "First inning run line",
+    "f5_runline": "First five run line",
+    "team_total_home": "Home team total",
+    "team_total_away": "Away team total",
+    "f5_team_total_home": "Home team first five total",
+    "f5_team_total_away": "Away team first five total",
+    "first_to_score": "First team to score",
+    "first_inning_run": "A run in the first inning",
+}
+
 #: The odds fields a ``get_odds`` dict carries, in the ``raw.game_odds`` column
 #: order. Every provider returns all of them (``None`` when unresolved).
 GAME_ODDS_FIELDS: tuple[str, ...] = (
@@ -842,6 +863,7 @@ __all__ = [
     "GAME_MARKET_SEGMENT",
     "GAME_MARKET_SIDE",
     "THREE_WAY_GAME_MARKET_TYPES",
+    "GAME_MARKET_NAMES",
     "GAME_ODDS_FIELDS",
     # SIM-555 (2026-09-28): the book vocabulary and the by-book seam
     "BOOK_NAMES",

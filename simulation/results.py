@@ -136,6 +136,26 @@ class GameSimSummary:
     confidence_level: float = 0.95
     #: The CI method (matches each ``ConfidenceInterval.method``).
     ci_method: str = "normal"
+    #: SIM-546, the inning grid: ``(home_cells, away_cells)`` per iteration, in
+    #: input order. A cell is one team's runs in one inning; ``None`` marks a
+    #: half the game never played. This is the light form
+    #: ``SegmentRuns.from_inning_grids`` reads to price the segment and team
+    #: markets. ``None`` when any result carried no grid (a result built by
+    #: hand in a test). Keep this field LAST: a summary pickled before it
+    #: existed restores without it, and ``__getattr__`` below then reads None.
+    inning_grids: list[tuple[list[int | None], list[int | None]]] | None = None
+
+    def __getattr__(self, name: str) -> object:
+        """Read ``inning_grids`` as None on a summary pickled before it existed.
+
+        A slot left unset raises ``AttributeError``, and Python then calls
+        this method. A summary cached by the old code has no grid slot, so
+        every reader, ``to_jsonable`` included, gets None for it instead of
+        an error. Every other missing name still raises.
+        """
+        if name == "inning_grids":
+            return None
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     @classmethod
     def from_results(
@@ -180,6 +200,17 @@ class GameSimSummary:
         away_score_ci = _mean_ci(away, z, confidence_level)
         total_score_ci = _mean_ci(total, z, confidence_level)
 
+        # SIM-546: the inning grid of every iteration, or None when any result
+        # lacks one (a grid with a hole would misprice the segment markets).
+        grids: list[tuple[list[int | None], list[int | None]]] = []
+        for r in results:
+            home_cells = getattr(r, "home_by_inning", None)
+            away_cells = getattr(r, "away_by_inning", None)
+            if home_cells is None or away_cells is None:
+                break
+            grids.append((list(home_cells), list(away_cells)))
+        inning_grids = grids if len(grids) == n else None
+
         return cls(
             n_iterations=n,
             home_win_pct=home_win_pct,
@@ -202,6 +233,7 @@ class GameSimSummary:
             simulated_at=simulated_at or datetime.now(UTC),
             confidence_level=float(confidence_level),
             ci_method="normal",
+            inning_grids=inning_grids,
         )
 
 

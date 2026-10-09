@@ -381,8 +381,21 @@ def market_outcome(
     return 1 if margin > 0 else 0
 
 
+def segment_runs_from_summary(summary: Any) -> SegmentRuns | None:
+    """The ``SegmentRuns`` of a ``GameSimSummary``, or None when it has no grid.
+
+    SIM-546, the inning grid: the runner's summary keeps each iteration's runs
+    per inning (``inning_grids``). A summary built by hand in a test, or one
+    pickled before the grid existed, has none; the caller then prices the
+    full-game markets only.
+    """
+    grids = getattr(summary, "inning_grids", None)
+    return None if not grids else SegmentRuns.from_inning_grids(grids)
+
+
 __all__ = [
     "SegmentRuns",
+    "segment_runs_from_summary",
     "FIRST_FIVE_INNINGS",
     "HOME_FIRST",
     "AWAY_FIRST",

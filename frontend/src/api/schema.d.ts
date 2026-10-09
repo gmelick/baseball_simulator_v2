@@ -219,8 +219,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Per-market edge reports (moneyline / total / run-line)
-         * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (moneyline / total / runline, both sides each) off the GameSimSummary + market odds. Odds come from the injected query params when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book); else the deterministic mock provider. odds_source flags each market: injected, stored or mock. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.
+         * Per-market edge reports (the fifteen game markets)
+         * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (SIM-546: the fifteen game markets by default, every side of each) off the GameSimSummary + market odds. The three full-game markets keep their labels (moneyline, total, run_line); every segment or team market's label is its market type. Odds come from the injected query params or the prices document when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book); else the deterministic mock provider. odds_source flags each market: injected, stored or mock. market_names gives each label its plain name. A cached summary with no inning grid prices the full-game markets only. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
          */
         get: operations["get_game_edges_api_betting_games__game_pk__edges_get"];
         put?: never;
@@ -260,7 +260,7 @@ export interface paths {
         };
         /**
          * Ranked +EV bet-signal recommendations
-         * @description Build the per-market EdgeReports (as /edges, with the same injected / stored / mock odds sources), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.
+         * @description Build the per-market EdgeReports (as /edges, with the same injected / stored / mock odds sources and the same prices document; SIM-546: the fifteen game markets by default, a tie side included), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. The segment and team markets' probabilities are not calibrated. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
          */
         get: operations["get_game_signals_api_betting_games__game_pk__signals_get"];
         put?: never;
@@ -1189,6 +1189,10 @@ export interface components {
             };
             /** Game Pk */
             game_pk: number;
+            /** Market Names */
+            market_names?: {
+                [key: string]: string;
+            };
             /** Markets */
             markets?: string[];
             /** N Iterations */
@@ -1198,6 +1202,10 @@ export interface components {
                 [key: string]: string;
             };
             run_line_pricing?: components["schemas"]["RunLinePricingModel"] | null;
+            /** Run Line Pricing By Label */
+            run_line_pricing_by_label?: {
+                [key: string]: components["schemas"]["RunLinePricingModel"];
+            };
         };
         /** EngineCatalogEntry */
         EngineCatalogEntry: {
@@ -2241,6 +2249,10 @@ export interface components {
             };
             /** Game Pk */
             game_pk: number;
+            /** Market Names */
+            market_names?: {
+                [key: string]: string;
+            };
             /** N Iterations */
             n_iterations: number;
             /** Odds Source */
@@ -2248,6 +2260,10 @@ export interface components {
                 [key: string]: string;
             };
             run_line_pricing?: components["schemas"]["RunLinePricingModel"] | null;
+            /** Run Line Pricing By Label */
+            run_line_pricing_by_label?: {
+                [key: string]: components["schemas"]["RunLinePricingModel"];
+            };
             /** Signals */
             signals?: components["schemas"]["BetSignalModel"][];
         };
@@ -3061,7 +3077,7 @@ export interface operations {
                 base_seed?: number | null;
                 /** @description Consult/populate the sim-result cache */
                 use_cache?: boolean;
-                /** @description Comma-separated subset of moneyline,total,runline (default all) */
+                /** @description Comma-separated subset of the fifteen game markets (moneyline, runline, total, f1_moneyline, f5_moneyline, f1_total, f5_total, f1_runline, f5_runline, team_total_home, team_total_away, f5_team_total_home, f5_team_total_away, first_to_score, first_inning_run); default all fifteen */
                 markets?: string | null;
                 /** @description Injected home moneyline (American) */
                 home_ml?: number | null;
@@ -3081,6 +3097,8 @@ export interface operations {
                 run_line?: number | null;
                 /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's) */
                 away_run_line?: number | null;
+                /** @description A JSON document of injected prices keyed by market type, e.g. {"f5_total": {"over_ml": -110, "under_ml": -110, "line": 4.5}}. A moneyline-kind market takes home_ml and away_ml; a three-way market those and draw_ml; a total kind over_ml, under_ml and line (first_inning_run is always 0.5); a run line home_ml, away_ml, home_line and away_line. A market named here is priced from it alone (odds_source 'injected'). 422 on an unknown market or field, a missing or non-numeric field, or a market also given by the named params */
+                prices?: string | null;
             };
             header?: never;
             path: {
@@ -3155,7 +3173,7 @@ export interface operations {
                 base_seed?: number | null;
                 /** @description Consult/populate the sim-result cache */
                 use_cache?: boolean;
-                /** @description Comma-separated subset of moneyline,total,runline (default all) */
+                /** @description Comma-separated subset of the fifteen game markets (moneyline, runline, total, f1_moneyline, f5_moneyline, f1_total, f5_total, f1_runline, f5_runline, team_total_home, team_total_away, f5_team_total_home, f5_team_total_away, first_to_score, first_inning_run); default all fifteen */
                 markets?: string | null;
                 /** @description Edge noise floor (gate) */
                 min_edge?: number;
@@ -3183,6 +3201,8 @@ export interface operations {
                 run_line?: number | null;
                 /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's) */
                 away_run_line?: number | null;
+                /** @description A JSON document of injected prices keyed by market type, e.g. {"f5_total": {"over_ml": -110, "under_ml": -110, "line": 4.5}}. A moneyline-kind market takes home_ml and away_ml; a three-way market those and draw_ml; a total kind over_ml, under_ml and line (first_inning_run is always 0.5); a run line home_ml, away_ml, home_line and away_line. A market named here is priced from it alone (odds_source 'injected'). 422 on an unknown market or field, a missing or non-numeric field, or a market also given by the named params */
+                prices?: string | null;
             };
             header?: never;
             path: {

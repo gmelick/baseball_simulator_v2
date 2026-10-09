@@ -7,8 +7,10 @@ Routes (prefix ``/api/betting``):
 
     GET  /api/betting/games/{game_pk}/edges          (SIM-367/SIM-339)
         run (or reuse) a Monte-Carlo sim for the game -> build the per-market
-        EdgeReports (moneyline / total / run-line) from the GameSimSummary + the
-        market odds -> return them as a list of EdgeReportModel.
+        EdgeReports from the GameSimSummary + the market odds -> return them as
+        a list of EdgeReportModel. SIM-546: the fifteen game markets, the
+        three full-game markets (moneyline / total / run-line) and the twelve
+        segment and team markets (see "THE FIFTEEN GAME MARKETS" below).
 
     GET  /api/betting/games/{game_pk}/signals        (SIM-369)
         build the same EdgeReports, then run them through
@@ -144,15 +146,42 @@ response's ``run_line_pricing`` says which shape was priced. The line-movement a
 CLV reads apply the same rule per quote. They compare only the SAME bet (see
 ``betting.line_movement``).
 
+THE FIFTEEN GAME MARKETS (SIM-546)
+---------------------------------
+/edges and /signals price every market in ``pipeline.odds_provider.GAME_MARKET_TYPES``
+by default; ``?markets=`` narrows. The three full-game markets are priced as
+above and keep their labels (``moneyline``, ``total``, ``run_line``). The twelve
+segment and team markets (the first-inning and first-five moneyline, total and
+run line; each team's full-game and first-five total; the first team to score;
+a run in the first inning) are priced from the summary's inning grid
+(``simulation.game_market_distributions``). Each of their reports carries its
+market type as its label. One table, generated from the market's kind, names
+each market's sides and columns (:data:`_STORED_SIDE_COLUMNS`). A three-way
+market (the first-inning and first-five moneylines) has a third side, the tie
+(``draw``); its three prices de-vig together. A segment run line listed as two
+separate bets reads its margin from the segment's own total first. A cached
+summary with no inning grid (one from before the change) prices the
+full-game markets only. The response names each market (``market_names``) and
+says how every run line was priced (``run_line_pricing_by_label``). None of the
+twelve probabilities is calibrated.
+
+A caller injects prices for any of the fifteen through one query param,
+``prices``: a JSON document keyed by market type (:func:`_parse_prices`). A
+market named there is priced from it alone (``injected``). A market both in the
+document and in the named params is a 422, like every other fault in it.
+
 Owner: Backend Developer + Betting Analyst (SIM-367 / SIM-368 / SIM-369).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -173,11 +202,17 @@ from api.schemas import (
     LineMovementModel,
 )
 from betting.bet_signal import BetSignalConfig, bet_signals_from_edges
+
+# SIM-546, the segment markets: this import names betting/ code new with them
+# (the three-way builder, the samples builder, the tie side MarketSide.DRAW).
+# The app imports betting/ from its image, so rebuild the image BEFORE this
+# file lands in the running app (the deploy order of the design's section 8).
 from betting.clv_engine import (
     EdgeReport,
     MarketSide,
     OddsQuote,
     TwoWayMarket,
+    _build_edge_report,
     american_to_decimal,
     devig_one_sided,
     expected_value,
@@ -187,6 +222,8 @@ from betting.clv_engine import (
     run_line_bet_cover_prob,
     run_line_edge_report,
     run_line_is_pair,
+    samples_over_under_edge_report,
+    three_way_edge_report,
     total_over_under_edge_report,
 )
 from betting.line_movement import fetch_line_movement
@@ -195,6 +232,12 @@ from betting.line_movement import fetch_line_movement
 # bind-mounts. The app imports betting/ from its image, so a new betting/ name
 # imported here would break the running app until the image is rebuilt.
 from pipeline.odds_provider import (
+    FULL_GAME_MARKET_TYPES,
+    GAME_MARKET_KIND,
+    GAME_MARKET_NAMES,
+    GAME_MARKET_SEGMENT,
+    GAME_MARKET_SIDE,
+    GAME_MARKET_TYPES,
     GRADED_BOOK_PREFERENCE,
     STORED_BOOK_FILTER_SQL,
     bettable_labels,
@@ -204,6 +247,11 @@ from pipeline.odds_provider import (
 )
 from pipeline.odds_row_guard import check_row
 from simulation.batch_runner import GameSpec
+from simulation.game_market_distributions import (
+    SegmentRuns,
+    segment_runs_from_summary,
+    side_probabilities,
+)
 from simulation.win_probability import IDENTITY_CALIBRATION, WinProbability, win_probability
 
 log = logging.getLogger("api.routes.betting")
@@ -211,8 +259,36 @@ log = logging.getLogger("api.routes.betting")
 router = APIRouter(prefix="/api/betting", tags=["betting"])
 
 #: The valid market_type values line-movement understands (mirrors the
-#: betting.line_movement _MARKET_SIDES set / the Alembic-0003 CHECK).
+#: betting.line_movement _MARKET_SIDES set / the Alembic-0003 CHECK). SIM-546:
+#: the line-movement and CLV reads keep these three; /edges and /signals price
+#: every game market (:data:`_EDGE_MARKET_TYPES`).
 _VALID_MARKET_TYPES = ("moneyline", "runline", "total")
+
+#: SIM-546: the markets /edges and /signals price — every game market the book
+#: posts, in the vocabulary's order. The default request prices all fifteen.
+_EDGE_MARKET_TYPES: tuple[str, ...] = GAME_MARKET_TYPES
+
+#: SIM-546: the report label of each full-game market. A segment or team
+#: market's label is its market type; the three full-game labels predate it.
+_FULL_GAME_LABELS: dict[str, str] = {
+    "moneyline": "moneyline",
+    "total": "total",
+    "runline": "run_line",
+}
+
+#: SIM-546: each segment's total of both teams (``game`` -> ``total``,
+#: ``f5`` -> ``f5_total``). A run line listed as two separate bets reads its
+#: reference margin from its own segment's total first.
+_SEGMENT_TOTAL_OF: dict[str, str] = {
+    GAME_MARKET_SEGMENT[m]: m
+    for m in GAME_MARKET_TYPES
+    if GAME_MARKET_KIND[m] == "total" and GAME_MARKET_SIDE[m] is None
+}
+
+
+def _report_label(market: str) -> str:
+    """SIM-546: the label a market's reports carry (``runline`` -> ``run_line``)."""
+    return _FULL_GAME_LABELS.get(market, market)
 
 
 # ---------------------------------------------------------------------------
@@ -281,18 +357,19 @@ _STARTED_LINE_TYPES: tuple[str, ...] = ("closing",)
 #: SIM-555: the game's status (``$1`` = game_pk). No row = not in ``Preview``.
 _SQL_GAME_STATUS = "SELECT status FROM raw.games WHERE game_pk = $1"
 
-#: SIM-555: the latest usable row of each book for each full-game market of a
-#: game: one-book rows only (``bp:<id>``), the listed sportsbooks only (never
-#: the blend, a daily-fantasy app, an exchange, a prediction market or a book
-#: the vocabulary does not list), the allowed line types only. ``$2`` is the
-#: market list, ``$3`` the sportsbook labels
+#: SIM-555: the latest usable row of each book for each requested game market
+#: of a game: one-book rows only (``bp:<id>``), the listed sportsbooks only
+#: (never the blend, a daily-fantasy app, an exchange, a prediction market or a
+#: book the vocabulary does not list), the allowed line types only. ``$2`` is
+#: the market list (:func:`_stored_read_markets`), ``$3`` the sportsbook labels
 #: (:func:`pipeline.odds_provider.bettable_labels`), ``$4`` the allowed line
 #: types (:func:`_usable_line_types`). A closing row sorts before any current
-#: row of the same book.
+#: row of the same book. SIM-546: the read selects ``draw_ml``, the tie price
+#: of a three-way market.
 _SQL_STORED_GAME_ODDS = f"""
     SELECT DISTINCT ON (market_type, book)
            market_type, book, line_type, fetched_at,
-           home_ml, away_ml,
+           home_ml, away_ml, draw_ml,
            home_spread, home_spread_ml, away_spread, away_spread_ml,
            total_line, over_ml, under_ml
     FROM raw.game_odds
@@ -304,11 +381,25 @@ _SQL_STORED_GAME_ODDS = f"""
     ORDER BY market_type, book, (line_type = 'closing') DESC, fetched_at DESC
 """
 
-#: SIM-555: each full-game market's sides as (side, price column, line column).
-#: A moneyline has no line column.
-_STORED_SIDE_COLUMNS: dict[str, tuple[tuple[MarketSide, str, str | None], ...]] = {
+#: A market's sides as (side, price column, line column); a side with no line
+#: column has ``None`` there.
+SideColumns = tuple[tuple[MarketSide, str, str | None], ...]
+
+#: SIM-546: each market KIND's sides (``pipeline.odds_provider.GAME_MARKET_KIND``).
+#: A three-way market prices the tie as a third side. The yes / no market ("a
+#: run in the first inning") is stored as over / under at line 0.5.
+_KIND_SIDE_COLUMNS: dict[str, SideColumns] = {
     "moneyline": ((MarketSide.HOME, "home_ml", None), (MarketSide.AWAY, "away_ml", None)),
+    "three_way": (
+        (MarketSide.HOME, "home_ml", None),
+        (MarketSide.AWAY, "away_ml", None),
+        (MarketSide.DRAW, "draw_ml", None),
+    ),
     "total": (
+        (MarketSide.OVER, "over_ml", "total_line"),
+        (MarketSide.UNDER, "under_ml", "total_line"),
+    ),
+    "yes_no": (
         (MarketSide.OVER, "over_ml", "total_line"),
         (MarketSide.UNDER, "under_ml", "total_line"),
     ),
@@ -318,12 +409,52 @@ _STORED_SIDE_COLUMNS: dict[str, tuple[tuple[MarketSide, str, str | None], ...]] 
     ),
 }
 
+#: SIM-555 / SIM-546: every game market's sides, generated from its kind. The
+#: stored rows, the offered prices and the usability rule all read this one table.
+_STORED_SIDE_COLUMNS: dict[str, SideColumns] = {
+    m: _KIND_SIDE_COLUMNS[GAME_MARKET_KIND[m]] for m in GAME_MARKET_TYPES
+}
+
+#: SIM-546: the fields of each market kind in the ``prices`` document, and the
+#: stored-row column each one fills. Every field is required.
+_DOC_FIELDS: dict[str, dict[str, str]] = {
+    "moneyline": {"home_ml": "home_ml", "away_ml": "away_ml"},
+    "three_way": {"home_ml": "home_ml", "away_ml": "away_ml", "draw_ml": "draw_ml"},
+    "total": {"over_ml": "over_ml", "under_ml": "under_ml", "line": "total_line"},
+    "yes_no": {"over_ml": "over_ml", "under_ml": "under_ml"},
+    "runline": {
+        "home_ml": "home_spread_ml",
+        "away_ml": "away_spread_ml",
+        "home_line": "home_spread",
+        "away_line": "away_spread",
+    },
+}
+
+#: SIM-546: the fields a kind accepts but does not need. The yes / no market
+#: takes a ``line`` and ignores it: the market is always over / under 0.5.
+_DOC_OPTIONAL_FIELDS: dict[str, frozenset[str]] = {"yes_no": frozenset({"line"})}
+
+#: SIM-546: the line a yes / no market is priced at, whatever a row says.
+_YES_NO_LINE = 0.5
+
+#: SIM-546: the named query param each ``prices`` field of a full-game market
+#: stands for. A full-game market in the document is priced through them.
+_NAMED_PARAM_OF: dict[str, dict[str, str]] = {
+    "moneyline": {"home_ml": "home_ml", "away_ml": "away_ml"},
+    "total": {"over_ml": "over_ml", "under_ml": "under_ml", "line": "total_line"},
+    "runline": {
+        "home_ml": "home_rl_ml",
+        "away_ml": "away_rl_ml",
+        "home_line": "run_line",
+        "away_line": "away_run_line",
+    },
+}
+
 #: SIM-555: the injected query params of each market. A market with any of them
-#: is priced from the injected values (and the mock for the rest).
+#: is priced from the injected values (and the mock for the rest). SIM-546: a
+#: segment or team market has no named param; the ``prices`` document injects it.
 _INJECTED_PARAMS: dict[str, tuple[str, ...]] = {
-    "moneyline": ("home_ml", "away_ml"),
-    "total": ("over_ml", "under_ml", "total_line"),
-    "runline": ("home_rl_ml", "away_rl_ml", "run_line", "away_run_line"),
+    m: tuple(_NAMED_PARAM_OF.get(m, {}).values()) for m in GAME_MARKET_TYPES
 }
 
 #: SIM-555: stored rows by market, each list in the graded order (see
@@ -411,7 +542,12 @@ def _stored_rows_by_market(
     line of its market is present, no price is 0 (no such American price) and
     the load guard (:func:`pipeline.odds_row_guard.check_row`) passes it. Each
     market's list is sorted by :func:`_graded_order`: the first row is the
-    graded book's."""
+    graded book's.
+
+    SIM-546: the columns come from the market's kind
+    (:data:`_STORED_SIDE_COLUMNS`). A three-way row needs its tie price too: a
+    row with no ``draw_ml`` is not usable, so the graded row is the first book
+    with a complete row, and with none the market falls to the mock."""
     by_market: dict[str, list[dict[str, Any]]] = {}
     for row in _latest_pregame_rows(rows, line_types):
         market = str(row.get("market_type"))
@@ -461,29 +597,40 @@ def _stored_market(stored: StoredRows | None, market: str) -> _StoredMarket | No
     return _StoredMarket(fair_book=str(graded["book"]), graded=graded, offered=offered)
 
 
-def _stored_reference_margin(stored: StoredRows | None, book: str) -> tuple[float, str]:
+def _reference_order(segment: str) -> tuple[tuple[str, str, str], ...]:
+    """SIM-546 (pure): the two-way markets a run line listed as two separate
+    bets reads its margin from, in order, as (market, price column, price
+    column): the segment's own total, then the full-game total, then the
+    moneyline. The full-game run line reads the total, then the moneyline. The
+    accuracy comparison uses the same order (SIM-549)."""
+    order: list[tuple[str, str, str]] = []
+    if segment != "game":
+        order.append((_SEGMENT_TOTAL_OF[segment], "over_ml", "under_ml"))
+    order.append(("total", "over_ml", "under_ml"))
+    order.append(("moneyline", "home_ml", "away_ml"))
+    return tuple(order)
+
+
+def _stored_reference_margin(
+    stored: StoredRows | None, book: str, segment: str = "game"
+) -> tuple[float, str]:
     """SIM-555 (pure): one book's two-way margin on the game: its total, then its
-    moneyline, then the flat 1.05 (``reference_margin_from_prices``)."""
+    moneyline, then the flat 1.05 (``reference_margin_from_prices``).
+
+    SIM-546: a segment run line (``segment`` ``f1`` or ``f5``) reads the book's
+    own segment total first (:func:`_reference_order`)."""
 
     def own(market: str) -> Mapping[str, Any] | None:
         rows = (stored or {}).get(market) or []
         return next((r for r in rows if r.get("book") == book), None)
 
-    total, moneyline = own("total"), own("moneyline")
-    return reference_margin_from_prices(
-        [
-            (
-                "total",
-                None if total is None else total.get("over_ml"),
-                None if total is None else total.get("under_ml"),
-            ),
-            (
-                "moneyline",
-                None if moneyline is None else moneyline.get("home_ml"),
-                None if moneyline is None else moneyline.get("away_ml"),
-            ),
-        ]
-    )
+    candidates: list[tuple[str, float | None, float | None]] = []
+    for market, col_a, col_b in _reference_order(segment):
+        row = own(market)
+        candidates.append(
+            (market, None, None) if row is None else (market, row.get(col_a), row.get(col_b))
+        )
+    return reference_margin_from_prices(candidates)
 
 
 def _at_offered_price(report: EdgeReport, offered: tuple[float, str] | None) -> EdgeReport:
@@ -498,23 +645,40 @@ def _at_offered_price(report: EdgeReport, offered: tuple[float, str] | None) -> 
     return replace(report, offered_american=price, ev=expected_value(report.sim_prob, price))
 
 
-async def _read_stored_rows(request: Request, game_pk: int) -> dict[str, list[dict[str, Any]]]:
+def _stored_read_markets(markets: Sequence[str]) -> list[str]:
+    """SIM-546 (pure): the market types the stored read asks for, in the
+    vocabulary's order.
+
+    The three full-game markets always (a run line listed as two separate
+    bets reads the total and the moneyline for its margin), every requested
+    market, and the segment's total of a requested segment run line (its
+    margin reads that first)."""
+    wanted = set(FULL_GAME_MARKET_TYPES) | set(markets)
+    for market in markets:
+        if GAME_MARKET_KIND.get(market) == "runline":
+            wanted.add(_SEGMENT_TOTAL_OF[GAME_MARKET_SEGMENT[market]])
+    return [m for m in GAME_MARKET_TYPES if m in wanted]
+
+
+async def _read_stored_rows(
+    request: Request, game_pk: int, markets: Sequence[str] = _VALID_MARKET_TYPES
+) -> dict[str, list[dict[str, Any]]]:
     """SIM-555: the game's usable stored rows by market (see :func:`_stored_rows_by_market`).
 
     Two reads on one connection: the game's status (:data:`_SQL_GAME_STATUS`),
     which sets the usable line types (:func:`_usable_line_types`), then each
-    book's latest usable row of each market. Empty when the app has no pool,
-    the game has no stored row, or a read fails; a failure logs a WARNING and
-    the markets fall back to the mock."""
+    book's latest usable row of each market in ``markets``. Empty when the app
+    has no pool, the game has no stored row, or a read fails; a failure logs a
+    WARNING and the markets fall back to the mock."""
     pool = getattr(request.app.state, "pg_pool", None)
     if pool is None:
         return {}
     try:
         if getattr(pool, "acquire", None) is not None:
             async with pool.acquire() as conn:
-                line_types, rows = await _fetch_stored_rows(conn, game_pk)
+                line_types, rows = await _fetch_stored_rows(conn, game_pk, markets)
         else:
-            line_types, rows = await _fetch_stored_rows(pool, game_pk)
+            line_types, rows = await _fetch_stored_rows(pool, game_pk, markets)
         return _stored_rows_by_market(rows, line_types)
     except Exception as exc:  # the mock is the fallback; the route must not fail
         log.warning(
@@ -525,14 +689,16 @@ async def _read_stored_rows(request: Request, game_pk: int) -> dict[str, list[di
         return {}
 
 
-async def _fetch_stored_rows(conn: Any, game_pk: int) -> tuple[tuple[str, ...], list[Any]]:
+async def _fetch_stored_rows(
+    conn: Any, game_pk: int, markets: Sequence[str] = _VALID_MARKET_TYPES
+) -> tuple[tuple[str, ...], list[Any]]:
     """SIM-555: (the usable line types, the stored rows) of one game, from ``conn``.
 
     Both reads go through ``fetch``, so a direct-connection pool and a
     connection work alike."""
     status_rows = await conn.fetch(_SQL_GAME_STATUS, int(game_pk))
     line_types = _usable_line_types(_status_of(status_rows))
-    args = (int(game_pk), list(_VALID_MARKET_TYPES), bettable_labels(), list(line_types))
+    args = (int(game_pk), list(markets), bettable_labels(), list(line_types))
     rows = await conn.fetch(_SQL_STORED_GAME_ODDS, *args)
     return line_types, list(rows or [])
 
@@ -563,6 +729,238 @@ class _EdgeBuild(NamedTuple):
     price_book: dict[tuple[str, str], str]
     #: SIM-555: market -> the graded book whose row gave the fair probability
     fair_book: dict[str, str]
+    #: SIM-546: report label -> how that run line was priced (all three run lines)
+    run_line_pricing_by_label: dict[str, dict[str, Any]]
+
+
+def _price_run_line(
+    reports: list[EdgeReport],
+    *,
+    label: str,
+    margin_source: Any,
+    h: float,
+    a: float,
+    home_line: float,
+    away_line: float,
+    home_offered: tuple[float, str] | None,
+    away_offered: tuple[float, str] | None,
+    reference: Callable[[], tuple[float, str]],
+) -> dict[str, Any]:
+    """Price both sides of one run line and return how it was priced.
+
+    ``margin_source`` is the summary (the full-game run line) or a raw
+    per-iteration margin array, home minus away (SIM-546: a segment's margin).
+    A pair (the away spread is the negative of the home spread) de-vigs the two
+    prices against each other. Two separate bets (SIM-549) price each bet from
+    its own price over ``reference()``, the book's two-way margin. Every report
+    carries ``label`` and its own side's spread."""
+    if run_line_is_pair(home_line, away_line):
+        _safe_report(
+            reports,
+            lambda: _at_offered_price(
+                replace(
+                    run_line_edge_report(
+                        margin_source,
+                        TwoWayMarket(
+                            side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=home_line)
+                        ),
+                        side=MarketSide.HOME,
+                        line=home_line,
+                    ),
+                    label=label,
+                ),
+                home_offered,
+            ),
+        )
+        # The away report prices at the mirrored home line; it carries the
+        # AWAY team's own spread (it used to carry the home spread).
+        _safe_report(
+            reports,
+            lambda: _at_offered_price(
+                replace(
+                    run_line_edge_report(
+                        margin_source,
+                        TwoWayMarket(
+                            side=MarketSide.AWAY, entry=OddsQuote(side=a, other=h, line=home_line)
+                        ),
+                        side=MarketSide.AWAY,
+                        line=home_line,
+                    ),
+                    line=away_line,
+                    label=label,
+                ),
+                away_offered,
+            ),
+        )
+        return {"shape": "pair", "home_line": home_line, "away_line": away_line}
+    # Two separate bets: each from its own price over the game's two-way margin.
+    margin, source = reference()
+    for side, price, own_line, offered in (
+        (MarketSide.HOME, h, home_line, home_offered),
+        (MarketSide.AWAY, a, away_line, away_offered),
+    ):
+        _safe_report(
+            reports,
+            lambda side=side, price=price, own_line=own_line, offered=offered: (
+                one_sided_edge_report(
+                    label=label,
+                    side=side,
+                    line=own_line,
+                    sim_prob=run_line_bet_cover_prob(margin_source, side, own_line),
+                    offered_american=price if offered is None else offered[0],
+                    fair_prob=devig_one_sided(price, margin),
+                )
+            ),
+        )
+    return {
+        "shape": "two_bets",
+        "home_line": home_line,
+        "away_line": away_line,
+        "reference_margin": margin,
+        "reference_source": source,
+    }
+
+
+def _unstored_reference_margin(
+    game_pk: int,
+    segment: str,
+    named: Mapping[str, float | None],
+    injected: Mapping[str, Mapping[str, float]],
+) -> tuple[float, str]:
+    """The two-way margin of a run line NOT priced from the stored rows.
+
+    The candidates follow :func:`_reference_order`. The full-game total and
+    moneyline read the injected query params, else the mock's prices, as
+    before SIM-546. A segment total reads the ``prices`` document, else the
+    mock's."""
+    candidates: list[tuple[str, float | None, float | None]] = []
+    for market, col_a, col_b in _reference_order(segment):
+        if market in FULL_GAME_MARKET_TYPES:
+            mock = _mock_odds(game_pk, market)
+            params = _NAMED_PARAM_OF[market]
+            price_a = _resolve_price(named.get(params[col_a]), mock, col_a)[0]
+            price_b = _resolve_price(named.get(params[col_b]), mock, col_b)[0]
+            candidates.append((market, price_a, price_b))
+        else:
+            row = injected.get(market) or _mock_odds(game_pk, market)
+            candidates.append((market, row.get(col_a), row.get(col_b)))
+    return reference_margin_from_prices(candidates)
+
+
+def _segment_quote(
+    market: str,
+    *,
+    game_pk: int,
+    stored: StoredRows | None,
+    injected: Mapping[str, Mapping[str, float]],
+) -> tuple[Mapping[str, Any], str, _StoredMarket | None]:
+    """SIM-546: the prices of one segment or team market and where they came from.
+
+    The ``prices`` document's entry when it names the market (no stored row
+    is read for it), else the graded stored row, else the mock. Returns
+    ``(row-shaped prices, odds source, the stored market or None)``."""
+    if market in injected:
+        return injected[market], "injected", None
+    stored_market = _stored_market(stored, market)
+    if stored_market is not None:
+        return stored_market.graded, "stored", stored_market
+    return _mock_odds(game_pk, market), "mock", None
+
+
+def _price_segment_market(
+    reports: list[EdgeReport],
+    market: str,
+    runs: SegmentRuns,
+    quote: Mapping[str, Any],
+    stored_market: _StoredMarket | None,
+    reference: Callable[[], tuple[float, str]],
+) -> dict[str, Any] | None:
+    """SIM-546: price every side of one segment or team market.
+
+    The label of each report is the market type (``f5_total``). The simulated
+    probabilities come from the per-iteration segment runs
+    (:mod:`simulation.game_market_distributions`); none is calibrated. Returns
+    how a run line was priced, else None."""
+    kind = GAME_MARKET_KIND[market]
+    sides = _STORED_SIDE_COLUMNS[market]
+
+    def offered(side: MarketSide) -> tuple[float, str] | None:
+        return None if stored_market is None else stored_market.offered[side]
+
+    if kind in ("total", "yes_no"):
+        line = _YES_NO_LINE if kind == "yes_no" else float(quote["total_line"])
+        over, under = float(quote["over_ml"]), float(quote["under_ml"])
+        samples = runs.market_samples(market)
+        for side, own, other in ((MarketSide.OVER, over, under), (MarketSide.UNDER, under, over)):
+            _safe_report(
+                reports,
+                lambda side=side, own=own, other=other: _at_offered_price(
+                    samples_over_under_edge_report(
+                        samples,
+                        TwoWayMarket(side=side, entry=OddsQuote(side=own, other=other, line=line)),
+                        side=side,
+                        label=market,
+                    ),
+                    offered(side),
+                ),
+            )
+        return None
+    if kind == "three_way":
+        home, away, draw = (float(quote[price]) for _, price, _ in sides)
+        p_home, p_away, p_draw = side_probabilities(runs, market)
+        for side, _price, _line in sides:
+            _safe_report(
+                reports,
+                lambda side=side: _at_offered_price(
+                    three_way_edge_report(
+                        p_home,
+                        p_away,
+                        p_draw,
+                        label=market,
+                        side=side,
+                        home_ml=home,
+                        away_ml=away,
+                        draw_ml=draw,
+                    ),
+                    offered(side),
+                ),
+            )
+        return None
+    if kind == "moneyline":
+        # The first team to score: a two-way side market, uncalibrated.
+        home, away = float(quote["home_ml"]), float(quote["away_ml"])
+        p_first_home, p_first_away, _p_nobody = side_probabilities(runs, market)
+        for side, sim_p, own, other in (
+            (MarketSide.HOME, p_first_home, home, away),
+            (MarketSide.AWAY, p_first_away, away, home),
+        ):
+            _safe_report(
+                reports,
+                lambda side=side, sim_p=sim_p, own=own, other=other: _at_offered_price(
+                    _build_edge_report(
+                        label=market,
+                        side=side,
+                        line=None,
+                        sim_prob=sim_p,
+                        market=TwoWayMarket(side=side, entry=OddsQuote(side=own, other=other)),
+                    ),
+                    offered(side),
+                ),
+            )
+        return None
+    # A run line over the segment.
+    return _price_run_line(
+        reports,
+        label=market,
+        margin_source=runs.segment_margin(GAME_MARKET_SEGMENT[market]),
+        h=float(quote["home_spread_ml"]),
+        a=float(quote["away_spread_ml"]),
+        home_line=float(quote["home_spread"]),
+        away_line=float(quote["away_spread"]),
+        home_offered=offered(MarketSide.HOME),
+        away_offered=offered(MarketSide.AWAY),
+        reference=reference,
+    )
 
 
 def _build_edge_reports(
@@ -581,10 +979,11 @@ def _build_edge_reports(
     run_line: float | None,
     away_run_line: float | None = None,
     stored: StoredRows | None = None,
+    injected: Mapping[str, Mapping[str, float]] | None = None,
 ) -> _EdgeBuild:
     """Build the EdgeReports for the requested markets off the sim + odds.
 
-    For each requested market the two sides are priced:
+    For each requested market every side is priced:
 
       * **moneyline** -- HOME + AWAY off the SIM-330 :class:`WinProbability`
         (``moneyline_edge_report``), de-vigged against (home_ml, away_ml).
@@ -597,20 +996,34 @@ def _build_edge_reports(
         Two separate bets (SIM-549) price each bet from its own price over
         the book's margin: the total's, then the moneyline's, then a flat 1.05
         (``one_sided_edge_report``).
+      * **the twelve segment and team markets** (SIM-546) -- off the summary's
+        inning grid (:func:`_price_segment_market`), each report labelled with
+        its market type. A summary with no grid skips them and logs one line.
 
-    Prices come from the injected query params when a market has any, else
-    (SIM-555) the ``stored`` rows (:func:`_stored_rows_by_market`) when the
-    market has one, else the mock provider. A stored market takes its fair
-    probability and its lines from the graded book's row, and each side's
-    offered price (and so the EV) from the best stored price at that line. A
-    side whose simulated probability is degenerate (0.0 / 1.0 -- no priceable
-    edge) is skipped via :func:`_safe_report` rather than erroring the
-    endpoint. Returns an :class:`_EdgeBuild`.
+    Prices come from the injected query params when a full-game market has
+    any, else (SIM-555) the ``stored`` rows (:func:`_stored_rows_by_market`)
+    when the market has one, else the mock provider. SIM-546: ``injected`` is
+    the parsed ``prices`` document's segment and team markets
+    (:func:`_parse_prices`); a market in it is priced from it alone. A stored
+    market takes its fair probability and its lines from the graded book's
+    row, and each side's offered price (and so the EV) from the best stored
+    price at that line. A side whose simulated probability is degenerate (0.0
+    / 1.0 -- no priceable edge) is skipped via :func:`_safe_report` rather than
+    erroring the endpoint. Returns an :class:`_EdgeBuild`.
     """
+    injected = injected or {}
     reports: list[EdgeReport] = []
     odds_source: dict[str, str] = {}
     price_book: dict[tuple[str, str], str] = {}
     fair_book: dict[str, str] = {}
+    pricing_by_label: dict[str, dict[str, Any]] = {}
+    named: dict[str, float | None] = {
+        "home_ml": home_ml,
+        "away_ml": away_ml,
+        "over_ml": over_ml,
+        "under_ml": under_ml,
+        "total_line": total_line,
+    }
 
     def note_book(label: str, side: MarketSide, offered: tuple[float, str] | None) -> None:
         if offered is not None:
@@ -710,92 +1123,166 @@ def _build_edge_reports(
         away_offered = None if stored_rl is None else stored_rl.offered[MarketSide.AWAY]
         note_book("run_line", MarketSide.HOME, home_offered)
         note_book("run_line", MarketSide.AWAY, away_offered)
-        if run_line_is_pair(eff_line, away_line):
-            # A pair: the two prices de-vig against each other, as before.
-            _safe_report(
-                reports,
-                lambda: _at_offered_price(
-                    run_line_edge_report(
-                        summary,
-                        TwoWayMarket(
-                            side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=eff_line)
-                        ),
-                        side=MarketSide.HOME,
-                        line=eff_line,
-                    ),
-                    home_offered,
-                ),
-            )
-            # The away report prices at the mirrored home line; it carries the
-            # AWAY team's own spread (it used to carry the home spread).
-            _safe_report(
-                reports,
-                lambda: _at_offered_price(
-                    replace(
-                        run_line_edge_report(
-                            summary,
-                            TwoWayMarket(
-                                side=MarketSide.AWAY,
-                                entry=OddsQuote(side=a, other=h, line=eff_line),
-                            ),
-                            side=MarketSide.AWAY,
-                            line=eff_line,
-                        ),
-                        line=away_line,
-                    ),
-                    away_offered,
-                ),
-            )
-            run_line_pricing = {"shape": "pair", "home_line": eff_line, "away_line": away_line}
-        else:
-            # Two separate bets: each from its own price over the game's
-            # two-way margin (the total, then the moneyline, then 1.05). A
-            # stored run line reads the graded book's own margin (SIM-555).
-            if stored_rl is not None:
-                margin, source = _stored_reference_margin(stored, stored_rl.fair_book)
-            else:
-                total_mock = _mock_odds(game_pk, "total")
-                ml_mock = _mock_odds(game_pk, "moneyline")
-                margin, source = reference_margin_from_prices(
-                    [
-                        (
-                            "total",
-                            _resolve_price(over_ml, total_mock, "over_ml")[0],
-                            _resolve_price(under_ml, total_mock, "under_ml")[0],
-                        ),
-                        (
-                            "moneyline",
-                            _resolve_price(home_ml, ml_mock, "home_ml")[0],
-                            _resolve_price(away_ml, ml_mock, "away_ml")[0],
-                        ),
-                    ]
-                )
-            for side, price, own_line, offered in (
-                (MarketSide.HOME, h, eff_line, home_offered),
-                (MarketSide.AWAY, a, away_line, away_offered),
-            ):
-                _safe_report(
-                    reports,
-                    lambda side=side, price=price, own_line=own_line, offered=offered: (
-                        one_sided_edge_report(
-                            label="run_line",
-                            side=side,
-                            line=own_line,
-                            sim_prob=run_line_bet_cover_prob(summary, side, own_line),
-                            offered_american=price if offered is None else offered[0],
-                            fair_prob=devig_one_sided(price, margin),
-                        )
-                    ),
-                )
-            run_line_pricing = {
-                "shape": "two_bets",
-                "home_line": eff_line,
-                "away_line": away_line,
-                "reference_margin": margin,
-                "reference_source": source,
-            }
+        # A stored run line reads the graded book's own margin (SIM-555).
+        full_game_reference: Callable[[], tuple[float, str]] = (
+            partial(_stored_reference_margin, stored, stored_rl.fair_book)
+            if stored_rl is not None
+            else partial(_unstored_reference_margin, game_pk, "game", named, injected)
+        )
+        run_line_pricing = _price_run_line(
+            reports,
+            label="run_line",
+            margin_source=summary,
+            h=h,
+            a=a,
+            home_line=eff_line,
+            away_line=away_line,
+            home_offered=home_offered,
+            away_offered=away_offered,
+            reference=full_game_reference,
+        )
+        pricing_by_label["run_line"] = run_line_pricing
 
-    return _EdgeBuild(reports, odds_source, run_line_pricing, price_book, fair_book)
+    segment_markets = [m for m in markets if m not in FULL_GAME_MARKET_TYPES]
+    runs = segment_runs_from_summary(summary) if segment_markets else None
+    if segment_markets and runs is None:
+        log.info(
+            "SIM-546: game %s: the simulation summary has no inning grid; "
+            "the segment and team markets %s are not priced",
+            game_pk,
+            segment_markets,
+        )
+    for market in segment_markets if runs is not None else []:
+        quote, source, stored_market = _segment_quote(
+            market, game_pk=game_pk, stored=stored, injected=injected
+        )
+        odds_source[market] = source
+        if stored_market is not None:
+            fair_book[market] = stored_market.fair_book
+            for side, _price, _line in _STORED_SIDE_COLUMNS[market]:
+                note_book(market, side, stored_market.offered[side])
+        segment = GAME_MARKET_SEGMENT[market]
+        reference: Callable[[], tuple[float, str]] = (
+            partial(_stored_reference_margin, stored, stored_market.fair_book, segment)
+            if stored_market is not None
+            else partial(_unstored_reference_margin, game_pk, segment, named, injected)
+        )
+        pricing = _price_segment_market(reports, market, runs, quote, stored_market, reference)
+        if pricing is not None:
+            pricing_by_label[market] = pricing
+
+    return _EdgeBuild(
+        reports, odds_source, run_line_pricing, price_book, fair_book, pricing_by_label
+    )
+
+
+def _parse_prices(
+    raw: str | None, named: Mapping[str, float | None]
+) -> dict[str, dict[str, float]]:
+    """SIM-546 (pure): the ``prices`` document, validated, as market -> row-shaped prices.
+
+    The document is a JSON object keyed by market type; each entry holds the
+    fields its kind needs (:data:`_DOC_FIELDS`). The returned entry uses the
+    stored-row column names (``total_line``, ``home_spread_ml``, ...), so the
+    pricing code reads a document entry like a stored row. A yes / no market
+    takes an optional ``line`` and is priced at 0.5 whatever it says.
+
+    A 422 names the market and the fault: a document that is not a JSON
+    object, an unknown market, an entry that is not an object, an unknown
+    field, a missing field, a field that is not a finite number, an American
+    price of 0, or a market also given by the named query params (``named``).
+    """
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        doc = json.loads(raw)
+    except ValueError as exc:
+        raise _prices_error(f"prices: the document is not valid JSON ({exc})") from exc
+    if not isinstance(doc, dict):
+        raise _prices_error("prices: the document must be a JSON object keyed by market type")
+    parsed: dict[str, dict[str, float]] = {}
+    for market, entry in doc.items():
+        if market not in GAME_MARKET_KIND:
+            raise _prices_error(
+                f"prices: unknown market {market!r}; expected one of {list(GAME_MARKET_TYPES)}"
+            )
+        kind = GAME_MARKET_KIND[market]
+        if not isinstance(entry, dict):
+            raise _prices_error(f"prices[{market!r}]: the entry must be a JSON object of prices")
+        required = _DOC_FIELDS[kind]
+        optional = _DOC_OPTIONAL_FIELDS.get(kind, frozenset())
+        unknown = [f for f in entry if f not in required and f not in optional]
+        if unknown:
+            raise _prices_error(
+                f"prices[{market!r}]: unknown field(s) {unknown}; "
+                f"the market takes {list(required) + sorted(optional)}"
+            )
+        row: dict[str, float] = {}
+        for field_name, column in required.items():
+            if field_name not in entry:
+                raise _prices_error(f"prices[{market!r}]: missing field {field_name!r}")
+            value = _finite_number(entry[field_name])
+            if value is None:
+                raise _prices_error(
+                    f"prices[{market!r}]: field {field_name!r} is not a number "
+                    f"({entry[field_name]!r})"
+                )
+            if field_name.endswith("_ml") and value == 0.0:
+                raise _prices_error(
+                    f"prices[{market!r}]: field {field_name!r} is 0, which is not an American price"
+                )
+            row[column] = value
+        for field_name in optional:
+            if field_name in entry and _finite_number(entry[field_name]) is None:
+                raise _prices_error(
+                    f"prices[{market!r}]: field {field_name!r} is not a number "
+                    f"({entry[field_name]!r})"
+                )
+        if kind == "yes_no":
+            row["total_line"] = _YES_NO_LINE
+        clash = [p for p in _INJECTED_PARAMS[market] if named.get(p) is not None]
+        if clash:
+            raise _prices_error(
+                f"prices[{market!r}]: the market is also given by the query param(s) "
+                f"{clash}; give it one way"
+            )
+        parsed[market] = row
+    return parsed
+
+
+def _finite_number(value: Any) -> float | None:
+    """SIM-546 (pure): ``value`` as a finite float, or None (a bool, a string,
+    a null, NaN and infinity are not numbers here)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _prices_error(detail: str) -> HTTPException:
+    """SIM-546: the 422 a bad ``prices`` document raises."""
+    return HTTPException(status_code=422, detail=detail)
+
+
+def _split_prices(
+    named: Mapping[str, float | None], doc: Mapping[str, Mapping[str, float]]
+) -> tuple[dict[str, float | None], dict[str, Mapping[str, float]]]:
+    """SIM-546 (pure): fold the ``prices`` document into the request's prices.
+
+    A full-game market in the document fills its named params (it is priced
+    through them, as ``injected``). A segment or team market stays a
+    document entry. Returns ``(named params, segment entries)``."""
+    merged = dict(named)
+    segments: dict[str, Mapping[str, float]] = {}
+    for market, row in doc.items():
+        params = _NAMED_PARAM_OF.get(market)
+        if params is None:
+            segments[market] = row
+            continue
+        fields = _DOC_FIELDS[GAME_MARKET_KIND[market]]
+        for field_name, param in params.items():
+            merged[param] = row[fields[field_name]]
+    return merged, segments
 
 
 async def _priced_edge_reports(
@@ -806,29 +1293,50 @@ async def _priced_edge_reports(
     game_pk: int,
     markets: tuple[str, ...],
     prices: Mapping[str, float | None],
+    doc: Mapping[str, Mapping[str, float]] | None = None,
 ) -> _EdgeBuild:
     """SIM-555: read the stored lines when a requested market needs them, then
-    build the reports. ``prices`` carries the injected query params by name."""
+    build the reports. ``prices`` carries the injected query params by name.
+    SIM-546: ``doc`` is the parsed ``prices`` document (:func:`_parse_prices`);
+    a market it names reads no stored row."""
+    named, injected = _split_prices(prices, doc or {})
     uninjected = [
-        m for m in markets if not _any_given(*(prices.get(p) for p in _INJECTED_PARAMS[m]))
+        m
+        for m in markets
+        if m not in injected and not _any_given(*(named.get(p) for p in _INJECTED_PARAMS[m]))
     ]
-    stored = await _read_stored_rows(request, game_pk) if uninjected else {}
+    stored = (
+        await _read_stored_rows(request, game_pk, _stored_read_markets(markets))
+        if uninjected
+        else {}
+    )
     return _build_edge_reports(
         summary,
         win_prob,
         game_pk=game_pk,
         markets=markets,
-        home_ml=prices.get("home_ml"),
-        away_ml=prices.get("away_ml"),
-        over_ml=prices.get("over_ml"),
-        under_ml=prices.get("under_ml"),
-        total_line=prices.get("total_line"),
-        home_rl_ml=prices.get("home_rl_ml"),
-        away_rl_ml=prices.get("away_rl_ml"),
-        run_line=prices.get("run_line"),
-        away_run_line=prices.get("away_run_line"),
+        home_ml=named.get("home_ml"),
+        away_ml=named.get("away_ml"),
+        over_ml=named.get("over_ml"),
+        under_ml=named.get("under_ml"),
+        total_line=named.get("total_line"),
+        home_rl_ml=named.get("home_rl_ml"),
+        away_rl_ml=named.get("away_rl_ml"),
+        run_line=named.get("run_line"),
+        away_run_line=named.get("away_run_line"),
         stored=stored,
+        injected=injected,
     )
+
+
+def _priced_markets(requested: Sequence[str], built: _EdgeBuild) -> list[str]:
+    """SIM-546 (pure): the requested markets that were priced, in vocabulary order."""
+    return [m for m in GAME_MARKET_TYPES if m in requested and m in built.odds_source]
+
+
+def _market_names(markets: Sequence[str]) -> dict[str, str]:
+    """SIM-546 (pure): report label -> the market's plain name ("First five total")."""
+    return {_report_label(m): GAME_MARKET_NAMES[m] for m in markets}
 
 
 def _side_value(side: Any) -> str:
@@ -844,20 +1352,21 @@ def _books_by_market(fair_book: Mapping[str, str]) -> dict[str, str]:
 def _parse_markets(markets: str | None) -> tuple[str, ...]:
     """Parse the ``markets`` query param (comma-separated) -> a validated tuple.
 
-    Defaults to all three (moneyline,total,runline) when unset. A token not in the
-    valid set is a 422 (a typo'd market should fail loudly, not be silently
-    dropped).
+    SIM-546: defaults to every game market (:data:`_EDGE_MARKET_TYPES`, all
+    fifteen) when unset, and returns the markets in the vocabulary's order. A
+    token not in the valid set is a 422 (a typo'd market should fail loudly,
+    not be silently dropped).
     """
     if not markets:
-        return _VALID_MARKET_TYPES
+        return _EDGE_MARKET_TYPES
     requested = tuple(m.strip() for m in markets.split(",") if m.strip())
-    bad = [m for m in requested if m not in _VALID_MARKET_TYPES]
+    bad = [m for m in requested if m not in _EDGE_MARKET_TYPES]
     if bad:
         raise HTTPException(
             status_code=422,
-            detail=(f"unknown market(s) {bad}; expected a subset of {list(_VALID_MARKET_TYPES)}"),
+            detail=(f"unknown market(s) {bad}; expected a subset of {list(_EDGE_MARKET_TYPES)}"),
         )
-    return requested or _VALID_MARKET_TYPES
+    return tuple(m for m in _EDGE_MARKET_TYPES if m in requested) or _EDGE_MARKET_TYPES
 
 
 async def _summary_and_winprob(
@@ -954,6 +1463,12 @@ class EdgesResponse(BaseModel):
     fair_book: dict[str, str] = Field(default_factory=dict)
     #: SIM-555: market -> that book's display name ("DraftKings").
     fair_book_name: dict[str, str] = Field(default_factory=dict)
+    #: SIM-546: report label -> the market's plain name ("First five total"); the
+    #: card titles its sections from it.
+    market_names: dict[str, str] = Field(default_factory=dict)
+    #: SIM-546: report label -> how that run line was priced, for every priced
+    #: run line ("run_line", "f1_runline", "f5_runline").
+    run_line_pricing_by_label: dict[str, RunLinePricingModel] = Field(default_factory=dict)
 
 
 class SignalsResponse(BaseModel):
@@ -978,6 +1493,11 @@ class SignalsResponse(BaseModel):
     fair_book: dict[str, str] = Field(default_factory=dict)
     #: SIM-555: market -> that book's display name ("DraftKings").
     fair_book_name: dict[str, str] = Field(default_factory=dict)
+    #: SIM-546: report label -> the market's plain name, so a signal on a
+    #: first-five total or a tie can be labelled.
+    market_names: dict[str, str] = Field(default_factory=dict)
+    #: SIM-546: report label -> how that run line was priced (every priced run line).
+    run_line_pricing_by_label: dict[str, RunLinePricingModel] = Field(default_factory=dict)
 
 
 class LineMovementResponse(BaseModel):
@@ -1017,16 +1537,73 @@ class ClvSnapshotResponse(BaseModel):
 # ===========================================================================
 
 
+#: SIM-546: the description of the ``prices`` query param, shared by both routes.
+_PRICES_PARAM_DESCRIPTION = (
+    "A JSON document of injected prices keyed by market type, e.g. "
+    '{"f5_total": {"over_ml": -110, "under_ml": -110, "line": 4.5}}. A moneyline-kind '
+    "market takes home_ml and away_ml; a three-way market those and draw_ml; a total "
+    "kind over_ml, under_ml and line (first_inning_run is always 0.5); a run line "
+    "home_ml, away_ml, home_line and away_line. A market named here is priced from it "
+    "alone (odds_source 'injected'). 422 on an unknown market or field, a missing or "
+    "non-numeric field, or a market also given by the named params"
+)
+
+#: SIM-546: the description of the ``markets`` query param, shared by both routes.
+_MARKETS_PARAM_DESCRIPTION = (
+    "Comma-separated subset of the fifteen game markets (moneyline, runline, total, "
+    "f1_moneyline, f5_moneyline, f1_total, f5_total, f1_runline, f5_runline, "
+    "team_total_home, team_total_away, f5_team_total_home, f5_team_total_away, "
+    "first_to_score, first_inning_run); default all fifteen"
+)
+
+
+def _named_prices(
+    *,
+    home_ml: float | None,
+    away_ml: float | None,
+    over_ml: float | None,
+    under_ml: float | None,
+    total_line: float | None,
+    home_rl_ml: float | None,
+    away_rl_ml: float | None,
+    run_line: float | None,
+    away_run_line: float | None,
+) -> dict[str, float | None]:
+    """The named injected query params of the three full-game markets, by name."""
+    return {
+        "home_ml": home_ml,
+        "away_ml": away_ml,
+        "over_ml": over_ml,
+        "under_ml": under_ml,
+        "total_line": total_line,
+        "home_rl_ml": home_rl_ml,
+        "away_rl_ml": away_rl_ml,
+        "run_line": run_line,
+        "away_run_line": away_run_line,
+    }
+
+
+def _pricing_models(built: _EdgeBuild) -> dict[str, RunLinePricingModel]:
+    """SIM-546: every priced run line's pricing as the API model, by report label."""
+    return {
+        label: RunLinePricingModel(**pricing)
+        for label, pricing in built.run_line_pricing_by_label.items()
+    }
+
+
 @router.get(
     "/games/{game_pk}/edges",
     response_model=EdgesResponse,
-    summary="Per-market edge reports (moneyline / total / run-line)",
+    summary="Per-market edge reports (the fifteen game markets)",
     dependencies=[Depends(require_auth)],
     description=(
         "Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and "
-        "build the EdgeReports for the requested markets (moneyline / total / "
-        "runline, both sides each) off the GameSimSummary + market odds. Odds come "
-        "from the injected query params when supplied; else (SIM-555) the stored "
+        "build the EdgeReports for the requested markets (SIM-546: the fifteen game "
+        "markets by default, every side of each) off the GameSimSummary + market "
+        "odds. The three full-game markets keep their labels (moneyline, total, "
+        "run_line); every segment or team market's label is its market type. Odds "
+        "come from the injected query params or the prices document when supplied; "
+        "else (SIM-555) the stored "
         "lines of the game, one row per book: the closing lines, plus the "
         "current lines while the game has not started (raw.games status "
         "Preview; an in-play line is never read). The fair probability comes "
@@ -1034,8 +1611,11 @@ class ClvSnapshotResponse(BaseModel):
         "side's offered price, and so its EV, from the best stored price at that "
         "line (its book named in price_book); else the deterministic mock "
         "provider. odds_source flags each "
-        "market: injected, stored or mock. numpy-free EdgeReportModel list. 503 if "
-        "no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market."
+        "market: injected, stored or mock. market_names gives each label its plain "
+        "name. A cached summary with no inning grid prices the full-game markets "
+        "only. numpy-free EdgeReportModel list. 503 if "
+        "no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or "
+        "a bad prices document."
     ),
 )
 async def get_game_edges(
@@ -1044,9 +1624,7 @@ async def get_game_edges(
     n_iterations: int = Query(200, ge=1, le=10000, description="Monte-Carlo iterations"),
     base_seed: int | None = Query(None, description="Reproducibility seed for the batch"),
     use_cache: bool = Query(True, description="Consult/populate the sim-result cache"),
-    markets: str | None = Query(
-        None, description="Comma-separated subset of moneyline,total,runline (default all)"
-    ),
+    markets: str | None = Query(None, description=_MARKETS_PARAM_DESCRIPTION),
     home_ml: float | None = Query(None, description="Injected home moneyline (American)"),
     away_ml: float | None = Query(None, description="Injected away moneyline (American)"),
     over_ml: float | None = Query(None, description="Injected total over price (American)"),
@@ -1064,8 +1642,22 @@ async def get_game_edges(
             "home_ml / away_ml (each injected, else the mock's)"
         ),
     ),
+    prices: str | None = Query(None, description=_PRICES_PARAM_DESCRIPTION),
 ) -> EdgesResponse:
     requested = _parse_markets(markets)
+    named = _named_prices(
+        home_ml=home_ml,
+        away_ml=away_ml,
+        over_ml=over_ml,
+        under_ml=under_ml,
+        total_line=total_line,
+        home_rl_ml=home_rl_ml,
+        away_rl_ml=away_rl_ml,
+        run_line=run_line,
+        away_run_line=away_run_line,
+    )
+    # SIM-546: a bad prices document fails before the simulation runs.
+    doc = _parse_prices(prices, named)
     summary, win_prob = await _summary_and_winprob(
         request,
         game_pk=int(game_pk),
@@ -1080,24 +1672,16 @@ async def get_game_edges(
         win_prob,
         game_pk=int(game_pk),
         markets=requested,
-        prices={
-            "home_ml": home_ml,
-            "away_ml": away_ml,
-            "over_ml": over_ml,
-            "under_ml": under_ml,
-            "total_line": total_line,
-            "home_rl_ml": home_rl_ml,
-            "away_rl_ml": away_rl_ml,
-            "run_line": run_line,
-            "away_run_line": away_run_line,
-        },
+        prices=named,
+        doc=doc,
     )
+    priced = _priced_markets(requested, built)
 
     return EdgesResponse(
         game_pk=int(game_pk),
         n_iterations=int(summary.n_iterations),
         base_seed=base_seed,
-        markets=list(requested),
+        markets=priced,
         odds_source=built.odds_source,
         edges=[
             EdgeReportModel.from_dataclass(
@@ -1112,6 +1696,8 @@ async def get_game_edges(
         ),
         fair_book=dict(built.fair_book),
         fair_book_name=_books_by_market(built.fair_book),
+        market_names=_market_names(priced),
+        run_line_pricing_by_label=_pricing_models(built),
     )
 
 
@@ -1127,14 +1713,17 @@ async def get_game_edges(
     dependencies=[Depends(require_auth)],
     description=(
         "Build the per-market EdgeReports (as /edges, with the same injected / "
-        "stored / mock odds sources), gate them to the +EV set "
+        "stored / mock odds sources and the same prices document; SIM-546: the "
+        "fifteen game markets by default, a tie side included), gate them to the "
+        "+EV set "
         "(strictly positive edge >= min_edge AND ev > min_ev), size each via "
         "fractional Kelly (kelly_fraction, capped at max_stake_fraction), and "
         "return them RANKED by EV descending. A signal priced from the stored "
         "lines names the book of its offered price (price_book). min_edge / "
-        "kelly_fraction are tunable via query params. numpy-free BetSignalModel "
+        "kelly_fraction are tunable via query params. The segment and team "
+        "markets' probabilities are not calibrated. numpy-free BetSignalModel "
         "list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a "
-        "bad market."
+        "bad market or a bad prices document."
     ),
 )
 async def get_game_signals(
@@ -1143,9 +1732,7 @@ async def get_game_signals(
     n_iterations: int = Query(200, ge=1, le=10000, description="Monte-Carlo iterations"),
     base_seed: int | None = Query(None, description="Reproducibility seed for the batch"),
     use_cache: bool = Query(True, description="Consult/populate the sim-result cache"),
-    markets: str | None = Query(
-        None, description="Comma-separated subset of moneyline,total,runline (default all)"
-    ),
+    markets: str | None = Query(None, description=_MARKETS_PARAM_DESCRIPTION),
     min_edge: float = Query(0.02, ge=0.0, le=1.0, description="Edge noise floor (gate)"),
     min_ev: float = Query(0.0, ge=-1.0, le=10.0, description="Minimum EV per unit (strict >)"),
     kelly_fraction: float = Query(0.25, ge=0.0, le=1.0, description="Fractional-Kelly multiplier"),
@@ -1169,8 +1756,21 @@ async def get_game_signals(
             "home_ml / away_ml (each injected, else the mock's)"
         ),
     ),
+    prices: str | None = Query(None, description=_PRICES_PARAM_DESCRIPTION),
 ) -> SignalsResponse:
     requested = _parse_markets(markets)
+    named = _named_prices(
+        home_ml=home_ml,
+        away_ml=away_ml,
+        over_ml=over_ml,
+        under_ml=under_ml,
+        total_line=total_line,
+        home_rl_ml=home_rl_ml,
+        away_rl_ml=away_rl_ml,
+        run_line=run_line,
+        away_run_line=away_run_line,
+    )
+    doc = _parse_prices(prices, named)
     summary, win_prob = await _summary_and_winprob(
         request,
         game_pk=int(game_pk),
@@ -1185,17 +1785,8 @@ async def get_game_signals(
         win_prob,
         game_pk=int(game_pk),
         markets=requested,
-        prices={
-            "home_ml": home_ml,
-            "away_ml": away_ml,
-            "over_ml": over_ml,
-            "under_ml": under_ml,
-            "total_line": total_line,
-            "home_rl_ml": home_rl_ml,
-            "away_rl_ml": away_rl_ml,
-            "run_line": run_line,
-            "away_run_line": away_run_line,
-        },
+        prices=named,
+        doc=doc,
     )
 
     config = BetSignalConfig(
@@ -1204,6 +1795,8 @@ async def get_game_signals(
         kelly_fraction=float(kelly_fraction),
         max_stake_fraction=float(max_stake_fraction),
     )
+    # SIM-546 (owner decision 4, 2026-10-09): the signals fire on all fifteen
+    # markets, the uncalibrated segment and team markets included.
     signals = bet_signals_from_edges(built.reports, config=config)
 
     return SignalsResponse(
@@ -1230,6 +1823,8 @@ async def get_game_signals(
         ),
         fair_book=dict(built.fair_book),
         fair_book_name=_books_by_market(built.fair_book),
+        market_names=_market_names(_priced_markets(requested, built)),
+        run_line_pricing_by_label=_pricing_models(built),
     )
 
 

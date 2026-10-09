@@ -136,6 +136,11 @@ USAGE
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
         --seasons 2024 --max-games 20 --book draftkings
 
+    # SIM-546: the nightly closing pass (scripts/nightly_closing_lines.sh) loads
+    # the closing rows of two official dates only, after the live marker ran:
+    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
+        --seasons 2026 --line-types closing --game-dates 2026-10-08 2026-10-07
+
     # SIM-421 (owner ruling 2026-09-12): every game market the book posts is
     # loaded by default — the three full-game markets plus the twelve segment
     # and team markets (first-inning / first-five moneyline, total, run line;
@@ -179,7 +184,7 @@ import os
 import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -493,6 +498,19 @@ def _configure_offline_cache() -> float:
     return float(os.environ[_OFFERS_CACHE_TTL_ENV])
 
 
+def parse_game_date(value: str) -> date:
+    """SIM-546: parse one ``--game-dates`` value (``YYYY-MM-DD``) into a date.
+
+    The parser reports a bad value as a usage error (exit 2) before any work.
+    """
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"a game date must read YYYY-MM-DD, not {value!r}"
+        ) from exc
+
+
 def parse_skip_loaded_since(value: str | None) -> datetime | None:
     """SIM-421 resume: parse ``--skip-loaded-since`` into an aware datetime.
 
@@ -590,6 +608,7 @@ async def _fetch_final_games(
     book_id: int | None = None,
     line_types: tuple[str, ...] = LINE_TYPES,
     resume_on_game_odds: bool = False,
+    game_dates: list[date] | None = None,
 ) -> list[dict]:
     """Return completed-game rows ``{game_pk}`` for the requested seasons.
 
@@ -611,6 +630,10 @@ async def _fetch_final_games(
     ``--book`` run) that book's rows. ``resume_on_game_odds`` reads
     ``raw.game_odds`` instead of ``raw.prop_odds``: a ``--no-props`` run writes
     no prop rows, so its resume has to look at the game rows.
+
+    SIM-546: ``game_dates`` keeps only the games of those official dates
+    (``AND game_date = ANY($n::date[])``, bound after the resume parameters).
+    The nightly closing pass loads yesterday's and the day before's games.
     """
     import asyncpg
 
@@ -624,6 +647,10 @@ async def _fetch_final_games(
         params.extend([skip_loaded_since, list(line_types)])
         if book_id is not None:
             params.append(book_label(book_id))
+    date_clause = ""
+    if game_dates:
+        params.append(sorted(set(game_dates)))
+        date_clause = f"AND game_date = ANY(${len(params)}::date[])"
     conn = await asyncpg.connect(dsn)
     try:
         rows = await conn.fetch(
@@ -634,6 +661,7 @@ async def _fetch_final_games(
               AND season IN ({sl})
               AND home_score_final IS NOT NULL AND away_score_final IS NOT NULL
               {resume_clause}
+              {date_clause}
             ORDER BY game_pk
             {limit}
             """,
@@ -945,6 +973,8 @@ async def run(args: argparse.Namespace) -> int:
     _hand_over_retry_policy(provider, retries, retry_wait_s)
 
     skip_since = parse_skip_loaded_since(getattr(args, "skip_loaded_since", None))
+    # SIM-546: --game-dates narrows the run to those official dates.
+    game_dates = sorted(set(getattr(args, "game_dates", None) or []))
     # SIM-555: a --no-props run writes no prop rows; its resume reads the game rows.
     resume_on_game_odds = bool(args.no_props)
     games = await _fetch_final_games(
@@ -955,7 +985,13 @@ async def run(args: argparse.Namespace) -> int:
         book_id=book_id,
         line_types=line_types,
         resume_on_game_odds=resume_on_game_odds,
+        game_dates=game_dates,
     )
+    if game_dates:
+        log.info(
+            "game dates: only the games of %s",
+            ", ".join(d.isoformat() for d in game_dates),
+        )
     if skip_since is not None:
         log.info(
             "resume: skipping games with %s rows (%s) fetched since %s",
@@ -1142,6 +1178,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="LINE_TYPE",
         help=f"Line types to fetch (any subset of: {', '.join(KNOWN_LINE_TYPES)}). "
         f"Default: {' '.join(LINE_TYPES)}.",
+    )
+    p.add_argument(
+        "--game-dates",
+        nargs="+",
+        type=parse_game_date,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="SIM-546: load only the games of these official dates (one or more). "
+        "The nightly closing pass (scripts/nightly_closing_lines.sh) loads yesterday "
+        "and the day before.",
     )
     p.add_argument(
         "--skip-loaded-since",

@@ -96,7 +96,7 @@ from pipeline.odds_provider import (
 
 # SIM-555: the load guard. Every writer shows it each non-empty row before the
 # row is persisted; a refused row is logged, counted and never written.
-from pipeline.odds_row_guard import RefusalTally, check_row
+from pipeline.odds_row_guard import CLOSING_STAMP_GRACE, RefusalTally, check_row
 
 # SIM-106: Type alias for the simulation callback. It MUST be an async
 # function — passing a sync function would either raise TypeError when the
@@ -193,6 +193,16 @@ PROP_FETCH_CADENCE_S = 60
 #: minutes. The in-play cycle keeps PROP_FETCH_CADENCE_S.
 PREGAME_ODDS_CADENCE_S = 600
 
+#: SIM-546: the near-start window. Closing lines move most in the last minutes,
+#: so once the scheduled start is this close (or past, while the game waits in
+#: ``Preview``), the pre-game cycle reads the vendor every
+#: PREGAME_NEAR_START_CADENCE_S instead. The live marker promotes the last row
+#: fetched before first pitch, so that row is then at most a minute old.
+PREGAME_NEAR_START_WINDOW_S = 900
+
+#: SIM-546: the pre-game cadence inside the near-start window: the live cadence.
+PREGAME_NEAR_START_CADENCE_S = PROP_FETCH_CADENCE_S
+
 # ---------------------------------------------------------------------------
 # SIM-555: odds rows, JSON and the database
 # ---------------------------------------------------------------------------
@@ -280,6 +290,31 @@ def _stamp_param(value: Any) -> datetime | None:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
+
+
+def _scheduled_start(game: Mapping[str, Any]) -> datetime | None:
+    """SIM-546: a schedule entry's scheduled start as an aware UTC datetime.
+
+    The entry's ``gameDate`` is ISO 8601 UTC text ("2026-10-09T23:05:00Z").
+    A missing or unreadable value gives ``None``.
+    """
+    return _stamp_param(game.get("gameDate"))
+
+
+def pregame_odds_cadence_s(game: Mapping[str, Any], now: datetime) -> int:
+    """PURE (SIM-546): the pre-game cycle's cadence in seconds for one schedule entry.
+
+    Inside PREGAME_NEAR_START_WINDOW_S of the scheduled start, or past the
+    start while the game still waits in ``Preview`` (a delay), the cadence is
+    PREGAME_NEAR_START_CADENCE_S (60 s). Further out, or with no readable
+    start, it is PREGAME_ODDS_CADENCE_S (600 s). ``now`` is an aware datetime.
+    """
+    start = _scheduled_start(game)
+    if start is None:
+        return PREGAME_ODDS_CADENCE_S
+    if (start - now).total_seconds() <= PREGAME_NEAR_START_WINDOW_S:
+        return PREGAME_NEAR_START_CADENCE_S
+    return PREGAME_ODDS_CADENCE_S
 
 
 def _game_row_has_odds(row: Mapping[str, Any]) -> bool:
@@ -402,6 +437,282 @@ async def insert_prop_odds_rows(conn: Any, rows: Sequence[Mapping[str, Any]]) ->
         return 0
     await conn.executemany(_PROP_ODDS_INSERT_SQL, [prop_odds_insert_args(row) for row in rows])
     return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# SIM-546: every live game's closing rows
+# ---------------------------------------------------------------------------
+# A closing row is the last price a book posted before first pitch. At first
+# pitch the live pipeline promotes, per (market, book) for game odds and per
+# (player, prop stat, book) for props, the latest pre-pitch row from 'current'
+# to 'closing'. The rule (the design's D1):
+#
+#   * Read one row per key among the rows with line_type 'current' OR
+#     'closing' fetched at or before the first-pitch instant. A 'closing' row
+#     sorts first: a key that holds one is done, whatever was fetched after
+#     it. So a second call promotes nothing, even after a restart mid-game
+#     reads up to a later instant and finds in-play 'current' rows.
+#   * A key with no closing row reads its latest 'current' row whose stamp
+#     the load guard keeps as a closing row: the stamp is no later than the
+#     scheduled start plus 15 minutes (CLOSING_STAMP_GRACE; a row with no stamp
+#     passes). The read applies the rule, so in a delayed game a book that
+#     moved its line during the delay keeps its last line inside the grace
+#     (the design's D4). Promote that row when the full guard keeps it.
+#   * Rewrite the row's odds_hash to the hash of the same row with line_type
+#     'closing'. The nightly loader's identical closing row then deduplicates
+#     against it. When a row with that hash already exists under the key of the
+#     dedup index, the loader got there first, and the row stays 'current'.
+
+#: SIM-546: one pre-pitch game row per (market, book): its closing row when it
+#: has one, else its latest current row stamped no later than ``$3`` (the
+#: scheduled start plus the grace; NULL = no stamp check).
+_CLOSING_GAME_READ_SQL = """
+            SELECT DISTINCT ON (market_type, book)
+                   id, source, line_type, book, market_type, is_sharp_book,
+                   book_line_at, odds_hash,
+                   home_ml, away_ml, draw_ml, home_spread, home_spread_ml,
+                   away_spread, away_spread_ml, total_line, over_ml, under_ml
+            FROM raw.game_odds
+            WHERE game_pk = $1
+              AND line_type IN ('current', 'closing')
+              AND fetched_at <= $2
+              AND (line_type = 'closing' OR $3::timestamptz IS NULL
+                   OR book_line_at IS NULL OR book_line_at <= $3::timestamptz)
+            ORDER BY market_type, book, (line_type = 'closing') DESC,
+                     fetched_at DESC, id DESC
+            """
+
+#: SIM-546: the prop analogue: one pre-pitch row per (player, prop stat, book),
+#: by the same order and the same stamp bound ``$3``.
+_CLOSING_PROP_READ_SQL = """
+            SELECT DISTINCT ON (player_id, prop_stat, book)
+                   id, source, line_type, player_id, prop_stat, book,
+                   is_sharp_book, book_line_at, odds_hash,
+                   line, over_ml, under_ml
+            FROM raw.prop_odds
+            WHERE game_pk = $1
+              AND line_type IN ('current', 'closing')
+              AND fetched_at <= $2
+              AND (line_type = 'closing' OR $3::timestamptz IS NULL
+                   OR book_line_at IS NULL OR book_line_at <= $3::timestamptz)
+            ORDER BY player_id, prop_stat, book, (line_type = 'closing') DESC,
+                     fetched_at DESC, id DESC
+            """
+
+#: SIM-546: the new hashes already stored for one (game, source). The dedup
+#: index of raw.game_odds is (game_pk, source, odds_hash).
+_CLOSING_GAME_EXISTING_SQL = """
+            SELECT source, odds_hash
+            FROM raw.game_odds
+            WHERE game_pk = $1 AND source = $2 AND odds_hash = ANY($3::text[])
+            """
+
+#: SIM-546: the prop analogue. The dedup index of raw.prop_odds is
+#: (game_pk, player_id, source, odds_hash); the caller matches the player.
+_CLOSING_PROP_EXISTING_SQL = """
+            SELECT player_id, source, odds_hash
+            FROM raw.prop_odds
+            WHERE game_pk = $1 AND source = $2 AND odds_hash = ANY($3::text[])
+            """
+
+#: SIM-546: promote the picked rows in one statement. The line_type guard makes
+#: a concurrent second call harmless: it skips a row already promoted.
+_CLOSING_GAME_UPDATE_SQL = """
+            UPDATE raw.game_odds AS g
+            SET    line_type = 'closing', odds_hash = v.odds_hash
+            FROM   unnest($1::bigint[], $2::text[]) AS v(id, odds_hash)
+            WHERE  g.id = v.id AND g.line_type = 'current'
+            """
+
+#: SIM-546: the prop analogue of the update.
+_CLOSING_PROP_UPDATE_SQL = """
+            UPDATE raw.prop_odds AS p
+            SET    line_type = 'closing', odds_hash = v.odds_hash
+            FROM   unnest($1::bigint[], $2::text[]) AS v(id, odds_hash)
+            WHERE  p.id = v.id AND p.line_type = 'current'
+            """
+
+#: SIM-546: the price columns of a game row and of a prop row. Postgres stores a
+#: price as INTEGER. A writer may have hashed it as a float: the BettingPros
+#: provider reads every price as a float (-110.0, not -110).
+_GAME_PRICE_KEYS: tuple[str, ...] = (
+    "home_ml",
+    "away_ml",
+    "draw_ml",
+    "home_spread_ml",
+    "away_spread_ml",
+    "over_ml",
+    "under_ml",
+)
+_PROP_PRICE_KEYS: tuple[str, ...] = ("over_ml", "under_ml")
+
+#: SIM-546: the line columns. Postgres stores a line as FLOAT. A writer may have
+#: hashed a whole line as an int (5, not 5.0).
+_GAME_LINE_KEYS: tuple[str, ...] = ("home_spread", "away_spread", "total_line")
+_PROP_LINE_KEYS: tuple[str, ...] = ("line",)
+
+
+def _as_float(value: Any) -> Any:
+    """An int price as a float; any other value unchanged."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def _as_int(value: Any) -> Any:
+    """A whole-number float line as an int; any other value unchanged."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _hash_typings(row: Mapping[str, Any], is_prop: bool) -> list[dict[str, Any]]:
+    """The four ways a writer may have typed the row's numbers before it hashed them.
+
+    The hash writes an int as ``-110`` and a float as ``-110.000000``, so one
+    price hashes two ways. The first typing is the row as read. The last is the
+    BettingPros provider's typing (float prices, float lines): the typing the
+    nightly loader writes.
+    """
+    prices = _PROP_PRICE_KEYS if is_prop else _GAME_PRICE_KEYS
+    lines = _PROP_LINE_KEYS if is_prop else _GAME_LINE_KEYS
+    as_read = dict(row)
+    int_lines = {**as_read, **{k: _as_int(as_read[k]) for k in lines if k in as_read}}
+    both = {**int_lines, **{k: _as_float(as_read[k]) for k in prices if k in as_read}}
+    float_prices = {**as_read, **{k: _as_float(as_read[k]) for k in prices if k in as_read}}
+    return [as_read, int_lines, both, float_prices]
+
+
+def closing_hash(row: Mapping[str, Any]) -> str:
+    """SIM-546: the odds_hash of ``row`` as a closing row.
+
+    The hash is ``LiveIngestionPipeline._odds_hash`` (for a prop row, one with
+    ``prop_stat``: ``_prop_odds_hash``) of the row with ``line_type`` set to
+    ``'closing'``. The row's numbers are typed the way its writer typed them:
+    the typing whose hash at the row's own line type equals the stored
+    ``odds_hash``. A row whose stored hash matches no typing (or has no hash)
+    takes the BettingPros provider's typing, the one the nightly loader writes.
+    """
+    is_prop = row.get("prop_stat") is not None
+    hasher = LiveIngestionPipeline._prop_odds_hash if is_prop else LiveIngestionPipeline._odds_hash
+    typings = _hash_typings(row, is_prop)
+    stored = row.get("odds_hash")
+    chosen = typings[-1]
+    if stored is not None:
+        own_type = row.get("line_type", "current")
+        for typing in typings:
+            if hasher({**typing, "line_type": own_type}) == stored:
+                chosen = typing
+                break
+    return hasher({**chosen, "line_type": "closing"})
+
+
+def closing_candidates(
+    rows: Sequence[Mapping[str, Any]], *, scheduled_start: datetime | None
+) -> list[tuple[int, str]]:
+    """PURE (SIM-546): the (row id, new odds_hash) of every row to promote.
+
+    ``rows`` are the promotion's read: one pre-pitch row per key, 'current' or
+    'closing' (per (market_type, book) for game odds, per (player_id,
+    prop_stat, book) for props). The read returns a key's closing row when it
+    has one, else its latest current row stamped inside the grace. The
+    function picks a row when it is 'current' and the load guard keeps it as a
+    closing row with ``scheduled_start`` attached (``check_row``: the prices,
+    and the stamp no later than the start plus 15 minutes). A 'closing' row is
+    already promoted, so its key is done. The new hash is :func:`closing_hash`.
+    """
+    picks: list[tuple[int, str]] = []
+    for row in rows:
+        if row.get("line_type") != "current":
+            continue
+        probe = {**row, "line_type": "closing", "scheduled_start": scheduled_start}
+        if check_row(probe) is not None:
+            continue
+        picks.append((int(row["id"]), closing_hash(row)))
+    return picks
+
+
+def _updated_count(result: Any) -> int:
+    """The row count of an asyncpg status string such as ``'UPDATE 12'`` (else 0)."""
+    try:
+        return int(str(result).split()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
+async def _promote_closing_rows(
+    conn: Any,
+    game_pk: int,
+    first_pitch_at: datetime,
+    *,
+    scheduled_start: datetime | None,
+    is_prop: bool,
+) -> int:
+    """SIM-546: one read, one existence check per source, then one update."""
+    read_sql = _CLOSING_PROP_READ_SQL if is_prop else _CLOSING_GAME_READ_SQL
+    stamp_bound = None if scheduled_start is None else scheduled_start + CLOSING_STAMP_GRACE
+    rows = [dict(r) for r in await conn.fetch(read_sql, game_pk, first_pitch_at, stamp_bound)]
+    picks = closing_candidates(rows, scheduled_start=scheduled_start)
+    if not picks:
+        return 0
+    by_id = {int(r["id"]): r for r in rows}
+
+    def _key(player_id: Any, source: Any, odds_hash: Any) -> tuple[Any, ...]:
+        key = (str(source), str(odds_hash))
+        return (int(player_id), *key) if is_prop else key
+
+    hashes_by_source: dict[str, list[str]] = {}
+    for row_id, new_hash in picks:
+        hashes_by_source.setdefault(str(by_id[row_id].get("source")), []).append(new_hash)
+    existing_sql = _CLOSING_PROP_EXISTING_SQL if is_prop else _CLOSING_GAME_EXISTING_SQL
+    taken: set[tuple[Any, ...]] = set()
+    for source, hashes in hashes_by_source.items():
+        for hit in await conn.fetch(existing_sql, game_pk, source, hashes):
+            taken.add(_key(hit["player_id"] if is_prop else None, hit["source"], hit["odds_hash"]))
+    keep = [
+        (row_id, new_hash)
+        for row_id, new_hash in picks
+        if _key(by_id[row_id].get("player_id"), by_id[row_id].get("source"), new_hash) not in taken
+    ]
+    if not keep:
+        return 0
+    update_sql = _CLOSING_PROP_UPDATE_SQL if is_prop else _CLOSING_GAME_UPDATE_SQL
+    result = await conn.execute(update_sql, [i for i, _ in keep], [h for _, h in keep])
+    return _updated_count(result)
+
+
+async def promote_closing_game_rows(
+    conn: Any,
+    game_pk: int,
+    first_pitch_at: datetime,
+    *,
+    scheduled_start: datetime | None,
+) -> int:
+    """SIM-546: promote one game's closing rows in raw.game_odds, one per (market, book).
+
+    ``conn`` is an asyncpg pool or connection. ``first_pitch_at`` bounds the rows
+    read (``fetched_at`` at or before it). ``scheduled_start`` feeds the load
+    guard's closing-stamp rule (``None`` = no stamp check). Returns the rows
+    promoted. A second call promotes nothing, even one with a later
+    ``first_pitch_at`` (a restart mid-game): a key that holds a closing row is
+    done (the rule above).
+    """
+    return await _promote_closing_rows(
+        conn, game_pk, first_pitch_at, scheduled_start=scheduled_start, is_prop=False
+    )
+
+
+async def promote_closing_prop_rows(
+    conn: Any,
+    game_pk: int,
+    first_pitch_at: datetime,
+    *,
+    scheduled_start: datetime | None,
+) -> int:
+    """SIM-546: the prop analogue: one closing row per (player, prop stat, book)."""
+    return await _promote_closing_rows(
+        conn, game_pk, first_pitch_at, scheduled_start=scheduled_start, is_prop=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -611,8 +922,12 @@ class MockOddsAPI:
         elif kind == "runline":
             spread = mrng.choice([-0.5, 0.5])
             result["home_spread"], result["away_spread"] = spread, -spread
-            result["home_spread_ml"] = mrng.randint(-130, 115)
-            result["away_spread_ml"] = mrng.randint(-130, 115)
+            # SIM-546: every mock price is a valid American price. A raw
+            # integer draw put about half of them inside (-100, 100) and
+            # some at 0, which the de-vig refuses for both sides.
+            p_home = mrng.uniform(0.40, 0.60)
+            result["home_spread_ml"] = MockOddsAPI._prob_to_american(p_home * (1 + vig / 2))
+            result["away_spread_ml"] = MockOddsAPI._prob_to_american((1.0 - p_home) * (1 + vig / 2))
         elif kind == "total":
             # The line scales with the slice of the game and the side.
             if canonical.startswith("f1_"):
@@ -624,12 +939,14 @@ class MockOddsAPI:
             else:  # a full-game team total
                 line = mrng.choice([3.5, 4.0, 4.5, 5.0])
             result["total_line"] = line
-            result["over_ml"] = mrng.randint(-140, 120)
-            result["under_ml"] = mrng.randint(-140, 120)
+            p_over = mrng.uniform(0.40, 0.60)
+            result["over_ml"] = MockOddsAPI._prob_to_american(p_over * (1 + vig / 2))
+            result["under_ml"] = MockOddsAPI._prob_to_american((1.0 - p_over) * (1 + vig / 2))
         elif kind == "yes_no":
             result["total_line"] = 0.5
-            result["over_ml"] = mrng.randint(-125, 110)
-            result["under_ml"] = mrng.randint(-125, 110)
+            p_yes = mrng.uniform(0.40, 0.60)
+            result["over_ml"] = MockOddsAPI._prob_to_american(p_yes * (1 + vig / 2))
+            result["under_ml"] = MockOddsAPI._prob_to_american((1.0 - p_yes) * (1 + vig / 2))
         return result
 
     @staticmethod
@@ -1639,6 +1956,10 @@ class LiveIngestionPipeline:
                     current_live.add(game_pk)
                     if game_pk not in self._ws_clients:
                         log.info("New live game detected: %s", game_pk)
+                        # SIM-546: the last pre-pitch row per market and book
+                        # becomes the closing row BEFORE the watcher starts,
+                        # so the live cycle's first in-play row comes after.
+                        await self._mark_closing_rows(game_pk, game)
                         await self._start_watching(game_pk)
                         # Immediately fetch initial state (don't wait for first WS msg)
                         asyncio.create_task(self._refresh_game_state(game_pk))
@@ -1675,6 +1996,48 @@ class LiveIngestionPipeline:
 
                 # Upsert every game (Preview/Live/Final) into raw.games
                 asyncio.create_task(self._upsert_game_record(game))
+
+    async def _mark_closing_rows(self, game_pk: int, game: Mapping[str, Any]) -> tuple[int, int]:
+        """SIM-546: promote a game's closing rows the first time the poll sees it Live.
+
+        The first-pitch instant is the poll's own time (UTC now): the poll runs
+        every 30 seconds, so the instant is at most 30 seconds after MLB
+        flipped the status. The scheduled start is the entry's ``gameDate``.
+        The method calls :meth:`mark_closing_lines` and
+        :meth:`mark_closing_prop_lines`, logs the two counts and never raises:
+        a failed promotion is logged, and the nightly closing pass repairs it.
+        A restart mid-game calls it again, with a later instant. A key that
+        already holds a closing row is done, so the call leaves it alone. One
+        limit: a key with no closing row yet (a book first posted in play, or a
+        failed first promotion) can then take an in-play row with no stamp or
+        a stamp inside the grace.
+        Returns (game rows promoted, prop rows promoted).
+        """
+        first_pitch_at = datetime.now(UTC)
+        scheduled_start = _scheduled_start(game)
+        if getattr(self, "_db", None) is None:
+            log.warning("closing rows not promoted for game %s: no database pool", game_pk)
+            return 0, 0
+        n_game = n_prop = 0
+        try:
+            n_game = await self.mark_closing_lines(
+                game_pk, first_pitch_at, scheduled_start=scheduled_start
+            )
+        except Exception as exc:  # noqa: BLE001 — the poll must not stop on a failed promotion
+            log.warning("closing game rows not promoted for game %s: %s", game_pk, exc)
+        try:
+            n_prop = await self.mark_closing_prop_lines(
+                game_pk, first_pitch_at, scheduled_start=scheduled_start
+            )
+        except Exception as exc:  # noqa: BLE001 — the poll must not stop on a failed promotion
+            log.warning("closing prop rows not promoted for game %s: %s", game_pk, exc)
+        log.info(
+            "closing rows promoted: game %s, %d game rows, %d prop rows",
+            game_pk,
+            n_game,
+            n_prop,
+        )
+        return n_game, n_prop
 
     async def _start_watching(self, game_pk: int) -> None:
         self._refresh_locks[game_pk] = asyncio.Lock()
@@ -2251,7 +2614,10 @@ class LiveIngestionPipeline:
         game's hydrated schedule entry. The method has its own clock per game
         (``_last_pregame_fetch``): inside PREGAME_ODDS_CADENCE_S (ten minutes)
         of the last pass it returns 0 and calls neither cycle, so a game reads
-        the vendor at most once every ten minutes before first pitch. The
+        the vendor at most once every ten minutes before first pitch. SIM-546:
+        inside 15 minutes of the entry's scheduled start the cadence is one
+        minute (:func:`pregame_odds_cadence_s`), so the row the live marker
+        promotes to closing at first pitch is fresh. The
         clock is set before the cycles run, so a failed pass also waits the
         full cadence, and a second poll that arrives while a pass is still
         running reads nothing.
@@ -2282,7 +2648,9 @@ class LiveIngestionPipeline:
             clock = {}
             self._last_pregame_fetch = clock
         last = clock.get(game_pk)
-        if last is not None and (now - last).total_seconds() < PREGAME_ODDS_CADENCE_S:
+        # SIM-546: one minute apart inside 15 minutes of the scheduled start.
+        cadence = pregame_odds_cadence_s(game, now)
+        if last is not None and (now - last).total_seconds() < cadence:
             return 0
         clock[game_pk] = now
         if game.get("gamePk") is not None:
@@ -2571,7 +2939,8 @@ class LiveIngestionPipeline:
 
         The live pipeline always writes line_type='current'.  Opening lines are
         captured by the nightly opening line job (SIM-138).  Closing lines are
-        designated by mark_closing_lines() which runs post-game.
+        designated by mark_closing_lines(), which the schedule poll calls at
+        first pitch (SIM-546).
         """
         await self._db.execute(_GAME_ODDS_INSERT_SQL, *self._odds_params(game_pk, odds))
 
@@ -2675,88 +3044,58 @@ class LiveIngestionPipeline:
         """
         return await insert_prop_odds_rows(self._db, rows)
 
-    async def mark_closing_lines(self, game_pk: int, first_pitch_at: datetime) -> int:
+    async def mark_closing_lines(
+        self,
+        game_pk: int,
+        first_pitch_at: datetime,
+        *,
+        scheduled_start: datetime | None = None,
+    ) -> int:
+        """SIM-133 / SIM-546: designate a game's closing rows in raw.game_odds.
+
+        SIM-546 rewrote the rule: one closing row per (market, book), not one
+        per game. Per key, the latest row fetched at or before
+        ``first_pitch_at`` among the 'current' and 'closing' rows is promoted
+        when it is 'current' and the load guard keeps its stamp against
+        ``scheduled_start`` (``None`` = no stamp check). The promoted row's
+        ``odds_hash`` is rewritten to its closing hash, so the nightly loader's
+        identical row deduplicates against it. A second call promotes nothing.
+        See :func:`promote_closing_game_rows`.
+
+        The schedule poll calls this the first time it sees a game Live
+        (:meth:`_mark_closing_rows`). Returns the rows promoted.
         """
-        SIM-133: Closing line designation job.
-
-        Finds the most recent raw.game_odds snapshot with line_type='current'
-        that was fetched before first_pitch_at and updates its line_type to
-        'closing'.  This row becomes the reference line for CLV calculation.
-
-        Should be called once per game immediately after first pitch is detected
-        (when feed/live status transitions from 'Preview' to 'Live').
-
-        Returns the number of rows updated (0 or 1 per market_type).
-        """
-        result = await self._db.execute(
-            """
-            WITH last_pre_pitch AS (
-                SELECT id
-                FROM raw.game_odds
-                WHERE game_pk = $1
-                  AND line_type = 'current'
-                  AND fetched_at <= $2
-                ORDER BY fetched_at DESC
-                LIMIT 1
-            )
-            UPDATE raw.game_odds
-               SET line_type = 'closing'
-             WHERE id IN (SELECT id FROM last_pre_pitch)
-            """,
-            game_pk,
-            first_pitch_at,
+        updated = await promote_closing_game_rows(
+            self._db, game_pk, first_pitch_at, scheduled_start=scheduled_start
         )
-        updated = int(result.split()[-1]) if result else 0
         if updated:
             log.info(
-                "Closing line designated: game %s at %s (%d row updated)",
+                "Closing lines designated: game %s at %s (%d rows promoted)",
                 game_pk,
                 first_pitch_at.isoformat(),
                 updated,
             )
         return updated
 
-    async def mark_closing_prop_lines(self, game_pk: int, first_pitch_at: datetime) -> int:
+    async def mark_closing_prop_lines(
+        self,
+        game_pk: int,
+        first_pitch_at: datetime,
+        *,
+        scheduled_start: datetime | None = None,
+    ) -> int:
+        """SIM-340 / SIM-546: the prop analogue of :meth:`mark_closing_lines`.
+
+        One closing row per (player, prop stat, book), by the same rule, with
+        the prop hash rewritten. See :func:`promote_closing_prop_rows`.
+        Returns the prop rows promoted.
         """
-        SIM-340: Closing prop-line designation job — the prop analogue of
-        mark_closing_lines() (SIM-133).
-
-        For every distinct (player_id, prop_stat, book) on this game, finds the
-        most recent raw.prop_odds snapshot with line_type='current' that was
-        fetched at or before first_pitch_at and stamps it line_type='closing'.
-        Each stamped row becomes the per-prop CLV reference line (SIM-339).
-
-        Unlike game odds — which has one closing line per market_type — props
-        fan out per player × stat × book, so this stamps one closing row per
-        such combination via a DISTINCT ON window rather than a single LIMIT 1.
-
-        Should be called once per game immediately after first pitch is detected
-        (status transitions 'Preview' -> 'Live'), the same trigger point used
-        for mark_closing_lines().
-
-        Returns the number of prop rows updated to 'closing'.
-        """
-        result = await self._db.execute(
-            """
-            WITH last_pre_pitch AS (
-                SELECT DISTINCT ON (player_id, prop_stat, book) id
-                FROM raw.prop_odds
-                WHERE game_pk = $1
-                  AND line_type = 'current'
-                  AND fetched_at <= $2
-                ORDER BY player_id, prop_stat, book, fetched_at DESC
-            )
-            UPDATE raw.prop_odds
-               SET line_type = 'closing'
-             WHERE id IN (SELECT id FROM last_pre_pitch)
-            """,
-            game_pk,
-            first_pitch_at,
+        updated = await promote_closing_prop_rows(
+            self._db, game_pk, first_pitch_at, scheduled_start=scheduled_start
         )
-        updated = int(result.split()[-1]) if result else 0
         if updated:
             log.info(
-                "Closing prop lines designated: game %s at %s (%d rows updated)",
+                "Closing prop lines designated: game %s at %s (%d rows promoted)",
                 game_pk,
                 first_pitch_at.isoformat(),
                 updated,

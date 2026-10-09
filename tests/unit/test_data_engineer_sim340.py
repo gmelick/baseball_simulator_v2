@@ -262,38 +262,79 @@ class TestSIM340MultiBookSharpFlag:
 # ===========================================================================
 
 
+def _current_prop_row(row_id: int, player_id: int, *, line_type: str = "current") -> dict:
+    """SIM-546: one stored prop row as the closing promotion reads it."""
+    row = {
+        "id": row_id,
+        "source": "bettingpros",
+        "line_type": line_type,
+        "player_id": player_id,
+        "prop_stat": "strikeouts",
+        "book": "bp:12",
+        "is_sharp_book": False,
+        "book_line_at": None,
+        "line": 5.5,
+        "over_ml": -115,
+        "under_ml": -105,
+    }
+    row["odds_hash"] = LiveIngestionPipeline._prop_odds_hash(row)
+    return row
+
+
 class TestSIM340MarkClosingPropLines:
+    """SIM-546 rewrote the marker: one candidate per (player, prop, book), the
+    hash rewritten to the closing hash, and a second call promotes nothing."""
+
     @pytest.mark.asyncio
     async def test_marks_closing_prop_lines(self) -> None:
-        """mark_closing_prop_lines must UPDATE raw.prop_odds current->closing."""
+        """mark_closing_prop_lines promotes raw.prop_odds current->closing."""
         pipeline = _make_pipeline()
-        pipeline._db.execute.return_value = "UPDATE 12"
+        rows = [_current_prop_row(1, 100), _current_prop_row(2, 200)]
+        pipeline._db.fetch.side_effect = [rows, []]  # the read, then the existence check
+        pipeline._db.execute.return_value = "UPDATE 2"
         first_pitch = datetime(2024, 8, 15, 19, 5, tzinfo=UTC)
 
         updated = await pipeline.mark_closing_prop_lines(745000, first_pitch)
 
-        assert updated == 12
-        sql = pipeline._db.execute.await_args.args[0]
+        assert updated == 2
+        read_sql = pipeline._db.fetch.await_args_list[0].args[0]
+        assert "raw.prop_odds" in read_sql
+        # Per-prop fan-out: the latest row per (player, prop, book), current or closing.
+        assert "DISTINCT ON (player_id, prop_stat, book)" in read_sql
+        assert "'current', 'closing'" in read_sql
+        sql, ids, hashes = pipeline._db.execute.await_args.args
         assert "raw.prop_odds" in sql
         assert "line_type = 'closing'" in sql
         assert "line_type = 'current'" in sql
-        # Per-prop fan-out: DISTINCT ON, not a single LIMIT 1.
-        assert "DISTINCT ON" in sql
+        assert ids == [1, 2]
+        assert hashes == [
+            LiveIngestionPipeline._prop_odds_hash({**row, "line_type": "closing"}) for row in rows
+        ]
 
     @pytest.mark.asyncio
     async def test_closing_returns_zero_when_no_rows(self) -> None:
         pipeline = _make_pipeline()
-        pipeline._db.execute.return_value = "UPDATE 0"
+        pipeline._db.fetch.return_value = []
         updated = await pipeline.mark_closing_prop_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
         assert updated == 0
+        pipeline._db.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_second_call_promotes_nothing(self) -> None:
+        pipeline = _make_pipeline()
+        pipeline._db.fetch.return_value = [_current_prop_row(1, 100, line_type="closing")]
+        updated = await pipeline.mark_closing_prop_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
+        assert updated == 0
+        pipeline._db.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_closing_passes_game_and_pitch_time(self) -> None:
         pipeline = _make_pipeline()
+        pipeline._db.fetch.side_effect = [[_current_prop_row(1, 100)], []]
         pipeline._db.execute.return_value = "UPDATE 1"
         first_pitch = datetime(2024, 8, 15, 19, 5, tzinfo=UTC)
         await pipeline.mark_closing_prop_lines(777, first_pitch)
-        args = pipeline._db.execute.await_args.args
+        args = pipeline._db.fetch.await_args_list[0].args
         assert 777 in args
         assert first_pitch in args
 

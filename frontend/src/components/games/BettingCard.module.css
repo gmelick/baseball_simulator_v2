@@ -144,3 +144,16 @@
   font-size: var(--sim-text-xs);
   color: var(--sim-color-text-muted);
 }
+
+/* SIM-546: the sub-heading over a group of markets (Full game, First five innings,
+   First inning, Team totals). */
+.groupTitle {
+  margin: 0;
+  padding-bottom: var(--sim-space-1);
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sim-color-text-muted);
+  border-bottom: 1px solid var(--sim-color-border);
+}

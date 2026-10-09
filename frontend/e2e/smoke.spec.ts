@@ -166,3 +166,128 @@ test('date navigation advances the day', async ({ page }) => {
   await expect(page).toHaveURL(/\/date\/2024-08-16/)
   await expect(page.getByText(/No games scheduled/i)).toBeVisible()
 })
+
+/**
+ * SIM-546: the fifteen game markets, as the edge route answers with the mock
+ * provider (every market priced from the mock's prices). Each market carries its
+ * kind's sides: a three-way market adds the tie ('draw').
+ */
+const EDGE_MARKETS: Array<{ type: string; label: string; name: string; sides: string[] }> = [
+  { type: 'moneyline', label: 'moneyline', name: 'Moneyline', sides: ['home', 'away'] },
+  { type: 'runline', label: 'run_line', name: 'Run line', sides: ['home', 'away'] },
+  { type: 'total', label: 'total', name: 'Total', sides: ['over', 'under'] },
+  { type: 'f1_moneyline', label: 'f1_moneyline', name: 'First inning moneyline', sides: ['home', 'away', 'draw'] },
+  { type: 'f5_moneyline', label: 'f5_moneyline', name: 'First five moneyline', sides: ['home', 'away', 'draw'] },
+  { type: 'f1_total', label: 'f1_total', name: 'First inning total', sides: ['over', 'under'] },
+  { type: 'f5_total', label: 'f5_total', name: 'First five total', sides: ['over', 'under'] },
+  { type: 'f1_runline', label: 'f1_runline', name: 'First inning run line', sides: ['home', 'away'] },
+  { type: 'f5_runline', label: 'f5_runline', name: 'First five run line', sides: ['home', 'away'] },
+  { type: 'team_total_home', label: 'team_total_home', name: 'Home team total', sides: ['over', 'under'] },
+  { type: 'team_total_away', label: 'team_total_away', name: 'Away team total', sides: ['over', 'under'] },
+  { type: 'f5_team_total_home', label: 'f5_team_total_home', name: 'Home team first five total', sides: ['over', 'under'] },
+  { type: 'f5_team_total_away', label: 'f5_team_total_away', name: 'Away team first five total', sides: ['over', 'under'] },
+  { type: 'first_to_score', label: 'first_to_score', name: 'First team to score', sides: ['home', 'away'] },
+  { type: 'first_inning_run', label: 'first_inning_run', name: 'A run in the first inning', sides: ['over', 'under'] },
+]
+
+/** Mock /edges + /signals for 745001: every market from the mock provider, no signal. */
+async function mockBetting(page: Page): Promise<void> {
+  const lineOf = (label: string, side: string): number | null => {
+    if (side === 'over' || side === 'under') return label === 'first_inning_run' ? 0.5 : 4.5
+    if (label.endsWith('run_line') || label.endsWith('runline')) return side === 'home' ? -0.5 : 0.5
+    return null
+  }
+  const edges = EDGE_MARKETS.flatMap((m) =>
+    m.sides.map((side) => ({
+      label: m.label,
+      side,
+      line: lineOf(m.label, side),
+      sim_prob: 0.4,
+      market_fair_prob: 0.42,
+      edge: -0.02,
+      ev: -0.05,
+      offered_american: 120,
+      sim_fair_american: 150,
+      clv: null,
+      positive_edge: false,
+      price_book: null,
+      price_book_name: null,
+    })),
+  )
+  const oddsSource = Object.fromEntries(EDGE_MARKETS.map((m) => [m.type, 'mock']))
+  const marketNames = Object.fromEntries(EDGE_MARKETS.map((m) => [m.label, m.name]))
+  const pairPricing = { shape: 'pair', home_line: -0.5, away_line: 0.5, reference_margin: null, reference_source: null }
+  const common = {
+    game_pk: 745001,
+    n_iterations: 200,
+    base_seed: null,
+    odds_source: oddsSource,
+    run_line_pricing: { ...pairPricing, home_line: -1.5, away_line: 1.5 },
+    fair_book: {},
+    fair_book_name: {},
+    market_names: marketNames,
+    run_line_pricing_by_label: {
+      run_line: { ...pairPricing, home_line: -1.5, away_line: 1.5 },
+      f1_runline: pairPricing,
+      f5_runline: pairPricing,
+    },
+  }
+  await page.route('**/api/betting/games/745001/edges**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...common, markets: EDGE_MARKETS.map((m) => m.type), edges }),
+    }),
+  )
+  await page.route('**/api/betting/games/745001/signals**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...common, config: {}, signals: [] }),
+    }),
+  )
+}
+
+test('the betting card renders all fifteen game markets with a tie side', async ({ page }) => {
+  await mockAuthed(page)
+  await mockGame(page)
+  await mockBetting(page)
+  await page.goto('/game/745001')
+
+  const card = page.getByRole('region', { name: 'Betting' })
+  await card.getByRole('button', { name: 'Load betting' }).click()
+
+  // SIM-546: one section per market, titled from market_names.
+  await expect(card.locator('section')).toHaveCount(15)
+  // The four sub-headings, in the card's order.
+  await expect(card.locator('h4')).toHaveText([
+    'Full game',
+    'First five innings',
+    'First inning',
+    'Team totals',
+  ])
+  // The sections, grouped under their sub-headings. The mock lists the markets in
+  // the vocabulary order, so this order holds only when the card groups them.
+  await expect(card.locator('section h5')).toHaveText([
+    'Moneyline',
+    'Run line',
+    'Total',
+    'First team to score',
+    'First five moneyline',
+    'First five total',
+    'First five run line',
+    'First inning moneyline',
+    'First inning total',
+    'First inning run line',
+    'A run in the first inning',
+    'Home team total',
+    'Away team total',
+    'Home team first five total',
+    'Away team first five total',
+  ])
+  // A three-way market's third side reads "Tie"; the yes / no market's read "Yes" / "No".
+  await expect(card.getByText('Tie', { exact: true }).first()).toBeVisible()
+  await expect(card.getByText('Yes', { exact: true })).toBeVisible()
+  await expect(card.getByText('No', { exact: true })).toBeVisible()
+  await expect(card.getByText(/A tie is a priced outcome/).first()).toBeVisible()
+})
