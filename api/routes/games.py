@@ -505,7 +505,8 @@ def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | 
     """Build a ``GameSimSummaryLite`` from a stored (JSONB) summary dict.
 
     Strips the three raw per-iteration score arrays (``home_scores``,
-    ``away_scores``, ``total_scores``) before passing to ``model_validate``
+    ``away_scores``, ``total_scores``) and the per-iteration inning grid
+    (``inning_grids``, SIM-546) before passing to ``model_validate``
     because ``GameSimSummaryLite`` does not carry those fields and the base
     ``_ApiModel`` uses ``extra="forbid"``.  Returns ``None`` on any failure
     (missing keys, type errors, unknown format) so callers never see an
@@ -517,7 +518,7 @@ def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | 
         lite_dict = {
             k: v
             for k, v in summary.items()
-            if k not in ("home_scores", "away_scores", "total_scores")
+            if k not in ("home_scores", "away_scores", "total_scores", "inning_grids")
         }
         return GameSimSummaryLite.model_validate(lite_dict)
     except Exception:  # noqa: BLE001 -- best-effort deserialization

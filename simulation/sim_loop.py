@@ -3256,6 +3256,14 @@ class GameSimResult:
     #: unaffected; ``None`` when no boxscore was accumulated (the loop attaches a
     #: populated one via :func:`simulate_game`).
     boxscore: BoxScore | None = None
+    #: SIM-546, the inning grid: each team's runs per inning, one cell per
+    #: inning. ``None`` in a cell marks a half the game never played (the
+    #: scoreboard "x"); ``0`` marks a half played without a run. The two lists
+    #: have the same length. The segment and team markets (the first inning,
+    #: the first five innings, a team's runs) are priced from these cells.
+    #: ``None`` for the whole field when the result was built by hand.
+    home_by_inning: list[int | None] | None = None
+    away_by_inning: list[int | None] | None = None
 
     @property
     def winner(self) -> Team | None:
@@ -3586,6 +3594,29 @@ def simulate_game(
     half_inning_open = False
     cur_inning, cur_half = state.inning, state.half
 
+    # --- SIM-546: the inning grid --------------------------------------------
+    # One run cell per inning for each team. The loop reads the score at the
+    # start of each half; when the half ends, the batting side's cell is the
+    # score now minus the score then. The roll comes after the runs are
+    # credited, so a third-out play's runs land in the half it ended, as in
+    # ``simulation.linescore``. The grid only reads the state: it draws no
+    # random number, so every game plays exactly as before.
+    # A game that starts later than the top of the 1st (a caller's
+    # ``initial_state``) has a ``None`` cell for each half it did not play,
+    # as ``linescore_from_plays`` gives for the same plays.
+    home_by_inning: list[int | None] = [None] * (state.inning - 1)
+    away_by_inning: list[int | None] = [None] * (state.inning - 1)
+    if state.half == Half.BOTTOM:
+        away_by_inning.append(None)
+    half_start_home, half_start_away = state.home_score, state.away_score
+
+    def _close_half(half: Half) -> None:
+        """Write the runs of the half that just ended into its team's list."""
+        if half == Half.TOP:
+            away_by_inning.append(state.away_score - half_start_away)
+        else:
+            home_by_inning.append(state.home_score - half_start_home)
+
     while True:
         # Detect a brand-new half-inning (the pointer changed, or the very first
         # pitch of the game): re-arm the per-half ghost-runner seeding.
@@ -3616,6 +3647,10 @@ def simulate_game(
         if rolled:
             # A half-inning just completed (3 outs).  Re-arm for the next half.
             half_inning_open = False
+            # SIM-546: the inning grid. A half that ended on a pickoff with
+            # no pitch (SIM-554) was still played and gets its cell too.
+            _close_half(prev_half)
+            half_start_home, half_start_away = state.home_score, state.away_score
             if _game_over_after_half(state):
                 break
             continue
@@ -3625,11 +3660,15 @@ def simulate_game(
         # batters, the half-inning does NOT complete, spec §6.2).
         if _is_walkoff_live(state):
             walk_off = True
+            # SIM-546: the walk-off half was played; its runs go in the grid.
+            _close_half(state.half)
             break
 
         # Safety guard: never spin past the inning OR pitch ceiling (the latter
         # bounds a pathological never-an-out machine that never rolls an inning).
         if state.inning > max_innings or total_pitches >= max_pitches:
+            # SIM-546: the half in progress had a pitch; its runs go in the grid.
+            _close_half(state.half)
             break
 
     # ``last_played_inning`` is the inning the deciding play happened in, so it is
@@ -3638,6 +3677,13 @@ def simulate_game(
     # played).
     innings_played = last_played_inning
     extra_innings = last_played_inning > REGULATION_INNINGS
+
+    # SIM-546: give both lists one cell per inning. The home list is the short
+    # one when the game ended after a top half: the bottom was never played,
+    # so its cell is None (the scoreboard "x").
+    grid_len = max(len(home_by_inning), len(away_by_inning))
+    home_by_inning.extend([None] * (grid_len - len(home_by_inning)))
+    away_by_inning.extend([None] * (grid_len - len(away_by_inning)))
 
     return GameSimResult(
         home_score=state.home_score,
@@ -3654,6 +3700,8 @@ def simulate_game(
         # terminal PA ever resolved a scored outcome (the machine never created
         # one).  Downstream SIM-329 props aggregates this across iterations.
         boxscore=getattr(state_machine, "boxscore", None),
+        home_by_inning=home_by_inning,
+        away_by_inning=away_by_inning,
     )
 
 
