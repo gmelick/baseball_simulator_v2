@@ -1118,9 +1118,13 @@ starting-position smoke (SIM-559) on the same ten games (runs 9.03 there, at 40 
    and the hot-reloaded `api/routes/betting.py` now imports new `betting/` names, so an `api/`
    reload before the rebuild fails to import (`CLAUDE.md` §2a). Then start the scheduler
    (`docker compose --profile scheduler up -d scheduler`). Check the vendor key without printing
-   it (`docker compose exec app sh -c 'test -n "$ODDS_API_KEY" && echo set'`). Run the nightly
-   job once by hand (`docker compose exec app env ODDS_PROVIDER=bettingpros sh
-   /app/scripts/nightly_closing_lines.sh`) and confirm it writes rows.
+   it (`docker compose exec app sh -c 'test -n "$ODDS_API_KEY" && echo set'`). Run the nightly job once by hand (`docker compose exec app env ODDS_PROVIDER=bettingpros sh
+   /app/scripts/nightly_closing_lines.sh`) and confirm it writes rows. **And set
+   `ODDS_PROVIDER=bettingpros` in the app's own environment** (the compose `app` env or the host
+   `.env`): checked 2026-10-09, neither sets it, so the live odds cycle in production runs the
+   mock provider and stores mock rows (`book = 'consensus'`), which every reader filters out.
+   Until that is set, the first-pitch promotion acts on mock rows only and the real closing rows
+   come from the nightly job alone (it names the provider itself and the container holds the key).
 2. **The first live game day check (§8).** `/edges` on a `Preview` game reads fifteen markets
    with `stored` sources. The app log at first pitch shows "closing rows promoted: game N, K
    game rows, M prop rows". `/edges` after first pitch reads closing rows. The next morning's

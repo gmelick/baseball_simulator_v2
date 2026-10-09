@@ -135,6 +135,12 @@ iterations).
     2.10.3 drops `additionalProperties: true` from free-form dict fields, which would have
     broken about fifteen existing types.
 
+**Deploy prerequisite found after the build (2026-10-09).** Production's live odds cycle runs the
+mock provider: neither the compose file nor the host `.env` sets `ODDS_PROVIDER`, so the rows it
+stores are mock rows, which every reader filters out. The first-pitch promotion therefore acts on
+mock rows until `ODDS_PROVIDER=bettingpros` is set in the app's environment; the nightly closing
+job names the provider itself and works without it (the container holds the vendor key).
+
 **Not yet run: the first live game day check of the design's section 8.** Nothing is deployed.
 The order matters. Rebuild the app image first (`docker compose build app`, then
 `docker compose up -d app`): `betting/` and `scripts/` are baked into the image, and the
