@@ -388,3 +388,30 @@ def test_no_run_reads_404_with_a_hint(app_and_pool) -> None:
         assert resp.status_code == 404
         assert "POST /simulate" in resp.text
         assert client.get("/api/games/1/boxscore?latest_run=true").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Part F: the generic bullpen is one summed row per side
+# ---------------------------------------------------------------------------
+
+
+def test_the_generic_pen_folds_into_one_row_per_side() -> None:
+    from api.schemas import GENERIC_PEN_IDS, BoxscoreCardModel
+
+    ps = _runner().run_job(_spec(), n_iterations=6, base_seed=2).prop_set
+    assert ps is not None
+    kw = _spec().sim_kwargs
+    import dataclasses
+
+    tags = {pid: dataclasses.asdict(t) for pid, t in games_mod._player_tags(kw).items()}
+    card = BoxscoreCardModel.from_prop_set(ps, tags=tags)
+    negatives = [r for r in card.players.values() if r.player_id < 0]
+    assert {r.player_id for r in negatives} <= set(GENERIC_PEN_IDS.values())
+    assert all(r.synthetic and r.name == "Bullpen (generic)" for r in negatives)
+    # The sum keeps the relievers' total: outs over the pen rows equal the
+    # outs of every negative-id pitcher in the set.
+    pen_outs = sum(r.means.get("OUTS", 0.0) for r in negatives)
+    raw_outs = sum(
+        props["OUTS"].mean for pid, props in ps.by_player.items() if pid < 0 and "OUTS" in props
+    )
+    assert pen_outs == pytest.approx(raw_outs)

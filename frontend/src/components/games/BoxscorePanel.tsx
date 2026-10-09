@@ -21,6 +21,7 @@
  * Simulation card) and runs no batch of its own; each click reads the same run.
  */
 import React, { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import {
   fetchBoxscore,
@@ -110,7 +111,11 @@ function groupByTeam(box: BoxscoreCard, awayLabel: string, homeLabel: string): T
       group.batters.push({ row, props: batting, marker: slot != null ? String(slot) : '–' })
     }
     if (pitching.length > 0) {
-      group.pitchers.push({ row, props: pitching, marker: row.starting_pitcher ? 'SP' : 'RP' })
+      group.pitchers.push({
+        row,
+        props: pitching,
+        marker: row.synthetic ? 'BP' : row.starting_pitcher ? 'SP' : 'RP',
+      })
     }
   }
 
@@ -228,9 +233,24 @@ export function BoxscorePanel({
   const renderLine = (line: PlayerLine): React.ReactElement => (
     <li key={`${line.row.player_id}-${line.marker}`} className={styles.playerRow}>
       <span className={styles.marker}>{line.marker}</span>
-      <span className={styles.playerName}>{playerName(line.row)}</span>
+      <span className={styles.playerName}>
+        {line.row.player_id > 0 ? (
+          <Link to={`/player/${line.row.player_id}`}>{playerName(line.row)}</Link>
+        ) : (
+          playerName(line.row)
+        )}
+      </span>
       <span className={styles.chips}>
         {line.props.map(([prop, mean]) => {
+          if (line.row.synthetic) {
+            // The summed pen has no single distribution to open.
+            return (
+              <span key={prop} className={styles.chip}>
+                <span className={styles.chipProp}>{propLabel(prop)}</span>
+                <span className={styles.chipMean}>{mean.toFixed(2)}</span>
+              </span>
+            )
+          }
           const active = selection?.playerId === line.row.player_id && selection?.prop === prop
           return (
             <button
@@ -269,6 +289,11 @@ export function BoxscorePanel({
             <>
               <h4 className={styles.groupLabel}>Pitching</h4>
               <ul className={styles.playerList}>{g.pitchers.map(renderLine)}</ul>
+              {g.pitchers.some((l) => l.row.synthetic) && (
+                <p className={styles.caption}>
+                  This game&apos;s bullpen is not listed yet; the relievers are a generic pen, shown as one row.
+                </p>
+              )}
             </>
           )}
         </section>
@@ -278,7 +303,7 @@ export function BoxscorePanel({
         <div className={styles.detail}>
           <div className={styles.detailHeader}>
             <strong>
-              {selectedRow ? playerName(selectedRow) : `Player ${selection.playerId}`} —{' '}
+              {dist?.player_name ?? (selectedRow ? playerName(selectedRow) : `Player ${selection.playerId}`)} —{' '}
               {propLabel(selection.prop)}
             </strong>
             <label className={styles.lineLabel}>

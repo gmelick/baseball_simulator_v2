@@ -360,6 +360,17 @@ _PROP_ODDS_INSERT_SQL = """
             """
 
 
+#: SIM-519 Part G: the live writers' form. A row the book still posts (the same
+#: hash) is re-stamped instead of skipped, so the pre-game read knows the
+#: price is current. Needs Alembic 0029 (``last_seen_at``).
+_GAME_ODDS_RESTAMP_SQL = _GAME_ODDS_INSERT_SQL.replace(
+    "DO NOTHING", "DO UPDATE SET last_seen_at = NOW()"
+)
+_PROP_ODDS_RESTAMP_SQL = _PROP_ODDS_INSERT_SQL.replace(
+    "DO NOTHING", "DO UPDATE SET last_seen_at = NOW()"
+)
+
+
 def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, ...]:
     """The bind values of one raw.game_odds INSERT, in ``_GAME_ODDS_INSERT_SQL`` order.
 
@@ -417,29 +428,35 @@ def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
-async def insert_game_odds_rows(conn: Any, game_pk: int, rows: Sequence[Mapping[str, Any]]) -> int:
+async def insert_game_odds_rows(
+    conn: Any, game_pk: int, rows: Sequence[Mapping[str, Any]], *, restamp: bool = False
+) -> int:
     """SIM-555: insert game-odds rows in one ``executemany``, with the dedup.
 
     ``conn`` is an asyncpg pool or connection. The SQL is the live writer's
     (``odds_hash`` last, ``ON CONFLICT ... DO NOTHING``). Returns the number of
     rows sent (the dedup may insert fewer). An empty list sends nothing.
+    SIM-519 Part G: ``restamp`` re-stamps ``last_seen_at`` on a row already
+    stored (the live writers, once Alembic 0029 is applied).
     """
     if not rows:
         return 0
-    await conn.executemany(
-        _GAME_ODDS_INSERT_SQL, [game_odds_insert_args(game_pk, row) for row in rows]
-    )
+    sql = _GAME_ODDS_RESTAMP_SQL if restamp else _GAME_ODDS_INSERT_SQL
+    await conn.executemany(sql, [game_odds_insert_args(game_pk, row) for row in rows])
     return len(rows)
 
 
-async def insert_prop_odds_rows(conn: Any, rows: Sequence[Mapping[str, Any]]) -> int:
+async def insert_prop_odds_rows(
+    conn: Any, rows: Sequence[Mapping[str, Any]], *, restamp: bool = False
+) -> int:
     """SIM-555: insert prop-odds rows in one ``executemany``, with the dedup.
 
     The prop analogue of :func:`insert_game_odds_rows`. Returns the rows sent.
     """
     if not rows:
         return 0
-    await conn.executemany(_PROP_ODDS_INSERT_SQL, [prop_odds_insert_args(row) for row in rows])
+    sql = _PROP_ODDS_RESTAMP_SQL if restamp else _PROP_ODDS_INSERT_SQL
+    await conn.executemany(sql, [prop_odds_insert_args(row) for row in rows])
     return len(rows)
 
 
@@ -2023,6 +2040,23 @@ class LiveIngestionPipeline:
 
         await self._write_heartbeat(sorted(current_live))
 
+    async def _last_seen_available(self) -> bool:
+        """SIM-519 Part G: whether ``raw.game_odds.last_seen_at`` exists (Alembic 0029), cached."""
+        known = getattr(self, "_last_seen_column", None)
+        if known is not None:
+            return bool(known)
+        try:
+            known = bool(
+                await self._db.fetchval(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'raw' "
+                    "AND table_name = 'game_odds' AND column_name = 'last_seen_at'"
+                )
+            )
+        except Exception:  # noqa: BLE001 -- unknown means the plain insert
+            return False
+        self._last_seen_column = known
+        return known
+
     async def _broadcast_message(self, game_pk: int, payload: dict) -> None:
         """Send a browser-bound message (SIM-519 Part C).
 
@@ -3129,7 +3163,9 @@ class LiveIngestionPipeline:
         the offer's books instead of one per book. Returns the number of rows
         sent (the dedup may insert fewer). An empty list sends nothing.
         """
-        return await insert_game_odds_rows(self._db, game_pk, rows)
+        return await insert_game_odds_rows(
+            self._db, game_pk, rows, restamp=await self._last_seen_available()
+        )
 
     @staticmethod
     def _prop_odds_hash(prop: dict) -> str:
@@ -3219,7 +3255,9 @@ class LiveIngestionPipeline:
         The same SQL and dedup as :meth:`_persist_prop_odds`. Returns the number
         of rows sent (the dedup may insert fewer). An empty list sends nothing.
         """
-        return await insert_prop_odds_rows(self._db, rows)
+        return await insert_prop_odds_rows(
+            self._db, rows, restamp=await self._last_seen_available()
+        )
 
     async def mark_closing_lines(
         self,

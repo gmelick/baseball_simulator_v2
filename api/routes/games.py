@@ -2917,10 +2917,18 @@ async def get_player_prop_edge(
         except Exception as exc:  # noqa: BLE001 -- best-effort; odds can be degenerate
             log.warning("prop_edge_report failed for %d/%s: %s", player_id, prop_upper, exc)
 
+    # SIM-519 Part F: name the player in the chart header (best effort).
+    player_name = None
+    if int(player_id) > 0:
+        name_pool = getattr(request.app.state, "pg_pool", None)
+        if name_pool is not None:
+            player_name = (await _player_names(name_pool, [int(player_id)])).get(int(player_id))
+
     return PropEdgeResponse(
         player_id=int(dist.player_id),
         prop=str(dist.prop),
         n=int(dist.n),
+        player_name=player_name,
         support=[int(v) for v in dist.support.tolist()],
         probabilities=[float(p) for p in dist.probabilities.tolist()],
         mean=float(dist.mean),

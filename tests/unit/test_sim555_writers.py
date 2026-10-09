@@ -1366,6 +1366,7 @@ class TestPersistMany:
     @pytest.mark.asyncio
     async def test_one_executemany_per_call_with_the_single_row_sql(self) -> None:
         p = _bare_pipeline()
+        p._last_seen_column = False  # a database before Alembic 0029 (SIM-519 Part G)
         rows = [MockOddsAPI.get_odds(9, market_type="f5_total", book=b) for b in ("a", "b")]
         assert await p._persist_odds_many(9, rows) == 2
         (call,) = p._db.executemany.await_args_list

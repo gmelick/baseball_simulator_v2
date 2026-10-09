@@ -617,7 +617,9 @@ class TestStoredEdges:
         # not in Preview (here: no raw.games row), a closing row first.
         assert "line_type = ANY($4::varchar[])" in sql
         assert "'current'" not in sql
-        assert "(line_type = 'closing') DESC, fetched_at DESC" in sql
+        # SIM-519 Part G: a book's rows sort by when the price was last seen.
+        assert "(line_type = 'closing') DESC," in sql
+        assert "COALESCE(last_seen_at, fetched_at) DESC" in sql
         assert "book LIKE 'bp:%'" in sql
         # Review fix (VOCAB-1): a list of the books a bettor can use, never a blacklist.
         assert "AND book = ANY($3::varchar[])" in sql and "NOT (book = ANY(" not in sql

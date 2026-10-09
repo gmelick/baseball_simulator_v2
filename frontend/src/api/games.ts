@@ -350,6 +350,8 @@ export interface BoxscoreRow {
   lineup_slot?: number | null
   /** SIM-560: true for each side's starting pitcher. */
   starting_pitcher?: boolean
+  /** SIM-519 Part F: the one summed row of a side's generic bullpen. */
+  synthetic?: boolean
 }
 
 export interface BoxscoreCard {
@@ -389,6 +391,8 @@ export interface PropEdge {
   player_id: number
   prop: string
   n: number
+  /** SIM-519 Part F: the player's name, when known. */
+  player_name?: string | null
   support: number[]
   probabilities: number[]
   mean: number

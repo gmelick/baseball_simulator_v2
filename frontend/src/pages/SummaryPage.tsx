@@ -232,7 +232,8 @@ export function SummaryPage(): React.ReactElement {
       <div className={styles.filterBar}>
         <span className={styles.filterLabel}>Season</span>
         <select className={styles.select} value={season ?? ''} onChange={(e) => setSeason(Number(e.target.value))} aria-label="Season">
-          {seasons.map((s) => (
+          {/* SIM-519 Part H: newest first; the default stays the newest. */}
+          {[...seasons].reverse().map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
