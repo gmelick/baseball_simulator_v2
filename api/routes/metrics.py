@@ -207,7 +207,9 @@ def _pipeline_freshness_seconds(app_state: Any) -> float:
     may set) when present; otherwise reports -1 (no data) so the gauge exists for
     the dashboard without fabricating a freshness reading.
     """
-    ts = getattr(app_state, "last_resim_signal_ts", None)
+    # SIM-519 Part C: the live service's heartbeat, when the background read has one.
+    hb = getattr(app_state, "live_heartbeat_ts", None)
+    ts = hb if hb is not None else getattr(app_state, "last_resim_signal_ts", None)
     if ts is None:
         return -1.0
     try:
@@ -238,6 +240,24 @@ async def _refresh_newest_final(app_state: Any) -> None:
         return
 
 
+async def _refresh_live_heartbeat(app_state: Any) -> None:
+    """Read the live service's heartbeat stamp into ``app.state`` (best effort)."""
+    redis = getattr(app_state, "redis_client", None)
+    if redis is None:
+        return
+    try:
+        from pipeline.live.broadcast import HEARTBEAT_KEY
+
+        raw = await redis.get(HEARTBEAT_KEY)
+        app_state.live_heartbeat_ts = float(raw) if raw is not None else None
+    except Exception:  # noqa: BLE001 -- a metric must never fail the app
+        return
+
+
+#: SIM-519 Part C: the heartbeat stamp is read at most this often.
+HEARTBEAT_REFRESH_S = 15
+
+
 def _schedule_finals_refresh(app_state: Any) -> None:
     """Start the refresh in the background when the stored date is stale.
 
@@ -245,16 +265,19 @@ def _schedule_finals_refresh(app_state: Any) -> None:
     value, and the next scrape sees the new one.
     """
     now = time.time()
-    if now - float(getattr(app_state, "finals_checked_at", 0.0) or 0.0) < FINALS_AGE_REFRESH_S:
-        return
-    app_state.finals_checked_at = now
     try:
         import asyncio
 
-        task = asyncio.get_running_loop().create_task(_refresh_newest_final(app_state))
-        app_state.finals_refresh_task = task  # keep a reference until it ends
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         return
+    if now - float(getattr(app_state, "finals_checked_at", 0.0) or 0.0) >= FINALS_AGE_REFRESH_S:
+        app_state.finals_checked_at = now
+        # Keep a reference until the task ends.
+        app_state.finals_refresh_task = loop.create_task(_refresh_newest_final(app_state))
+    if now - float(getattr(app_state, "heartbeat_checked_at", 0.0) or 0.0) >= HEARTBEAT_REFRESH_S:
+        app_state.heartbeat_checked_at = now
+        app_state.heartbeat_refresh_task = loop.create_task(_refresh_live_heartbeat(app_state))
 
 
 def _finals_age_hours(app_state: Any) -> float:

@@ -49,6 +49,9 @@ function teamLabel(name: string | null, abbrev: string | null, id: number | null
   return name ?? abbrev ?? (id != null ? `Team ${id}` : 'TBD')
 }
 
+/** SIM-519 Part C: the REST fallback's interval while the live socket is closed. */
+const LIVE_POLL_MS = 15_000
+
 /** Fetch hook that tolerates a 404 as "no data yet" (returns null, not error). */
 function useOptionalResource<T>(
   fn: () => Promise<T>,
@@ -101,9 +104,11 @@ export function GamePage(): React.ReactElement {
   )
   const isLive = card.data?.game_status === 'live'
 
+  // SIM-519 Part C: while the live socket is down, re-read /live every 15 s.
+  const [livePoll, setLivePoll] = useState(0)
   const live = useOptionalResource<LiveState>(
     () => (isLive ? fetchLiveState(gamePk) : Promise.resolve(null as unknown as LiveState)),
-    [gamePk, isLive],
+    [gamePk, isLive, livePoll],
   )
   // SIM-561: a newly stored simulated game bumps the version, which reloads the
   // card; the card's run id then loads that run's plays.
@@ -140,6 +145,12 @@ export function GamePage(): React.ReactElement {
 
   // Live WS — only connect for an in-progress game.
   const socket = useGameSocket(gamePk, isLive)
+
+  useEffect(() => {
+    if (!isLive || socket.status !== 'closed') return
+    const id = window.setInterval(() => setLivePoll((n) => n + 1), LIVE_POLL_MS)
+    return () => window.clearInterval(id)
+  }, [isLive, socket.status])
 
   if (!valid) {
     return (

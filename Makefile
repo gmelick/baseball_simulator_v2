@@ -12,7 +12,7 @@
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke profile-computor engine-artifacts calibrate \
-        validate-props load-historical-odds ingest-catch-up
+        validate-props load-historical-odds ingest-catch-up live-logs
 
 # Default target — show help.
 ##
@@ -71,6 +71,11 @@ migrate: _require_env_file
 ##   make ingest-catch-up DAYS=14
 ingest-catch-up: _require_env_file
 	docker compose run --rm -e DAYS=$(or $(DAYS),3) app sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
+
+## SIM-519 Part C: follow the live service's log (schedule polls, lineup writes,
+## push subscriptions).
+live-logs:
+	docker compose logs -f --tail=200 live
 
 ## Nightly: rebuild DuckDB player profiles + sim pools from Postgres.
 profile-computor: _require_env_file

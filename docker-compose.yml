@@ -382,6 +382,50 @@ services:
       - baseball_net
 
   # ---------------------------------------------------------------------------
+  # The live service (SIM-519 Part C; decision D2). The live ingestion pipeline
+  # in its own container: the schedule poll (yesterday..tomorrow, Eastern), the
+  # per-game push subscriptions, the published-lineup writer and the pre-game
+  # odds cycles. It publishes every browser-bound message on Redis; the app's
+  # bridge forwards it to /ws/games/{game_pk}. Its own restart policy, memory
+  # cap, logs and health check. Never set LIVE_PIPELINE_ENABLED in the app:
+  # this service is the one publisher. ODDS_PROVIDER / ODDS_API_KEY come from
+  # .env (the pre-game odds cycle; the mock when unset).
+  # ---------------------------------------------------------------------------
+  live:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    mem_limit: "1g"
+    env_file:
+      - .env
+    environment:
+      BASEBALL_DB_DSN: postgresql://baseball_user:baseball_pass@db:5432/baseball_sim
+      REDIS_URL:       redis://redis:6379/0
+      LIVE_PROJECTED_LINEUPS: "0"   # decision D3: built, OFF until the owner rules
+      LIVE_PIPELINE_ENABLED: "false"
+    command: python -m pipeline.live.run_live
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    volumes:
+      - ./pipeline:/app/pipeline
+      - ./db:/app/db
+      - ./api:/app/api
+      - ./simulation:/app/simulation
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
   # nginx reverse proxy (SIM-373)
   # Fronts the ``app`` service: proxies REST/ops/docs to app:8000 and the
   # live-game WebSocket (/ws/games/{game_pk}) with the HTTP/1.1 Upgrade

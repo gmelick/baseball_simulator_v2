@@ -361,6 +361,14 @@ async def lifespan(app: FastAPI):
             "LIVE_PIPELINE_ENABLED is false — ws_router/odds_router are mounted "
             "but the background live ingestion pipeline is NOT started."
         )
+        # SIM-519 Part C (decision D2): the live service runs in its own
+        # container and publishes on Redis; this bridge forwards a game's
+        # messages to the browsers watching it. Never set LIVE_PIPELINE_ENABLED
+        # on the compose stack: the `live` service is the one publisher.
+        from pipeline.live.broadcast import RedisBridge
+        from pipeline.live.live_ingestion_pipeline import connection_manager
+
+        app.state.live_bridge = RedisBridge(app.state.redis_client, connection_manager.broadcast)
 
     # ----------------------------------------------------------------
     # Phase 5 (SIM-357) / SIM-561: the replay store -- a DuckDB file of its own.
@@ -567,6 +575,13 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "sim_runner", None) is not None:
         try:
             app.state.sim_runner.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # SIM-519 Part C: stop the live bridge's subscriptions.
+    if getattr(app.state, "live_bridge", None) is not None:
+        try:
+            await app.state.live_bridge.close()
         except Exception:  # noqa: BLE001
             pass
 
@@ -869,6 +884,12 @@ def create_app() -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 checks["redis"] = f"error: {type(exc).__name__}"
                 all_ok = False
+
+        # SIM-519 Part C: the live service's heartbeat (informational only).
+        if redis_client is not None:
+            from pipeline.live.broadcast import heartbeat_status
+
+            checks["live_service"] = await heartbeat_status(redis_client)
 
         # Pitcher engine (informational only — not a readiness blocker)
         checks["pitcher_engine"] = (
