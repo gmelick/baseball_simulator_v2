@@ -27,7 +27,10 @@ sim.sim_runs (Part E: one durable run per game)
                                                  stored run is 'done'.
     progress_done, requested_at, started_at, finished_at, error, spec_key,
     requested_by, lineup_source, bullpen_source, and the run's panel data:
-    prop_set, linescore, decisions, play_by_play, inning_grids (JSONB).
+    prop_set, linescore, decisions, inning_grids (JSONB), and replay_run_id —
+    the run's representative game in the replay file (SIM-561 keeps a
+    simulated game's play-by-play there, so the row links to it rather than
+    copying it; the design's ``play_by_play`` column became this link).
     ``summary`` drops NOT NULL: a queued run has none yet.
     idx_sim_runs_game_status   (game_pk, status, created_at DESC)
     uq_sim_runs_active_spec    UNIQUE (spec_key) WHERE status IN
@@ -83,7 +86,7 @@ _RUN_COLUMNS = (
     ("prop_set", "JSONB"),
     ("linescore", "JSONB"),
     ("decisions", "JSONB"),
-    ("play_by_play", "JSONB"),
+    ("replay_run_id", "INTEGER"),
     ("inning_grids", "JSONB"),
 )
 

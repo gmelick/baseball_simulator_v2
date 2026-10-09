@@ -165,6 +165,15 @@ async def lifespan(app: FastAPI):
     app.state.pg_pool = await open_pg_pool(dsn)
     app.state.player_name_resolver = make_pg_name_resolver(app.state.pg_pool)
 
+    # SIM-519 Part E: the run jobs. A queued or running row left by a previous
+    # process can never finish, so it is marked failed('restart') at boot.
+    from api.sim_jobs import SimJobRegistry
+
+    app.state.sim_jobs = SimJobRegistry(app.state.pg_pool)
+    orphans = await app.state.sim_jobs.recover_orphans()
+    if orphans:
+        log.info("SIM-519: %d unfinished simulation run(s) marked failed('restart')", orphans)
+
     log.info("Opening Redis cache ...")
     app.state.redis_client, app.state.similarity_cache = await open_redis_cache(redis_url)
 
@@ -575,6 +584,13 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "sim_runner", None) is not None:
         try:
             app.state.sim_runner.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # SIM-519 Part E: stop the run jobs (their rows are recovered at next boot).
+    if getattr(app.state, "sim_jobs", None) is not None:
+        try:
+            await app.state.sim_jobs.close()
         except Exception:  # noqa: BLE001
             pass
 

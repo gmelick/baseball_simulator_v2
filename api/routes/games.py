@@ -993,9 +993,13 @@ async def _persist_replay_artifacts(
     con = _get_replay_store(request)
     pool = getattr(request.app.state, "pg_pool", None)
 
-    # Nothing to write the replay stream to -> skip entirely (the replay reads
-    # answer 503 "replay store unavailable").
+    # Nothing to write the replay stream to: the replay reads answer 503
+    # "replay store unavailable". SIM-519: a /simulate batch still keeps its
+    # summary in the Postgres history (the slate card's sim line reads it);
+    # before, the early return skipped that write on the default stack.
     if con is None:
+        if batch is not None and pool is not None:
+            await _store_history_run(pool, game_pk=game_pk, batch=batch, base_seed=base_seed)
         return None
 
     try:
@@ -1977,6 +1981,201 @@ async def simulate_game_endpoint(
 
 
 # ===========================================================================
+# SIM-519 Part E -- one simulation run per game: POST /simulate + /simulate/runs
+# ===========================================================================
+
+
+class SimRunRequest(BaseModel):
+    """``POST /api/games/{game_pk}/simulate`` body."""
+
+    n_iterations: int = Field(100, ge=1, le=10000)
+    base_seed: int | None = None
+
+
+class SimRunModel(BaseModel):
+    """One run job (a ``sim.sim_runs`` row)."""
+
+    run_id: int
+    game_pk: int
+    status: Literal["queued", "running", "done", "failed", "cancelled"]
+    n_iterations: int
+    progress_done: int = 0
+    base_seed: int | None = None
+    position_in_queue: int | None = None
+    existing: bool = False
+    requested_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+    lineup_source: str | None = None
+    bullpen_source: str | None = None
+    replay_run_id: int | None = None
+    summary: GameSimSummaryLite | None = None
+
+
+#: The lineup the simulator reads for a game: the box, else a published, else a
+#: projected lineup (Alembic 0029). None before 0029 or with no row.
+_SQL_LINEUP_SOURCE = """
+    SELECT CASE WHEN bool_or(source = 'box') THEN 'box'
+                WHEN bool_or(source = 'published') THEN 'published'
+                WHEN bool_or(source = 'projected') THEN 'projected' END
+      FROM raw.game_lineups WHERE game_pk = $1
+"""
+
+
+def _get_sim_jobs(request: Request) -> Any:
+    jobs = getattr(request.app.state, "sim_jobs", None)
+    if jobs is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="the run registry is not attached (no database pool)",
+        )
+    return jobs
+
+
+def _run_model(run: Mapping[str, Any], *, existing: bool = False) -> SimRunModel:
+    summary = run.get("summary")
+    return SimRunModel(
+        run_id=int(run["run_id"]),
+        game_pk=int(run["game_pk"]),
+        status=run.get("status") or "done",
+        n_iterations=int(run["n_iterations"]),
+        progress_done=int(run.get("progress_done") or 0),
+        base_seed=run.get("base_seed"),
+        position_in_queue=run.get("position_in_queue"),
+        existing=existing,
+        requested_at=_iso(run.get("requested_at")),
+        started_at=_iso(run.get("started_at")),
+        finished_at=_iso(run.get("finished_at")),
+        error=run.get("error"),
+        lineup_source=run.get("lineup_source"),
+        bullpen_source=run.get("bullpen_source"),
+        replay_run_id=run.get("replay_run_id"),
+        summary=_sim_summary_lite_from_stored(summary) if isinstance(summary, dict) else None,
+    )
+
+
+async def _lineup_source(pool: Any, game_pk: int) -> str | None:
+    try:
+        return await pool.fetchval(_SQL_LINEUP_SOURCE, int(game_pk))
+    except Exception:  # noqa: BLE001 -- before 0029 there is no source column
+        return None
+
+
+@router.post(
+    "/{game_pk}/simulate",
+    response_model=SimRunModel,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start a simulation run (SIM-519 Part E)",
+    dependencies=[Depends(require_auth)],
+    description=(
+        "Queue one Monte-Carlo run of the game: N iterations from first pitch. The run "
+        "is a durable row; poll GET /simulate/runs/{run_id} for its state and progress. "
+        "A run with the same game, seed and N that is queued or running is returned "
+        "instead (existing=true). When done, the row holds the summary, every player's "
+        "prop distributions and the inning grids, and the panels read it. 503 with "
+        "Retry-After when the lineup is not yet published; 404 for an unknown game."
+    ),
+)
+async def start_simulation_run(game_pk: int, request: Request, body: SimRunRequest) -> SimRunModel:
+    jobs = _get_sim_jobs(request)
+    pool = _get_pool(request)
+    state = await _resolve_state_or_error(pool, game_pk)
+    factory_ref = resolve_factory_ref(request)
+    spec = GameSpec(
+        machine_factory=factory_ref,
+        sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
+    )
+    runner = _build_runner(request)
+
+    async def record_game(seed: int | None) -> int | None:
+        # The run's representative game, stored in the replay file (SIM-561):
+        # the linescore and play-by-play panels show it.
+        return await _persist_replay_artifacts(
+            request,
+            game_pk=int(game_pk),
+            factory_ref=factory_ref,
+            base_seed=seed,
+            sim_kwargs=spec.sim_kwargs,
+        )
+
+    run, existing = await jobs.submit(
+        game_pk=int(game_pk),
+        spec=spec,
+        runner=runner,
+        n_iterations=body.n_iterations,
+        base_seed=body.base_seed,
+        lineup_source=await _lineup_source(pool, game_pk),
+        bullpen_source=getattr(state, "bullpen_source", None),
+        record_game=record_game,
+    )
+    return _run_model(run, existing=existing)
+
+
+@router.get(
+    "/{game_pk}/simulate/runs/latest",
+    response_model=SimRunModel,
+    summary="The game's newest run, any state (SIM-519 Part E)",
+)
+async def get_latest_simulation_run(game_pk: int, request: Request) -> SimRunModel:
+    run = await _get_sim_jobs(request).latest(int(game_pk))
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "no simulation run for this game", "hint": "POST /simulate"},
+        )
+    return _run_model(run)
+
+
+@router.get(
+    "/{game_pk}/simulate/runs/{run_id}",
+    response_model=SimRunModel,
+    summary="One run's state, progress and summary (SIM-519 Part E)",
+)
+async def get_simulation_run(game_pk: int, run_id: int, request: Request) -> SimRunModel:
+    run = await _get_sim_jobs(request).get(int(game_pk), int(run_id))
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"run {run_id} not found")
+    return _run_model(run)
+
+
+@router.delete(
+    "/{game_pk}/simulate/runs/{run_id}",
+    response_model=SimRunModel,
+    summary="Cancel a run (SIM-519 Part E)",
+    dependencies=[Depends(require_auth)],
+    description=(
+        "A queued run is cancelled at once; a running run stops after its current chunk "
+        "of games (it keeps the games it played). Idempotent. 409 when the run already "
+        "finished; 404 when unknown."
+    ),
+)
+async def cancel_simulation_run(game_pk: int, run_id: int, request: Request) -> SimRunModel:
+    run = await _get_sim_jobs(request).cancel(int(game_pk), int(run_id))
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"run {run_id} not found")
+    if run["status"] in ("done", "failed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"run {run_id} is {run['status']}"
+        )
+    return _run_model(run)
+
+
+async def _stored_prop_set(
+    request: Request, game_pk: int, run_id: int | None
+) -> tuple[PropDistributionSet, dict[str, Any]]:
+    """A run's prop set (``run_id``, else the newest done run); 404 with a hint when none."""
+    jobs = _get_sim_jobs(request)
+    row = await jobs.prop_set_row(int(game_pk), run_id)
+    if row is None or not row.get("prop_set"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "no simulation run for this game", "hint": "POST /simulate"},
+        )
+    return PropDistributionSet.from_json(row["prop_set"]), row
+
+
+# ===========================================================================
 # SIM-561 -- POST /api/games/{game_pk}/sample-game
 # ===========================================================================
 
@@ -2546,6 +2745,8 @@ async def get_game_boxscore(
     request: Request,
     n_iterations: int = Query(100, ge=1, le=2000, description="Monte-Carlo iterations"),
     base_seed: int | None = Query(None, description="Reproducibility seed for the batch"),
+    run_id: int | None = Query(None, description="SIM-519: read this stored run, no batch"),
+    latest_run: bool = Query(False, description="SIM-519: read the game's newest done run"),
 ) -> BoxscoreCardModel:
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
@@ -2555,6 +2756,19 @@ async def get_game_boxscore(
         machine_factory=resolve_factory_ref(request),
         sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
     )
+    if run_id is not None or latest_run:
+        # SIM-519 Part E: the panel reads the run; no second batch.
+        stored, row = await _stored_prop_set(request, int(game_pk), run_id)
+        names = _placeholder_names(spec.sim_kwargs)
+        names.update(await _player_names(pool, sorted(pid for pid in stored.by_player if pid > 0)))
+        return BoxscoreCardModel.from_prop_set(
+            stored,
+            base_seed=row.get("base_seed"),
+            names=names,
+            tags={
+                pid: dataclasses.asdict(tag) for pid, tag in _player_tags(spec.sim_kwargs).items()
+            },
+        )
     # SIM-561: store the run's first game for the linescore and play-by-play
     # panels, while the pool runs the batch.  Game 0's seed is base_seed itself
     # (derive_seed(base_seed, 0)), so the panels show one of these games.  A store
@@ -2623,6 +2837,8 @@ async def get_player_prop_edge(
     over_ml: float | None = Query(None, description="American odds for the OVER side"),
     under_ml: float | None = Query(None, description="American odds for the UNDER side"),
     bet_side: str = Query("over", description="Side to compute edge for ('over' or 'under')"),
+    run_id: int | None = Query(None, description="SIM-519: read this stored run, no batch"),
+    latest_run: bool = Query(False, description="SIM-519: read the game's newest done run"),
 ) -> PropEdgeResponse:
     # ---- parameter validation ----
     prop_upper = prop.upper()
@@ -2643,20 +2859,24 @@ async def get_player_prop_edge(
         )
 
     # ---- build prop set (same path as /boxscore; SIM-560: a seeded run is cached) ----
-    pool = _get_pool(request)
-    state = await _resolve_state_or_error(pool, game_pk)
-    # SIM-452: this route was one of the five park-blind callers. It resolves now.
-    spec = GameSpec(
-        machine_factory=resolve_factory_ref(request),
-        sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
-    )
-    pset = await asyncio.to_thread(
-        _build_prop_set,
-        runner=_build_runner(request),
-        spec=spec,
-        n_iterations=n_iterations,
-        base_seed=base_seed,
-    )
+    if run_id is not None or latest_run:
+        # SIM-519 Part E: the stored run's distributions; no batch.
+        pset, _row = await _stored_prop_set(request, int(game_pk), run_id)
+    else:
+        pool = _get_pool(request)
+        state = await _resolve_state_or_error(pool, game_pk)
+        # SIM-452: this route was one of the five park-blind callers. It resolves now.
+        spec = GameSpec(
+            machine_factory=resolve_factory_ref(request),
+            sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
+        )
+        pset = await asyncio.to_thread(
+            _build_prop_set,
+            runner=_build_runner(request),
+            spec=spec,
+            n_iterations=n_iterations,
+            base_seed=base_seed,
+        )
 
     # ---- look up the requested player + prop ----
     dist = pset.get(int(player_id), prop_upper)

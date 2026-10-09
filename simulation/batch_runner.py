@@ -711,6 +711,21 @@ class BatchResult:
     base_seed: int | None
 
 
+@dataclass(frozen=True)
+class JobOutcome:
+    """A run job's return (SIM-519 Part E): the summary and the prop set of the
+    games played, how many were played, and whether a cancel stopped it early.
+
+    ``summary`` and ``prop_set`` are None when no game was played (a cancel
+    before the first chunk ended)."""
+
+    summary: GameSimSummary | None
+    prop_set: PropDistributionSet | None
+    n_done: int
+    n_requested: int
+    cancelled: bool
+
+
 class BatchRunner:
     """Run N iterations of :func:`simulate_game` and aggregate to a SIM-327 summary.
 
@@ -1092,6 +1107,47 @@ class BatchRunner:
             self.cache.set(key, prop_set, SIM_PROP_SET_TTL_S)
         return prop_set
 
+    def run_job(
+        self,
+        spec: GameSpec,
+        *,
+        n_iterations: int = 100,
+        base_seed: int | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> JobOutcome:
+        """Play a run job's games in chunks, with progress and cancel (SIM-519 Part E).
+
+        The games run as in :meth:`run` (the same per-game seeds, the same warm
+        pool), in chunks of ``max_workers * 2``. After each chunk the runner
+        calls ``on_progress(done, total)`` and asks ``should_cancel()``; a
+        cancel stops before the next chunk (the games of the current chunk
+        finish). The one batch gives both the summary and every player's prop
+        distributions, so the panels never run a second batch. No cache: a job
+        is stored by its caller.
+        """
+        if n_iterations < 1:
+            raise ValueError(f"n_iterations must be >= 1, got {n_iterations}")
+        max_workers = self.resolve_max_workers(n_iterations)
+        seeds = [derive_seed(base_seed, i) for i in range(n_iterations)]
+        chunk = max(1, max_workers * 2)
+        results: list[GameSimResult] = []
+        cancelled = False
+        for start in range(0, n_iterations, chunk):
+            results.extend(self._execute(spec, seeds[start : start + chunk], max_workers))
+            if on_progress is not None:
+                on_progress(len(results), n_iterations)
+            if should_cancel is not None and len(results) < n_iterations and should_cancel():
+                cancelled = True
+                break
+        if not results:
+            return JobOutcome(None, None, 0, n_iterations, cancelled)
+        summary = GameSimSummary.from_results(results, confidence_level=self.confidence_level)
+        prop_set = PropDistributionSet.from_boxscores(
+            [r.boxscore if r.boxscore is not None else BoxScore() for r in results]
+        )
+        return JobOutcome(summary, prop_set, len(results), n_iterations, cancelled)
+
     def record_game(self, spec: GameSpec, seed: int | None) -> Any:
         """Record ONE game with its plays on the warm pool (SIM-561).
 
@@ -1252,6 +1308,7 @@ __all__ = [
     # the runner
     "BatchRunner",
     "BatchResult",
+    "JobOutcome",
     # the picklable no-DB factory (the always-on path)
     "rng_driven_machine_factory",
 ]
