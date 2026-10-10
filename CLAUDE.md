@@ -618,11 +618,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   them when the file's mtime changes, at most once a minute, and keeps the old snapshot
   while a rebuild holds the lock. Every other open (the engine builds, the worker loads)
   already closed after its load. The nightly profile + bundle rebuild job is ON
-  (`deploy/ofelia/config.ini`, 08:00 UTC). Three gaps stay (SIM-563): the engines and the
-  bundle load at boot, so rebuilt data reaches users at the next app restart; an app boot
-  or a hot reload DURING a rebuild cannot open the file for the engine builds; a worker that
-  respawns during a rebuild gets no intentional-walk rates. Do not boot or reload the app
-  while a rebuild runs.
+  (`deploy/ofelia/config.ini`, 08:00 UTC). The three gaps it left are closed by SIM-563
+  (the next bullet).
+- **The nightly rebuild reaches users by itself (SIM-563, 2026-10-10).** The bundle
+  `/data/play_pool/engine_artifacts` is a LINK to a version under
+  `engine_artifacts.versions/<build id>/` (`pipeline/batch/bundle_versions.py`). A build with
+  no `--out-dir` copies the current version, builds into the copy and moves the link in one
+  step; a failed build moves nothing; pruning keeps three versions plus any a running app
+  marks in use. The app pins the version it booted with (`BASEBALL_ENGINE_ARTIFACT_DIR`, set
+  before the pool starts), so a respawned worker reads the parent's version. The workers read
+  the IBB rates and the venue run factors from the bundle (`--what reference`), never DuckDB.
+  When the link moves, the app waits for its run jobs (at most 10 minutes) and for any DuckDB
+  writer, then restarts itself (`api/bundle_watch.py`, `SIM_RESTART_ON_NEW_BUNDLE=1` in
+  compose; SIGTERM to PID 1, `restart: unless-stopped`). A boot while a writer holds the file
+  waits for it (`SIM_BOOT_LOCK_WAIT_S`, 30 minutes) instead of crashing, and a failed
+  park-factor read retries every minute. An explicit `--out-dir` still writes in place.
 - **The game page opens with the real game and runs a "what if" from any play (SIM-562,
   2026-10-09).** A live or final game shows the league feed's linescore, box score and
   play-by-play above every simulation (`GET /feed/plays`). "What if from here" on a play reads
@@ -930,7 +940,7 @@ make lint              # ruff check
 make format            # ruff format
 make type-check        # mypy
 make profile-computor  # nightly: rebuild DuckDB profiles + sim pools
-make engine-artifacts  # nightly (after profile-computor): rebuild the engine-artifact bundle (SIM-486)
+make engine-artifacts  # nightly (after profile-computor): build + publish a new bundle version (SIM-486, SIM-563)
 make calibrate         # fit /data/calibration.json (arsenal W2 + per-engine sigmas) — SIM-406/432
 make validate-props    # SIM-407 prop-PMF / win-prob validation (add --write-calibration for the curve)
 make ingest-catch-up DAYS=14  # SIM-519: load the last N days' finals, crash-wrapped (Postgres only)

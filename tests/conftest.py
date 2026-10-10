@@ -93,6 +93,11 @@ os.environ["SIM_FENCE_STAGE"] = "0"
 os.environ["SIM_CARRY_OFFSET"] = "0"
 os.environ["SIM_BB_BORN_PER_FEATURE"] = "0"
 os.environ["SIM_BB_MARGIN_BAND"] = "0"
+# SIM-563: a test never restarts PID 1 or reads a pinned bundle version left by
+# a lifespan, and a lock error in a test never waits 30 minutes.
+os.environ["SIM_RESTART_ON_NEW_BUNDLE"] = "0"
+os.environ.pop("BASEBALL_ENGINE_ARTIFACT_DIR", None)
+os.environ["SIM_BOOT_LOCK_WAIT_S"] = "0"
 
 # SIM-523 part D: the pitching change as a draw from the opportunity pool.
 # Off = the SIM-434 formula, production today and the OFF arm of the SIM-427
