@@ -1,3 +1,75 @@
+# CLOSED — the nightly rebuild reaches users with no person involved; the bundle is published as versions — SIM-563, 2026-10-10
+
+**Why it matters.** Since SIM-524 the 08:00 UTC rebuild runs beside the app, but the app
+loaded the profiles and the data bundle only at boot, so the new data waited for somebody to
+restart it. A boot during a rebuild crashed, and a worker that respawned could mix two bundle
+versions or lose its intentional-walk rates. Now the rebuild publishes a new bundle version,
+and the app restarts itself on it.
+
+**Owner decisions (2026-10-10).** The app restarts itself (about a minute of downtime near
+5 AM Eastern) rather than swapping engines in place (twice the memory, much harder code). The
+proof is the full nightly job, run by hand with the app serving.
+
+**What was built.**
+- **Bundle versions** (`pipeline/batch/bundle_versions.py`). `/data/play_pool/engine_artifacts`
+  is a relative link to `engine_artifacts.versions/<UTC build id>/`. The engine-artifact CLI
+  with no `--out-dir` copies the current version, builds into the copy, writes `.published`
+  and moves the link with `os.replace` (atomic). A build that raises deletes its copy. Pruning
+  keeps the newest three published versions, the current one and any version an app marks in
+  use (`.in_use.<hostname>`), and deletes an unpublished folder older than the current version
+  (a build whose process died). An explicit `--out-dir` writes in place as before. The first
+  boot or publish converts the legacy real folder to `versions/legacy-<ts>`.
+- **The workers read only the bundle.** `--what reference` (in `all`) writes `ibb_rates.json`
+  and `venue_run_factors.json`; the factory takes them from the bundle and reads DuckDB only
+  for an older bundle. A failed DuckDB open for the IBB rates is no longer cached for the life
+  of the worker.
+- **The pin.** The lifespan converts the legacy folder, resolves the link and sets
+  `BASEBALL_ENGINE_ARTIFACT_DIR` to the version before the pool starts; the forkserver's
+  workers inherit it, so a worker started after a publish reads the parent's version. The
+  pre-warm passes no pool dir, so it caches under the same key as the games.
+- **The self-restart** (`api/bundle_watch.py`). Every minute the app compares the link with
+  the version it booted with. On a change it waits for its run jobs (at most 10 minutes;
+  `SimJobRegistry.active_count`) and for any DuckDB writer, then sends SIGTERM to PID 1;
+  `restart: unless-stopped` brings it back. `SIM_RESTART_ON_NEW_BUNDLE=1` in compose; off in
+  `tests/conftest.py`.
+- **A boot during a rebuild waits.** `api.state.retry_on_duckdb_lock` retries an engine build
+  every 15 s while a DuckDB lock error lasts (`SIM_BOOT_LOCK_WAIT_S`, 30 minutes), then raises
+  as before. A failed park-factor read retries every minute; the `X-Park-Factor-Source` header
+  follows the module's live verdict.
+
+**Tests.** `tests/unit/test_sim563_bundle_versions.py` (12, POSIX only: the atomic link swap)
+and `tests/unit/test_sim563_worker_and_boot.py` (17). The container unit lane showed failures
+only in files whose image copies are stale (docs, `db/`, the live pipeline); each of those six
+files passes on the branch's files.
+
+**The live run (2026-10-10, the app serving throughout).**
+- `nightly_rebuild.sh` under the retry wrapper, started 06:01 UTC. Attempts 1 and 2
+  SEGFAULTED in the bundle step (exit 139, the stochastic crash class of CLAUDE.md §2a); attempt
+  3 passed and published `20261010T075603Z` at 09:09:29. A clean attempt takes about 85
+  minutes: the 2026 profiles 12 minutes, the bundle 73. With two crashes the job took 3 h 8 min.
+- The scheduler's own 08:00 run collided with mine: its profile step could not take the write
+  lock (my bundle step held a read connection) and stopped in 3 s with nothing written. A
+  normal night has one run.
+- Memory: the job peaked at 7.2 GB beside the app's 7.4–9.5 GB; the app reads about 14 GB
+  of its 16 GB limit once its ten workers are warm.
+- 60 `/health` samples during the rebuild answered 200; `/simulate` answered 200.
+- The app saw the new version 8 s after the publish, restarted (09:09:37), and answered
+  again at 09:10:48: **71 s of downtime**. The boot built 11/11 engines and pinned the new
+  version; every worker's environment carries it.
+- Found and fixed in the run: the two crashed attempts left their staged folders behind (a
+  segfault skips the clean-up), and pruning counted them as kept versions. `.published` now
+  tells a dead build from a published one.
+- An operator slip: a process filter in my check killed the server's resource tracker (PID 7),
+  not a pool worker. I restarted the app once (09:11:56) to clear it. A pool worker was NOT
+  killed on purpose: one dead worker breaks the whole process pool until the app restarts
+  (no recovery exists; pre-existing).
+
+**Risks recorded.** The restart lands at the end of the rebuild: about 09:25 UTC on a clean
+night, later after a crash. The SIM-546 closing-lines job runs at 09:30 UTC inside the app
+container (`job-exec`) and fails if the app is restarting at that minute. Each segfault costs
+up to 75 minutes, and three crashes exhaust the wrapper, which leaves the published version in
+place and the app on it.
+
 # CLOSED — a rebuild runs while the app serves; the nightly rebuild job is ON — SIM-524, 2026-10-10
 
 **Why it matters.** A data rebuild could not write the statistics database
