@@ -47,6 +47,11 @@ KEEP_VERSIONS = 3
 #: The prefix of a converted legacy folder. It sorts as the oldest version.
 LEGACY_PREFIX = "legacy-"
 
+#: The file :func:`publish_bundle_version` writes into a version it publishes.
+#: A folder without it is a build that never published: one in progress, or one
+#: whose process died (a segfault skips the clean-up).
+PUBLISHED_MARKER = ".published"
+
 
 def versions_root(link: str) -> str:
     """The folder that holds the versions of ``link``."""
@@ -72,7 +77,11 @@ def _unique_dir(root: str, name: str) -> str:
 
 
 def _ignore_markers(_dir: str, names: list[str]) -> set[str]:
-    return {n for n in names if n.startswith(IN_USE_PREFIX) or n.startswith("tmp_")}
+    return {
+        n
+        for n in names
+        if n.startswith(IN_USE_PREFIX) or n.startswith("tmp_") or n == PUBLISHED_MARKER
+    }
 
 
 def stage_bundle_version(link: str, *, now: datetime | None = None) -> str:
@@ -116,6 +125,8 @@ def publish_bundle_version(link: str, version_dir: str) -> None:
     if os.path.lexists(tmp):
         os.remove(tmp)
     os.symlink(os.path.relpath(os.path.abspath(version_dir), parent), tmp)
+    with open(os.path.join(version_dir, PUBLISHED_MARKER), "w", encoding="utf-8") as fh:
+        fh.write(datetime.now(UTC).isoformat())
     os.replace(tmp, os.path.abspath(link))
     log.info("SIM-563: published bundle version %s", version_dir)
 
@@ -137,24 +148,38 @@ def _in_use(version_dir: str) -> bool:
         return False
 
 
-def prune_bundle_versions(link: str, keep: int = KEEP_VERSIONS) -> list[str]:
-    """Delete old versions. Keep the newest ``keep``, the current one and every marked one.
+def _published(name: str, path: str) -> bool:
+    return name.startswith(LEGACY_PREFIX) or os.path.exists(os.path.join(path, PUBLISHED_MARKER))
 
-    Returns the deleted folders.
+
+def prune_bundle_versions(link: str, keep: int = KEEP_VERSIONS) -> list[str]:
+    """Delete old versions and dead builds. Returns the deleted folders.
+
+    * A PUBLISHED version is kept when it is among the newest ``keep``, is the
+      current one, or carries an in-use marker.
+    * An UNPUBLISHED folder older than the current version is a build whose
+      process died before it published (a segfault skips the clean-up): it is
+      deleted. One newer than the current version may be a build in progress, so
+      it stays.
     """
     root = versions_root(link)
     if not os.path.isdir(root):
         return []
     current = resolve_bundle_dir(link)
+    current_key = _version_order(os.path.basename(current))
     names = sorted(
         (n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n))),
         key=_version_order,
     )
+    published = [n for n in names if _published(n, os.path.join(root, n))]
+    keep_names = set(published[-keep:]) if keep > 0 else set()
     removed: list[str] = []
-    for name in names[: max(0, len(names) - keep)]:
+    for name in names:
         path = os.path.join(root, name)
-        if os.path.realpath(path) == current or _in_use(path):
+        if os.path.realpath(path) == current or _in_use(path) or name in keep_names:
             continue
+        if name not in published and _version_order(name) > current_key:
+            continue  # maybe a build in progress
         shutil.rmtree(path, ignore_errors=True)
         removed.append(path)
         log.info("SIM-563: pruned bundle version %s", path)

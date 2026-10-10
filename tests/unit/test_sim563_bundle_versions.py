@@ -163,3 +163,28 @@ def test_the_app_pin_converts_the_legacy_folder_first(link, monkeypatch):
         assert _read(link) == "legacy"
     finally:
         os.environ.pop(bundle_watch.PINNED_ENV, None)
+
+
+def test_a_dead_build_is_pruned_and_a_build_in_progress_is_kept(link):
+    """A segfault skips the clean-up; the next publish removes the dead folder.
+
+    Found in the 2026-10-10 live run: two attempts crashed and left their folders.
+    """
+    dead = bv.stage_bundle_version(link, now=_at(0))  # never published
+    good = bv.stage_bundle_version(link, now=_at(1))
+    bv.publish_bundle_version(link, good)
+    running = bv.stage_bundle_version(link, now=_at(2))  # newer, not published yet
+
+    removed = bv.prune_bundle_versions(link, keep=3)
+
+    assert dead in removed
+    assert os.path.exists(good)
+    assert os.path.exists(running)
+    assert os.path.exists(os.path.join(good, bv.PUBLISHED_MARKER))
+
+
+def test_the_published_marker_is_not_copied(link):
+    first = bv.stage_bundle_version(link, now=_at(0))
+    bv.publish_bundle_version(link, first)
+    second = bv.stage_bundle_version(link, now=_at(1))
+    assert not os.path.exists(os.path.join(second, bv.PUBLISHED_MARKER))
