@@ -633,6 +633,6 @@ class TestMain:
             return real_connect(*args, **kwargs)
 
         monkeypatch.setattr(duckdb, "connect", locked_connect)
-        with pytest.raises(SystemExit, match="docker compose stop app") as info:
+        with pytest.raises(SystemExit, match="wait for the other process") as info:
             recompute.main(["--skip-profiles", "--duckdb-path", path])
         assert "sim532_locked.duckdb" in str(info.value)

@@ -8,7 +8,7 @@
 # that was off for a night. The loader skips games already loaded, so the
 # window costs a few schedule reads. Postgres only: no DuckDB write, so it is
 # safe while the app runs (the profile + artifact rebuild is
-# scripts/nightly_rebuild.sh, which needs the DuckDB lock — SIM-524).
+# scripts/nightly_rebuild.sh, the 08:00 UTC job that takes the DuckDB lock).
 #
 # Ofelia runs it nightly through the crash wrapper:
 #   sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh

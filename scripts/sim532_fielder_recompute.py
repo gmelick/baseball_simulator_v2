@@ -3,8 +3,8 @@ scripts/sim532_fielder_recompute.py — Savant's per-position outs above average
 outfield jump in the fielder profile (SIM-532), run-book step 4: the DuckDB migration,
 the fielder chain, the league rows, and the verify block.
 
-What it does, in order (the app must be STOPPED — a DuckDB write; the forkserver's
-writer lock, SIM-524):
+What it does, in order (a DuckDB write; since SIM-524 it runs
+while the app serves):
 
   1. applies ``db/migrations/duckdb/0030_sim532_fielder_oaa_jump.sql`` (idempotent
      ``ADD COLUMN IF NOT EXISTS``): the six columns after ``asof_date`` on
@@ -150,8 +150,9 @@ def _connect_writable(duckdb_path: str) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(duckdb_path)
     except duckdb.IOException as exc:
         raise SystemExit(
-            f"cannot open {duckdb_path} for writing ({exc}). The app holds the DuckDB "
-            "writer lock (SIM-524): stop it first — docker compose stop app."
+            f"cannot open {duckdb_path} for writing ({exc}). Another process holds "
+            "the file: a rebuild, or a reader in another container. The app holds no "
+            "handle since SIM-524; wait for the other process and retry."
         ) from exc
 
 

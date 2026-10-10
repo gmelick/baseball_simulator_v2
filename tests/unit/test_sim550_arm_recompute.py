@@ -698,11 +698,11 @@ class TestFillArmBlock:
             return real_connect(*args, **kwargs)
 
         monkeypatch.setattr(duckdb, "connect", locked_connect)
-        with pytest.raises(SystemExit, match="docker compose stop app") as info:
+        with pytest.raises(SystemExit, match="wait for the other process") as info:
             recompute.main(["--skip-fill", "--no-cross-check", "--duckdb-path", path])
         assert "sim550_locked.duckdb" in str(info.value)
         # The same run without the flag reads the same message: one probe, one text.
-        with pytest.raises(SystemExit, match="docker compose stop app"):
+        with pytest.raises(SystemExit, match="wait for the other process"):
             recompute.main(["--no-cross-check", "--duckdb-path", path])
 
 

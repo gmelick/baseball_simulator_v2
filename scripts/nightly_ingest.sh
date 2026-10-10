@@ -12,8 +12,8 @@
 # SIM-519 Part D: the scheduler no longer runs this chain. It runs
 # scripts/nightly_finals.sh (step 1's job, a three-day window) nightly and
 # scripts/weekly_refresh.sh on Sunday; steps 2 and 3 are
-# scripts/nightly_rebuild.sh, by hand with the app stopped (SIM-524). This
-# script stays as the whole chain for a by-hand run with the app stopped:
+# scripts/nightly_rebuild.sh, the 08:00 UTC job (it runs beside the app since
+# SIM-524). This script stays as the whole chain for a by-hand run:
 #   docker compose run --rm app sh /app/scripts/nightly_ingest.sh
 #
 # BASEBALL_DB_DSN must point at the in-container DB (db:5432); a default is set

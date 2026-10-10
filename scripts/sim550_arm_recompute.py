@@ -2,8 +2,8 @@
 scripts/sim550_arm_recompute.py — the outfield arm block (SIM-550), run-book step 2:
 the block rebuilt from our own advancement pool, the league rows, and the verify block.
 
-What it does, in order (the app must be STOPPED — a DuckDB write; the forkserver's
-writer lock, SIM-524):
+What it does, in order (a DuckDB write; since SIM-524 it runs
+while the app serves):
 
   1. NO migration. The six arm columns already exist on
      ``derived.fielder_season_metrics``; this ticket changes what they hold, not
@@ -143,8 +143,9 @@ def _connect_writable(duckdb_path: str) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(duckdb_path)
     except duckdb.IOException as exc:
         raise SystemExit(
-            f"cannot open {duckdb_path} for writing ({exc}). The app holds the DuckDB "
-            "writer lock (SIM-524): stop it first — docker compose stop app."
+            f"cannot open {duckdb_path} for writing ({exc}). Another process holds "
+            "the file: a rebuild, or a reader in another container. The app holds no "
+            "handle since SIM-524; wait for the other process and retry."
         ) from exc
 
 
