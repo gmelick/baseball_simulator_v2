@@ -556,15 +556,16 @@ services:
 
   # Nightly data scheduler (Ofelia, docker-native cron). It starts with the
   # stack (SIM-519 D6). Jobs (deploy/ofelia/config.ini): the three-day finals
-  # load nightly at 07:00 UTC and the season sweep on Sunday, both as fresh
-  # app-image containers through scripts/with_retry.sh; the SIM-546 closing
+  # load nightly at 07:00 UTC, the profile + bundle rebuild at 08:00 UTC and the
+  # season sweep on Sunday, as fresh app-image containers through
+  # scripts/with_retry.sh; the SIM-546 closing
   # pass inside the app container. Requires the app image to be built first
   # (docker compose build app) so the scripts are present.
   scheduler:
     image: mcuadros/ofelia:latest
     # SIM-519 Part D (decision D6): no profile gate — the scheduler starts with
     # the stack. Its jobs are in deploy/ofelia/config.ini; the DuckDB rebuild
-    # job stays disabled there until SIM-524.
+    # job runs beside the app since SIM-524 (the app holds no handle on the file).
     restart: unless-stopped
     command: daemon --config=/etc/ofelia/config.ini
     depends_on:

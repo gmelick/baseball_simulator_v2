@@ -92,6 +92,12 @@ concern. ``api/main.py`` calls it in the lifespan whether or not replay is on, a
 :func:`resolve_park_run_factor` falls back to it when its caller passes
 ``con=None``.
 
+The prime READS the run factors into memory and CLOSES the file (SIM-524). A
+DuckDB writer needs the file free of every other process, read-only handles
+included, so a handle kept open for the life of the app blocked every rebuild.
+The resolver re-reads the file when its mtime changes, so a rebuild reaches the
+app without a restart.
+
 The fallback is live only after an explicit prime. Nothing primes it in the unit
 lane, so a unit test that passes ``con=None`` still gets the unavailable sentinel
 and never touches a file.
@@ -108,8 +114,10 @@ Owner: Backend Developer (SIM-449, SIM-452, SIM-453).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -408,6 +416,25 @@ async def resolve_venue_id(pool: Any, game_pk: int) -> int | None:
         return None
 
 
+def _park_factor_row(con: Any, venue_id: int, season: int) -> tuple[Any, ...] | None:
+    """One ``(regressed_factor,)`` row for the venue and season, or ``None``.
+
+    ``con`` is a DuckDB connection or the in-memory snapshot (SIM-524), a dict
+    keyed by ``(venue_id, season)``. Both answer the same question, so the
+    resolver's reasons are the same on both paths.
+    """
+    if isinstance(con, dict):
+        if (venue_id, season) not in con:
+            return None
+        return (con[(venue_id, season)],)
+    row = con.execute(
+        "SELECT regressed_factor FROM derived.park_factors "
+        "WHERE venue_id = ? AND season = ? AND factor_type = 'R'",
+        [venue_id, season],
+    ).fetchone()
+    return None if row is None else tuple(row)
+
+
 async def resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int) -> float:
     """SIM-411: resolve the venue run park-factor for a game (~1.0 = neutral). Extracted SIM-449.
 
@@ -416,10 +443,10 @@ async def resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int
     venue from ``pool``, then its regressed run factor (``factor_type='R'``) for the
     season from ``con`` (``app.state.sim_duckdb``).
 
-    ``con=None`` falls back to the primed read-only park-factor source when
-    ``api/main.py`` opened one (SIM-453). That is how the default local stack --
-    which never opens ``app.state.sim_duckdb`` -- reads the park factors that are
-    sitting in the file.
+    ``con=None`` falls back to the park-factor snapshot when ``api/main.py`` primed
+    one (SIM-453). That is how the default local stack -- which never opens
+    ``app.state.sim_duckdb`` -- reads the park factors in the file. The snapshot is
+    a dict in memory; no file stays open (SIM-524).
 
     RETURN CONTRACT (SIM-453). A real row inside the sane 0.5-2.0 range comes back
     a PLAIN ``float``. Every other outcome -- no source, unknown venue, no row, a
@@ -432,7 +459,8 @@ async def resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int
     ``pool`` may be a connection pool (it has ``acquire``) or a single connection
     (it does not). Both the API pool and a script's asyncpg connection work."""
     if con is None:
-        con = _primed_park_factor_connection()
+        await _refresh_park_factor_snapshot_if_changed()
+        con = _PARK_FACTORS
     if con is None:
         reason = (
             "no park-factor source — app.state.sim_duckdb is None and no read-only "
@@ -456,11 +484,7 @@ async def resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int
             reason = f"raw.games has no venue_id for game_pk={int(game_pk)}"
             _warn_once(reason)
             return park_factor_unavailable(reason)
-        res = con.execute(
-            "SELECT regressed_factor FROM derived.park_factors "
-            "WHERE venue_id = ? AND season = ? AND factor_type = 'R'",
-            [int(venue_id), int(season)],
-        ).fetchone()
+        res = _park_factor_row(con, int(venue_id), int(season))
         if not res or res[0] is None:
             reason = (
                 "derived.park_factors has no factor_type='R' row for "
@@ -757,9 +781,21 @@ def open_sim_duckdb(path: str | None = None) -> Any:
 #      a replay stream. One variable for both is why the park factor went dark,
 #      and setting that variable keeps the conflation and adds side effects.
 #
-# The connection is process-wide because the thing it opens is process-wide: a
-# read-only DuckDB handle. It is live only after an explicit prime, so the unit
-# lane never touches a file and ``con=None`` there still means "unavailable".
+# The snapshot is process-wide, and it is live only after an explicit prime, so
+# the unit lane never touches a file and ``con=None`` there still means
+# "unavailable".
+#
+# SIM-524 -- THE FILE IS READ ONCE AND CLOSED. Until 2026-10-10 the prime kept
+# its read-only connection open for the life of the app. DuckDB lets a WRITER
+# open the file only when no other process holds it, read-only handles
+# included, so that one handle in the uvicorn server process blocked every
+# rebuild (a profile recompute, a pool rebuild, the nightly job) until somebody
+# stopped the app. ``/proc/<pid>/fd`` in the app container showed it: one
+# process, one read-only descriptor on the file, and no worker holding anything.
+# The run factors are a few thousand rows, so the prime now reads them into a
+# dict and closes the file. The resolver re-reads the file when its mtime
+# changes, at most once a minute; a re-read that fails (a rebuild holds the
+# write lock) keeps the old snapshot.
 # ---------------------------------------------------------------------------
 
 
@@ -779,87 +815,187 @@ class ParkFactorSource:
         return f"duckdb:{self.n_rows}" if self.available else "unavailable"
 
 
-#: The primed read-only connection, or ``None``. Process-wide by design.
-_PARK_FACTOR_CON: Any = None
+#: The primed run factors, ``(venue_id, season) -> regressed_factor``, or ``None``.
+#: Process-wide by design. A value may be ``None``: the row exists, the factor not.
+_PARK_FACTORS: dict[tuple[int, int], Any] | None = None
 
 #: What the last prime found. ``None`` means nobody primed in this process.
 _PARK_FACTOR_SOURCE: ParkFactorSource | None = None
 
+#: The file's mtime when the snapshot was read (SIM-524). ``None`` = unknown.
+_PARK_FACTORS_MTIME: float | None = None
 
-def _primed_park_factor_connection() -> Any:
-    """The primed read-only connection, or ``None`` (SIM-453)."""
-    return _PARK_FACTOR_CON
+#: ``time.monotonic()`` of the last mtime check (SIM-524).
+_PARK_FACTORS_CHECKED_AT: float = 0.0
+
+#: True while a re-read keeps failing, so a long rebuild logs one line, not one a minute.
+_PARK_FACTORS_REFRESH_FAILING: bool = False
+
+#: Seconds between two mtime checks of the file (SIM-524).
+PARK_FACTOR_REFRESH_SECONDS = 60.0
 
 
-def prime_park_factor_source(path: str | None = None) -> ParkFactorSource:
-    """Open the read-only park-factor source for this process (SIM-453).
+def _file_mtime(path: str) -> float | None:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
 
-    ``api/main.py`` calls this in the lifespan, whether or not replay persistence
-    is on, because reading park factors is not replay persistence. After it
-    succeeds, :func:`resolve_park_run_factor` uses it whenever its caller passes
-    ``con=None`` -- which every ``api/routes/games.py`` route does on the default
-    stack.
 
-    The prime also COUNTS ``derived.park_factors``. An empty table is an
-    unavailable source, not a neutral one, so the count is part of the verdict.
+def _read_park_factor_snapshot(
+    duckdb_path: str,
+) -> tuple[ParkFactorSource, dict[tuple[int, int], Any] | None]:
+    """Read ``derived.park_factors`` into memory and CLOSE the file (SIM-524).
 
-    Idempotent: a second call while a connection is open returns the same verdict.
-    Never raises; a failure returns an unavailable :class:`ParkFactorSource`.
+    Returns the verdict and, when the source is available, the run factors.
+    Never raises. The connection is closed on every path, so no handle outlives
+    this call.
     """
-    global _PARK_FACTOR_CON, _PARK_FACTOR_SOURCE
-
-    duckdb_path = path or os.environ.get("BASEBALL_DUCKDB_PATH") or DEFAULT_DUCKDB_PATH
-    if _PARK_FACTOR_CON is not None and _PARK_FACTOR_SOURCE is not None:
-        return _PARK_FACTOR_SOURCE
-
     con = open_sim_duckdb(duckdb_path)
     if con is None:
-        _PARK_FACTOR_SOURCE = ParkFactorSource(
-            available=False,
-            path=duckdb_path,
-            n_rows=0,
-            detail="the read-only DuckDB open failed (missing file, no duckdb module, "
-            "or another process holds the write lock)",
+        return (
+            ParkFactorSource(
+                available=False,
+                path=duckdb_path,
+                n_rows=0,
+                detail="the read-only DuckDB open failed (missing file, no duckdb module, "
+                "or another process holds the write lock)",
+            ),
+            None,
         )
-        return _PARK_FACTOR_SOURCE
-
     try:
         row = con.execute("SELECT count(*) FROM derived.park_factors").fetchone()
         n_rows = int(row[0]) if row else 0
+        rows = (
+            con.execute(
+                "SELECT venue_id, season, regressed_factor FROM derived.park_factors "
+                "WHERE factor_type = 'R'"
+            ).fetchall()
+            if n_rows > 0
+            else []
+        )
     except Exception as exc:  # noqa: BLE001
+        return (
+            ParkFactorSource(
+                available=False,
+                path=duckdb_path,
+                n_rows=0,
+                detail=f"derived.park_factors is unreadable ({type(exc).__name__}: {exc})",
+            ),
+            None,
+        )
+    finally:
         try:
             con.close()
         except Exception:  # noqa: BLE001
             pass
-        _PARK_FACTOR_SOURCE = ParkFactorSource(
-            available=False,
-            path=duckdb_path,
-            n_rows=0,
-            detail=f"derived.park_factors is unreadable ({type(exc).__name__}: {exc})",
-        )
-        return _PARK_FACTOR_SOURCE
 
     if n_rows <= 0:
-        try:
-            con.close()
-        except Exception:  # noqa: BLE001
-            pass
-        _PARK_FACTOR_SOURCE = ParkFactorSource(
-            available=False,
-            path=duckdb_path,
-            n_rows=0,
-            detail="derived.park_factors opened but holds 0 rows",
+        return (
+            ParkFactorSource(
+                available=False,
+                path=duckdb_path,
+                n_rows=0,
+                detail="derived.park_factors opened but holds 0 rows",
+            ),
+            None,
         )
+    factors = {(int(v), int(s)): f for v, s, f in rows}
+    return (
+        ParkFactorSource(
+            available=True,
+            path=duckdb_path,
+            n_rows=n_rows,
+            detail="read-only, read into memory and closed (SIM-524); separate from "
+            "REPLAY_PERSISTENCE_ENABLED",
+        ),
+        factors,
+    )
+
+
+def prime_park_factor_source(path: str | None = None) -> ParkFactorSource:
+    """Read the park factors for this process into memory (SIM-453, SIM-524).
+
+    ``api/main.py`` calls this in the lifespan, whether or not replay persistence
+    is on, because reading park factors is not replay persistence. After it
+    succeeds, :func:`resolve_park_run_factor` uses the snapshot whenever its
+    caller passes ``con=None`` -- which every ``api/routes/games.py`` route does
+    on the default stack.
+
+    The prime also COUNTS ``derived.park_factors``. An empty table is an
+    unavailable source, not a neutral one, so the count is part of the verdict.
+    The file is closed before this returns (SIM-524), so a rebuild can write it.
+
+    Idempotent: a second call while a snapshot is held returns the same verdict.
+    Never raises; a failure returns an unavailable :class:`ParkFactorSource`.
+    """
+    global _PARK_FACTORS, _PARK_FACTOR_SOURCE, _PARK_FACTORS_MTIME, _PARK_FACTORS_CHECKED_AT
+
+    duckdb_path = path or os.environ.get("BASEBALL_DUCKDB_PATH") or DEFAULT_DUCKDB_PATH
+    if _PARK_FACTORS is not None and _PARK_FACTOR_SOURCE is not None:
         return _PARK_FACTOR_SOURCE
 
-    _PARK_FACTOR_CON = con
-    _PARK_FACTOR_SOURCE = ParkFactorSource(
-        available=True,
-        path=duckdb_path,
-        n_rows=n_rows,
-        detail="read-only; separate from REPLAY_PERSISTENCE_ENABLED",
+    mtime = _file_mtime(duckdb_path)
+    source, factors = _read_park_factor_snapshot(duckdb_path)
+    _PARK_FACTOR_SOURCE = source
+    _PARK_FACTORS = factors
+    _PARK_FACTORS_MTIME = mtime
+    _PARK_FACTORS_CHECKED_AT = time.monotonic()
+    return source
+
+
+def refresh_park_factor_snapshot() -> bool:
+    """Re-read the file when its mtime moved (SIM-524). True = a new snapshot.
+
+    A re-read that fails -- a rebuild holds the write lock, or the rebuilt table
+    is empty -- keeps the old snapshot and its mtime, so the next check tries
+    again. Only a snapshot the prime already made is refreshed.
+    """
+    global _PARK_FACTORS, _PARK_FACTOR_SOURCE, _PARK_FACTORS_MTIME
+    global _PARK_FACTORS_CHECKED_AT, _PARK_FACTORS_REFRESH_FAILING
+
+    _PARK_FACTORS_CHECKED_AT = time.monotonic()
+    old = _PARK_FACTOR_SOURCE
+    if _PARK_FACTORS is None or old is None:
+        return False
+    mtime = _file_mtime(old.path)
+    if mtime is None or mtime == _PARK_FACTORS_MTIME:
+        return False
+    source, factors = _read_park_factor_snapshot(old.path)
+    if factors is None:
+        if not _PARK_FACTORS_REFRESH_FAILING:
+            log.warning(
+                "SIM-524: %s changed but the park-factor re-read failed (%s); "
+                "the app keeps the snapshot it has (%d rows) and retries.",
+                old.path,
+                source.detail,
+                old.n_rows,
+            )
+        _PARK_FACTORS_REFRESH_FAILING = True
+        return False
+    _PARK_FACTORS = factors
+    _PARK_FACTOR_SOURCE = source
+    _PARK_FACTORS_MTIME = mtime
+    _PARK_FACTORS_REFRESH_FAILING = False
+    log.info(
+        "SIM-524: park factors re-read from %s after the file changed: %d rows.",
+        old.path,
+        source.n_rows,
     )
-    return _PARK_FACTOR_SOURCE
+    return True
+
+
+async def _refresh_park_factor_snapshot_if_changed() -> None:
+    """Check the file's mtime at most every :data:`PARK_FACTOR_REFRESH_SECONDS`.
+
+    The re-read runs on a thread, so a lookup never blocks the event loop on the
+    file. Nothing happens before a prime, so the unit lane never reads a file.
+    """
+    if _PARK_FACTORS is None:
+        return
+    if time.monotonic() - _PARK_FACTORS_CHECKED_AT < PARK_FACTOR_REFRESH_SECONDS:
+        return
+    await asyncio.to_thread(refresh_park_factor_snapshot)
 
 
 def park_factor_source_status() -> ParkFactorSource | None:
@@ -868,13 +1004,15 @@ def park_factor_source_status() -> ParkFactorSource | None:
 
 
 def close_park_factor_source() -> None:
-    """Close the primed read-only source (SIM-453). The API lifespan calls this."""
-    global _PARK_FACTOR_CON, _PARK_FACTOR_SOURCE
+    """Drop the park-factor snapshot (SIM-453). The API lifespan calls this.
 
-    if _PARK_FACTOR_CON is not None:
-        try:
-            _PARK_FACTOR_CON.close()
-        except Exception:  # noqa: BLE001
-            pass
-    _PARK_FACTOR_CON = None
+    No file is open by then (SIM-524); the name stays for its callers.
+    """
+    global _PARK_FACTORS, _PARK_FACTOR_SOURCE, _PARK_FACTORS_MTIME
+    global _PARK_FACTORS_CHECKED_AT, _PARK_FACTORS_REFRESH_FAILING
+
+    _PARK_FACTORS = None
     _PARK_FACTOR_SOURCE = None
+    _PARK_FACTORS_MTIME = None
+    _PARK_FACTORS_CHECKED_AT = 0.0
+    _PARK_FACTORS_REFRESH_FAILING = False

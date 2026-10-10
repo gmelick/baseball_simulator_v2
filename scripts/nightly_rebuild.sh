@@ -3,12 +3,11 @@
 # scripts/nightly_rebuild.sh — rebuild the profiles and the engine bundle for
 # the current season (SIM-519 Part D; steps 2 and 3 of the old nightly chain).
 #
-# Both steps write DuckDB and need its write lock, which the running app's
-# forkserver holds (SIM-524). The scheduler job for this script stays
-# DISABLED until that ticket lands. Run it by hand with the app stopped:
-#   docker compose stop app
+# Both steps write DuckDB and need its write lock. The running app holds no
+# handle on the file (SIM-524), so the scheduler runs this at 08:00 UTC beside
+# the app (deploy/ofelia/config.ini). By hand:
 #   docker compose run --rm app sh /app/scripts/nightly_rebuild.sh
-#   docker compose up -d app
+# The app serves the data it loaded at boot until its next restart.
 # =============================================================================
 set -eu
 

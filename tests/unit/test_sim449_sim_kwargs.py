@@ -1201,8 +1201,20 @@ async def test_the_REAL_route_with_a_source_resolves_the_venue(monkeypatch):
 # --- the primed read-only source (requirement 3) -----------------------------
 
 
+class _PrimedRows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return list(self._rows)
+
+
 class _PrimedCon:
-    """A read-only DuckDB stand-in that answers the row count and the factor."""
+    """A read-only DuckDB stand-in that answers the row count and the factors.
+
+    SIM-524: the prime reads every run factor at once (``fetchall``) and closes
+    the connection. The one factor belongs to venue 680, season 2024.
+    """
 
     def __init__(self, n_rows: int, factor: float | None) -> None:
         self._n_rows = n_rows
@@ -1212,7 +1224,7 @@ class _PrimedCon:
     def execute(self, sql, params=None):
         if "count(*)" in sql:
             return _FakeDuckRes((self._n_rows,))
-        return _FakeDuckRes(None if self._factor is None else (self._factor,))
+        return _PrimedRows([(680, 2024, self._factor)])
 
     def close(self) -> None:
         self.closed = True

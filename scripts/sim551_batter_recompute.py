@@ -9,8 +9,8 @@ booted ``build_all_engines: 10/11`` from then on. The computor now refuses such 
 rebuild before it writes and stamps the whole table after it (SIM-551); this
 script runs that corrected batter section for every season.
 
-What it does, in order (the app must be STOPPED — a DuckDB write; the forkserver's
-lock, SIM-524):
+What it does, in order (a DuckDB write; since SIM-524 it runs
+while the app serves):
 
   1. reads the table's stamps before the rebuild and prints them;
   2. rebuilds ``derived.batter_season_metrics`` for the seasons through the
@@ -74,8 +74,9 @@ def _connect_writable(duckdb_path: str) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(duckdb_path)
     except duckdb.IOException as exc:
         raise SystemExit(
-            f"cannot open {duckdb_path} for writing ({exc}). The app holds the DuckDB "
-            "writer lock (SIM-524): stop it first — docker compose stop app."
+            f"cannot open {duckdb_path} for writing ({exc}). Another process holds "
+            "the file: a rebuild, or a reader in another container. The app holds no "
+            "handle since SIM-524; wait for the other process and retry."
         ) from exc
 
 

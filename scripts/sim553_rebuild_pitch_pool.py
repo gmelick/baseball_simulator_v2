@@ -2103,8 +2103,8 @@ def _rebuild(args: argparse.Namespace, t0: float) -> int:
     con = _open_writable(duckdb_path)
     if con is None:
         _log(
-            "the app is running: stop it first — SIM-524 (the app's worker server holds the DuckDB "
-            "writer lock; any other container that reads the DuckDB file holds a lock too)"
+            "another process holds the DuckDB file: a rebuild, or a reader in another "
+            "container (the app holds no handle since SIM-524). Wait for it and retry."
         )
         _log("SIM-553 REBUILD FAILED: the DuckDB file is locked")
         return EXIT_LOCKED

@@ -365,8 +365,8 @@ bandwidth of 0.5 with the pitch-count term OFF** (`SIM_FATIGUE_TTO_SIGMA=0.5`; t
 recommendation was HOLD OFF: on the flipped composition neither bandwidth passes the
 within-pitcher fit rule and the two paired accuracy arms, σ 0.5 and 0.7 on 250 games of
 2024, read flat on every market; the plan with its stamps is
-`docs/audit/2026-09-12-sim518-fit-plan.md`, SIM-518 CLOSED); the forkserver's DuckDB lock that blocks every rebuild while the app runs
-(SIM-524); backups (SIM-525); the receiving ratio's enable (SIM-526); the manager-draw
+`docs/audit/2026-09-12-sim518-fit-plan.md`, SIM-518 CLOSED); the DuckDB lock that blocked every rebuild while the app ran
+(SIM-524 — CLOSED 2026-10-10, see the bullet below); backups (SIM-525); the receiving ratio's enable (SIM-526); the manager-draw
 follow-ons — the pen on the API, the preview-game fallbacks, the pen order, a finer rest
 fit (SIM-547, P3; the parent, each team's real manager for the pitching change, SIM-427,
 CLOSED 2026-09-13 — see the bullet below); the
@@ -390,8 +390,8 @@ history only. **SIM-518 CODE LANDED 2026-09-07** (plan `docs/audit/2026-09-04-si
 migration 0023 (schema v23) + the sim518.1 builder + the artifact columns, and three draw
 weights gated OFF (`SIM_FATIGUE_PC_SIGMA` / `SIM_FATIGUE_TTO_SIGMA` / `SIM_PITCH_HOME_OFF_WEIGHT`
 / `SIM_BB_PITCH_SIGMA`). The SIM-469 pool-only rebuild (`scripts/sim518_rebuild_pools.py`)
-RAN 2026-09-09 with the redesign's part G (the app stopped for it — the forkserver's DuckDB
-writer lock, **SIM-524**, stays the operational blocker); the three weights' fits and the
+RAN 2026-09-09 with the redesign's part G (the app stopped for it — the DuckDB writer lock,
+SIM-524, CLOSED 2026-10-10); the three weights' fits and the
 lane still follow. **SIM-467 CODE LANDED + MEASURED
 2026-09-07:** the pitch-draw cell index (`SIM_PITCH_CELL_INDEX` / `SIM_PITCH_MIN_CELL`,
 `simulation/filter_cells.py`) cuts a game iteration from 2.62 s to 0.86 s (3.05×) with
@@ -609,6 +609,20 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `api/sim_jobs.py`). The nightly finals job runs through `scripts/with_retry.sh`; the scheduler
   starts with the stack. Alembic **0029** carries every new column. The record and the run book:
   `CHANGES.md` 2026-10-09.
+- **A rebuild runs while the app serves (SIM-524, CLOSED 2026-10-10).** A DuckDB writer
+  opens the file only when no other process holds it, read-only handles included. The
+  blocker was never the forkserver: `/proc/*/fd` in the app container showed ONE handle,
+  read-only, in the uvicorn server process, the park-factor connection that
+  `prime_park_factor_source` kept open for the life of the app. The prime now reads the run
+  factors into memory and closes the file (`simulation/sim_kwargs.py`); a lookup re-reads
+  them when the file's mtime changes, at most once a minute, and keeps the old snapshot
+  while a rebuild holds the lock. Every other open (the engine builds, the worker loads)
+  already closed after its load. The nightly profile + bundle rebuild job is ON
+  (`deploy/ofelia/config.ini`, 08:00 UTC). Three gaps stay (SIM-563): the engines and the
+  bundle load at boot, so rebuilt data reaches users at the next app restart; an app boot
+  or a hot reload DURING a rebuild cannot open the file for the engine builds; a worker that
+  respawns during a rebuild gets no intentional-walk rates. Do not boot or reload the app
+  while a rebuild runs.
 - **The game page opens with the real game and runs a "what if" from any play (SIM-562,
   2026-10-09).** A live or final game shows the league feed's linescore, box score and
   play-by-play above every simulation (`GET /feed/plays`). "What if from here" on a play reads

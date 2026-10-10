@@ -3,8 +3,8 @@ scripts/sim531_runner_recompute.py — SIM-531 run-book step 4: the three runner
 profile tables and the league averages, recomputed on their own (not the five-hour
 full rebuild).
 
-What it does, in order (the app must be STOPPED — a DuckDB write; the forkserver's
-lock, SIM-524):
+What it does, in order (a DuckDB write; since SIM-524 it runs
+while the app serves):
 
   1. applies ``db/migrations/duckdb/0028_sim537_baserunner_catcher_fielder_asof.sql``
      and then ``0029_sim531_lead_distance.sql`` (both idempotent
@@ -153,8 +153,9 @@ def _connect_writable(duckdb_path: str):
         return duckdb.connect(duckdb_path)
     except duckdb.IOException as exc:
         raise SystemExit(
-            f"cannot open {duckdb_path} for writing ({exc}). The app holds the DuckDB "
-            "writer lock (SIM-524): stop it first — docker compose stop app."
+            f"cannot open {duckdb_path} for writing ({exc}). Another process holds "
+            "the file: a rebuild, or a reader in another container. The app holds no "
+            "handle since SIM-524; wait for the other process and retry."
         ) from exc
 
 
