@@ -39,6 +39,13 @@ from typing import Any
 import duckdb
 import numpy as np
 
+from pipeline.batch.bundle_versions import (
+    discard_bundle_version,
+    prune_bundle_versions,
+    publish_bundle_version,
+    stage_bundle_version,
+)
+
 log = logging.getLogger("engine_artifacts")
 
 _GEOM_COLS = [
@@ -2705,6 +2712,74 @@ _ADV_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
 )
 
 
+#: SIM-563: the reference tables a worker used to read from DuckDB. They ride
+#: the bundle so a worker never opens the database (a rebuild may hold its lock).
+IBB_RATES_FILE = "ibb_rates.json"
+VENUE_RUN_FACTORS_FILE = "venue_run_factors.json"
+
+
+def ibb_rates_from_rows(rows) -> dict[tuple[int, int, bool, bool], float] | None:
+    """SIM-515: the issued share per cell, from ``(rs, outs, late, close, opp, issued)``."""
+    out = {
+        (int(rs), int(o), bool(late), bool(close)): float(iss) / float(opp)
+        for rs, o, late, close, opp, iss in rows
+        if opp
+    }
+    return out or None
+
+
+def venue_run_factors_from_rows(rows) -> dict[tuple[int, int], float] | None:
+    """SIM-491: ``(venue_id, season) -> factor`` for the sane 0.5-2.0 range."""
+    out = {
+        (int(v), int(s)): float(f) for v, s, f in rows if f is not None and 0.5 <= float(f) <= 2.0
+    }
+    return out or None
+
+
+def build_reference_tables(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict[str, int]:
+    """SIM-563: write the IBB rates and the venue run factors into the bundle.
+
+    The rows are the ones the worker loaders read from DuckDB
+    (``simulation/production_factory._load_ibb_rates`` / ``_load_venue_run_factors``).
+    A table the database lacks writes no file, and the worker then falls back.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    tables = (
+        (
+            IBB_RATES_FILE,
+            "SELECT runners_state, outs, is_late, is_close, opportunities, issued "
+            "FROM sim.ibb_rates WHERE opportunities > 0 ORDER BY 1, 2, 3, 4",
+        ),
+        (
+            VENUE_RUN_FACTORS_FILE,
+            "SELECT venue_id, season, regressed_factor FROM derived.park_factors "
+            "WHERE factor_type = 'R' AND regressed_factor IS NOT NULL ORDER BY 1, 2",
+        ),
+    )
+    for name, sql in tables:
+        try:
+            rows = [list(r) for r in con.execute(sql).fetchall()]
+        except duckdb.Error as exc:
+            log.warning("SIM-563: %s not written (%s)", name, exc)
+            continue
+        tmp = os.path.join(out_dir, f"tmp_{name}")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"rows": rows}, fh)
+        os.replace(tmp, os.path.join(out_dir, name))
+        counts[name] = len(rows)
+    log.info("SIM-563: reference tables written: %s", counts)
+    return counts
+
+
+def _read_reference_rows(art_dir: str, name: str) -> list | None:
+    path = os.path.join(art_dir, name)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return list(json.load(fh).get("rows", []))
+
+
 class EngineArtifacts:
     """Per-worker loader for the SIM-422 bundle (resident, built entirely from disk
     so nothing live crosses the ProcessPool fork).  Holds both batter-hand pools +
@@ -2736,8 +2811,17 @@ class EngineArtifacts:
         change_pool: ChangePool | None = None,
         receiving: dict | None = None,
         change_roles: dict[str, tuple[int, float, float]] | None = None,
+        ibb_rates: dict[tuple[int, int, bool, bool], float] | None = None,
+        venue_run_factors: dict[tuple[int, int], float] | None = None,
+        has_reference: bool = False,
     ):
         self.pools: dict[str, HandPool] = pools
+        #: SIM-563: the IBB rate per cell and the venue run factors, read from the
+        #: bundle. ``has_reference`` is False on a bundle built before SIM-563; the
+        #: worker then reads DuckDB as before.
+        self.ibb_rates = ibb_rates
+        self.venue_run_factors = venue_run_factors
+        self.has_reference = has_reference
         #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
         #: float32}; {} on a bundle built before the actor matrices (then every
         #: actor factor is neutral — the kernels are retired, SIM-523).
@@ -3537,6 +3621,9 @@ class EngineArtifacts:
                         "std": z["std"],
                         "features": json.loads(str(z["features"])),
                     }
+        # SIM-563: the reference tables (absent on an older bundle).
+        ibb_rows = _read_reference_rows(art_dir, IBB_RATES_FILE)
+        venue_rows = _read_reference_rows(art_dir, VENUE_RUN_FACTORS_FILE)
         return cls(
             pools,
             ps_index,
@@ -3552,6 +3639,11 @@ class EngineArtifacts:
             change_pool=change_pool,
             receiving=receiving,
             change_roles=change_roles,
+            ibb_rates=ibb_rates_from_rows(ibb_rows) if ibb_rows is not None else None,
+            venue_run_factors=(
+                venue_run_factors_from_rows(venue_rows) if venue_rows is not None else None
+            ),
+            has_reference=ibb_rows is not None or venue_rows is not None,
         )
 
 
@@ -3559,7 +3651,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser(description="Build the SIM-422 engine-artifact bundle.")
     ap.add_argument("--duckdb-path", default=DEFAULT_DUCKDB_PATH)
-    ap.add_argument("--out-dir", default=os.path.join(DEFAULT_POOL_DIR, "engine_artifacts"))
+    ap.add_argument(
+        "--out-dir",
+        default=None,
+        help=(
+            "Write the bundle IN PLACE here. Omit it to build a new VERSION of the "
+            "published bundle (DEFAULT_POOL_DIR/engine_artifacts) and swap it in when "
+            "the build is complete (SIM-563)."
+        ),
+    )
     ap.add_argument(
         "--seasons",
         type=int,
@@ -3577,6 +3677,7 @@ def main(argv: list[str] | None = None) -> int:
             "park",
             "manager",
             "receiving",
+            "reference",
             "all",
         ],
         default="pool",
@@ -3604,6 +3705,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    # SIM-563: with no --out-dir, build a staged version and publish it at the end.
+    link = os.path.join(DEFAULT_POOL_DIR, "engine_artifacts")
+    staged = args.out_dir is None
+    if staged:
+        args.out_dir = stage_bundle_version(link)
+    try:
+        _build(args)
+    except BaseException:
+        if staged:
+            discard_bundle_version(args.out_dir)
+        raise
+    if staged:
+        publish_bundle_version(link, args.out_dir)
+        prune_bundle_versions(link)
+    log.info("engine-artifact build complete -> %s", args.out_dir)
+    return 0
+
+
+def _build(args: argparse.Namespace) -> None:
     con = duckdb.connect(args.duckdb_path, read_only=True)
     try:
         seasons = args.seasons or last_n_seasons(con)
@@ -3623,6 +3743,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.what in ("receiving", "all"):
             # SIM-523 part E: the catcher receiving ratios.
             build_receiving_profiles(con, args.out_dir, seasons)
+        if args.what in ("reference", "all"):
+            # SIM-563: the IBB rates and the venue run factors, for the workers.
+            build_reference_tables(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit
@@ -3639,8 +3762,6 @@ def main(argv: list[str] | None = None) -> int:
             )
     finally:
         con.close()
-    log.info("engine-artifact build complete -> %s", args.out_dir)
-    return 0
 
 
 if __name__ == "__main__":

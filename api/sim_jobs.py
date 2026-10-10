@@ -195,6 +195,10 @@ class SimJobRegistry:
             d["prop_set"] = json.loads(d["prop_set"])
         return d
 
+    def active_count(self) -> int:
+        """The run jobs queued or running in this process (SIM-563's restart waits on 0)."""
+        return len(self._tasks)
+
     def position(self, run_id: int) -> int | None:
         """1 = next to run; None when the run is not waiting."""
         try:

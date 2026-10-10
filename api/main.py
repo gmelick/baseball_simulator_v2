@@ -502,12 +502,23 @@ async def lifespan(app: FastAPI):
     # we skip the publish; each worker then disk-loads the bundle itself and
     # fails loudly at the first /simulate if it is absent (SIM-486: there is
     # no fallback simulator).
+    #
+    # SIM-563: the bundle is a link to a published version. Pin the version this
+    # boot loads, BEFORE the worker pool starts (the forkserver's workers inherit
+    # the environment), so a worker that respawns after a rebuild reads the same
+    # version as the shared arrays. The pin is undone at shutdown.
+    from api.bundle_watch import PINNED_ENV, bundle_link, pin_bundle_version
+
+    app.state.bundle_pin_prev_env = os.environ.get(PINNED_ENV)
+    app.state.bundle_version = None
+    app.state.bundle_in_use_marker = None
+    if os.path.isdir(bundle_link()):
+        app.state.bundle_version, app.state.bundle_in_use_marker = pin_bundle_version()
     shared_arrays_payload: dict | None = None
     try:
         from pipeline.batch.engine_artifacts import EngineArtifacts
 
-        pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
-        art_dir = os.path.join(pool_dir, "engine_artifacts")
+        art_dir = app.state.bundle_version or bundle_link()
         log.info(
             "SIM-403b: loading engine artifacts for shared-memory publish (%s) ...",
             art_dir,
@@ -554,15 +565,56 @@ async def lifespan(app: FastAPI):
     # yields + serves immediately; workers warm behind it (in bounded-concurrency
     # waves, see BatchRunner.prewarm) and any failure degrades to the lazy per-game
     # warm-up.
-    prewarm_pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
+    # SIM-563: with a pinned version the workers find the bundle through the pin,
+    # so the pre-warm passes no pool dir (an explicit one would bypass the pin and
+    # cache the sampler under a different key than the real games use).
+    prewarm_pool_dir = (
+        None
+        if app.state.bundle_version
+        else os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
+    )
     log.info("SIM-402: scheduling background sim-runner pre-warm ...")
     app.state.prewarm_task = asyncio.create_task(
         _background_prewarm(app.state.sim_runner, prewarm_pool_dir)
     )
 
+    # SIM-563: restart this app when the nightly rebuild publishes a new version.
+    from api.bundle_watch import restart_enabled, watch_for_new_bundle
+
+    app.state.bundle_watch_task = None
+    if restart_enabled() and app.state.bundle_version:
+        jobs = getattr(app.state, "sim_jobs", None)
+        app.state.bundle_watch_task = asyncio.create_task(
+            watch_for_new_bundle(
+                link=bundle_link(),
+                loaded=app.state.bundle_version,
+                active_jobs=(lambda: jobs.active_count()) if jobs is not None else (lambda: 0),
+            )
+        )
+        log.info("SIM-563: watching %s for a new bundle version.", bundle_link())
+
     yield
 
     log.info("MLB Simulation Platform shutting down.")
+
+    # SIM-563: stop the bundle watch, release this boot's version and its pin.
+    watch_task = getattr(app.state, "bundle_watch_task", None)
+    if watch_task is not None and not watch_task.done():
+        watch_task.cancel()
+        try:
+            await watch_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+    from api.bundle_watch import PINNED_ENV as _PINNED_ENV
+    from pipeline.batch.bundle_versions import unmark_in_use
+
+    unmark_in_use(getattr(app.state, "bundle_in_use_marker", None))
+    if getattr(app.state, "bundle_version", None):
+        prev = getattr(app.state, "bundle_pin_prev_env", None)
+        if prev is None:
+            os.environ.pop(_PINNED_ENV, None)
+        else:
+            os.environ[_PINNED_ENV] = prev
 
     # SIM-402: stop awaiting the background pre-warm if it's still running. Its worker
     # threads are detached and finish on their own; cancelling just releases our await
@@ -662,7 +714,13 @@ class ParkFactorSourceMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        source = getattr(request.app.state, "park_factor_source", None)
+        # SIM-563: the module's live verdict first, so the header follows a
+        # re-read (a boot during a rebuild recovers its park factors later).
+        from simulation.sim_kwargs import park_factor_source_status
+
+        source = park_factor_source_status() or getattr(
+            request.app.state, "park_factor_source", None
+        )
         try:
             response.headers["X-Park-Factor-Source"] = (
                 source.header_value() if source is not None else "unknown"

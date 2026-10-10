@@ -949,15 +949,32 @@ def refresh_park_factor_snapshot() -> bool:
 
     A re-read that fails -- a rebuild holds the write lock, or the rebuilt table
     is empty -- keeps the old snapshot and its mtime, so the next check tries
-    again. Only a snapshot the prime already made is refreshed.
+    again. Only a source somebody primed is refreshed.
+
+    SIM-563: a prime that FAILED (a boot during a rebuild) is tried again on
+    every check, so the app recovers its park factors without a restart.
     """
     global _PARK_FACTORS, _PARK_FACTOR_SOURCE, _PARK_FACTORS_MTIME
     global _PARK_FACTORS_CHECKED_AT, _PARK_FACTORS_REFRESH_FAILING
 
     _PARK_FACTORS_CHECKED_AT = time.monotonic()
     old = _PARK_FACTOR_SOURCE
-    if _PARK_FACTORS is None or old is None:
+    if old is None:
         return False
+    if _PARK_FACTORS is None:
+        mtime = _file_mtime(old.path)
+        source, factors = _read_park_factor_snapshot(old.path)
+        if factors is None:
+            return False
+        _PARK_FACTORS = factors
+        _PARK_FACTOR_SOURCE = source
+        _PARK_FACTORS_MTIME = mtime
+        log.info(
+            "SIM-563: park factors read from %s after the boot-time read failed: %d rows.",
+            old.path,
+            source.n_rows,
+        )
+        return True
     mtime = _file_mtime(old.path)
     if mtime is None or mtime == _PARK_FACTORS_MTIME:
         return False
@@ -991,7 +1008,7 @@ async def _refresh_park_factor_snapshot_if_changed() -> None:
     The re-read runs on a thread, so a lookup never blocks the event loop on the
     file. Nothing happens before a prime, so the unit lane never reads a file.
     """
-    if _PARK_FACTORS is None:
+    if _PARK_FACTOR_SOURCE is None:
         return
     if time.monotonic() - _PARK_FACTORS_CHECKED_AT < PARK_FACTOR_REFRESH_SECONDS:
         return

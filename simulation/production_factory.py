@@ -112,10 +112,21 @@ _CACHED_FULL_POOL_SAMPLER = None
 _CACHED_FULL_POOL_ART_DIR: str | None = None
 
 
+#: SIM-563: the environment variable that pins the bundle VERSION a worker reads.
+#: The app resolves the published link at boot and sets it before the pool
+#: starts, so a worker that respawns after a rebuild reads the same version as
+#: the parent's shared arrays, never the newly published one.
+PINNED_ARTIFACT_DIR_ENV = "BASEBALL_ENGINE_ARTIFACT_DIR"
+
+
 def _artifact_dir(spec: GameSpec) -> str:
-    pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
-        "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
-    )
+    explicit = _kwarg(spec, "_pool_dir", None)
+    if explicit:
+        return os.path.join(explicit, "engine_artifacts")
+    pinned = os.environ.get(PINNED_ARTIFACT_DIR_ENV)
+    if pinned:
+        return pinned
+    pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
     return os.path.join(pool_dir, "engine_artifacts")
 
 
@@ -276,7 +287,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     /simulate request paid the ~6-9 s warm-up cost N times.
     """
     art_dir = _artifact_dir(spec)
-    global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR
+    global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR, _CACHED_IBB_RATES
     # Reuse the cached sampler when the artifact dir matches.  Re-seed its
     # rng so the per-game seed still governs the weighted draws (the per-game
     # half-inning / PA state caches inside the sampler are reset at the loop's
@@ -316,6 +327,10 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     except ValueError:
         home_w = 1.0
     sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
+    # SIM-563: a bundle built since SIM-563 carries the IBB rates; the worker
+    # then never opens DuckDB for them (a rebuild may hold the lock).
+    if getattr(art, "has_reference", False):
+        _CACHED_IBB_RATES = art.ibb_rates
     # SIM-491 part 2 (the SIM-411 rebuild): the park kernel. 0.0 (the
     # default, and any unparsable value) disables it EXACTLY. When enabled,
     # load the (venue_id, season) -> regressed run-factor map read-only;
@@ -325,7 +340,11 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     except ValueError:
         park_sigma = 0.0
     if park_sigma > 0.0:
-        sampler.venue_run_factors = _load_venue_run_factors()
+        sampler.venue_run_factors = (
+            art.venue_run_factors
+            if getattr(art, "has_reference", False)
+            else _load_venue_run_factors()
+        )
         if sampler.venue_run_factors:
             sampler.park_sigma = park_sigma
     # SIM-517: the catcher RECEIVING kernel bandwidths — an anisotropic
@@ -396,11 +415,13 @@ def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
         return _CACHED_IBB_RATES  # type: ignore[return-value]
     out: dict[tuple[int, int, bool, bool], float] | None
     try:
+        from pipeline.batch.engine_artifacts import ibb_rates_from_rows
         from simulation.sim_kwargs import open_sim_duckdb
 
         con = open_sim_duckdb()
         if con is None:
-            _CACHED_IBB_RATES = None
+            # SIM-563: not cached. A rebuild holding the lock is temporary, so the
+            # next machine build tries again instead of losing the IBB for good.
             return None
         try:
             rows = con.execute(
@@ -409,10 +430,7 @@ def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
             ).fetchall()
         finally:
             con.close()
-        out = {
-            (int(rs), int(o), bool(late), bool(close)): float(iss) / float(opp)
-            for rs, o, late, close, opp, iss in rows
-        } or None
+        out = ibb_rates_from_rows(rows)
     except Exception:
         out = None
     _CACHED_IBB_RATES = out
@@ -437,8 +455,9 @@ def _load_venue_run_factors() -> dict[tuple[int, int], float] | None:
             ).fetchall()
         finally:
             con.close()
-        out = {(int(v), int(s)): float(f) for v, s, f in rows if 0.5 <= float(f) <= 2.0}
-        return out or None
+        from pipeline.batch.engine_artifacts import venue_run_factors_from_rows
+
+        return venue_run_factors_from_rows(rows)
     except Exception:
         return None
 

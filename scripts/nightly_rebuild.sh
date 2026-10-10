@@ -7,7 +7,8 @@
 # handle on the file (SIM-524), so the scheduler runs this at 08:00 UTC beside
 # the app (deploy/ofelia/config.ini). By hand:
 #   docker compose run --rm app sh /app/scripts/nightly_rebuild.sh
-# The app serves the data it loaded at boot until its next restart.
+# Step 2 publishes a new bundle version (SIM-563); the app then restarts itself
+# to load the new profiles and bundle (api/bundle_watch.py).
 # =============================================================================
 set -eu
 

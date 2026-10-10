@@ -338,6 +338,13 @@ services:
       # Missing file -> engines keep locked defaults + identity win-prob (no boot
       # failure), so this is safe before the first fit has run.
       CALIBRATION_REPORT_PATH: /data/calibration.json
+      # SIM-563: the nightly rebuild ends by publishing a new engine-artifact bundle
+      # version (/data/play_pool/engine_artifacts is a link to it). The app then
+      # restarts itself, once its run jobs finish and no DuckDB writer remains, so
+      # the new profiles and bundle reach users the same morning (api/bundle_watch.py;
+      # restart: unless-stopped brings it back). "0" = the app keeps the data it
+      # booted with until somebody restarts it.
+      SIM_RESTART_ON_NEW_BUNDLE: "1"
     ports:
       # Host port is overridable via APP_HOST_PORT (default 8000).
       - "${APP_HOST_PORT:-8000}:8000"

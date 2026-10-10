@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 import asyncpg
@@ -37,6 +38,60 @@ log = logging.getLogger("api.state")
 # ---------------------------------------------------------------------------
 
 DEFAULT_DUCKDB_PATH = "/data/baseball_sim.duckdb"
+
+#: SIM-563: the longest a boot waits for a DuckDB writer (a rebuild) to finish.
+BOOT_LOCK_WAIT_ENV = "SIM_BOOT_LOCK_WAIT_S"
+DEFAULT_BOOT_LOCK_WAIT_S = 1800.0
+
+#: Seconds between two tries while a writer holds the file.
+BOOT_LOCK_RETRY_S = 15.0
+
+
+def _is_duckdb_lock_error(exc: BaseException) -> bool:
+    """True for the IOException DuckDB raises while another process holds the file."""
+    if type(exc).__name__ != "IOException":
+        return False
+    msg = str(exc).lower()
+    return "lock" in msg or "already open" in msg
+
+
+def _boot_lock_wait_s() -> float:
+    try:
+        return float(os.environ.get(BOOT_LOCK_WAIT_ENV, DEFAULT_BOOT_LOCK_WAIT_S))
+    except ValueError:
+        return DEFAULT_BOOT_LOCK_WAIT_S
+
+
+def retry_on_duckdb_lock[T](
+    fn: Callable[[], T],
+    what: str,
+    *,
+    max_wait_s: float | None = None,
+    sleep: Callable[[float], object] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> T:
+    """Run ``fn``; while a DuckDB writer holds the file, wait and try again (SIM-563).
+
+    A boot during the nightly rebuild used to crash (the pitcher engine is
+    fail-fast) or skip engines (10/11). It now waits for the writer, up to
+    ``SIM_BOOT_LOCK_WAIT_S`` (default 30 minutes), and then raises the lock error
+    as before. Any other error rises at once.
+    """
+    limit = _boot_lock_wait_s() if max_wait_s is None else max_wait_s
+    started = clock()
+    while True:
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_duckdb_lock_error(exc) or clock() - started >= limit:
+                raise
+            log.warning(
+                "SIM-563: %s waits: a DuckDB writer holds the file (%s). Retrying in %.0f s.",
+                what,
+                exc,
+                BOOT_LOCK_RETRY_S,
+            )
+            sleep(BOOT_LOCK_RETRY_S)
 
 
 def build_pitcher_engine(duckdb_path: str | None = None):
@@ -75,7 +130,7 @@ def build_pitcher_engine(duckdb_path: str | None = None):
 
     log.info("Building PitcherSimilarityEngine from %s ...", path)
     engine = PitcherSimilarityEngine(duckdb_path=path)
-    engine.build()
+    retry_on_duckdb_lock(engine.build, "the pitcher engine build")
     log.info(
         "PitcherSimilarityEngine ready: %d profiles loaded.",
         len(engine._profiles),  # noqa: SLF001 — internal counter for log line
@@ -176,7 +231,7 @@ def build_all_engines(
         try:
             engine_cls = load(module_path, class_name)
             engine = engine_cls(duckdb_path=path)
-            engine.build()
+            retry_on_duckdb_lock(engine.build, f"the {name} engine build")
             engines[name] = engine
             log.info("Similarity engine '%s' built.", name)
         except Exception as exc:  # noqa: BLE001 — one bad engine must not kill boot
