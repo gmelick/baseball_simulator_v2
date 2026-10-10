@@ -447,8 +447,8 @@ async def lifespan(app: FastAPI):
     app.state.park_factor_source = park_source
     if park_source.available:
         log.info(
-            "SIM-453: park-factor source OPEN (read-only) at %s — %d rows in "
-            "derived.park_factors. SIM_PARK_FACTOR has real factors to act on.",
+            "SIM-453: park-factor source READ at %s — %d rows in "
+            "derived.park_factors, held in memory; the file is closed (SIM-524).",
             park_source.path,
             park_source.n_rows,
         )
