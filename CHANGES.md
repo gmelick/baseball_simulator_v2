@@ -1,3 +1,51 @@
+# CLOSED — a rebuild runs while the app serves; the nightly rebuild job is ON — SIM-524, 2026-10-10
+
+**Why it matters.** A data rebuild could not write the statistics database
+(`/data/baseball_sim.duckdb`) while the app ran, so every profile recompute and pool rebuild
+needed `docker compose stop app`, and the nightly profile + bundle rebuild job stayed off.
+Now the rebuild runs beside the app, and the nightly job runs at 08:00 UTC.
+
+**The cause was not the forkserver.** A DuckDB writer opens the file only when no other process
+holds it open, read-only handles included. The filing (2026-09-07) blamed a descriptor the
+forkserver inherited. `/proc/*/fd` in the app container on 2026-10-10 showed ONE handle on the
+file: read-only, fd 23, in the uvicorn server process (the `spawn_main` child of the `--reload`
+supervisor). It was the park-factor connection: `prime_park_factor_source` opened it at boot
+and kept it in a module global for the life of the app (SIM-453). No worker held anything; the
+engine builds and the worker loads already closed their connections after the load.
+
+**The fix** (`simulation/sim_kwargs.py`).
+- The prime reads every `factor_type = 'R'` row of `derived.park_factors` into a dict and
+  closes the file on every path. The verdict (`ParkFactorSource`, the `X-Park-Factor-Source`
+  header, 0 rows = unavailable) is unchanged.
+- `resolve_park_run_factor(con=None)` reads the dict. A caller that passes its own connection
+  (the acceptance lane, the scripts) queries it as before. Both paths give the same reasons.
+- A lookup checks the file's mtime at most once a minute, on a thread. A changed file is
+  re-read. A re-read that fails (a rebuild holds the write lock) keeps the old snapshot and
+  logs one line per streak.
+- `deploy/ofelia/config.ini`: the `nightly-rebuild` job is uncommented (owner decision).
+  `scripts/nightly_rebuild.sh`, the compose comment and the one-off rebuild scripts' lock
+  messages no longer tell the operator to stop the app.
+
+**Tests.** `tests/unit/test_sim524_park_snapshot.py` (11 tests on a real DuckDB file): after
+the prime, a writer in a SECOND PROCESS opens the file and writes (the same check with a
+read-only handle held fails with "File is already open"); the snapshot gives the same reasons
+as a connection; a rebuilt file is re-read; a failed re-read keeps the snapshot. The SIM-449
+tests' fake connection answers `fetchall`. The container unit lane showed 12 failures from the
+image's stale docs and live-pipeline copies; they pass on the branch's files.
+
+**The live proof (2026-10-10, the app serving).** The fd listing after the restart shows no
+handle on the statistics file (the replay file only). The batter recompute
+(`scripts/sim551_batter_recompute.py`, all ten seasons, 65 s) ran with the app up: exit 0,
+one stamp (2026-10-10, 7,906 rows), the batter engine built. During it, 60 `/health` probes
+answered 200 with `X-Park-Factor-Source: duckdb:2961`, and three `/simulate` calls (n = 10)
+answered 200. The next lookup logged `SIM-524: park factors re-read ... 2961 rows`.
+
+**What stays open (SIM-563, P2).** The engines and the sim bundle load at boot, so a rebuild
+reaches users at the next app restart. An app boot or a hot reload DURING a rebuild cannot
+open the file for the engine builds. A worker that respawns during a rebuild gets no
+intentional-walk rates and could cold-load a half-written bundle. The nightly job's first run
+(08:00 UTC) is unobserved, and its memory beside the running app is not measured.
+
 # BUILT — the game page opens with the real game, a "what if" runs from any play, the bets are graded on the real final; the Line movement and Managerial override boxes are gone — SIM-562, 2026-10-09
 
 **Why it matters.** The owner reviewed the deployed game page on 2026-10-09. The page showed
