@@ -1,4 +1,17 @@
-# CLOSED — the nightly rebuild reaches users with no person involved; the bundle is published as versions — SIM-563, 2026-10-10
+# NOT RUN — the game-day live check of the live slate and the game page found no game in progress — SIM-519 / SIM-562, 2026-10-11
+
+The scheduled check fired at 14:34 EDT on 2026-10-11. No game was live, so the live
+steps (the live card, the game page refresh, the what-if from the latest play) could not run.
+
+- **Health: PASS.** app (healthy), live, scheduler and nginx were up; nothing was restarted.
+- **Find a live game: NOT POSSIBLE.** The slate (`/api/games/2026-10-11`, `source` =
+  schedule) held one game: Dodgers at Brewers, NL Championship Series (849809), Scheduled
+  for 00:00 UTC (8 PM EDT), lineup not posted yet. The MLB schedule agrees. The last final
+  was White Sox at Guardians (849831) on the evening of 2026-10-10.
+- Steps 3 to 6 did not run. No defect was found, and no code changed.
+- The live game-day view stays open in `BACKLOG.xlsx`. The check must fire while a game is
+  in progress: after 8 PM EDT on 2026-10-11, or during 849812 (5 PM EDT on 2026-10-12).
+
 
 **Why it matters.** Since SIM-524 the 08:00 UTC rebuild runs beside the app, but the app
 loaded the profiles and the data bundle only at boot, so the new data waited for somebody to
