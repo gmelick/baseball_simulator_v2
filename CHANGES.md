@@ -13,8 +13,11 @@ is left on the data volume.
 
 **Also seen.** The 07:00 finals load and the 08:00 rebuild both started at 14:56:12 UTC: the
 scheduler missed both times (the host was most likely asleep) and fired them together on
-wake. The rebuild's profile step may have read Postgres before that night's finals were
-loaded, so the profiles of 2026-10-11 may lack the games of 2026-10-10. Not fixed.
+wake. CHECKED, no harm that day: the finals load wrote the one game of 2026-10-10
+(849831, 257 pitches) at 14:56:24, and the rebuild read after it. The pools hold all 257
+pitches, and pitcher 668909's 2026 profile counts 3,195 pitches (Postgres: 3,201 with the
+game, 3,107 without it). The ordering risk stays: nothing makes the rebuild wait for the
+finals load, so a slow finals load on another night could still lose the race.
 
 # NOT RUN — the game-day live check of the live slate and the game page found no game in progress — SIM-519 / SIM-562, 2026-10-11
 
