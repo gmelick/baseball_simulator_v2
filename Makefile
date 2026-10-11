@@ -70,7 +70,7 @@ migrate: _require_env_file
 ## hand, through the crash wrapper. Postgres only; safe while the app runs.
 ##   make ingest-catch-up DAYS=14
 ingest-catch-up: _require_env_file
-	docker compose run --rm -e DAYS=$(or $(DAYS),3) app sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
+	docker compose run --rm -e DAYS=$(or $(DAYS),3) app sh /app/scripts/with_mark.sh nightly-finals sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
 
 ## SIM-519 Part C: follow the live service's log (schedule polls, lineup writes,
 ## push subscriptions).

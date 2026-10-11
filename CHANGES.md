@@ -1,3 +1,19 @@
+# BUILT — the nightly rebuild waits for the finals load — SIM-563 follow-up, 2026-10-11
+
+**Why.** The finals load (07:00 UTC) and the rebuild (08:00 UTC) relied on the hour between
+them. On 2026-10-11 the scheduler fired both in the same second; the finals load won that race,
+but nothing made sure it would.
+
+**What.** `scripts/with_mark.sh` wraps the finals load and the Sunday season sweep: while one
+runs, `/data/ingest_marks/<name>.running` holds its start time, and at its end `<name>.last`
+holds the UTC date and the exit code (the mark spans every retry). The rebuild's new first step,
+`scripts/wait_for_ingest.sh`, waits 60 s (a job fired in the same second writes its mark), then
+waits while either job runs (at most 2 hours; a mark older than 6 hours is stale). When the
+finals load ran today it goes on, whatever the exit; when it did not, it runs the finals load
+itself first. It never fails the rebuild. The two ingest jobs now mount `/data` and run as
+`appuser`; `make ingest-catch-up` writes the same marks. 10 tests
+(`tests/unit/test_sim563_ingest_wait.py`, POSIX).
+
 # FIXED — the nightly rebuild runs as the app's user — SIM-563 follow-up, 2026-10-11
 
 **What happened.** The first unattended nightly rebuild (2026-10-11) worked end to end: it
