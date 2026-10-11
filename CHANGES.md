@@ -1,3 +1,21 @@
+# FIXED — the nightly rebuild runs as the app's user — SIM-563 follow-up, 2026-10-11
+
+**What happened.** The first unattended nightly rebuild (2026-10-11) worked end to end: it
+finished at 17:14:50 UTC, the app saw the new version, restarted itself at 17:14:59 and
+answered again at 17:16:31 with 11/11 engines on the new version. The prune fix removed the
+crashed attempt's folder from 2026-10-10. But Ofelia ran the job container as root, so the
+new version folder (84 files) and the link were root-owned. The app (appuser) logged
+`Permission denied` writing its in-use marker, and a by-hand build could not prune that folder.
+
+**The fix.** `deploy/ofelia/config.ini`: `user = appuser` on the `nightly-rebuild` job. A
+one-off `chown` gave the link and the folder back to uid 1001 / gid 999; no root-owned file
+is left on the data volume.
+
+**Also seen.** The 07:00 finals load and the 08:00 rebuild both started at 14:56:12 UTC: the
+scheduler missed both times (the host was most likely asleep) and fired them together on
+wake. The rebuild's profile step may have read Postgres before that night's finals were
+loaded, so the profiles of 2026-10-11 may lack the games of 2026-10-10. Not fixed.
+
 # NOT RUN — the game-day live check of the live slate and the game page found no game in progress — SIM-519 / SIM-562, 2026-10-11
 
 The scheduled check fired at 14:34 EDT on 2026-10-11. No game was live, so the live
