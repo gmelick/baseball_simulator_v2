@@ -633,6 +633,9 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   compose; SIGTERM to PID 1, `restart: unless-stopped`). A boot while a writer holds the file
   waits for it (`SIM_BOOT_LOCK_WAIT_S`, 30 minutes) instead of crashing, and a failed
   park-factor read retries every minute. An explicit `--out-dir` still writes in place.
+  The rebuild's first step waits for the night's finals load (`scripts/wait_for_ingest.sh`,
+  reading the `/data/ingest_marks` that `scripts/with_mark.sh` writes) and runs it when it has
+  not run that day; the scheduler jobs run as `appuser`.
 - **The game page opens with the real game and runs a "what if" from any play (SIM-562,
   2026-10-09).** A live or final game shows the league feed's linescore, box score and
   play-by-play above every simulation (`GET /feed/plays`). "What if from here" on a play reads

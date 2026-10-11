@@ -18,6 +18,11 @@ export BASEBALL_DUCKDB_PATH="${BASEBALL_DUCKDB_PATH:-/data/baseball_sim.duckdb}"
 
 log() { echo "[nightly-rebuild $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
+# SIM-563 follow-up: the profiles read Postgres, so the night's finals must be
+# loaded first. The wait never fails the rebuild (scripts/wait_for_ingest.sh).
+log "0/2 wait for the finals load"
+sh /app/scripts/wait_for_ingest.sh
+
 log "1/2 player_profile_computor --seasons ${YEAR}"
 python -m pipeline.batch.player_profile_computor --seasons "${YEAR}"
 
