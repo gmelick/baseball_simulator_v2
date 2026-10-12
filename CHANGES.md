@@ -1,3 +1,22 @@
+# NOT RUN (second try) — the game-day live check found the day's game already final — SIM-519 / SIM-562, 2026-10-11
+
+The scheduled check fired again at 23:43 EDT on 2026-10-11. The day's only game had ended
+before it fired, so the live steps could not run.
+
+- **Health: PASS.** app (healthy), live, scheduler and nginx were up; nothing was restarted.
+- **Find a live game: NOT POSSIBLE.** The slate held one game: Dodgers at Brewers, NL
+  Championship Series game 1 (849809), Final. The slate's score (LAD 1, MIL 2) equals MLB's
+  own linescore. The next game is 849812, Dodgers at Brewers, 5 PM EDT on 2026-10-12.
+- **The posted lineup: PASS.** The live service wrote 849809's lineup before first pitch
+  (`raw.game_lineups`: 20 rows, `source` = published).
+- Steps 3 to 6 did not run: no game was live, and no game on the slate was still to start, so
+  no simulation run was queued. No defect was found in the app, and no code changed.
+- **A record defect, fixed.** The first try's entry (below) replaced the header of the
+  SIM-563 closure entry instead of going above it. That header is restored.
+- The live game-day view stays open in `BACKLOG.xlsx` (the workbook was not edited; it was
+  open in Excel: `~$BACKLOG.xlsx` existed). The check must fire while 849812 is in progress,
+  between about 5:10 PM and 8 PM EDT on 2026-10-12.
+
 # BUILT — the nightly rebuild waits for the finals load — SIM-563 follow-up, 2026-10-11
 
 **Why.** The finals load (07:00 UTC) and the rebuild (08:00 UTC) relied on the hour between
@@ -49,6 +68,7 @@ steps (the live card, the game page refresh, the what-if from the latest play) c
 - The live game-day view stays open in `BACKLOG.xlsx`. The check must fire while a game is
   in progress: after 8 PM EDT on 2026-10-11, or during 849812 (5 PM EDT on 2026-10-12).
 
+# CLOSED — the nightly rebuild reaches users with no person involved; the bundle is published as versions — SIM-563, 2026-10-10
 
 **Why it matters.** Since SIM-524 the 08:00 UTC rebuild runs beside the app, but the app
 loaded the profiles and the data bundle only at boot, so the new data waited for somebody to
