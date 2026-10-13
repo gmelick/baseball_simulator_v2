@@ -1,3 +1,19 @@
+# FIXED — the nightly rebuild runs numpy with one math thread per process — SIM-563 follow-up, 2026-10-13
+
+**Why.** The scheduled profile step took 54 minutes on 2026-10-11 and 2026-10-12, against
+about 12 by hand. The GMM fit (each pitcher's pitch-mix model, 635 pitchers in 15 worker
+processes) took 52 of them. The compose app service sets `OPENBLAS_NUM_THREADS=1`; a by-hand
+`docker compose run app` inherits it, the scheduler's job did not. Without it numpy's math
+library starts 16 threads in every worker, about 240 threads on 16 CPUs.
+
+**The measurement.** The computor's own `_fit_gmm_batch` on 150 synthetic pitchers, 15
+workers, in the app image: 549 s and 459 s without the setting, 140 s and 138 s with it
+(3.3–3.9 times slower without). The bundle step is not affected (about 71 minutes either way).
+
+**The fix.** `deploy/ofelia/config.ini`: `environment = OPENBLAS_NUM_THREADS=1` on the
+`nightly-rebuild` job. Expected effect: about 40 minutes less per night; the app's restart
+moves from about 10:07 to about 09:25 UTC.
+
 # BUILT — a game that started with no stored lineup can still be simulated from a play — SIM-519 follow-up, 2026-10-13
 
 **Why.** The game-day check of 2026-10-12 failed two steps on one cause. The laptop slept
