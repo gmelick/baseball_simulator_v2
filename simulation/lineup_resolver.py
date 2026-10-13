@@ -821,8 +821,13 @@ async def resolve_lineup(
     game_pk: int,
     *,
     as_of_at_bat: int | None = None,
+    fallback_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> ResolvedLineup:
     """Read Postgres and return the resolved (substitution-applied) lineup.
+
+    ``fallback_rows`` (the game page's what-if) stand in for the lineup table
+    when it holds no row for the game: a game that started before the live
+    service stored its lineup. They take the ``raw.game_lineups`` columns.
 
     Thin orchestration only: it reads ``raw.games`` (to map sides + season),
     ``raw.game_lineups`` (every sequence), and ``raw.players`` (hands), then
@@ -844,6 +849,8 @@ async def resolve_lineup(
     away_team_id = int(_row_get(game, "away_team_id"))
 
     lineup_rows = await fetch_lineup_rows(conn, game_pk)
+    if not lineup_rows and fallback_rows:
+        lineup_rows = list(fallback_rows)
     if not lineup_rows:
         raise LineupNotIngestedError(
             f"no raw.game_lineups rows for game_pk={game_pk}; "
@@ -956,12 +963,15 @@ async def resolve_game_state(
     half: Half = Half.TOP,
     as_of_at_bat: int | None = None,
     seed: int | None = None,
+    fallback_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> GameState:
     """One-call convenience: Postgres ``game_pk`` -> a fresh :class:`GameState`.
 
     Wires :func:`resolve_lineup` (DB) into :func:`build_game_state` (pure).
     """
-    resolved = await resolve_lineup(conn, game_pk, as_of_at_bat=as_of_at_bat)
+    resolved = await resolve_lineup(
+        conn, game_pk, as_of_at_bat=as_of_at_bat, fallback_rows=fallback_rows
+    )
     return build_game_state(resolved, half=half, seed=seed)
 
 

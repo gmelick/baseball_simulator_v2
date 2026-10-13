@@ -608,7 +608,9 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   simulation run is a durable `sim.sim_runs` row (`POST /simulate`, `/simulate/runs/*`,
   `api/sim_jobs.py`). The nightly finals job runs through `scripts/with_retry.sh`; the scheduler
   starts with the stack. Alembic **0029** carries every new column. The record and the run book:
-  `CHANGES.md` 2026-10-09.
+  `CHANGES.md` 2026-10-09. A game that STARTED with no stored lineup gets its starting rows from
+  its feed (`PublishedLineupWriter.on_live`), and the what-if builds its base state from the feed
+  when the table is empty (`fallback_rows`; 2026-10-13).
 - **A rebuild runs while the app serves (SIM-524, CLOSED 2026-10-10).** A DuckDB writer
   opens the file only when no other process holds it, read-only handles included. The
   blocker was never the forkserver: `/proc/*/fd` in the app container showed ONE handle,

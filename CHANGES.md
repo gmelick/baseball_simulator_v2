@@ -1,3 +1,30 @@
+# BUILT — a game that started with no stored lineup can still be simulated from a play — SIM-519 follow-up, 2026-10-13
+
+**Why.** The game-day check of 2026-10-12 failed two steps on one cause. The laptop slept
+through first pitch, and the live service writes a lineup only while a game is in Preview, so
+neither live game had a row in `raw.game_lineups`. A run of 100 had no game to run on, and
+"Simulate 100 from here" answered 503 "no raw.game_lineups rows".
+
+**What.**
+- **The live service writes a started game's lineup** (`PublishedLineupWriter.on_live`,
+  `pipeline/live/lineup_writer.py`). The poll calls it for every live game. Once per game it
+  checks for any stored row; when there is none, it reads the feed, builds the starting rows
+  with the loader's builder (each starter at his starting position, the starting pitcher) and
+  writes them as `published`. It writes only when both sides have nine batting slots and a
+  pitcher, and tries again on the next poll otherwise. A stored lineup is never replaced, and
+  the final box still replaces the published rows.
+- **The what-if no longer needs the stored lineup.** `resolve_lineup` / `resolve_game_state`
+  take `fallback_rows`, used only when the table holds no row for the game. `POST /what-if`,
+  on a 503 from the resolver, builds those rows from the cached league feed
+  (`_feed_lineup_rows`) and resolves again. A feed with no starters (a preview game without
+  posted lineups) still answers 503. `/simulate` is unchanged.
+
+**Tests.** Six new writer tests (the write, a stored lineup left alone, written once, an
+incomplete box retried, a preview entry ignored, the live poll's hook) and five what-if tests
+(the feed's rows, a feed with no starters, the resolver's fallback, the route on an empty
+table, the 503 kept). The full unit suite: 5,864 passed, 25 skipped; the regression lane,
+ruff, ruff format and mypy pass. The live game-day view stays open for one more live check.
+
 # PARTLY RUN — the game-day live check on a live game: four steps pass, two fail — SIM-519 / SIM-562, 2026-10-12
 
 The scheduled check fired at 19:55 EDT on 2026-10-12, when the laptop woke from sleep. The

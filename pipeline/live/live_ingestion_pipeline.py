@@ -1997,6 +1997,9 @@ class LiveIngestionPipeline:
                         await self._start_watching(game_pk)
                         # Immediately fetch initial state (don't wait for first WS msg)
                         asyncio.create_task(self._refresh_game_state(game_pk))
+                    # A game that started with no stored lineup gets its
+                    # starting rows from the feed (once; later polls are free).
+                    asyncio.create_task(self._write_live_lineup(game))
 
                 elif status == "Final":
                     if game_pk in self._ws_clients:
@@ -3041,6 +3044,18 @@ class LiveIngestionPipeline:
         except Exception as exc:  # noqa: BLE001
             log.warning("lineup: game row not upserted for %s: %s", game.get("gamePk"), exc)
             return
+        source = await self._get_lineup_writer().on_preview(game)
+        if source is not None:
+            await self._on_lineup_published(int(game["gamePk"]), source)
+
+    async def _write_live_lineup(self, game: dict) -> None:
+        """Make a game that started with no stored lineup simulable (from its feed's box)."""
+        source = await self._get_lineup_writer().on_live(game)
+        if source is not None:
+            await self._on_lineup_published(int(game["gamePk"]), source)
+
+    def _get_lineup_writer(self) -> Any:
+        """The one published-lineup writer of this pipeline (built on first use)."""
         writer = getattr(self, "_lineup_writer", None)
         if writer is None:
             from pipeline.live.lineup_writer import PublishedLineupWriter
@@ -3052,9 +3067,7 @@ class LiveIngestionPipeline:
 
             writer = PublishedLineupWriter(self._db, get_json)
             self._lineup_writer = writer
-        source = await writer.on_preview(game)
-        if source is not None:
-            await self._on_lineup_published(int(game["gamePk"]), source)
+        return writer
 
     async def _on_lineup_published(self, game_pk: int, source: str) -> None:
         """SIM-519: tell the game page a lineup is in (the Part C bridge carries it)."""
