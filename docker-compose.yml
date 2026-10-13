@@ -608,6 +608,12 @@ services:
     environment:
       BASEBALL_DB_DSN: "postgresql://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
     command: alembic upgrade head
+    # Mount the migrations, as the app service mounts ./db. Without the mount,
+    # alembic reads the tree baked into this image when it was first built,
+    # and a newer migration never applies.
+    volumes:
+      - ./db:/app/db:ro
+      - ./alembic.ini:/app/alembic.ini:ro
     depends_on:
       db:
         condition: service_healthy

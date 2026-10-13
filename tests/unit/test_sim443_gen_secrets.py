@@ -97,6 +97,32 @@ def test_append_keeps_crlf_line_endings(tmp_path: Path) -> None:
     assert data.count(b"\n") == data.count(b"\r\n")
 
 
+def test_append_and_check_read_a_file_with_a_byte_order_mark(tmp_path: Path) -> None:
+    # PowerShell 5.1 writes a BOM; the first line's key must still count.
+    env = tmp_path / ".env"
+    env.write_bytes(b"\xef\xbb\xbfPOSTGRES_PASSWORD=mine\n")
+    gen.main(["--append", str(env)])
+    data = env.read_bytes()
+    assert data.startswith(b"\xef\xbb\xbfPOSTGRES_PASSWORD=mine\n")
+    assert data.count(b"POSTGRES_PASSWORD=") == 1
+    assert gen.main(["--check", str(env)]) == 0
+
+
+def test_append_keeps_an_earlier_copy_that_holds_a_value(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("API_KEYS=keepme\nAPI_KEYS=\n", encoding="utf-8")
+    gen.main(["--append", str(env)])
+    lines = env.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "API_KEYS=keepme"
+    assert _VALUE_RE.match(lines[1].split("=", 1)[1])
+
+
+def test_a_quoted_empty_value_with_a_comment_is_blank() -> None:
+    # Compose reads SECRET_KEY="" # note as an empty value.
+    assert gen.read_env('SECRET_KEY="" # note\n')["SECRET_KEY"] == ""
+    assert gen.read_env("A='x y' # note\n")["A"] == "x y"
+
+
 def test_check_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env = tmp_path / ".env"
     assert gen.main(["--check", str(env)]) == 1  # absent file

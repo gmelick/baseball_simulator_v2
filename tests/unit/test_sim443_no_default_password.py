@@ -35,7 +35,7 @@ ROLES_SH = ROOT / "db" / "roles" / "setup_roles.sh"
 ROLES_SQL = ROOT / "db" / "roles" / "setup_roles.sql"
 
 # Built from two halves so this file never matches its own search.
-RETIRED_PASSWORD = "baseball" + "_pass"
+RETIRED_PASSWORD = "baseball" + "_pass"  # nosec - test-only literal
 
 LOOPBACK_SERVICES = ("db", "redis", "app", "prometheus", "grafana")
 SECRETS = (
@@ -163,6 +163,14 @@ def test_compose_builds_each_dsn_from_its_role_password() -> None:
     )
 
 
+def test_the_migrate_service_reads_the_current_migrations() -> None:
+    # Without the mount, alembic runs the tree baked into the image at its
+    # first build, and a newer migration never applies.
+    volumes = [str(v) for v in _services()["migrate"].get("volumes", [])]
+    assert "./db:/app/db:ro" in volumes
+    assert "./alembic.ini:/app/alembic.ini:ro" in volumes
+
+
 def test_redis_asks_for_its_password() -> None:
     redis = _services()["redis"]
     assert "--requirepass ${REDIS_PASSWORD:?" in str(redis["command"])
@@ -210,6 +218,8 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
     for job in ("nightly-finals", "weekly-refresh", "nightly-rebuild"):
         section = text.split(f'[job-exec "{job}"]', 1)[1].split("\n[", 1)[0]
         assert f"container = {JOBS_CONTAINER}" in section, job
+        # Ofelia execs as root unless the job names a user (SIM-563).
+        assert "user = appuser" in section, job
 
 
 # ---------------------------------------------------------------------------

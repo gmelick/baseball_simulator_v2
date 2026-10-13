@@ -57,7 +57,7 @@ _REPRESENTATIVE_GETS = [
     "/metrics",
 ]
 
-_API_KEY = "test-key-sim443c"
+_API_KEY = "test-key-sim443c"  # nosec - test-only literal
 
 
 def _env(monkeypatch, *, environment: str | None = "development", keys: str = _API_KEY) -> None:

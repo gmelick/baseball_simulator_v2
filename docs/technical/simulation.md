@@ -110,7 +110,7 @@ SIM-327's multi-iteration aggregation contract: turns a list of per-game GameSim
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
 | `GameSimSummary.from_results` | Aggregates N GameSimResults: computes home/away/tie win rates, score means/medians, raw score arrays, and Wald normal-approximation CIs on the win rate and the means. | `simulation.batch_runner.BatchRunner.run`<br>`simulation.win_probability.win_probability (when given a raw list)`<br>`api/routes/games.py, betting.py`<br>`scripts/*` | `_proportion_ci`<br>`_mean_ci` |
-| `GameSimSummary.inning_grids` | SIM-546 (2026-10-09): `(home_cells, away_cells)` per iteration, in input order, read off each result's `home_by_inning` / `away_by_inning` by `from_results`. It is the light form `SegmentRuns.from_inning_grids` reads, and it rides in the pickled summary through the runner's cache, so the edge route can price the twelve segment and team markets without re-simulating. It is `None` for the whole summary when any one result lacks a grid (a grid with a hole would misprice the markets). The field is LAST on the slotted dataclass. A summary pickled before the field existed restores with the slot unset, and `__getattr__` then reads `inning_grids` as None (every other missing name still raises), so `to_jsonable` and every reader see None, not an error. The wire models do not carry the grid: `/simulate` returns what it returned before, and the lite projection drops the key. | `simulation.game_market_distributions.segment_runs_from_summary`<br>`api/routes/games.py (_persist_replay_artifacts stores it through to_jsonable; _sim_summary_lite_from_stored drops it)` | — |
+| `GameSimSummary.inning_grids` | SIM-546 (2026-10-09): `(home_cells, away_cells)` per iteration, in input order, read off each result's `home_by_inning` / `away_by_inning` by `from_results`. It is the light form `SegmentRuns.from_inning_grids` reads, and it rides in the summary through the runner's cache, stored as JSON by `simulation/cache_codec.py` (`GameSimSummary.to_json` / `from_json`; key prefix `sim443:`), so the edge route can price the twelve segment and team markets without re-simulating. It is `None` for the whole summary when any one result lacks a grid (a grid with a hole would misprice the markets). The field is LAST on the slotted dataclass. A summary pickled before the field existed restores with the slot unset, and `__getattr__` then reads `inning_grids` as None (every other missing name still raises), so `to_jsonable` and every reader see None, not an error. The wire models do not carry the grid: `/simulate` returns what it returned before, and the lite projection drops the key. | `simulation.game_market_distributions.segment_runs_from_summary`<br>`api/routes/games.py (_persist_replay_artifacts stores it through to_jsonable; _sim_summary_lite_from_stored drops it)` | — |
 
 **Depends on:** `simulation.sim_loop (GameSimResult, BoxScore, PlayerStatLine)`
 
@@ -323,6 +323,21 @@ The single builder that turns a resolved GameState into simulate_game kwargs (SI
 **Environment flags read here:** `BASEBALL_DUCKDB_PATH (DuckDB file path for open_sim_duckdb / prime_park_factor_source)`
 
 > **Notes for anyone changing this file:** This module exists specifically because two callers (the API route and scripts/sim_stats.py) once built the kwargs dict by hand and one of them silently dropped home_defense/away_defense/park_run_factor -- the only three keys that feed the fielder score matrices and the park kernel -- making any A/B test of those flags compare two identical no-ops. SIM_KWARG_KEYS is the frozenset a unit test pins the builder's output against so a future dropped key fails CI instead of silently no-op'ing a production feature again. The UNRESOLVED_PARK_FACTOR sentinel is a float subclass equal to 1.0 but distinguishable via isinstance -- this is deliberate so any consumer that only reads the number keeps working while a consumer that cares can tell 'nobody looked' from 'looked and it's neutral'.
+
+---
+
+### `simulation/cache_codec.py`
+
+SIM-443f (2026-10-13): the JSON codec of the Redis sim cache. The cache used to pickle its values, and a pickle load runs code, so anyone who could write to Redis could run code in the API. The cache (`batch_runner`'s Redis cache, key prefix `sim443:`) now stores JSON only. Every value is an envelope `{"t": <tag>, "v": <payload>}`.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `encode` | Writes a value as the JSON text of a typed envelope: tag `summary` for a `GameSimSummary` (its `to_json`), `prop_set` for a `PropDistributionSet` (its `to_json`), `json` for any plain JSON value. It has no `default=` hook, so a value JSON cannot hold raises `TypeError` and the cache skips the write. | `simulation.batch_runner` (the Redis cache's set) | `GameSimSummary.to_json`<br>`PropDistributionSet.to_json` |
+| `decode` | Reads an envelope back. It never raises: any text it cannot read (an old pickle, a truncated value, a wrong tag) is a miss, and the caller recomputes. | `simulation.batch_runner` (the Redis cache's get) | `GameSimSummary.from_json`<br>`PropDistributionSet.from_json` |
+
+**Depends on:** `simulation.results`, `simulation.prop_distributions`
+
+**Used by:** `simulation.batch_runner`
 
 ---
 

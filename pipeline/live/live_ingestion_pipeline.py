@@ -3382,7 +3382,9 @@ ws_router = APIRouter(prefix="/ws", tags=["live"])
 
 @ws_router.websocket("/games/{game_pk}")
 async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
-    # SIM-443c: a router-level dependency never runs for a WebSocket, so the
+    # SIM-443c: require_auth takes a Request, and FastAPI does not supply one
+    # in a WebSocket scope, so on ws_router it would fail every handshake with
+    # a TypeError. ws_router therefore carries no router dependency, and the
     # handler checks the handshake's cookie or key first. A refused handshake
     # is closed with code 1008 before it is accepted.
     if await authenticate_websocket(websocket) is None:

@@ -15,8 +15,10 @@ Redis). It provides these seams:
     Every data router carries this dependency at the router level.
 
   - ``authenticate_websocket``: the same check for the live WebSocket. A
-    router-level dependency never runs for a WebSocket route, so the handler
-    calls this first. A failed check closes the socket with code 1008 (policy
+    ``require_auth`` takes a Request, and FastAPI does not supply one in a
+    WebSocket scope, so on the WebSocket router it would fail every handshake
+    with a TypeError. That router therefore carries no router dependency, and
+    the handler calls this first. A failed check closes the socket with code 1008 (policy
     violation) before the handshake is accepted.
 
   - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter

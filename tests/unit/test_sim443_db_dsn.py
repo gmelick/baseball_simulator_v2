@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.db_dsn import require_dsn
+from pipeline.db_dsn import dsn_label, require_dsn
 
 
 def test_returns_the_stripped_value(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,3 +44,18 @@ def test_no_default_password_in_the_module() -> None:
         source = fh.read()
     assert "baseball" + "_pass" not in source
     assert "postgresql://" not in source.replace("a postgresql:// connection", "")
+
+
+@pytest.mark.parametrize(
+    ("dsn", "label"),
+    [
+        ("postgresql://baseball_app:SECRET@db:5432/baseball_sim", "db:5432/baseball_sim"),
+        ("postgresql://u@db/x?password=SECRET", "db/x"),
+        ("host=db dbname=baseball_sim user=baseball_app password=SECRET", "db/baseball_sim"),
+        ("host=db port=5432 password='SE CRET' dbname=x", "db:5432/x"),
+        ("password=SECRET", "<redacted>"),
+    ],
+)
+def test_dsn_label_never_holds_the_password(dsn: str, label: str) -> None:
+    assert dsn_label(dsn) == label
+    assert "SECRET" not in dsn_label(dsn)

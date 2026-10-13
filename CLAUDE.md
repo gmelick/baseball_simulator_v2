@@ -660,6 +660,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
 
 ## 2a. Operational caveats (Windows + Docker)
 
+- **Every compose command needs the five passwords in `.env` (SIM-443b, 2026-10-13).** The
+  compose file has no default password: `POSTGRES_PASSWORD`, `BASEBALL_APP_DB_PASSWORD`,
+  `BASEBALL_RO_DB_PASSWORD`, `REDIS_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` use `${VAR:?}`, so a
+  missing one fails `docker compose` at once, `make test-unit` included. A worktree needs its
+  own `.env`; `python scripts/gen_secrets.py --append .env` adds any secret that is missing and
+  never changes one that has a value.
+- **The app, live and jobs services blank three passwords over their `env_file`.** They set
+  `POSTGRES_PASSWORD`, `BASEBALL_RO_DB_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` to `""`, so the
+  owner's password never reaches a serving container. The app logs in as `baseball_app`, which
+  cannot create or alter a table.
+- **`make migrate` runs the `migrate` service**, the only service that logs in as the cluster
+  owner. Run another alembic command through it: `docker compose run --rm migrate alembic current`.
+- **Prometheus needs `deploy/monitoring/secrets/app_api_key` (SIM-443c).** The file holds one
+  `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
+  DOWN. See `deploy/monitoring/secrets/README.md`.
 - **`scripts/` is NOT volume-mounted** into the running app container; only `api/`, `pipeline/`,
   `similarity/`, `simulation/`, `db/` are (see `docker-compose.yml` line ~110).  Edits to
   `scripts/` are picked up by the running container only after `docker compose build app` +

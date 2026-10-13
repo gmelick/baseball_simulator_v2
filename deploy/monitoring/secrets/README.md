@@ -21,7 +21,11 @@ Git tracks only this README and `app_api_key.example`. The real
 
 ## When the target shows DOWN
 
-- No `app_api_key` file, or the placeholder is still in it: the app answers
-  401 and the target shows DOWN. Prometheus itself still starts.
+- No `app_api_key` file: Prometheus cannot read the token, so it sends no
+  request. The target shows DOWN with "unable to read authorization
+  credentials", and the app's log shows nothing. Prometheus itself still
+  starts (`promtool check config` exits 1).
+- The placeholder is still in the file, or the key is wrong: the app answers
+  401 and the target shows DOWN.
 - You rotated `API_KEYS` in `.env`: copy the new value into `app_api_key`
   and recreate Prometheus.

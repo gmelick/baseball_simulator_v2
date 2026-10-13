@@ -417,6 +417,7 @@ every component is exercised once:
 ```bat
 git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb
 copy .env.example .env
+py scripts\gen_secrets.py --append .env
 make dev-bg
 make migrate
 make test
@@ -427,6 +428,8 @@ pytest tests\unit\test_engine_build_smoke.py -v
 curl http://localhost:8000/health
 curl http://localhost:8000/ready
 
+:: SIM-443c: every data route needs a key. Use one value of API_KEYS in .env.
+set API_KEY=<one API_KEYS value from .env>
 :: CORRECT URL (path-style, /api/similarity, no /v1):
 curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=20&top_n=10"
 
@@ -441,7 +444,7 @@ make down
 ### 3.1 Single-line `&&`-chained equivalent
 
 ```bat
-git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb && copy .env.example .env && make dev-bg && make migrate && make test && pytest tests\unit\test_engine_build_smoke.py -v && curl http://localhost:8000/health && curl http://localhost:8000/ready && curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024" && python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md && python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 --out docs\perf\2026-05-13-index-acceptance.md && make down
+git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb && copy .env.example .env && py scripts\gen_secrets.py --append .env && make dev-bg && make migrate && make test && pytest tests\unit\test_engine_build_smoke.py -v && curl http://localhost:8000/health && curl http://localhost:8000/ready && set "API_KEY=<one API_KEYS value from .env>" && curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024" && python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md && python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 --out docs\perf\2026-05-13-index-acceptance.md && make down
 ```
 
 ### 3.2 Persisting `BASEBALL_DB_DSN`

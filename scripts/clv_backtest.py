@@ -494,7 +494,7 @@ from betting.clv_engine import (  # noqa: E402
     run_line_is_pair,
     total_over_under_edge_report,
 )
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from pipeline.db_dsn import dsn_label, require_dsn  # noqa: E402
 from pipeline.odds_provider import (  # noqa: E402
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
@@ -4106,7 +4106,7 @@ async def run(args: argparse.Namespace) -> int:
         # traceback out of asyncio.run; name it and exit on a documented code.
         log.exception(
             "Could not read the game list from Postgres at %r.",
-            args.dsn.rsplit("@", 1)[-1],  # SIM-443b: the host only, never the password
+            dsn_label(args.dsn),  # SIM-443b: the host only, never the password
         )
         if duck is not None:
             try:
@@ -4187,7 +4187,7 @@ async def run(args: argparse.Namespace) -> int:
         "base_seed": int(args.base_seed),
         "workers": workers,
         # SIM-443b: the report keeps the host and database, never the password.
-        "dsn": args.dsn.rsplit("@", 1)[-1],
+        "dsn": dsn_label(args.dsn),
         "duckdb": args.duckdb,
         "park_factors_available": duck is not None,
         "factory_ref": _FACTORY_REF,

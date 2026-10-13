@@ -580,14 +580,15 @@ jobs:
         run: |
           # SIM-443b: a postgres:// or postgresql:// DSN outside docs/, CHANGES.md
           # and tests/ may carry only a placeholder password: CHANGE_ME..., a
-          # ${VAR}, a <text>, ***, pass, password or pw (any case). Each DSN is
-          # checked on its own (git grep -o), so a placeholder on the same line
+          # bare ${VAR} or ${VAR:?message}, a <text>, ***, pass, password or pw
+          # (any case). A ${VAR:-default} counts as a literal password. Each DSN
+          # is checked on its own (git grep -o), so a placeholder on the same line
           # cannot hide a real one. compose's ${VAR:?message} form contains
           # spaces, so it never matches the DSN pattern.
           set +e
           HITS=$(git grep -nIoE 'postgres(ql)?(\+[a-z0-9]+)?://[^:/@[:space:]"'\'']+:[^@[:space:]"'\'']+@' \
                    -- ':!docs/' ':!CHANGES.md' ':!tests/' \
-                 | grep -viE '://[^:/@[:space:]]+:(CHANGE_ME[^@]*|\$\{[^}@]*\}|<[^>@]*>|\*\*\*|pass|password|pw)@$')
+                 | grep -viE '://[^:/@[:space:]]+:(CHANGE_ME[^@]*|\$\{[A-Za-z_][A-Za-z0-9_]*(:\?[^}@]*)?\}|<[^>@]*>|\*\*\*|pass|password|pw)@$')
           set -e
           if [ -n "$HITS" ]; then
             echo "::error::SIM-443b: a DSN with a literal password (file:line:dsn-prefix):"

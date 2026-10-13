@@ -12,8 +12,13 @@ The deployment composes the value from the secrets in ``.env``.
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import urlsplit
 
-__all__ = ["require_dsn"]
+__all__ = ["dsn_label", "require_dsn"]
+
+#: One ``key=value`` pair of a libpq keyword DSN (the value may be quoted).
+_KEYWORD_PAIR = re.compile(r"(\w+)\s*=\s*('(?:[^'\\]|\\.)*'|\S+)")
 
 
 def require_dsn(var: str = "BASEBALL_DB_DSN") -> str:
@@ -31,3 +36,30 @@ def require_dsn(var: str = "BASEBALL_DB_DSN") -> str:
             "No default database password exists."
         )
     return value
+
+
+def dsn_label(dsn: str) -> str:
+    """Return ``host[:port]/dbname`` for a DSN, for a log line or a report.
+
+    The label never holds the user, the password or a query string. A URL DSN
+    is read with :func:`urllib.parse.urlsplit`; a libpq keyword DSN
+    (``host=db password=...``) gives only its ``host``, ``port`` and
+    ``dbname``. A DSN that does not parse gives ``<redacted>``.
+    """
+    text = str(dsn).strip()
+    if "://" in text:
+        try:
+            parts = urlsplit(text)
+            host = parts.hostname or ""
+            port = str(parts.port) if parts.port else ""
+        except ValueError:
+            return "<redacted>"
+        dbname = parts.path.rsplit("/", 1)[-1]
+    else:
+        found = {key.lower(): value.strip("'") for key, value in _KEYWORD_PAIR.findall(text)}
+        host = found.get("host", "")
+        port = found.get("port", "")
+        dbname = found.get("dbname", "")
+    if not host and not dbname:
+        return "<redacted>"
+    return f"{host}{':' + port if port else ''}/{dbname}"

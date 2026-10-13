@@ -171,7 +171,6 @@ export function DaySummaryPage(): React.ReactElement {
       {state.kind === 'error' && (
         <div className={styles.error} role="alert">
           <p>{state.message}</p>
-          {state.status === 401 && <p className={styles.errorHint}>Your session may have expired — try refreshing.</p>}
         </div>
       )}
 

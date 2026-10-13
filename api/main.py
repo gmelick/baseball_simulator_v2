@@ -843,9 +843,11 @@ def create_app() -> FastAPI:
     # SIM-443c: every data router below carries require_auth at the router
     # level (its APIRouter(dependencies=...)), so a new route on one of them
     # is gated without a per-route line. Two routers are deliberately open:
-    # auth_router (the login itself) and ws_router (a router-level dependency
-    # never runs for a WebSocket, so the handler calls authenticate_websocket
-    # first). tests/unit/test_sim443c_route_auth_coverage.py walks app.routes
+    # auth_router (the login itself) and ws_router: require_auth takes a
+    # Request, and FastAPI does not supply one in a WebSocket scope, so on
+    # ws_router it would fail every handshake with a TypeError. ws_router
+    # therefore carries no router dependency, and the handler calls
+    # authenticate_websocket first. tests/unit/test_sim443c_route_auth_coverage.py walks app.routes
     # and fails on any ungated data route.
     from api.routes.auth import router as auth_router
 

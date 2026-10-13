@@ -31,7 +31,7 @@
 set -eu
 
 # SIM-443b: no default password. The container composes the DSN from .env.
-: "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the jobs service composes it from .env (see .env.example)}"
+: "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the app service composes it from .env (see .env.example)}"
 export BASEBALL_DB_DSN
 
 log() { echo "[nightly-closing-lines $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }

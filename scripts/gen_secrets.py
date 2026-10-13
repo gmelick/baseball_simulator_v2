@@ -10,7 +10,7 @@ password, the Grafana admin password, the session-signing key, the login
 password and one API key. Each value is ``secrets.token_urlsafe(32)``: 43
 characters of ``A-Z a-z 0-9 - _``, so a value needs no escaping inside a DSN.
 
-Usage (stdlib only; runs on the host with any Python 3.10+):
+Usage (stdlib only; runs on the host with any Python 3.11+):
 
     python scripts/gen_secrets.py                  # print KEY=value lines to stdout
     python scripts/gen_secrets.py --append .env    # add the missing secrets to .env
@@ -51,6 +51,12 @@ TOKEN_BYTES = 32
 #: One ``KEY=value`` line of a dotenv file, with an optional ``export`` prefix.
 _LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
+#: A quoted value, with an optional trailing comment after the closing quote.
+_QUOTED_RE = re.compile(r"""^(["'])(.*?)\1\s*(?:#.*)?$""")
+
+#: The UTF-8 byte-order mark. PowerShell 5.1 writes it; compose strips it.
+_BOM = "\ufeff"
+
 
 def new_secret() -> str:
     """Return one new secret value."""
@@ -60,8 +66,9 @@ def new_secret() -> str:
 def _clean_value(raw: str) -> str:
     """Return a dotenv value without its quotes and its trailing comment."""
     value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1].strip()
+    quoted = _QUOTED_RE.match(value)
+    if quoted:
+        return quoted.group(2).strip()
     if " #" in value:
         value = value.split(" #", 1)[0]
     return value.strip()
@@ -99,7 +106,10 @@ def append_secrets(path: Path) -> tuple[list[str], list[str], list[str]]:
     """
     existed = path.exists()
     # Raw bytes keep a CRLF file's line endings; read_text would translate them.
-    text = path.read_bytes().decode("utf-8") if existed else ""
+    # utf-8-sig drops a byte-order mark, which would hide the first line's key.
+    raw = path.read_bytes() if existed else b""
+    has_bom = raw.startswith(_BOM.encode("utf-8"))
+    text = raw.decode("utf-8-sig")
     eol = "\r\n" if "\r\n" in text else "\n"
     present = read_env(text)
 
@@ -113,9 +123,10 @@ def append_secrets(path: Path) -> tuple[list[str], list[str], list[str]]:
         if line.lstrip().startswith("#"):
             continue
         match = _LINE_RE.match(line.rstrip("\r\n"))
-        if not match or match.group(1) not in blank:
+        if not match or match.group(1) not in blank or _clean_value(match.group(2)):
             continue
         # Every blank copy of a key is filled: compose reads the last line.
+        # A copy that holds a value is never changed.
         key = match.group(1)
         ending = line[len(line.rstrip("\r\n")) :]
         lines[index] = f"{key}={new_secret()}{ending}"
@@ -133,7 +144,7 @@ def append_secrets(path: Path) -> tuple[list[str], list[str], list[str]]:
 
     if added or filled:
         with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(out)
+            fh.write((_BOM if has_bom else "") + out)
         if not existed and os.name == "posix":
             os.chmod(path, 0o600)
     return added, filled, kept
@@ -166,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
     if args.check is not None:
-        text = args.check.read_text(encoding="utf-8") if args.check.exists() else ""
+        text = args.check.read_text(encoding="utf-8-sig") if args.check.exists() else ""
         missing = missing_keys(text)
         if missing:
             sys.stderr.write(
