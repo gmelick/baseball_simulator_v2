@@ -37,10 +37,18 @@ scrape_configs:
   # The app serves on `app:8000` inside the compose `baseball_net` network, so
   # Prometheus scrapes it directly. (It could also be scraped through nginx at
   # `nginx:80/metrics`; the direct target is simpler and avoids the proxy hop.)
+  #
+  # SIM-443c: /metrics requires a login like every API route. Prometheus sends
+  # one of the app's API_KEYS as a Bearer token. It reads the token from a file
+  # that git does not track (deploy/monitoring/secrets/README.md). A missing or
+  # wrong token file shows the target DOWN; Prometheus itself still starts.
   # ---------------------------------------------------------------------------
   - job_name: baseball-sim-app
     metrics_path: /metrics
     scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/app_api_key
     static_configs:
       - targets:
           - app:8000

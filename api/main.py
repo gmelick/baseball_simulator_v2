@@ -31,7 +31,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.auth import LatencyMiddleware, RateLimitMiddleware, resolve_cors_origins
+from api.auth import (
+    LatencyMiddleware,
+    RateLimitMiddleware,
+    _auth_disabled,
+    resolve_cors_origins,
+)
 from api.errors import install_exception_handlers
 from api.state import (
     apply_calibration_to_engines,
@@ -54,9 +59,9 @@ _REQUIRED_ENV_VARS = [
     "REDIS_URL",
 ]
 
-# SIM-389: auth vars are only required outside development so `make test-unit`
-# and local dev boot without ceremony.  In any other ENVIRONMENT value they must
-# be set — validate_environment() enforces this.
+# SIM-443c: the auth variables are required in EVERY environment. The one
+# opt-out is AUTH_DISABLED=1, which validate_environment() logs as a warning.
+# (SIM-389 required them only outside development; that relaxed mode is gone.)
 _REQUIRED_AUTH_ENV_VARS = [
     "SECRET_KEY",  # HMAC signing key for session tokens
     "AUTH_PASSWORD",  # shared browser login password
@@ -70,9 +75,11 @@ def validate_environment() -> None:
     Called inside the lifespan so a misconfigured container fails fast
     rather than silently running with broken connections.
 
-    Auth variables (SECRET_KEY, AUTH_PASSWORD) are only required outside
-    the ``development`` environment — local dev + the test suite boot without
-    them, falling back to insecure dev sentinels that are logged as warnings.
+    SIM-443c: the auth variables (SECRET_KEY, AUTH_PASSWORD) are required in
+    every environment; ``ENVIRONMENT`` plays no part. A blank or
+    whitespace-only value counts as missing. With ``AUTH_DISABLED=1`` the
+    function logs ONE warning and skips the auth requirement; the test suite
+    runs this way (tests/conftest.py).
     """
     missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
     if missing:
@@ -81,15 +88,21 @@ def validate_environment() -> None:
             f"Copy .env.example to .env and fill in the required values."
         )
 
-    env = os.environ.get("ENVIRONMENT", "development").strip().lower()
-    if env != "development":
-        missing_auth = [v for v in _REQUIRED_AUTH_ENV_VARS if not os.environ.get(v)]
-        if missing_auth:
-            raise RuntimeError(
-                f"Missing required auth variable(s) for ENVIRONMENT={env!r}: "
-                f"{', '.join(missing_auth)}. "
-                f"Set these before deploying outside development."
-            )
+    if _auth_disabled():
+        log.warning(
+            "SIM-443c: AUTH_DISABLED is set - every API route and the live "
+            "WebSocket accept requests with no credentials."
+        )
+        return
+
+    missing_auth = [v for v in _REQUIRED_AUTH_ENV_VARS if not os.environ.get(v, "").strip()]
+    if missing_auth:
+        raise RuntimeError(
+            f"Missing required auth variable(s): {', '.join(missing_auth)}. "
+            f"Run: python scripts/gen_secrets.py --append .env "
+            f"(or set AUTH_DISABLED=1 to run with no login)."
+        )
+    log.info("SIM-443c: login enforced on every API route and the live WebSocket.")
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +839,14 @@ def create_app() -> FastAPI:
     # SIM-389: Browser session auth (login / me / logout).
     # Registered FIRST so the /auth/* routes are always resolvable
     # regardless of other router registration order.
+    #
+    # SIM-443c: every data router below carries require_auth at the router
+    # level (its APIRouter(dependencies=...)), so a new route on one of them
+    # is gated without a per-route line. Two routers are deliberately open:
+    # auth_router (the login itself) and ws_router (a router-level dependency
+    # never runs for a WebSocket, so the handler calls authenticate_websocket
+    # first). tests/unit/test_sim443c_route_auth_coverage.py walks app.routes
+    # and fails on any ungated data route.
     from api.routes.auth import router as auth_router
 
     app.include_router(auth_router)
@@ -884,6 +905,8 @@ def create_app() -> FastAPI:
     # These are registered unconditionally — route registration requires no live
     # DB/Redis/WS connection. The background pipeline that *feeds* the WS clients
     # is started in lifespan only when LIVE_PIPELINE_ENABLED=true.
+    # SIM-443c: odds_router carries require_auth; the WebSocket handler checks
+    # the handshake's cookie or key itself and closes with 1008 on a failure.
     from pipeline.live.live_ingestion_pipeline import odds_router, ws_router
 
     app.include_router(ws_router)
@@ -959,6 +982,8 @@ def create_app() -> FastAPI:
             "status": "ok",
             "phase": "6",
             "environment": os.environ.get("ENVIRONMENT", "development"),
+            # SIM-443c: false only under the AUTH_DISABLED=1 opt-out.
+            "auth_enforced": not _auth_disabled(),
             # SIM-443e: whether the SQL console's read-only pool is open, and as
             # which database role. No DSN, no password.
             "sql_console": {

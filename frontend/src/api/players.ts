@@ -4,10 +4,12 @@
  * universal PlayerSearchInput and the Player Detail hub.
  */
 import { GamesApiError } from '@/api/games'
+import { notifyUnauthorized } from '@/api/unauthorized'
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { credentials: 'include', signal })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
   }

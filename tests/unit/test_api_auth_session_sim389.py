@@ -4,16 +4,16 @@ tests/unit/test_api_auth_session_sim389.py — SIM-389
 Unit tests for the browser session auth layer:
   - Session token mint / verify (api/auth._mint_session_token / _verify_session_token)
   - POST /auth/login  — correct password → 200 + cookie; wrong password → 401
-  - GET  /auth/me     — with/without cookie; dev bypass
+  - GET  /auth/me     — with/without cookie
   - POST /auth/logout — clears cookie
-  - require_auth dependency — cookie path, API-key path, 401 path, dev bypass
+  - require_auth dependency — cookie path, API-key path, 401 path
   - CORS dev origins no longer include wildcard (SIM-389 fix)
   - Protected route integration — GET /api/games/{game_pk}/simulate returns 401
-    in non-dev when no credential is presented
+    when no credential is presented, in every environment
 
-Test environment: ENVIRONMENT=development (the default) so require_auth is a
-no-op pass-through.  Tests that exercise non-dev enforcement temporarily set
-ENVIRONMENT=production via monkeypatch.
+Test environment (SIM-443c): the login is enforced in every environment.
+tests/conftest.py sets AUTH_DISABLED=1 for the whole suite; every client this
+file builds deletes it with monkeypatch, so the enforcement is what runs here.
 
 The TestClient is built from create_app() with the no-DB seam
 (``SIM_MACHINE_FACTORY_REF`` / rng_driven_machine_factory) so no live Postgres,
@@ -41,7 +41,16 @@ from api.auth import (
 
 
 def _make_client(monkeypatch, env: str = "development") -> TestClient:
-    """Build a TestClient with a fixed ENVIRONMENT."""
+    """Build a TestClient with a fixed ENVIRONMENT and the login enforced."""
+    _prepare_env(monkeypatch, env)
+    return _build_client()
+
+
+def _prepare_env(monkeypatch, env: str) -> None:
+    """Set the variables every client here needs; drop the suite's opt-out."""
+    # SIM-443c: tests/conftest.py opts the suite out of the login; this file
+    # tests the login itself.
+    monkeypatch.delenv("AUTH_DISABLED", raising=False)
     monkeypatch.setenv("ENVIRONMENT", env)
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-unit-tests")
     monkeypatch.setenv("AUTH_PASSWORD", "hunter2")
@@ -49,6 +58,9 @@ def _make_client(monkeypatch, env: str = "development") -> TestClient:
     monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://test:test@localhost/test")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
 
+
+def _build_client() -> TestClient:
+    """Build the app with a no-op lifespan and wrap it in a TestClient."""
     # Patch the lifespan startup so TestClient doesn't need live services.
     import unittest.mock as mock
     from contextlib import asynccontextmanager
@@ -178,35 +190,23 @@ class TestLoginEndpoint:
         set_cookie = res.headers.get("set-cookie", "")
         assert "HttpOnly" in set_cookie or SESSION_COOKIE_NAME in res.cookies
 
-    def test_dev_password_sentinel_accepted_when_no_env_var(self, monkeypatch):
-        """In dev, AUTH_PASSWORD defaults to 'dev' sentinel."""
+    def test_login_without_configured_password_returns_503(self, monkeypatch):
+        """SIM-443c: no default password exists; an unconfigured login says so."""
+        _prepare_env(monkeypatch, "development")
         monkeypatch.delenv("AUTH_PASSWORD", raising=False)
-        monkeypatch.setenv("ENVIRONMENT", "development")
-        monkeypatch.setenv("SECRET_KEY", "test-key")
-        monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://test:test@localhost/test")
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-
-        import unittest.mock as mock
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def _noop_lifespan(app):
-            from simulation.batch_runner import make_cache
-
-            app.state.sim_cache = make_cache()
-            app.state.calibration_map = __import__(
-                "simulation.win_probability", fromlist=["IDENTITY_CALIBRATION"]
-            ).IDENTITY_CALIBRATION
-            yield
-
-        with mock.patch("api.main.lifespan", _noop_lifespan):
-            from api.main import create_app
-
-            app = create_app()
-
-        client = TestClient(app, base_url="https://testserver")
+        client = _build_client()
         res = client.post("/auth/login", json={"password": "dev"})
-        assert res.status_code == 200
+        assert res.status_code == 503
+        assert "not configured" in res.json()["detail"]
+        assert SESSION_COOKIE_NAME not in res.cookies
+
+    def test_login_without_secret_key_returns_503(self, monkeypatch):
+        """SIM-443c: no default signing key exists either."""
+        _prepare_env(monkeypatch, "development")
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        client = _build_client()
+        res = client.post("/auth/login", json={"password": "hunter2"})
+        assert res.status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ class TestMeEndpoint:
         assert res.status_code == 200
         body = res.json()
         assert body["authenticated"] is False
-        assert body["mode"] == "unauthenticated"
+        assert body["mode"] == "none"
 
     def test_valid_cookie_returns_authenticated(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "production")
@@ -236,16 +236,17 @@ class TestMeEndpoint:
         me_res = client.get("/auth/me")
         body = me_res.json()
         assert body["authenticated"] is True
-        assert body["mode"] == "session"
+        assert body["mode"] == "cookie"
         assert body["expires_in"] > 0
 
-    def test_dev_bypass_returns_authenticated(self, monkeypatch):
+    def test_development_without_cookie_is_not_authenticated(self, monkeypatch):
+        """SIM-443c: ENVIRONMENT=development no longer logs the caller in."""
         client = _make_client(monkeypatch, env="development")
         res = client.get("/auth/me")
         assert res.status_code == 200
         body = res.json()
-        assert body["authenticated"] is True
-        assert body["mode"] == "dev_bypass"
+        assert body["authenticated"] is False
+        assert body["mode"] == "none"
 
     def test_me_never_returns_401(self, monkeypatch):
         """GET /auth/me must always return 200 — even with no cookie."""
@@ -287,16 +288,15 @@ class TestLogoutEndpoint:
 
 
 class TestRequireAuth:
-    def test_dev_bypass_no_credentials_needed(self, monkeypatch):
-        """In development, require_auth never raises."""
+    def test_development_no_credentials_returns_401(self, monkeypatch):
+        """SIM-443c: in development too, no credential means 401."""
         client = _make_client(monkeypatch, env="development")
-        # The /simulate route has require_auth; in dev it should not return 401.
-        # It will return 503 (no DB pool) not 401.
         res = client.get("/api/games/123456/simulate")
-        assert res.status_code != 401
+        assert res.status_code == 401
+        assert "WWW-Authenticate" in res.headers
 
     def test_production_no_credentials_returns_401(self, monkeypatch):
-        """In non-dev with credentials configured, no credential → 401."""
+        """In production, no credential → 401."""
         client = _make_client(monkeypatch, env="production")
         res = client.get("/api/games/123456/simulate")
         assert res.status_code == 401
@@ -334,37 +334,14 @@ class TestRequireAuth:
         res = client.get("/api/games/123456/simulate")
         assert res.status_code != 401
 
-    def test_unconfigured_non_dev_is_passthrough(self, monkeypatch):
-        """No AUTH_PASSWORD + no API_KEYS in non-dev → pass-through (no enforcement)."""
+    def test_unconfigured_non_dev_returns_401(self, monkeypatch):
+        """SIM-443c: no AUTH_PASSWORD and no API_KEYS no longer opens the routes."""
+        _prepare_env(monkeypatch, "production")
         monkeypatch.delenv("AUTH_PASSWORD", raising=False)
         monkeypatch.delenv("API_KEYS", raising=False)
-        # Use a fresh client with production env but no creds configured.
-        monkeypatch.setenv("ENVIRONMENT", "production")
-        monkeypatch.setenv("SECRET_KEY", "test-key")
-        monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://test:test@localhost/test")
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-
-        import unittest.mock as mock
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def _noop_lifespan(app):
-            from simulation.batch_runner import make_cache
-
-            app.state.sim_cache = make_cache()
-            app.state.calibration_map = __import__(
-                "simulation.win_probability", fromlist=["IDENTITY_CALIBRATION"]
-            ).IDENTITY_CALIBRATION
-            yield
-
-        with mock.patch("api.main.lifespan", _noop_lifespan):
-            from api.main import create_app
-
-            app = create_app()
-
-        client = TestClient(app, base_url="https://testserver")
+        client = _build_client()
         res = client.get("/api/games/123456/simulate")
-        assert res.status_code != 401  # pass-through, not 401
+        assert res.status_code == 401
 
 
 # ---------------------------------------------------------------------------

@@ -872,6 +872,7 @@ async def test_the_probes_read_the_graded_strikeout_line(monkeypatch, probe):
         return conn
 
     monkeypatch.setattr(asyncpg, "connect", _connect)
+    monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://u:dummy_pw@db:5432/x")
     lines = await probe._k_lines([1, 2])
     assert lines == {(1, 9): 5.5}
     ((sql, args),) = conn.calls

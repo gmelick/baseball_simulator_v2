@@ -112,6 +112,9 @@ Prometheus scrapes `/metrics` with a Bearer key read from a file:
 4. `http://127.0.0.1:9090/targets` shows `baseball-sim-app` UP. A missing
    file shows the target DOWN; Prometheus still starts.
 
+`deploy/monitoring/secrets/README.md` repeats these steps next to the file.
+When you rotate `API_KEYS`, copy the new value into the file.
+
 ## Running the stack behind nginx
 
 ```bash

@@ -33,7 +33,7 @@ const run = (over: Record<string, unknown>) => ({
 
 async function mockGamePage(page: Page): Promise<void> {
   await page.route('**/auth/me', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true, mode: 'session', expires_in: 3600 }) }),
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true, mode: 'cookie', expires_in: 3600 }) }),
   )
   await page.route(`**/api/games/${PK}/status`, (route) =>
     route.fulfill({

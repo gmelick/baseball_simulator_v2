@@ -7,6 +7,10 @@
  * On mount, calls GET /auth/me to restore a pre-existing session — so a
  * page refresh does NOT log the user out (the httpOnly cookie persists).
  *
+ * SIM-443c: a data client that gets a 401 fires UNAUTHORIZED_EVENT
+ * (@/api/unauthorized). The provider listens and marks the session logged
+ * out, so App renders the login page after the session expires.
+ *
  * Usage:
  *   const { authenticated, loading, login, logout } = useAuth()
  */
@@ -25,6 +29,7 @@ import {
   login as apiLogin,
   logout as apiLogout,
 } from '@/api/auth'
+import { UNAUTHORIZED_EVENT } from '@/api/unauthorized'
 
 // ---------------------------------------------------------------------------
 // Shape
@@ -33,9 +38,10 @@ import {
 interface AuthContextValue {
   /** True once the /auth/me probe has completed. */
   loading: boolean
-  /** True when a valid session or dev bypass is active. */
+  /** True when the server accepts this browser: a valid session cookie, or
+   *  a server that runs with AUTH_DISABLED=1. */
   authenticated: boolean
-  /** Auth mode reported by the server ("session" | "dev_bypass" | …). */
+  /** Auth mode reported by the server ("cookie" | "api_key" | "disabled" | "none"). */
   mode: string
   /** Call with the shared password to log in. Throws on wrong password. */
   login: (password: string) => Promise<void>
@@ -56,7 +62,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [authenticated, setAuthenticated] = useState(false)
-  const [mode, setMode] = useState('unauthenticated')
+  const [mode, setMode] = useState('none')
 
   // Probe the session on mount (restores existing cookie across page reloads).
   useEffect(() => {
@@ -67,9 +73,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {
         setAuthenticated(false)
-        setMode('unauthenticated')
+        setMode('none')
       })
       .finally(() => setLoading(false))
+  }, [])
+
+  // A 401 from any data client means the session ended: show the login page.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setAuthenticated(false)
+      setMode('none')
+    }
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   }, [])
 
   const login = useCallback(async (password: string) => {
@@ -83,7 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     await apiLogout()
     setAuthenticated(false)
-    setMode('unauthenticated')
+    setMode('none')
   }, [])
 
   const value = useMemo(

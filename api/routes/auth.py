@@ -25,33 +25,40 @@ to the browser.  Subsequent requests to localhost:5173/api/* include the cookie,
 which Vite also proxies (with the Cookie header) to localhost:8000 — the server
 validates it as normal.
 
-Auth password: the shared AUTH_PASSWORD env var (dev default: "dev").
-Signing key:   the SECRET_KEY env var (dev default: logged warning + sentinel).
+Auth password: the shared AUTH_PASSWORD env var (required; no default, SIM-443c).
+Signing key:   the SECRET_KEY env var (required; no default, SIM-443c).
 Session TTL:   SESSION_TTL_HOURS (default 8 h = one workday).
 
-Programmatic API consumers (scripts, Prometheus, Grafana) continue to use
-X-API-Key headers — the require_auth dependency accepts either form.
+A server with no AUTH_PASSWORD or SECRET_KEY answers POST /auth/login with 503
+("Login is not configured on this server"), not a 500.
+
+Programmatic API consumers (scripts, Prometheus, Grafana) use an X-API-Key or
+an Authorization: Bearer header; the require_auth dependency accepts either.
 
 Owner: Backend Developer (SIM-389).
 """
 
 from __future__ import annotations
 
+import hmac
 import logging
+import time
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response, status
 from fastapi.requests import Request
 from pydantic import BaseModel
 
 from api.auth import (
-    SESSION_COOKIE_NAME,
+    _auth_disabled,
+    _authenticate,
     _get_auth_password,
-    _is_development,
+    _get_secret_key,
     _mint_session_token,
     _session_ttl_seconds,
-    _verify_session_token,
     cookie_kwargs,
 )
+
+LOGIN_NOT_CONFIGURED_DETAIL = "Login is not configured on this server."
 
 log = logging.getLogger("api.routes.auth")
 
@@ -71,10 +78,11 @@ class AuthStatusResponse(BaseModel):
     """Response for GET /auth/me — always 200, never 401."""
 
     authenticated: bool
-    # "session"        — valid httpOnly cookie present
-    # "api_key"        — valid X-API-Key header present
-    # "dev_bypass"     — ENVIRONMENT=development, no auth enforced
-    # "unauthenticated"— no valid credential found
+    # "cookie"   — a valid httpOnly session cookie is present
+    # "api_key"  — a valid X-API-Key or Authorization: Bearer key is present
+    # "disabled" — AUTH_DISABLED=1, so the server enforces no login (SIM-443c)
+    # "none"     — no valid credential was found
+    # ``authenticated`` is true exactly when require_auth would pass.
     mode: str
     # Seconds until the current session expires (0 when not authenticated).
     expires_in: int
@@ -92,21 +100,28 @@ class AuthStatusResponse(BaseModel):
         "Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie "
         "(sim_session). The cookie is Secure + SameSite=strict in non-development "
         "environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). "
-        "Returns 401 on an incorrect password."
+        "Returns 401 on an incorrect password, and 503 when the server has no "
+        "AUTH_PASSWORD or SECRET_KEY."
     ),
     status_code=200,
 )
 async def login(body: LoginRequest, response: Response) -> dict:
     """Validate the shared password and set the session cookie."""
-    expected = _get_auth_password()
+    try:
+        expected = _get_auth_password()
+        _get_secret_key()
+    except RuntimeError:
+        # SIM-443c: no default password or key exists any more. A server
+        # without them cannot issue a session, so it says so plainly.
+        log.error("Login refused: AUTH_PASSWORD or SECRET_KEY is not set.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=LOGIN_NOT_CONFIGURED_DETAIL,
+        ) from None
 
     # Constant-time comparison to resist timing attacks.
-    import hmac as _hmac
-
-    if not _hmac.compare_digest(body.password, expected):
+    if not hmac.compare_digest(body.password.encode(), expected.encode()):
         log.warning("Failed login attempt.")
-        from fastapi import HTTPException, status
-
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect password.",
@@ -137,39 +152,21 @@ async def login(body: LoginRequest, response: Response) -> dict:
 )
 async def me(request: Request) -> AuthStatusResponse:
     """Return the caller's auth status without enforcing authentication."""
-    # Dev bypass.
-    if _is_development():
+    if _auth_disabled():
         return AuthStatusResponse(
             authenticated=True,
-            mode="dev_bypass",
+            mode="disabled",
             expires_in=_session_ttl_seconds(),
         )
 
-    # Check session cookie.
-    raw_cookie = request.cookies.get(SESSION_COOKIE_NAME)
-    if raw_cookie:
-        payload = _verify_session_token(raw_cookie)
-        if payload:
-            remaining = max(0, int(payload.get("exp", 0) - __import__("time").time()))
-            return AuthStatusResponse(
-                authenticated=True,
-                mode="session",
-                expires_in=remaining,
-            )
-
-    # Check API key (so programmatic callers that have a key also see "authenticated").
-    from api.auth import API_KEY_HEADER, _configured_api_keys
-
-    keys = _configured_api_keys()
-    presented = request.headers.get(API_KEY_HEADER)
-    if keys and presented and presented in keys:
-        return AuthStatusResponse(
-            authenticated=True,
-            mode="api_key",
-            expires_in=0,  # API keys don't expire
-        )
-
-    return AuthStatusResponse(authenticated=False, mode="unauthenticated", expires_in=0)
+    principal = _authenticate(request.cookies, request.headers)
+    if principal is None:
+        return AuthStatusResponse(authenticated=False, mode="none", expires_in=0)
+    remaining = 0
+    if principal.expires_at is not None:
+        remaining = max(0, int(principal.expires_at - time.time()))
+    # An API key does not expire, so its ``expires_in`` stays 0.
+    return AuthStatusResponse(authenticated=True, mode=principal.mode, expires_in=remaining)
 
 
 # ---------------------------------------------------------------------------

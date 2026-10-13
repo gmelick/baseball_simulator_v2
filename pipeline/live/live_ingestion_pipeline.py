@@ -75,8 +75,12 @@ import asyncpg
 import redis.asyncio as aioredis
 import websockets
 import websockets.exceptions
-from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.routing import APIRouter
+
+# SIM-443c: the odds routes and the live WebSocket require a login. api.auth
+# imports only FastAPI and Starlette, so this import makes no cycle.
+from api.auth import authenticate_websocket, require_auth
 
 # SIM-370: odds/prop provider seam.  The pipeline obtains its odds source via
 # get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
@@ -1078,8 +1082,9 @@ class MockOddsAPI:
         return [self.get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)]
 
 
-# FastAPI router — mounts at /api/odds
-odds_router = APIRouter(prefix="/api/odds", tags=["odds"])
+# FastAPI router — mounts at /api/odds. SIM-443c: every route on it requires a
+# login (cookie or API key), in the main app and in the live service's app.
+odds_router = APIRouter(prefix="/api/odds", tags=["odds"], dependencies=[Depends(require_auth)])
 
 
 @odds_router.get("/{game_pk}")
@@ -3377,6 +3382,11 @@ ws_router = APIRouter(prefix="/ws", tags=["live"])
 
 @ws_router.websocket("/games/{game_pk}")
 async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
+    # SIM-443c: a router-level dependency never runs for a WebSocket, so the
+    # handler checks the handshake's cookie or key first. A refused handshake
+    # is closed with code 1008 before it is accepted.
+    if await authenticate_websocket(websocket) is None:
+        return
     await connection_manager.connect(game_pk, websocket)
     # SIM-519 Part C: in the app, the live service's messages arrive on Redis;
     # the bridge subscribes to this game's channel while anyone watches it.

@@ -632,6 +632,9 @@ services:
       - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:
       - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # SIM-443c: the scrape token (one API_KEYS value). Mount the DIRECTORY:
+      # Docker creates a missing bind-mounted FILE as an empty directory.
+      - ./deploy/monitoring/secrets:/etc/prometheus/secrets:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"

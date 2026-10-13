@@ -17,14 +17,16 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from api.auth import require_auth
 from api.routes._common import _get_pool, _row_get
 
 log = logging.getLogger("api.routes.players")
 
-router = APIRouter(prefix="/api/players", tags=["data-lab"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(prefix="/api/players", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 
 class PlayerHit(BaseModel):
@@ -87,7 +89,6 @@ async def _fetch(pool, sql: str, *args):
     "/search",
     response_model=list[PlayerHit],
     summary="Player name typeahead (raw.players, pg_trgm)",
-    dependencies=[],
 )
 async def search_players(
     request: Request,

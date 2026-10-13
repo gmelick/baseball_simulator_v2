@@ -10,6 +10,7 @@
  * credentials/error conventions.
  */
 import { type EdgeReport, GamesApiError } from './games'
+import { notifyUnauthorized } from './unauthorized'
 
 export type { EdgeReport }
 
@@ -105,6 +106,7 @@ export interface SignalsResponse {
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { credentials: 'include' })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
   }

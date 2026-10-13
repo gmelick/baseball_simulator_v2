@@ -8,18 +8,21 @@ SIM-439 — read-only schema tree for the Data Lab SchemaBrowser + AI grounding.
 Lists only the ``raw`` schema — the Postgres tables reachable by the SQL Console
 and the AI assistant. ``derived.*`` / ``sim.*`` live in the in-process DuckDB and
 are NOT on this pool, so exposing them here would invite cross-database joins
-that can't run. Structure only (no row data), so no auth; cached on
+that can't run. Structure only (no row data), but it still needs a login
+(SIM-443c: the table and column names are not public); cached on
 ``app.state`` for the process lifetime (the schema is static between deploys).
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
+from api.auth import require_auth
 from api.routes._common import _get_pool, _row_get
 
-router = APIRouter(prefix="/api/schema", tags=["data-lab"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(prefix="/api/schema", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 
 class ColumnInfo(BaseModel):

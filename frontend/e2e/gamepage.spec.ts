@@ -104,7 +104,7 @@ async function json(page: Page, glob: string, body: unknown, status = 200): Prom
 }
 
 async function mockFinalGame(page: Page): Promise<{ whatIfBody: () => unknown }> {
-  await json(page, '**/auth/me', { authenticated: true, mode: 'session', expires_in: 3600 })
+  await json(page, '**/auth/me', { authenticated: true, mode: 'cookie', expires_in: 3600 })
   await json(page, `**/api/games/${PK}/status`, {
     game_pk: PK,
     game_status: 'final',

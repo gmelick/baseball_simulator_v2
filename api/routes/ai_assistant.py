@@ -52,7 +52,8 @@ from api.routes.sql_safety import (
 
 log = logging.getLogger("api.routes.ai_assistant")
 
-router = APIRouter(prefix="/api/assistant", tags=["data-lab"])
+# SIM-443c: every route on this router (including /status) requires a login.
+router = APIRouter(prefix="/api/assistant", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 DEFAULT_MODEL = os.environ.get("ASSISTANT_MODEL", "claude-sonnet-5")
 MAX_STEPS = int(os.environ.get("MAX_ASSISTANT_STEPS", "4"))

@@ -100,7 +100,9 @@ numbers it backs reach users.
 
 - **CLV computed off an uncalibrated probability** — `betting.py:329` calls `win_probability()` with no
   `calibration_map=` though one is loaded at boot (SIM-387).
-- **Auth defined but unenforced** — `require_api_key` is on zero routes; dev CORS is `*`+credentials (SIM-389).
+- **Auth defined but unenforced** — `require_api_key` was on zero routes; dev CORS was `*`+credentials.
+  SIM-389 added the session login. SIM-443c (2026-10-13) closed the gap: every data router and the live
+  WebSocket require a login in every environment, and `AUTH_DISABLED=1` is the one opt-out.
 - **Runner serialized** — `SIM_RUNNER_WORKERS=1` + shared-memory tiles unwired (SIM-403).
 - **Dead `park` field** — the run environment ignores venue; no home-field edge; pitcher hand unused in the
   batted-ball matchup (SIM-411/412/413).

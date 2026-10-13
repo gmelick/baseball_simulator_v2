@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from api.auth import require_auth
 from api.state import (
     CACHE_TTL_SECONDS,
     NameResolver,
@@ -63,7 +64,10 @@ except Exception:  # pragma: no cover — fallback for partial test setups
 
 log = logging.getLogger("api.routes.similarity")
 
-router = APIRouter(prefix="/api/similarity", tags=["similarity"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(
+    prefix="/api/similarity", tags=["similarity"], dependencies=[Depends(require_auth)]
+)
 
 
 # ---------------------------------------------------------------------------

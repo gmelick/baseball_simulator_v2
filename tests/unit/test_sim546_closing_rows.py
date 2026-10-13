@@ -897,6 +897,7 @@ def _run_script(tmp_path: Path, **env_over: str) -> tuple[subprocess.CompletedPr
     fake.chmod(0o755)
     env = {k: v for k, v in os.environ.items() if k not in ("ODDS_PROVIDER", "ODDS_API_KEY")}
     env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    env.setdefault("BASEBALL_DB_DSN", "postgresql://u:dummy_pw@db:5432/x")
     env.update(env_over)
     assert _SH is not None
     proc = subprocess.run(

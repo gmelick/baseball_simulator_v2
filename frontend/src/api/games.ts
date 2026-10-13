@@ -11,6 +11,8 @@
  * Keep them in sync when those models change.
  */
 
+import { notifyUnauthorized } from '@/api/unauthorized'
+
 /** The card states. Since SIM-519 the server maps the league's status. */
 export type GameStatus = 'scheduled' | 'live' | 'final' | 'postponed'
 
@@ -455,6 +457,7 @@ function retryAfterOf(res: Response): number | null {
 export async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { credentials: 'include' })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
   }
@@ -469,6 +472,7 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`, retryAfterOf(res))
   }
@@ -714,6 +718,7 @@ export async function cancelSimRun(gamePk: number, runId: number): Promise<SimRu
     credentials: 'include',
   })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
   }

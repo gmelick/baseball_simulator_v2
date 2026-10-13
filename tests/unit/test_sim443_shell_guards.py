@@ -34,7 +34,7 @@ pytestmark = pytest.mark.skipif(
 def test_the_script_names_the_guard(script: str) -> None:
     text = (SCRIPTS / script).read_text(encoding="utf-8")
     assert "${BASEBALL_DB_DSN:?" in text
-    assert "baseball_pass" not in text
+    assert "baseball" + "_pass" not in text
     assert "${BASEBALL_DB_DSN:-" not in text
 
 

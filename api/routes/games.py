@@ -144,7 +144,8 @@ from simulation.snapshots import (
 
 log = logging.getLogger("api.routes.games")
 
-router = APIRouter(prefix="/api/games", tags=["games"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(prefix="/api/games", tags=["games"], dependencies=[Depends(require_auth)])
 
 
 # ---------------------------------------------------------------------------

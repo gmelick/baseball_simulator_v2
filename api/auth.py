@@ -1,17 +1,23 @@
 """
 api/auth.py
 ===========
-Baseline API security primitives for the MLB Simulation Platform (SIM-351).
+API security primitives for the MLB Simulation Platform (SIM-351, SIM-389, SIM-443c).
 
-This module is intentionally dependency-free beyond FastAPI/Starlette (no
-``slowapi``, no Redis). It provides two seams Phase-5 routers can attach:
+This module is dependency-free beyond FastAPI/Starlette (no ``slowapi``, no
+Redis). It provides these seams:
 
-  - ``require_auth`` — a FastAPI dependency that accepts a valid session
-    cookie OR an ``X-API-Key`` header. In ``development`` env, or when neither
-    a password nor keys are configured, it is a no-op pass-through so local
-    dev + the test suite work without ceremony. In any non-dev environment
-    with credentials configured, a missing/invalid credential yields ``401``.
-    This is the primary route gate for expensive / sensitive routes.
+  - ``require_auth``: a FastAPI dependency that accepts a valid session
+    cookie, an ``X-API-Key`` header or an ``Authorization: Bearer <key>``
+    header. A request with none of them gets ``401``. The gate is enforced in
+    EVERY environment (SIM-443c): ``ENVIRONMENT`` no longer relaxes it. The
+    one opt-out is an explicit ``AUTH_DISABLED=1`` (``_auth_disabled``); the
+    app logs a warning at boot and ``/health`` reports ``auth_enforced``.
+    Every data router carries this dependency at the router level.
+
+  - ``authenticate_websocket``: the same check for the live WebSocket. A
+    router-level dependency never runs for a WebSocket route, so the handler
+    calls this first. A failed check closes the socket with code 1008 (policy
+    violation) before the handshake is accepted.
 
   - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter
     keyed by API key (falling back to client IP). Defaults to
@@ -30,6 +36,9 @@ cache (the same one ``api/state.py`` already opens) — the middleware's
 public surface (constructor knobs + ``_client_key`` seam) is written so that
 swap is a body change, not an interface change.
 
+``ENVIRONMENT`` still drives two things here: the cookie ``secure`` flag
+(``cookie_kwargs``) and the CORS defaults (``resolve_cors_origins``).
+
 Owned by Backend Developer (SIM-351).
 """
 
@@ -42,8 +51,10 @@ import json
 import os
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping
+from dataclasses import dataclass
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, WebSocket, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
@@ -55,7 +66,11 @@ _FALSEY = ("0", "false", "no", "off", "")
 
 
 def _is_development() -> bool:
-    """True when ENVIRONMENT is development (the auth/rate-limit relaxed mode)."""
+    """True when ENVIRONMENT is development.
+
+    SIM-443c: this no longer touches authentication. It drives the cookie
+    ``secure`` flag and the CORS defaults only.
+    """
     return os.environ.get("ENVIRONMENT", "development").strip().lower() == "development"
 
 
@@ -65,6 +80,16 @@ def _env_flag(name: str, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in _FALSEY
+
+
+def _auth_disabled() -> bool:
+    """True when ``AUTH_DISABLED`` is set to a truthy value (SIM-443c).
+
+    This is the ONE opt-out from authentication. Every site that skips the
+    credential check reads this helper, so removing the opt-out later means
+    deleting this helper and its call sites.
+    """
+    return _env_flag("AUTH_DISABLED", default=False)
 
 
 def _configured_api_keys() -> set[str]:
@@ -88,17 +113,18 @@ def _configured_api_keys() -> set[str]:
 # Payload keys: sub (subject), iat (issued-at unix ts), exp (expiry unix ts).
 #
 # Environment variables consumed:
-#   SECRET_KEY         — HMAC signing key.  Required in non-dev; defaults to an
-#                        insecure dev sentinel (logged as a warning) so the app
-#                        boots and tests run without ceremony.
+#   SECRET_KEY         — HMAC signing key. Required in every environment
+#                        (SIM-443c); there is no default.
 #   AUTH_PASSWORD      — The single shared login password for the browser UI.
-#                        Required in non-dev; dev default is the literal "dev".
+#                        Required in every environment; there is no default.
 #   SESSION_TTL_HOURS  — Cookie / token lifetime in hours (default: 8).
+#
+# validate_environment() (api/main.py) refuses to boot without the first two,
+# unless AUTH_DISABLED=1. scripts/gen_secrets.py writes both into .env.
 # ---------------------------------------------------------------------------
 
 SESSION_COOKIE_NAME = "sim_session"
-_DEV_SECRET_SENTINEL = "INSECURE-dev-only-secret-change-in-production"  # noqa: S105
-_DEV_PASSWORD_SENTINEL = "dev"
+_GEN_SECRETS_HINT = "run: python scripts/gen_secrets.py --append .env"
 
 
 def _session_ttl_seconds() -> int:
@@ -110,38 +136,26 @@ def _session_ttl_seconds() -> int:
 
 
 def _get_secret_key() -> str:
-    """HMAC signing key from SECRET_KEY env var.
+    """HMAC signing key from the SECRET_KEY env var.
 
-    In development, falls back to a hard-coded sentinel and logs a warning.
-    In non-dev, the absence of SECRET_KEY is a misconfiguration that validate_environment()
-    will surface at boot before any request is served.
+    Raises ``RuntimeError`` when the variable is blank. There is no default
+    key (SIM-443c): a published default would let anyone mint a session.
     """
     key = os.environ.get("SECRET_KEY", "").strip()
     if not key:
-        if _is_development():
-            import logging
-
-            logging.getLogger("api.auth").warning(
-                "SECRET_KEY is not set — using insecure dev sentinel. "
-                "Set SECRET_KEY before deploying."
-            )
-            return _DEV_SECRET_SENTINEL
-        # In non-dev this path should never be reached because validate_environment
-        # (api/main.py) fails fast on missing SECRET_KEY before the first request.
-        raise RuntimeError("SECRET_KEY must be set in non-development environments.")
+        raise RuntimeError(f"SECRET_KEY is not set - {_GEN_SECRETS_HINT}")
     return key
 
 
 def _get_auth_password() -> str:
-    """Shared browser login password from AUTH_PASSWORD env var.
+    """Shared browser login password from the AUTH_PASSWORD env var.
 
-    Dev default: "dev".  Non-dev: required (validate_environment() guards this).
+    Raises ``RuntimeError`` when the variable is blank. There is no default
+    password (SIM-443c).
     """
     pw = os.environ.get("AUTH_PASSWORD", "").strip()
     if not pw:
-        if _is_development():
-            return _DEV_PASSWORD_SENTINEL
-        raise RuntimeError("AUTH_PASSWORD must be set in non-development environments.")
+        raise RuntimeError(f"AUTH_PASSWORD is not set - {_GEN_SECRETS_HINT}")
     return pw
 
 
@@ -211,69 +225,135 @@ def cookie_kwargs(*, max_age: int | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# API-key auth dependency (SIM-351)
+# The shared credential check (SIM-351, SIM-389, SIM-443c)
 # ---------------------------------------------------------------------------
 
 API_KEY_HEADER = "X-API-Key"
+_BEARER_PREFIX = "bearer "
+_WWW_AUTHENTICATE = 'Bearer realm="sim", ApiKey realm="X-API-Key", Cookie realm="sim_session"'
+# The WebSocket close code for a refused credential (RFC 6455: policy violation).
+WS_POLICY_VIOLATION = 1008
 
 
-# ---------------------------------------------------------------------------
-# Combined browser + programmatic auth dependency (SIM-389)
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Principal:
+    """The caller that a credential proves.
 
-
-async def require_auth(request: Request) -> str | None:
-    """FastAPI dependency that accepts a valid session cookie OR a valid API key.
-
-    This is the primary auth gate for expensive / sensitive routes:
-      GET  /api/games/{game_pk}/simulate
-      POST /api/games/{game_pk}/simulate/with_override
-      GET  /api/betting/games/{game_pk}/edges
-      GET  /api/betting/games/{game_pk}/signals
-      GET  /metrics
-
-    Auth priority (first match wins):
-      1. Development env OR nothing configured  → pass-through (returns None)
-      2. Valid ``sim_session`` httpOnly cookie   → returns "session:<sub>"
-      3. Valid ``X-API-Key`` header             → returns "key:<value>"
-      4. Otherwise                              → 401
-
-    The "nothing configured" pass-through (point 1) applies to non-dev
-    environments where NEITHER AUTH_PASSWORD NOR API_KEYS is configured — this
-    lets staging environments that haven't set up credentials yet behave as
-    unauthenticated pass-through rather than hard-failing every request.
+    ``mode`` is ``cookie`` (a valid session cookie) or ``api_key`` (a
+    configured key in ``X-API-Key`` or ``Authorization: Bearer``).
+    ``expires_at`` is the session's expiry as a unix time, or None for a key.
     """
-    # 1a. Dev bypass — transparent pass-through in development.
-    if _is_development():
-        return None
 
-    # 1b. Non-dev but nothing configured yet → pass-through.
-    keys = _configured_api_keys()
-    has_pw = bool(os.environ.get("AUTH_PASSWORD", "").strip())
-    if not keys and not has_pw:
-        return None
+    mode: str
+    subject: str
+    expires_at: int | None = None
 
-    # 2. Session cookie path (browser clients).
-    raw_cookie = request.cookies.get(SESSION_COOKIE_NAME)
+
+def _presented_api_key(headers: Mapping[str, str]) -> str | None:
+    """Return the API key that a request presents, or None.
+
+    ``X-API-Key`` comes first. Otherwise an ``Authorization: Bearer <key>``
+    header supplies the key (Prometheus sends its scrape token this way).
+    """
+    key = headers.get(API_KEY_HEADER)
+    if key and key.strip():
+        return key.strip()
+    auth = headers.get("authorization")
+    if auth and auth[: len(_BEARER_PREFIX)].lower() == _BEARER_PREFIX:
+        token = auth[len(_BEARER_PREFIX) :].strip()
+        if token:
+            return token
+    return None
+
+
+def _key_matches(presented: str, keys: set[str]) -> bool:
+    """True when ``presented`` equals one configured key.
+
+    The check compares against EVERY key with ``hmac.compare_digest`` and has
+    no early exit, so its time does not tell which key matched.
+    """
+    presented_b = presented.encode()
+    matched = False
+    for key in keys:
+        matched |= hmac.compare_digest(presented_b, key.encode())
+    return matched
+
+
+def _authenticate(cookies: Mapping[str, str], headers: Mapping[str, str]) -> Principal | None:
+    """Check the session cookie, then the API key. Never raises.
+
+    Returns the ``Principal`` of the first valid credential, or None. A
+    missing SECRET_KEY makes every cookie invalid; it does not raise.
+    """
+    raw_cookie = cookies.get(SESSION_COOKIE_NAME)
     if raw_cookie:
         payload = _verify_session_token(raw_cookie)
         if payload:
-            return f"session:{payload.get('sub', 'user')}"
+            exp = payload.get("exp")
+            return Principal(
+                mode="cookie",
+                subject=str(payload.get("sub", "user")),
+                expires_at=int(exp) if isinstance(exp, (int, float)) else None,
+            )
 
-    # 3. API key path (programmatic clients: scripts, Prometheus, CI).
-    presented_key = request.headers.get(API_KEY_HEADER)
-    if keys and presented_key and presented_key in keys:
-        return f"key:{presented_key}"
+    presented = _presented_api_key(headers)
+    if presented:
+        keys = _configured_api_keys()
+        if keys and _key_matches(presented, keys):
+            return Principal(mode="api_key", subject="key")
+    return None
+
+
+async def require_auth(request: Request) -> str | None:
+    """FastAPI dependency: the caller must present a valid credential.
+
+    Every data router carries this dependency (SIM-443c). It gates every
+    route except ``/health``, ``/ready``, ``/``, ``/auth/*`` and the API docs.
+
+    Accepted credentials (the first match wins):
+      1. a valid ``sim_session`` httpOnly cookie -> returns "cookie:<sub>"
+      2. a configured key in ``X-API-Key`` or ``Authorization: Bearer``
+         -> returns "api_key:key" (the key itself never leaves this module)
+    Otherwise the dependency raises 401 with a ``WWW-Authenticate`` header.
+
+    ``AUTH_DISABLED=1`` is the one opt-out: the dependency then returns None
+    and reads no credential. ``ENVIRONMENT`` plays no part.
+    """
+    if _auth_disabled():
+        return None
+
+    principal = _authenticate(request.cookies, request.headers)
+    if principal is not None:
+        return f"{principal.mode}:{principal.subject}"
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=(
             "Authentication required. "
             "Log in via POST /auth/login to obtain a session cookie, "
-            "or provide a valid X-API-Key header."
+            "or send a valid X-API-Key or Authorization: Bearer header."
         ),
-        headers={"WWW-Authenticate": "Cookie realm=sim_session, ApiKey realm=X-API-Key"},
+        headers={"WWW-Authenticate": _WWW_AUTHENTICATE},
     )
+
+
+async def authenticate_websocket(websocket: WebSocket) -> str | None:
+    """Check the credential of a WebSocket handshake (SIM-443c).
+
+    The check reads the same cookie and headers as ``require_auth``; a
+    browser sends the session cookie on a same-origin handshake. On success
+    the function returns the caller's label ("disabled" under
+    ``AUTH_DISABLED=1``). On failure it closes the socket with code 1008
+    BEFORE it accepts the socket (the server answers the handshake with 403)
+    and returns None. The handler must then return at once.
+    """
+    if _auth_disabled():
+        return "disabled"
+    principal = _authenticate(websocket.cookies, websocket.headers)
+    if principal is not None:
+        return f"{principal.mode}:{principal.subject}"
+    await websocket.close(code=WS_POLICY_VIOLATION)
+    return None
 
 
 # ---------------------------------------------------------------------------

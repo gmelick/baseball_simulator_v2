@@ -6,10 +6,12 @@
  * engine on a score path.
  */
 import { GamesApiError } from '@/api/games'
+import { notifyUnauthorized } from '@/api/unauthorized'
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { credentials: 'include' })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
   }
@@ -23,6 +25,7 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   })
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
   }

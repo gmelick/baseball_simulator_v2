@@ -256,7 +256,8 @@ from simulation.win_probability import IDENTITY_CALIBRATION, WinProbability, win
 
 log = logging.getLogger("api.routes.betting")
 
-router = APIRouter(prefix="/api/betting", tags=["betting"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(prefix="/api/betting", tags=["betting"], dependencies=[Depends(require_auth)])
 
 #: The valid market_type values line-movement understands (mirrors the
 #: betting.line_movement _MARKET_SIDES set / the Alembic-0003 CHECK). SIM-546:

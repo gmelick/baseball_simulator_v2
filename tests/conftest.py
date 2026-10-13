@@ -126,6 +126,14 @@ os.environ["SIM_RELIEF_HAND_OFF_WEIGHT"] = "1.0"
 # it in the pitch's class. A test that wants the old single pre-pitch draw sets
 # ``sampler.steal_pitch_class = False``, or builds a steal pool with no class.
 
+# SIM-443c: the API requires a login in every environment, and the one opt-out
+# is AUTH_DISABLED=1. The suite opts out here so the route tests that build a
+# bare app or router need no credentials. setdefault (not a pin) keeps an
+# explicit value from the shell. The two files that test the enforcement
+# delete the variable with monkeypatch: tests/unit/test_api_auth_session_sim389.py
+# and tests/unit/test_sim443c_route_auth_coverage.py.
+os.environ.setdefault("AUTH_DISABLED", "1")
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

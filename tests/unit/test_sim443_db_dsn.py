@@ -42,5 +42,5 @@ def test_no_default_password_in_the_module() -> None:
     assert mod.__file__ is not None
     with open(mod.__file__, encoding="utf-8") as fh:
         source = fh.read()
-    assert "baseball_pass" not in source
+    assert "baseball" + "_pass" not in source
     assert "postgresql://" not in source.replace("a postgresql:// connection", "")

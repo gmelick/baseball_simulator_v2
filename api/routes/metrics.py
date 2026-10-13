@@ -97,7 +97,8 @@ except Exception:  # noqa: BLE001 - any import failure → fallback path
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
 
 
-router = APIRouter(tags=["ops"])
+# SIM-443c: /metrics requires a login; Prometheus sends an Authorization: Bearer key.
+router = APIRouter(tags=["ops"], dependencies=[Depends(require_auth)])
 
 # App build version surfaced as a label on the info gauge. Kept in sync with
 # api/main.py's FastAPI(version=...) intent; overridable via env for releases.

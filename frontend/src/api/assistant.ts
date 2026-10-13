@@ -5,6 +5,8 @@
  * turns them into typed AssistantEvents delivered via an onEvent callback.
  */
 
+import { notifyUnauthorized } from '@/api/unauthorized'
+
 export interface AssistantResultEvent {
   type: 'result'
   columns: string[]
@@ -55,6 +57,8 @@ export async function askAssistant(
   }
 
   if (!res.ok || !res.body) {
+
+    if (res.status === 401) notifyUnauthorized()
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     onEvent({ type: 'error', detail: body.detail ?? `Assistant request failed (${res.status}).` })
     onEvent({ type: 'done' })

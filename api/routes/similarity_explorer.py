@@ -39,9 +39,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from api.auth import require_auth
 from api.routes.similarity import (
     _BinSpec,
     classify_diagnostic,
@@ -51,7 +52,10 @@ from api.routes.similarity import (
 
 log = logging.getLogger("api.routes.similarity_explorer")
 
-router = APIRouter(prefix="/api/similarity", tags=["similarity"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(
+    prefix="/api/similarity", tags=["similarity"], dependencies=[Depends(require_auth)]
+)
 
 
 # ---------------------------------------------------------------------------

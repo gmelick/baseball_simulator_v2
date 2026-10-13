@@ -11,6 +11,12 @@
 *.pem
 *.key
 
+# SIM-443c: the Prometheus scrape token. Git tracks only the example and the
+# README; the real token file stays on this machine.
+deploy/monitoring/secrets/*
+!deploy/monitoring/secrets/*.example
+!deploy/monitoring/secrets/README.md
+
 # ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------

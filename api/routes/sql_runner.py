@@ -41,7 +41,8 @@ from api.routes.sql_safety import (
 
 log = logging.getLogger("api.routes.sql_runner")
 
-router = APIRouter(prefix="/api/sql", tags=["data-lab"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(prefix="/api/sql", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 
 class SqlRunRequest(BaseModel):

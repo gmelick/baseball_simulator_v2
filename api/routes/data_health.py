@@ -19,12 +19,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from api.auth import require_auth
 from api.routes._common import _get_pool, _row_get
 
-router = APIRouter(prefix="/api/data", tags=["data"])
+# SIM-443c: every route on this router requires a login (cookie or API key).
+router = APIRouter(prefix="/api/data", tags=["data"], dependencies=[Depends(require_auth)])
 
 
 class SeasonCoverage(BaseModel):

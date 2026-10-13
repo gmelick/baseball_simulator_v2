@@ -10,7 +10,8 @@
 
 export interface AuthStatus {
   authenticated: boolean
-  /** "session" | "api_key" | "dev_bypass" | "unauthenticated" */
+  /** "cookie" | "api_key" | "disabled" | "none" (SIM-443c). "disabled" means
+   *  the server runs with AUTH_DISABLED=1 and checks no credential. */
   mode: string
   /** Seconds until the current session expires (0 when not authenticated). */
   expires_in: number
@@ -36,7 +37,7 @@ export async function login(password: string): Promise<void> {
 export async function checkAuth(): Promise<AuthStatus> {
   const res = await fetch('/auth/me', { credentials: 'include' })
   if (!res.ok) {
-    return { authenticated: false, mode: 'unauthenticated', expires_in: 0 }
+    return { authenticated: false, mode: 'none', expires_in: 0 }
   }
   return res.json() as Promise<AuthStatus>
 }

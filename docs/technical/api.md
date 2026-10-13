@@ -20,7 +20,7 @@ The FastAPI application entry point: builds the app via create_app(), wires the 
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `validate_environment()` | Fails fast at boot if BASEBALL_DB_DSN/REDIS_URL are missing, and (outside ENVIRONMENT=development) if SECRET_KEY/AUTH_PASSWORD are missing. | `lifespan() (api/main.py)` | `os.environ reads only` |
+| `validate_environment()` | Fails fast at boot if BASEBALL_DB_DSN/REDIS_URL are missing, then (SIM-443c) if SECRET_KEY/AUTH_PASSWORD are blank in ANY environment; the error names `scripts/gen_secrets.py`. With `AUTH_DISABLED=1` it logs one WARNING and skips the auth check. | `lifespan() (api/main.py)` | `os.environ reads only` |
 | `lifespan(app)` | Async context manager: on startup opens the pg pool + Redis cache, builds the pitcher engine and all 11 engines (api.state.build_pitcher_engine/build_all_engines), loads + applies win-prob calibration, optionally wires the AI-assistant Anthropic client and a read-only pg pool, optionally starts the live ingestion pipeline and the replay-persistence DuckDB connection, opens the park-factor source, builds the persistent BatchRunner (with SIM-403b shared-memory engine artifacts) and schedules a background pre-warm; on shutdown tears all of that down in reverse order. | `FastAPI(app, lifespan=lifespan) inside create_app()` | `api.state.open_pg_pool`<br>`api.state.make_pg_name_resolver`<br>`api.state.open_redis_cache`<br>`api.state.build_pitcher_engine`<br>`api.state.build_all_engines`<br>`api.state.load_calibration_report`<br>`api.state.apply_calibration_to_engines`<br>`simulation.win_probability.CalibrationMap.from_report`<br>`simulation.sim_kwargs.prime_park_factor_source / close_park_factor_source`<br>`simulation.batch_runner.BatchRunner / default_max_workers / make_cache`<br>`pipeline.batch.engine_artifacts.EngineArtifacts.load`<br>`pipeline.live.live_ingestion_pipeline.LiveIngestionPipeline`<br>`anthropic.AsyncAnthropic (optional)`<br>`duckdb.connect (optional)` |
 | `_background_prewarm(runner, pool_dir)` | Runs BatchRunner.prewarm() in a background asyncio task so a slow/OOM'd worker warm-up never blocks startup. | `lifespan()` | `simulation.batch_runner.BatchRunner.prewarm` |
 | `ParkFactorSourceMiddleware.dispatch()` | Stamps an X-Park-Factor-Source response header (duckdb:<n> / unavailable / unknown) on every response so a caller can see whether venue park factors were real. | `Starlette middleware stack (every request)` | `app.state.park_factor_source.header_value()` |
@@ -30,9 +30,9 @@ The FastAPI application entry point: builds the app via create_app(), wires the 
 
 **Used by:** `Dockerfile CMD (uvicorn api.main:app)`, `the whole test suite via TestClient(create_app())`
 
-**Environment flags read here:** `BASEBALL_DB_DSN`, `REDIS_URL`, `SECRET_KEY`, `AUTH_PASSWORD`, `ENVIRONMENT`, `SIMILARITY_ENGINE_ENABLED`, `ANTHROPIC_API_KEY`, `ASSISTANT_MODEL`, `BASEBALL_DB_RO_DSN`, `LIVE_PIPELINE_ENABLED`, `REPLAY_PERSISTENCE_ENABLED`, `REPLAY_DUCKDB_PATH`, `BASEBALL_DUCKDB_PATH`, `BASEBALL_PLAY_POOL_DIR`, `SIM_RUNNER_WORKERS`, `APP_VERSION`
+**Environment flags read here:** `BASEBALL_DB_DSN`, `REDIS_URL`, `SECRET_KEY`, `AUTH_PASSWORD`, `AUTH_DISABLED`, `ENVIRONMENT`, `SIMILARITY_ENGINE_ENABLED`, `ANTHROPIC_API_KEY`, `ASSISTANT_MODEL`, `BASEBALL_DB_RO_DSN`, `LIVE_PIPELINE_ENABLED`, `REPLAY_PERSISTENCE_ENABLED`, `REPLAY_DUCKDB_PATH`, `BASEBALL_DUCKDB_PATH`, `BASEBALL_PLAY_POOL_DIR`, `SIM_RUNNER_WORKERS`, `APP_VERSION`
 
-> **Notes for anyone changing this file:** This is the single wiring point for app.state: pg_pool, pg_pool_ro, redis_client, similarity_cache, pitcher_engine, engines (dict), calibration_report, calibration_map, anthropic_client, pipeline, sim_duckdb, park_factor_source, sim_runner, sim_cache, prewarm_task. Every route file reads one or more of these off request.app.state — changing an attribute name here silently breaks a route elsewhere (no compile-time check). The engine build is FAIL-FAST (crashes boot) but build_all_engines is per-engine resilient (skips a bad engine). Routers must be registered in the exact order shown (auth first) only because of doc ergonomics, not because FastAPI requires it — but the SPA catch-all `/{full_path:path}` MUST stay last or it will shadow every API route registered after it. sim_runner is built once and reused across requests (SIM-360); a unit test that builds the app without running the lifespan must fall back to a per-request BatchRunner (see games.py `_build_runner`).
+> **Notes for anyone changing this file:** This is the single wiring point for app.state: pg_pool, pg_pool_ro, sql_console_role (the console pool's database role name, or None; /health reads it), redis_client, similarity_cache, pitcher_engine, engines (dict), calibration_report, calibration_map, anthropic_client, pipeline, sim_duckdb, park_factor_source, sim_runner, sim_cache, prewarm_task. Every route file reads one or more of these off request.app.state — changing an attribute name here silently breaks a route elsewhere (no compile-time check). The engine build is FAIL-FAST (crashes boot) but build_all_engines is per-engine resilient (skips a bad engine). Routers must be registered in the exact order shown (auth first) only because of doc ergonomics, not because FastAPI requires it — but the SPA catch-all `/{full_path:path}` MUST stay last or it will shadow every API route registered after it. sim_runner is built once and reused across requests (SIM-360); a unit test that builds the app without running the lifespan must fall back to a per-request BatchRunner (see games.py `_build_runner`).
 
 ---
 
@@ -64,11 +64,15 @@ Boot-time resource builders for app.state: the 11 similarity engines, the win-pr
 
 ### `api/auth.py`
 
-Baseline security primitives: session-cookie + API-key authentication (require_auth dependency), a stdlib in-memory rate limiter, a rolling p95 latency middleware, and the CORS-origin resolution logic. Dependency-light by design (no slowapi, no Redis) so tests and the dev environment work without extra services.
+Baseline security primitives: session-cookie + API-key authentication (the require_auth dependency and its WebSocket twin authenticate_websocket; SIM-443c: enforced in every environment, with `AUTH_DISABLED=1` the one opt-out), a stdlib in-memory rate limiter, a rolling p95 latency middleware, and the CORS-origin resolution logic. Dependency-light by design (no slowapi, no Redis) so tests and the dev environment work without extra services.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `require_auth(request)` | FastAPI dependency gating expensive/sensitive routes: pass-through in development or when nothing is configured; else accepts a valid sim_session cookie OR a valid X-API-Key header; otherwise raises 401. | `api/routes/games.py (simulate, simulate/with_override)`<br>`api/routes/betting.py (edges, signals)`<br>`api/routes/metrics.py (/metrics)`<br>`api/routes/sql_runner.py (/api/sql/run)`<br>`api/routes/analytics.py (router-level dependency, all analytics endpoints)`<br>`api/routes/ai_assistant.py (/api/assistant/ask)` | `_is_development`<br>`_configured_api_keys`<br>`_verify_session_token` |
+| `require_auth(request)` | FastAPI dependency on every data router (SIM-443c). It passes with no credential only when `_auth_disabled()`; else it accepts a valid sim_session cookie, an `X-API-Key` header or `Authorization: Bearer <key>`; otherwise it raises 401 with a `WWW-Authenticate` header. `ENVIRONMENT` plays no part. | The router-level `dependencies=[Depends(require_auth)]` of `api/routes/games.py`, `betting.py`, `similarity.py`, `similarity_explorer.py`, `players.py`, `schema_introspect.py`, `data_health.py`, `sql_runner.py`, `ai_assistant.py`, `metrics.py`, `analytics.py`<br>`pipeline/live/live_ingestion_pipeline.py odds_router` | `_auth_disabled`<br>`_authenticate` |
+| `authenticate_websocket(websocket)` | The WebSocket gate: the same check over the handshake's cookies and headers. On failure it closes the socket with code 1008 BEFORE accept and returns None. A router-level dependency gets nothing in a WebSocket scope, so the handler calls this itself. | `pipeline/live/live_ingestion_pipeline.py game_state_ws (first line)` | `_auth_disabled`<br>`_authenticate` |
+| `_auth_disabled()` | The ONE opt-out: true when `AUTH_DISABLED=1`. To remove the opt-out, delete this helper and its call sites. | `require_auth`, `authenticate_websocket`, `api/routes/auth.py me()`, `api/main.py validate_environment()` and `/health` | `_env_flag` |
+| `Principal` / `_authenticate(cookies, headers)` | The shared core: a valid session cookie first, else an API key. It returns a `Principal(mode, subject, expires_at)` or None, and never raises. | `require_auth`, `authenticate_websocket`, `api/routes/auth.py me()` | `_verify_session_token`<br>`_presented_api_key`<br>`_key_matches` |
+| `_presented_api_key(headers)` / `_key_matches(presented, keys)` | Reads `X-API-Key`, else `Authorization: Bearer <key>`. Compares the key against EVERY configured key with `hmac.compare_digest` (no early exit). | `_authenticate` | `_configured_api_keys` |
 | `_mint_session_token(subject='user') / _verify_session_token(token)` | Stateless HMAC-SHA256-signed session token (mint) and its verification (signature + expiry check, never raises). | `api/routes/auth.py login() (mint)`<br>`require_auth() and api/routes/auth.py me() (verify)` | `_get_secret_key`<br>`hmac/hashlib/base64 stdlib` |
 | `cookie_kwargs(max_age=None)` | Builds the response.set_cookie/delete_cookie kwargs (httponly, secure-outside-dev, samesite=strict). | `api/routes/auth.py login()/logout()` | `_is_development`<br>`_session_ttl_seconds` |
 | `RateLimitMiddleware.dispatch(request, call_next)` | Per-key (API key, else client IP) sliding-window limiter; 429 + Retry-After when the window's request count hits the configured limit. Disabled unless RATE_LIMIT_PER_MINUTE > 0. | `ASGI middleware stack, registered in api.main.create_app` | `nothing external — pure in-memory deque bookkeeping` |
@@ -77,11 +81,11 @@ Baseline security primitives: session-cookie + API-key authentication (require_a
 
 **Depends on:** `fastapi`, `starlette.middleware.base.BaseHTTPMiddleware`
 
-**Used by:** `api.main (middleware registration)`, `api.routes.auth`, `api.routes.games`, `api.routes.betting`, `api.routes.metrics`, `api.routes.sql_runner`, `api.routes.analytics`, `api.routes.ai_assistant`
+**Used by:** `api.main (middleware registration, validate_environment, /health)`, `api.routes.auth`, every data router in `api.routes.*`, `pipeline.live.live_ingestion_pipeline (odds_router, game_state_ws)`
 
-**Environment flags read here:** `ENVIRONMENT`, `SECRET_KEY`, `AUTH_PASSWORD`, `SESSION_TTL_HOURS`, `API_KEYS`, `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_ENABLED`, `CORS_ORIGINS`, `FRONTEND_URL`
+**Environment flags read here:** `ENVIRONMENT` (the cookie `secure` flag and the CORS defaults only), `AUTH_DISABLED`, `SECRET_KEY`, `AUTH_PASSWORD`, `SESSION_TTL_HOURS`, `API_KEYS`, `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_ENABLED`, `CORS_ORIGINS`, `FRONTEND_URL`
 
-> **Notes for anyone changing this file:** The rate limiter is PROCESS-LOCAL (an in-memory dict) — correct only for a single worker; a multi-worker deployment would under-count. require_auth's 'nothing configured -> pass-through' branch means a non-dev deployment that forgets to set AUTH_PASSWORD/API_KEYS silently runs unauthenticated rather than failing closed — validate_environment() in api/main.py is what actually prevents that in a real deploy (it requires SECRET_KEY + AUTH_PASSWORD outside development). _get_secret_key()/_get_auth_password() fall back to hard-coded INSECURE dev sentinels only in development; changing _is_development()'s definition changes the security posture of the whole module.
+> **Notes for anyone changing this file:** The rate limiter is PROCESS-LOCAL (an in-memory dict) — correct only for a single worker; a multi-worker deployment would under-count. Since SIM-443c require_auth fails CLOSED: there is no development pass-through, no 'nothing configured' pass-through and no dev sentinel secret. _get_secret_key()/_get_auth_password() raise RuntimeError naming scripts/gen_secrets.py when the variable is blank. The only way to turn the check off is AUTH_DISABLED=1; the app logs it at boot and /health reports "auth_enforced": false. The cookie `secure` flag still follows ENVIRONMENT: on plain HTTP keep ENVIRONMENT=development, or the browser drops the cookie and the login loops.
 
 ---
 
@@ -154,12 +158,12 @@ Two tiny helpers hoisted out of games.py/data_health.py to remove copy-paste dri
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `_get_pool(request)` | Returns request.app.state.pg_pool, or raises 503 if the lifespan never attached one. | `api/routes/games.py`<br>`api/routes/betting.py`<br>`api/routes/data_health.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py`<br>`api/routes/analytics.py`<br>`api/routes/sql_runner.py (indirectly via _ro_pool)` | — |
+| `_get_pool(request)` | Returns request.app.state.pg_pool, or raises 503 if the lifespan never attached one. | `api/routes/games.py`<br>`api/routes/betting.py`<br>`api/routes/data_health.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py`<br>`api/routes/analytics.py` | — |
 | `_row_get(row, key, default=None)` | Reads key from an asyncpg Record OR a plain dict uniformly, collapsing a present-but-None value to default. | `api/routes/games.py`<br>`api/routes/data_health.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py` | — |
 
 **Depends on:** `fastapi`
 
-**Used by:** `api.routes.games`, `api.routes.betting`, `api.routes.data_health`, `api.routes.players`, `api.routes.schema_introspect`, `api.routes.sql_runner`, `api.routes.analytics`
+**Used by:** `api.routes.games`, `api.routes.betting`, `api.routes.data_health`, `api.routes.players`, `api.routes.schema_introspect`, `api.routes.analytics`
 
 > **Notes for anyone changing this file:** This is the canonical implementation chosen by the 2026-06-03 audit's 'api/ duplication' cleanup — do not re-introduce a per-file copy of either helper; every other route module should import from here.
 
@@ -171,15 +175,15 @@ Browser session-auth HTTP endpoints: POST /auth/login (password -> httpOnly cook
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `login(body, response)` | Validates the posted password against AUTH_PASSWORD (constant-time compare) and, on success, mints and sets a signed session cookie. | `frontend login form (POST /auth/login)` | `api.auth._get_auth_password / _mint_session_token / cookie_kwargs` |
-| `me(request)` | Never raises 401 — reports authenticated/mode/expires_in so the frontend can decide whether to show the login page on boot. | `frontend app-boot check (GET /auth/me)` | `api.auth._is_development / _verify_session_token / _configured_api_keys` |
+| `login(body, response)` | Validates the posted password against AUTH_PASSWORD (constant-time compare) and, on success, mints and sets a signed session cookie. A blank AUTH_PASSWORD or SECRET_KEY answers 503 ("Login is not configured on this server"), not a 500. | `frontend login form (POST /auth/login)` | `api.auth._get_auth_password / _mint_session_token / cookie_kwargs` |
+| `me(request)` | Never raises 401 — reports authenticated/mode/expires_in so the frontend can decide whether to show the login page on boot. `mode` is `cookie`, `api_key`, `disabled` or `none` (SIM-443c); `authenticated` is true exactly when require_auth would pass. | `frontend app-boot check (GET /auth/me)` | `api.auth._auth_disabled / _authenticate` |
 | `logout(response)` | Idempotently clears the session cookie. | `frontend logout action (POST /auth/logout)` | `api.auth.cookie_kwargs` |
 
 **Depends on:** `api.auth`
 
 **Used by:** `api.main.create_app (registered first)`
 
-> **Notes for anyone changing this file:** No server-side session store — the cookie IS the session (HMAC-signed, self-expiring). Programmatic clients bypass this router entirely and use X-API-Key headers against require_auth directly.
+> **Notes for anyone changing this file:** No server-side session store — the cookie IS the session (HMAC-signed, self-expiring). Programmatic clients bypass this router entirely and send an API key (X-API-Key or Authorization: Bearer) to require_auth directly. This router carries NO auth gate on purpose: the login page must reach it.
 
 ---
 
@@ -199,7 +203,7 @@ The /metrics Prometheus scrape endpoint (SIM-374). Uses the real prometheus_clie
 
 **Environment flags read here:** `APP_VERSION`
 
-> **Notes for anyone changing this file:** Guarded by require_auth (SIM-374's auth gate list). The module keeps a single hand-rolled fallback scrape counter at module scope (_FALLBACK_SCRAPE_COUNT) which resets on process restart — expected, not a bug. Only requests_total/sim_latency/api_p95/pipeline_freshness are 'live'; the rest of the app never calls these seams unless another route explicitly imports them (record_sim_latency is currently called from exactly one place).
+> **Notes for anyone changing this file:** Guarded by require_auth on the router (SIM-443c). Prometheus sends one API_KEYS value as a Bearer token, read from deploy/monitoring/secrets/app_api_key. The module keeps a single hand-rolled fallback scrape counter at module scope (_FALLBACK_SCRAPE_COUNT) which resets on process restart — expected, not a bug. Only requests_total/sim_latency/api_p95/pipeline_freshness are 'live'; the rest of the app never calls these seams unless another route explicitly imports them (record_sim_latency is currently called from exactly one place).
 
 ---
 
@@ -278,7 +282,7 @@ v1 Similarity Score Explorer: the pitcher-vs-pitcher engine's histogram/top-N di
 | `get_pitcher_engine(request) / get_name_resolver(request) / get_similarity_cache(request)` | FastAPI dependencies pulling pitcher_engine / player_name_resolver / similarity_cache off app.state, with graceful degradation (placeholder names, no cache) and a 503 when the engine isn't attached. | `get_pitcher_similarity_distribution (Depends)`<br>`api/routes/similarity_explorer.py (_resolve_names reuses get_name_resolver)` | — |
 | `compute_score_summary(scores) / classify_diagnostic(scores, n_bins) / build_bins / build_top_n / _BinSpec` | Pure, numpy-free statistics and binning helpers (min/percentiles/mean/std, COLLAPSED/NO_SPREAD/HEALTHY classification, histogram bucketing). | `get_pitcher_similarity_distribution`<br>`api/routes/similarity_explorer.py (reused directly for all other engines)` | — |
 
-**Depends on:** `api.state (CACHE_TTL_SECONDS, NameResolver, SimilarityCache, make_cache_key)`, `similarity.engines.pitcher_similarity`
+**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.state (CACHE_TTL_SECONDS, NameResolver, SimilarityCache, make_cache_key)`, `similarity.engines.pitcher_similarity`
 
 **Used by:** `api.main.create_app`, `api.routes.similarity_explorer (imports _BinSpec, classify_diagnostic, compute_score_summary, get_name_resolver)`
 
@@ -298,7 +302,7 @@ Generalizes the Similarity Explorer to all 8 score-producing engines (batter, fi
 | `situation_query(request, body)` | POST /api/similarity/situation/query — nearest historical game states from the KDTree situation engine. | `frontend Situation Finder` | `similarity.engines.situation_similarity.SituationVector`<br>`engine.query` |
 | `list_engines(request)` | GET /api/similarity/engines — catalog of all 11 engines with build status + profile counts, for the UI's engine picker. | `frontend Similarity Explorer landing page` | — |
 
-**Depends on:** `api.routes.similarity (_BinSpec, classify_diagnostic, compute_score_summary, get_name_resolver)`, `similarity.engines.situation_similarity.SituationVector (lazy import)`
+**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes.similarity (_BinSpec, classify_diagnostic, compute_score_summary, get_name_resolver)`, `similarity.engines.situation_similarity.SituationVector (lazy import)`
 
 **Used by:** `api.main.create_app`
 
@@ -314,11 +318,11 @@ SIM-417 data-freshness endpoint for the UI's 'data as of...' badge: aggregate in
 |---|---|---|---|
 | `get_data_freshness(request)` | GET /api/data/freshness — runs one aggregate query plus a per-season GROUP BY and returns last_ingest_at, latest_game_date, totals, and per-season SeasonCoverage rows. | `frontend header/data-status badge` | `api.routes._common._get_pool/_row_get` |
 
-**Depends on:** `api.routes._common`
+**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
 
 **Used by:** `api.main.create_app`
 
-> **Notes for anyone changing this file:** No auth dependency — deliberately unauthenticated (pure aggregate counts, nothing sensitive), sitting alongside /health and /ready. An empty store returns zeros, never an error.
+> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before; only /health, /ready, /, /auth/* and the docs stay open). An empty store returns zeros, never an error.
 
 ---
 
@@ -346,7 +350,7 @@ The single shared read-only SQL validation + execution path used by BOTH the SQL
 
 ### `api/routes/sql_runner.py`
 
-POST /api/sql/run — the Data Lab SQL Console's HTTP endpoint. A thin wrapper that delegates all safety/execution to api.routes.sql_safety, so it is the single place that must be authenticated (require_auth) for this capability.
+POST /api/sql/run — the Data Lab SQL Console's HTTP endpoint. A thin wrapper that delegates all safety/execution to api.routes.sql_safety, and carries require_auth on its router (SIM-443c, as every data router does).
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
@@ -370,11 +374,11 @@ Player name typeahead + identity lookup for the Data Lab / Similarity UI, backed
 | `search_players(request, q, limit)` | GET /api/players/search — ranks raw.players by pg_trgm similarity(); degrades to plain ILIKE ordering (logged once) if the extension/function is unavailable. | `frontend player search boxes (Data Lab, Similarity Explorer)` | `_fetch`<br>`api.routes._common._get_pool/_row_get` |
 | `get_player(request, player_id)` | GET /api/players/{player_id} — identity + the distinct seasons the player appears in raw.pitches as pitcher or batter. | `frontend player detail panel` | `_fetch` |
 
-**Depends on:** `api.routes._common`
+**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
 
 **Used by:** `api.main.create_app`
 
-> **Notes for anyone changing this file:** No auth dependency (pure read, no sensitive data). The pg_trgm fallback path means a search that silently ISN'T similarity-ranked (alphabetical ILIKE instead) is possible in an environment missing the extension — worth checking server logs if search relevance looks off.
+> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before). The pg_trgm fallback path means a search that silently ISN'T similarity-ranked (alphabetical ILIKE instead) is possible in an environment missing the extension — worth checking server logs if search relevance looks off.
 
 ---
 
@@ -386,7 +390,7 @@ GET /api/schema — the raw.* table/column tree consumed by the SQL Console's sc
 |---|---|---|---|
 | `get_schema(request)` | Queries information_schema.columns for table_schema='raw', groups into TableInfo/ColumnInfo, caches the built SchemaResponse on request.app.state._schema_cache. | `frontend SQL Console schema browser` | `api.routes._common._get_pool/_row_get` |
 
-**Depends on:** `api.routes._common`
+**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
 
 **Used by:** `api.main.create_app`
 
@@ -423,7 +427,7 @@ The optional (ANTHROPIC_API_KEY-gated) natural-language Data Lab assistant. Stre
 | `_pool(request)` | Returns app.state.pg_pool_ro or None. SIM-443e: no fallback to the main pool. | `ask`<br>`_run_conversation` | — |
 | `_run_conversation(request, body)` | Drives up to MAX_STEPS turns of the Anthropic tool-use loop: sends the system prompt + schema catalog + RUN_SQL_TOOL, for each tool_use block runs the SQL through api.routes.sql_safety.run_read_only_sql (validation errors and DB errors are fed back to the model as a tool_result rather than raised), and yields typed SSE frames (text/query/result/error/done) as it goes. | `ask` | `client.messages.create (anthropic SDK)`<br>`api.routes.sql_safety.run_read_only_sql`<br>`_sse`<br>`_block_to_dict` |
 
-**Depends on:** `api.auth.require_auth (on /ask only)`, `api.routes.sql_safety`, `anthropic SDK (only via app.state.anthropic_client, never imported directly here)`
+**Depends on:** `api.auth.require_auth (router-level dependency since SIM-443c; covers /status too)`, `api.routes.sql_safety`, `anthropic SDK (only via app.state.anthropic_client, never imported directly here)`
 
 **Used by:** `api.main.create_app`
 

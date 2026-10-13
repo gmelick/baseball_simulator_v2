@@ -16,7 +16,7 @@ async function mockAuthed(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ authenticated: true, mode: 'session', expires_in: 3600 }),
+      body: JSON.stringify({ authenticated: true, mode: 'cookie', expires_in: 3600 }),
     }),
   )
 }
@@ -114,7 +114,7 @@ test('unauthenticated visitor sees the login page', async ({ page }) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ authenticated: false, mode: 'unauthenticated', expires_in: 0 }),
+      body: JSON.stringify({ authenticated: false, mode: 'none', expires_in: 0 }),
     }),
   )
   await page.goto('/')
