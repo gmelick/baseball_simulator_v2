@@ -1,3 +1,19 @@
+# MOVED — the nightly closing-lines job runs at 10:30 UTC — SIM-563 follow-up, 2026-10-13
+
+**Why.** The first run with the thread setting (2026-10-13) finished the rebuild at 09:26:03
+UTC. The app restarted itself at 09:26:31 and answered again at 09:27:46. The closing-lines
+job runs INSIDE the app container (a job-exec) and fails when the container is restarting;
+at 09:30 it had about two minutes of margin, and one crash retry of the rebuild would erase it.
+That night's job succeeded (55 s).
+
+**The change.** `deploy/ofelia/config.ini`: `nightly-closing-lines` at `0 30 10 * * *`. The
+script header, the SIM-546 config test and the two technical docs say 10:30. A rebuild that
+crashes twice can still end near 10:30; the record of the run times is in this file.
+
+**The run of 2026-10-13, for the record.** Finals load 8.5 s; the wait found it ran today;
+profile step 13 min (the GMM fit 11 min, was 52); bundle step 72 min; whole rebuild 1 h 26 min
+on the first attempt (was 2 h 6 min); the app back at 09:27:46 with 11/11 engines.
+
 # FIXED — the nightly rebuild runs numpy with one math thread per process — SIM-563 follow-up, 2026-10-13
 
 **Why.** The scheduled profile step took 54 minutes on 2026-10-11 and 2026-10-12, against
