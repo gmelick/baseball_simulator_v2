@@ -1355,6 +1355,29 @@ class TestLiveGameState:
         body = client.get("/api/games/745001/live").json()
         json.dumps(body)  # must not raise
 
+    def test_live_state_reads_roster_objects(self, monkeypatch):
+        """The live service stores roster entries as objects with a player_id."""
+        row = {
+            "session_id": "bbbbbbbb-0000-0000-0000-000000000002",
+            "game_pk": 745003,
+            "game_state": {
+                "home_lineup": [{"player_id": 694192, "name": "A", "batting_order": 1}],
+                "away_lineup": [{"player_id": 605141, "name": "B"}, {"name": "no id"}],
+                "home_bullpen": [{"player_id": 694477, "role": "RP"}],
+                "away_bullpen": [],
+                "home_bench": [{"player_id": 687401, "position": "SS"}],
+            },
+            "updated_at": None,
+        }
+        app = self._patched_app(monkeypatch, live_row=row)
+        resp = TestClient(app).get("/api/games/745003/live")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["home_lineup"] == [694192]
+        assert body["away_lineup"] == [605141]
+        assert body["home_bullpen"] == [694477]
+        assert body["home_bench"] == [687401]
+
     def test_live_state_empty_game_state_uses_defaults(self, monkeypatch):
         """A minimal game_state dict (missing most fields) falls back to defaults."""
         row = {
