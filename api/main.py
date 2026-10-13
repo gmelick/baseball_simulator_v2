@@ -950,32 +950,6 @@ def create_app() -> FastAPI:
     app.include_router(ai_assistant_router)
     # ----------------------------------------------------------------
 
-    # ---- SIM-381: Serve the Vite-built SPA -----------------------------------
-    # In production, nginx serves frontend/dist/ directly (see deploy/nginx/nginx.conf).
-    # This mount is a dev/staging convenience: when running uvicorn directly,
-    # the built assets are served from FastAPI so the app is fully self-contained.
-    #
-    # The mount is CONDITIONAL on the dist directory existing so the app boots
-    # cleanly before the first `npm run build` (CI / fresh clone).
-    #
-    # Mount order matters: API routes above are registered first, so the
-    # `/{full_path:path}` SPA catch-all only fires when nothing else matches.
-    _spa_dist = Path(__file__).parent.parent / "frontend" / "dist"
-    if _spa_dist.is_dir():
-        _spa_assets = _spa_dist / "assets"
-        if _spa_assets.is_dir():
-            # Hashed filenames from Vite → safe for immutable caching in prod.
-            app.mount(
-                "/assets",
-                StaticFiles(directory=str(_spa_assets)),
-                name="spa-assets",
-            )
-
-        @app.get("/{full_path:path}", include_in_schema=False, tags=["frontend"])
-        async def _serve_spa(full_path: str) -> FileResponse:  # noqa: RUF029
-            """SPA catch-all — returns index.html for all non-API client routes."""
-            return FileResponse(str(_spa_dist / "index.html"))
-
     # ---- Health / readiness -----------------------------------------
 
     @app.get("/health", tags=["ops"], summary="Liveness probe")
@@ -1050,6 +1024,34 @@ def create_app() -> FastAPI:
             {"status": "ready" if all_ok else "degraded", "checks": checks},
             status_code=status_code,
         )
+
+    # ---- SIM-381: Serve the Vite-built SPA -----------------------------------
+    # In production, nginx serves frontend/dist/ directly (see deploy/nginx/nginx.conf).
+    # This mount is a dev/staging convenience: when running uvicorn directly,
+    # the built assets are served from FastAPI so the app is fully self-contained.
+    #
+    # The mount is CONDITIONAL on the dist directory existing so the app boots
+    # cleanly before the first `npm run build` (CI / fresh clone).
+    #
+    # Mount order matters: FastAPI matches routes in registration order, so the
+    # API routes and /health and /ready come first. The `/{full_path:path}`
+    # catch-all then fires only when nothing else matches. It stays before "/"
+    # so a built frontend serves index.html at the root.
+    _spa_dist = Path(__file__).parent.parent / "frontend" / "dist"
+    if _spa_dist.is_dir():
+        _spa_assets = _spa_dist / "assets"
+        if _spa_assets.is_dir():
+            # Hashed filenames from Vite → safe for immutable caching in prod.
+            app.mount(
+                "/assets",
+                StaticFiles(directory=str(_spa_assets)),
+                name="spa-assets",
+            )
+
+        @app.get("/{full_path:path}", include_in_schema=False, tags=["frontend"])
+        async def _serve_spa(full_path: str) -> FileResponse:  # noqa: RUF029
+            """SPA catch-all — returns index.html for all non-API client routes."""
+            return FileResponse(str(_spa_dist / "index.html"))
 
     @app.get("/", tags=["ops"], include_in_schema=False)
     async def root() -> dict:

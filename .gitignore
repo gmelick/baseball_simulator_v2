@@ -127,6 +127,8 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/.eslintcache
+# TypeScript incremental build cache (tsconfig.node.json is composite).
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

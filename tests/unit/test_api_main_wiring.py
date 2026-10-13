@@ -210,6 +210,21 @@ def _ro_lifespan_setup(monkeypatch, role_check):
     else:
         check = AsyncMock(return_value=role_check)
     monkeypatch.setattr(sql_safety, "check_read_only_role", check)
+
+    # These tests read only the console pool. Stub the sim runner, its pre-warm
+    # and the bundle load, so no test loads the real bundle or starts workers
+    # (that raised the pytest process's peak memory past the SIM-280 cap).
+    import api.bundle_watch as bundle_watch
+    import simulation.batch_runner as batch_runner
+    from pipeline.batch.engine_artifacts import EngineArtifacts
+
+    def _no_bundle(*_args, **_kwargs):
+        raise FileNotFoundError("no bundle in this test")
+
+    monkeypatch.setattr(bundle_watch, "bundle_link", lambda: "/nonexistent/engine_artifacts")
+    monkeypatch.setattr(EngineArtifacts, "load", staticmethod(_no_bundle))
+    monkeypatch.setattr(batch_runner, "BatchRunner", MagicMock(name="BatchRunner"))
+    monkeypatch.setattr(main_mod, "_background_prewarm", AsyncMock(return_value=None))
     return main_mod.create_app(), main_pool, ro_pool, opener
 
 
