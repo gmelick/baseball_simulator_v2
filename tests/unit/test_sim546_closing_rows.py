@@ -951,7 +951,8 @@ def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
         '[job-exec "nightly-closing-lines"]'
     )
     job = text.split('[job-exec "nightly-closing-lines"]', 1)[1]
-    assert "schedule = 0 30 9 * * *" in job
+    # 10:30 UTC (SIM-563): after the nightly rebuild's self-restart of the app.
+    assert "schedule = 0 30 10 * * *" in job
     assert "container = baseball_simulator_v2-app-1" in job
     assert "command = env ODDS_PROVIDER=bettingpros sh /app/scripts/nightly_closing_lines.sh" in job
     assert "volume" not in job
