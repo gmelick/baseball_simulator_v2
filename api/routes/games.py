@@ -724,7 +724,9 @@ def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> di
     return kw
 
 
-async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
+async def _resolve_state_or_error(
+    pool: Any, game_pk: int, *, fallback_rows: list[dict[str, Any]] | None = None
+) -> Any:
     """Resolve a game's GameState via SIM-353, mapping failures to HTTP errors.
 
     A connection is acquired from the pool (asyncpg-style ``async with
@@ -750,10 +752,10 @@ async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
     try:
         if acquire is not None:
             async with pool.acquire() as conn:
-                state = await resolve_game_state(conn, game_pk)
+                state = await resolve_game_state(conn, game_pk, fallback_rows=fallback_rows)
         else:
             # The pool itself exposes fetch/fetchrow (mock-pool / direct-conn path).
-            state = await resolve_game_state(pool, game_pk)
+            state = await resolve_game_state(pool, game_pk, fallback_rows=fallback_rows)
         mark_park_factor_unresolved(state)
         return state
     except (LineupNotIngestedError, LineupIncompleteError) as exc:
@@ -2077,6 +2079,33 @@ def _pa_state_model(game_pk: int, ss: Mapping[str, Any]) -> PaStateModel:
     )
 
 
+def _feed_lineup_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Both starting lineups from a league feed, as ``raw.game_lineups`` rows.
+
+    The loader's own builder reads the box: each starter at his starting
+    position and the starting pitcher. A game whose box lists no starter yet (a
+    preview game without posted lineups) gives no rows.
+    """
+    from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows
+
+    game_pk = int(((payload.get("gameData") or {}).get("game") or {}).get("pk") or 0)
+    season = int(((payload.get("gameData") or {}).get("game") or {}).get("season") or 0)
+    return [
+        {
+            "team_id": r[2],
+            "player_id": r[3],
+            "batting_order": r[4],
+            "position_code": r[5],
+            "is_starter": r[6],
+            "sequence": r[7],
+            "entered_inning": None,
+            "entered_at_bat": None,
+            "pinch_role": None,
+        }
+        for r in _build_starting_lineup_rows(game_pk, season, dict(payload))
+    ]
+
+
 async def _start_state(request: Request, game_pk: int, at_bat: int | None) -> dict[str, Any]:
     """The start state at a plate appearance, or an HTTP error."""
     from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
@@ -2550,7 +2579,19 @@ async def start_what_if(game_pk: int, request: Request, body: WhatIfRequest) -> 
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     pool = _get_pool(request)
-    state = await _resolve_state_or_error(pool, game_pk)
+    try:
+        state = await _resolve_state_or_error(pool, game_pk)
+    except HTTPException as exc:
+        # A game that started before its lineup was stored: the base state
+        # comes from the feed's starting lineup (the start state then replaces
+        # the lineups, pitchers, defense and hands anyway).
+        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+            raise
+        payload, _source, _error = await _league_game_payload(request, game_pk)
+        rows = _feed_lineup_rows(payload) if payload is not None else []
+        if not rows:
+            raise
+        state = await _resolve_state_or_error(pool, game_pk, fallback_rows=rows)
     factory_ref = resolve_factory_ref(request)
     kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
     runner = _build_runner(request)

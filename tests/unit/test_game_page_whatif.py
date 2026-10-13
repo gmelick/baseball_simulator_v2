@@ -481,3 +481,98 @@ def test_before_first_pitch_either_side_changes_its_lineup_and_starter() -> None
                 ]
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# A started game with no stored lineup (the 2026-10-12 live check): the what-if
+# builds its base state from the league feed's starting lineup.
+# ---------------------------------------------------------------------------
+
+
+def test_the_feed_gives_both_starting_lineups() -> None:
+    from api.routes.games import _feed_lineup_rows
+
+    rows = _feed_lineup_rows(FEED)
+    for team in {r["team_id"] for r in rows}:
+        mine = [r for r in rows if r["team_id"] == team]
+        assert sorted(r["batting_order"] for r in mine if r["batting_order"] is not None) == list(
+            range(1, 10)
+        )
+        assert any(r["position_code"] == "P" for r in mine)
+    assert {r["sequence"] for r in rows} == {1}
+    assert all(r["entered_at_bat"] is None and r["pinch_role"] is None for r in rows)
+
+
+def test_a_feed_with_no_starters_gives_no_rows() -> None:
+    from api.routes.games import _feed_lineup_rows
+
+    feed = copy.deepcopy(FEED)
+    for team in feed["liveData"]["boxscore"]["teams"].values():
+        team["pitchers"] = []
+        for player in team["players"].values():
+            player.pop("battingOrder", None)
+    assert _feed_lineup_rows(feed) == []
+
+
+class _EmptyLineupConn:
+    """A database whose lineup table holds no row for the game."""
+
+    async def fetchrow(self, sql: str, *args):
+        return {
+            "game_pk": 824381,
+            "season": 2026,
+            "home_team_id": 114,
+            "away_team_id": 133,
+            "home_manager_id": None,
+            "away_manager_id": None,
+            "game_date": None,
+        }
+
+    async def fetch(self, sql: str, *args):
+        return []
+
+
+def test_the_resolver_takes_the_callers_rows_when_the_table_is_empty() -> None:
+    import asyncio
+
+    from api.routes.games import _feed_lineup_rows
+    from simulation.lineup_resolver import LineupNotIngestedError, resolve_lineup
+
+    with pytest.raises(LineupNotIngestedError):
+        asyncio.run(resolve_lineup(_EmptyLineupConn(), 824381))
+    resolved = asyncio.run(
+        resolve_lineup(_EmptyLineupConn(), 824381, fallback_rows=_feed_lineup_rows(FEED))
+    )
+    assert len(resolved.home.slots) == 9 and len(resolved.away.slots) == 9
+    assert resolved.home.pitcher_id is not None and resolved.away.pitcher_id is not None
+
+
+def test_a_what_if_runs_on_a_started_game_with_no_stored_lineup(client, monkeypatch) -> None:
+    import api.routes.games as games_mod
+    from simulation.lineup_resolver import LineupNotIngestedError
+
+    seen: list = []
+
+    async def resolve(conn, game_pk, **kw):
+        seen.append(kw.get("fallback_rows"))
+        if not kw.get("fallback_rows"):
+            raise LineupNotIngestedError("no raw.game_lineups rows")
+        return _base_state()
+
+    monkeypatch.setattr(games_mod, "resolve_game_state", resolve)
+    resp = client.post("/api/games/824381/what-if", json={"at_bat": 52, "n_iterations": 10})
+    assert resp.status_code == 202, resp.text
+    assert seen[0] is None and len(seen[1]) >= 20
+
+
+def test_a_what_if_still_answers_503_when_the_feed_has_no_lineup(client, monkeypatch) -> None:
+    import api.routes.games as games_mod
+    from simulation.lineup_resolver import LineupNotIngestedError
+
+    async def resolve(conn, game_pk, **kw):
+        raise LineupNotIngestedError("no raw.game_lineups rows")
+
+    monkeypatch.setattr(games_mod, "resolve_game_state", resolve)
+    resp = client.post("/api/games/824381/what-if", json={"at_bat": 52, "n_iterations": 10})
+    assert resp.status_code == 503
+    assert "no raw.game_lineups rows" in resp.text

@@ -52,6 +52,8 @@ class _Conn:
         self.pool.log.append(("fetchval", sql, args))
         if "source = 'box'" in sql:
             return 1 if self.pool.has_box else None
+        if "FROM raw.game_lineups WHERE game_pk = $1 LIMIT 1" in sql:
+            return 1 if (self.pool.has_any or self.pool.has_box) else None
         if "SELECT throws" in sql:
             return "R"
         return None
@@ -83,6 +85,7 @@ class _Conn:
 class _Pool:
     def __init__(self, *, has_box: bool = False, unknown_players: set[int] | None = None) -> None:
         self.has_box = has_box
+        self.has_any = False
         self.unknown_players = unknown_players or set()
         self.log: list[tuple[str, str, Any]] = []
         self.inserted: list = []
@@ -294,3 +297,96 @@ def test_no_0029_columns_means_no_update() -> None:
     p = _pipeline_with_db(False)
     _run(p._upsert_game_record(_entry()))
     assert p._db.execute.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# A game that started with no stored lineup (the 2026-10-12 live check: the
+# laptop slept through first pitch, so the Preview writer never ran).
+# ---------------------------------------------------------------------------
+
+
+def _live_entry() -> dict:
+    entry = _entry()
+    entry["status"].update(
+        abstractGameState="Live", codedGameState="I", detailedState="In Progress"
+    )
+    return entry
+
+
+def test_a_started_game_with_no_lineup_gets_its_starting_rows() -> None:
+    pool, http = _Pool(), _Http()
+    assert _run(PublishedLineupWriter(pool, http, projected=False).on_live(_live_entry())) == (
+        "published"
+    )
+    rows = pool.inserted
+    assert {r[-1] for r in rows} == {"published"}
+    for team in {r[2] for r in rows}:
+        mine = [r for r in rows if r[2] == team]
+        assert sorted(r[4] for r in mine if r[4] is not None) == list(range(1, 10))
+        assert any(r[5] == "P" for r in mine)
+    assert len(http.urls) == 1
+
+
+def test_a_started_game_with_a_stored_lineup_is_left_alone() -> None:
+    pool, http = _Pool(), _Http()
+    pool.has_any = True
+    writer = PublishedLineupWriter(pool, http, projected=False)
+    assert _run(writer.on_live(_live_entry())) is None
+    assert _run(writer.on_live(_live_entry())) is None
+    assert pool.inserted == []
+    assert http.urls == []
+    # The second poll does not even ask the database.
+    assert sum(1 for kind, *_ in pool.log if kind == "fetchval") == 1
+
+
+def test_a_started_game_is_written_once() -> None:
+    pool, http = _Pool(), _Http()
+    writer = PublishedLineupWriter(pool, http, projected=False)
+    assert _run(writer.on_live(_live_entry())) == "published"
+    assert _run(writer.on_live(_live_entry())) is None
+    assert len(http.urls) == 1
+
+
+def test_an_incomplete_box_writes_nothing_and_tries_again() -> None:
+    def thin_feed() -> dict:
+        feed = _feed()
+        for team in feed["liveData"]["boxscore"]["teams"].values():
+            team["pitchers"] = []
+            for player in team["players"].values():
+                player.pop("battingOrder", None)
+        return feed
+
+    pool = _Pool()
+    http_calls: list[str] = []
+
+    async def get_json(url: str) -> Any:
+        http_calls.append(url)
+        return thin_feed()
+
+    writer = PublishedLineupWriter(pool, get_json, projected=False)
+    assert _run(writer.on_live(_live_entry())) is None
+    assert _run(writer.on_live(_live_entry())) is None
+    assert pool.inserted == []
+    assert len(http_calls) == 2
+
+
+def test_a_preview_entry_is_not_the_live_writers() -> None:
+    pool, http = _Pool(), _Http()
+    assert _run(PublishedLineupWriter(pool, http, projected=False).on_live(_entry())) is None
+    assert pool.log == []
+
+
+def test_the_live_poll_schedules_the_live_writer() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
+    p = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
+    p._upsert_game_record = AsyncMock()
+    p._on_lineup_published = AsyncMock()
+    writer = MagicMock()
+    writer.on_live = AsyncMock(return_value="published")
+    p._lineup_writer = writer
+    _run(p._write_live_lineup(_live_entry()))
+    writer.on_live.assert_awaited_once()
+    p._on_lineup_published.assert_awaited_once_with(PK, "published")

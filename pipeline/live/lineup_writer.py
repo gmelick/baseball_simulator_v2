@@ -19,6 +19,14 @@ default OFF), the writer copies each team's last final lineup, against a
 starter of the same hand when one of the last ten games had one, with today's
 probable pitcher as ``P``, and writes it with ``source = 'projected'``.
 
+A game that STARTED with no stored lineup (the live service was down or the
+host slept through Preview, as on 2026-10-12) gets one too: the live service
+calls :meth:`PublishedLineupWriter.on_live` for each live game. After first
+pitch the feed's box lists every starter's batting order and starting position
+and the starting pitcher, so the loader's builder gives the full starting rows.
+The writer writes them once, only when the game has no lineup row at all and
+only when both sides are complete (nine batting slots and a pitcher).
+
 The final box is the authority: the loader deletes a game's non-box rows
 before its own insert (``_ensure_game_lineups``). The writer never touches a
 game that already has box rows.
@@ -37,7 +45,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows, _parse_height
-from pipeline.mlb_schedule import SCHEDULED, card_state, parse_game
+from pipeline.mlb_schedule import LIVE, SCHEDULED, card_state, parse_game
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +107,8 @@ class PublishedLineupWriter:
         self._get_json = get_json
         self._projected = projected_lineups_enabled() if projected is None else projected
         self._seen: dict[int, tuple[Any, ...]] = {}
+        #: Live games the live writer has finished with (written, or a lineup was there).
+        self._live_done: set[int] = set()
 
     async def on_preview(self, entry: Mapping[str, Any]) -> str | None:
         """Write the game's lineup when it is new or changed.
@@ -153,11 +163,55 @@ class PublishedLineupWriter:
         if source is None or not rows:
             return None
 
+        await self._write_rows(game.game_pk, rows, source)
+        self._seen[game.game_pk] = sig
+        log.info("lineup writer: game %s — %d %s rows", game.game_pk, len(rows), source)
+        return source
+
+    async def on_live(self, entry: Mapping[str, Any]) -> str | None:
+        """Write a started game's starting lineup when none is stored.
+
+        Returns ``published`` on a write, else None. Never raises. A game with
+        any stored lineup row is left alone; an incomplete box is retried on the
+        next poll.
+        """
+        try:
+            return await self._on_live(entry)
+        except Exception as exc:  # noqa: BLE001 -- the poll must not stop on one game
+            log.warning("lineup writer: live game %s not written: %s", entry.get("gamePk"), exc)
+            return None
+
+    async def _on_live(self, entry: Mapping[str, Any]) -> str | None:
+        game = parse_game(entry)
+        if card_state(game) != LIVE or game.game_pk in self._live_done:
+            return None
+        async with self._db.acquire() as conn:
+            if await conn.fetchval(
+                "SELECT 1 FROM raw.game_lineups WHERE game_pk = $1 LIMIT 1", game.game_pk
+            ):
+                self._live_done.add(game.game_pk)
+                return None
+        feed = await self._get_json(FEED_URL.format(game_pk=game.game_pk))
+        rows: list[Row] = list(_build_starting_lineup_rows(game.game_pk, game.season, feed))
+        teams = {game.away.team_id, game.home.team_id}
+        for team in teams:
+            mine = [r for r in rows if r[2] == team]
+            slots = {r[4] for r in mine if r[4] is not None}
+            if slots != set(range(1, 10)) or not any(r[5] == "P" for r in mine):
+                log.info("lineup writer: live game %s — the box is not complete yet", game.game_pk)
+                return None
+        await self._write_rows(game.game_pk, rows, "published")
+        self._live_done.add(game.game_pk)
+        log.info("lineup writer: live game %s — %d published rows", game.game_pk, len(rows))
+        return "published"
+
+    async def _write_rows(self, game_pk: int, rows: Sequence[Row], source: str) -> None:
+        """Replace the game's published and projected rows with ``rows`` in one transaction."""
         await self._ensure_players({r[3] for r in rows})
         async with self._db.acquire() as conn, conn.transaction():
             await conn.execute(
                 "DELETE FROM raw.game_lineups WHERE game_pk = $1 AND source IN ('published', 'projected')",
-                game.game_pk,
+                game_pk,
             )
             await conn.executemany(
                 """
@@ -169,9 +223,6 @@ class PublishedLineupWriter:
                 """,
                 [(*r, source) for r in rows],
             )
-        self._seen[game.game_pk] = sig
-        log.info("lineup writer: game %s — %d %s rows", game.game_pk, len(rows), source)
-        return source
 
     @staticmethod
     def _rows_from_schedule(game: Any) -> list[Row]:
