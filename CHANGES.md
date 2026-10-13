@@ -1,3 +1,41 @@
+# PARTLY RUN — the game-day live check on a live game: four steps pass, two fail — SIM-519 / SIM-562, 2026-10-12
+
+The scheduled check fired at 19:55 EDT on 2026-10-12, when the laptop woke from sleep. The
+laptop slept from 10:50 to 19:55 EDT (Windows power events), so the live service saw no
+schedule poll from 14:50 to 23:55 UTC. The check ran on Dodgers at Brewers, NL Championship
+Series game 2 (849812), in the top of the 8th.
+
+- **Health: PASS.** app (healthy), live, scheduler and nginx were up; nothing was restarted.
+- **Find a live game: PASS.** Two games: 849812 in progress (top 8th, LAD 4, MIL 5) and
+  Guardians at Rays (849820) in warm-up.
+- **The live card: PASS.** At 19:59 the card and MLB's linescore agreed: LAD 4, MIL 5, top 8th,
+  1 out, count 0-0, bases empty. At 20:00:53 MLB showed 2 outs and the card still showed 1 out
+  (the pitch count had moved). At 20:01:49 the card showed 2 outs; the app's feed matched MLB
+  on every poll. The card follows the game about 30 seconds behind.
+- **The posted lineup and a run: FAIL (not run).** `raw.game_lineups` holds no rows for either
+  game. The lineup writer acts only on a game still in Preview. Both games had started (or were
+  in warm-up) when the laptop woke, so the writer never wrote them. No game on the slate was
+  still to start, so no `/simulate` run was queued.
+- **The game page on a live game: PASS.** "The game" (linescore, box score, play-by-play) sits
+  above the Simulation card. Without a reload, the play count went from 64 to 65 and the 8th
+  inning's zero appeared in the linescore.
+- **A what-if from the latest play: FAIL.** "What if from here" on the newest play (Hernández
+  grounds out, top 8th) showed the right state: 2 outs, LAD 4-5 MIL, bases empty, Ashby at 4
+  pitches (Freeman's four-pitch strikeout). I staged Trevor Megill for Ashby. "Simulate 100 from
+  here" answered 503: "no raw.game_lineups rows for game_pk=849812". No run row was written.
+  The what-if reads the real state from the league feed, but it still resolves the venue and
+  the hands from `raw.game_lineups`, so a game whose lineup was never written cannot run one.
+  I did not write the lineup by hand (the direct database write was refused).
+- **A defect, fixed (commit 906ced9).** `GET /api/games/{pk}/live` answered 500 on every call
+  during a live game (88 times in 30 hours). The live service stores each lineup, bullpen and
+  bench entry as an object with a `player_id`; the endpoint cast the object to an int. The
+  reader now takes the `player_id`. A new unit test covers it; the games test file, ruff and
+  mypy pass (the full unit lane did not run). The running app reloaded and answers 200.
+- **A small UI oddity, not chased.** The first click on the Dodgers card's series label
+  opened the Guardians card instead; a second click on the card body opened the right one.
+- The live game-day view stays open in `BACKLOG.xlsx`; the two failures are in its Proposed
+  Solution cell.
+
 # NOT RUN (second try) — the game-day live check found the day's game already final — SIM-519 / SIM-562, 2026-10-11
 
 The scheduled check fired again at 23:43 EDT on 2026-10-11. The day's only game had ended
