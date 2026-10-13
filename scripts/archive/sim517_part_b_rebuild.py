@@ -14,7 +14,6 @@ scripts/sim517_part_b_rebuild.py — the SIM-517 part-B rebuild, end to end.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -31,9 +30,9 @@ SEASONS = [2023, 2024, 2025, 2026]
 
 
 def main() -> int:
-    dsn = os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    dsn = require_dsn()
 
     print("=== 1. migration 0022 ===", flush=True)
     con = duckdb.connect(DUCKDB_PATH)

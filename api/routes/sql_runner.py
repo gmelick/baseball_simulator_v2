@@ -15,22 +15,26 @@ Errors:
   * 400 — the query was rejected by the validator (non-SELECT, multi-statement,
     write keyword, dangerous function, too long) OR Postgres raised (syntax,
     statement-timeout, read-only-transaction). The message is surfaced in
-    ``detail`` so the console's error panel can render it verbatim.
-  * 503 — no database pool attached (lifespan not up).
+    ``detail`` so the console's error panel can render it verbatim. A query
+    that reads a table outside ``raw.*`` is one of these rejections (SIM-443d).
+  * 503 — the read-only pool is not open (SIM-443e). The console runs ONLY on
+    ``app.state.pg_pool_ro``, the ``BASEBALL_DB_RO_DSN`` pool that the lifespan
+    opened and checked; it never falls back to the main pool.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
-from api.routes._common import _get_pool
 from api.routes.sql_safety import (
     DEFAULT_MAX_ROWS,
     DEFAULT_TIMEOUT_MS,
+    RO_POOL_UNAVAILABLE_DETAIL,
     SqlValidationError,
     run_read_only_sql,
 )
@@ -60,13 +64,19 @@ class SqlRunResponse(BaseModel):
     timeout_ms: int
 
 
-def _ro_pool(request: Request):
-    """Prefer a dedicated read-only pool if the lifespan attached one, else the
-    main pool (still executed inside a read-only transaction)."""
+def _ro_pool(request: Request) -> Any:
+    """Return the read-only pool, or raise 503 when the lifespan has none.
+
+    SIM-443e: there is no fallback. The main pool's role can write, so user
+    SQL never runs on it.
+    """
     ro = getattr(request.app.state, "pg_pool_ro", None)
-    if ro is not None:
-        return ro
-    return _get_pool(request)
+    if ro is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=RO_POOL_UNAVAILABLE_DETAIL,
+        )
+    return ro
 
 
 @router.post(
@@ -75,9 +85,10 @@ def _ro_pool(request: Request):
     summary="Run a read-only SQL query against raw.* (Postgres)",
     description=(
         "Executes a single SELECT / WITH query in a read-only transaction with a "
-        "statement timeout and a hard row cap. Only raw.* (Postgres) is reachable; "
-        "derived.*/sim.* live in DuckDB and are not on this pool. 400 on a rejected "
-        "or failing query; 503 with no pool."
+        "statement timeout and a hard row cap, on the read-only database role. "
+        "Every table must be written as raw.<table> (or be a CTE of the query); "
+        "any other schema or an unqualified table name is rejected. 400 on a "
+        "rejected or failing query; 503 when the read-only pool is not open."
     ),
     dependencies=[Depends(require_auth)],
 )

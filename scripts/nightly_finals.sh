@@ -17,7 +17,9 @@
 # =============================================================================
 set -eu
 
-export BASEBALL_DB_DSN="${BASEBALL_DB_DSN:-postgresql://baseball_user:baseball_pass@db:5432/baseball_sim}"
+# SIM-443b: no default password. The container composes the DSN from .env.
+: "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the jobs service composes it from .env (see .env.example)}"
+export BASEBALL_DB_DSN
 export DAYS="${DAYS:-3}"
 
 log() { echo "[nightly-finals $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }

@@ -391,9 +391,9 @@ def _duckdb_path() -> str:
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn()
 
 
 @pytest.fixture(scope="package")
@@ -428,7 +428,9 @@ def preconditions(production_flags: dict[str, str]) -> None:
 
         asyncio.run(_probe())
     except Exception as exc:  # noqa: BLE001 -- report ANY connect failure verbatim
-        missing.append(f"Postgres at {_dsn().rsplit('@', 1)[-1]} ({exc!r})")
+        # SIM-443b: an unset DSN raises inside the probe; name the host only when set.
+        where = os.environ.get("BASEBALL_DB_DSN", "").rsplit("@", 1)[-1] or "BASEBALL_DB_DSN"
+        missing.append(f"Postgres at {where} ({exc!r})")
 
     if missing:
         pytest.fail(

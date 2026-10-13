@@ -237,7 +237,9 @@ def test_the_stored_summary_serialises_the_grid():
     )
     stored = to_jsonable(summary)
     assert stored["inning_grids"] == [[[1, None], [0, 0]], [[0, 2], [1, 0]]]
-    # The cache pickles the summary; the grid survives the round trip.
+    # The Redis cache stores the summary as JSON (SIM-443f); the grid survives
+    # that round trip, and a pickle round trip too.
+    assert GameSimSummary.from_json(summary.to_json()).inning_grids == summary.inning_grids
     assert pickle.loads(pickle.dumps(summary)).inning_grids == summary.inning_grids
 
 

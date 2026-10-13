@@ -15,7 +15,9 @@ runs is validated, read-only, time-limited, row-capped, and shown to the user.
 Feature-gating: the Anthropic client is created in ``api/main.py``'s lifespan
 only when ``ANTHROPIC_API_KEY`` is set; otherwise ``app.state.anthropic_client``
 is ``None``. ``/status`` reports ``configured:false`` so the UI shows a friendly
-setup card instead of failing a call, and ``/ask`` returns 503. Nothing here
+setup card instead of failing a call, and ``/ask`` returns 503. ``/ask`` also
+returns 503 when the read-only pool is not open (SIM-443e): the assistant's SQL
+runs ONLY on ``app.state.pg_pool_ro``, never on the main pool. Nothing here
 imports ``anthropic`` at module load, so the app + test suite boot without the
 package or the key.
 
@@ -43,6 +45,7 @@ from pydantic import BaseModel, Field
 from api.auth import require_auth
 from api.routes.sql_safety import (
     DEFAULT_TIMEOUT_MS,
+    RO_POOL_UNAVAILABLE_DETAIL,
     SqlValidationError,
     run_read_only_sql,
 )
@@ -124,8 +127,9 @@ SCHEMA (PostgreSQL, schema `raw`):
 {_SCHEMA_CATALOG}
 
 HARD RULES:
-- Only the `raw.*` schema is reachable. `derived.*` and `sim.*` live in a separate DuckDB database and \
-CANNOT be joined here — never write a query referencing them.
+- Only `raw.*` tables are reachable: always write `raw.<table>` (e.g. `FROM raw.pitches p`). Any other \
+schema or an unqualified table name is rejected. `derived.*` and `sim.*` CANNOT be read here — never \
+write a query referencing them.
 - Emit read-only SELECT / WITH…SELECT only. No INSERT/UPDATE/DELETE/DDL, no multiple statements.
 - ALWAYS bound the scan with an indexed predicate (season and/or pitcher/batter/game_date/venue_id). \
 raw.pitches has ~10^7 rows — an unbounded query is unacceptable.
@@ -168,10 +172,8 @@ def _client(request: Request) -> Any:
 
 
 def _pool(request: Request) -> Any:
-    ro = getattr(request.app.state, "pg_pool_ro", None)
-    if ro is not None:
-        return ro
-    return getattr(request.app.state, "pg_pool", None)
+    """Return the read-only pool, or None. SIM-443e: no main-pool fallback."""
+    return getattr(request.app.state, "pg_pool_ro", None)
 
 
 @router.get(
@@ -198,7 +200,9 @@ async def _run_conversation(request: Request, body: AskRequest) -> AsyncIterator
     client = _client(request)
     pool = _pool(request)
     if pool is None:
-        yield _sse({"type": "error", "detail": "database pool unavailable", "step": 0})
+        # The route checks the pool before it streams; this guard covers a pool
+        # that closed between the check and the stream.
+        yield _sse({"type": "error", "detail": RO_POOL_UNAVAILABLE_DETAIL, "step": 0})
         yield _sse({"type": "done"})
         return
 
@@ -342,6 +346,8 @@ async def ask(request: Request, body: AskRequest) -> Any:
             status_code=503,
             content={"detail": "assistant not configured — set ANTHROPIC_API_KEY to enable it"},
         )
+    if _pool(request) is None:
+        return JSONResponse(status_code=503, content={"detail": RO_POOL_UNAVAILABLE_DETAIL})
     return StreamingResponse(
         _run_conversation(request, body),
         media_type="text/event-stream",

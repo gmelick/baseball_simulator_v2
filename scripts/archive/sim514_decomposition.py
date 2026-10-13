@@ -54,7 +54,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -104,9 +103,9 @@ _DP_EVENTS = frozenset(
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn()
 
 
 # ---------------------------------------------------------------------------

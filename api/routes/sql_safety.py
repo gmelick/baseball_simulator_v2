@@ -25,14 +25,20 @@ Layered guarantees (see ``docs`` / the SIM-439 build spec):
   4. Hard row cap enforced *in SQL* (the user query is wrapped in a bounded
      subquery) so a ``SELECT *`` can never materialise millions of rows.
   5. asyncpg's single-statement ``fetch`` refuses multiple statements outright.
-  6. Optional belt-and-suspenders: point ``BASEBALL_DB_RO_DSN`` at a
-     ``GRANT SELECT``-only Postgres role and even a validator bypass cannot
-     write (wired in ``api/main.py``'s lifespan → ``app.state.pg_pool_ro``).
+  6. The relation allowlist (SIM-443d): a parser (sqlglot) reads the query, and
+     every table it names must be ``raw.<table>`` or a CTE of the query. The
+     system catalogs (``pg_authid``, ``pg_stat_activity``,
+     ``information_schema``) and every other schema are rejected before the
+     database is touched. See :func:`validate_relation_allowlist`.
+  7. The read-only role (SIM-443e): the console and the assistant run ONLY on
+     the ``BASEBALL_DB_RO_DSN`` pool, a role that can read ``raw.*`` and nothing
+     else. The lifespan in ``api/main.py`` checks the role with
+     :func:`check_read_only_role` and refuses a superuser. With no such pool the
+     routes answer 503; they never fall back to the main pool.
 
-``raw.*`` lives in PostgreSQL; ``derived.*`` / ``sim.*`` live in the in-process
-DuckDB and are NOT reachable through this pool, so a cross-database join simply
-fails — the assistant's system prompt and the schema browser only expose
-``raw.*``.
+The query must name its tables as ``raw.<table>``. An unqualified name is
+rejected even though the pool's ``search_path`` is ``raw``, so the rule never
+depends on a session setting.
 
 This module is pure (no FastAPI, no engines) so the validator is unit-tested
 without an HTTP layer or a live DB (``tests/unit/test_sql_safety.py``).
@@ -43,7 +49,14 @@ from __future__ import annotations
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
+
+# SIM-443d: imported at module top on purpose. The relation allowlist is a
+# security control, so a missing package must fail the boot, never switch the
+# check off.
+import sqlglot
+from sqlglot import exp
 
 from api.serialization import to_jsonable
 
@@ -125,7 +138,9 @@ _DANGEROUS_TOKENS = (
     r"pg_sleep",
     r"pg_read_file",
     r"pg_read_binary_file",
-    r"pg_ls_dir",
+    # SIM-443d: the whole pg_ls_* family (pg_ls_dir, pg_ls_waldir, pg_ls_logdir,
+    # pg_ls_tmpdir, pg_ls_archive_statusdir), not pg_ls_dir alone.
+    r"pg_ls_",
     r"pg_stat_file",
     r"lo_import",
     r"lo_export",
@@ -136,6 +151,60 @@ _DANGEROUS_TOKENS = (
     r"current_setting",
     r"set_config",
     r"txid_",
+    # SIM-443d: functions that read a table or run SQL text by NAME, or that
+    # report server internals. query_to_xml / table_to_xml / cursor_to_xml
+    # take a table name or a query string, so they read a relation that the
+    # relation allowlist never sees. None of these substrings occurs in a
+    # raw.* column name.
+    r"_to_xml",
+    r"pg_stat_get_",
+    r"pg_show_all_",
+    r"pg_hba_file_rules",
+    r"pg_ident_file_mappings",
+    r"pg_config",
+    r"pg_get_",
+    r"pg_current_logfile",
+    r"pg_backend_pid",
+)
+
+# ---------------------------------------------------------------------------
+# SIM-443d: the relation allowlist
+# ---------------------------------------------------------------------------
+
+#: The one schema the console may read.
+ALLOWED_SCHEMA = "raw"
+
+#: Set-returning functions that may stand in a FROM clause. Each one computes
+#: rows from its arguments and reads no table. Any other function in a FROM
+#: clause is rejected (fail closed). sqlglot names generate_series
+#: ``exploding_generate_series`` when it parses it into a FROM clause.
+_TABLE_FUNCTIONS_ALLOWED = frozenset(
+    {
+        "generate_series",
+        "exploding_generate_series",
+        "generate_subscripts",
+        "unnest",
+        "json_each",
+        "json_each_text",
+        "jsonb_each",
+        "jsonb_each_text",
+        "json_array_elements",
+        "json_array_elements_text",
+        "jsonb_array_elements",
+        "jsonb_array_elements_text",
+        "json_object_keys",
+        "jsonb_object_keys",
+        "regexp_split_to_table",
+        "regexp_matches",
+        "string_to_table",
+    }
+)
+
+#: The 503 detail the SQL console and the assistant return when the read-only
+#: pool is missing (SIM-443e). One string, so the two routes say the same thing.
+RO_POOL_UNAVAILABLE_DETAIL = (
+    "The SQL console is unavailable: the read-only database pool is not open. "
+    "Set BASEBALL_DB_RO_DSN to the baseball_ro role and restart the app."
 )
 
 
@@ -255,7 +324,8 @@ def validate_read_only_sql(sql: str, *, max_len: int = MAX_SQL_LEN) -> str:
     Rejects: empty input; anything not beginning with ``SELECT`` or ``WITH``;
     any statement containing a data-modifying / DDL / session keyword (even
     inside a CTE); multiple statements (an inner ``;``); a blocklist of dangerous
-    functions; and anything over ``max_len`` characters.
+    functions; anything over ``max_len`` characters; and, last, any query that
+    reads a table outside ``raw.*`` (:func:`validate_relation_allowlist`).
     """
     if not isinstance(sql, str):
         raise SqlValidationError("query must be a string")
@@ -310,7 +380,231 @@ def validate_read_only_sql(sql: str, *, max_len: int = MAX_SQL_LEN) -> str:
     executable = raw
     if executable.endswith(";"):
         executable = executable[:-1].rstrip()
+
+    # SIM-443d: the parser-backed relation check runs last, after the cheap
+    # scans, on the exact text that executes.
+    validate_relation_allowlist(executable)
     return executable
+
+
+def _fold(ident: Any) -> str:
+    """Return an identifier's name as Postgres resolves it.
+
+    An unquoted identifier folds to lower case; a quoted one keeps its case.
+    """
+    if not isinstance(ident, exp.Identifier):
+        return str(ident or "")
+    return ident.name if ident.quoted else ident.name.lower()
+
+
+def _cte_name(cte: exp.Expression) -> str:
+    alias = cte.args.get("alias")
+    ident = alias.this if isinstance(alias, exp.TableAlias) else alias
+    return _fold(ident)
+
+
+def _ctes_in_scope(node: exp.Expression) -> set[str]:
+    """Return the CTE names a table reference at ``node`` can see.
+
+    The walk goes up the tree. At a ``WITH`` that holds the reference, a
+    non-recursive ``WITH`` shows only the CTEs before the one that holds it
+    (Postgres resolves a forward or self reference to a real table); a
+    ``WITH RECURSIVE`` shows all of them. At any other ancestor, a ``WITH``
+    attached to it (the main body's view) shows all its CTEs. So
+    ``WITH pg_authid AS (SELECT * FROM pg_authid) ...`` sees no CTE at the
+    inner reference, and the check rejects it.
+    """
+    names: set[str] = set()
+    child: exp.Expression = node
+    parent = node.parent
+    while parent is not None:
+        if isinstance(parent, exp.With):
+            recursive = bool(parent.args.get("recursive"))
+            for cte in parent.expressions:
+                if not recursive and cte is child:
+                    break
+                names.add(_cte_name(cte))
+        else:
+            for value in parent.args.values():
+                if isinstance(value, exp.With) and value is not child:
+                    names.update(_cte_name(cte) for cte in value.expressions)
+        child = parent
+        parent = parent.parent
+    return names
+
+
+def _function_name(func: exp.Expression) -> str:
+    """Return the lower-case name of a function node from sqlglot."""
+    if isinstance(func, exp.Anonymous):
+        return str(func.name).lower()
+    if isinstance(func, exp.Func):
+        return func.sql_name().lower()
+    return type(func).__name__.lower()
+
+
+def _check_function_relation(func: exp.Expression) -> None:
+    name = _function_name(func)
+    if name not in _TABLE_FUNCTIONS_ALLOWED:
+        raise SqlValidationError(
+            f"the function {name}() may not be used as a table; "
+            f"only {ALLOWED_SCHEMA}.* tables may be read"
+        )
+
+
+def _dotted(table: exp.Table) -> str:
+    parts = [_fold(table.args.get(key)) for key in ("catalog", "db", "this") if table.args.get(key)]
+    return ".".join(parts) or "?"
+
+
+def validate_relation_allowlist(sql: str) -> None:
+    """Reject a query that reads any table outside ``raw.*`` (SIM-443d).
+
+    sqlglot parses ``sql`` in the Postgres dialect. The check fails closed:
+
+    * a parse error, or anything other than exactly one statement, is rejected;
+    * the statement must be a query (``SELECT``, a set operation, or a
+      parenthesised query). sqlglot returns a generic command node for syntax
+      it does not support, and such a node carries no table nodes to check;
+    * ``SELECT ... INTO`` is rejected (it creates a table);
+    * the ``TABLE name`` shorthand is rejected: sqlglot drops the name inside
+      a CTE (``WITH a AS (TABLE pg_authid) ...``), so the parse cannot see it;
+    * every table must be ``raw.<name>`` (no catalog part), or a bare name that
+      is a CTE in scope at that point;
+    * a function in a FROM clause (plain or ``LATERAL``) must be on
+      ``_TABLE_FUNCTIONS_ALLOWED``.
+
+    ``find_all`` walks the whole tree, so CTE bodies, subqueries, set
+    operations, scalar subqueries and ``LATERAL`` bodies are all checked.
+    Raises :class:`SqlValidationError`; returns None when the query passes.
+    """
+    # The TABLE shorthand. The scan runs on a copy with comments, strings and
+    # quoted identifiers blanked, so a column named "table" stays legal.
+    if re.search(r"(?<![A-Za-z0-9_$])table(?![A-Za-z0-9_$])", _strip_sql_noise(sql).lower()):
+        raise SqlValidationError(
+            f"the TABLE shorthand is not supported; write SELECT * FROM {ALLOWED_SCHEMA}.<table>"
+        )
+
+    try:
+        statements = sqlglot.parse(sql, read="postgres")
+    except Exception as exc:  # noqa: BLE001 — any parser failure rejects the query
+        first_line = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:200]
+        raise SqlValidationError(f"could not parse the query ({first_line})") from exc
+
+    parsed = [s for s in statements if s is not None]
+    if len(parsed) != 1:
+        raise SqlValidationError("only a single statement is allowed")
+    root = parsed[0]
+    if not isinstance(root, exp.Query):
+        raise SqlValidationError("only read-only SELECT / WITH queries are allowed")
+    if root.find(exp.Into) is not None:
+        raise SqlValidationError("SELECT ... INTO is not allowed — this console is read-only")
+
+    for lateral in root.find_all(exp.Lateral):
+        body = lateral.this
+        if isinstance(body, (exp.Subquery, exp.Query)):
+            continue  # its tables are checked by the walk below
+        if isinstance(body, exp.Func):
+            _check_function_relation(body)
+            continue
+        raise SqlValidationError("unsupported LATERAL form; use LATERAL (SELECT ...)")
+
+    for table in root.find_all(exp.Table):
+        target = table.this
+        if isinstance(target, exp.Func):
+            if table.args.get("db") or table.args.get("catalog"):
+                raise SqlValidationError(
+                    f"a schema-qualified function may not be used as a table; "
+                    f"only {ALLOWED_SCHEMA}.* tables may be read"
+                )
+            _check_function_relation(target)
+            continue
+        if not isinstance(target, exp.Identifier):
+            raise SqlValidationError(
+                f"unsupported FROM item; only {ALLOWED_SCHEMA}.* tables may be read"
+            )
+        db = table.args.get("db")
+        if table.args.get("catalog"):
+            raise SqlValidationError(
+                f"only {ALLOWED_SCHEMA}.* tables may be read; found {_dotted(table)}"
+            )
+        if db is not None:
+            if _fold(db) == ALLOWED_SCHEMA:
+                continue
+            raise SqlValidationError(
+                f"only {ALLOWED_SCHEMA}.* tables may be read; found {_dotted(table)}"
+            )
+        name = _fold(target)
+        if name in _ctes_in_scope(table):
+            continue
+        raise SqlValidationError(
+            f"only {ALLOWED_SCHEMA}.* tables may be read; found {name} "
+            f"(write it as {ALLOWED_SCHEMA}.{name})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# SIM-443e: the read-only role check
+# ---------------------------------------------------------------------------
+
+# One round trip. to_regnamespace / to_regclass return NULL for a missing
+# schema or table, the privilege functions return NULL for a NULL oid, and
+# COALESCE turns that into false, so a fresh database never errors.
+_ROLE_CHECK_SQL = """
+SELECT current_user::text AS role,
+       COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles r
+                 WHERE r.rolname = current_user), false) AS superuser,
+       COALESCE(has_schema_privilege(to_regnamespace('sim')::oid, 'USAGE'), false)
+           AS sim_usage,
+       COALESCE(has_table_privilege(to_regclass('raw.pitches')::oid, 'INSERT'), false)
+           AS raw_insert,
+       COALESCE(has_table_privilege(to_regclass('raw.pitches')::oid, 'SELECT'), false)
+           AS raw_select
+"""
+
+
+@dataclass(frozen=True)
+class ReadOnlyRoleCheck:
+    """What the SQL console's database role can do (SIM-443e).
+
+    ``acceptable`` is True when the role is not a superuser, cannot use the
+    ``sim`` schema, and cannot insert into ``raw.pitches``. ``raw_select`` is
+    reported but does not decide: a role that cannot read is useless, not
+    dangerous.
+    """
+
+    role: str
+    superuser: bool
+    sim_usage: bool
+    raw_insert: bool
+    raw_select: bool
+
+    @property
+    def acceptable(self) -> bool:
+        return not (self.superuser or self.sim_usage or self.raw_insert)
+
+    def flags(self) -> str:
+        return (
+            f"superuser={self.superuser}, sim_usage={self.sim_usage}, "
+            f"raw_insert={self.raw_insert}, raw_select={self.raw_select}"
+        )
+
+
+async def check_read_only_role(pool: Any) -> ReadOnlyRoleCheck:
+    """Read the role of ``pool`` and what it may do, in one query.
+
+    ``pool`` is an asyncpg Pool (or a stand-in with ``fetchrow``). Errors from
+    the driver propagate; the caller treats any error as a refusal.
+    """
+    row = await pool.fetchrow(_ROLE_CHECK_SQL)
+    if row is None:
+        raise RuntimeError("the role check returned no row")
+    return ReadOnlyRoleCheck(
+        role=str(row["role"]),
+        superuser=bool(row["superuser"]),
+        sim_usage=bool(row["sim_usage"]),
+        raw_insert=bool(row["raw_insert"]),
+        raw_select=bool(row["raw_select"]),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +689,12 @@ async def run_read_only_sql(
 __all__ = [
     "SqlValidationError",
     "validate_read_only_sql",
+    "validate_relation_allowlist",
     "run_read_only_sql",
+    "check_read_only_role",
+    "ReadOnlyRoleCheck",
+    "ALLOWED_SCHEMA",
+    "RO_POOL_UNAVAILABLE_DETAIL",
     "DEFAULT_MAX_ROWS",
     "DEFAULT_TIMEOUT_MS",
 ]

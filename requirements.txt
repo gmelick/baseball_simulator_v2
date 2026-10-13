@@ -85,6 +85,17 @@ POT>=0.9.5,<1.0                 # Wasserstein distance for GMM arsenal similarit
 anthropic>=0.40,<1.0
 
 # ---------------------------------------------------------------------------
+# SQL console relation allowlist (SIM-443d)
+# ---------------------------------------------------------------------------
+# The Data Lab SQL console and the AI assistant parse every query with sqlglot
+# and reject any table outside raw.* (api/routes/sql_safety.py). The import is
+# at module top, so a missing package fails the boot instead of switching the
+# check off. Pure Python with no dependencies; do NOT install the Rust tokenizer
+# extra (sqlglot[rs]). The floor is the version the parse tests were run on; the
+# ceiling keeps a major parser change a deliberate upgrade.
+sqlglot>=30.22,<31.0
+
+# ---------------------------------------------------------------------------
 # Baseball data ingestion
 # ---------------------------------------------------------------------------
 pybaseball>=2.2,<3.0

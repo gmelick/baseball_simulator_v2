@@ -532,7 +532,7 @@ def test_redact_dsn_strips_a_libpq_keyword_password() -> None:
     ("dsn", "expected"),
     [
         # URL form — the shape docker-compose.yml:108 uses.
-        ("postgresql://baseball_user:baseball_pass@db:5432/baseball_sim", "db:5432/baseball_sim"),
+        ("postgresql://baseball_app:dummy_pw@db:5432/baseball_sim", "db:5432/baseball_sim"),
         ("postgres://u:p@localhost:5433/baseball_sim", "localhost:5433/baseball_sim"),
         ("postgresql://u:p@db/baseball_sim", "db/baseball_sim"),
         # Query options must not survive; they can carry sslpassword.

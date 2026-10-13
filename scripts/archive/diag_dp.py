@@ -20,19 +20,19 @@ if str(_ROOT) not in sys.path:
 
 import asyncpg  # noqa: E402
 
+from pipeline.db_dsn import require_dsn  # noqa: E402
 from simulation.batch_runner import GameSpec  # noqa: E402
 from simulation.lineup_resolver import resolve_game_state  # noqa: E402
 from simulation.production_factory import production_machine_factory  # noqa: E402
 from simulation.sim_loop import _DOUBLE_PLAY_EVENTS, BoxScore, simulate_game  # noqa: E402
 
 _FACTORY = "simulation.production_factory:production_machine_factory"
-_DSN = os.environ.get(
-    "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-)
+#: SIM-443b: no default password; require_dsn names the missing variable.
+_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 
 async def _resolve(gp):
-    c = await asyncpg.connect(_DSN)
+    c = await asyncpg.connect(_DSN or require_dsn())
     try:
         return await resolve_game_state(c, gp, seed=0)
     finally:

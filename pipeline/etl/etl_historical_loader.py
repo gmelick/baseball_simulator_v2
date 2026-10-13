@@ -3678,7 +3678,9 @@ class HistoricalDataLoader:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    loader = HistoricalDataLoader("postgresql://baseball_user:baseball_pass@db:5432/baseball_sim")
+    # SIM-443b: no default password. The loader reads BASEBALL_DB_DSN and raises
+    # a clear error when it is not set.
+    loader = HistoricalDataLoader()
     try:
         loader.refresh_seasons()
     finally:

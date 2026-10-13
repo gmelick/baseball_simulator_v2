@@ -125,6 +125,8 @@ def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
     monkeypatch.setenv("SIMILARITY_ENGINE_ENABLED", "false")
     monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
     monkeypatch.setenv("REPLAY_PERSISTENCE_ENABLED", "false")
+    # SIM-443e: no read-only DSN, so the lifespan opens no console pool.
+    monkeypatch.delenv("BASEBALL_DB_RO_DSN", raising=False)
 
     # Stub the live-infra openers the lifespan calls (return AsyncMocks with the
     # close/aclose coroutines the shutdown path awaits).
@@ -158,6 +160,155 @@ def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
     runner = asyncio.run(_drive())
     # Shutdown called close() on the persistent runner (SIM-360 teardown).
     assert runner.close.called
+
+
+# ---------------------------------------------------------------------------
+# SIM-443e — the lifespan opens the SQL console's pool only on a read-only role
+# ---------------------------------------------------------------------------
+
+_MAIN_DSN = "postgresql://baseball_app:app-secret@db:5432/baseball_sim"
+_RO_DSN = "postgresql://baseball_ro:ro-secret@db:5432/baseball_sim"
+
+
+def _ro_lifespan_setup(monkeypatch, role_check):
+    """Stub the lifespan's openers; return (app, main_pool, ro_pool, opener).
+
+    ``role_check`` is the ReadOnlyRoleCheck the stubbed check returns, or an
+    exception instance the check raises.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import api.main as main_mod
+    import api.routes.sql_safety as sql_safety
+
+    monkeypatch.setenv("BASEBALL_DB_DSN", _MAIN_DSN)
+    monkeypatch.setenv("BASEBALL_DB_RO_DSN", _RO_DSN)
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("SIMILARITY_ENGINE_ENABLED", "false")
+    monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
+    monkeypatch.setenv("REPLAY_PERSISTENCE_ENABLED", "false")
+    monkeypatch.setenv("AUTH_DISABLED", "1")
+
+    main_pool = MagicMock(name="main_pool")
+    main_pool.close = AsyncMock()
+    ro_pool = MagicMock(name="ro_pool")
+    ro_pool.close = AsyncMock()
+
+    async def _open(dsn, **kwargs):
+        return ro_pool if dsn == _RO_DSN else main_pool
+
+    opener = AsyncMock(side_effect=_open)
+    fake_redis = MagicMock()
+    fake_redis.aclose = AsyncMock()
+    monkeypatch.setattr(main_mod, "open_pg_pool", opener)
+    monkeypatch.setattr(main_mod, "make_pg_name_resolver", lambda pool: lambda ids: {})
+    monkeypatch.setattr(
+        main_mod, "open_redis_cache", AsyncMock(return_value=(fake_redis, MagicMock()))
+    )
+    if isinstance(role_check, Exception):
+        check = AsyncMock(side_effect=role_check)
+    else:
+        check = AsyncMock(return_value=role_check)
+    monkeypatch.setattr(sql_safety, "check_read_only_role", check)
+    return main_mod.create_app(), main_pool, ro_pool, opener
+
+
+def _drive_lifespan(app):
+    """Enter and exit the lifespan; return what app.state held inside it."""
+    import asyncio
+
+    import api.main as main_mod
+
+    async def _drive():
+        async with main_mod.lifespan(app):
+            return app.state.pg_pool_ro, app.state.sql_console_role
+
+    return asyncio.run(_drive())
+
+
+def _role(**overrides):
+    from api.routes.sql_safety import ReadOnlyRoleCheck
+
+    fields = {
+        "role": "baseball_ro",
+        "superuser": False,
+        "sim_usage": False,
+        "raw_insert": False,
+        "raw_select": True,
+    }
+    fields.update(overrides)
+    return ReadOnlyRoleCheck(**fields)
+
+
+def test_lifespan_refuses_a_superuser_console_pool(monkeypatch, caplog):
+    """A superuser role is refused: the pool is closed and left None."""
+    import logging
+
+    app, _main, ro_pool, _opener = _ro_lifespan_setup(
+        monkeypatch, _role(role="baseball_user", superuser=True)
+    )
+    with caplog.at_level(logging.ERROR, logger="api.main"):
+        attached, role = _drive_lifespan(app)
+    assert attached is None
+    assert role is None
+    ro_pool.close.assert_awaited()
+    assert any("superuser=True" in r.getMessage() for r in caplog.records)
+    # No password in any log line.
+    assert all("ro-secret" not in r.getMessage() for r in caplog.records)
+
+
+def test_lifespan_accepts_a_read_only_console_pool(monkeypatch, caplog):
+    """A read-only role is attached with search_path=raw and closed at shutdown."""
+    import logging
+
+    app, _main, ro_pool, opener = _ro_lifespan_setup(monkeypatch, _role())
+    with caplog.at_level(logging.INFO, logger="api.main"):
+        attached, role = _drive_lifespan(app)
+    assert attached is ro_pool
+    assert role == "baseball_ro"
+    ro_calls = [c for c in opener.await_args_list if c.args and c.args[0] == _RO_DSN]
+    assert len(ro_calls) == 1
+    assert ro_calls[0].kwargs.get("server_settings") == {"search_path": "raw"}
+    ro_pool.close.assert_awaited()  # shutdown closed it
+    opened = [r.getMessage() for r in caplog.records if "pool open as" in r.getMessage()]
+    assert opened and "baseball_ro" in opened[0]
+    assert all("ro-secret" not in r.getMessage() for r in caplog.records)
+
+
+def test_lifespan_refuses_when_the_role_check_fails(monkeypatch):
+    """A failing role check refuses the pool (fail closed) and closes it."""
+    app, _main, ro_pool, _opener = _ro_lifespan_setup(
+        monkeypatch, RuntimeError("connection refused for ro-secret")
+    )
+    attached, role = _drive_lifespan(app)
+    assert attached is None
+    assert role is None
+    ro_pool.close.assert_awaited()
+
+
+def test_lifespan_refuses_a_role_that_can_write(monkeypatch):
+    """A role with sim usage or a raw insert grant is refused."""
+    app, _main, ro_pool, _opener = _ro_lifespan_setup(
+        monkeypatch, _role(role="baseball_app", sim_usage=True, raw_insert=True)
+    )
+    attached, _role_name = _drive_lifespan(app)
+    assert attached is None
+    ro_pool.close.assert_awaited()
+
+
+def test_health_reports_the_sql_console_state():
+    """/health carries the console's pool state and role, never a DSN."""
+    from api.main import create_app
+
+    app = create_app()
+    client = TestClient(app)  # no `with`: the lifespan does not run
+    body = client.get("/health").json()
+    assert body["sql_console"] == {"ro_pool": False, "role": None}
+
+    app.state.pg_pool_ro = object()
+    app.state.sql_console_role = "baseball_ro"
+    body = client.get("/health").json()
+    assert body["sql_console"] == {"ro_pool": True, "role": "baseball_ro"}
 
 
 # ---------------------------------------------------------------------------

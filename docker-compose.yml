@@ -9,9 +9,24 @@
 #   docker compose logs -f app    → tail app logs
 #
 # Services:
-#   db    — PostgreSQL 15 (port 5432)
-#   redis — Redis 7      (port 6379)
-#   app   — FastAPI app  (port 8000)
+#   db         — PostgreSQL 15 (port 5432)
+#   redis      — Redis 7      (port 6379)
+#   app        — FastAPI app  (port 8000)
+#   live       — the live ingestion service (no published port)
+#   jobs       — the nightly data jobs' container (no published port)
+#   nginx      — the frontend + reverse proxy (port 80)
+#   prometheus — metrics store (port 9090)
+#   grafana    — dashboards    (port 3000)
+#   scheduler  — Ofelia, the nightly cron (no published port)
+#
+# Published ports (SIM-443a): db, redis, app, prometheus and grafana bind
+# 127.0.0.1 only, so another machine on the LAN cannot reach them. nginx :80
+# is the one port on every interface: it is the way into the site.
+#
+# Secrets (SIM-443b/f): every password comes from .env. A missing one fails
+# every compose command and names the variable; create them with
+#   python scripts/gen_secrets.py --append .env
+# The containers build every DSN from those passwords; no DSN is a literal here.
 #
 # DuckDB is intentionally absent — it runs in-process inside the app container.
 # =============================================================================
@@ -25,17 +40,34 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
+      # SIM-443b: baseball_user owns the cluster (the superuser). Only the
+      # migrate service and the admin scripts log in as it. The password has
+      # no default: .env must carry it.
       POSTGRES_USER:     ${POSTGRES_USER:-baseball_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-baseball_pass}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
       POSTGRES_DB:       ${POSTGRES_DB:-baseball_sim}
+      # SIM-443b: the passwords of the two least-privilege roles. Only the role
+      # script reads them (db/roles/setup_roles.sh): baseball_app (the app, the
+      # live service and the jobs; read and write rows in raw and sim) and
+      # baseball_ro (the SQL console; read raw only).
+      BASEBALL_APP_DB_PASSWORD: "${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
+      BASEBALL_RO_DB_PASSWORD:  "${BASEBALL_RO_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
     ports:
       # Host port is overridable via DB_HOST_PORT in .env so contributors
       # already running PostgreSQL on 5432 can pick a free port (eg 5433).
-      - "${DB_HOST_PORT:-5432}:5432"
+      # SIM-443a: loopback only. Host tools reach it at localhost; the LAN does not.
+      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Schema is applied via 'make migrate' (alembic upgrade head)
-      # NOT via /docker-entrypoint-initdb.d/ — Alembic is the single source of truth
+      # The schema is applied by 'make migrate' (alembic upgrade head), never by
+      # /docker-entrypoint-initdb.d/: Alembic is the single source of truth for
+      # tables. The ROLES are different (SIM-443b): db/roles/setup_roles.sh
+      # creates baseball_app and baseball_ro and grants their privileges. A fresh
+      # volume runs it once through the init directory; `make db-roles` runs it
+      # on an existing one (it is idempotent, and it resets the two passwords
+      # from .env every run).
+      - ./db/roles:/opt/baseball/roles:ro
+      - ./db/roles/setup_roles.sh:/docker-entrypoint-initdb.d/10-setup-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baseball_user} -d ${POSTGRES_DB:-baseball_sim}"]
       interval: 10s
@@ -56,17 +88,25 @@ services:
       # already running Redis on 6379 (Memurai/WSL/another project) can pick
       # a free port without editing this file.  The app container always
       # reaches Redis at the in-network address ``redis:6379`` regardless.
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      # SIM-443a: loopback only.
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    # SIM-443f: Redis asks for a password (requirepass). redis-cli reads
+    # REDISCLI_AUTH, so the health check and `docker compose exec redis
+    # redis-cli` log in without the password on their command line.
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
     command: >
       redis-server
       --save 60 1
       --loglevel warning
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # A wrong password answers NOAUTH with exit 0, so the check reads PONG.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -103,13 +143,25 @@ services:
     env_file:
       - .env
     environment:
-      # In-container DSN is deterministic (the `db` service is always at
-      # db:5432), so set it here rather than relying on .env — .env's
-      # BASEBALL_DB_DSN is the HOST-side value (localhost:<DB_HOST_PORT>) for
-      # host tools and won't resolve inside the network. This override wins over
-      # env_file. alembic auto-coerces to the +psycopg2 driver in env.py.
-      BASEBALL_DB_DSN: postgresql://baseball_user:baseball_pass@db:5432/baseball_sim
-      REDIS_URL:       redis://redis:6379/0
+      # SIM-443b: compose builds the in-container DSNs from the passwords in
+      # .env (the `db` service is always at db:5432). These win over env_file, so
+      # a host-side BASEBALL_DB_DSN in .env (localhost:<DB_HOST_PORT>, for host
+      # tools) never reaches the container. The app logs in as baseball_app: it
+      # reads and writes rows in raw and sim, and it cannot create, drop or
+      # alter anything (the migrate service does that as the owner).
+      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      # SIM-443e: the SQL console's pool. baseball_ro reads raw only, and every
+      # transaction it opens is read-only. The app refuses this pool (the
+      # console answers 503) when the role is a superuser or can write.
+      BASEBALL_DB_RO_DSN: "postgresql://baseball_ro:${BASEBALL_RO_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      # SIM-443f: Redis asks for its password.
+      REDIS_URL:       "redis://:${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@redis:6379/0"
+      # SIM-443b: env_file hands this container every secret in .env. Blank the
+      # passwords it never reads (its own are inside the DSNs above), so a
+      # process here cannot read the owner's password from its environment.
+      POSTGRES_PASSWORD: ""
+      BASEBALL_RO_DB_PASSWORD: ""
+      GRAFANA_ADMIN_PASSWORD: ""
       ENVIRONMENT:     ${ENVIRONMENT:-development}
       # SIM-402 pre-warm: how many workers warm their full-pool cache at once
       # (default 2). At 14 workers (2026-09-15, the WSL cap raised to 16 vCPU /
@@ -347,7 +399,8 @@ services:
       SIM_RESTART_ON_NEW_BUNDLE: "1"
     ports:
       # Host port is overridable via APP_HOST_PORT (default 8000).
-      - "${APP_HOST_PORT:-8000}:8000"
+      # SIM-443a: loopback only. The LAN reaches the API through nginx :80.
+      - "127.0.0.1:${APP_HOST_PORT:-8000}:8000"
     volumes:
       # Mount source for hot-reload in development
       # Comment out for a production-like build test
@@ -408,8 +461,15 @@ services:
     env_file:
       - .env
     environment:
-      BASEBALL_DB_DSN: postgresql://baseball_user:baseball_pass@db:5432/baseball_sim
-      REDIS_URL:       redis://redis:6379/0
+      # SIM-443b/f: the app role and the Redis password, as in the app service.
+      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      REDIS_URL:       "redis://:${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@redis:6379/0"
+      # SIM-443b: env_file hands this container every secret in .env. Blank the
+      # passwords it never reads (its own are inside the DSNs above), so a
+      # process here cannot read the owner's password from its environment.
+      POSTGRES_PASSWORD: ""
+      BASEBALL_RO_DB_PASSWORD: ""
+      GRAFANA_ADMIN_PASSWORD: ""
       LIVE_PROJECTED_LINEUPS: "0"   # decision D3: built, OFF until the owner rules
       LIVE_PIPELINE_ENABLED: "false"
     command: python -m pipeline.live.run_live
@@ -429,6 +489,64 @@ services:
       - ./db:/app/db
       - ./api:/app/api
       - ./simulation:/app/simulation
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
+  # The nightly data jobs' container (SIM-443b). The scheduler EXECS the finals
+  # load, the Sunday season sweep and the profile + bundle rebuild into this
+  # container (deploy/ofelia/config.ini, job-exec). Before, each job ran as a
+  # fresh container whose DSN, password included, sat in the INI: Ofelia's INI
+  # does not expand variables, so a fresh container could get a credential only
+  # as a literal. This container gets the composed app-role DSN and .env here.
+  # It idles (sleep infinity) between jobs. scripts/ is baked into the image,
+  # so a script edit needs `docker compose build jobs`.
+  # ---------------------------------------------------------------------------
+  jobs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    restart: unless-stopped
+    user: appuser
+    # A ceiling, not a measurement: the old fresh job containers had no cap.
+    # Measure the first rebuild with `docker stats` and set JOBS_MEM_LIMIT in
+    # .env (16g is the safe first value). An OOM kill (exit 137) is not retried.
+    mem_limit: "${JOBS_MEM_LIMIT:-10g}"
+    env_file:
+      - .env
+    environment:
+      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      BASEBALL_DUCKDB_PATH: /data/baseball_sim.duckdb
+      # SIM-443b: env_file hands this container every secret in .env. Blank the
+      # passwords it never reads (its own are inside the DSNs above), so a
+      # process here cannot read the owner's password from its environment.
+      POSTGRES_PASSWORD: ""
+      BASEBALL_RO_DB_PASSWORD: ""
+      GRAFANA_ADMIN_PASSWORD: ""
+      # One numpy math thread per process, as the app service sets it. Without
+      # it the profile step's 15 GMM workers start 16 threads each on 16 CPUs:
+      # the fit took 52 minutes on 2026-10-12, against about 12 with the setting.
+      OPENBLAS_NUM_THREADS: "1"
+    command: sleep infinity
+    volumes:
+      - duckdb_data:/data
+      - ./api:/app/api
+      - ./pipeline:/app/pipeline
+      - ./similarity:/app/similarity
+      - ./simulation:/app/simulation
+      - ./db:/app/db
+    healthcheck:
+      # The image's own check probes :8000, which this container never serves.
+      # The jobs need a writable /data (the ingest marks, the DuckDB file).
+      test: ["CMD-SHELL", "test -w /data"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - baseball_net
 
@@ -482,10 +600,13 @@ services:
       target: runtime
     env_file:
       - .env
-    # No environment: override here.  BASEBALL_DB_DSN comes straight from .env
-    # and alembic env.py auto-coerces postgresql:// to postgresql+psycopg2://
-    # (see db/migrations/env.py).  This avoids the docker-compose ${VAR:-default}
-    # substitution path that broke on some Windows / Compose v2 combinations.
+    # SIM-443b: migrations create and alter tables, so this service logs in as
+    # the cluster owner (POSTGRES_USER). It is the only service that does.
+    # alembic env.py auto-coerces postgresql:// to postgresql+psycopg2://
+    # (see db/migrations/env.py). Run another alembic command through it:
+    #   docker compose run --rm migrate alembic current
+    environment:
+      BASEBALL_DB_DSN: "postgresql://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
     command: alembic upgrade head
     depends_on:
       db:
@@ -499,14 +620,16 @@ services:
   # Prometheus (SIM-374)
   # Scrapes the app's /metrics endpoint (api/routes/metrics.py) per
   # deploy/monitoring/prometheus.yml and stores the series in prometheus_data.
-  # Grafana (below) reads from it. Publishes :9090 on the host (overridable).
+  # Grafana (below) reads from it. Publishes :9090 on the host's loopback
+  # address (overridable).
   # ---------------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v2.53.0
     restart: unless-stopped
     ports:
       # Host port overridable via PROMETHEUS_HOST_PORT (default 9090).
-      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+      # SIM-443a: loopback only.
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:
       - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -529,19 +652,24 @@ services:
   # Grafana (SIM-374)
   # Auto-provisions the Prometheus datasource + the SIM-374 dashboard from
   # deploy/monitoring/grafana/ and persists its state in grafana_data.
-  # Publishes :3000 on the host (overridable). depends_on prometheus.
+  # Publishes :3000 on the host's loopback address (overridable).
+  # depends_on prometheus.
   # ---------------------------------------------------------------------------
   grafana:
     image: grafana/grafana:11.1.0
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER:     ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # SIM-443a: no default password. Grafana reads it only when its volume is
+      # new; on an existing volume reset it with `grafana cli admin
+      # reset-admin-password` (the cutover run book in docs/audit/).
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
       # Disabled sign-up; default org dashboards come from provisioning.
       GF_USERS_ALLOW_SIGN_UP:     "false"
     ports:
       # Host port overridable via GRAFANA_HOST_PORT (default 3000).
-      - "${GRAFANA_HOST_PORT:-3000}:3000"
+      # SIM-443a: loopback only.
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
     volumes:
       # Provisioning: datasource + dashboard provider configs.
       - ./deploy/monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
@@ -564,10 +692,10 @@ services:
   # Nightly data scheduler (Ofelia, docker-native cron). It starts with the
   # stack (SIM-519 D6). Jobs (deploy/ofelia/config.ini): the three-day finals
   # load nightly at 07:00 UTC, the profile + bundle rebuild at 08:00 UTC and the
-  # season sweep on Sunday, as fresh app-image containers through
-  # scripts/with_retry.sh; the SIM-546 closing
-  # pass inside the app container. Requires the app image to be built first
-  # (docker compose build app) so the scripts are present.
+  # season sweep on Sunday, each run inside the `jobs` container through
+  # scripts/with_retry.sh (SIM-443b); the SIM-546 closing pass inside the app
+  # container. A stopped `jobs` container fails all three; Ofelia logs the
+  # exec error.
   scheduler:
     image: mcuadros/ofelia:latest
     # SIM-519 Part D (decision D6): no profile gate — the scheduler starts with
@@ -578,8 +706,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # SIM-443b: the three data jobs exec into this container.
+      jobs:
+        condition: service_healthy
     volumes:
-      # Read-only docker socket so Ofelia can launch the nightly job container.
+      # Read-only docker socket so Ofelia can exec into the job containers.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./deploy/ofelia/config.ini:/etc/ofelia/config.ini:ro
     networks:

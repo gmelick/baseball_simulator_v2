@@ -66,10 +66,24 @@ defined in `api/main.py`.
 git clone <repo-url>
 cd baseball_simulator_v2
 copy .env.example .env
+py scripts\gen_secrets.py --append .env
 make dev-bg
 make migrate
 make test
 ```
+
+`gen_secrets.py` fills every secret `.env` lacks: the three Postgres
+passwords, the Redis password, the Grafana admin password, `SECRET_KEY`,
+`AUTH_PASSWORD` and `API_KEYS` (SIM-443). It prints key names only, never a
+value. Every compose command fails, naming the variable, until each is set.
+A fresh Postgres volume creates the two app roles on first start
+(`db/roles/README.md`); on an existing volume run `make db-roles`.
+
+Postgres, Redis, the app (:8000), Prometheus and Grafana listen on
+`127.0.0.1` only; another machine on the LAN reaches the site through nginx
+on :80. Every `/api/` route needs a credential: below, `%API_KEY%` is one of
+the comma-separated `API_KEYS` values in `.env` (`set API_KEY=<one key>`).
+`/health` and `/ready` stay open.
 
 **What good looks like.**
 - `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0030` as of 2026-10-09).
@@ -90,8 +104,12 @@ via `docker compose up db redis` or installed locally.
 
 ### 1.4 Loading data
 
+Host tools read `BASEBALL_DB_DSN`; none has a built-in default. Use the app
+role and replace the `<...>` placeholder with the value from `.env` (cmd
+reads a bare `<` as a redirect).
+
 ```bat
-set BASEBALL_DB_DSN=postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim
+set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
 
 python pipeline\etl\etl_historical_loader.py --season 2024 --dsn %BASEBALL_DB_DSN%
 python pipeline\etl\etl_sprint_speed_loader.py --season 2024
@@ -132,10 +150,10 @@ curl http://localhost:8000/openapi.json > openapi.json
 
 :: Pitcher similarity distribution (CORRECT ENDPOINT)
 :: Path: /api/similarity/pitcher/{pitcher_id}/{season}
-curl "http://localhost:8000/api/similarity/pitcher/605400/2024"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024"
 
 :: With histogram + top-N tuning:
-curl "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=30&top_n=10"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=30&top_n=10"
 ```
 
 > **cmd URL gotcha.**  `&` is a command separator in cmd.exe.  Either
@@ -148,7 +166,7 @@ The simulation loop is live (Phase 4 complete).  Kick off a 100-iteration
 run for a game:
 
 ```bat
-curl "http://localhost:8000/api/games/745000/simulate"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/simulate"
 :: Returns win probabilities, the score spread and every iteration's score.
 ```
 
@@ -160,10 +178,10 @@ button, or this call, plays ONE game and stores it in the replay file
 (`/data/replay.duckdb`, which only the app opens):
 
 ```bat
-curl -X POST "http://localhost:8000/api/games/745000/sample-game"
+curl -X POST -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/sample-game"
 :: Returns {game_pk, run_id, base_seed}; add ?base_seed=N to replay a game.
-curl "http://localhost:8000/api/games/745000/linescore"
-curl "http://localhost:8000/api/games/745000/plays"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/linescore"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/plays"
 :: Each play carries its inning, half, outs, batter, pitcher and the score after;
 :: "names" maps the player ids to names.
 ```
@@ -268,12 +286,13 @@ model still needs the run-conversion / calibration work to develop an edge.
 
 ```bat
 docker compose exec db pg_isready -U %POSTGRES_USER% -d %POSTGRES_DB%
-docker compose exec app alembic current
+:: The migrate service is the one service that logs in as the owner (SIM-443b).
+docker compose run --rm migrate alembic current
 
 docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT season, COUNT(*) AS pitch_count FROM raw.pitches GROUP BY season ORDER BY season;"
 
 :: SIM-160 bat-side coverage audit:
-set BASEBALL_DB_DSN=postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim
+set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
 python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md
 echo %ERRORLEVEL%
 ```
@@ -318,7 +337,7 @@ docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT COUNT
 docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT game_pk, source, odds_hash, COUNT(*) FROM raw.game_odds GROUP BY 1,2,3 HAVING COUNT(*) > 1 LIMIT 5;"
 
 :: If either gate fails, run SIM-157 backfill:
-set BASEBALL_DB_DSN=postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim
+set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
 python scripts\backfill_odds_hash.py
 ```
 
@@ -332,7 +351,7 @@ curl http://localhost:8000/ready
 :: Expected: {"status":"ready"}
 
 :: Pitcher similarity (CORRECT path-style URL):
-curl "http://localhost:8000/api/similarity/pitcher/605400/2024"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024"
 
 :: Surface inventory:
 curl http://localhost:8000/openapi.json > openapi.json
@@ -409,9 +428,9 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 
 :: CORRECT URL (path-style, /api/similarity, no /v1):
-curl "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=20&top_n=10"
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=20&top_n=10"
 
-set BASEBALL_DB_DSN=postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim
+set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
 python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md
 python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 ^
     --out docs\perf\2026-05-13-index-acceptance.md
@@ -422,13 +441,13 @@ make down
 ### 3.1 Single-line `&&`-chained equivalent
 
 ```bat
-git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb && copy .env.example .env && make dev-bg && make migrate && make test && pytest tests\unit\test_engine_build_smoke.py -v && curl http://localhost:8000/health && curl http://localhost:8000/ready && curl "http://localhost:8000/api/similarity/pitcher/605400/2024" && python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md && python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 --out docs\perf\2026-05-13-index-acceptance.md && make down
+git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb && copy .env.example .env && make dev-bg && make migrate && make test && pytest tests\unit\test_engine_build_smoke.py -v && curl http://localhost:8000/health && curl http://localhost:8000/ready && curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024" && python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md && python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 --out docs\perf\2026-05-13-index-acceptance.md && make down
 ```
 
 ### 3.2 Persisting `BASEBALL_DB_DSN`
 
 ```bat
-setx BASEBALL_DB_DSN "postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim"
+setx BASEBALL_DB_DSN "postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim"
 :: Open a NEW cmd window after setx — current windows don't see the new value.
 echo %BASEBALL_DB_DSN%
 ```
@@ -452,7 +471,12 @@ echo %BASEBALL_DB_DSN%
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |
 | Pitcher engine smoke fails with `import ot` | POT isn't installed — `pip install -r requirements.txt` (pins `POT>=0.9.5`, which ships a cp313 wheel). |
-| `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "baseball_user"` even though `.env` and `docker compose exec db env` agree | **Stale `postgres_data` volume.**  `POSTGRES_PASSWORD` only takes effect on the volume's first init.  Reset the password in-band:<br>`docker compose exec db psql -U baseball_user -d baseball_sim -c "ALTER USER baseball_user WITH PASSWORD 'baseball_pass';"`<br>If that ALSO fails: `docker compose exec -u postgres db psql -c "ALTER USER baseball_user WITH PASSWORD 'baseball_pass';"`<br>Nuclear option (loses all data): `docker compose down -v && docker compose up -d db && make migrate`. |
+| `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "baseball_user"` (or `"baseball_app"` / `"baseball_ro"`) even though `.env` and `docker compose exec db env` agree | **Stale `postgres_data` volume.**  `POSTGRES_PASSWORD` only takes effect on the volume's first init.  Reset the passwords in-band from `.env` over the db container's socket (no password needed):<br>`make db-roles ROTATE_ADMIN_PASSWORD=1`<br>It sets `baseball_user`'s password from `POSTGRES_PASSWORD` and both app roles' passwords from `.env`, and re-applies the grants.<br>Nuclear option (loses all data): `docker compose down -v && docker compose up -d db && make migrate`. |
+| `required variable POSTGRES_PASSWORD is missing a value` (or another secret) on any `docker compose` or `make` command | `.env` lacks a secret (SIM-443): `py scripts\gen_secrets.py --append .env`, then `py scripts\gen_secrets.py --check .env` exits 0. A worktree needs its own `.env`. |
+| `401 Unauthorized` from an `/api/` route | Every route needs a credential in every environment (SIM-443c): `X-API-Key: <key>` or `Authorization: Bearer <key>` with a key from `API_KEYS`, or the browser's login with `AUTH_PASSWORD`. `curl http://localhost:8000/health` shows `"auth_enforced"`. |
+| The SQL console answers 503 | The read-only pool is missing or refused (SIM-443e). `curl http://localhost:8000/health` shows `"sql_console"`; `docker compose logs app \| findstr SIM-443e` names the reason. Run `make db-roles` if `baseball_ro` does not exist yet. |
+| `permission denied for table ...` from the app or a loader | The table is outside `raw`/`sim`, or a new schema has no grants: add its lines to `db\roles\setup_roles.sql`, then `make db-roles`. |
+| Ofelia logs `No such container: baseball_simulator_v2-jobs-1` | The nightly data jobs exec into the `jobs` container (SIM-443b): `docker compose up -d jobs`, then `docker compose ps jobs` shows it healthy. A worktree's or a renamed project's container has another name: edit the `container =` lines in `deploy\ofelia\config.ini`. |
 
 ---
 

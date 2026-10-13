@@ -947,9 +947,13 @@ def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
     text = (_ROOT / "deploy" / "ofelia" / "config.ini").read_text(encoding="utf-8")
     assert '[job-run "nightly-closing-lines"]' not in text
     # SIM-519 Part D: the finals load replaced the old ingest chain's job.
-    assert text.index('[job-run "nightly-finals"]') < text.index(
+    # SIM-443b: it execs into the jobs container now, so no job is a job-run
+    # and no DSN (with its password) sits in the file.
+    assert text.index('[job-exec "nightly-finals"]') < text.index(
         '[job-exec "nightly-closing-lines"]'
     )
+    assert "job-run" not in text
+    assert "postgresql://" not in text
     job = text.split('[job-exec "nightly-closing-lines"]', 1)[1]
     assert "schedule = 0 30 9 * * *" in job
     assert "container = baseball_simulator_v2-app-1" in job

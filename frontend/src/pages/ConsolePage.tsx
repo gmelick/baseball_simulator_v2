@@ -169,8 +169,8 @@ export function ConsolePage(): React.ReactElement {
             </div>
             <div className={styles.toolbar}>
               <span className={styles.helper}>
-                SELECT-only · runs in a read-only transaction with a 5s timeout and a 1,000-row cap. raw.* only
-                (derived.*/sim.* live in DuckDB).
+                SELECT-only · runs on a read-only role with a 5s timeout and a 1,000-row cap. Write every
+                table as raw.&lt;table&gt;; any other schema or an unqualified name is rejected.
               </span>
             </div>
           </div>

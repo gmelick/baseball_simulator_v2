@@ -294,11 +294,24 @@ cd baseball_simulator
 # Configure environment
 cp .env.example .env
 
+# Fill in every secret .env lacks: the three Postgres passwords, the Redis
+# and Grafana passwords, SECRET_KEY, AUTH_PASSWORD and API_KEYS (SIM-443).
+# The stack has no default password: every compose command fails, naming
+# the variable, until each is set. The script prints key names only.
+python scripts/gen_secrets.py --append .env
+
 # Build + start all services (db, redis, app)
 make dev
 
 # Run database migrations (in a separate terminal once db is healthy)
 make migrate
+
+# A fresh Postgres volume creates the app roles (baseball_app, baseball_ro)
+# on first start. On an existing volume, create or refresh them:
+make db-roles
+
+# Host tools read BASEBALL_DB_DSN (no built-in default). Use the app role:
+export BASEBALL_DB_DSN="postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim"
 
 # Load historical Statcast data (2022–2024)
 python pipeline/etl/etl_historical_loader.py --seasons 2022 2023 2024

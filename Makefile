@@ -5,14 +5,17 @@
 # All commands are self-contained — no local Python install required.
 #
 # Acceptance gate (SIM-145):
-#   git clone <repo> && cp .env.example .env && make dev
+#   git clone <repo> && cp .env.example .env && make gen-secrets && make dev
 #   make migrate   (in separate terminal once db is healthy)
 #   make test
+#
+# SIM-443b: every compose command needs the secrets in .env (the passwords
+# have no defaults). `make gen-secrets` appends any that are missing.
 # =============================================================================
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke profile-computor engine-artifacts calibrate \
-        validate-props load-historical-odds ingest-catch-up live-logs
+        validate-props load-historical-odds ingest-catch-up live-logs db-roles gen-secrets
 
 # Default target — show help.
 ##
@@ -20,7 +23,7 @@
 ## Windows cmd.exe prints the literal "" instead of a blank line for
 ## `echo ""`, so the bash form was visually broken under Windows GNU Make.
 help:
-	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n''')"
+	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n  make gen-secrets       Append any missing secret to .env (passwords, keys)\n  make db-roles          Create/refresh the baseball_app + baseball_ro roles\n                         (ROTATE_ADMIN_PASSWORD=1 also resets baseball_user)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n''')"
 
 # ---------------------------------------------------------------------------
 # Docker Compose shortcuts
@@ -47,15 +50,29 @@ build:
 ## Apply all Alembic migrations to the PostgreSQL database.
 ## Uses the 'migrate' one-shot service defined in docker-compose.yml.
 ##
-## Cross-platform note: BASEBALL_DB_DSN is read from .env by the migrate
-## container (env_file in docker-compose.yml).  alembic env.py auto-coerces
-## the postgresql:// scheme to postgresql+psycopg2:// for SQLAlchemy.
-## This avoids the bash $${VAR:-default} substitution that doesn't expand
-## under cmd.exe on Windows GNU Make.
+## SIM-443b: the migrate service is the ONLY service that logs in as the
+## cluster owner (POSTGRES_USER); compose builds its DSN from POSTGRES_PASSWORD.
+## The app logs in as baseball_app, which cannot create or alter a table, so a
+## migration through the app service would fail. Naming the service enables
+## its `tools` profile (Compose v2). alembic env.py auto-coerces the
+## postgresql:// scheme to postgresql+psycopg2:// for SQLAlchemy.
 migrate: _require_env_file
 	@echo "Applying Alembic migrations..."
-	docker compose run --rm app alembic upgrade head
+	docker compose run --rm migrate
 	@echo "Migrations complete."
+
+## SIM-443b: create or refresh the two least-privilege roles (baseball_app,
+## baseball_ro) and their grants, inside the running db container. Idempotent:
+## it resets both passwords from .env every run. Add ROTATE_ADMIN_PASSWORD=1
+## to also set baseball_user's password from POSTGRES_PASSWORD. Run it after
+## the db service is healthy (a fresh volume runs it on first start).
+db-roles: _require_env_file
+	docker compose exec -T -e ROTATE_ADMIN_PASSWORD=$(or $(ROTATE_ADMIN_PASSWORD),0) db sh /opt/baseball/roles/setup_roles.sh
+
+## SIM-443b: append every missing secret to .env (a present key, even blank,
+## is left alone). It prints key names only, never a value.
+gen-secrets:
+	py scripts/gen_secrets.py --append .env
 
 # ---------------------------------------------------------------------------
 # Nightly batch jobs
@@ -228,4 +245,4 @@ nuke:
 ## prerequisite (see requirements.txt + Dockerfile), so introducing it
 ## here adds no new dependency.
 _require_env_file:
-	@py -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then edit .env with your database credentials.\n', file=sys.stderr) or sys.exit(1)"
+	@py -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then: py scripts/gen_secrets.py --append .env\n', file=sys.stderr) or sys.exit(1)"

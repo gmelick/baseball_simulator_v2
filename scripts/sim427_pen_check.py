@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import random
 import sys
 from collections import Counter
@@ -42,9 +41,9 @@ from pipeline.bullpen_usage import fetch_pen_for_game  # noqa: E402
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn()
 
 
 async def main_async(args: argparse.Namespace) -> int:

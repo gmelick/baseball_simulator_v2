@@ -88,9 +88,9 @@ _BLOCK_COL = 2
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn()
 
 
 class Recorder:

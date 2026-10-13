@@ -117,21 +117,14 @@ async def main_async(dsn, out_path):
         msg = (
             "\nERROR: password authentication failed against " + repr(masked) + ".\n\n"
             "The DSN reached the database, but the password is wrong.\n\n"
-            "Reset the password in-band (cmd.exe):\n"
-            '  docker compose exec db psql -U baseball_user -d baseball_sim -c "ALTER USER baseball_user WITH PASSWORD '
-            + chr(39)
-            + "baseball_pass"
-            + chr(39)
-            + ';"\n\n'
-            "If THAT fails too, try with the OS-trusted postgres user:\n"
-            '  docker compose exec -u postgres db psql -c "ALTER USER baseball_user WITH PASSWORD '
-            + chr(39)
-            + "baseball_pass"
-            + chr(39)
-            + ';"\n\n'
-            "Then verify the host-side DSN matches:\n"
+            # SIM-443b: the passwords live only in .env; the role script resets them.
+            "Reset the role passwords from .env (cmd.exe):\n"
+            "  make db-roles\n"
+            "  (add ROTATE_ADMIN_PASSWORD=1 to also reset baseball_user)\n\n"
+            "Then verify the host-side DSN matches the password in .env:\n"
             "  echo %BASEBALL_DB_DSN%\n"
-            "  (expected: postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim)\n\n"
+            "  (expected: postgresql://baseball_app:CHANGE_ME@localhost:5432/baseball_sim,\n"
+            "   with BASEBALL_APP_DB_PASSWORD from .env in place of CHANGE_ME)\n\n"
             f"Original asyncpg error: {e}\n"
         )
         sys.stderr.write(msg)

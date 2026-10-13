@@ -41,7 +41,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
-import os
 import random
 import sys
 from pathlib import Path
@@ -65,9 +64,9 @@ POOL_WINDOW = (2023, 2024, 2025, 2026)
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    ).replace("+asyncpg", "")
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn().replace("+asyncpg", "")
 
 
 def classify(lineup_pick: int | None, box_starter: int | None, pick_pitched: bool) -> str:

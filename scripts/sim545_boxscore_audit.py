@@ -55,15 +55,15 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from pipeline.db_dsn import require_dsn  # noqa: E402
 from pipeline.statcast_events import sql_outs_recorded, sql_steal_success  # noqa: E402
 from simulation.prop_validation import real_props_from_boxscore_rows  # noqa: E402
 
 log = logging.getLogger("sim545_boxscore_audit")
 
-DEFAULT_DSN = os.environ.get(
-    "BASEBALL_DB_DSN",
-    "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim",
-)
+#: SIM-443b: no default password. A blank value is resolved in main() through
+#: pipeline.db_dsn.require_dsn, which names the missing variable.
+DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 #: The batter stats the derivation produces, in report order.
 BATTER_STATS: tuple[str, ...] = ("H", "HR", "TB", "1B", "2B", "3B", "R", "SB", "RBI")
@@ -464,7 +464,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s  %(levelname)-8s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    return asyncio.run(run(parse_args(argv)))
+    args = parse_args(argv)
+    args.dsn = args.dsn or require_dsn()  # SIM-443b: fail loudly with no DSN
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":

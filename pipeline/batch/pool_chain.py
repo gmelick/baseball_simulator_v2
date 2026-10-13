@@ -106,8 +106,9 @@ The chain solver is the one ``scripts/sim429_chain_analysis.py`` carried
 
 from __future__ import annotations
 
-import os
 from typing import Any
+
+from pipeline.db_dsn import require_dsn
 
 #: The six pitch-pool classes, in the column order of a count matrix row.
 OUTCOMES: tuple[str, ...] = (
@@ -129,9 +130,6 @@ LABEL_CHECK_TOLERANCE = 0.005
 
 #: The channels the label check compares, in print order.
 LABEL_CHANNELS: tuple[str, ...] = ("k", "walk", "hbp", "pitches")
-
-#: The DSN the stack's containers use when ``BASEBALL_DB_DSN`` is not set.
-DEFAULT_PG_DSN = "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
 
 #: The ``events`` values that are not a plate appearance's end: a runner event
 #: (steal, pickoff, wild pitch, balk) or a feed note. An intentional walk is a
@@ -389,7 +387,8 @@ def _redact(text: str, dsn: str) -> str:
 def attach_pg(con: Any, dsn: str | None = None) -> None:
     """Attach Postgres read-only as the catalog ``pg``; a no-op when ``pg`` is attached.
 
-    ``dsn`` defaults to ``BASEBALL_DB_DSN``, then :data:`DEFAULT_PG_DSN`. The
+    ``dsn`` defaults to ``BASEBALL_DB_DSN``; with neither, the attach raises
+    ``RuntimeError`` naming the variable (SIM-443b: no default password). The
     attach works on a read-only DuckDB connection. An attach failure raises
     ``RuntimeError`` with the DSN's password redacted.
     """
@@ -398,7 +397,7 @@ def attach_pg(con: Any, dsn: str | None = None) -> None:
     ).fetchone()[0]
     if attached:
         return
-    dsn = dsn or os.environ.get("BASEBALL_DB_DSN") or DEFAULT_PG_DSN
+    dsn = dsn or require_dsn()
     try:
         con.execute("INSTALL postgres; LOAD postgres;")
         con.execute(f"ATTACH '{dsn}' AS pg (TYPE postgres, READ_ONLY);")

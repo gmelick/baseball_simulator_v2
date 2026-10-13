@@ -41,8 +41,10 @@ DESIGN DECISIONS (the SIM-327 acceptance criteria, see the audit ticket row)
 from __future__ import annotations
 
 import statistics
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -235,6 +237,105 @@ class GameSimSummary:
             ci_method="normal",
             inning_grids=inning_grids,
         )
+
+    def to_json(self) -> dict[str, Any]:
+        """A JSON-ready dict of the summary (SIM-443f: the Redis cache's form).
+
+        The shape equals ``api.serialization.to_jsonable(summary)``: the arrays
+        as int lists, each interval as a dict, ``simulated_at`` as ISO-8601 text
+        and each inning grid as a pair of lists.
+        """
+        grids = self.inning_grids
+        return {
+            "n_iterations": int(self.n_iterations),
+            "home_win_pct": float(self.home_win_pct),
+            "away_win_pct": float(self.away_win_pct),
+            "tie_pct": float(self.tie_pct),
+            "home_score_mean": float(self.home_score_mean),
+            "away_score_mean": float(self.away_score_mean),
+            "total_score_mean": float(self.total_score_mean),
+            "home_score_median": float(self.home_score_median),
+            "away_score_median": float(self.away_score_median),
+            "total_score_median": float(self.total_score_median),
+            "home_scores": [int(v) for v in self.home_scores],
+            "away_scores": [int(v) for v in self.away_scores],
+            "total_scores": [int(v) for v in self.total_scores],
+            "home_win_ci": _ci_to_json(self.home_win_ci),
+            "away_win_ci": _ci_to_json(self.away_win_ci),
+            "home_score_ci": _ci_to_json(self.home_score_ci),
+            "away_score_ci": _ci_to_json(self.away_score_ci),
+            "total_score_ci": _ci_to_json(self.total_score_ci),
+            "simulated_at": self.simulated_at.isoformat(),
+            "confidence_level": float(self.confidence_level),
+            "ci_method": str(self.ci_method),
+            "inning_grids": (
+                None if grids is None else [[list(home), list(away)] for home, away in grids]
+            ),
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> GameSimSummary:
+        """The inverse of :meth:`to_json`. A missing or bad key raises.
+
+        The three score arrays come back as ``int64`` arrays and each inning
+        grid as a ``(home, away)`` tuple, as :meth:`from_results` builds them.
+        """
+        raw_grids = data.get("inning_grids")
+        grids: list[tuple[list[int | None], list[int | None]]] | None = None
+        if raw_grids is not None:
+            grids = [(list(home), list(away)) for home, away in raw_grids]
+        return cls(
+            n_iterations=int(data["n_iterations"]),
+            home_win_pct=float(data["home_win_pct"]),
+            away_win_pct=float(data["away_win_pct"]),
+            tie_pct=float(data["tie_pct"]),
+            home_score_mean=float(data["home_score_mean"]),
+            away_score_mean=float(data["away_score_mean"]),
+            total_score_mean=float(data["total_score_mean"]),
+            home_score_median=float(data["home_score_median"]),
+            away_score_median=float(data["away_score_median"]),
+            total_score_median=float(data["total_score_median"]),
+            home_scores=np.asarray(data["home_scores"], dtype=np.int64),
+            away_scores=np.asarray(data["away_scores"], dtype=np.int64),
+            total_scores=np.asarray(data["total_scores"], dtype=np.int64),
+            home_win_ci=_ci_from_json(data["home_win_ci"]),
+            away_win_ci=_ci_from_json(data["away_win_ci"]),
+            home_score_ci=_ci_from_json(data["home_score_ci"]),
+            away_score_ci=_ci_from_json(data["away_score_ci"]),
+            total_score_ci=_ci_from_json(data["total_score_ci"]),
+            simulated_at=_utc_from_iso(str(data["simulated_at"])),
+            confidence_level=float(data.get("confidence_level", 0.95)),
+            ci_method=str(data.get("ci_method", "normal")),
+            inning_grids=grids,
+        )
+
+
+def _ci_to_json(ci: ConfidenceInterval) -> dict[str, Any]:
+    """One interval as the dict ``to_jsonable`` writes (no ``half_width``)."""
+    return {
+        "point": float(ci.point),
+        "low": float(ci.low),
+        "high": float(ci.high),
+        "level": float(ci.level),
+        "method": str(ci.method),
+    }
+
+
+def _ci_from_json(data: Mapping[str, Any]) -> ConfidenceInterval:
+    """The inverse of :func:`_ci_to_json`."""
+    return ConfidenceInterval(
+        point=float(data["point"]),
+        low=float(data["low"]),
+        high=float(data["high"]),
+        level=float(data.get("level", 0.95)),
+        method=str(data.get("method", "normal")),
+    )
+
+
+def _utc_from_iso(text: str) -> datetime:
+    """Read ISO-8601 text; the reader takes a time with no zone as UTC."""
+    stamp = datetime.fromisoformat(text)
+    return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
 
 
 def _proportion_ci(p: float, n: int, z: float, level: float) -> ConfidenceInterval:

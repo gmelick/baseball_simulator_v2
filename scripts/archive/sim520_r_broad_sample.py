@@ -39,7 +39,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import os
 import sys
 import time
 from collections import defaultdict
@@ -68,9 +67,9 @@ _POS_NUM_TO_NAME = {3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn()
 
 
 async def _candidate_games(limit: int) -> list[int]:

@@ -67,9 +67,9 @@ def _log(msg: str) -> None:
 
 
 def main() -> int:
-    dsn = os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    dsn = require_dsn()
     t0 = time.time()
 
     _log("=== 1. migration 0023 ===")

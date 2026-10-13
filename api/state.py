@@ -26,6 +26,7 @@ import os
 import time
 from collections.abc import Callable, Iterable
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import asyncpg
 import redis.asyncio as aioredis
@@ -468,7 +469,13 @@ async def open_redis_cache(redis_url: str) -> tuple[aioredis.Redis, RedisSimilar
 # ---------------------------------------------------------------------------
 
 
-async def open_pg_pool(dsn: str, *, min_size: int = 2, max_size: int = 10) -> asyncpg.Pool:
+async def open_pg_pool(
+    dsn: str,
+    *,
+    min_size: int = 2,
+    max_size: int = 10,
+    server_settings: dict[str, str] | None = None,
+) -> asyncpg.Pool:
     """
     Open an asyncpg pool against the project's PostgreSQL DSN.
 
@@ -476,10 +483,34 @@ async def open_pg_pool(dsn: str, *, min_size: int = 2, max_size: int = 10) -> as
     ``pipeline.live.live_ingestion_pipeline.LiveIngestionPipeline.start()``.
     Kept here as a small helper so the lifespan in ``api.main`` stays
     declarative and the sizing knobs live in one place.
+
+    ``server_settings`` sets session parameters on every connection of the
+    pool (SIM-443e: the SQL console's pool sets ``search_path`` to ``raw``).
     """
-    pool = await asyncpg.create_pool(dsn, min_size=min_size, max_size=max_size)
+    pool = await asyncpg.create_pool(
+        dsn, min_size=min_size, max_size=max_size, server_settings=server_settings
+    )
     if pool is None:
         # asyncpg.create_pool returns None only if init=False is passed;
         # we never pass it. This branch is defensive only.
         raise RuntimeError("asyncpg.create_pool returned None")
     return pool
+
+
+def redact_dsn(dsn: str) -> str:
+    """Return ``dsn`` with its password masked, for a log line (SIM-443e).
+
+    The result reads ``scheme://user:***@host:port/db``. Any query string is
+    dropped, since it can carry a password too. A DSN that does not parse
+    returns ``<redacted>``, so a malformed value never reaches the log.
+    """
+    try:
+        parts = urlsplit(dsn)
+        if not parts.scheme or not parts.hostname:
+            return "<redacted>"
+        user = parts.username or ""
+        auth = f"{user}:***@" if parts.password is not None else (f"{user}@" if user else "")
+        port = f":{parts.port}" if parts.port is not None else ""
+        return f"{parts.scheme}://{auth}{parts.hostname}{port}{parts.path}"
+    except Exception:  # noqa: BLE001 — a bad DSN must never raise in a log call
+        return "<redacted>"

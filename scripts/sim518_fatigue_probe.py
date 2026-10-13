@@ -249,9 +249,9 @@ async def _k_lines(game_pks: list[int]) -> dict[tuple[int, int], float]:
     try:
         import asyncpg
 
-        dsn = os.environ.get(
-            "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-        )
+        from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+        dsn = require_dsn()
         conn = await asyncpg.connect(dsn, timeout=30)
     except Exception as exc:  # noqa: BLE001 — the line is optional
         print(f"  strikeout lines unavailable ({type(exc).__name__}: {exc})")

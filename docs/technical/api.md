@@ -49,7 +49,8 @@ Boot-time resource builders for app.state: the 11 similarity engines, the win-pr
 | `load_calibration_map(path=None)` | Convenience wrapper returning a CalibrationMap (or IDENTITY_CALIBRATION) from a persisted report. | `tests/unit/test_ml_engines_sim361.py (test/legacy only — no production caller; api/main.py does the same thing inline so the loaded report can also feed apply_calibration_to_engines)` | `load_calibration_report`<br>`simulation.win_probability.CalibrationMap.from_report` |
 | `make_pg_name_resolver(pool)` | Builds an async closure resolving a set of player_ids to full names in one round trip against raw.players. | `api.main.lifespan (assigned to app.state.player_name_resolver)` | `asyncpg pool.fetch on raw.players` |
 | `open_redis_cache(redis_url)` | Opens an aioredis client, pings it (fail-fast), and wraps it in RedisSimilarityCache. | `api.main.lifespan` | `redis.asyncio.from_url` |
-| `open_pg_pool(dsn, min_size=2, max_size=10)` | Opens an asyncpg connection pool. | `api.main.lifespan (main pool and, when BASEBALL_DB_RO_DSN is set, the read-only pool)` | `asyncpg.create_pool` |
+| `open_pg_pool(dsn, min_size=2, max_size=10, server_settings=None)` | Opens an asyncpg connection pool. `server_settings` sets session parameters on every connection (SIM-443e: the SQL console's pool sets `search_path` to `raw`). | `api.main.lifespan (main pool and, when BASEBALL_DB_RO_DSN is set, the read-only pool)` | `asyncpg.create_pool` |
+| `redact_dsn(dsn)` | Returns the DSN as `scheme://user:***@host:port/db` for a log line: the password masked, any query string dropped, `<redacted>` when the DSN does not parse (SIM-443e). | `api.main.lifespan (the one INFO line that names the console pool)` | `urllib.parse.urlsplit` |
 
 **Depends on:** `similarity.engines.* (11 engine classes, lazily imported)`, `similarity.similarity_calibration.CalibrationReport`, `simulation.win_probability.CalibrationMap / IDENTITY_CALIBRATION`, `asyncpg`, `redis.asyncio`
 
@@ -327,17 +328,19 @@ The single shared read-only SQL validation + execution path used by BOTH the SQL
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `validate_read_only_sql(sql, max_len=MAX_SQL_LEN)` | Strips comments/string/dollar/quoted-identifier noise, rejects empty/oversized input, anything not starting with SELECT/WITH, any forbidden write/DDL/session keyword anywhere (even inside a CTE), multiple statements, and a blocklist of dangerous functions (including inside double-quoted identifiers). Returns the executable (semicolon-stripped) SQL string. | `run_read_only_sql (this file)`<br>`tests/unit/test_sql_safety.py` | `_strip_sql_noise` |
+| `validate_read_only_sql(sql, max_len=MAX_SQL_LEN)` | Strips comments/string/dollar/quoted-identifier noise, rejects empty/oversized input, anything not starting with SELECT/WITH, any forbidden write/DDL/session keyword anywhere (even inside a CTE), multiple statements, and a blocklist of dangerous functions (including inside double-quoted identifiers). Last, it runs the relation allowlist. Returns the executable (semicolon-stripped) SQL string. | `run_read_only_sql (this file)`<br>`tests/unit/test_sql_safety.py` | `_strip_sql_noise`<br>`validate_relation_allowlist` |
+| `validate_relation_allowlist(sql)` | SIM-443d. Parses the query with sqlglot (Postgres dialect) and rejects it unless every table is `raw.<name>` or a CTE in scope at that point (a non-recursive CTE sees only the CTEs before it). Also rejects: a parse error, more than one statement, a statement that is not a query, `SELECT ... INTO`, the `TABLE name` shorthand, a three-part name, and any function in a FROM clause (plain or LATERAL) that is not on `_TABLE_FUNCTIONS_ALLOWED`. Fails closed. | `validate_read_only_sql` | `sqlglot.parse`<br>`_ctes_in_scope`<br>`_strip_sql_noise` |
+| `check_read_only_role(pool)` / `ReadOnlyRoleCheck` | SIM-443e. One query reads the pool's role, whether it is a superuser, whether it can use the `sim` schema, and whether it can INSERT into / SELECT from `raw.pitches`. `acceptable` is true when it is not a superuser, has no `sim` usage and no `raw` insert. | `api.main.lifespan` | `pool.fetchrow` |
 | `run_read_only_sql(pool, sql, max_rows=DEFAULT_MAX_ROWS, timeout_ms=DEFAULT_TIMEOUT_MS)` | Validates the query, wraps it in a row-capped subquery, executes it inside a read-only transaction with SET LOCAL statement_timeout, and returns a JSON-safe {columns, rows, row_count, truncated, elapsed_ms} payload. | `api/routes/sql_runner.py run_sql`<br>`api/routes/ai_assistant.py _run_conversation` | `validate_read_only_sql`<br>`_execute`<br>`api.serialization.to_jsonable` |
 | `_strip_sql_noise(sql, keep_identifiers=False)` | Blanks out comments and string literals (and, unless keep_identifiers, quoted identifiers) while preserving character offsets, so keyword/function scans never trip on literal text — but preserves quoted-identifier TEXT when keep_identifiers=True because a quoted identifier is executable code (Postgres folds unquoted names to lower case, so \"pg_read_file\" IS pg_read_file). | `validate_read_only_sql (called twice: once blanking identifiers for the keyword scan, once preserving them for the dangerous-function scan)` | — |
 
-**Depends on:** `api.serialization.to_jsonable`
+**Depends on:** `api.serialization.to_jsonable`, `sqlglot` (imported at module top: a missing package fails the boot)
 
-**Used by:** `api.routes.sql_runner`, `api.routes.ai_assistant`
+**Used by:** `api.routes.sql_runner`, `api.routes.ai_assistant`, `api.main.lifespan (check_read_only_role)`
 
 **Environment flags read here:** `SQL_RUNNER_MAX_ROWS`, `SQL_RUNNER_TIMEOUT_MS`, `SQL_RUNNER_MAX_LEN`
 
-> **Notes for anyone changing this file:** SECURITY-CRITICAL FILE (documented inline as SIM-442): the double-quoted-identifier handling was previously a real vulnerability — blanking a quoted identifier's contents let `SELECT \"pg_read_file\"('/etc/passwd')` slip past every entry in _DANGEROUS_TOKENS because the scanned copy no longer contained the function name, while the ORIGINAL (unblanked) string still executed. Any future edit to _strip_sql_noise or the two validate_read_only_sql scan passes must preserve the keep_identifiers=True pass for the dangerous-function scan or this bug reopens. raw.* (Postgres) is the ONLY reachable schema — derived.*/sim.* live in a separate DuckDB process and simply cannot be joined here, which is why the assistant's system prompt and the schema browser only expose raw.*. _HARD_MAX_ROWS/_HARD_MAX_TIMEOUT_MS are ceilings the env-var tunables can never exceed even if misconfigured.
+> **Notes for anyone changing this file:** SECURITY-CRITICAL FILE (documented inline as SIM-442): the double-quoted-identifier handling was previously a real vulnerability — blanking a quoted identifier's contents let `SELECT \"pg_read_file\"('/etc/passwd')` slip past every entry in _DANGEROUS_TOKENS because the scanned copy no longer contained the function name, while the ORIGINAL (unblanked) string still executed. Any future edit to _strip_sql_noise or the two validate_read_only_sql scan passes must preserve the keep_identifiers=True pass for the dangerous-function scan or this bug reopens. raw.* is the ONLY readable schema, and two layers enforce it (SIM-443d/e): the relation allowlist rejects any other table before the database is touched, and the console's pool runs as the baseball_ro role, which can SELECT raw.* and nothing else. Postgres also holds a `sim` schema (sim.sim_runs); the allowlist rejects it like any other schema. An unqualified name is rejected even though the pool's search_path is raw, so the rule never depends on a session setting. A new set-returning function in FROM needs a line in `_TABLE_FUNCTIONS_ALLOWED`; never widen the rule to accept unknown functions. _HARD_MAX_ROWS/_HARD_MAX_TIMEOUT_MS are ceilings the env-var tunables can never exceed even if misconfigured.
 
 ---
 
@@ -347,10 +350,10 @@ POST /api/sql/run — the Data Lab SQL Console's HTTP endpoint. A thin wrapper t
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `run_sql(request, body)` | Runs body.sql through run_read_only_sql against the read-only pool (or the main pool) and maps SqlValidationError / any DB exception to a 400 with the message verbatim in detail. | `frontend SQL Console` | `_ro_pool`<br>`api.routes.sql_safety.run_read_only_sql` |
-| `_ro_pool(request)` | Prefers app.state.pg_pool_ro (a GRANT-SELECT-only role) if attached, else falls back to the main pool (still executed inside a read-only transaction). | `run_sql` | `api.routes._common._get_pool` |
+| `run_sql(request, body)` | Runs body.sql through run_read_only_sql on the read-only pool and maps SqlValidationError / any DB exception to a 400 with the message verbatim in detail. | `frontend SQL Console` | `_ro_pool`<br>`api.routes.sql_safety.run_read_only_sql` |
+| `_ro_pool(request)` | Returns app.state.pg_pool_ro (the baseball_ro pool the lifespan checked), or raises 503 with `RO_POOL_UNAVAILABLE_DETAIL`. SIM-443e: no fallback to the main pool, whose role can write. | `run_sql` | `api.routes.sql_safety.RO_POOL_UNAVAILABLE_DETAIL` |
 
-**Depends on:** `api.auth.require_auth`, `api.routes._common`, `api.routes.sql_safety`
+**Depends on:** `api.auth.require_auth`, `api.routes.sql_safety`
 
 **Used by:** `api.main.create_app`
 
@@ -416,7 +419,8 @@ The optional (ANTHROPIC_API_KEY-gated) natural-language Data Lab assistant. Stre
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
 | `status_probe(request)` | GET /api/assistant/status — reports whether app.state.anthropic_client is set (configured:true/false) and the model name, so the UI can show a setup card instead of failing a call. | `frontend Data Lab assistant panel (on mount)` | `_client` |
-| `ask(request, body)` | POST /api/assistant/ask — 503 JSON if unconfigured, else returns a StreamingResponse of SSE frames from _run_conversation. | `frontend assistant chat input` | `_client`<br>`_run_conversation` |
+| `ask(request, body)` | POST /api/assistant/ask — 503 JSON if unconfigured or when the read-only pool is not open (SIM-443e), else returns a StreamingResponse of SSE frames from _run_conversation. | `frontend assistant chat input` | `_client`<br>`_pool`<br>`_run_conversation` |
+| `_pool(request)` | Returns app.state.pg_pool_ro or None. SIM-443e: no fallback to the main pool. | `ask`<br>`_run_conversation` | — |
 | `_run_conversation(request, body)` | Drives up to MAX_STEPS turns of the Anthropic tool-use loop: sends the system prompt + schema catalog + RUN_SQL_TOOL, for each tool_use block runs the SQL through api.routes.sql_safety.run_read_only_sql (validation errors and DB errors are fed back to the model as a tool_result rather than raised), and yields typed SSE frames (text/query/result/error/done) as it goes. | `ask` | `client.messages.create (anthropic SDK)`<br>`api.routes.sql_safety.run_read_only_sql`<br>`_sse`<br>`_block_to_dict` |
 
 **Depends on:** `api.auth.require_auth (on /ask only)`, `api.routes.sql_safety`, `anthropic SDK (only via app.state.anthropic_client, never imported directly here)`

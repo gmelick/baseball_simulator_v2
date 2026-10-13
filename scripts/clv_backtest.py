@@ -494,6 +494,7 @@ from betting.clv_engine import (  # noqa: E402
     run_line_is_pair,
     total_over_under_edge_report,
 )
+from pipeline.db_dsn import require_dsn  # noqa: E402
 from pipeline.odds_provider import (  # noqa: E402
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
@@ -531,10 +532,9 @@ from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap  # n
 
 log = logging.getLogger("clv_backtest")
 
-DEFAULT_DSN = os.environ.get(
-    "BASEBALL_DB_DSN",
-    "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim",
-)
+#: SIM-443b: no default password. A blank value is resolved in main() through
+#: pipeline.db_dsn.require_dsn, which names the missing variable.
+DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 DEFAULT_OUTPUT = os.environ.get("CLV_BACKTEST_PATH", "/data/clv_backtest.json")
 #: SIM-538: mirrors validate_props.py's DEFAULT_CALIBRATION_PATH — the SAME
@@ -4104,7 +4104,10 @@ async def run(args: argparse.Namespace) -> int:
     except Exception:
         # SIM-454: the parent cannot reach Postgres. That used to escape as a raw
         # traceback out of asyncio.run; name it and exit on a documented code.
-        log.exception("Could not read the game list from Postgres at %r.", args.dsn)
+        log.exception(
+            "Could not read the game list from Postgres at %r.",
+            args.dsn.rsplit("@", 1)[-1],  # SIM-443b: the host only, never the password
+        )
         if duck is not None:
             try:
                 duck.close()
@@ -4183,7 +4186,8 @@ async def run(args: argparse.Namespace) -> int:
         "markets": args.markets,
         "base_seed": int(args.base_seed),
         "workers": workers,
-        "dsn": args.dsn,
+        # SIM-443b: the report keeps the host and database, never the password.
+        "dsn": args.dsn.rsplit("@", 1)[-1],
         "duckdb": args.duckdb,
         "park_factors_available": duck is not None,
         "factory_ref": _FACTORY_REF,
@@ -4416,6 +4420,7 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
+    args.dsn = args.dsn or require_dsn()  # SIM-443b: fail loudly with no DSN
     return asyncio.run(run(args))
 
 

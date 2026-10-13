@@ -272,9 +272,11 @@ async def lifespan(app: FastAPI):
     #   - app.state.anthropic_client : the AI assistant's LLM client, created
     #     ONLY when ANTHROPIC_API_KEY is set (best-effort; None otherwise so the
     #     assistant route 503s and /api/assistant/status reports configured:false).
-    #   - app.state.pg_pool_ro       : an optional dedicated read-only Postgres
-    #     pool (BASEBALL_DB_RO_DSN → a GRANT-SELECT-only role) for the SQL runner
-    #     + assistant; when unset the runner uses pg_pool inside a read-only txn.
+    #   - app.state.pg_pool_ro       : the read-only Postgres pool
+    #     (BASEBALL_DB_RO_DSN → the baseball_ro role, SELECT on raw.* only) for
+    #     the SQL console + assistant. SIM-443e: it is the ONLY pool they use.
+    #     The lifespan checks the role and refuses a superuser or a role that
+    #     can write; with no acceptable pool the two routes answer 503.
     # Neither is in _REQUIRED_ENV_VARS — absence never blocks boot (mirrors
     # ODDS_API_KEY / the calibration report).
     # ----------------------------------------------------------------
@@ -300,18 +302,58 @@ async def lifespan(app: FastAPI):
             "(SQL console + analytics still work)."
         )
 
+    # SIM-443e: open the SQL console's read-only pool, check its role, and
+    # keep it only when the role is safe. No fallback to the main pool.
+    from api.routes.sql_safety import ReadOnlyRoleCheck, check_read_only_role
+    from api.state import redact_dsn
+
     app.state.pg_pool_ro = None
-    ro_dsn = os.environ.get("BASEBALL_DB_RO_DSN")
-    if ro_dsn:
+    app.state.sql_console_role = None
+    ro_dsn = os.environ.get("BASEBALL_DB_RO_DSN", "").strip()
+    if not ro_dsn:
+        log.warning(
+            "SIM-443e: BASEBALL_DB_RO_DSN is unset; the SQL console and the assistant answer 503."
+        )
+    else:
+        ro_pool = None
+        role_check: ReadOnlyRoleCheck | None = None
         try:
-            app.state.pg_pool_ro = await open_pg_pool(ro_dsn)
-            log.info("SIM-439: opened dedicated read-only SQL pool (BASEBALL_DB_RO_DSN).")
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "SIM-439: BASEBALL_DB_RO_DSN set but pool open failed (%s); "
-                "SQL runner falls back to the main pool in a read-only transaction.",
+            ro_pool = await open_pg_pool(ro_dsn, server_settings={"search_path": "raw"})
+            role_check = await check_read_only_role(ro_pool)
+        except Exception as exc:  # noqa: BLE001 — a driver message can echo the DSN
+            log.error(
+                "SIM-443e: the SQL console's read-only pool failed to open or to "
+                "check its role (%s); the console answers 503.",
                 type(exc).__name__,
             )
+            role_check = None
+        if role_check is not None and not role_check.acceptable:
+            log.error(
+                "SIM-443e: refused the SQL console pool: role %s is not read-only "
+                "(%s); the console answers 503.",
+                role_check.role,
+                role_check.flags(),
+            )
+        if role_check is None or not role_check.acceptable:
+            if ro_pool is not None:
+                try:
+                    await ro_pool.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            app.state.pg_pool_ro = ro_pool
+            app.state.sql_console_role = role_check.role
+            log.info(
+                "SIM-443e: SQL console read-only pool open as %s (superuser=False) at %s",
+                role_check.role,
+                redact_dsn(ro_dsn),
+            )
+            if not role_check.raw_select:
+                log.warning(
+                    "SIM-443e: role %s cannot SELECT raw.pitches; console queries "
+                    "will fail until the grants are applied (make db-roles).",
+                    role_check.role,
+                )
 
     # ----------------------------------------------------------------
     # Phase 5 (SIM-354): live ingestion pipeline.
@@ -917,6 +959,12 @@ def create_app() -> FastAPI:
             "status": "ok",
             "phase": "6",
             "environment": os.environ.get("ENVIRONMENT", "development"),
+            # SIM-443e: whether the SQL console's read-only pool is open, and as
+            # which database role. No DSN, no password.
+            "sql_console": {
+                "ro_pool": getattr(app.state, "pg_pool_ro", None) is not None,
+                "role": getattr(app.state, "sql_console_role", None),
+            },
         }
 
     @app.get("/ready", tags=["ops"], summary="Readiness probe")

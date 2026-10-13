@@ -1550,7 +1550,8 @@ async def get_games_on_date(
     )
     if use_cache and cache is not None:
         try:
-            cache.set(db_key, resp.model_dump(), POOL_QUERY_TTL_S)
+            # SIM-443f: the Redis cache stores JSON only, so dump the dates as text.
+            cache.set(db_key, resp.model_dump(mode="json"), POOL_QUERY_TTL_S)
         except Exception as exc:  # noqa: BLE001
             log.warning("listing cache write failed for %s: %s", db_key, exc)
     return resp

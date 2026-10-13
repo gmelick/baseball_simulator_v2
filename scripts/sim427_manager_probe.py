@@ -291,9 +291,9 @@ def install(machine: Any, rec: Rec, state: Any) -> None:
 async def _pg_connect() -> Any:
     import asyncpg
 
-    dsn = os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    dsn = require_dsn()
     return await asyncpg.connect(dsn, timeout=30)
 
 

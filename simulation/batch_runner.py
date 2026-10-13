@@ -79,6 +79,7 @@ picklable no-DB factory over a synthetic bundle) stay green.
 from __future__ import annotations
 
 import importlib
+import logging
 import multiprocessing
 import os
 import threading
@@ -91,9 +92,12 @@ from typing import Any
 
 import numpy as np
 
+from simulation import cache_codec
 from simulation.prop_distributions import PropDistributionSet
 from simulation.results import BoxScore, GameSimResult, GameSimSummary
 from simulation.sim_loop import simulate_game
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # TTL constants (SIM-113 caching spirit)
@@ -611,20 +615,21 @@ class InMemoryCache(SimCache):
 class RedisCache(SimCache):
     """A Redis-backed TTL cache (the production backend).
 
-    Wraps a live ``redis.Redis`` client; values are pickled (the summary is a
-    dataclass with numpy arrays, not JSON-trivial).  Constructed only by
-    :func:`make_cache` AFTER a ``ping()`` confirms a live server, so the runner
-    never hard-fails on a missing Redis.  Any per-op Redis error degrades to a
-    miss / drop rather than propagating -- the batch must not die because the
-    cache hiccuped.
+    Wraps a live ``redis.Redis`` client. SIM-443f: every value is stored as
+    JSON through :mod:`simulation.cache_codec`, never as a pickle. A pickle
+    load runs code, so a pickle in Redis would let anyone who can write to
+    Redis run code in the API. The key prefix is ``sim443:``: the cache never
+    reads a value the old code pickled under ``sim332:``.
+
+    Constructed only by :func:`make_cache` AFTER a ``ping()`` confirms a live
+    server, so the runner never hard-fails on a missing Redis.  Any per-op
+    Redis error degrades to a miss / drop rather than propagating -- the batch
+    must not die because the cache hiccuped.
     """
 
-    def __init__(self, client: Any, *, prefix: str = "sim332:"):
-        import pickle  # local import: only needed on the live-Redis path.
-
+    def __init__(self, client: Any, *, prefix: str = "sim443:"):
         self._client = client
         self._prefix = prefix
-        self._pickle = pickle
 
     def _k(self, key: str) -> str:
         return f"{self._prefix}{key}"
@@ -634,16 +639,17 @@ class RedisCache(SimCache):
             raw = self._client.get(self._k(key))
         except Exception:
             return None
-        if raw is None:
-            return None
-        try:
-            return self._pickle.loads(raw)
-        except Exception:
-            return None
+        return cache_codec.decode(raw)
 
     def set(self, key: str, value: Any, ttl_s: int) -> None:
         try:
-            self._client.set(self._k(key), self._pickle.dumps(value), ex=int(ttl_s))
+            text = cache_codec.encode(value)
+        except (TypeError, ValueError) as exc:
+            # A value JSON cannot hold is not cached; the caller recomputes.
+            log.warning("sim cache: skipped %s (not JSON: %s)", key, type(exc).__name__)
+            return None
+        try:
+            self._client.set(self._k(key), text, ex=int(ttl_s))
         except Exception:
             return None
 

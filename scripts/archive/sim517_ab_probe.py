@@ -81,9 +81,9 @@ _CENTRES = {"BB_PA": 0.08500, "HBP_PA": 0.01130, "STEAL_ATT_OPP_2B": 0.02140}
 
 
 def _dsn() -> str:
-    return os.environ.get(
-        "BASEBALL_DB_DSN", "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+
+    return require_dsn()
 
 
 def _install(machine: Any, pc: dict[str, int]) -> None:

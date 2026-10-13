@@ -538,8 +538,10 @@ jobs:
           # except this workflow file (it's allowed to mention "secret" in
           # comments referencing GitHub Secrets) and the example template.
           # Exits 1 if any HIGH-confidence pattern is found.
+          # SIM-443b: case-insensitive (PASSWORD = "..." counts too). A line
+          # that carries `nosec` is a reviewed test-only literal and is skipped.
           set +e
-          MATCHES=$(grep -nIE \
+          MATCHES=$(grep -niIE \
             -e 'password\s*=\s*["'\''][^"'\'' $][^"'\'']{2,}["'\'']' \
             -e 'api[_-]?key\s*=\s*["'\''][A-Za-z0-9_-]{16,}["'\'']' \
             -e 'secret\s*=\s*["'\''][A-Za-z0-9_-]{16,}["'\'']' \
@@ -553,7 +555,7 @@ jobs:
             --exclude='*.lock' \
             --exclude='.env.example' \
             --exclude='*.md' \
-            -r .)
+            -r . | grep -v 'nosec')
           set -e
           if [ -n "$MATCHES" ]; then
             echo "::error::SIM-153: literal credential(s) found in source:"
@@ -561,6 +563,38 @@ jobs:
             exit 1
           fi
           echo "OK — no literal credentials detected."
+
+      - name: Reject the retired default database password
+        run: |
+          # SIM-443b: the old default Postgres password must not come back in any
+          # tracked file. docs/ and CHANGES.md keep it as history. The needle is
+          # built from two halves, so this file does not match itself.
+          NEEDLE="baseball""_pass"
+          if git grep -nI "$NEEDLE" -- ':!docs/' ':!CHANGES.md'; then
+            echo "::error::SIM-443b: the retired default password is in a tracked file (above). Read the DSN from BASEBALL_DB_DSN or compose it from .env."
+            exit 1
+          fi
+          echo "OK — the retired default password appears nowhere outside docs/ and CHANGES.md."
+
+      - name: Reject a Postgres DSN with a literal password
+        run: |
+          # SIM-443b: a postgres:// or postgresql:// DSN outside docs/, CHANGES.md
+          # and tests/ may carry only a placeholder password: CHANGE_ME..., a
+          # ${VAR}, a <text>, ***, pass, password or pw (any case). Each DSN is
+          # checked on its own (git grep -o), so a placeholder on the same line
+          # cannot hide a real one. compose's ${VAR:?message} form contains
+          # spaces, so it never matches the DSN pattern.
+          set +e
+          HITS=$(git grep -nIoE 'postgres(ql)?(\+[a-z0-9]+)?://[^:/@[:space:]"'\'']+:[^@[:space:]"'\'']+@' \
+                   -- ':!docs/' ':!CHANGES.md' ':!tests/' \
+                 | grep -viE '://[^:/@[:space:]]+:(CHANGE_ME[^@]*|\$\{[^}@]*\}|<[^>@]*>|\*\*\*|pass|password|pw)@$')
+          set -e
+          if [ -n "$HITS" ]; then
+            echo "::error::SIM-443b: a DSN with a literal password (file:line:dsn-prefix):"
+            echo "$HITS" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'
+            exit 1
+          fi
+          echo "OK — every Postgres DSN outside docs/ and tests/ carries a placeholder password."
 
       - name: Verify .env is in .gitignore
         run: |
