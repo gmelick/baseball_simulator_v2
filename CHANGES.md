@@ -23,7 +23,19 @@ neither live game had a row in `raw.game_lineups`. A run of 100 had no game to r
 incomplete box retried, a preview entry ignored, the live poll's hook) and five what-if tests
 (the feed's rows, a feed with no starters, the resolver's fallback, the route on an empty
 table, the 503 kept). The full unit suite: 5,864 passed, 25 skipped; the regression lane,
-ruff, ruff format and mypy pass. The live game-day view stays open for one more live check.
+ruff, ruff format and mypy pass.
+
+**Merged, deployed and checked live the same evening** (master a23671a; `app` and `live`
+restarted, then `nginx`, which kept the old app address and answered 502 until restarted). On
+its first poll the new writer stored Guardians at Rays (849820, in progress): 20 published rows,
+nine batters and a pitcher a side. On that game, bottom of the 3rd, CLE 0–2 TB:
+- a what-if from the latest play (Caminero vs Griffin, Shawn Armstrong in for Griffin) ran both
+  100-game runs in 35 s and 64 s (TB win 85.0% as it stood, 74.0% with the change);
+- a run of 100 from the stored lineup finished in 37 s (`lineup_source` published).
+
+**The live game-day view (SIM-519) is CLOSED.** With the 2026-10-12 check (the live card against
+MLB, the game page's refresh), every step of the game-day check has now passed on a live game.
+Its backlog row is deleted.
 
 # PARTLY RUN — the game-day live check on a live game: four steps pass, two fail — SIM-519 / SIM-562, 2026-10-12
 
