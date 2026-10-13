@@ -2181,10 +2181,13 @@ async def get_live_game_state(
         return None if v is None else int(v)
 
     def _ids(key: str) -> list[int]:
+        # The live service stores each roster entry as an object with a
+        # ``player_id`` (GameStateBuilder._parse_roster); older rows hold bare ids.
         v = gs.get(key)
         if not v:
             return []
-        return [int(x) for x in v if x is not None]
+        ids = (x.get("player_id") if isinstance(x, Mapping) else x for x in v)
+        return [int(x) for x in ids if x is not None]
 
     return LiveGameStateResponse(
         game_pk=int(live["game_pk"]),
