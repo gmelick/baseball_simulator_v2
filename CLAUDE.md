@@ -595,7 +595,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `sim.sim_runs` row. The page reads `/card` (linescore, run id, seed), then `/plays?run_id=`;
   the file keeps 5 runs per game.
 - **The Daily Diamond slate and the live, schedule-driven game day view (SIM-519, BUILT,
-  MERGED and DEPLOYED 2026-10-09; the game-day live check is pending).** The
+  MERGED and DEPLOYED 2026-10-09; the game-day live check PASSED and the ticket CLOSED 2026-10-13).** The
   owner's Claude Design ("Daily Diamond MLB tracker") is the frontend's look: the tokens keep
   their `--sim-*` names with the design's values, the fonts and the 30 team logos are bundled.
   The slate reads the league schedule (`pipeline/mlb_schedule.py`, `api/league_feed.py`;
