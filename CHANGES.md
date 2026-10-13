@@ -1,3 +1,116 @@
+# BUILT — the security hardening cluster: loopback ports, no default database password and a least-privilege app role, login on every API route, the SQL console on a read-only role reading raw.* only, a Redis password and a JSON cache — SIM-443a–f, 2026-10-13
+
+**Why.** Six security defects were filed on 2026-07-27 and deferred until the per-file bug work
+finished. This session re-checked each one against the current code; all six still held.
+Postgres, Redis, the app, Prometheus and Grafana listened on every network interface. The
+database password `baseball_pass` sat in 43 tracked files, and the one login role was the
+cluster superuser. The login check returned early in the deployed `development` setting, and
+30+ data routes and the live WebSocket had no check at all. The SQL console checked only the
+shape of a statement, so `SELECT * FROM pg_authid` ran, on the superuser pool. Redis had no
+password, and the API unpickled whatever it read from Redis (a pickle load can run code).
+
+**What, per ticket.** The design and the privilege inventory are in
+`docs/audit/2026-10-13-sim443-security-hardening.md`.
+- **Loopback ports (SIM-443a).** `docker-compose.yml` binds Postgres, Redis, the app,
+  Prometheus and Grafana to `127.0.0.1`. nginx on port 80 stays on the LAN (owner decision).
+  No container-to-container path uses a host port.
+- **No default password, a least-privilege app role (SIM-443b).** `db/roles/setup_roles.sh` and
+  `setup_roles.sql` create two new roles, and a rerun changes nothing: `baseball_app` (select,
+  insert, update and delete in `raw` and `sim`, plus the sequences; no TRUNCATE, no CREATE) and
+  `baseball_ro` (SELECT on `raw` only, read-only by default, `sim` revoked). `baseball_user`
+  stays the owner, and only the `migrate` service logs in as it. The script runs on a fresh
+  volume and through `make db-roles`; `ROTATE_ADMIN_PASSWORD=1` also resets the owner's
+  password. Compose builds every DSN and the Redis URL from required variables (`${VAR:?}`), so
+  a missing secret fails any compose command and names the variable. The app, live and jobs
+  services blank the owner's password over their `env_file`. The three nightly data jobs moved
+  from fresh `job-run` containers into a new `jobs` service (`sleep infinity`, `appuser`,
+  `mem_limit ${JOBS_MEM_LIMIT:-10g}`); `deploy/ofelia/config.ini` holds three `job-exec` jobs
+  with `user = appuser` and no credential. The new `pipeline/db_dsn.py` (`require_dsn`,
+  `dsn_label`) replaced the password default in 32 Python files (14 of them archived scripts) and in the five
+  nightly shell scripts. The new `scripts/gen_secrets.py` writes the eight secrets (`--append`,
+  `--check`). The env templates, `WORKFLOW.md`, `README.md` and `deploy/README.md` follow. CI's
+  credential grep is now case-insensitive, and two new steps reject the retired password and a
+  Postgres DSN with a real password. `git grep baseball_pass` outside `docs/` and `CHANGES.md`
+  now prints nothing.
+- **A login on every API route (SIM-443c).** `require_auth` always checks a credential: the
+  session cookie, an `X-API-Key` header or an `Authorization: Bearer` key, compared in
+  constant time against every configured key. A refusal is a 401 with a `WWW-Authenticate`
+  header. `AUTH_DISABLED=1` is the one opt-out (owner decision); the boot log warns and
+  `/health` reports `auth_enforced`. Every data router carries the gate, `odds_router` too.
+  The WebSocket handler calls `authenticate_websocket` first, which closes a refused handshake
+  with code 1008. `SECRET_KEY` and `AUTH_PASSWORD` are required in every environment.
+  `/auth/me` reports `cookie`, `api_key`, `disabled` or `none`; `/auth/login` answers 503 when
+  login is not configured. The frontend returns to the login page on any 401
+  (`frontend/src/api/unauthorized.ts`, `AuthContext.tsx`). Prometheus scrapes with a bearer
+  token read from `deploy/monitoring/secrets/app_api_key` (gitignored).
+- **The SQL console reads `raw.*` only (SIM-443d).** `validate_relation_allowlist` in
+  `api/routes/sql_safety.py` parses each query with sqlglot (a SQL parser, new in
+  `requirements.txt`, imported at module top so a missing package fails the boot). Every table
+  must be `raw.<name>` or a CTE (a named subquery in the query's WITH clause) in scope. A
+  function in FROM or LATERAL must be on a short allowlist. The check also rejects a parse
+  failure, two statements, `SELECT ... INTO` and the `TABLE name` shorthand. The blocklist
+  gains the `query_to_xml` family and the `pg_stat_get_` / `pg_get_` / `pg_ls_` families.
+- **The console runs only on the read-only pool (SIM-443e).** The console and the assistant
+  answer 503 when the read-only pool is missing; there is no fallback to the main pool. The
+  lifespan opens the pool with `search_path=raw`, runs `check_read_only_role` and refuses a
+  superuser or a role that can write. `/health` reports `sql_console` (`ro_pool`, `role`).
+  The boot log shows the DSN through `redact_dsn` only.
+- **A Redis password and a JSON cache (SIM-443f).** Redis runs with `--requirepass`. The new
+  `simulation/cache_codec.py` stores every cached value as a typed JSON envelope
+  (`{"t": tag, "v": payload}`; tags `summary`, `prop_set`, `json`). A value that does not
+  decode reads as a cache miss, and a value JSON cannot hold is not cached. `GameSimSummary`
+  gains `to_json` / `from_json`. The key prefix moved from `sim332:` to `sim443:`, so the
+  cache never reads an old pickled key. Pickle is gone from the cache.
+- **Fixed in passing.** `scripts/clv_backtest.py` wrote the full DSN, password included, into
+  its report and its error log; both use `dsn_label` now. The SPA catch-all registered before
+  `/health`, so a checkout with a built `frontend/dist` answered `/health` with HTML; it now
+  registers after `/health` and `/ready`. The review found that an Ofelia exec job with no
+  `user =` line runs as root, which brings back the root-owned bundle defect (SIM-563); each
+  of the three jobs names `appuser`.
+
+**Tests.** Seven new files: `test_sim443c_route_auth_coverage.py` (47 tests),
+`test_sim443_sql_console_pool.py`, `test_sim443f_cache_codec.py` (34),
+`test_sim443_db_dsn.py`, `test_sim443_gen_secrets.py`, `test_sim443_no_default_password.py`
+(16) and `test_sim443_shell_guards.py`. `test_sql_safety.py` gains the allowlist cases and a
+test that every starter query of the console passes. The final verifier ran the full unit lane
+in the container, with the worktree mounted and the odds provider unset: about 6,158 passed,
+2 skipped, 0 failed. Two earlier runs died of the known stochastic crash class; the third was
+clean. The regression lane: 33 passed. ruff and ruff format pass on the whole tree (487
+files); mypy passes on `similarity/`, `pipeline/` and `api/` (72 files). The frontend type
+check, lint and build pass; the frontend has no unit-test runner. `docker compose config`
+passes with a full `.env` and fails, naming the variable, when one password is removed. The
+role script ran in a throwaway Postgres container: the grants matched the plan, a rerun changed
+nothing, and all three roles logged in over TCP.
+
+**Rollout.** NOT YET DEPLOYED: the cutover needs the owner's go, because it restarts the
+serving stack and changes the database passwords. The run book (steps 1–14 and the rollback)
+is in `docs/audit/2026-10-13-sim443-security-hardening.md`. Rebuild the app image first:
+sqlglot is not in the live image, and the app fails to boot without it. Every compose command
+needs the secrets in `.env` (`py scripts\gen_secrets.py --append .env`). A DEPLOYED entry
+follows the cutover.
+
+**Not done.**
+- Three follow-ups, filed P3 in `BACKLOG.xlsx`: the rate limiter keys its buckets on the raw,
+  unverified `X-API-Key` header (SIM-564); the engine bundle loads with `allow_pickle=True`
+  (SIM-565); `/api/schema`, `/api/analytics/*` and `/api/players/*` still run their fixed
+  queries on the main pool, not the read-only one (SIM-566).
+- The session cookie's `secure` flag follows `ENVIRONMENT`. The stack is plain HTTP on the
+  LAN, so `ENVIRONMENT` must stay `development`; `production` without TLS makes a login loop.
+  A `SESSION_COOKIE_SECURE` override is a note here, not a ticket.
+- The SPA catch-all order was out of scope in the plan. The verification run hit it, so it is
+  fixed (see above).
+- The live service's own app on port 8001 (no published port) keeps `/health`,
+  `/api/pipeline/status` and `POST /api/games/{pk}/resimulate` open on the internal network.
+  The plan accepted this risk. Its `/api/odds/*` routes need a key now.
+- The `nightly-closing-lines` job execs into the app container with no `user =` line, as it
+  did before, so it runs as root.
+- `JOBS_MEM_LIMIT=10g` is a guess. Measure the first rebuild in the `jobs` container with
+  `docker stats`.
+- The 401 listener in `AuthContext` has no automated test. Check it by hand after the
+  cutover: delete the `sim_session` cookie, then open a data view.
+- The first commit's message (4ffb13c) pairs the ticket letters with the wrong tracks. The
+  letters in this entry are the right ones.
+
 # FIXED — the nightly rebuild runs numpy with one math thread per process — SIM-563 follow-up, 2026-10-13
 
 **Why.** The scheduled profile step took 54 minutes on 2026-10-11 and 2026-10-12, against

@@ -488,8 +488,9 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   game), which CLOSES SIM-545. Two facts from the loader smoke: BettingPros has no walks / outs-recorded /
   hits-allowed offers on the 2024 games checked (why the old load had zero walks rows), and
   the old load saw only page 1 of each batter market (~8 of ~15-18 hitters). **Not built:**
-  the API's `/edges` and the game page still serve the three full-game markets (the sim
-  cache holds score arrays, not inning grids) — SIM-546. Details: `CHANGES.md` (2026-09-12,
+  the API's `/edges` and the game page still served the three full-game markets — SIM-546,
+  CLOSED 2026-10-09: the inning grid now rides in the summary through the cache, which stores
+  it as JSON since SIM-443f (`simulation/cache_codec.py`). Details: `CHANGES.md` (2026-09-12,
   two entries) and the build record in `docs/audit/2026-09-11-sim421-prop-market-scrape.md`.
 
 - **Each team's real manager decides the pitching change (SIM-427, CLOSED 2026-09-13 —
@@ -654,6 +655,24 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `final` on `/edges`) and shows no price on a market with no stored line. Projections and
   Betting are collapsible and start collapsed; the Line movement and Managerial override boxes
   are gone (the `/simulate/with_override` endpoint stays). The record: `CHANGES.md` 2026-10-09.
+- **The stack is hardened (SIM-443a–f, BUILT 2026-10-13; NOT YET DEPLOYED — the cutover
+  needs the owner's go).** What the stack runs after the cutover: Postgres, Redis, the app,
+  Prometheus and Grafana listen on `127.0.0.1` only; nginx on port 80 stays on the LAN. Three
+  Postgres roles (`db/roles/`, `make db-roles`): `baseball_user` the owner, used only by the
+  `migrate` service; `baseball_app` (row reads and writes in `raw` and `sim`, no DDL) for the
+  app, live and jobs services; `baseball_ro` (SELECT on `raw` only) for the SQL console. No
+  password has a default: compose builds every DSN from required `.env` secrets
+  (`scripts/gen_secrets.py`), and a script with no `BASEBALL_DB_DSN` fails
+  (`pipeline/db_dsn.require_dsn`). The three nightly data jobs exec into the `jobs`
+  container as `appuser`; the Ofelia INI holds no credential. Every API route and the live
+  WebSocket require a login (the session cookie, `X-API-Key` or a Bearer key);
+  `AUTH_DISABLED=1` is the one opt-out, warned at boot and shown on `/health`
+  (`auth_enforced`). The SQL console reads `raw.*` only (a sqlglot parse of every query) and
+  runs only on the read-only pool; without that pool it answers 503. Redis requires a
+  password, and the sim cache stores typed JSON (`simulation/cache_codec.py`, keys `sim443:`),
+  never a pickle. The tests' conftest sets `AUTH_DISABLED=1`; two auth test files remove it.
+  Follow-ups: SIM-564..566 (P3). The design and the cutover run book:
+  `docs/audit/2026-10-13-sim443-security-hardening.md`; the record: `CHANGES.md` 2026-10-13.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.
@@ -672,6 +691,12 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   cannot create or alter a table.
 - **`make migrate` runs the `migrate` service**, the only service that logs in as the cluster
   owner. Run another alembic command through it: `docker compose run --rm migrate alembic current`.
+- **The nightly data jobs exec into the `jobs` container (SIM-443b).** Ofelia runs
+  `nightly-finals`, `weekly-refresh` and `nightly-rebuild` with `docker exec` into
+  `baseball_simulator_v2-jobs-1` as `appuser` (an exec with no `user =` line runs as root).
+  A stopped `jobs` container fails all three jobs; Ofelia logs the exec error. The Sunday
+  08:00 pair shares the container's memory cap (`JOBS_MEM_LIMIT`, default 10g, not yet
+  measured). Recreate the scheduler after an INI edit: Ofelia reads it only at start.
 - **Prometheus needs `deploy/monitoring/secrets/app_api_key` (SIM-443c).** The file holds one
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
@@ -797,7 +822,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   linescore and the probability of every game market the book posts — first-inning / first-five
   moneyline, total, run line, team totals, first team to score, a run in the first inning),
   `game_state.py` (carries bat/throw hands + per-team pitcher/catcher ids + the SIM-434 per-pitcher
-  rest / pitch-count fields), `results.py`, `batch_runner.py` (ProcessPool runner — `mp_context=forkserver`
+  rest / pitch-count fields), `results.py` (since SIM-443f `GameSimSummary.to_json` / `from_json`),
+  `cache_codec.py` (SIM-443f: the sim cache's typed JSON envelope; anything that does not decode
+  reads as a miss), `batch_runner.py` (ProcessPool runner — `mp_context=forkserver`
   per SIM-430), `production_factory.py` (builds the full-pool sampler from disk per worker, and
   RAISES when the bundle is missing — no fallback; `_manager_enabled()` + synthetic-bullpen builder gate SIM-434), `lineup_resolver.py`
   (also resolves the per-team catcher via the SIM-363 defense map; since SIM-558 each side's starter comes from the official box, `raw.game_player_stats.p_started`, and a game with a starter missing on either side is refused), `linescore.py`, `pitcher_decisions.py`
@@ -815,6 +842,8 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `pipeline/live/lineup_writer.py` (the published-lineup writer), `pipeline/live/broadcast.py`
   (the Redis bridge and the heartbeat), `pipeline/live/run_live.py` (the `live` service),
   `frontend/src/components/slate/` (the Daily Diamond card), `frontend/src/teams.ts`.
+- `pipeline/db_dsn.py` (SIM-443b) — `require_dsn()` (the DSN or a loud error; no default
+  password anywhere) and `dsn_label()` (a DSN with the password removed, for a log or a report).
 - `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
   imported by both ETL loaders; `boxscore_ingest.py`, the SIM-545 official box-score parser + upsert into
   `raw.game_player_stats`, which the loader calls per game), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
@@ -833,7 +862,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   deleted by SIM-544; `--workers` parallelizes across games — SIM-436; props graded on the official box
   score since SIM-545), `validate_props.py`, `load_official_boxscores.py` (SIM-545: backfill
   `raw.game_player_stats` from the MLB box-score endpoint), `sim545_boxscore_audit.py` (SIM-545: the
-  derived-vs-official per-player totals study), `check_file_integrity.py`.
+  derived-vs-official per-player totals study), `check_file_integrity.py`, `gen_secrets.py`
+  (SIM-443b: writes the eight `.env` secrets; `--append` never changes a key that has a
+  value, `--check` lists the missing ones).
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0030** — 0030 = the what-if runs: `kind`, `start_at_bat` and `changes` on `sim.sim_runs` (SIM-562, 2026-10-09); 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
@@ -841,7 +872,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   (numbered SQL, schema **v32**; 0032 = the SIM-561 replay play stream's pitch
   context — inning, half, outs before, batter, pitcher, score after; 0031 = the
   SIM-554 steal pool's `pitch_class` and `is_pickoff_row` columns) +
-  `schemas/duckdb_schema_version.txt`.
+  `schemas/duckdb_schema_version.txt`. `roles/` (SIM-443b): `setup_roles.sh` + `setup_roles.sql`
+  create the `baseball_app` and `baseball_ro` roles and their grants (a new schema needs a line
+  there); run on a fresh volume and by `make db-roles`; `README.md` lists the grant set.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
 - `deploy/` — nginx + Prometheus/Grafana. `frontend/` — **React 18 + Vite + TypeScript** app
@@ -965,6 +998,8 @@ make calibrate         # fit /data/calibration.json (arsenal W2 + per-engine sig
 make validate-props    # SIM-407 prop-PMF / win-prob validation (add --write-calibration for the curve)
 make ingest-catch-up DAYS=14  # SIM-519: load the last N days' finals, crash-wrapped (Postgres only)
 make live-logs         # SIM-519: follow the live service's log
+make gen-secrets      # SIM-443b: add any missing secret to .env (never changes a set one)
+make db-roles         # SIM-443b: create/refresh the app + read-only roles (ROTATE_ADMIN_PASSWORD=1 resets the owner's)
 ```
 
 Raw equivalents (if running Python directly, target **Python 3.13**):
