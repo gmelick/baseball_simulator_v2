@@ -17,12 +17,12 @@ underneath.
 Reproduced against the round-2 tree before anything changed:
 
   * ``R`` at ``rel_floor=0.075`` PASSED at 7.0%, 7.2%, 7.4% and 7.5% low, and
-    first failed at 7.6%. ``CLAUDE.md:85`` records the live gap as "Runs run
+    first failed at 7.6%. ``CLAUDE.md:813`` records the live gap as "Runs run
     ~7-8% low", so the band passed on most of the documented range. Round 2 had
     sized the floor on ``CLAUDE.md:465``'s "10-12%", which the owner ruled STALE
     on 2026-08-10.
   * ``home_win_pct`` at ``abs_floor=0.030`` failed ONLY at exactly 0.5000 and
-    PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:400`` records the defect as
+    PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:816`` records the defect as
     "stuck at the structural-only ~.510-.515", and this lane's own first
     production run measured 0.5125.
   * ``evaluate("H", [8.0, 8.0])`` returned ``passed=True``: two observations, 7%
@@ -362,7 +362,7 @@ def test_every_rule_b_floor_is_the_tightest_the_run_resolves_sim450() -> None:
 def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
     """R must go RED on a 7% run shortfall.
 
-    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md:85``: "Runs run ~7-8% low (down from
+    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md:813``: "Runs run ~7-8% low (down from
     ~12% pre-fix)". The owner ruled on 2026-08-10 that this line is authoritative
     and that ``CLAUDE.md:465``'s "runs sit ~10-12% low" is stale.
 
@@ -379,7 +379,7 @@ def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
             "R", _certifying_sample("R", bands.REFERENCES["R"].centre * (1.0 - shortfall))
         )
         assert result.verdict == "FAIL", (
-            f"a {shortfall:.1%} run shortfall must red the R band. CLAUDE.md:85 records "
+            f"a {shortfall:.1%} run shortfall must red the R band. CLAUDE.md:813 records "
             f"the live gap as 7-8% low." + result.explain()
         )
         assert result.failed and not result.passed
@@ -389,7 +389,7 @@ def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
 def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
     """The mandated boundary case, on its own so it cannot be lost in a loop.
 
-    ``CLAUDE.md:85`` — "Runs run ~7-8% low". 7% is the EASIEST end of that range
+    ``CLAUDE.md:813`` — "Runs run ~7-8% low". 7% is the EASIEST end of that range
     for the band to miss, so it is the one that decides whether the instrument
     works. Delta 0.3113 against a floor of 0.1222 is a margin of 2.55, which is
     a detection power above 0.9999 at this sample size.
@@ -397,10 +397,10 @@ def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
     ref = bands.REFERENCES["R"]
     documented = 0.07 * ref.centre
     assert ref.must_detect == pytest.approx(documented, abs=1e-6), (
-        "R.must_detect must be the CLAUDE.md:85 magnitude, 0.07 * 4.4473 = 0.3113"
+        "R.must_detect must be the CLAUDE.md:813 magnitude, 0.07 * 4.4473 = 0.3113"
     )
     assert ref.floor() < documented / bands.DETECTION_MARGIN, (
-        f"R floor {ref.floor():.5f} is not below the CLAUDE.md:85 gap {documented:.5f} "
+        f"R floor {ref.floor():.5f} is not below the CLAUDE.md:813 gap {documented:.5f} "
         f"divided by the {bands.DETECTION_MARGIN} detection margin. Detection power at "
         f"the resolving sample size would be "
         f"{bands.detection_power(documented / ref.floor()):.1%}."
@@ -408,7 +408,7 @@ def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
 
     result = bands.evaluate("R", _certifying_sample("R", ref.centre - documented))
     assert result.verdict == "FAIL", (
-        "the R band must red on the run-conversion gap CLAUDE.md:85 records" + result.explain()
+        "the R band must red on the run-conversion gap CLAUDE.md:813 records" + result.explain()
     )
     assert result.delta == pytest.approx(-documented, abs=1e-9)
     assert abs(result.delta) / result.floor > 2.5
@@ -444,7 +444,7 @@ def test_the_R_band_boundary_sits_where_the_floor_says_sim450() -> None:
 def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> None:
     """home_win_pct must go RED at 0.5125, and across the whole documented range.
 
-    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md:400``: home_win_pct "stuck at the
+    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md:816``: home_win_pct "stuck at the
     structural-only ~.510-.515". That is the value the channel reads when the
     SIM-412 home-field bias does not act. This lane's own first production run
     measured 0.5125 — the middle of that range — at 400 game-sims.
@@ -462,7 +462,7 @@ def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> Non
     for rate in (0.5000, 0.5100, 0.5125, 0.5150):
         result = bands.evaluate("home_win_pct", _home_win_sample(rate, n))
         assert result.verdict == "FAIL", (
-            f"a home win rate of {rate:.4f} must red the band. CLAUDE.md:400 records the "
+            f"a home win rate of {rate:.4f} must red the band. CLAUDE.md:816 records the "
             f"structural-only baseline as ~.510-.515." + result.explain()
         )
         assert result.failed and not result.passed
@@ -471,17 +471,17 @@ def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> Non
 def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
     """The mandated boundary case, on its own.
 
-    ``CLAUDE.md:400`` — home_win_pct "stuck at the structural-only ~.510-.515".
+    ``CLAUDE.md:816`` — home_win_pct "stuck at the structural-only ~.510-.515".
     0.5125 is that baseline's midpoint and the value
     ``test_production_config_bands_sim450.py`` recorded from the first production
     run of this lane. Delta 0.0303 against a floor of 0.0173 is a margin of 1.75.
     """
     ref = bands.REFERENCES["home_win_pct"]
     assert ref.must_detect == pytest.approx(0.0278, abs=1e-9), (
-        "home_win_pct.must_detect must be the CLAUDE.md:400 magnitude, 0.5428 - 0.515"
+        "home_win_pct.must_detect must be the CLAUDE.md:816 magnitude, 0.5428 - 0.515"
     )
     assert ref.floor() <= ref.must_detect / bands.DETECTION_MARGIN, (
-        f"home_win_pct floor {ref.floor():.5f} is not below the CLAUDE.md:400 baseline gap "
+        f"home_win_pct floor {ref.floor():.5f} is not below the CLAUDE.md:816 baseline gap "
         f"{ref.must_detect:.5f} divided by the {bands.DETECTION_MARGIN} detection margin. "
         f"Detection power would be "
         f"{bands.detection_power(ref.must_detect / ref.floor()):.1%}."
@@ -489,7 +489,7 @@ def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
 
     result = bands.evaluate("home_win_pct", _home_win_sample(0.5125, ref.required_observations()))
     assert result.verdict == "FAIL", (
-        "the home_win_pct band must red on 0.5125 — the midpoint of the CLAUDE.md:400 "
+        "the home_win_pct band must red on 0.5125 — the midpoint of the CLAUDE.md:816 "
         "structural-only baseline, and this lane's own first production reading" + result.explain()
     )
     assert result.mean == pytest.approx(0.5125, abs=1e-4)
@@ -758,7 +758,7 @@ def test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450() -> None:
 
     This is a limit, not a defect, and it is asserted so nobody rediscovers it by
     accident or quietly widens the floor to make it fit. A floor loose enough for
-    a nightly cannot reject the 0.515 baseline ``CLAUDE.md:400`` documents.
+    a nightly cannot reject the 0.515 baseline ``CLAUDE.md:816`` documents.
     """
     ref = bands.REFERENCES["home_win_pct"]
     assert ref.required_sims() == CERTIFYING_DECISIVE_GAMES
