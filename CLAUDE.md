@@ -497,8 +497,8 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `nightly-finals`, `weekly-refresh` and `nightly-rebuild` with `docker exec` into
   `baseball_simulator_v2-jobs-1` as `appuser` (an exec with no `user =` line runs as root).
   A stopped `jobs` container fails all three jobs; Ofelia logs the exec error. The Sunday
-  08:00 pair shares the container's memory cap (`JOBS_MEM_LIMIT`, default 10g, not yet
-  measured). Recreate the scheduler after an INI edit: Ofelia reads it only at start.
+  08:00 pair shares the container's memory cap (`JOBS_MEM_LIMIT`, default 10g; the first
+  rebuild peaked at 6.5 GiB on 2026-10-14). Recreate the scheduler after an INI edit.
 - **Prometheus needs `deploy/monitoring/secrets/app_api_key` (SIM-443c).** The file holds one
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.

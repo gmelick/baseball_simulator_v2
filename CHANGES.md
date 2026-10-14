@@ -1,3 +1,15 @@
+# MEASURED — the first unattended nightly chain in the jobs container: peak 6.5 GiB under the 10 GiB cap, no OOM; the 10g default stands — SIM-443b follow-up, 2026-10-14
+
+A sampler read the jobs container's memory every 20 seconds from 06:00 to 11:00 UTC (824
+samples). The finals load ran at 07:00 (4 s). The rebuild ran from 08:00 to 09:29: the profile
+computor 13 minutes, the engine artifacts 1 h 16 min. Memory sat near 3.7 GiB through the
+artifact build and spiked to 6.54 GiB at 09:28, the publish step, then fell. `OOMKilled` is
+false. The app saw the new bundle version at 09:30, restarted itself, booted with the login
+enforced and the read-only pool, and pinned the version; the version directory is owned by
+`appuser`. The closing-lines pass ran at 10:30 (51 s). `JOBS_MEM_LIMIT` keeps its 10g default:
+1.5 times the peak. The Sunday pair (weekly refresh plus rebuild) shares that cap; the
+refresh is a Postgres load with a small footprint.
+
 # DEPLOYED — the security hardening cluster is live: the cutover ran on the serving stack — SIM-443a–f, 2026-10-14
 
 **Why.** The cluster was built and verified on 2026-10-13 (the entry below). The owner gave the
