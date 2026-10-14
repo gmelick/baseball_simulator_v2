@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f1ecdf;color:#1f2a24;font-family:'Barlow',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#24493a}a:hover{color:#b8332a}
+</style>
+</helmet>
+<div style="min-height:100vh; background:#f1ecdf; font-variant-numeric:tabular-nums;">
+  <header style="background:#24493a; color:#f3eee2; position:sticky; top:0; z-index:30; box-shadow:0 2px 0 #1a3a2c;">
+    <div style="max-width:1480px; margin:0 auto; padding:12px 20px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:30px; height:30px; border-radius:50%; background:#f6f2e6; border:2px dashed #c4473c; flex:none;"></div>
+        <div style="font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:26px; letter-spacing:.05em; line-height:1;">DAILY DIAMOND</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; position:relative;">
+        <div onClick="{{ prevDay }}" style="width:40px; height:40px; display:grid; place-items:center; border-radius:8px; background:#1b3a2d; border:1px solid #3d6553; cursor:pointer; font-size:20px; user-select:none;" style-hover="background:#2e5946;">‹</div>
+        <div onClick="{{ toggleCal }}" style="height:40px; padding:0 14px; display:flex; align-items:center; gap:8px; border-radius:8px; background:#f3eee2; color:#1f2a24; cursor:pointer; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:19px; letter-spacing:.02em; user-select:none; white-space:nowrap;">
+          <span>{{ dateLabel }}</span><span style="font-size:11px; color:#5d6a62;">▼</span>
+        </div>
+        <div onClick="{{ nextDay }}" style="width:40px; height:40px; display:grid; place-items:center; border-radius:8px; background:#1b3a2d; border:1px solid #3d6553; cursor:pointer; font-size:20px; user-select:none;" style-hover="background:#2e5946;">›</div>
+        <sc-if value="{{ notToday }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ goToday }}" style="height:40px; padding:0 12px; display:flex; align-items:center; border-radius:8px; border:1px solid #6b8f7c; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; user-select:none;" style-hover="background:#2e5946;">Today</div>
+        </sc-if>
+        <sc-if value="{{ calOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ closeCal }}" style="position:fixed; inset:0; z-index:40;"></div>
+          <div style="position:absolute; top:48px; right:0; z-index:41; width:288px; background:#fbf9f3; color:#1f2a24; border:1.5px solid #1f2a24; border-radius:10px; padding:12px; box-shadow:0 10px 30px rgba(20,30,25,.25);">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <div onClick="{{ calPrev }}" style="width:32px; height:32px; display:grid; place-items:center; border-radius:6px; cursor:pointer; font-size:18px;" style-hover="background:#ebe5d6;">‹</div>
+              <div style="font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:18px; letter-spacing:.03em;">{{ calTitle }}</div>
+              <div onClick="{{ calNext }}" style="width:32px; height:32px; display:grid; place-items:center; border-radius:6px; cursor:pointer; font-size:18px;" style-hover="background:#ebe5d6;">›</div>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:2px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#5d6a62; text-align:center; margin-bottom:4px;">
+              <div>S</div><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:2px;">
+              <sc-for list="{{ calCells }}" as="cc" hint-placeholder-count="35">
+                <div onClick="{{ cc.pick }}" style="height:34px; display:grid; place-items:center; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:13px; cursor:{{ cc.cursor }}; background:{{ cc.bg }}; color:{{ cc.color }}; box-shadow:{{ cc.ring }};">{{ cc.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+    <div style="height:3px; background:repeating-linear-gradient(90deg,#c4473c 0 8px,transparent 8px 14px); opacity:.9;"></div>
+  </header>
+
+  <main style="max-width:1480px; margin:0 auto; padding:20px 20px 60px;">
+    <div style="display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:8px 16px; margin-bottom:16px;">
+      <div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#b8332a; margin-bottom:2px;">{{ relLabel }}</div>
+        <h1 style="margin:0; font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:34px; line-height:1.05; letter-spacing:.01em; text-wrap:balance;">{{ longDate }}</h1>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px;">
+        <sc-for list="{{ summaryTags }}" as="st" hint-placeholder-count="2">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:4px 9px; border-radius:5px; white-space:nowrap; background:{{ st.bg }}; color:{{ st.color }};">{{ st.text }}</span>
+        </sc-for>
+      </div>
+    </div>
+    <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:60px 20px; text-align:center; border:1.5px dashed #c9c0aa; border-radius:12px; color:#5d6a62; font-family:'Barlow Condensed',sans-serif; font-size:22px; font-weight:600;">No MLB games scheduled for this date.</div>
+    </sc-if>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr)); gap:16px; align-items:start;">
+      <sc-for list="{{ games }}" as="g" hint-placeholder-count="6">
+        <article style="background:#fbf9f3; border:1.5px solid #1f2a24; border-radius:12px; overflow:hidden; box-shadow:0 2px 0 #1f2a24;">
+          <div onClick="{{ g.toggle }}" style="padding:12px 14px 14px; cursor:pointer; user-select:none;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <span style="display:inline-flex; align-items:center; gap:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:3px 8px; border-radius:5px; background:{{ g.tagBg }}; color:{{ g.tagColor }};">
+                <span style="width:7px; height:7px; border-radius:50%; background:{{ g.dot }};"></span>{{ g.statusText }}
+              </span>
+              <span style="font-size:11px; color:#5d6a62; display:inline-block; transform:rotate({{ g.chevRot }});">▼</span>
+            </div>
+            <div style="display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:10px;">
+              <div style="display:flex; flex-direction:column; align-items:flex-start; gap:4px; min-width:0; color:{{ g.awayRow.color }};">
+                <div style="width:52px; height:52px; margin-bottom:2px; background:center / contain no-repeat url({{ g.awayRow.logo }}); opacity:{{ g.awayRow.chipOp }};"></div>
+                <div style="width:48px; height:30px; border-radius:5px; display:grid; place-items:center; background:{{ g.awayRow.chipBg }}; opacity:{{ g.awayRow.chipOp }}; color:#f3eee2; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:12.5px; letter-spacing:.04em;">{{ g.awayRow.abbr }}</div>
+                <div style="font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:21px; line-height:1.05;">{{ g.awayRow.name }}</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#5d6a62;">{{ g.awayRow.record }}</div>
+              </div>
+              <div style="text-align:center; line-height:1;">
+                <div style="font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:42px; white-space:nowrap;">{{ g.centerScore }}</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#5d6a62; margin-top:4px;">{{ g.centerSub }}</div>
+              </div>
+              <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; min-width:0; text-align:right; color:{{ g.homeRow.color }};">
+                <div style="width:52px; height:52px; margin-bottom:2px; background:center / contain no-repeat url({{ g.homeRow.logo }}); opacity:{{ g.homeRow.chipOp }};"></div>
+                <div style="width:48px; height:30px; border-radius:5px; display:grid; place-items:center; background:{{ g.homeRow.chipBg }}; opacity:{{ g.homeRow.chipOp }}; color:#f3eee2; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:12.5px; letter-spacing:.04em;">{{ g.homeRow.abbr }}</div>
+                <div style="font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:21px; line-height:1.05;">{{ g.homeRow.name }}</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#5d6a62;">{{ g.homeRow.record }}</div>
+              </div>
+            </div>
+          </div>
+
+          <sc-if value="{{ g.open }}" hint-placeholder-val="{{ false }}">
+            <div style="border-top:1px solid #ddd5c2; padding:14px; display:flex; flex-direction:column; gap:18px;">
+
+              <sc-if value="{{ g.isPre }}" hint-placeholder-val="{{ false }}">
+                <div>
+                  <div style="font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.12em; text-transform:uppercase; color:#5d6a62; display:flex; align-items:center; gap:8px; margin-bottom:10px;">{{ g.lineupTitle }}<span style="flex:1; height:1px; background:#ddd5c2;"></span></div>
+                  <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px;">
+                    <sc-for list="{{ g.lineupCols }}" as="lc" hint-placeholder-count="2">
+                      <div style="min-width:0;">
+                        <div style="font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:16px; margin-bottom:2px;">{{ lc.abbr }}</div>
+                        <div style="font-size:12.5px; color:#5d6a62; margin-bottom:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">SP <span style="color:#1f2a24; font-weight:600;">{{ lc.sp }}</span></div>
+                        <sc-if value="{{ lc.empty }}" hint-placeholder-val="{{ false }}">
+                          <div style="font-size:12.5px; color:#5d6a62; font-style:italic; padding:8px 0;">Lineup not yet posted</div>
+                        </sc-if>
+                        <sc-for list="{{ lc.items }}" as="li" hint-placeholder-count="9">
+                          <div style="display:grid; grid-template-columns:16px minmax(0,1fr) auto; gap:6px; align-items:baseline; padding:3px 0; border-bottom:1px dotted #ddd5c2; font-size:13px;">
+                            <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5d6a62;">{{ li.n }}</span>
+                            <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500;">{{ li.name }}</span>
+                            <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#5d6a62;">{{ li.pos }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ g.hasLinescore }}" hint-placeholder-val="{{ false }}">
+                <div>
+                  <div style="font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.12em; text-transform:uppercase; color:#5d6a62; display:flex; align-items:center; gap:8px; margin-bottom:8px;">Linescore<span style="flex:1; height:1px; background:#ddd5c2;"></span></div>
+                  <div style="overflow-x:auto; background:#24493a; color:#f3eee2; border-radius:8px; padding:8px 10px;">
+                    <div style="min-width:max-content; font-family:'JetBrains Mono',monospace; font-size:12.5px;">
+                      <div style="display:flex; color:#a9c2b4; padding-bottom:5px; border-bottom:1px solid #3d6553;">
+                        <div style="width:46px; flex:none;"></div>
+                        <sc-for list="{{ g.lsCols }}" as="c" hint-placeholder-count="9"><div style="width:21px; flex:none; text-align:center;">{{ c }}</div></sc-for>
+                        <div style="width:8px; flex:none;"></div>
+                        <div style="width:24px; flex:none; text-align:center; color:#f3eee2; font-weight:700;">R</div>
+                        <div style="width:24px; flex:none; text-align:center;">H</div>
+                        <div style="width:24px; flex:none; text-align:center;">E</div>
+                      </div>
+                      <sc-for list="{{ g.lsRows }}" as="lr" hint-placeholder-count="2">
+                        <div style="display:flex; align-items:center; padding-top:5px;">
+                          <div style="width:46px; flex:none; font-weight:700;">{{ lr.abbr }}</div>
+                          <sc-for list="{{ lr.cells }}" as="lc2" hint-placeholder-count="9"><div style="width:21px; flex:none; text-align:center; border-radius:3px; background:{{ lc2.bg }}; color:{{ lc2.color }};">{{ lc2.v }}</div></sc-for>
+                          <div style="width:8px; flex:none;"></div>
+                          <div style="width:24px; flex:none; text-align:center; font-weight:700; color:#f4e19a;">{{ lr.R }}</div>
+                          <div style="width:24px; flex:none; text-align:center;">{{ lr.H }}</div>
+                          <div style="width:24px; flex:none; text-align:center;">{{ lr.E }}</div>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ g.isLive }}" hint-placeholder-val="{{ false }}">
+                <div>
+                  <div style="font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.12em; text-transform:uppercase; color:#5d6a62; display:flex; align-items:center; gap:8px; margin-bottom:8px;">On the field<span style="flex:1; height:1px; background:#ddd5c2;"></span></div>
+                  <div style="position:relative; aspect-ratio:400 / 310; background:#3e7a4b; border-radius:10px; overflow:hidden; border:1.5px solid #1f2a24;">
+                    <svg viewBox="0 -10 400 310" preserveAspectRatio="none" style="position:absolute; inset:0; width:100%; height:100%; display:block;">
+                      <path d="M200 250 L17.6 67.6 A258 258 0 0 1 382.4 67.6 Z" fill="#74b26f"></path>
+                      <path d="M17.6 67.6 A258 258 0 0 1 382.4 67.6" fill="none" stroke="#b98450" stroke-width="9"></path>
+                      <path d="M200 250 L306.3 143.7 A112 112 0 0 0 93.7 143.7 Z" fill="#c9945e"></path>
+                      <path d="M200 238 L264 175 L200 112 L136 175 Z" fill="#82bf7c"></path>
+                      <circle cx="200" cy="179" r="11" fill="#c9945e"></circle>
+                      <circle cx="200" cy="250" r="17" fill="#c9945e"></circle>
+                      <line x1="200" y1="250" x2="17.6" y2="67.6" stroke="#f6f2e6" stroke-width="2"></line>
+                      <line x1="200" y1="250" x2="382.4" y2="67.6" stroke="#f6f2e6" stroke-width="2"></line>
+                      <rect x="197" y="176" width="6" height="2" fill="#f6f2e6"></rect>
+                    </svg>
+                    <div style="position:absolute; left:67.5%; top:58.06%; width:2.5%; height:3.23%; transform:rotate(45deg); background:{{ g.field.b1 }}; border:1px solid #f6f2e6;"></div>
+                    <div style="position:absolute; left:48.75%; top:33.87%; width:2.5%; height:3.23%; transform:rotate(45deg); background:{{ g.field.b2 }}; border:1px solid #f6f2e6;"></div>
+                    <div style="position:absolute; left:30%; top:58.06%; width:2.5%; height:3.23%; transform:rotate(45deg); background:{{ g.field.b3 }}; border:1px solid #f6f2e6;"></div>
+                    <div style="position:absolute; left:48.75%; top:82.26%; width:2.5%; height:3.23%; background:#f6f2e6;"></div>
+                    <sc-for list="{{ g.field.labels }}" as="fl" hint-placeholder-count="10">
+                      <div style="position:absolute; left:{{ fl.left }}; top:{{ fl.top }}; transform:translate(-50%,-50%); white-space:nowrap; display:flex; align-items:center; gap:4px; padding:2px 6px; border-radius:10px; font-size:11px; font-weight:600; line-height:1.25; background:{{ fl.bg }}; color:{{ fl.color }}; box-shadow:0 1px 0 rgba(0,0,0,.25);">
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:8.5px; opacity:.7;">{{ fl.tag }}</span>{{ fl.text }}
+                      </div>
+                    </sc-for>
+                  </div>
+                  <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 16px; margin-top:10px;">
+                    <div style="display:flex; gap:16px;">
+                      <sc-for list="{{ g.count }}" as="ct" hint-placeholder-count="3">
+                        <div style="display:flex; align-items:center; gap:5px;">
+                          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:700; width:12px;">{{ ct.label }}</span>
+                          <sc-for list="{{ ct.dots }}" as="d" hint-placeholder-count="3"><span style="width:12px; height:12px; border-radius:50%; background:{{ d.bg }}; border:1.5px solid {{ d.bd }};"></span></sc-for>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="font-size:12.5px; color:#5d6a62;">P <span style="color:#1f2a24; font-weight:600;">{{ g.pitcherName }}</span> <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">· {{ g.pitchCount }} pitches</span></div>
+                  </div>
+                  <div style="display:flex; gap:10px; align-items:baseline; margin-top:10px; padding:8px 12px; border-left:3px solid #b8332a; background:#f3eee2; border-radius:0 6px 6px 0; font-size:13.5px; line-height:1.4;">
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#b8332a; white-space:nowrap;">Last play</span>
+                    <span style="text-wrap:pretty;">{{ g.lastPlay }}</span>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ g.hasBox }}" hint-placeholder-val="{{ false }}">
+                <div>
+                  <div style="font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.12em; text-transform:uppercase; color:#5d6a62; display:flex; align-items:center; gap:8px; margin-bottom:10px;">Box score<span style="flex:1; height:1px; background:#ddd5c2;"></span></div>
+                  <div style="display:flex; border:1.5px solid #1f2a24; border-radius:8px; overflow:hidden; margin-bottom:8px;">
+                    <sc-for list="{{ g.boxTabs }}" as="tb" hint-placeholder-count="2">
+                      <div onClick="{{ tb.pick }}" style="flex:1; min-width:0; text-align:center; padding:7px 8px; cursor:pointer; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:16px; letter-spacing:.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; user-select:none; background:{{ tb.bg }}; color:{{ tb.color }};">{{ tb.label }}</div>
+                    </sc-for>
+                  </div>
+                  <sc-for list="{{ g.boxList }}" as="bt" hint-placeholder-count="1">
+                    <div>
+                      <div style="display:flex; justify-content:flex-end; padding:0 4px 2px;">
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:{{ bt.roleColor }};">{{ bt.role }}</span>
+                      </div>
+                      <sc-for list="{{ bt.sections }}" as="sec" hint-placeholder-count="2">
+                        <div style="margin-top:6px;">
+                          <div style="display:grid; grid-template-columns:minmax(0,1fr) repeat(7,28px) 38px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#5d6a62; padding:3px 4px; background:#ece6d7; border-radius:4px;">
+                            <div style="font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#1f2a24;">{{ sec.title }}</div>
+                            <sc-for list="{{ sec.cols }}" as="col" hint-placeholder-count="8"><div style="text-align:right;">{{ col }}</div></sc-for>
+                          </div>
+                          <sc-for list="{{ sec.rows }}" as="r" hint-placeholder-count="9">
+                            <div style="display:grid; grid-template-columns:minmax(0,1fr) repeat(7,28px) 38px; align-items:baseline; padding:3px 4px; border-bottom:1px dotted #ddd5c2; border-radius:4px; background:{{ r.bg }}; color:{{ r.color }}; font-weight:{{ r.fw }};">
+                              <div style="min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:13px;">{{ r.name }} <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#5d6a62; font-weight:400;">{{ r.pos }}</span></div>
+                              <sc-for list="{{ r.cells }}" as="v" hint-placeholder-count="8"><div style="text-align:right; font-family:'JetBrains Mono',monospace; font-size:12px;">{{ v }}</div></sc-for>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ g.hasOdds }}" hint-placeholder-val="{{ false }}">
+                <div>
+                  <div style="font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.12em; text-transform:uppercase; color:#5d6a62; display:flex; align-items:center; gap:8px; margin-bottom:8px;">{{ g.oddsTitle }}<span style="flex:1; height:1px; background:#ddd5c2;"></span></div>
+                  <div style="display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:#ddd5c2; border:1px solid #ddd5c2; border-radius:8px; overflow:hidden;">
+                    <sc-for list="{{ g.oddsRows }}" as="o" hint-placeholder-count="3">
+                      <div style="background:#fbf9f3; padding:8px 6px; display:flex; flex-direction:column; gap:5px; min-width:0;">
+                        <div style="font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:15px; text-align:center;">{{ o.mkt }}</div>
+                        <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:4px; border-radius:5px; text-align:center; white-space:nowrap; background:{{ o.aBg }}; color:{{ o.aColor }};">{{ o.aFull }}</div>
+                        <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; padding:4px; border-radius:5px; text-align:center; white-space:nowrap; background:{{ o.hBg }}; color:{{ o.hColor }};">{{ o.hFull }}</div>
+                      </div>
+                    </sc-for>
+                  </div>
+                  <sc-if value="{{ g.isFinal }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
+                      <sc-for list="{{ g.oddsResults }}" as="res" hint-placeholder-count="3">
+                        <span style="font-size:12px; font-weight:600; padding:3px 8px; border-radius:20px; background:#24493a; color:#f3eee2;">{{ res }}</span>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+
+            </div>
+          </sc-if>
+        </article>
+      </sc-for>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;refreshSeconds&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;15&quot;,&quot;30&quot;,&quot;0&quot;],&quot;default&quot;:&quot;15&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;sortLiveFirst&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+const PAL={text:'#1f2a24',bg:'#f3eee2',accent:'#24493a','accent-200':'#f4e19a','accent-600':'#b8332a','accent-700':'#b8332a','accent-800':'#7d2a22','accent-900':'#1f2a24','neutral-100':'#fbf9f3','neutral-200':'#ece6d7','neutral-300':'#ddd5c2','neutral-400':'#a9b2ab','neutral-500':'#8a948d','neutral-600':'#7b857e','neutral-700':'#5d6a62','neutral-800':'#1f2a24','accent-2-200':'#d7ead2','accent-2-600':'#2f7d4f','accent-2-700':'#2f7d4f','accent-2-900':'#1d4a2a'};
+const V=n=>PAL[n]||'#1f2a24';
+const pad2=n=>String(n).padStart(2,'0');
+const toStr=d=>`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+const parse=s=>{const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
+const todayStr=()=>toStr(new Date());
+const addDays=(s,n)=>{const d=parse(s);d.setDate(d.getDate()+n);return toStr(d)};
+const ord=n=>{const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0])};
+const short=n=>{if(!n)return'';const p=n.trim().split(/\s+/);return p.length<2?n:p[0][0]+'. '+p.slice(1).join(' ')};
+const last=n=>{if(!n)return'';const p=n.trim().split(/\s+/);return p.length<2?n:p.slice(1).join(' ')};
+const fmt=n=>n>0?'+'+n:String(n);
+const fmtLine=l=>(l>0?'+':'')+l;
+const ipOf=o=>Math.floor(o/3)+'.'+o%3;
+function rngOf(seed){let a=seed>>>0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function seedOf(str){let h=2166136261;for(const c of String(str)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+const ri=(r,a,b)=>a+Math.floor(r()*(b-a+1));
+const sumInn=(g,s)=>g.innings.reduce((t,x)=>t+(x[s]||0),0);
+
+function makeOdds(pk,ap,hp){
+  const r=rngOf(pk*7+3);
+  let p=0.54+(hp-ap)*0.9+(r()-.5)*.12;p=Math.min(.72,Math.max(.3,p));
+  const homeFav=p>=.5,fp=homeFav?p:1-p;
+  const fav=Math.min(-105,-Math.round(fp/(1-fp)*104.5/5)*5),dog=Math.max(100,Math.round((1-fp)/fp*95.5/5)*5);
+  const fP=ri(r,105,150),dP=-(fP+ri(r,15,25)),o=-ri(r,100,120);
+  return{ml:{away:homeFav?dog:fav,home:homeFav?fav:dog},
+    spread:{away:{line:homeFav?1.5:-1.5,price:homeFav?dP:fP},home:{line:homeFav?-1.5:1.5,price:homeFav?fP:dP}},
+    total:{line:[7,7.5,8,8.5,8.5,9,9.5][ri(r,0,6)],over:o,under:-(220+o)}};
+}
+
+const FIRST=['Alex','Ben','Carlos','Danny','Eli','Felix','Gabe','Hank','Ivan','Jake','Kai','Luis','Marco','Nate','Omar','Pete','Ramon','Sam','Tony','Wes','Yuki','Zach','Diego','Cole','Mason','Rafael','Theo','Andre'];
+const LAST=['Alvarez','Bennett','Castillo','Dawson','Espinal','Fuller','Garza','Hollis','Ibarra','Jensen','Kowalski','Lindqvist','Mercado','Novak','Ortega','Pruitt','Quintero','Rasmussen','Tanaka','Ueda','Valdez','Whitlock','Yates','Zamora','Brandt','Crowe','Delgado','Fisk','Hargrove','Kimura','Lopez','Marsh','Okafor','Pena','Rourke','Sandoval','Thorne','Vance','Webb','Abernathy'];
+const TEAMS=[['NYY','Yankees'],['BOS','Red Sox'],['TOR','Blue Jays'],['BAL','Orioles'],['TB','Rays'],['CLE','Guardians'],['DET','Tigers'],['MIN','Twins'],['HOU','Astros'],['SEA','Mariners'],['TEX','Rangers'],['LAD','Dodgers'],['SD','Padres'],['SF','Giants'],['ARI','D-backs'],['ATL','Braves'],['PHI','Phillies'],['NYM','Mets'],['CHC','Cubs'],['MIL','Brewers']];
+const TC={NYY:'#0C2340',BOS:'#BD3039',TOR:'#134A8E',BAL:'#DF4601',TB:'#092C5C',CLE:'#00385D',DET:'#0C2340',MIN:'#002B5C',HOU:'#EB6E1F',SEA:'#005C5C',TEX:'#003278',LAD:'#005A9C',SD:'#2F241D',SF:'#FD5A1E',ARI:'#A71930',ATL:'#CE1141',PHI:'#E81828',NYM:'#002D72',CHC:'#0E3386',MIL:'#12284B'};
+const TID={NYY:147,BOS:111,TOR:141,BAL:110,TB:139,CLE:114,DET:116,MIN:142,HOU:117,SEA:136,TEX:140,LAD:119,SD:135,SF:137,ARI:109,ATL:144,PHI:143,NYM:121,CHC:112,MIL:158};
+const logoErr=e=>{e.currentTarget.style.visibility='hidden'};
+const POS=['CF','SS','RF','1B','DH','3B','LF','C','2B'];
+const FW={P:'the pitcher',C:'the catcher','1B':'first','2B':'second','3B':'third',SS:'short',LF:'left',CF:'center',RF:'right'};
+
+function gamesPlayed(date){const d=parse(date),y=d.getFullYear(),st=new Date(y,2,27),en=new Date(y,8,28);if(d<st)return 0;if(d>en)return 162;return Math.round((d-st)/(en-st)*162)}
+
+function batLine(r,bat,outs,runs){
+  const pa=Math.round(outs/27*38);
+  const rows=bat.map(b=>({...b,ab:0,r:0,h:0,rbi:0,bb:0,k:0,hr:0}));
+  for(let p=0;p<pa;p++){const b=rows[p%9],x=r();if(x<.09)b.bb++;else{b.ab++;if(x<.33){b.h++;if(r()<.12)b.hr++}else if(x<.56)b.k++}}
+  for(let k=0;k<runs;k++){
+    const c=rows.filter(b=>b.h+b.bb>0),pool=c.length?c:rows;pool[ri(r,0,pool.length-1)].r++;
+    const c2=rows.filter(b=>b.h>0),pool2=c2.length?c2:rows;pool2[ri(r,0,pool2.length-1)].rbi++;
+  }
+  return{rows,next:pa%9};
+}
+function pitLine(r,pit,outs,H,R,BB,K){
+  const parts=[Math.min(outs,ri(r,15,21))];let rem=outs-parts[0],j=1;
+  while(rem>0&&j<pit.length-2){const o=Math.min(rem,ri(r,3,5));parts.push(o);rem-=o;j++}
+  if(rem>0)parts[parts.length-1]+=rem;
+  const share=tot=>{const arr=parts.map(()=>0);if(!outs){arr[0]=tot;return arr}for(let x=0;x<tot;x++){let t=r()*outs,acc=0,i=0;for(;i<parts.length;i++){acc+=parts[i];if(t<acc)break}arr[Math.min(i,parts.length-1)]++}return arr};
+  const hs=share(H),rs=share(R),bs=share(BB),ks=share(K);
+  const used=parts.map((o,i)=>({...pit[i],outs:o,h:hs[i],r:rs[i],er:Math.max(0,rs[i]-(r()<.15?1:0)),bb:bs[i],k:ks[i],
+    np:Math.round(o*4.6+hs[i]*3+bs[i]*5+ks[i]*2+ri(r,0,8)),limit:i===0?ri(r,92,106):ri(r,18,30)}));
+  const pen=pit.slice(parts.length).map(p=>({...p,outs:0,h:0,r:0,er:0,bb:0,k:0,np:0,limit:ri(r,18,30)}));
+  return{used,pen};
+}
+
+function demoGame(date,i,status,A,H){
+  const r=rngOf(seedOf(date+'#'+i)),pk=100000+seedOf(date+'pk'+i)%900000;let uid=pk*100;
+  const nm=()=>FIRST[ri(r,0,FIRST.length-1)]+' '+LAST[ri(r,0,LAST.length-1)];
+  const roster=()=>({bat:POS.map(p=>({id:++uid,name:nm(),pos:p,avg:'.'+ri(r,205,318)})),pit:[0,1,2,3,4,5].map(()=>({id:++uid,name:nm(),era:(ri(r,220,520)/100).toFixed(2)}))});
+  const ra=roster(),rh=roster(),gp=gamesPlayed(date);
+  const rec=()=>{const w=Math.round(gp*ri(r,40,62)/100);return[w,gp-w]};
+  const[aw,al]=rec(),[hw,hl]=rec();
+  const times=['1:05 PM','4:10 PM','6:40 PM','7:05 PM','7:10 PM','8:10 PM','9:40 PM','10:10 PM'];
+  const g={pk,status,timeText:times[Math.min(7,Math.floor(i*8/10))],away:{abbr:A[0],name:A[1],w:aw,l:al,errors:0},home:{abbr:H[0],name:H[1],w:hw,l:hl,errors:0},innings:[]};
+  g.odds=makeOdds(pk,aw/(aw+al||1),hw/(hw+hl||1));
+  if(status==='pre'){
+    g.probables={away:ra.pit[0].name,home:rh.pit[0].name};
+    g.lineups=r()<.6?{away:ra.bat,home:rh.bat}:null;
+    return g;
+  }
+  const run=()=>r()<.7?0:r()<.7?1:ri(r,2,4);
+  const cur=status==='final'?9:ri(r,2,8),half=status==='final'?'Bottom':(r()<.5?'Top':'Bottom');
+  for(let k=1;k<=cur;k++){const inn={num:k,away:run(),home:run()};if(status==='live'&&k===cur&&half==='Top')inn.home=null;g.innings.push(inn)}
+  if(status==='final'){
+    let k=9;while(sumInn(g,'away')===sumInn(g,'home')&&k<12){k++;g.innings.push({num:k,away:run(),home:run()})}
+    const L=g.innings[g.innings.length-1];
+    if(sumInn(g,'away')===sumInn(g,'home'))L.home+=1;
+    if(sumInn(g,'home')-L.home>sumInn(g,'away'))L.home=null;
+  }
+  const curOuts=status==='live'?ri(r,0,2):0;
+  let awayOuts,homeOuts;
+  if(status==='final'){awayOuts=g.innings.length*3;homeOuts=g.innings.filter(x=>x.home!=null).length*3}
+  else if(half==='Top'){awayOuts=(cur-1)*3+curOuts;homeOuts=(cur-1)*3}
+  else{awayOuts=cur*3;homeOuts=(cur-1)*3+curOuts}
+  const aR=sumInn(g,'away'),hR=sumInn(g,'home');
+  const ab=batLine(r,ra.bat,awayOuts,aR),hb=batLine(r,rh.bat,homeOuts,hR);
+  const tot=(rows,k)=>rows.reduce((t,x)=>t+x[k],0);
+  const aP=pitLine(r,ra.pit,homeOuts,tot(hb.rows,'h'),hR,tot(hb.rows,'bb'),tot(hb.rows,'k'));
+  const hP=pitLine(r,rh.pit,awayOuts,tot(ab.rows,'h'),aR,tot(ab.rows,'bb'),tot(ab.rows,'k'));
+  g.away.errors=r()<.3?1:0;g.home.errors=r()<.3?1:0;
+  if(status==='final'){if(aR>hR){g.away.w++;g.home.l++}else{g.home.w++;g.away.l++}}
+  g.box={away:{batters:ab.rows,pitchers:aP.used},home:{batters:hb.rows,pitchers:hP.used}};
+  if(status==='live'){
+    const off=half==='Top'?'away':'home',ob=off==='away'?ab:hb,rows=ob.rows,n=ob.next;
+    const prev=rows[(n+8)%9],f=['SS','2B','CF','LF','RF','3B'][ri(r,0,5)];
+    g.live={inning:cur,half,b:ri(r,0,3),s:ri(r,0,2),o:curOuts,offense:off,
+      bases:{first:r()<.4?prev:null,second:r()<.3?rows[(n+7)%9]:null,third:r()<.25?rows[(n+6)%9]:null},
+      lastPlay:`${last(prev.name)} ${['LF','CF','RF'].includes(f)?'flies out to':'grounds out to'} ${FW[f]}.`};
+    if(g.live.bases.first)g.live.lastPlay=`${last(prev.name)} singles to ${FW[['LF','CF','RF'][ri(r,0,2)]]}.`;
+    g.sim={next:{away:ab.next,home:hb.next},pen:{away:aP.pen,home:hP.pen}};
+  }
+  return g;
+}
+function demoGames(date){
+  const t=todayStr(),r0=rngOf(seedOf('day'+date));
+  const order=TEAMS.map(x=>[r0(),x]).sort((a,b)=>a[0]-b[0]).map(x=>x[1]);
+  const out=[];
+  for(let i=0;i<10;i++){const st=date<t?'final':date>t?'pre':(i<3?'final':i<6?'live':'pre');out.push(demoGame(date,i,st,order[i*2],order[i*2+1]))}
+  return out;
+}
+
+function endGame(g){
+  g.status='final';
+  if(sumInn(g,'away')>sumInn(g,'home')){g.away.w++;g.home.l++}else{g.home.w++;g.away.l++}
+}
+function simPitch(g,r){
+  const L=g.live,off=L.offense,def=off==='away'?'home':'away';
+  const bats=g.box[off].batters,pits=g.box[def].pitchers,P=pits[pits.length-1];
+  const B=bats[g.sim.next[off]],inn=g.innings[g.innings.length-1],b=L.bases,nm=x=>last(x.name);
+  const score=list=>{list.forEach(x=>x.r++);inn[off]=(inn[off]||0)+list.length;P.r+=list.length;P.er+=list.length;B.rbi+=list.length;
+    return list.length?' '+list.map(x=>`${nm(x)} scores.`).join(' '):''};
+  P.np++;
+  let text;const x=r();
+  if(x<.35){
+    L.b++;if(L.b<4)return;
+    B.bb++;P.bb++;const sc=[];
+    if(b.first){if(b.second){if(b.third)sc.push(b.third);b.third=b.second}b.second=b.first}b.first=B;
+    text=`${nm(B)} walks.`+score(sc);
+  }else if(x<.80){
+    if(x>=.62&&L.s===2)return;
+    L.s++;if(L.s<3)return;
+    B.ab++;B.k++;P.k++;P.outs++;L.o++;text=`${nm(B)} ${r()<.5?'strikes out swinging':'is called out on strikes'}.`;
+  }else{
+    const y=r();
+    if(y<.66){
+      B.ab++;P.outs++;L.o++;
+      const f=['P','1B','2B','3B','SS','LF','CF','RF'][ri(r,0,7)],ofl=['LF','CF','RF'].includes(f);
+      text=`${nm(B)} ${ofl?'flies out to':r()<.7?'grounds out to':'lines out to'} ${FW[f]}.`;
+      if(ofl&&L.o<3&&b.third){const s=[b.third];b.third=null;B.ab--;text=`${nm(B)} hits a sacrifice fly to ${FW[f]}.`+score(s)}
+    }else{
+      const n=y<.86?1:y<.94?2:y<.955?3:4;B.ab++;B.h++;P.h++;if(n===4)B.hr++;
+      const nb={first:null,second:null,third:null},sc=[],put=(row,base)=>{if(base>=4)sc.push(row);else nb[['','first','second','third'][base]]=row};
+      if(b.third)put(b.third,3+n);if(b.second)put(b.second,2+n);if(b.first)put(b.first,1+n);put(B,n);
+      L.bases=nb;
+      text=`${nm(B)} ${['','singles','doubles','triples','homers'][n]} to ${FW[['LF','CF','RF'][ri(r,0,2)]]}.`+score(sc);
+    }
+  }
+  L.b=0;L.s=0;g.sim.next[off]=(g.sim.next[off]+1)%9;
+  const tA=()=>sumInn(g,'away'),tH=()=>sumInn(g,'home');
+  if(L.half==='Bottom'&&L.inning>=9&&tH()>tA()){L.lastPlay=text;return endGame(g)}
+  if(L.o>=3){
+    L.o=0;L.bases={first:null,second:null,third:null};
+    if(L.half==='Top'){
+      if(L.inning>=9&&tH()>tA()){inn.home=null;L.lastPlay=text;return endGame(g)}
+      L.half='Bottom';L.offense='home';if(inn.home==null)inn.home=0;
+    }else{
+      if(L.inning>=9&&tH()!==tA()){L.lastPlay=text;return endGame(g)}
+      L.inning++;L.half='Top';L.offense='away';g.innings.push({num:L.inning,away:0,home:null});
+    }
+    text+=` End of the ${L.half==='Top'?ord(L.inning-1):'top of the '+ord(L.inning)}.`;
+  }
+  const curP=pits[pits.length-1],pen=g.sim.pen[def];
+  if(curP.np>=curP.limit&&pen.length){const np=pen.shift();pits.push(np);text+=` ${nm(np)} replaces ${nm(curP)} on the mound.`}
+  L.lastPlay=text;
+}
+
+const FPOS={P:[200,175],C:[200,292],'1B':[304,150],'2B':[262,112],SS:[138,112],'3B':[96,150],LF:[78,58],CF:[200,26],RF:[322,58]};
+const pct=([x,y])=>({left:(x/4)+'%',top:((y+10)/3.1)+'%'});
+
+class Component extends DCLogic{
+  state={date:todayStr(),games:[],flip:{},tab:{},mobile:window.matchMedia('(max-width: 640px)').matches,calOpen:false,calMonth:null,dir:null,tick:0};
+  cache={};
+  componentDidMount(){
+    this.mq=window.matchMedia('(max-width: 640px)');
+    this.onMq=()=>{if(this.mq.matches!==this.state.mobile)this.setState({mobile:this.mq.matches,flip:{}})};this.onMq();
+    this.mq.addEventListener('change',this.onMq);
+    this.setDate(this.state.date);this.setupTimer();
+  }
+  componentWillUnmount(){this.mq&&this.mq.removeEventListener('change',this.onMq);clearInterval(this.timer)}
+  componentDidUpdate(pp){if(pp.refreshSeconds!==this.props.refreshSeconds)this.setupTimer();if(pp.direction!==this.props.direction)this.setState({dir:null})}
+  setupTimer(){
+    clearInterval(this.timer);const s=Number(this.props.refreshSeconds??15);if(!s)return;
+    this.timer=setInterval(()=>{
+      const gs=this.state.games.filter(g=>g.status==='live');if(!gs.length)return;
+      gs.forEach(g=>simPitch(g,Math.random));this.setState(x=>({tick:x.tick+1}));
+    },s*1000);
+  }
+  setDate(d){if(!this.cache[d])this.cache[d]=demoGames(d);this.setState({date:d,games:this.cache[d],calOpen:false,flip:{}})}
+  isOpen(g){const f=!!this.state.flip[g.pk],def=this.state.mobile?false:g.status==='live';return f?!def:def}
+
+  vm(g,dirB){
+    const isLive=g.status==='live',isFinal=g.status==='final',isPre=g.status==='pre';
+    const open=this.isOpen(g),aS=sumInn(g,'away'),hS=sumInn(g,'home');
+    const hits=s=>g.box?g.box[s].batters.reduce((t,x)=>t+x.h,0):0;
+    const teamRow=(t,side)=>{const lose=isFinal&&(side==='away'?aS<hS:hS<aS);
+      return{abbr:t.abbr,name:t.name,record:`${t.w}-${t.l}`,score:(isLive||isFinal)?String(side==='away'?aS:hS):'',color:lose?V('neutral-600'):V('text'),chipBg:TC[t.abbr]||V('neutral-800'),chipOp:lose?'0.55':'1',logo:`https://www.mlbstatic.com/team-logos/${TID[t.abbr]}.svg`,logoErr}};
+    let statusText,tagBg,tagColor,dot;
+    if(isLive){const L=g.live;statusText=`${L.half==='Top'?'Top':'Bot'} ${ord(L.inning)} · ${L.o} out${L.o===1?'':'s'}`;tagBg='#f8e1dc';tagColor='#9c2b22';dot='#b8332a'}
+    else if(isFinal){statusText=g.innings.length>9?`Final/${g.innings.length}`:'Final';tagBg=V('neutral-200');tagColor=V('neutral-800');dot=V('neutral-700')}
+    else{statusText=g.timeText;tagBg=V('accent-2-200');tagColor=V('accent-2-900');dot=V('accent-2-600')}
+    const ar=teamRow(g.away,'away'),hr=teamRow(g.home,'home');
+    const vm={pk:g.pk,isLive,isFinal,isPre,open,statusText,tagBg,tagColor,dot,away:g.away,home:g.home,chevRot:open?'180deg':'0deg',
+      teamRows:[ar,hr],awayRow:ar,homeRow:hr,
+      centerScore:isPre?'vs':`${aS} – ${hS}`,centerSub:isPre?'Pregame':isFinal?'Final':`${g.live.half==='Top'?'▲':'▼'} ${ord(g.live.inning)}`,
+      toggle:()=>this.setState(s=>({flip:{...s.flip,[g.pk]:!s.flip[g.pk]}}))};
+    if(isLive||isFinal){
+      const n=Math.max(9,g.innings.length),cols=Array.from({length:n},(_,i)=>String(i+1)),ci=isLive?g.live.inning-1:-1;
+      const row=(side,t)=>({abbr:t.abbr,R:String(side==='away'?aS:hS),H:String(hits(side)),E:String(t.errors),
+        cells:cols.map((_,i)=>{const inn=g.innings[i];let v='';if(inn)v=inn[side]==null?(isFinal&&side==='home'?'X':''):String(inn[side]);
+          const on=isLive&&i===ci&&g.live.offense===side;return{v,bg:on?V('accent-200'):'transparent',color:on?V('accent-900'):'#f3eee2'}})});
+      Object.assign(vm,{hasLinescore:true,lsCols:cols,lsRows:[row('away',g.away),row('home',g.home)]});
+    }
+    if(isLive){
+      const L=g.live,off=L.offense,def=off==='away'?'home':'away',labels=[];
+      const pits=g.box[def].pitchers,P=pits[pits.length-1],B=g.box[off].batters[g.sim.next[off]];
+      const fielders={P:P.name};g.box[def].batters.forEach(x=>{if(x.pos!=='DH')fielders[x.pos]=x.name});
+      Object.entries(FPOS).forEach(([p,xy])=>{const nm=fielders[p];if(nm)labels.push({...pct(xy),tag:p,text:last(nm),bg:V('neutral-100'),color:V('text')})});
+      const BP={first:[318,196],second:[200,80],third:[82,196]};
+      Object.entries(BP).forEach(([k,xy])=>{const x=L.bases[k];if(x)labels.push({...pct(xy),tag:k==='first'?'1B':k==='second'?'2B':'3B',text:last(x.name),bg:V('accent-700'),color:V('neutral-100')})});
+      labels.push({...pct([200,260]),tag:'AB',text:last(B.name),bg:V('accent-200'),color:V('accent-900')});
+      const dots=(v,max,on)=>Array.from({length:max},(_,i)=>({bg:i<v?on:'transparent',bd:i<v?on:V('neutral-400')}));
+      const base=x=>x?V('accent-700'):V('neutral-100');
+      Object.assign(vm,{field:{labels,b1:base(L.bases.first),b2:base(L.bases.second),b3:base(L.bases.third)},
+        count:[{label:'B',dots:dots(Math.min(L.b,3),3,V('accent-2-700'))},{label:'S',dots:dots(Math.min(L.s,2),2,V('accent-600'))},{label:'O',dots:dots(Math.min(L.o,2),2,V('accent-600'))}],
+        pitcherName:short(P.name),pitchCount:String(P.np),lastPlay:L.lastPlay||'—',curBatter:B.id});
+    }
+    if(g.box&&(isLive||isFinal)){
+      const bt=side=>{const b=g.box[side],t=g[side],off=isLive&&g.live.offense===side,def=isLive&&!off;
+        const bat={title:'Batting',cols:['AB','R','H','RBI','BB','K','HR','AVG'],rows:b.batters.map(x=>{const cur=off&&x.id===vm.curBatter;
+          return{name:short(x.name),pos:x.pos,bg:cur?V('accent-200'):'transparent',color:cur?V('accent-900'):V('text'),fw:cur?'700':'400',cells:[x.ab,x.r,x.h,x.rbi,x.bb,x.k,x.hr,x.avg].map(String)}})};
+        const pit={title:'Pitching',cols:['IP','H','R','ER','BB','K','NP','ERA'],rows:b.pitchers.map(x=>({name:short(x.name),pos:'',bg:'transparent',color:V('text'),fw:'400',cells:[ipOf(x.outs),x.h,x.r,x.er,x.bb,x.k,x.np,x.era].map(String)}))};
+        return{side,name:`${t.abbr} ${t.name}`,role:isLive?(off?'At bat':'In the field'):'',roleColor:off?V('accent-700'):V('neutral-700'),sections:[bat,pit]}};
+      const both=[bt('away'),bt('home')];
+      const active=this.state.tab[g.pk]||(isLive?g.live.offense:'away');
+      vm.hasBox=true;
+      vm.boxList=dirB?both.filter(x=>x.side===active):both;
+      vm.boxTabs=both.map(x=>({label:x.name,bg:x.side===active?V('accent'):'transparent',color:x.side===active?V('bg'):V('text'),
+        pick:()=>this.setState(s=>({tab:{...s.tab,[g.pk]:x.side}}))}));
+    }
+    if(isPre){
+      const col=side=>{const L=g.lineups&&g.lineups[side];return{abbr:`${g[side].abbr} ${g[side].name}`,sp:short(g.probables[side]),empty:!L,items:(L||[]).map((p,i)=>({n:String(i+1),name:short(p.name),pos:p.pos}))}};
+      vm.lineupCols=[col('away'),col('home')];vm.lineupTitle=g.lineups?'Confirmed lineups':'Probable starters';
+    }
+    if(isPre||isFinal){
+      const O=g.odds,win={bg:V('accent-2-200'),c:V('accent-2-900')},no={bg:'transparent',c:V('text')};
+      let mlW=null,rlW=null,tW=null,res=[];
+      if(isFinal){
+        mlW=aS>hS?'away':'home';rlW=aS+O.spread.away.line>hS?'away':'home';
+        const tot=aS+hS;tW=tot>O.total.line?'away':tot<O.total.line?'home':null;
+        res=[`${g[mlW].abbr} ML ${fmt(O.ml[mlW])}`,`${g[rlW].abbr} ${fmtLine(O.spread[rlW].line)} covered`,tW?`${tW==='away'?'Over':'Under'} ${O.total.line} · ${tot} runs`:`Total push · ${tot}`];
+      }
+      const A=g.away.abbr,H=g.home.abbr;
+      vm.hasOdds=true;vm.oddsTitle=isFinal?'Betting results · pregame lines':'Pregame odds';vm.oddsResults=res;
+      vm.oddsRows=[
+        {mkt:'Moneyline',a:fmt(O.ml.away),h:fmt(O.ml.home),aFull:`${A} ${fmt(O.ml.away)}`,hFull:`${H} ${fmt(O.ml.home)}`},
+        {mkt:'Run line',a:`${fmtLine(O.spread.away.line)} (${fmt(O.spread.away.price)})`,h:`${fmtLine(O.spread.home.line)} (${fmt(O.spread.home.price)})`,aFull:`${fmtLine(O.spread.away.line)} ${fmt(O.spread.away.price)}`,hFull:`${fmtLine(O.spread.home.line)} ${fmt(O.spread.home.price)}`},
+        {mkt:'Total',a:`O ${O.total.line} (${fmt(O.total.over)})`,h:`U ${O.total.line} (${fmt(O.total.under)})`,aFull:`O ${O.total.line} ${fmt(O.total.over)}`,hFull:`U ${O.total.line} ${fmt(O.total.under)}`}
+      ].map((r,i)=>{const w=[mlW,rlW,tW][i],a=w==='away'?win:no,h=w==='home'?win:no;return{...r,aBg:a.bg,aColor:a.c,hBg:h.bg,hColor:h.c}});
+    }
+    return vm;
+  }
+
+  renderVals(){
+    const s=this.state,d=parse(s.date),t=todayStr();
+    const dir='B',dirB=true;
+    let games=s.games.slice();
+    if(this.props.sortLiveFirst??true){const rk={live:0,pre:1,final:2};games.sort((a,b)=>rk[a.status]-rk[b.status])}
+    const live=games.filter(g=>g.status==='live').length,fin=games.filter(g=>g.status==='final').length;
+    const rel=s.date===t?'Today':s.date===addDays(t,-1)?'Yesterday':s.date===addDays(t,1)?'Tomorrow':d.getFullYear()+'';
+    const summaryTags=[{text:`${games.length} games`,bg:V('neutral-200'),color:V('neutral-800')}];
+    if(live)summaryTags.push({text:`${live} live`,bg:'#f8e1dc',color:'#9c2b22'});
+    if(fin&&fin<games.length)summaryTags.push({text:`${fin} final`,bg:V('accent-2-200'),color:V('accent-2-900')});
+    const cm=s.calMonth||[d.getFullYear(),d.getMonth()],first=new Date(cm[0],cm[1],1),nd=new Date(cm[0],cm[1]+1,0).getDate();
+    const calCells=[];
+    for(let i=0;i<first.getDay();i++)calCells.push({label:'',pick:()=>{},cursor:'default',bg:'transparent',color:V('text'),ring:'none'});
+    for(let k=1;k<=nd;k++){const ds=toStr(new Date(cm[0],cm[1],k)),sel=ds===s.date;
+      calCells.push({label:String(k),pick:()=>this.setDate(ds),cursor:'pointer',bg:sel?V('accent'):'transparent',color:sel?V('bg'):V('text'),ring:ds===t&&!sel?`inset 0 0 0 2px ${V('accent-2-600')}`:'none'})}
+    const shiftM=n=>{const x=new Date(cm[0],cm[1]+n,1);this.setState({calMonth:[x.getFullYear(),x.getMonth()]})};
+    return{
+      dirA:!dirB,dirB,fieldRadius:dirB?'50% 50% 28px 28px / 42% 42% 28px 28px':'28px',
+      dirOpts:[['A','A · Stacked'],['B','B · Tabbed']].map(([k,l])=>({label:l,bg:k===dir?V('accent'):'transparent',color:k===dir?V('neutral-100'):V('neutral-300'),pick:()=>this.setState({dir:k})})),
+      dateLabel:d.toLocaleDateString([],s.mobile?{month:'short',day:'numeric'}:{weekday:'short',month:'short',day:'numeric',year:'numeric'}),
+      relLabel:rel,longDate:d.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'}),notToday:s.date!==t,
+      summaryTags,showEmpty:!games.length,
+      games:games.map(g=>this.vm(g,dirB)),
+      prevDay:()=>this.setDate(addDays(s.date,-1)),nextDay:()=>this.setDate(addDays(s.date,1)),goToday:()=>this.setDate(todayStr()),
+      calOpen:s.calOpen,toggleCal:()=>this.setState(x=>({calOpen:!x.calOpen,calMonth:null})),closeCal:()=>this.setState({calOpen:false}),
+      calTitle:first.toLocaleDateString([],{month:'long',year:'numeric'}),calCells,calPrev:()=>shiftM(-1),calNext:()=>shiftM(1)
+    };
+  }
+}
+</script>
+</body>
+</html>
