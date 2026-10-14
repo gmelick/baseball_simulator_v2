@@ -1,5 +1,7 @@
 # The security hardening cluster — SIM-443a to SIM-443f (2026-10-13)
 
+**Run record.** The cutover ran on 2026-10-14 on the serving stack, every step of the run book below, plus `docker compose build nginx` for the frontend's 401 handling; the results are in `CHANGES.md` (2026-10-14).
+
 Status: BUILT on branch `claude/sim-443-tickets-42c030`, reviewed and verified. NOT YET
 DEPLOYED: the live cutover (the run book at the end) needs the owner's go, because it restarts
 the serving stack and changes the database passwords. The record is `CHANGES.md` 2026-10-13.

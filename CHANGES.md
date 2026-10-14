@@ -1,3 +1,46 @@
+# DEPLOYED — the security hardening cluster is live: the cutover ran on the serving stack — SIM-443a–f, 2026-10-14
+
+**Why.** The cluster was built and verified on 2026-10-13 (the entry below). The owner gave the
+go on 2026-10-14, after CI passed on the merge commit `079610d`.
+
+**What ran, in order.** The three images were built from the branch before the merge, so the
+app was down only from the merge to its restart. Master took in the condensed `CLAUDE.md`
+from another session (commit `abd7b19`), then fast-forwarded to the branch and was pushed.
+`scripts/gen_secrets.py --append .env` wrote seven secrets; the template's placeholder
+`SECRET_KEY` was replaced with a generated value (a placeholder would sign the login cookies);
+the old connection-string lines were retired from `.env`. `docker compose config --quiet`
+passed. The database was recreated with the new environment and mounts, `make db-roles`
+created `baseball_app` and `baseball_ro`, and the privilege checks read `t t t / f f`, no
+TRUNCATE, all eight sequences granted. The stack came up on the new images, the scheduler was
+recreated and registered its four jobs, the owner's password was rotated
+(`ROTATE_ADMIN_PASSWORD=1`), `alembic current` through the migrate service read `0030 (head)`,
+Grafana's admin password was reset, and nginx was rebuilt so the browser gets the frontend's
+401 handling.
+
+**Verified live.** Host listeners: port 80 on every interface; 3000, 5434, 6379, 8000 and 9090
+on `127.0.0.1` only. Redis answers PONG with the password and NOAUTH without. `/health` reads
+`auth_enforced: true` and `sql_console: {ro_pool: true, role: baseball_ro}`; the boot log
+reads "login enforced on every API route and the live WebSocket" and "read-only pool open as
+baseball_ro (superuser=False)" with the DSN redacted. A data route answers 401 with no
+credential, `/metrics` answers 200 with a bearer key and 401 with a wrong one, `/auth/me`
+reads `none`. The console rejects `pg_authid` and `sim.sim_runs` with 400 and runs
+`select count(*) from raw.games` (23,173). The jobs container connects as `baseball_app`.
+Prometheus shows the app target up. The cache holds JSON envelopes under `sim443:`; the twelve
+legacy `sim332:` keys were deleted. The live service's log shows no credential error. The
+host-side `BASEBALL_DB_DSN` user variable now names the app role on the published port.
+
+**Found on the way.** CI's case-insensitive credential grep caught a fake password in one test
+fixture (`tests/unit/test_sim443_db_dsn.py`); the line carries `# nosec` now. The condensed
+`CLAUDE.md` moved the two cited anchors again (813 and 816) and left the bare constant
+`_CLAUDE_MD_GAP_LINE` at 85 and the guarded phrase `DuckDB schema **v32**` reworded; the merge
+commit fixes all three. A frontend change needs `docker compose build nginx`, which the run
+book did not list; it does now.
+
+**Open.** Measure the first unattended rebuild in the jobs container with `docker stats` and
+set `JOBS_MEM_LIMIT` (the 10g default is a guess). The owner's first browser login at
+`http://localhost/` with the `AUTH_PASSWORD` value is still to do. The branch and its worktree
+are deleted once this session is archived.
+
 # BUILT — the security hardening cluster: loopback ports, no default database password and a least-privilege app role, login on every API route, the SQL console on a read-only role reading raw.* only, a Redis password and a JSON cache — SIM-443a–f, 2026-10-13
 
 **Why.** Six security defects were filed on 2026-07-27 and deferred until the per-file bug work

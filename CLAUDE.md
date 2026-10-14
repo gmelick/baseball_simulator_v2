@@ -457,8 +457,8 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `final` on `/edges`) and shows no price on a market with no stored line. Projections and
   Betting are collapsible and start collapsed; the Line movement and Managerial override boxes
   are gone (the `/simulate/with_override` endpoint stays). The record: `CHANGES.md` 2026-10-09.
-- **The stack is hardened (SIM-443a–f, BUILT 2026-10-13; NOT YET DEPLOYED — the cutover
-  needs the owner's go).** What the stack runs after the cutover: Postgres, Redis, the app,
+- **The stack is hardened (SIM-443a–f, BUILT 2026-10-13, DEPLOYED 2026-10-14; the run
+  record is in `CHANGES.md`).** What the stack runs: Postgres, Redis, the app,
   Prometheus and Grafana listen on `127.0.0.1` only; nginx on port 80 stays on the LAN. Three
   Postgres roles (`db/roles/`, `make db-roles`): `baseball_user` the owner, used only by the
   `migrate` service; `baseball_app` (row reads and writes in `raw` and `sim`, no DDL) for the
