@@ -238,7 +238,10 @@ total=0
 n_files=0
 while IFS= read -r p; do
     [ -n "$p" ] || continue
-    size=$(wc -c < "$partial/$p" | tr -d ' ')
+    # stat, never wc: busybox wc reads the whole file in small chunks, and over
+    # the Docker Desktop bind mount a gigabyte then takes minutes (measured
+    # 2026-10-15: 53 s for 94 MB; sha256sum reads the same file in 2.7 s).
+    size=$(stat -c %s "$partial/$p") || fail "cannot size $p"
     sum=$(sha256sum "$partial/$p" | awk '{print $1}') || fail "cannot hash $p"
     total=$(( total + size ))
     if [ "$n_files" -gt 0 ]; then
