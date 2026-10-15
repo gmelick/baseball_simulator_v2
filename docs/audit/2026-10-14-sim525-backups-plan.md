@@ -499,6 +499,16 @@ DuckDB copy's counts and hashes match, and the bundle copy loaded with the produ
 10 s. The drill removed the container and the volume. The report is
 `BACKUP_DIR/drills/20261015T051919Z.json`.
 
+**The first scheduled run (10:00 UTC).** Both jobs fired at 10:00:00 UTC, 32 minutes after the
+rebuild's mark cleared (the rebuild ran 08:00 to 09:28 and left `nightly-rebuild.last` with exit
+0). The scheduler log shows both finished with `failed: false`: the data job in 4 min 50 s, the
+Postgres job in 6 min 2 s. Each store holds a new complete set `20261015T100000Z`: Postgres
+2,895,264,234 bytes in 361 s (slower than the manual run, because the two jobs share the disk),
+DuckDB 3,908,590,670 bytes in 180 s with 25 tables counted, and the bundle 588,495,503 bytes in
+50 s of the night's new build `20261015T081423Z`. `nightly-backup.last` reads exit 0, and
+`make backup-status` and the gauge read all three stores under 0.3 h old. The ticket's definition
+of done is met on both counts: the schedule runs by itself, and a real restore was drilled.
+
 **The unit lane in the container.** 6,239 tests passed. `ruff` and `mypy` are clean. 12 tests
 failed in `test_data_engineer_sim340.py`, `test_live_pipeline_sim348.py` and
 `test_sim421_odds_vocabulary.py`. The cause is `ODDS_PROVIDER=bettingpros`, which reaches

@@ -81,7 +81,13 @@ manifest. The build: five components by Opus 5.5 agents on separate files, each 
 independently; four were repaired (a crash retry made a second same-day set; a failed `psql`
 read as a populated target, and the Postgres job had no lock; the `db` service passed no
 `BACKUP_KEEP`; the drill's ready probe could catch the image's temporary init server, passed
-`latest` unresolved, and its streaming timeout never fired without output).
+`latest` unresolved, and its streaming timeout never fired without output). The first scheduled run fired at 10:00 UTC the same morning, 32 minutes after the rebuild's
+mark cleared (the rebuild ran 08:00 to 09:28 and left `nightly-rebuild.last` with exit 0). Both
+jobs finished with `failed: false` in the scheduler log. The Postgres set `20261015T100000Z`
+holds 2,895,264,234 bytes (361 s, the two jobs sharing the disk), the DuckDB set 3,908,590,670
+bytes (180 s) and the bundle set 588,495,503 bytes (50 s) of the night's new build
+`20261015T081423Z`. `nightly-backup.last` reads exit 0, and `make backup-status` and the gauge
+read all three stores under 0.3 h old.
 
 **Found on the way.** 12 unit tests fail in `test_data_engineer_sim340.py`,
 `test_live_pipeline_sim348.py` and `test_sim421_odds_vocabulary.py` when
