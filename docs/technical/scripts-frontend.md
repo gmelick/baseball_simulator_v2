@@ -2,11 +2,11 @@
 
 The scripts that are still run operationally (not one-off probes), plus a map of the frontend structure.
 
-*20 files documented — use the page outline (right sidebar) to jump to one.*
+*Use the page outline (right sidebar) to jump to a file.*
 
 ### `scripts/nightly_finals.sh`, `scripts/with_retry.sh`, `scripts/weekly_refresh.sh`, `scripts/nightly_rebuild.sh`
 
-SIM-519 Part D. `nightly_finals.sh` loads the final games of the last `DAYS` days (default 3; Eastern dates; Postgres only, safe while the app runs). `with_retry.sh <max> <command...>` reruns a command after exit 139 or a "Fatal Python error" (the SIM-445 crash class) and stops at once on any other failure; Ofelia runs the finals job nightly at 07:00 UTC and `weekly_refresh.sh` (the whole current season) on Sunday, both through it. `nightly_rebuild.sh` is the old chain's steps 2 and 3 (profiles, engine artifacts); its scheduler job stays disabled until SIM-524, so run it by hand with the app stopped. `make ingest-catch-up DAYS=n` runs the finals window by hand.
+SIM-519 Part D. `nightly_finals.sh` loads the final games of the last `DAYS` days (default 3; Eastern dates; Postgres only, safe while the app runs). `with_retry.sh <max> <command...>` reruns a command after exit 139 or a "Fatal Python error" (the SIM-445 crash class) and stops at once on any other failure; Ofelia runs the finals job nightly at 07:00 UTC and `weekly_refresh.sh` (the whole current season) on Sunday, both through it. `nightly_rebuild.sh` is the old chain's steps 2 and 3 (profiles, engine artifacts); Ofelia runs it nightly at 08:00 UTC beside the app (the app holds no handle on the DuckDB file since SIM-524), inside `with_mark.sh` and `with_retry.sh`, so it leaves the `nightly-rebuild.running` mark that the data job of the scheduled backups (SIM-525) waits for. `make ingest-catch-up DAYS=n` runs the finals window by hand.
 
 ---
 
@@ -49,6 +49,82 @@ SIM-546 (2026-10-09): the nightly closing pass. A *closing row* is the last pric
 **Environment flags read here:** `ODDS_PROVIDER (the job's command sets it to bettingpros for this one process; the app container does not set it)`, `ODDS_API_KEY (from the app service's env_file; never in the committed ini)`, `BASEBALL_DB_DSN (defaults to the in-container db:5432 DSN)`
 
 > **Notes for anyone changing this file:** The Ofelia stanza is a `job-exec` that runs inside the running app container (named `baseball_simulator_v2-app-1`, the docker-compose default), not a `job-run` fresh container: a fresh container reads no `.env`, so the key would be missing and the job would exit 1 every night. The scheduler service is opt-in (`docker compose --profile scheduler up -d scheduler`); without it neither this job nor the ingest chain runs. `scripts/` is baked into the image, so a change here needs `docker compose build app` and `docker compose up -d app` before the job sees it. Check the key without printing it: `docker compose exec app sh -c 'test -n "$ODDS_API_KEY" && echo set'`. Then run the job once by hand and confirm it writes rows.
+
+---
+
+### `db/backup/pg_backup.sh`
+
+The scheduled backups (SIM-525): the nightly Postgres backup. The Ofelia job `nightly-backup-postgres` runs it at 10:00 UTC inside the `db` container as the `postgres` OS user (`sh /opt/baseball/backup/pg_backup.sh`; compose mounts `db/backup` read-only at `/opt/baseball/backup`), and `make backup` runs it by hand. It logs in over the unix socket, where the image's `local all all trust` rule needs no password, and the `pg_dump` client always matches the server (15.18). A run takes the lock folder `/backups/postgres/.lock` (a second run refuses with exit 2; a lock whose pid is gone or older than 6 h is stale and removed), deletes every `*.partial` set a dead run left, and applies the free-space guard: the free space on `/backups` must reach the larger of `BACKUP_MIN_FREE_GB` (10 GiB) and 1.5 times the newest set, or the script deletes the oldest set while more than 2 remain, else refuses with exit 2. Then it writes `postgres/<TS>.partial/`: `counts_before.tsv` (an exact `count(*)` of every `raw`, `sim` and `public` table), `dump/` (`pg_dump -Fd -j 4 -Z 3`), a `pg_restore --list` check, `counts_after.tsv`, and `manifest.json` last (the server and client versions, the alembic head, the bytes and sha256 of every file). It syncs every file, renames the set to `<TS>` (UTC, `%Y%m%dT%H%M%SZ`), keeps the newest `BACKUP_KEEP` (3) complete sets and prints `BACKUP OK postgres <TS> <bytes> bytes <seconds> s`. Exit 0 the set is complete; 1 the backup failed and nothing is pruned; 2 a refusal before any write. The `db` service has no `env_file`, so it passes `BACKUP_KEEP` and `BACKUP_MIN_FREE_GB` from `.env` in its `environment`.
+
+---
+
+### `db/backup/pg_restore.sh`
+
+The scheduled backups (SIM-525): restore one Postgres set into an EMPTY database, `sh /opt/baseball/backup/pg_restore.sh <set dir>`, as the `postgres` OS user over the socket (`make restore-postgres SET=<TS>`; the restore drill runs it in its scratch cluster). The set must hold `manifest.json` and `dump/toc.dat` (else exit 2). The script probes the connection (`select 1`, every 2 s for up to `PG_CONNECT_WAIT_S`, 30 s; no answer is exit 1). Then it runs `DROP SCHEMA IF EXISTS raw; DROP SCHEMA IF EXISTS sim;` WITHOUT CASCADE: on an empty target, where the image's init created both schemas empty, the drop removes them; on a populated database it fails with "depend on" and the script refuses with exit 3 ("target database is not empty") before it restores anything. Then `pg_restore -j 4 --no-owner --no-acl --exit-on-error`, then the count check (`COUNT_CHECK=1`): every table's live count must lie between its two counts in `counts_before.tsv` and `counts_after.tsv`. Its last line is `RESTORE OK <set dir>`. After a restore, run `make db-roles` (the grants) and `docker compose run --rm migrate alembic current` (expect `0030 (head)`). Exit 0 restored; 1 no connection, a restore error or a count failure; 2 a usage error or an incomplete set; 3 the target is not empty.
+
+---
+
+### `pipeline/backup/data_stores.py`
+
+The scheduled backups (SIM-525): back up, verify and restore the DuckDB analytics file and the engine-artifact bundle, run as `python -m pipeline.backup.data_stores` in the `jobs` container as `appuser`. The Ofelia job `nightly-backup-data` runs it at 10:00 UTC inside `with_mark.sh nightly-backup` and `with_retry.sh 2`. A run refuses (exit 2) when the backup root is missing or read-only or the free-space guard fails; deletes every dead `*.partial` set; waits for the writer jobs; writes `duckdb/<TS>/` and `bundle/<TS>/` under one set id; and prunes each store to `BACKUP_KEEP` sets only when every store succeeded. Exit 0 every store succeeded; 1 a store failed (the other was still attempted); 2 a refusal. The module docstring is the design in prose.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `wait_for_marks(mark_dir, *, grace_s, wait_s, poll_s, stale_s, clock, sleep)` | Sleeps `grace_s` (60 s), then waits while a `nightly-rebuild`, `nightly-finals` or `weekly-refresh` `.running` mark younger than `stale_s` (6 h) exists, polling every 60 s for up to `wait_s` (2 h). False on a timeout. | `run_backup` | the marks `scripts/with_mark.sh` writes in `/data/ingest_marks` |
+| `backup_duckdb(root, set_id, *, duckdb_path, calibration, prop_validation, mark_dir, ...)` | Opens the file read-only (`open_read_only`: a lock error retries every 60 s for 30 min, then the store fails). With the handle held it counts every table, copies the file and its `.wal` when present and syncs them; then it opens the copy, requires equal counts and writes the set through `_finish_set` (a sha256 per file, `manifest.json` last, the rename). | `run_backup` | `duckdb`, `backup_small_files` |
+| `backup_bundle(root, set_id, *, play_pool_dir)` | Resolves the published version behind `engine_artifacts` and copies it with `shutil.copytree` into `bundle/<set>/<build id>/`, without the `.in_use.*` marks. The manifest holds the build id, the publish time and a sha256 per file. | `run_backup` | `pipeline.batch.bundle_versions` (`resolve_bundle_dir`, `IN_USE_PREFIX`) |
+| `backup_small_files(set_dir, *, calibration, prop_validation, mark_dir)` | Copies `calibration.json`, `prop_validation.json` and `ingest_marks/*.last` into `<set>/data_files/`; skips a missing file. The `.running` marks and the `calibration.json.bak_*` files are not copied. | `backup_duckdb` | — |
+| `free_space_ok(root, store, *, min_free_gb, factor)` | True when the free space on the backup root reaches the larger of `min_free_gb` GiB (`BACKUP_MIN_FREE_GB`, 10) and `factor` (`BACKUP_FREE_FACTOR`, 1.5) times the newest set. When short, it deletes the oldest set while more than 2 remain. | `run_backup` | `shutil.disk_usage` |
+| `prune_sets(root, store, keep, current)` | Keeps the newest `keep` complete sets of a store; never deletes `current`. | `run_backup` (after a run where every store succeeded) | `pipeline.backup.status.complete_sets` |
+| `recent_sets(root, stores, *, window_s, now)` | The stores whose newest complete set started less than `window_s` (`--rerun-window-s`, 3600 s) ago. A crash retry skips them and reuses their set id; `--new-set` sets the window to 0. | `run_backup` | `pipeline.backup.status` |
+| `verify_set(root, set_id)` | Verifies the DuckDB set (every file's size and sha256, the copy's table counts) and the bundle set (the hashes, then `EngineArtifacts.load` on the copy). `latest` takes each store's newest set. True when at least one set exists and every set passes. | `--verify-set`; `scripts/backup_drill.py` | `pipeline.batch.engine_artifacts.EngineArtifacts.load` |
+| `restore_duckdb(root, set_id, *, duckdb_path)` | Checks the copy's size and sha256, copies it to `<path>.restore-tmp`, moves a live `.wal` aside, then `os.replace`. Restart the app after it. | `--restore-duckdb <TS> --yes` | — |
+| `restore_bundle(root, set_id, *, play_pool_dir, force)` | Checks the hashes, copies the build into `engine_artifacts.versions/<build id>/` (refuses an existing folder without `--force`) and publishes it; the app's bundle watcher restarts the app on the link move. | `--restore-bundle <TS> --yes` | `pipeline.batch.bundle_versions.publish_bundle_version`, `versions_root` |
+| `status_rows(root, now)` | The newest complete set of each store (set id, created at, age in hours, bytes, number of sets), as plain data. | `print_status` (`--status`, `make backup-status`) | `pipeline.backup.status` |
+| `main(argv, *, clock, sleep, opener)` | The command line: `--status [--json]`, `--verify-set`, `--restore-duckdb` / `--restore-bundle` (both refuse without `--yes`), or a backup run (`--only`, `--keep`, `--new-set`, `--backups-root`, `--data-root`, and one flag per wait). The test seams make the waits instant. | Ofelia `nightly-backup-data`; `make backup` (with `--new-set`); `make backup-status`; the drill | `run_backup` |
+
+**Depends on:** `pipeline/backup/status.py`, `pipeline/batch/bundle_versions.py`, `pipeline/batch/engine_artifacts.py` (the verify only), `duckdb`
+
+**Used by:** `deploy/ofelia/config.ini [job-exec "nightly-backup-data"]`, `Makefile` (`backup`, `backup-status`), `scripts/backup_drill.py`
+
+**Environment flags read here:** `BACKUP_ROOT` (default `/backups`), `BACKUP_KEEP` (3), `BACKUP_MIN_FREE_GB` (10), `BACKUP_FREE_FACTOR` (1.5), `BASEBALL_DUCKDB_PATH`, `BASEBALL_PLAY_POOL_DIR`, `INGEST_MARK_DIR`, `CALIBRATION_REPORT_PATH`, `PROP_VALIDATION_PATH` (each defaults under `/data`; `--data-root` beats them)
+
+> **Notes for anyone changing this file:** Never open the DuckDB file while a rebuild runs: a read-only handle we hold makes the rebuild's writer connect fail, and the computor does not retry. That is why the rebuild job runs inside `with_mark.sh`. The module does not back up `/data/replay.duckdb`: the app holds it writable with a live WAL, and its replays are disposable. It lives in a bind-mounted folder, so an edit needs no image rebuild.
+
+---
+
+### `pipeline/backup/status.py`
+
+The scheduled backups (SIM-525): which sets exist and how old they are. Pure standard library: the API imports it for the backup-age gauge, so it must never import duckdb. A set is complete only when its `manifest.json` exists; a `*.partial` folder never counts.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `SetInfo` | One complete set: store, set id, path, created at (UTC), bytes. | everywhere below | — |
+| `parse_set_id(set_id)` | The UTC time a set id (`%Y%m%dT%H%M%SZ`) names, or None. | `_read_set`, `data_stores.recent_sets` | — |
+| `complete_sets(root, store)` / `newest_complete_set(root, store)` / `newest_complete_sets(root)` | Every complete set of a store, the oldest first; the newest one; the newest of each of `postgres`, `duckdb`, `bundle`. | `pipeline.backup.data_stores`, `api/routes/metrics.py` | — |
+| `age_hours(info, now)` | Hours since the set's creation; -1.0 when there is no set. | `api/routes/metrics.py` (`baseball_sim_backup_age_hours{store}`, read from `BACKUPS_ROOT` at most every 600 s), `data_stores.status_rows` | — |
+
+**Used by:** `pipeline/backup/data_stores.py`, `api/routes/metrics.py`
+
+---
+
+### `scripts/backup_drill.py`
+
+The scheduled backups (SIM-525): the restore drill, on the host with the Windows `py` launcher (standard library only; it calls `docker` with list argv, so Git Bash cannot rewrite its paths). `make backup-drill` runs `py scripts/backup_drill.py --set latest` (`SET=<TS>` names a set). The drill never touches the live database.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `leftovers()` | Lists every `sim525_*` container and volume; the drill refuses (exit 2) while one exists. | `main` | `docker ps -a`, `docker volume ls` |
+| `pick_set(store_dir, which)` / `pick_data_set(backup_dir, which)` | Resolves `latest` to the newest complete Postgres set, and to the newest set id complete in BOTH `duckdb/` and `bundle/`. A named set must be complete. | `main` | — |
+| `docker_run_argv(set_dir, backup_scripts)` | Starts `postgres:15-alpine` as `sim525_drill_pg`: trust auth, `--network none`, no port, the named volume `sim525_drill_pg` (Postgres refuses a Windows bind mount as its data directory; the volume takes about 20 GB inside the disk image while the drill runs), the set at `/restore:ro`, `db/backup` at `/opt/baseball/backup:ro`. | `_restore_postgres` | — |
+| `wait_ready(...)` | Polls `pg_isready -h 127.0.0.1` until the final server answers (the socket also answers the image's temporary init server). | `_restore_postgres` | — |
+| `restore_ok(exit_code, output)` | Passes the restore on exit 0, no "errors ignored" line and `RESTORE OK` as the last line. | `_restore_postgres` | `db/backup/pg_restore.sh` |
+| `_verify_data(data_set, timeout_s)` | Runs `docker compose run --rm -T jobs python -m pipeline.backup.data_stores --verify-set <TS>`. | `main` | `pipeline.backup.data_stores.verify_set` |
+| `main(argv)` | Refuses on a leftover, a missing set, or a `--backup-dir` that is not the folder compose mounts in `jobs`; restores, verifies, always removes the container and the volume (unless `--keep-cluster`), and writes `BACKUP_DIR/drills/<TS>.json`. Exit 0 pass, 1 a step failed, 2 a refusal. | `make backup-drill` | `BACKUP_DIR` in `.env` (default `./backups`) |
+
+**Depends on:** `db/backup/pg_restore.sh`, `pipeline/backup/data_stores.py`, the Docker CLI on the host
+
+**Used by:** `Makefile` (`backup-drill`)
 
 ---
 

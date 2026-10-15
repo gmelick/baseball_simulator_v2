@@ -115,6 +115,30 @@ Prometheus scrapes `/metrics` with a Bearer key read from a file:
 `deploy/monitoring/secrets/README.md` repeats these steps next to the file.
 When you rotate `API_KEYS`, copy the new value into the file.
 
+## Backups (SIM-525)
+
+The scheduled backups copy the three data stores (the Postgres database, the
+DuckDB analytics file and the engine-artifact bundle) into a host folder.
+`BACKUP_DIR` in `.env` names the folder:
+`C:/Users/grego/Documents/baseball_backups`. Compose mounts it at `/backups`:
+read-write in `db` and `jobs`, read-only in `app` (for the backup-age gauge).
+Without the value, compose uses `./backups` in the repo, which git and Docker
+ignore. Each store keeps its newest `BACKUP_KEEP` sets (3).
+
+| Ofelia job (10:00 UTC, `no-overlap`) | Runs in | What it writes |
+|---|---|---|
+| `nightly-backup-postgres` | `db`, as the `postgres` OS user, over the unix socket | `db/backup/pg_backup.sh`: `postgres/<TS>/` (a `pg_dump -Fd` dump and the table counts before and after it) |
+| `nightly-backup-data` | `jobs`, as `appuser`, inside `with_mark.sh` and `with_retry.sh` | `python -m pipeline.backup.data_stores`: `duckdb/<TS>/` and `bundle/<TS>/` |
+
+The folder is outside Docker's disk image but on the laptop's only disk, C:.
+The sets survive a loss or a reset of the disk image, `docker compose down -v`,
+a bad migration or rebuild, a writer that dies in the middle of a rebuild, and
+accidental deletion. They do not survive the
+laptop's disk dying or the loss of the laptop; an off-machine copy is a
+follow-up ticket. `make backup` backs up by hand, `make backup-status` lists
+the sets and `make backup-drill` tests a restore. `WORKFLOW.md` §2.10 holds
+the checks and the restore run book.
+
 ## Running the stack behind nginx
 
 ```bash

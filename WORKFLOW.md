@@ -407,6 +407,99 @@ full coverage on 3.13 — no source build required (SIM-431).
 - `.github\workflows\integration-weekly.yml` — testcontainers integration suite, Monday 03:00 UTC.
 - `.github\workflows\docker-release.yml` — push image to `ghcr.io` on main.
 
+### 2.10 Backups and restore
+
+The scheduled backups (SIM-525) copy the three data stores to a host folder every day. A *store* is one of the three: the Postgres statistics database, the DuckDB analytics file (`/data/baseball_sim.duckdb`) and the engine-artifact bundle (the published version under `/data/play_pool/engine_artifacts`). A *set* is one store's backup from one run.
+
+**The folder.**  `BACKUP_DIR` in `.env` names it: `C:/Users/grego/Documents/baseball_backups`. Compose mounts it at `/backups`: read-write in the `db` and `jobs` containers, read-only in the app. The folder is outside Docker's disk image, on the laptop's only disk, C:. Each store keeps its newest 3 complete sets (`BACKUP_KEEP=3` in `.env`). Without `BACKUP_DIR`, compose uses `.\backups` in the repo, which git and Docker ignore.
+
+```
+BACKUP_DIR\
+  postgres\<TS>\     dump\ (pg_dump directory format), counts_before.tsv, counts_after.tsv, manifest.json
+  duckdb\<TS>\       baseball_sim.duckdb [+ .wal], data_files\ (calibration.json, prop_validation.json, ingest_marks\*.last), manifest.json
+  bundle\<TS>\       <build id>\ (a copy of the published version), manifest.json
+  drills\<TS>.json   one report per restore drill
+```
+
+`<TS>` is the UTC start time of the run (`YYYYmmddTHHMMSSZ`). A run writes each set as `<TS>.partial`, syncs every file to disk, writes `manifest.json` last and then renames the folder. A set without `manifest.json` never counts. The next run deletes every `.partial` folder it finds. Each manifest records the bytes and the sha256 of every file.
+
+**What the sets protect against.**  They protect against the loss or a reset of Docker's disk image, `docker compose down -v` and `make nuke`, a bad migration or rebuild, a writer that dies in the middle of a rebuild, and accidental deletion. They do NOT protect against the laptop's disk dying or the loss of the laptop: the sets sit on the same disk. An off-machine copy of the sets is a follow-up ticket.
+
+**The schedule.**  Ofelia runs two jobs at 10:00 UTC, after the nightly rebuild (08:00 UTC, done at about 09:30) and before the closing-lines pass (10:30 UTC). Each job sets `no-overlap`.
+
+| Job | Container and user | What it does |
+|---|---|---|
+| `nightly-backup-postgres` (the Postgres job) | `db`, the `postgres` OS user | Runs `db/backup/pg_backup.sh` over the unix socket, with no password. It counts every `raw`, `sim` and `public` table, dumps the database (`pg_dump -Fd -j 4 -Z 3`), checks the dump with `pg_restore --list` and counts every table again. The live service can write during the dump, so a restore checks each count against the two counts. A lock folder (`postgres\.lock`) stops a second run. |
+| `nightly-backup-data` (the data job) | `jobs`, `appuser` | Runs `with_mark.sh nightly-backup with_retry.sh 2 python -m pipeline.backup.data_stores`. It copies the DuckDB file under a read-only handle and requires the same table counts on the copy. It copies the small files into the same set. It copies the bundle version without the app's `.in_use.*` marks. |
+
+The data job waits 60 s. Then it waits while a `nightly-rebuild`, `nightly-finals` or `weekly-refresh` `.running` mark younger than 6 h exists in `/data/ingest_marks`, for up to 2 h. The rebuild runs inside `with_mark.sh`, so it leaves that mark while it writes the DuckDB file. When a writer still holds the file, the open retries every 60 s for 30 min. When either wait runs out, the data job skips the DuckDB store, still backs up the bundle and exits 1. A crash retry within one hour skips a store that already finished and reuses its set id, so the duckdb and bundle sets of one night share one `<TS>`. The data job does not back up `/data/replay.duckdb` (the app holds it writable, and its replays are disposable) or the `calibration.json.bak_*` files.
+
+Both jobs guard the free space on `/backups` (the host disk C:). They need the larger of 10 GiB and 1.5 times the newest set. When the disk is short, they delete the oldest set while more than 2 remain. Otherwise they refuse with exit 2. A failed run prunes nothing.
+
+**Back up now.**  Run these from cmd.exe: Git Bash rewrites the container paths (CLAUDE.md §2a).
+
+```bat
+make backup
+:: The Postgres step prints:  BACKUP OK postgres <TS> <bytes> bytes <seconds> s
+:: The data step prints:      BACKUP OK duckdb <TS> ...  and  BACKUP OK bundle <TS> ...
+make backup-status
+```
+
+`make backup` runs the two steps one after the other. Its data step passes `--new-set`, so it always makes a fresh set, even within an hour of the scheduled run. On the first run (2026-10-15) the data step took 308 s: a 3.6 GiB DuckDB copy and a 561 MiB bundle copy.
+
+**Check last night's run.**
+
+```bat
+make backup-status
+:: Expected: postgres, duckdb and bundle, each under 24 h old, with 3 sets each.
+
+type C:\Users\grego\Documents\baseball_backups\postgres\<TS>\manifest.json
+type C:\Users\grego\Documents\baseball_backups\duckdb\<TS>\manifest.json
+
+docker compose exec -T jobs cat /data/ingest_marks/nightly-backup.last
+:: Expected: <UTC date> 0 <UTC timestamp>   (the middle field is the data job's exit code)
+
+docker compose logs scheduler | findstr nightly-backup
+
+set API_KEY=<one key from API_KEYS in .env>
+curl -s -H "X-API-Key: %API_KEY%" http://localhost:8000/metrics | findstr backup_age
+:: baseball_sim_backup_age_hours{store="postgres"} 1.2   (and duckdb, bundle)
+```
+
+**What good looks like.**  Each store's newest set is under 24 h old, its folder holds `manifest.json`, and no `.partial` folder is left. `nightly-backup.last` reads exit 0. The gauge `baseball_sim_backup_age_hours{store}` reads the hours since each store's newest complete set, and -1 for a store with no set. The app reads the folder again at most every 600 s.
+
+**The restore drill.**  The drill proves that a set restores. It never touches the live database.
+
+```bat
+make backup-drill
+make backup-drill SET=<TS>
+```
+
+`make backup-drill` runs `py scripts/backup_drill.py --set latest` on the host. The drill refuses to start while any `sim525_*` container or volume exists. It starts a scratch Postgres cluster (`postgres:15-alpine`, container `sim525_drill_pg`, no network, no port, the named volume `sim525_drill_pg`). It runs the real `pg_restore.sh` against the scratch cluster. It requires exit 0, no "errors ignored" line and `RESTORE OK` as the last line. Then it runs `--verify-set <TS>` in the jobs container on the newest set id that is complete in both `duckdb\` and `bundle\`: the DuckDB copy's counts and hashes, and a load of the bundle copy. It removes the scratch container and volume, and writes `BACKUP_DIR\drills\<TS>.json`. Postgres refuses a Windows folder as its data directory, so the scratch cluster lives on a Docker volume: it takes about 20 GB inside Docker's disk image while it runs. Check that the disk image has room first; `docker builder prune -f` frees the build cache.
+
+**The restore run book, in short.**  The full run book is `docs\audit\2026-10-14-sim525-backups-plan.md` §6. Pick the set with `make backup-status`.
+
+```bat
+:: Postgres: the target database must be empty (a new postgres_data volume).
+:: The script refuses a populated database with exit 3 ("target database is not empty").
+make restore-postgres SET=<TS>
+:: Expected last line: RESTORE OK /backups/postgres/<TS>
+make db-roles
+docker compose run --rm migrate alembic current
+:: Expected: 0030 (head)
+
+:: DuckDB: checks the size and sha256, moves a live .wal aside, replaces the file.
+docker compose stop scheduler
+docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-duckdb <TS> --yes
+docker compose restart app
+docker compose start scheduler
+
+:: The bundle: copies the version back and publishes it; the app restarts itself on the link move.
+docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-bundle <TS> --yes
+```
+
+`pg_restore.sh` drops the empty `raw` and `sim` schemas that the image's init creates. Then it restores with `pg_restore -j 4 --no-owner --no-acl --exit-on-error` and checks every table's count against the set's two counts. The restore carries no owners or grants, so `make db-roles` puts the grants back. `--restore-bundle` refuses a version folder that exists already; `--force` copies over it. No command restores the small files: copy them from the DuckDB set's `data_files\` folder into `/data` by hand.
+
 ---
 
 ## Part 3 — End-to-end run (sprint-kickoff health checklist)
@@ -474,12 +567,14 @@ echo %BASEBALL_DB_DSN%
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |
 | Pitcher engine smoke fails with `import ot` | POT isn't installed — `pip install -r requirements.txt` (pins `POT>=0.9.5`, which ships a cp313 wheel). |
-| `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "baseball_user"` (or `"baseball_app"` / `"baseball_ro"`) even though `.env` and `docker compose exec db env` agree | **Stale `postgres_data` volume.**  `POSTGRES_PASSWORD` only takes effect on the volume's first init.  Reset the passwords in-band from `.env` over the db container's socket (no password needed):<br>`make db-roles ROTATE_ADMIN_PASSWORD=1`<br>It sets `baseball_user`'s password from `POSTGRES_PASSWORD` and both app roles' passwords from `.env`, and re-applies the grants.<br>Nuclear option (loses all data): `docker compose down -v && docker compose up -d db && make migrate`. |
+| `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "baseball_user"` (or `"baseball_app"` / `"baseball_ro"`) even though `.env` and `docker compose exec db env` agree | **Stale `postgres_data` volume.**  `POSTGRES_PASSWORD` only takes effect on the volume's first init.  Reset the passwords in-band from `.env` over the db container's socket (no password needed):<br>`make db-roles ROTATE_ADMIN_PASSWORD=1`<br>It sets `baseball_user`'s password from `POSTGRES_PASSWORD` and both app roles' passwords from `.env`, and re-applies the grants.<br>Nuclear option (loses all data): `docker compose down -v && docker compose up -d db && make migrate`. Take a backup first (`make backup`); the restore run book in §2.10 brings the data back from a set. |
 | `required variable POSTGRES_PASSWORD is missing a value` (or another secret) on any `docker compose` or `make` command | `.env` lacks a secret (SIM-443): `py scripts\gen_secrets.py --append .env`, then `py scripts\gen_secrets.py --check .env` exits 0. A worktree needs its own `.env`. |
 | `401 Unauthorized` from an `/api/` route | Every route needs a credential in every environment (SIM-443c): `X-API-Key: <key>` or `Authorization: Bearer <key>` with a key from `API_KEYS`, or the browser's login with `AUTH_PASSWORD`. `curl http://localhost:8000/health` shows `"auth_enforced"`. |
 | The SQL console answers 503 | The read-only pool is missing or refused (SIM-443e). `curl http://localhost:8000/health` shows `"sql_console"`; `docker compose logs app \| findstr SIM-443e` names the reason. Run `make db-roles` if `baseball_ro` does not exist yet. |
 | `permission denied for table ...` from the app or a loader | The table is outside `raw`/`sim`, or a new schema has no grants: add its lines to `db\roles\setup_roles.sql`, then `make db-roles`. |
 | Ofelia logs `No such container: baseball_simulator_v2-jobs-1` | The nightly data jobs exec into the `jobs` container (SIM-443b): `docker compose up -d jobs`, then `docker compose ps jobs` shows it healthy. A worktree's or a renamed project's container has another name: edit the `container =` lines in `deploy\ofelia\config.ini`. |
+| A store is lost or corrupt (the Postgres database, `/data/baseball_sim.duckdb` or the published bundle) | Restore it from its newest good set with the scheduled backups (SIM-525): the restore run book in §2.10, in full in `docs\audit\2026-10-14-sim525-backups-plan.md` §6. `make backup-status` lists the sets. To test a set before you restore it, run `make backup-drill SET=<TS>`. |
+| A backup set is missing this morning (`make backup-status` shows a store over 24 h old, or the gauge `baseball_sim_backup_age_hours` reads over 24 or -1) | 1. `docker compose logs scheduler \| findstr nightly-backup` shows each job's output and exit. An exec error means the `db` or `jobs` container was stopped at 10:00 UTC. 2. The Postgres job: exit 2 is a refusal before any write (the backup root is missing or read-only, the free space is short, or another run holds `postgres\.lock`); exit 1 is a failed dump, and the job prunes nothing. 3. The data job: `docker compose exec -T jobs cat /data/ingest_marks/nightly-backup.last` holds its exit code in the middle field. Exit 2 is a refusal (the root or the free space). Exit 1 means a store failed. One cause: a writer mark such as `nightly-rebuild.running` stayed fresh for 2 h, or a writer held the DuckDB file for 30 min, so the job skipped the DuckDB store. 4. A `<TS>.partial` folder is a run that died; the next run deletes it. 5. With no `BACKUP_DIR` in `.env`, the sets go to `.\backups` in the repo. Then run `make backup` from cmd.exe. |
 
 ---
 

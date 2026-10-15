@@ -1,3 +1,100 @@
+# DEPLOYED — the scheduled backups of the three data stores, with a restore drill — SIM-525, 2026-10-15
+
+**Why.** The platform keeps its data in three stores, and none had a backup: the Postgres
+statistics database (18 GB; a rebuild is the 6-hour re-sweep plus days of odds reload), the
+DuckDB analytics file (3.6 GiB; the 1.5-hour recompute) and the engine-artifact bundle (561 MiB
+a version). Every volume lives inside Docker Desktop's disk image on C:. A disk-image loss or
+reset, `docker compose down -v` (`make nuke`), a bad migration or rebuild, a writer that dies
+in the middle of a rebuild, or an accidental deletion loses a store. The owner's decisions (2026-10-14): the sets
+go to the host folder `C:/Users/grego/Documents/baseball_backups` (`BACKUP_DIR` in `.env`,
+outside the disk image), and each store keeps 3 daily sets (`BACKUP_KEEP=3`). The folder is on
+the laptop's only disk, so the sets do not survive that disk dying or the laptop being lost; an
+off-machine copy is a follow-up. The design and both run books:
+`docs/audit/2026-10-14-sim525-backups-plan.md`.
+
+**What runs.** Two Ofelia jobs at 10:00 UTC, each with `no-overlap`. The Postgres job
+(`nightly-backup-postgres`) execs `db/backup/pg_backup.sh` into the `db` container as the
+`postgres` OS user, over the unix socket (`trust`, so no password; the client is the server's
+own, 15.18). The data job (`nightly-backup-data`) execs `with_mark.sh nightly-backup
+with_retry.sh 2 python -m pipeline.backup.data_stores` into the `jobs` container as `appuser`.
+The rebuild (08:00 UTC) now runs inside `with_mark.sh` too, so the data job waits for its
+`.running` mark (and the finals' and the Sunday sweep's) before it opens the DuckDB file.
+- Each set is written as `<TS>.partial` (TS = the UTC start, `%Y%m%dT%H%M%SZ`), every file
+  fsynced, `manifest.json` last, then renamed. The next run deletes every leftover `.partial`.
+  A set without a manifest is never counted.
+- Postgres: an exact `count(*)` of every `raw`, `sim` and `public` table before and after
+  `pg_dump -Fd -j 4 -Z 3`; `pg_restore --list` as the structural check; a sha256 per file; a
+  lock folder (`postgres/.lock`).
+- DuckDB: 60 s of grace, then a wait while a writer mark is younger than 6 h (up to 2 h); a
+  read-only open, retried on a lock error every 60 s for 30 min; the file (and its `.wal`)
+  copied while the handle is held; the copy opened and its counts required equal. The small
+  files (`calibration.json`, `prop_validation.json`, `ingest_marks/*.last`) ride in the set.
+- The bundle: a copy of the published version without the `.in_use.*` marks; the build id in
+  the manifest.
+- The free-space guard on `/backups` (the host disk): at least max(10 GiB, 1.5 x the newest
+  set); short, the oldest set goes while more than 2 remain, else exit 2. Retention keeps 3
+  complete sets per store; a failed run prunes nothing. A crash retry within 1 hour skips a
+  store that finished and reuses its set id; `make backup` passes `--new-set`.
+- Not backed up: `replay.duckdb` (the app holds it writable; disposable replays) and the
+  `calibration.json.bak_*` files.
+- Make targets: `backup`, `backup-status`, `backup-drill` (`SET=<ts>` optional),
+  `restore-postgres SET=<ts>` (refuses a populated database). The gauge
+  `baseball_sim_backup_age_hours{store}` on `/metrics` reads the newest set of each store from
+  `/backups` (read-only in the app), at most every 600 s; -1 when none.
+- Compose mounts the folder into `db` and `jobs` (writable) and `app` (read-only), with the
+  default `./backups` (git- and docker-ignored) and no `:?`, so a worktree without the value
+  still runs `make test-unit`.
+
+**What ran, in order (2026-10-15, UTC).**
+1. 04:56, the deploy from this checkout: `BACKUP_DIR` written to `.env`;
+   `docker compose config --quiet`; `docker compose up -d --wait db jobs app` (Postgres
+   restarted for about ten seconds; app, `db` and `jobs` healthy inside a minute);
+   `docker compose up -d --force-recreate scheduler` registered six jobs (the four old ones,
+   `nightly-backup-postgres` and `nightly-backup-data`).
+2. 04:58, the first backup by hand, both steps in parallel as the schedule runs them. The data
+   job wrote the set `20261015T045846Z`: the DuckDB copy 3,839,122,442 bytes (3.6 GiB) in 201 s
+   with equal counts on the copy; the bundle (build `20261014T081352Z`) 588,464,368 bytes in
+   46 s; the whole run 308 s with the 60 s grace. The Postgres job's first attempt (set
+   `20261015T045845Z`) dumped in four minutes and then sat in the file-sizing step (the `wc -c`
+   finding below); it was stopped at 05:13 and its partial set removed. The fixed script wrote
+   the set `20261015T051313Z` at 05:13: 2,895,149,569 bytes (2.7 GiB, 39 files) in 267 s.
+3. The negative checks: a planted `duckdb/20261015T000000Z.partial` was deleted on the next run,
+   and that run skipped both stores (their sets were under an hour old) with exit 0. A fresh
+   `nightly-rebuild.running` mark made the data job wait, give up after the 5 s test window,
+   skip the DuckDB store and exit 1, with no `.partial` left. `--status` listed the sets.
+   `pg_restore.sh` run against the live database refused with exit 3 ("target database is not
+   empty") and changed nothing: `raw.games` still held its 23,175 rows.
+4. The restore drill (`make backup-drill`, 05:19 to 05:27): PASS in 450 s. The scratch cluster
+   restored the set `20261015T051313Z` in 349 s of `pg_restore -j 4`; every one of the 36 tables
+   landed inside its count bracket (34 exact; `raw.game_odds` and `raw.prop_odds` moved by 27
+   and 8 rows during the dump, because the live service writes odds); `RESTORE OK` was the last
+   line and no error was ignored. The data set `20261015T045846Z` verified in 84 s: the DuckDB
+   copy's counts and hashes match, and the bundle copy loaded with the production loader in
+   10 s. The container and the volume were removed; the report is
+   `BACKUP_DIR/drills/20261015T051919Z.json`.
+5. The unit lane in the container: 6,239 passed; `ruff` and `mypy` clean.
+
+**Verified live.** Inside both the `db` and the `jobs` container, `df /backups` reads the host
+disk C: (125 GB free), as the free-space guard needs. The scheduler log lists the six jobs. The
+live service's Redis heartbeat advanced after the Postgres restart. Every set above carries its
+manifest. The build: five components by Opus 5.5 agents on separate files, each reviewed
+independently; four were repaired (a crash retry made a second same-day set; a failed `psql`
+read as a populated target, and the Postgres job had no lock; the `db` service passed no
+`BACKUP_KEEP`; the drill's ready probe could catch the image's temporary init server, passed
+`latest` unresolved, and its streaming timeout never fired without output).
+
+**Found on the way.** 12 unit tests fail in `test_data_engineer_sim340.py`,
+`test_live_pipeline_sim348.py` and `test_sim421_odds_vocabulary.py` when
+`ODDS_PROVIDER=bettingpros` leaks from `.env` into `docker compose run app pytest`; they pass
+with `ODDS_PROVIDER=mock`. That is an old gap in the tests' isolation. The live service logged
+one DNS error while Postgres restarted, and then reconnected. The Postgres job first sized each
+dump file with busybox `wc -c`, which read 94 MB in 53 s over the Docker Desktop bind mount
+(measured 2026-10-15). Commit `9122237` sizes each file with `stat -c %s` instead.
+
+**Open.** An off-machine copy of the backup sets (P3). Pin `ODDS_PROVIDER=mock` in
+`tests/conftest.py` (P3). A Grafana panel (and an alert) for the backup-age gauge. Read
+`make backup-status` after the first scheduled run at 10:00 UTC.
+
 # MEASURED — the first unattended nightly chain in the jobs container: peak 6.5 GiB under the 10 GiB cap, no OOM; the 10g default stands — SIM-443b follow-up, 2026-10-14
 
 A sampler read the jobs container's memory every 20 seconds from 06:00 to 11:00 UTC (824

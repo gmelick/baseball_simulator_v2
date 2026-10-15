@@ -440,7 +440,39 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   park-factor read retries every minute. An explicit `--out-dir` still writes in place.
   The rebuild's first step waits for the night's finals load (`scripts/wait_for_ingest.sh`,
   reading the `/data/ingest_marks` that `scripts/with_mark.sh` writes) and runs it when it has
-  not run that day; the scheduler jobs run as `appuser`.
+  not run that day. The jobs in the jobs container run as `appuser` (the Postgres job of the
+  scheduled backups runs as `postgres` in the db container). Since the scheduled backups
+  (SIM-525) the rebuild runs inside `with_mark.sh` and leaves `nightly-rebuild.running` while
+  it writes; the data job waits on that mark before it opens the DuckDB file.
+- **The three data stores back up nightly, and a real restore was drilled (SIM-525, CLOSED
+  2026-10-15).** A store is one of the three: the Postgres statistics database, the DuckDB
+  analytics file and the engine-artifact bundle. A set is one backup of one store. Two Ofelia
+  jobs run at 10:00 UTC, each with `no-overlap`. The Postgres job runs `db/backup/pg_backup.sh`
+  in the `db` container as the `postgres` OS user over the unix socket (no password; the client
+  matches the server). The data job runs `python -m pipeline.backup.data_stores` in the `jobs`
+  container as `appuser`, inside `with_mark.sh` and `with_retry.sh 2`. The layout under
+  `BACKUP_DIR`: `postgres/<TS>/` (a `pg_dump -Fd` dump, the `count(*)` of every table before
+  and after it, `manifest.json`), `duckdb/<TS>/` (the file, its `.wal` when present, the small
+  `/data` files, `manifest.json`), `bundle/<TS>/<build id>/` and `drills/<TS>.json`; TS is the
+  UTC time `%Y%m%dT%H%M%SZ`. A set is written as `<TS>.partial`, `manifest.json` goes last,
+  then the folder is renamed; the next run deletes every leftover `.partial`, and a set with no
+  manifest never counts. The data job waits on the rebuild's, the finals' and the sweep's
+  running marks, opens the DuckDB file read-only, copies it and requires equal counts on the
+  copy; `replay.duckdb` is not backed up. Each store keeps 3 sets (`BACKUP_KEEP`). The
+  free-space guard needs max(10 GiB, 1.5 × the newest set) free on `/backups`. When space is
+  short, the guard deletes the oldest set while more than 2 remain. Then it refuses the run.
+  The gauge `baseball_sim_backup_age_hours` in `/metrics` and `make backup-status` give the
+  age of each store's newest set. The sets protect against five losses: a Docker disk-image
+  loss or reset, `docker compose down -v` / `make nuke`, a bad migration or rebuild, a writer
+  that dies in the middle of a rebuild, and an accidental deletion. They do NOT protect
+  against the laptop's disk dying or the loss of the laptop. `BACKUP_DIR` is on C:, the only
+  disk. An off-machine copy of the backup sets is a follow-up ticket. The restore run book:
+  `docs/audit/2026-10-14-sim525-backups-plan.md`. The record of 2026-10-15: the DuckDB set
+  copied 3,839,122,442 bytes in 201 s with equal counts; the bundle set 588,464,368 bytes in
+  46 s; the whole data run 308 s; the Postgres set 2,895,149,569 bytes (2.7 GiB) in 267 s. The
+  restore drill: PASS in 450 s on 2026-10-15 (pg_restore 349 s;
+  all 36 tables inside their count brackets; the DuckDB and bundle copies verified; the scratch
+  cluster removed; the report `baseball_backups/drills/20261015T051919Z.json`). The record: `CHANGES.md` 2026-10-15.
 - **The game page opens with the real game and runs a "what if" from any play (SIM-562,
   2026-10-09).** A live or final game shows the league feed's linescore, box score and
   play-by-play above every simulation (`GET /feed/plays`). "What if from here" on a play reads
@@ -494,11 +526,20 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
 - **`make migrate` runs the `migrate` service**, the only service that logs in as the cluster
   owner. Run another alembic command through it: `docker compose run --rm migrate alembic current`.
 - **The nightly data jobs exec into the `jobs` container (SIM-443b).** Ofelia runs
-  `nightly-finals`, `weekly-refresh` and `nightly-rebuild` with `docker exec` into
-  `baseball_simulator_v2-jobs-1` as `appuser` (an exec with no `user =` line runs as root).
-  A stopped `jobs` container fails all three jobs; Ofelia logs the exec error. The Sunday
+  `nightly-finals`, `weekly-refresh`, `nightly-rebuild` and `nightly-backup-data` with
+  `docker exec` into `baseball_simulator_v2-jobs-1` as `appuser` (an exec with no `user =`
+  line runs as root). A stopped `jobs` container fails all four jobs, the data job of the
+  scheduled backups (SIM-525) included. Ofelia logs the exec error. The Sunday
   08:00 pair shares the container's memory cap (`JOBS_MEM_LIMIT`, default 10g; the first
   rebuild peaked at 6.5 GiB on 2026-10-14). Recreate the scheduler after an INI edit.
+- **The backup sets land in `BACKUP_DIR` (SIM-525, the scheduled backups).** `.env` sets
+  `BACKUP_DIR=C:/Users/grego/Documents/baseball_backups`, a host folder outside Docker's disk
+  image; compose mounts it at `/backups`. Without the value, compose uses `./backups`, which
+  git and docker ignore. Run `make backup` from cmd.exe: Git Bash rewrites the container paths
+  in its `docker compose exec` lines. The data job skips a store that has a set under an hour
+  old; `--new-set` turns the skip off, and `make backup` passes it. The restore drill
+  (`make backup-drill`) needs about 20 GB inside Docker's disk image while it runs, because
+  its scratch Postgres cluster lives on a Docker volume.
 - **Prometheus needs `deploy/monitoring/secrets/app_api_key` (SIM-443c).** The file holds one
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
@@ -612,6 +653,10 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `frontend/src/components/slate/` (the Daily Diamond card), `frontend/src/teams.ts`.
 - `pipeline/db_dsn.py` (SIM-443b) — `require_dsn()` (the DSN or a loud error; no default
   password anywhere) and `dsn_label()` (a DSN with the password removed, for a log or a report).
+- `pipeline/backup/` (SIM-525, the scheduled backups) — `data_stores.py` (the data job: the
+  DuckDB file, the bundle and the small `/data` files; also `--status`, `--verify-set`,
+  `--restore-duckdb` and `--restore-bundle`; its module docstring is the design) and
+  `status.py` (`newest_complete_sets`, read by `--status` and the backup age gauge).
 - `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
   imported by both ETL loaders; `boxscore_ingest.py`, the SIM-545 official box-score parser + upsert into
   `raw.game_player_stats`, which the loader calls per game), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
@@ -632,7 +677,8 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `raw.game_player_stats` from the MLB box-score endpoint), `sim545_boxscore_audit.py` (SIM-545: the
   derived-vs-official per-player totals study), `check_file_integrity.py`, `gen_secrets.py`
   (SIM-443b: writes the eight `.env` secrets; `--append` never changes a key that has a
-  value, `--check` lists the missing ones).
+  value, `--check` lists the missing ones), `backup_drill.py` (SIM-525: the restore drill; it
+  runs on the host, restores a Postgres set into a scratch cluster and verifies the data sets).
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0030** — 0030 = the what-if runs: `kind`, `start_at_bat` and `changes` on `sim.sim_runs` (SIM-562, 2026-10-09); 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
@@ -643,6 +689,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `schemas/duckdb_schema_version.txt`. `roles/` (SIM-443b): `setup_roles.sh` + `setup_roles.sql`
   create the `baseball_app` and `baseball_ro` roles and their grants (a new schema needs a line
   there); run on a fresh volume and by `make db-roles`; `README.md` lists the grant set.
+  `backup/` (SIM-525): `pg_backup.sh` (the Postgres job's dump) and `pg_restore.sh` (the
+  restore into an empty database; it refuses a populated one); both run in the `db` container
+  as the `postgres` OS user.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
 - `deploy/` — nginx + Prometheus/Grafana. `frontend/` — **React 18 + Vite + TypeScript** app
@@ -762,6 +811,10 @@ make ingest-catch-up DAYS=14  # SIM-519: load the last N days' finals, crash-wra
 make live-logs         # SIM-519: follow the live service's log
 make gen-secrets      # SIM-443b: add any missing secret to .env (never changes a set one)
 make db-roles         # SIM-443b: create/refresh the app + read-only roles (ROTATE_ADMIN_PASSWORD=1 resets the owner's)
+make backup           # SIM-525: back up the three stores into BACKUP_DIR now (run from cmd.exe)
+make backup-status    # SIM-525: show each store's newest set and its age
+make backup-drill     # SIM-525: restore the newest set into a scratch cluster and check it (SET=<ts> picks one)
+make restore-postgres SET=<ts>  # SIM-525: restore one Postgres set (refuses a populated database)
 ```
 
 Raw equivalents (if running Python directly, target **Python 3.13**):
