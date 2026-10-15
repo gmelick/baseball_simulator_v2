@@ -59,6 +59,13 @@ without touching this file's contract:
                                                               current season loaded; -1 when
                                                               unknown. A background task reads
                                                               it at most every 10 minutes.
+    baseball_sim_backup_age_hours{store=...} gauge     The scheduled backups (SIM-525) —
+                                                              hours since the newest complete
+                                                              backup set of each store
+                                                              (postgres, duckdb, bundle); -1
+                                                              when the store has none. Read
+                                                              from BACKUPS_ROOT at most every
+                                                              10 minutes.
 
 The values are read from ``request.app.state`` where available (so no DB / Redis
 connection is required — this module is fully import-safe and the endpoint never
@@ -71,6 +78,8 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -156,6 +165,13 @@ if _PROM_AVAILABLE:
     _FINALS_AGE = Gauge(
         "baseball_sim_finals_age_hours",
         "Hours since the newest final game of the current season loaded; -1 when unknown.",
+        registry=_REGISTRY,
+    )
+
+    _BACKUP_AGE = Gauge(
+        "baseball_sim_backup_age_hours",
+        "Hours since the newest complete backup set of the store; -1 when none.",
+        ["store"],
         registry=_REGISTRY,
     )
 
@@ -287,12 +303,67 @@ def _finals_age_hours(app_state: Any) -> float:
     if newest is None:
         return -1.0
     try:
-        from datetime import UTC, datetime
-
         start = datetime(newest.year, newest.month, newest.day, tzinfo=UTC).timestamp()
         return max(0.0, (time.time() - start) / 3600.0)
     except Exception:  # noqa: BLE001
         return -1.0
+
+
+#: The scheduled backups (SIM-525): the backup root is read at most this often.
+BACKUP_AGE_REFRESH_S = 600
+
+#: The three backup stores, in the order the gauge lists them.
+BACKUP_STORES = ("postgres", "duckdb", "bundle")
+
+
+def _no_backup_ages() -> dict[str, float]:
+    """Return -1 (no complete set) for every backup store."""
+    return dict.fromkeys(BACKUP_STORES, -1.0)
+
+
+def _read_backup_ages() -> dict[str, float]:
+    """Read the age in hours of the newest complete set of each backup store.
+
+    The backup root is ``BACKUPS_ROOT`` (default ``/backups``). A missing root,
+    a missing reader module or any read error gives -1 for every store. The
+    reader never raises.
+    """
+    try:
+        from pipeline.backup.status import age_hours, newest_complete_sets
+    except ImportError:
+        return _no_backup_ages()
+    ages = _no_backup_ages()
+    try:
+        root = Path(os.environ.get("BACKUPS_ROOT", "/backups"))
+        if not root.is_dir():
+            return ages
+        sets = newest_complete_sets(root)
+        now = datetime.now(UTC)
+        for store in BACKUP_STORES:
+            ages[store] = float(age_hours(sets.get(store), now))
+    except Exception:  # noqa: BLE001 -- a metric must never fail the app
+        return _no_backup_ages()
+    return ages
+
+
+def _backup_ages(app_state: Any) -> dict[str, float]:
+    """Return the backup ages, read again only when the cached reading is stale.
+
+    The reading and its check time live on ``app.state`` (``backup_ages`` and
+    ``backup_ages_checked_at``), so one scrape in ten minutes reads the disk.
+    """
+    now = time.time()
+    cached = getattr(app_state, "backup_ages", None)
+    checked = float(getattr(app_state, "backup_ages_checked_at", 0.0) or 0.0)
+    if isinstance(cached, dict) and now - checked < BACKUP_AGE_REFRESH_S:
+        return dict(cached)
+    ages = _read_backup_ages()
+    try:
+        app_state.backup_ages = ages
+        app_state.backup_ages_checked_at = now
+    except Exception:  # noqa: BLE001
+        pass
+    return dict(ages)
 
 
 def _collect(app_state: Any) -> dict[str, float]:
@@ -365,6 +436,15 @@ def _render_fallback(app_state: Any, scrape_count: int) -> str:
             "gauge",
             [f"baseball_sim_finals_age_hours {vals['finals_age']:g}"],
         ),
+        _metric_block(
+            "baseball_sim_backup_age_hours",
+            "Hours since the newest complete backup set of the store; -1 when none.",
+            "gauge",
+            [
+                f'baseball_sim_backup_age_hours{{store="{store}"}} {age:g}'
+                for store, age in _backup_ages(app_state).items()
+            ],
+        ),
     ]
     return "".join(blocks)
 
@@ -405,6 +485,8 @@ async def metrics(request: Request) -> Response:
         _API_P95.set(vals["api_p95"])
         _PIPELINE_FRESHNESS.set(vals["pipeline_freshness"])
         _FINALS_AGE.set(vals["finals_age"])
+        for store, age in _backup_ages(app_state).items():
+            _BACKUP_AGE.labels(store=store).set(age)
         body = generate_latest(_REGISTRY)
         return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 

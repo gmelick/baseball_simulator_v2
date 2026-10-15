@@ -52,6 +52,12 @@ services:
       # baseball_ro (the SQL console; read raw only).
       BASEBALL_APP_DB_PASSWORD: "${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
       BASEBALL_RO_DB_PASSWORD:  "${BASEBALL_RO_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
+      # SIM-525, the scheduled backups: this service has no env_file, and an
+      # Ofelia job-exec passes no environment, so the Postgres backup reads
+      # its retention and free-space floor from here. The same .env values
+      # reach the jobs container through its env_file.
+      BACKUP_KEEP:        ${BACKUP_KEEP:-3}
+      BACKUP_MIN_FREE_GB: ${BACKUP_MIN_FREE_GB:-10}
     ports:
       # Host port is overridable via DB_HOST_PORT in .env so contributors
       # already running PostgreSQL on 5432 can pick a free port (eg 5433).
@@ -68,6 +74,13 @@ services:
       # from .env every run).
       - ./db/roles:/opt/baseball/roles:ro
       - ./db/roles/setup_roles.sh:/docker-entrypoint-initdb.d/10-setup-roles.sh:ro
+      # SIM-525, the scheduled backups: the Postgres dump lands in the host
+      # folder BACKUP_DIR, outside Docker's disk image. The default ./backups
+      # keeps a worktree without the value working (no `:?` on purpose).
+      - ${BACKUP_DIR:-./backups}:/backups
+      # SIM-525: the backup and restore scripts run in this container as the
+      # postgres OS user, over the socket (db/backup/pg_backup.sh, pg_restore.sh).
+      - ./db/backup:/opt/baseball/backup:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baseball_user} -d ${POSTGRES_DB:-baseball_sim}"]
       interval: 10s
@@ -397,6 +410,9 @@ services:
       # restart: unless-stopped brings it back). "0" = the app keeps the data it
       # booted with until somebody restarts it.
       SIM_RESTART_ON_NEW_BUNDLE: "1"
+      # SIM-525: the backup age gauge reads the newest complete set of each store
+      # from this folder (api/routes/metrics.py, baseball_sim_backup_age_hours).
+      BACKUPS_ROOT: /backups
     ports:
       # Host port is overridable via APP_HOST_PORT (default 8000).
       # SIM-443a: loopback only. The LAN reaches the API through nginx :80.
@@ -416,6 +432,9 @@ services:
       # restarts and is visible to both the `app` service and any
       # one-off `docker compose run --rm app ...` invocations.
       - duckdb_data:/data
+      # SIM-525: the backup folder, read-only. The app only reads the set ages
+      # for the backup age gauge; it never writes a backup.
+      - ${BACKUP_DIR:-./backups}:/backups:ro
     command: >
       uvicorn api.main:app
         --host 0.0.0.0
@@ -536,6 +555,9 @@ services:
       - ./similarity:/app/similarity
       - ./simulation:/app/simulation
       - ./db:/app/db
+      # SIM-525: the data backup writes the DuckDB file, the bundle and the small
+      # /data files into the host folder BACKUP_DIR (pipeline/backup/data_stores.py).
+      - ${BACKUP_DIR:-./backups}:/backups
     healthcheck:
       # The image's own check probes :8000, which this container never serves.
       # The jobs need a writable /data (the ingest marks, the DuckDB file).
@@ -703,8 +725,9 @@ services:
   # load nightly at 07:00 UTC, the profile + bundle rebuild at 08:00 UTC and the
   # season sweep on Sunday, each run inside the `jobs` container through
   # scripts/with_retry.sh (SIM-443b); the SIM-546 closing pass inside the app
-  # container. A stopped `jobs` container fails all three; Ofelia logs the
-  # exec error.
+  # container. SIM-525: the two backup jobs at 10:00 UTC, the Postgres dump in
+  # the db container and the DuckDB + bundle copy in the `jobs` container. A
+  # stopped `jobs` container fails its four jobs; Ofelia logs the exec error.
   scheduler:
     image: mcuadros/ofelia:latest
     # SIM-519 Part D (decision D6): no profile gate — the scheduler starts with

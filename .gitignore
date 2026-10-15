@@ -190,3 +190,9 @@ scripts/sim555_probe_300.json
 scripts/sim555_probe_300_regated.json
 scripts/*.npz
 scripts/sim548_design_*/
+
+# ---------------------------------------------------------------------------
+# SIM-525: the default backup folder. The scheduled backups of the three data
+# stores land in BACKUP_DIR; without that value compose uses ./backups here.
+# ---------------------------------------------------------------------------
+/backups/

@@ -214,12 +214,18 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
     assert "environment =" not in text
     assert "postgresql://" not in text
     assert RETIRED_PASSWORD not in text
-    assert text.count(f"container = {JOBS_CONTAINER}") == 3
-    for job in ("nightly-finals", "weekly-refresh", "nightly-rebuild"):
+    # The data backup (SIM-525) is the fourth job in the jobs container.
+    assert text.count(f"container = {JOBS_CONTAINER}") == 4
+    for job in ("nightly-finals", "weekly-refresh", "nightly-rebuild", "nightly-backup-data"):
         section = text.split(f'[job-exec "{job}"]', 1)[1].split("\n[", 1)[0]
         assert f"container = {JOBS_CONTAINER}" in section, job
         # Ofelia execs as root unless the job names a user (SIM-563).
         assert "user = appuser" in section, job
+    # The Postgres backup runs in the db container as the postgres OS user.
+    # It logs in over the socket, so it needs no password.
+    section = text.split('[job-exec "nightly-backup-postgres"]', 1)[1].split("\n[", 1)[0]
+    assert "container = baseball_simulator_v2-db-1" in section
+    assert "user = postgres" in section
 
 
 # ---------------------------------------------------------------------------

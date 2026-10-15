@@ -15,7 +15,8 @@
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke profile-computor engine-artifacts calibrate \
-        validate-props load-historical-odds ingest-catch-up live-logs db-roles gen-secrets
+        validate-props load-historical-odds ingest-catch-up live-logs db-roles gen-secrets \
+        backup backup-status backup-drill restore-postgres
 
 # Default target — show help.
 ##
@@ -23,7 +24,7 @@
 ## Windows cmd.exe prints the literal "" instead of a blank line for
 ## `echo ""`, so the bash form was visually broken under Windows GNU Make.
 help:
-	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n  make gen-secrets       Append any missing secret to .env (passwords, keys)\n  make db-roles          Create/refresh the baseball_app + baseball_ro roles\n                         (ROTATE_ADMIN_PASSWORD=1 also resets baseball_user)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n''')"
+	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n  make gen-secrets       Append any missing secret to .env (passwords, keys)\n  make db-roles          Create/refresh the baseball_app + baseball_ro roles\n                         (ROTATE_ADMIN_PASSWORD=1 also resets baseball_user)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n\n  make backup            Back up Postgres, DuckDB and the bundle into BACKUP_DIR\n  make backup-status     Show the newest backup set of each store and its age\n  make backup-drill      Restore the newest set into a scratch cluster and check it\n                         (SET=<ts> picks a set)\n  make restore-postgres  Restore SET=<ts> into an EMPTY database (refuses a full one)\n''')"
 
 # ---------------------------------------------------------------------------
 # Docker Compose shortcuts
@@ -73,6 +74,42 @@ db-roles: _require_env_file
 ## is left alone). It prints key names only, never a value.
 gen-secrets:
 	py scripts/gen_secrets.py --append .env
+
+# ---------------------------------------------------------------------------
+# Backups of the three data stores (SIM-525)
+# ---------------------------------------------------------------------------
+# The scheduler runs the same two steps every day at 10:00 UTC. The sets land
+# in BACKUP_DIR (.env; default ./backups), mounted at /backups.
+
+## Back up now. The Postgres dump runs in the db container as the postgres OS
+## user, over the socket. The data step copies the DuckDB file, the bundle and
+## the small /data files in the jobs container, and leaves nightly-backup.last.
+## --new-set: a manual run always makes a fresh set, even within an hour of
+## the scheduled one (the scheduled run's crash retry skips a finished store).
+## Run it from cmd.exe: Git Bash rewrites the container paths (CLAUDE.md 2a).
+backup: _require_env_file
+	docker compose exec -T -u postgres db sh /opt/baseball/backup/pg_backup.sh
+	docker compose exec -T jobs sh /app/scripts/with_mark.sh nightly-backup python -m pipeline.backup.data_stores --new-set
+
+## Show the newest complete set of each store, its age and its size.
+backup-status: _require_env_file
+	docker compose exec -T jobs python -m pipeline.backup.data_stores --status
+
+## The restore drill: restore a Postgres set into a scratch cluster, check the
+## table counts, verify the DuckDB and bundle copies, then remove the cluster.
+## It runs on the host and leaves a report in BACKUP_DIR/drills/.
+##   make backup-drill SET=20261015T100000Z
+backup-drill: _require_env_file
+	py scripts/backup_drill.py --set $(or $(SET),latest)
+
+## Restore one Postgres set into the running db container. The script refuses
+## a database that still holds the raw or sim schema, so it never overwrites
+## live data. Afterwards run `make db-roles` (the grants) and
+## `docker compose run --rm migrate alembic current` (expect the head).
+##   make restore-postgres SET=20261015T100000Z
+restore-postgres: _require_env_file
+	@py -c "import sys; '$(SET)'.strip() or print('ERROR: name the set: make restore-postgres SET=<YYYYmmddTHHMMSSZ>', file=sys.stderr) or sys.exit(2)"
+	docker compose exec -T -u postgres db sh /opt/baseball/backup/pg_restore.sh /backups/postgres/$(SET)
 
 # ---------------------------------------------------------------------------
 # Nightly batch jobs
@@ -226,7 +263,7 @@ clean:
 ## Non-interactive override: ``make nuke NUKE_CONFIRM=yes`` skips the prompt,
 ## useful for CI / scripted teardowns.
 nuke:
-	@echo "WARNING: This will delete all Docker volumes including the PostgreSQL database."
+	@echo "WARNING: This will delete all Docker volumes including the PostgreSQL database. Take a backup first: make backup (SIM-525)"
 	@py -c "import sys, os; ans = os.environ.get('NUKE_CONFIRM') or input('Are you sure? [y/N] '); sys.exit(0 if ans.strip().lower() in ('y','yes') else 1)" \
 	  && docker compose down -v && echo "Done." \
 	  || echo "Aborted."

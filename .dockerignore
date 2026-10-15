@@ -74,3 +74,7 @@ frontend/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# SIM-525: the default backup folder (./backups, when BACKUP_DIR is unset).
+# Without this line every image build would ship the backup sets as context.
+backups/

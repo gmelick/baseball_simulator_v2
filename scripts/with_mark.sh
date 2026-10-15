@@ -11,6 +11,9 @@
 # The mark spans the whole command, so it covers every attempt of a
 # with_retry.sh wrapper inside it. scripts/wait_for_ingest.sh reads the marks:
 # the nightly rebuild waits for the finals load before it reads Postgres.
+# The scheduler marks the profile + bundle rebuild (nightly-rebuild) and the
+# data backup (nightly-backup) too (SIM-525). The data backup waits for the
+# rebuild's mark, so it never opens the DuckDB file while the rebuild writes it.
 #
 # The marks live on the /data volume (default /data/ingest_marks). When that
 # folder cannot be written, the command still runs, unmarked.
