@@ -214,9 +214,16 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
     assert "environment =" not in text
     assert "postgresql://" not in text
     assert RETIRED_PASSWORD not in text
-    # The data backup (SIM-525) is the fourth job in the jobs container.
-    assert text.count(f"container = {JOBS_CONTAINER}") == 4
-    for job in ("nightly-finals", "weekly-refresh", "nightly-rebuild", "nightly-backup-data"):
+    # The data backup (SIM-525) is the fourth job in the jobs container, and the
+    # off-site copy of the backup sets (SIM-568) the fifth.
+    assert text.count(f"container = {JOBS_CONTAINER}") == 5
+    for job in (
+        "nightly-finals",
+        "weekly-refresh",
+        "nightly-rebuild",
+        "nightly-backup-data",
+        "nightly-backup-offsite",
+    ):
         section = text.split(f'[job-exec "{job}"]', 1)[1].split("\n[", 1)[0]
         assert f"container = {JOBS_CONTAINER}" in section, job
         # Ofelia execs as root unless the job names a user (SIM-563).

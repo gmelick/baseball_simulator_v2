@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -43,6 +44,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 mkdir -p "$out"
+chmod 700 "$out"  # the real pg_dump creates the dump folder 0700
 printf 'toc' > "$out/toc.dat"
 printf 'aaaa' > "$out/3001.dat.gz"
 printf 'bbbbbb' > "$out/3002.dat.gz"
@@ -237,6 +239,20 @@ def test_a_backup_writes_a_complete_set(fake):
     last = res.stdout.strip().splitlines()[-1]
     assert last.startswith(f"BACKUP OK postgres {s.name} ")
     assert " bytes " in last and last.endswith(" s")
+
+
+def test_the_set_is_readable_by_another_user(fake):
+    # pg_dump creates the dump folder 0700. The off-site copy (SIM-568) reads
+    # the set from the jobs container as appuser, another uid, so the script
+    # opens every folder and file of the set before the manifest lands.
+    env, root, _logs = fake
+    res = _run(BACKUP_SH, env=env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    s = next((root / "postgres").iterdir())
+    for path in [s, *s.rglob("*")]:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        want = 0o055 if path.is_dir() else 0o044
+        assert mode & want == want, f"{path.relative_to(s)} has mode {oct(mode)}"
 
 
 def test_a_leftover_partial_set_is_deleted(fake):

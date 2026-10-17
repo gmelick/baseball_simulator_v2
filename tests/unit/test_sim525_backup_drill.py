@@ -35,6 +35,17 @@ def _load() -> ModuleType:
 drill = _load()
 
 
+@pytest.fixture(autouse=True)
+def _no_compose_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the two folder variables, so each test reads only its own .env (SIM-568).
+
+    The drill reads the shell environment before .env, as docker compose
+    does, and the app container hands the owner's .env to every process.
+    """
+    monkeypatch.delenv("BACKUP_DIR", raising=False)
+    monkeypatch.delenv("OFFSITE_BACKUP_DIR", raising=False)
+
+
 def _make_set(root: Path, store: str, ts: str, complete: bool = True) -> Path:
     path = root / store / ts
     path.mkdir(parents=True)
@@ -253,7 +264,8 @@ def test_a_good_drill_exits_0_and_writes_the_report(
     code = drill.main(["--backup-dir", str(backups)])
     assert code == 0
     report = _report(backups)
-    assert set(report) == {"started_at", "finished_at", "postgres", "data", "ok"}
+    assert set(report) == {"started_at", "finished_at", "source", "postgres", "data", "ok"}
+    assert report["source"] == "local"
     assert report["ok"] is True
     for part in ("postgres", "data"):
         assert set(report[part]) == {"set", "seconds", "ok", "exit_code", "output_tail"}
@@ -393,6 +405,17 @@ def test_no_complete_postgres_set_refuses_with_exit_2(
     assert not fake.find("docker", "run")
 
 
+def test_a_missing_restore_script_folder_refuses_with_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    backups = _setup(tmp_path, monkeypatch, fake)
+    (tmp_path / "db" / "backup").rmdir()
+    assert drill.main(["--backup-dir", str(backups)]) == 2
+    assert not fake.find("docker", "run")
+    assert not (backups / "drills").exists()
+
+
 def test_the_wait_polls_pg_isready_until_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     answers = iter([1, 1, 0])
     calls: list[list[str]] = []
@@ -511,6 +534,231 @@ def test_a_backup_dir_unlike_the_compose_folder_refuses_the_data_verify(
     assert not fake.find("docker", "run")
     assert drill.main(["--backup-dir", str(other), "--skip-data"]) == 0
     assert backups.is_dir()
+
+
+# ---------------------------------------------------------------- the off-site copy (SIM-568)
+
+
+def _setup_offsite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeDocker) -> Path:
+    """Give the repo an .env that names an off-site folder holding one set per store."""
+    _setup(tmp_path, monkeypatch, fake)
+    offsite = tmp_path / "onedrive" / "baseball_backups"
+    for store in ("postgres", "duckdb", "bundle"):
+        _make_set(offsite, store, "20261015T100000Z")
+    (tmp_path / ".env").write_text(
+        f"BACKUP_DIR={(tmp_path / 'backups').as_posix()}\n"
+        f"OFFSITE_BACKUP_DIR={offsite.as_posix()}\n",
+        encoding="utf-8",
+    )
+    return offsite
+
+
+def test_the_offsite_dir_comes_from_the_flag_then_env_then_default(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("OFFSITE_BACKUP_DIR=elsewhere/copy\n", encoding="utf-8")
+    flag = tmp_path / "flagged"
+    assert drill.resolve_offsite_dir(str(flag), tmp_path) == flag.resolve()
+    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "elsewhere/copy").resolve()
+    (tmp_path / ".env").write_text('OFFSITE_BACKUP_DIR="quoted/copy"\n', encoding="utf-8")
+    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "quoted/copy").resolve()
+    (tmp_path / ".env").write_text("BACKUP_DIR=b\n", encoding="utf-8")
+    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "backups_offsite").resolve()
+
+
+def test_the_shell_environment_wins_over_the_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compose reads the shell before .env, so the drill does too (SIM-568)."""
+    (tmp_path / ".env").write_text(
+        "BACKUP_DIR=env/local\nOFFSITE_BACKUP_DIR=env/copy\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "shell" / "local"))
+    monkeypatch.setenv("OFFSITE_BACKUP_DIR", str(tmp_path / "shell" / "copy"))
+    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "shell/local").resolve()
+    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "shell/copy").resolve()
+    # A flag still wins over both.
+    flag = tmp_path / "flagged"
+    assert drill.resolve_offsite_dir(str(flag), tmp_path) == flag.resolve()
+    # An empty shell value is set: compose's ${VAR:-default} then takes the default.
+    monkeypatch.setenv("BACKUP_DIR", "")
+    monkeypatch.setenv("OFFSITE_BACKUP_DIR", "")
+    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "backups").resolve()
+    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "backups_offsite").resolve()
+    # With no shell value, .env answers.
+    monkeypatch.delenv("BACKUP_DIR")
+    monkeypatch.delenv("OFFSITE_BACKUP_DIR")
+    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "env/local").resolve()
+    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "env/copy").resolve()
+
+
+def test_offsite_reads_the_folder_the_shell_names_over_the_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    env_offsite = _setup_offsite(tmp_path, monkeypatch, fake)
+    shell_offsite = tmp_path / "shell" / "baseball_backups"
+    for store in ("postgres", "duckdb", "bundle"):
+        _make_set(shell_offsite, store, "20261016T100000Z")
+    monkeypatch.setenv("OFFSITE_BACKUP_DIR", shell_offsite.as_posix())
+    assert drill.main(["--offsite"]) == 0
+    run = fake.find("docker", "run")[0]
+    restore_mount = (shell_offsite / "postgres" / "20261016T100000Z").resolve().as_posix()
+    assert f"{restore_mount}:/restore:ro" in run
+    verify = fake.find("docker", "compose", "run")[0]
+    assert verify[-4:] == ["--verify-set", "20261016T100000Z", "--backups-root", "/offsite"]
+    assert _report(shell_offsite)["source"] == "offsite"
+    assert not (env_offsite / "drills").exists()
+
+
+def test_the_local_verify_argv_carries_no_backups_root() -> None:
+    assert "--backups-root" not in drill.verify_argv("20261014T100000Z")
+    assert "--backups-root" not in drill.verify_argv("20261014T100000Z", "/backups")
+    assert drill.verify_argv("20261014T100000Z", "/offsite")[-2:] == ["--backups-root", "/offsite"]
+
+
+def test_offsite_restores_from_the_env_folder_and_verifies_under_offsite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    offsite = _setup_offsite(tmp_path, monkeypatch, fake)
+    assert drill.main(["--offsite"]) == 0
+    run = fake.find("docker", "run")[0]
+    restore_mount = (offsite / "postgres" / "20261015T100000Z").resolve().as_posix()
+    assert f"{restore_mount}:/restore:ro" in run
+    verify = fake.find("docker", "compose", "run")
+    assert verify == [
+        [
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            "-T",
+            "jobs",
+            "python",
+            "-m",
+            "pipeline.backup.data_stores",
+            "--verify-set",
+            "20261015T100000Z",
+            "--backups-root",
+            "/offsite",
+        ]
+    ]
+    report = _report(offsite)
+    assert report["source"] == "offsite"
+    assert report["ok"] is True
+    assert report["postgres"]["set"] == "20261015T100000Z"
+    assert report["data"]["set"] == "20261015T100000Z"
+    assert not (tmp_path / "backups" / "drills").exists()
+
+
+def test_a_backup_dir_equal_to_the_offsite_folder_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    offsite = _setup_offsite(tmp_path, monkeypatch, fake)
+    assert drill.main(["--backup-dir", str(offsite)]) == 0
+    verify = fake.find("docker", "compose", "run")[0]
+    assert verify[-2:] == ["--backups-root", "/offsite"]
+    assert _report(offsite)["source"] == "offsite"
+
+
+def test_offsite_with_the_same_backup_dir_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    offsite = _setup_offsite(tmp_path, monkeypatch, fake)
+    assert drill.main(["--offsite", "--backup-dir", str(offsite)]) == 0
+    assert _report(offsite)["source"] == "offsite"
+
+
+def test_offsite_with_another_backup_dir_refuses_with_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    _setup_offsite(tmp_path, monkeypatch, fake)
+    assert drill.main(["--offsite", "--backup-dir", str(tmp_path / "backups")]) == 2
+    assert not fake.find("docker", "run")
+    assert not fake.find("docker", "compose", "run")
+
+
+def test_another_folder_still_refuses_with_an_offsite_folder_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    _setup_offsite(tmp_path, monkeypatch, fake)
+    other = tmp_path / "other"
+    for store in ("postgres", "duckdb", "bundle"):
+        _make_set(other, store, "20261014T100000Z")
+    assert drill.main(["--backup-dir", str(other)]) == 2
+    assert not fake.find("docker", "run")
+    assert not fake.find("docker", "compose", "run")
+    assert not (other / "drills").exists()
+
+
+def test_the_local_folder_keeps_the_local_verify_with_an_offsite_folder_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    _setup_offsite(tmp_path, monkeypatch, fake)
+    backups = tmp_path / "backups"
+    assert drill.main([]) == 0
+    verify = fake.find("docker", "compose", "run")[0]
+    assert "--backups-root" not in verify
+    assert verify[-2:] == ["--verify-set", "20261014T100000Z"]
+    report = _report(backups)
+    assert report["source"] == "local"
+
+
+@pytest.mark.parametrize(
+    ("flags", "source", "root"),
+    [([], "local", None), (["--offsite"], "offsite", "/offsite")],
+)
+def test_one_folder_for_both_settings_reads_local_unless_offsite_is_passed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: list[str],
+    source: str,
+    root: str | None,
+) -> None:
+    """BACKUP_DIR and OFFSITE_BACKUP_DIR name one folder: the local folder wins (SIM-568)."""
+    fake = FakeDocker()
+    backups = _setup(tmp_path, monkeypatch, fake)
+    (tmp_path / ".env").write_text(
+        f"BACKUP_DIR={backups.as_posix()}\nOFFSITE_BACKUP_DIR={backups.as_posix()}\n",
+        encoding="utf-8",
+    )
+    assert drill.main(flags) == 0
+    verify = fake.find("docker", "compose", "run")[0]
+    if root is None:
+        assert "--backups-root" not in verify
+        assert verify[-2:] == ["--verify-set", "20261014T100000Z"]
+    else:
+        assert verify[-2:] == ["--backups-root", root]
+    assert _report(backups)["source"] == source
+
+
+def test_offsite_with_skip_data_runs_no_verify_and_reports_off_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    offsite = _setup_offsite(tmp_path, monkeypatch, fake)
+    assert drill.main(["--offsite", "--skip-data"]) == 0
+    assert fake.find("docker", "run")
+    assert not fake.find("docker", "compose", "run")
+    report = _report(offsite)
+    assert report["source"] == "offsite"
+    assert report["data"] is None
+    assert report["postgres"]["set"] == "20261015T100000Z"
+    assert not (tmp_path / "backups" / "drills").exists()
+
+
+def test_offsite_with_no_complete_set_refuses_with_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    offsite = _setup_offsite(tmp_path, monkeypatch, fake)
+    (offsite / "postgres" / "20261015T100000Z" / "manifest.json").unlink()
+    assert drill.main(["--offsite"]) == 2
+    assert not fake.find("docker", "run")
 
 
 # ---------------------------------------------------------------- the streaming runner

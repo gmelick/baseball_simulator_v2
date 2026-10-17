@@ -449,7 +449,9 @@ output). The drill exits 0 on a pass and 1 on a failure.
 
 - **An off-machine copy of the backup sets** (P3). The sets share the
   laptop's one disk. A copy on another machine or a cloud store protects against the disk dying
-  and the laptop being lost.
+  and the laptop being lost. **Done:** the off-site copy (SIM-568, built 2026-10-17) copies the
+  newest sets into a OneDrive folder at 10:30 UTC. The design, the run book and the restore from
+  the copy are in `docs/audit/2026-10-17-sim568-offsite-copy.md`.
 - **Pin `ODDS_PROVIDER=mock` in `tests/conftest.py`** (P3). The value
   `bettingpros` in `.env` reaches `docker compose run app pytest` and fails 12 unrelated tests
   (§10).

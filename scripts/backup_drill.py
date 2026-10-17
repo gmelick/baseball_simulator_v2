@@ -13,21 +13,39 @@ the live stack's database:
 5. It removes the scratch container and its volume, whatever happened.
 6. It writes ``<backup dir>/drills/<start time>.json`` and prints a report.
 
+The drill also restores from the off-site copy (SIM-568). The off-site copy
+is the OneDrive folder that ``OFFSITE_BACKUP_DIR`` names (default
+``./backups_offsite``); the jobs container reads it at ``/offsite``. Pass
+``--offsite``, or pass that folder as ``--backup-dir``. The data verify then
+runs with ``--backups-root /offsite``. The report names its source
+(``"source": "offsite"``) and lands in the off-site folder's ``drills/``.
+OneDrive can turn synced files into online-only placeholders. A drill from
+such a dehydrated copy downloads the whole set first, so it takes longer and
+needs the OneDrive client online.
+
+The drill reads ``BACKUP_DIR`` and ``OFFSITE_BACKUP_DIR`` in the order docker
+compose reads them (SIM-568): the shell environment first, then the repo's
+``.env``. So the drill and the jobs container's mounts name the same folders.
+
 Exit 0 when every step passes, 1 when a step fails, 2 when the drill refuses
-to start (a leftover scratch container or volume, no complete set, or a
-backup folder that is not the one the jobs container reads).
+to start: a leftover scratch container or volume, no complete set,
+``--offsite`` with a ``--backup-dir`` that is not the off-site folder, a
+backup folder that is neither the local folder nor the off-site folder the
+jobs container reads, or no ``db/backup`` folder in the repo.
 
 Usage::
 
     py scripts/backup_drill.py [--set TS|latest] [--data-set TS|latest]
-                               [--backup-dir PATH] [--keep-cluster]
-                               [--skip-data] [--timeout-s 7200]
+                               [--backup-dir PATH] [--offsite]
+                               [--keep-cluster] [--skip-data]
+                               [--timeout-s 7200]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -49,6 +67,9 @@ RESTORE_SCRIPT = "/opt/baseball/backup/pg_restore.sh"
 TAIL_LINES = 40
 READY_TIMEOUT_S = 120.0
 READY_POLL_S = 2.0
+# The roots where the jobs container mounts the two backup folders (SIM-568).
+LOCAL_ROOT = "/backups"
+OFFSITE_ROOT = "/offsite"
 
 
 class DrillError(Exception):
@@ -146,12 +167,45 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def compose_value(key: str, repo: Path) -> str:
+    """Return the value docker compose reads for one variable (SIM-568).
+
+    Compose takes a variable from the shell environment first, and from the
+    repo's .env only when the shell does not set it. The drill reads the same
+    order, so its folders match the jobs container's mounts. An empty string
+    means the variable is unset or empty: the caller then takes the compose
+    file's default, as ``${VAR:-default}`` does.
+    """
+    if key in os.environ:
+        return os.environ[key]
+    return read_env_file(repo / ".env").get(key, "")
+
+
 def resolve_backup_dir(flag: str | None, repo: Path) -> Path:
-    """Pick the backup folder: the flag, else BACKUP_DIR in .env, else ./backups."""
+    """Pick the backup folder: the flag, else BACKUP_DIR, else ./backups.
+
+    BACKUP_DIR comes from the shell environment, then .env (``compose_value``).
+    """
     if flag:
         return Path(flag).resolve()
-    configured = read_env_file(repo / ".env").get("BACKUP_DIR")
+    configured = compose_value("BACKUP_DIR", repo)
     path = Path(configured) if configured else Path("backups")
+    if not path.is_absolute():
+        path = repo / path
+    return path.resolve()
+
+
+def resolve_offsite_dir(flag: str | None, repo: Path) -> Path:
+    """Pick the off-site folder (SIM-568).
+
+    The flag wins; else OFFSITE_BACKUP_DIR from the shell environment, then
+    .env (``compose_value``); else ./backups_offsite, the same default that the
+    compose file mounts at /offsite.
+    """
+    if flag:
+        return Path(flag).resolve()
+    configured = compose_value("OFFSITE_BACKUP_DIR", repo)
+    path = Path(configured) if configured else Path("backups_offsite")
     if not path.is_absolute():
         path = repo / path
     return path.resolve()
@@ -324,11 +378,29 @@ def _restore_postgres(set_id: str, set_dir: Path, timeout_s: float) -> dict[str,
     return _step(set_id, started, result.returncode, restore_ok(result.returncode, output), output)
 
 
-def _verify_data(data_set: str, timeout_s: float) -> dict[str, Any]:
-    started = time.monotonic()
-    log(f"verifying the duckdb and bundle copies (set {data_set}) in the jobs container")
+def verify_argv(data_set: str, container_root: str = LOCAL_ROOT) -> list[str]:
+    """Build the argv of the data verify in the jobs container.
+
+    The local root keeps the argv of the scheduled backups (SIM-525). Any
+    other root, such as the off-site root (SIM-568), adds
+    ``--backups-root <root>``.
+    """
     argv = ["docker", "compose", "run", "--rm", "-T", "jobs", "python", "-m"]
     argv += ["pipeline.backup.data_stores", "--verify-set", data_set]
+    if container_root != LOCAL_ROOT:
+        argv += ["--backups-root", container_root]
+    return argv
+
+
+def _verify_data(
+    data_set: str, timeout_s: float, container_root: str = LOCAL_ROOT
+) -> dict[str, Any]:
+    started = time.monotonic()
+    log(
+        f"verifying the duckdb and bundle copies (set {data_set}) "
+        f"under {container_root} in the jobs container"
+    )
+    argv = verify_argv(data_set, container_root)
     result = _run(argv, cwd=REPO, capture=False, timeout=timeout_s)
     output = result.stdout + result.stderr
     return _step(data_set, started, result.returncode, result.returncode == 0, output)
@@ -349,7 +421,14 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--set", default="latest", help="postgres set TS or 'latest'")
     parser.add_argument("--data-set", default="latest", help="duckdb/bundle set TS or 'latest'")
     parser.add_argument(
-        "--backup-dir", default=None, help="the backup folder (default: BACKUP_DIR in .env)"
+        "--backup-dir",
+        default=None,
+        help="the backup folder (default: BACKUP_DIR from the shell, then .env)",
+    )
+    parser.add_argument(
+        "--offsite",
+        action="store_true",
+        help="restore from the off-site copy (OFFSITE_BACKUP_DIR from the shell, then .env)",
     )
     parser.add_argument(
         "--keep-cluster", action="store_true", help="leave the scratch cluster for inspection"
@@ -362,8 +441,22 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the drill and return its exit code."""
     args = _parse(argv)
-    backup_dir = resolve_backup_dir(args.backup_dir, REPO)
+    compose_dir = resolve_backup_dir(None, REPO)
+    offsite_dir = resolve_offsite_dir(None, REPO)
+    backup_dir = offsite_dir if args.offsite else resolve_backup_dir(args.backup_dir, REPO)
+    # The off-site copy (SIM-568): --offsite, or a --backup-dir that is the
+    # off-site folder. The local folder wins when the two are one folder.
+    offsite = args.offsite or (backup_dir == offsite_dir and backup_dir != compose_dir)
+    source = "offsite" if offsite else "local"
+    container_root = OFFSITE_ROOT if offsite else LOCAL_ROOT
     try:
+        if args.offsite and args.backup_dir:
+            flagged = resolve_backup_dir(args.backup_dir, REPO)
+            if flagged != offsite_dir:
+                raise DrillError(
+                    f"--offsite reads {offsite_dir} (OFFSITE_BACKUP_DIR), "
+                    f"not --backup-dir {flagged}; drop one of the two"
+                )
         found = leftovers()
         if found:
             raise DrillError(
@@ -374,14 +467,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         set_id = pick_set(backup_dir / "postgres", args.set)
         data_set_id: str | None = None
         if not args.skip_data:
-            # The jobs container reads /backups through compose's BACKUP_DIR,
-            # so the verify only means something when that is this folder.
-            compose_dir = resolve_backup_dir(None, REPO)
-            if compose_dir != backup_dir:
+            # The jobs container reads /backups through compose's BACKUP_DIR
+            # and /offsite through OFFSITE_BACKUP_DIR (SIM-568), so the verify
+            # only means something when this folder is one of the two.
+            if not offsite and compose_dir != backup_dir:
                 raise DrillError(
-                    f"--backup-dir {backup_dir} is not the folder the jobs container "
-                    f"reads ({compose_dir}, BACKUP_DIR in .env); pass --skip-data "
-                    "or drop --backup-dir"
+                    f"--backup-dir {backup_dir} is not a folder the jobs container "
+                    f"reads ({compose_dir}, BACKUP_DIR; {offsite_dir}, "
+                    "OFFSITE_BACKUP_DIR); pass --skip-data or drop --backup-dir"
                 )
             data_set_id = pick_data_set(backup_dir, args.data_set)
         if not (REPO / "db" / "backup").is_dir():
@@ -392,13 +485,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     started_at = datetime.now(UTC)
     drill_id = started_at.strftime("%Y%m%dT%H%M%SZ")
-    log(f"drill {drill_id}: backup folder {backup_dir}")
+    log(f"drill {drill_id}: backup folder {backup_dir} (source {source})")
     postgres: dict[str, Any] | None = None
     data: dict[str, Any] | None = None
     try:
         postgres = _restore_postgres(set_id, backup_dir / "postgres" / set_id, args.timeout_s)
         if data_set_id is not None:
-            data = _verify_data(data_set_id, args.timeout_s)
+            data = _verify_data(data_set_id, args.timeout_s, container_root)
     finally:
         if args.keep_cluster:
             log(f"keeping {NAME}; remove it with: docker rm -f {NAME}; docker volume rm {NAME}")
@@ -409,6 +502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = {
         "started_at": started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "finished_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": source,
         "postgres": postgres,
         "data": data,
         "ok": ok,
@@ -429,6 +523,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"  {label:<9} set {part['set']}: {verdict} "
             f"(exit {part['exit_code']}, {part['seconds']} s)"
         )
+    print(f"  source    {source} ({backup_dir})")
     print(f"  report    {report_path}")
     return 0 if ok else 1
 

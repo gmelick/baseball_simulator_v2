@@ -196,3 +196,6 @@ scripts/sim548_design_*/
 # stores land in BACKUP_DIR; without that value compose uses ./backups here.
 # ---------------------------------------------------------------------------
 /backups/
+# SIM-568: the default off-site copy folder (./backups_offsite, when
+# OFFSITE_BACKUP_DIR is unset).
+/backups_offsite/
