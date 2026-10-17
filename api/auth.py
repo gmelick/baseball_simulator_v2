@@ -21,8 +21,9 @@ Redis). It provides these seams:
     the handler calls this first. A failed check closes the socket with code 1008 (policy
     violation) before the handshake is accepted.
 
-  - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter
-    keyed by API key (falling back to client IP). Defaults to
+  - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter.
+    It counts a request against a configured API key when the request
+    presents one, else against the client address (SIM-564). Defaults to
     ``RATE_LIMIT_PER_MINUTE`` requests/min and returns ``429`` when exceeded.
     Disabled when ``RATE_LIMIT_ENABLED`` is false or the per-minute limit is
     ``<= 0`` (the test/dev default), so it never interferes with the suite
@@ -366,11 +367,12 @@ async def authenticate_websocket(websocket: WebSocket) -> str | None:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """In-memory sliding-window rate limiter (pure stdlib).
 
-    Keyed by API key when present (so a single shared NAT'd IP with distinct
-    keys isn't collectively throttled), else by client IP. Each key gets a
-    ``deque`` of recent request timestamps; on every request we evict
-    timestamps older than ``window_s`` and reject with ``429`` once the deque
-    length reaches ``limit``.
+    The limiter counts a request against a configured API key when the
+    request presents one, else against the client address (SIM-564).
+    Callers with distinct configured API keys behind one shared address keep
+    separate buckets. Each bucket holds a ``deque`` of recent request
+    timestamps. On every request the limiter evicts timestamps older than
+    ``window_s``. It answers ``429`` once the deque length reaches ``limit``.
 
     Constructor knobs (all overridable for tests; defaults read from env):
       limit     — max requests per window (``RATE_LIMIT_PER_MINUTE``)
@@ -417,10 +419,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_key(request: Request) -> str:
-        """Bucket key: API key if presented, else client IP, else 'unknown'."""
-        api_key = request.headers.get(API_KEY_HEADER)
-        if api_key:
-            return f"key:{api_key}"
+        """Return the bucket name of a request (SIM-564).
+
+        The limiter reads the key the same way the login does. A request
+        that presents a configured API key counts against that key. The
+        bucket name is then ``key:`` plus 16 hex characters of the key's
+        SHA-256 digest. The bucket name never holds the text of the key.
+
+        Every other request counts against the client address: no key, a
+        made-up key, or no configured keys. A request with no client address
+        counts against the bucket named ``ip:unknown``. The limiter never uses
+        the raw header text, so a made-up key cannot open a new bucket.
+        """
+        presented = _presented_api_key(request.headers)
+        if presented:
+            keys = _configured_api_keys()
+            if keys and _key_matches(presented, keys):
+                digest = hashlib.sha256(presented.encode()).hexdigest()[:16]
+                return f"key:{digest}"
         client = request.client
         ip = client.host if client else "unknown"
         return f"ip:{ip}"

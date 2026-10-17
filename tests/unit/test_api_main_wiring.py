@@ -19,6 +19,8 @@ Owned by Backend Developer (SIM-354 / SIM-351).
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
@@ -429,3 +431,148 @@ def test_rate_limit_disabled_by_default(monkeypatch):
     client = TestClient(app)
     for _ in range(20):
         assert client.get("/data").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# SIM-564: the limiter counts a request against a key only when the key is
+# a configured API key. Every other request counts against the client address.
+# ---------------------------------------------------------------------------
+
+_SIM564_REAL_KEY = "sim564-real-key-0123456789"
+
+
+def test_rate_limit_made_up_keys_count_against_client_address(monkeypatch):
+    """SIM-564: made-up keys share the client address's bucket.
+
+    A caller that sends a new made-up key on every request still reaches
+    the limit, so the third request answers 429.
+    """
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    client = TestClient(_tiny_app(rate_limit=2))
+    assert client.get("/data", headers={"X-API-Key": "made-up-1"}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": "made-up-2"}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": "made-up-3"}).status_code == 429
+
+
+def test_rate_limit_many_made_up_keys_reach_the_limit(monkeypatch):
+    """SIM-564: twenty requests with made-up keys at limit 5 get 429 from the sixth request on."""
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    client = TestClient(_tiny_app(rate_limit=5))
+    codes = [
+        client.get("/data", headers={"X-API-Key": uuid.uuid4().hex}).status_code for _ in range(20)
+    ]
+    assert codes[:5] == [200] * 5
+    assert set(codes[5:]) == {429}
+
+
+def test_rate_limit_real_key_counts_under_the_key(monkeypatch):
+    """SIM-564: a configured API key has its own bucket.
+
+    The test guards the key's own bucket against an over-fix that always
+    uses the client address. The key's bucket fills after two requests.
+    A request with no key from the same client still answers 200, because
+    the client address has a separate bucket.
+    """
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    client = TestClient(_tiny_app(rate_limit=2))
+    real = {"X-API-Key": _SIM564_REAL_KEY}
+    assert client.get("/data", headers=real).status_code == 200
+    assert client.get("/data", headers=real).status_code == 200
+    assert client.get("/data", headers=real).status_code == 429
+    assert client.get("/data").status_code == 200
+
+
+def test_rate_limit_no_key_does_not_consume_the_real_key(monkeypatch):
+    """SIM-564: requests with no key do not use up a configured key's bucket.
+
+    The test guards the key's own bucket against an over-fix that always
+    uses the client address.
+    """
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    client = TestClient(_tiny_app(rate_limit=2))
+    assert client.get("/data").status_code == 200
+    assert client.get("/data").status_code == 200
+    assert client.get("/data").status_code == 429
+    real = {"X-API-Key": _SIM564_REAL_KEY}
+    assert client.get("/data", headers=real).status_code == 200
+    assert client.get("/data", headers=real).status_code == 200
+
+
+def test_rate_limit_bearer_and_header_share_one_bucket(monkeypatch):
+    """SIM-564: one key in X-API-Key or in Authorization: Bearer counts against one bucket.
+
+    The login reads both headers through ``_presented_api_key``, so the
+    limiter reads them the same way.
+    """
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    client = TestClient(_tiny_app(rate_limit=2))
+    bearer = {"Authorization": f"Bearer {_SIM564_REAL_KEY}"}
+    header = {"X-API-Key": _SIM564_REAL_KEY}
+    assert client.get("/data", headers=bearer).status_code == 200
+    assert client.get("/data", headers=header).status_code == 200
+    assert client.get("/data", headers=bearer).status_code == 429
+    assert client.get("/data", headers=header).status_code == 429
+    # The client address bucket is still empty.
+    assert client.get("/data").status_code == 200
+
+
+def test_rate_limit_no_configured_keys_counts_against_client_address(monkeypatch):
+    """SIM-564: with no configured API keys, every key counts against the client address."""
+    for value in (None, "", " , "):
+        if value is None:
+            monkeypatch.delenv("API_KEYS", raising=False)
+        else:
+            monkeypatch.setenv("API_KEYS", value)
+        client = TestClient(_tiny_app(rate_limit=2))
+        assert client.get("/data", headers={"X-API-Key": "any-1"}).status_code == 200
+        assert client.get("/data", headers={"X-API-Key": "any-2"}).status_code == 200
+        assert client.get("/data").status_code == 429
+
+
+def test_rate_limit_bucket_name_holds_no_key_in_clear(monkeypatch):
+    """SIM-564: no bucket name holds the text of a key.
+
+    The test wraps a tiny app in the middleware directly, so it can read
+    the middleware's ``_hits`` dict.
+    """
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    inner = _tiny_app()
+    middleware = RateLimitMiddleware(inner, limit=5, window_s=60, enabled=True)
+    client = TestClient(middleware)
+    assert client.get("/data", headers={"X-API-Key": _SIM564_REAL_KEY}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": "made-up-key-xyz"}).status_code == 200
+    names = list(middleware._hits)
+    assert names, "the middleware recorded no bucket"
+    for name in names:
+        assert _SIM564_REAL_KEY not in name
+        assert "made-up-key-xyz" not in name
+    assert any(name.startswith("key:") for name in names)
+    assert "ip:testclient" in names
+
+
+def test_rate_limit_made_up_keys_do_not_consume_the_real_key(monkeypatch):
+    """SIM-564: made-up keys fill the client address bucket, not the real key's bucket."""
+    monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
+    client = TestClient(_tiny_app(rate_limit=2))
+    assert client.get("/data", headers={"X-API-Key": "made-up-1"}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": "made-up-2"}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": "made-up-3"}).status_code == 429
+    real = {"X-API-Key": _SIM564_REAL_KEY}
+    assert client.get("/data", headers=real).status_code == 200
+
+
+def test_rate_limit_two_configured_keys_keep_separate_buckets(monkeypatch):
+    """SIM-564: each configured API key has a bucket of its own.
+
+    A full bucket for the first key does not throttle the second key.
+    """
+    first = "sim564-first-key-0123456789"
+    second = "sim564-second-key-0123456789"
+    monkeypatch.setenv("API_KEYS", f"{first},{second}")
+    client = TestClient(_tiny_app(rate_limit=2))
+    assert client.get("/data", headers={"X-API-Key": first}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": first}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": first}).status_code == 429
+    assert client.get("/data", headers={"X-API-Key": second}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": second}).status_code == 200
+    assert client.get("/data", headers={"X-API-Key": second}).status_code == 429

@@ -184,7 +184,9 @@ only place that pickled them.
 ## Follow-ups (filed P3)
 
 - SIM-564: the rate limiter keys its buckets on the raw `X-API-Key` header, which it does not
-  verify (it is off by default).
+  verify (it is off by default). CLOSED 2026-10-17: a bucket opens only for a configured API
+  key, else the request counts against the client address (`CHANGES.md` 2026-10-17). The
+  review found that behind nginx the client address is the proxy's: SIM-569.
 - SIM-565: the engine bundle loads with `np.load(..., allow_pickle=True)`; check the live bundle
   for object arrays first.
 - SIM-566: `/api/schema`, `/api/analytics/*` and `/api/players/*` run fixed queries on the main
