@@ -68,9 +68,13 @@ read-write in `jobs` and read-only in the app (`OFFSITE_ROOT`), with the default
    2,896,533,430 / 2,897,058,654 bytes in 167 / 168 / 169 s), six `COPY SKIP`, exit 0;
    `nightly-backup-offsite.last` reads exit 0. `--status`: three stores MIRRORED, 3 sets each. A
    third run skipped all nine sets in 2 s. The gauge refreshed on its 600 s schedule (DuckDB and
-   bundle 5.7 h at 15:44; a read that falls mid-copy shows the sets complete at that moment).
-5. The OneDrive upload, measured on the host by the files OneDrive turns into placeholders:
-   about 3.3 MB/s (26 Mbit/s), so the 20.8 GiB needs about 1 h 50 min. [UPLOAD RESULT PENDING]
+   bundle 5.7 h at 15:44; a read that falls mid-copy shows the sets complete at that moment); at
+   16:04 the local and the off-site gauges agreed for every store (5.94 to 5.99 h).
+5. The OneDrive upload, watched on the host by the files OneDrive turns into placeholders
+   (the `ReparsePoint` attribute, a poll every two minutes): the last file, a 3.77 GB DuckDB
+   copy, became a placeholder at 16:45:04 UTC. From the first copied file (15:22) that is
+   1 h 23 min for 20.8 GiB, about 4.5 MB/s on average over Wi-Fi (a 30 s adapter sample read
+   5.0 MB/s, 40 Mbit/s). One night's 7.5 GB therefore reaches the cloud in about half an hour.
 6. 15:44 to 15:59, the drill from the copy (`make backup-drill OFFSITE=1`): PASS in 881 s.
    The scratch cluster restored the Postgres set `20261017T100000Z` from the OneDrive folder in
    760 s with every one of the 36 tables at its exact count (the 10:00 dump ran with no live

@@ -574,9 +574,15 @@ from the copy. A copy of the set folder back into the local folder, as for Postg
    at about 15:41 saw DuckDB and bundle at 5.7 h, and Postgres still at its second set. Each
    reading aged by the seconds since its read between scrapes, as designed. The refresh is
    600 s, so a reading taken in the middle of a copy shows the sets complete at that moment.
-5. **The upload.** Measured on the host by the files the OneDrive client turns into placeholders
-   (the `ReparsePoint` attribute): the small files first, then about 3.3 MB/s (26 Mbit/s) on the
-   large ones, so the 20.8 GiB needs about 1 h 50 min. [UPLOAD RESULT PENDING]
+   At 16:04 the two gauges agreed for every store: the local sets 5.94 to 5.96 h old, the
+   off-site copies 5.97 to 5.99 h.
+5. **The upload, done at 16:45:04.** Watched on the host by the files the OneDrive client turns
+   into placeholders (the `ReparsePoint` attribute), with a poll every two minutes. The small
+   files went first; the last file, a 3.77 GB DuckDB copy, became a placeholder at 16:45:04.
+   From the first copied file (15:22) that is 1 h 23 min for 20.8 GiB, about 4.5 MB/s on
+   average over Wi-Fi (a 30 s adapter sample read 5.0 MB/s, 40 Mbit/s). One night's 7.5 GB
+   therefore reaches the cloud in about half an hour after the 10:30 copy. The §6 step 7
+   estimate of 20 to 50 minutes per night's sets holds.
 6. **The drill from the copy, 15:44:50 to 15:59:30 (881 s): PASS.** `make backup-drill
    OFFSITE=1` resolved the OneDrive folder from `.env`, started the scratch cluster with the
    Postgres set `20261017T100000Z` mounted from that folder, and restored it in 760 s; every one
