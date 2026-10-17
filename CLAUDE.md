@@ -466,7 +466,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   loss or reset, `docker compose down -v` / `make nuke`, a bad migration or rebuild, a writer
   that dies in the middle of a rebuild, and an accidental deletion. They do NOT protect
   against the laptop's disk dying or the loss of the laptop. `BACKUP_DIR` is on C:, the only
-  disk. An off-machine copy of the backup sets is a follow-up ticket. The restore run book:
+  disk. The off-site copy (SIM-568, CLOSED 2026-10-17) closes that gap. At 10:30 UTC the
+  Ofelia job `nightly-backup-offsite` waits for the two backup jobs. Then it copies the newest
+  three complete sets of each store into the OneDrive folder
+  `C:/Users/grego/OneDrive/Documents/baseball_backups` (`OFFSITE_BACKUP_DIR`), and the OneDrive
+  client uploads them. The gauge `baseball_sim_offsite_backup_age_hours` gives the age of each
+  store's newest off-site copy. `make backup-offsite` copies by hand, and
+  `make backup-drill OFFSITE=1` restores from the copy. Its design and run book:
+  `docs/audit/2026-10-17-sim568-offsite-copy.md`. The record of 2026-10-17: nine sets
+  (20.8 GiB) copied at about 22 MB/s through the Docker file server in two runs (774 s +
+  507 s); a rerun that copies nothing takes 2 s; the drill from the copy PASSED in 881 s (every
+  table count exact; the DuckDB and bundle copies verified through `/offsite`); the OneDrive
+  upload runs at about 3.3 MB/s. One trap: `pg_dump` makes its dump folder 0700, which the
+  jobs container's `appuser` cannot open, so `pg_backup.sh` now opens each set before its
+  manifest lands. The copy runs 10:30 to about 10:45 UTC, so recreate `jobs`, `app` or
+  `scheduler` only after about 11:00 UTC, with no `.running` mark. The restore run book:
   `docs/audit/2026-10-14-sim525-backups-plan.md`. The record of 2026-10-15: the DuckDB set
   copied 3,839,122,442 bytes in 201 s with equal counts; the bundle set 588,464,368 bytes in
   46 s; the whole data run 308 s; the Postgres set 2,895,149,569 bytes (2.7 GiB) in 267 s. The
@@ -526,12 +540,13 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
 - **`make migrate` runs the `migrate` service**, the only service that logs in as the cluster
   owner. Run another alembic command through it: `docker compose run --rm migrate alembic current`.
 - **The nightly data jobs exec into the `jobs` container (SIM-443b).** Ofelia runs
-  `nightly-finals`, `weekly-refresh`, `nightly-rebuild` and `nightly-backup-data` with
-  `docker exec` into `baseball_simulator_v2-jobs-1` as `appuser` (an exec with no `user =`
-  line runs as root). A stopped `jobs` container fails all four jobs, the data job of the
-  scheduled backups (SIM-525) included. Ofelia logs the exec error. The Sunday
-  08:00 pair shares the container's memory cap (`JOBS_MEM_LIMIT`, default 10g; the first
-  rebuild peaked at 6.5 GiB on 2026-10-14). Recreate the scheduler after an INI edit.
+  `nightly-finals`, `weekly-refresh`, `nightly-rebuild`, `nightly-backup-data` and
+  `nightly-backup-offsite` with `docker exec` into `baseball_simulator_v2-jobs-1` as `appuser`
+  (an exec with no `user =` line runs as root). A stopped `jobs` container fails all five
+  jobs, the data job of the scheduled backups (SIM-525) and the off-site copy (SIM-568)
+  included. Ofelia logs the exec error. The Sunday 08:00 pair shares the container's memory
+  cap (`JOBS_MEM_LIMIT`, default 10g; the first rebuild peaked at 6.5 GiB on 2026-10-14).
+  Recreate the scheduler after an INI edit.
 - **The backup sets land in `BACKUP_DIR` (SIM-525, the scheduled backups).** `.env` sets
   `BACKUP_DIR=C:/Users/grego/Documents/baseball_backups`, a host folder outside Docker's disk
   image; compose mounts it at `/backups`. Without the value, compose uses `./backups`, which
@@ -540,6 +555,17 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   old; `--new-set` turns the skip off, and `make backup` passes it. The restore drill
   (`make backup-drill`) needs about 20 GB inside Docker's disk image while it runs, because
   its scratch Postgres cluster lives on a Docker volume.
+- **The off-site copy lands in a OneDrive folder (SIM-568).** `.env` sets
+  `OFFSITE_BACKUP_DIR=C:/Users/grego/OneDrive/Documents/baseball_backups`; compose mounts it at
+  `/offsite`, read-write in `jobs` and read-only in the app. Without the value, compose uses
+  `./backups_offsite`, which is NOT off the machine. The folder is a cloud-files folder.
+  Storage Sense (the Windows disk clean-up) can turn its files into online-only placeholders,
+  and a read through the Docker mount then downloads the file. The copy is off the machine
+  only once the OneDrive client has uploaded it, and the job cannot see the upload. The
+  OneDrive tray icon and Explorer's status column are the truth. Never point
+  `OFFSITE_BACKUP_DIR` at `BACKUP_DIR`: the copy refuses to run when the two are one folder.
+  Do not run `make backup` and `make backup-offsite` at the same time: the backup can prune a
+  local set that the copy reads. Run both from cmd.exe.
 - **Prometheus needs `deploy/monitoring/secrets/app_api_key` (SIM-443c).** The file holds one
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
@@ -655,8 +681,11 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   password anywhere) and `dsn_label()` (a DSN with the password removed, for a log or a report).
 - `pipeline/backup/` (SIM-525, the scheduled backups) — `data_stores.py` (the data job: the
   DuckDB file, the bundle and the small `/data` files; also `--status`, `--verify-set`,
-  `--restore-duckdb` and `--restore-bundle`; its module docstring is the design) and
-  `status.py` (`newest_complete_sets`, read by `--status` and the backup age gauge).
+  `--restore-duckdb` and `--restore-bundle`; its module docstring is the design),
+  `status.py` (`newest_complete_sets`, read by `--status` and both backup age gauges),
+  `offsite.py` (the off-site copy, SIM-568: the newest complete sets from `/backups` to
+  `/offsite`; also `--status` and `--dry-run`) and `common.py` (the standard-library helpers
+  that `data_stores.py` and `offsite.py` share: the chunked copy, the sha256, the mark check).
 - `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
   imported by both ETL loaders; `boxscore_ingest.py`, the SIM-545 official box-score parser + upsert into
   `raw.game_player_stats`, which the loader calls per game), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
@@ -812,8 +841,10 @@ make live-logs         # SIM-519: follow the live service's log
 make gen-secrets      # SIM-443b: add any missing secret to .env (never changes a set one)
 make db-roles         # SIM-443b: create/refresh the app + read-only roles (ROTATE_ADMIN_PASSWORD=1 resets the owner's)
 make backup           # SIM-525: back up the three stores into BACKUP_DIR now (run from cmd.exe)
-make backup-status    # SIM-525: show each store's newest set and its age
+make backup-offsite   # SIM-568: copy the newest sets into OFFSITE_BACKUP_DIR (the OneDrive folder) now (run from cmd.exe)
+make backup-status    # SIM-525: show each store's newest set and its age; SIM-568: whether the off-site copy mirrors it
 make backup-drill     # SIM-525: restore the newest set into a scratch cluster and check it (SET=<ts> picks one)
+make backup-drill OFFSITE=1  # SIM-568: the same drill, from the off-site copy
 make restore-postgres SET=<ts>  # SIM-525: restore one Postgres set (refuses a populated database)
 ```
 

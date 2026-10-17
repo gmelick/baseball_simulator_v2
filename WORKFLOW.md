@@ -423,18 +423,29 @@ BACKUP_DIR\
 
 `<TS>` is the UTC start time of the run (`YYYYmmddTHHMMSSZ`). A run writes each set as `<TS>.partial`, syncs every file to disk, writes `manifest.json` last and then renames the folder. A set without `manifest.json` never counts. The next run deletes every `.partial` folder it finds. Each manifest records the bytes and the sha256 of every file.
 
-**What the sets protect against.**  They protect against the loss or a reset of Docker's disk image, `docker compose down -v` and `make nuke`, a bad migration or rebuild, a writer that dies in the middle of a rebuild, and accidental deletion. They do NOT protect against the laptop's disk dying or the loss of the laptop: the sets sit on the same disk. An off-machine copy of the sets is a follow-up ticket.
+**What the sets protect against.**  They protect against the loss or a reset of Docker's disk image, `docker compose down -v` and `make nuke`, a bad migration or rebuild, a writer that dies in the middle of a rebuild, and accidental deletion. They do NOT protect against the laptop's disk dying or the loss of the laptop on their own: the sets sit on the same disk. The off-site copy (SIM-568) covers that loss (see **The off-site copy** below).
 
-**The schedule.**  Ofelia runs two jobs at 10:00 UTC, after the nightly rebuild (08:00 UTC, done at about 09:30) and before the closing-lines pass (10:30 UTC). Each job sets `no-overlap`.
+**The off-site copy.**  A third job copies the newest complete sets of each store into a OneDrive folder, and the OneDrive client uploads them off the machine. `OFFSITE_BACKUP_DIR` in `.env` names the folder: `C:/Users/grego/OneDrive/Documents/baseball_backups`. Compose mounts it at `/offsite`: read-write in the `jobs` container, read-only in the app. Without the value, compose uses `.\backups_offsite` in the repo, which is NOT off the machine. Each store keeps its newest 3 sets there (`OFFSITE_KEEP`, else `BACKUP_KEEP`, else 3). The folder has the same store folders as `BACKUP_DIR`, and each set in it is a byte-for-byte copy of the local set. The copy writes no `.partial` folder: it writes each file straight into `<store>\<TS>\` and `manifest.json` last, so a folder with no manifest is not a complete set. The design and the run book are in `docs\audit\2026-10-17-sim568-offsite-copy.md`.
+
+What OneDrive does and does not do for you:
+
+- The copy is off the machine only once the OneDrive client has uploaded it. The job cannot see the upload: the OneDrive tray icon and Explorer's status column are the truth.
+- The folder is a cloud-files folder. Storage Sense (the Windows disk clean-up) can turn its files into online-only placeholders. A read of a placeholder through the Docker mount downloads the file.
+- Never point `OFFSITE_BACKUP_DIR` at `BACKUP_DIR`. The copy refuses to run when the two are one folder.
+
+**The schedule.**  Ofelia runs two jobs at 10:00 UTC, after the nightly rebuild (08:00 UTC, done at about 09:30), and the off-site copy at 10:30 UTC. The closing-lines pass also starts at 10:30 UTC, in the app container, so it never shares a container with the copy. Each job sets `no-overlap`.
 
 | Job | Container and user | What it does |
 |---|---|---|
 | `nightly-backup-postgres` (the Postgres job) | `db`, the `postgres` OS user | Runs `db/backup/pg_backup.sh` over the unix socket, with no password. It counts every `raw`, `sim` and `public` table, dumps the database (`pg_dump -Fd -j 4 -Z 3`), checks the dump with `pg_restore --list` and counts every table again. The live service can write during the dump, so a restore checks each count against the two counts. A lock folder (`postgres\.lock`) stops a second run. |
 | `nightly-backup-data` (the data job) | `jobs`, `appuser` | Runs `with_mark.sh nightly-backup with_retry.sh 2 python -m pipeline.backup.data_stores`. It copies the DuckDB file under a read-only handle and requires the same table counts on the copy. It copies the small files into the same set. It copies the bundle version without the app's `.in_use.*` marks. |
+| `nightly-backup-offsite` (the off-site copy, 10:30 UTC) | `jobs`, `appuser` | Runs `with_mark.sh nightly-backup-offsite with_retry.sh 2 python -m pipeline.backup.offsite`. It copies the newest 3 complete sets of each store from `/backups` to `/offsite`, file by file, the oldest set first. It checks each file's sha256 against the set's manifest, then copies the manifest last. It skips a set that is already off-site. |
 
 The data job waits 60 s. Then it waits while a `nightly-rebuild`, `nightly-finals` or `weekly-refresh` `.running` mark younger than 6 h exists in `/data/ingest_marks`, for up to 2 h. The rebuild runs inside `with_mark.sh`, so it leaves that mark while it writes the DuckDB file. When a writer still holds the file, the open retries every 60 s for 30 min. When either wait runs out, the data job skips the DuckDB store, still backs up the bundle and exits 1. A crash retry within one hour skips a store that already finished and reuses its set id, so the duckdb and bundle sets of one night share one `<TS>`. The data job does not back up `/data/replay.duckdb` (the app holds it writable, and its replays are disposable) or the `calibration.json.bak_*` files.
 
-Both jobs guard the free space on `/backups` (the host disk C:). They need the larger of 10 GiB and 1.5 times the newest set. When the disk is short, they delete the oldest set while more than 2 remain. Otherwise they refuse with exit 2. A failed run prunes nothing.
+The two 10:00 jobs guard the free space on `/backups` (the host disk C:). They need the larger of 10 GiB and 1.5 times the newest set. When the disk is short, they delete the oldest set while more than 2 remain. Otherwise they refuse with exit 2. A failed run prunes nothing.
+
+One off-site copy runs at a time. A run takes the copy lock `/data/ingest_marks/offsite-copy.lock` before it waits and deletes it at its end; a second run refuses with exit 2. The copy then waits while the data job's `nightly-backup.running` mark is younger than 6 h, or while the Postgres job's lock (`postgres\.lock\owner`) holds a start younger than 6 h. It polls every 60 s for up to 2 h. When the wait runs out, it logs that and copies anyway: a complete set is always safe to copy. A crash retry keeps each file that already matches and copies the rest. Before it writes, the copy needs the larger of 10 GiB and 1.5 times the bytes it will copy free on C:, else it refuses with exit 2. It cannot see the OneDrive quota. Each store prunes only after that store copied cleanly. It never prunes a set among the newest 3 local sets, and a pruned set loses its manifest first. A failed store prunes nothing; the other stores still copy.
 
 **Back up now.**  Run these from cmd.exe: Git Bash rewrites the container paths (CLAUDE.md §2a).
 
@@ -447,37 +458,58 @@ make backup-status
 
 `make backup` runs the two steps one after the other. Its data step passes `--new-set`, so it always makes a fresh set, even within an hour of the scheduled run. On the first run (2026-10-15) the data step took 308 s: a 3.6 GiB DuckDB copy and a 561 MiB bundle copy.
 
+```bat
+make backup-offsite
+:: Prints, per set:  COPY OK <store> <TS> <bytes> bytes <seconds> s
+::               or  COPY SKIP <store> <TS> (already off-site)
+docker compose exec -T jobs python -m pipeline.backup.offsite --dry-run
+:: Prints WOULD COPY / WOULD SKIP / WOULD PRUNE lines and writes nothing.
+```
+
+`make backup-offsite` runs the off-site copy now, inside `with_mark.sh nightly-backup-offsite`. It refuses with exit 2 while another copy runs: a `nightly-backup-offsite.running` mark under 6 h old, or a live copy lock. Do not run it while `make backup` runs: the backup can prune a local set that the copy reads, and that store then fails for the run.
+
 **Check last night's run.**
 
 ```bat
 make backup-status
 :: Expected: postgres, duckdb and bundle, each under 24 h old, with 3 sets each.
+:: The second block is the off-site copy, one line per store:
+::   postgres local <TS>  off-site <TS>  age 0.5 h  2.7 GiB  (3 sets)  MIRRORED
 
 type C:\Users\grego\Documents\baseball_backups\postgres\<TS>\manifest.json
 type C:\Users\grego\Documents\baseball_backups\duckdb\<TS>\manifest.json
 
 docker compose exec -T jobs cat /data/ingest_marks/nightly-backup.last
 :: Expected: <UTC date> 0 <UTC timestamp>   (the middle field is the data job's exit code)
+docker compose exec -T jobs cat /data/ingest_marks/nightly-backup-offsite.last
+:: Expected: the same shape; the middle field is the off-site copy's exit code
 
 docker compose logs scheduler | findstr nightly-backup
+:: (this also matches nightly-backup-offsite)
 
 set API_KEY=<one key from API_KEYS in .env>
 curl -s -H "X-API-Key: %API_KEY%" http://localhost:8000/metrics | findstr backup_age
 :: baseball_sim_backup_age_hours{store="postgres"} 1.2   (and duckdb, bundle)
+:: baseball_sim_offsite_backup_age_hours{store="postgres"} 0.7   (and duckdb, bundle)
 ```
 
 **What good looks like.**  Each store's newest set is under 24 h old, its folder holds `manifest.json`, and no `.partial` folder is left. `nightly-backup.last` reads exit 0. The gauge `baseball_sim_backup_age_hours{store}` reads the hours since each store's newest complete set, and -1 for a store with no set. The app reads the folder again at most every 600 s.
+
+For the off-site copy: each store's line in the second block of `make backup-status` ends `MIRRORED`, and `nightly-backup-offsite.last` reads exit 0. The gauge `baseball_sim_offsite_backup_age_hours{store}` reads the hours since each store's newest complete off-site copy: under 24, and -1 before the first copy. A background task in the app reads the off-site folder at most every 600 s; a scrape never reads it. On the host, Explorer's status column shows every file of the newest sets as synced. Only that shows the copy is off the machine.
 
 **The restore drill.**  The drill proves that a set restores. It never touches the live database.
 
 ```bat
 make backup-drill
 make backup-drill SET=<TS>
+make backup-drill OFFSITE=1
 ```
 
 `make backup-drill` runs `py scripts/backup_drill.py --set latest` on the host. The drill refuses to start while any `sim525_*` container or volume exists. It starts a scratch Postgres cluster (`postgres:15-alpine`, container `sim525_drill_pg`, no network, no port, the named volume `sim525_drill_pg`). It runs the real `pg_restore.sh` against the scratch cluster. It requires exit 0, no "errors ignored" line and `RESTORE OK` as the last line. Then it runs `--verify-set <TS>` in the jobs container on the newest set id that is complete in both `duckdb\` and `bundle\`: the DuckDB copy's counts and hashes, and a load of the bundle copy. It removes the scratch container and volume, and writes `BACKUP_DIR\drills\<TS>.json`. Postgres refuses a Windows folder as its data directory, so the scratch cluster lives on a Docker volume: it takes about 20 GB inside Docker's disk image while it runs. Check that the disk image has room first; `docker builder prune -f` frees the build cache.
 
-**The restore run book, in short.**  The full run book is `docs\audit\2026-10-14-sim525-backups-plan.md` §6. Pick the set with `make backup-status`.
+`make backup-drill OFFSITE=1` runs the same drill from the off-site copy (`--offsite`); only the value 1 turns it on. It reads the folder that `OFFSITE_BACKUP_DIR` names, from the shell environment first and then `.env`, as compose reads it. The data verify runs with `--backups-root /offsite`. The report says `"source": "offsite"` and lands in the off-site folder's `drills\`. A drill from online-only placeholders downloads the set first, so it takes longer and needs the OneDrive client online.
+
+**The restore run book, in short.**  The full run book is `docs\audit\2026-10-14-sim525-backups-plan.md` §6. Pick the set with `make backup-status`. To restore from the off-site copy on this machine, first copy the set folder (for example `postgres\<TS>\`) from the OneDrive folder back into `BACKUP_DIR`: the `db` container has no `/offsite` mount. On a new machine, point `BACKUP_DIR` at the synced OneDrive folder instead. `docs\audit\2026-10-17-sim568-offsite-copy.md` §7 holds both cases.
 
 ```bat
 :: Postgres: the target database must be empty (a new postgres_data volume).
@@ -486,7 +518,7 @@ make restore-postgres SET=<TS>
 :: Expected last line: RESTORE OK /backups/postgres/<TS>
 make db-roles
 docker compose run --rm migrate alembic current
-:: Expected: 0030 (head)
+:: Expected: alembic prints 0030 (head)
 
 :: DuckDB: checks the size and sha256, moves a live .wal aside, replaces the file.
 docker compose stop scheduler

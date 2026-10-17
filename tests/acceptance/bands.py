@@ -148,7 +148,7 @@ centres and spreads (the "round-3" 2023-era floors are in git history)::
 
   channel  documented magnitude          source             floor   first
                                                                     fails
-  R        runs ~7-8% low                CLAUDE.md:866      0.0275  2.7%
+  R        runs ~7-8% low                CLAUDE.md:897      0.0275  2.7%
   H        +0.2078/team-game: a drawn    BACKLOG.md:20      0.0157  1.6%
            field_error is aliased to a   (SIM-496) +
            single, so a retired batter   constants.py:177
@@ -167,18 +167,18 @@ centres and spreads (the "round-3" 2023-era floors are in git history)::
   ROE      none — see the warning below  Rule B             0.0822  8.2%
   ROE_     nothing reaches base on an    BACKLOG.md:20      0.0822  8.2%
   reached  error at all = -100%          (SIM-496)
-  home_    stuck at the structural-only  CLAUDE.md:869      0.0173  3.2%
+  home_    stuck at the structural-only  CLAUDE.md:900      0.0173  3.2%
   win_pct  ~.510-.515 baseline                              (abs)
 
 Two entries need their reasoning written out.
 
-**R.** ``CLAUDE.md:866`` reads "Runs run ~7-8% low (down from ~12% pre-fix)". The
+**R.** ``CLAUDE.md:897`` reads "Runs run ~7-8% low (down from ~12% pre-fix)". The
 owner ruled on 2026-08-10 that this line is authoritative and that
 ``CLAUDE.md:465``'s "runs sit ~10-12% low" is STALE. The band is therefore sized
 on the HARDER end of the live range, 7%: ``d = 0.07 * 4.4473 = 0.3113``. A floor
 of 0.027478 x 4.4473 = 0.1222 clears the 1.6 margin with room (``d/floor = 2.55``).
 
-**home_win_pct.** ``CLAUDE.md:869`` records the defect as "stuck at the
+**home_win_pct.** ``CLAUDE.md:900`` records the defect as "stuck at the
 structural-only ~.510-.515". The band is sized on the HARDEST point of that
 range, 0.515, so ``d = 0.5428 - 0.515 = 0.0278`` and the floor is the margin
 bound 0.0278 / 1.6 rounded down to 0.0173 (``d/floor = 1.61``). It also reds
@@ -245,7 +245,7 @@ price of an instrument that can see a 7% run-conversion gap instead of a 15% one
 ``home_win_pct`` is worse. Certifying it at 26,015 decisive games takes about
 16.3 hours serial, which is a WEEKEND run, not a nightly. I am not proposing a
 looser floor to make it fit: a floor loose enough for a nightly cannot reject the
-0.515 baseline ``CLAUDE.md:869`` documents, and a band that cannot reject the
+0.515 baseline ``CLAUDE.md:900`` documents, and a band that cannot reject the
 documented defect is the exact failure this round exists to end. So the honest
 statement is:
 
@@ -414,12 +414,12 @@ record.** Every floor is re-derived here from a magnitude with a file and a line
 behind it. Reproduced before changing anything:
 
   * ``evaluate("R", ...)`` at rel_floor 0.075 PASSED at 7.0%, 7.2%, 7.4% and
-    7.5% low, and first failed at 7.6%. ``CLAUDE.md:866`` records the live gap as
+    7.5% low, and first failed at 7.6%. ``CLAUDE.md:897`` records the live gap as
     "Runs run ~7-8% low", so the band passed on most of the documented range.
     Round 2 had sized it against ``CLAUDE.md:465``'s "10-12%", which the owner
     ruled STALE on 2026-08-10.
   * ``evaluate("home_win_pct", ...)`` at floor 0.030 failed ONLY at exactly
-    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:869`` records the
+    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:900`` records the
     defect as "stuck at the structural-only ~.510-.515", and this lane's own
     first production run measured 0.5125
     (``test_production_config_bands_sim450.py``). The band passed on the whole
@@ -429,7 +429,7 @@ behind it. Reproduced before changing anything:
 
 The changes:
 
-  * **R: rel_floor 0.075 -> 0.0276.** Sized on ``CLAUDE.md:866``, harder end:
+  * **R: rel_floor 0.075 -> 0.0276.** Sized on ``CLAUDE.md:897``, harder end:
     ``d = 0.07 * 4.62 = 0.3234``; floor = 0.1275; margin 2.54; power > 0.9999.
     Cost: 5,098 game-sims, up from 691.
   * **H: rel_floor 0.10 -> 0.0158.** Sized on ``BACKLOG.md:20`` (SIM-496) with
@@ -446,7 +446,7 @@ The changes:
     Rule B did, and it applies because these channels share the lane's run.
     Tightening them costs nothing (they resolve inside the 5,648-sim box run) and
     keeps the band meaningful after the defect is fixed.
-  * **home_win_pct: abs_floor 0.030 -> 0.0124.** Sized on ``CLAUDE.md:869``,
+  * **home_win_pct: abs_floor 0.030 -> 0.0124.** Sized on ``CLAUDE.md:900``,
     hardest point: ``d = 0.535 - 0.515 = 0.020``; margin 1.61; power 0.992. It
     reds 0.5125 at 1.81x the floor. Cost: **26,015 decisive games, about 16.3
     hours** — a weekend run. Stated, not hidden. No nightly-sized floor can
@@ -648,7 +648,7 @@ REFERENCES: dict[str, Reference] = {
         sd_ref=3.2468,
         rel_floor=0.027478,
         must_detect=0.311311,
-        detect_source="CLAUDE.md:866 'Runs run ~7-8% low' -> harder end 0.07 * 4.4473 = 0.311311",
+        detect_source="CLAUDE.md:897 'Runs run ~7-8% low' -> harder end 0.07 * 4.4473 = 0.311311",
     ),
     "H": Reference(
         RESTATED_MLB_2025["H"],
@@ -794,7 +794,7 @@ REFERENCES: dict[str, Reference] = {
         obs_per_sim=1,
         must_detect=0.0278,
         detect_source=(
-            "CLAUDE.md:869: home_win_pct 'stuck at the structural-only ~.510-.515'. Sized "
+            "CLAUDE.md:900: home_win_pct 'stuck at the structural-only ~.510-.515'. Sized "
             "on the HARDEST point of that range against the measured 2025 centre: "
             "0.5428 - 0.515 = 0.0278; floor = 0.0278/1.6 rounded down. The band also reds "
             "0.5125, which this lane's own first production run measured."

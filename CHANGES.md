@@ -1,3 +1,103 @@
+# DEPLOYED — an off-machine copy of the backup sets, on OneDrive — SIM-568, 2026-10-17
+
+**Why.** The scheduled backups (SIM-525) write the Postgres dump, the DuckDB file and the engine
+bundle every night into `C:/Users/grego/Documents/baseball_backups`, on the laptop's only disk.
+They did not survive the disk dying or the loss of the laptop. The owner's decisions
+(2026-10-15): the copy lives in the OneDrive folder
+`C:/Users/grego/OneDrive/Documents/baseball_backups` (`OFFSITE_BACKUP_DIR` in `.env`; the OneDrive
+client uploads whatever lands there, so the cloud copy is the off-machine copy), and it keeps 3
+sets per store, a mirror of the local retention. The design, the run book and the restore from
+the copy: `docs/audit/2026-10-17-sim568-offsite-copy.md`.
+
+**What runs.** A third Ofelia job, `nightly-backup-offsite`, at 10:30 UTC in the `jobs`
+container as `appuser`, with `no-overlap`, inside `with_mark.sh nightly-backup-offsite` and
+`with_retry.sh 2`: `python -m pipeline.backup.offsite`. Compose mounts the folder at `/offsite`,
+read-write in `jobs` and read-only in the app (`OFFSITE_ROOT`), with the default
+`./backups_offsite` (git- and docker-ignored) and no `:?`.
+- The copy takes a run lock (`/data/ingest_marks/offsite-copy.lock`; a second run refuses with
+  exit 2), waits in one loop while the data job's `nightly-backup.running` mark is fresh or the
+  Postgres job's `postgres/.lock/owner` is younger than 6 h (up to 2 h, a poll a minute; never on
+  a `.partial`, which is a dead run), then copies the newest 3 complete sets of each store, the
+  oldest first.
+- No `.partial` folder and no folder rename: OneDrive holds a new file open while it uploads
+  it, and a Windows folder rename fails then. The files go straight into `<store>/<TS>/`, each
+  copied in 8 MiB reads with the source hashed in flight and the copy read back (`--no-hash`
+  skips the read-back); the local manifest's bytes go last, verbatim, as `manifest.json.tmp`
+  then `os.replace`. A folder with no manifest reads as incomplete to every reader; a rerun
+  keeps each file that already matches and copies the rest.
+- Retention per store, right after that store copied cleanly: the newest `OFFSITE_KEEP` (else
+  `BACKUP_KEEP`, else 3) complete off-site sets, never a set the local side still wants; the
+  manifest goes first, then the folder. A failed store prunes nothing. The free-space guard on
+  `/offsite` (the C: disk; the container cannot see the OneDrive quota) runs before any write.
+- `--status` (the second block of `make backup-status`) prints MIRRORED / BEHIND / none per
+  store; `--dry-run` prints what a run would copy and prune; `make backup-offsite` copies by
+  hand (its first line refuses while a `nightly-backup-offsite.running` mark is under 6 h old);
+  `make backup-drill OFFSITE=1` runs the restore drill from the copy (`scripts/backup_drill.py
+  --offsite`; its data verify runs `data_stores --verify-set ... --backups-root /offsite`).
+- The gauge `baseball_sim_offsite_backup_age_hours{store}` on `/metrics`: the age of each
+  store's newest complete off-site set, read every 600 s on a daemon thread of its own (one read
+  at a time, never on the event loop: a dehydrated OneDrive file can stall a read), aged to the
+  scrape; -1 until the first read. `pipeline/backup/common.py` holds the helpers that
+  `data_stores.py` and `offsite.py` share (stdlib only); `data_stores.py` imports them back.
+
+**What ran, in order (2026-10-17, UTC).**
+1. The build: a workflow of 14 Opus 5.5 agents (39 minutes): five builders on disjoint files,
+   an adversarial reviewer and a repair pass per code component, then the lane. The reviewers'
+   confirmed findings, all repaired: the gauge's read had no single-flight guard and froze at
+   its last value; the copy had no run lock; retention protected only the sets copied that
+   night (a wanted set would flap between pruned and re-copied); the Makefile turned the
+   off-site drill on for `OFFSITE=0`. The lane: 6,342 unit tests passed, 2 skipped (both
+   pre-existing); ruff and mypy clean. A first workflow of 18 agents built nothing: its agents
+   inherited plan mode from an interrupted ExitPlanMode (the memory note
+   `workflow-agents-inherit-plan-mode` carries the rule).
+2. 15:20, the deploy: `OFFSITE_BACKUP_DIR` in `.env`; `docker compose up -d --wait jobs app`
+   (the app healthy in 75 s); the scheduler recreated with seven jobs. The mount probe wrote and
+   deleted a file under `/offsite`; `--status` read every store BEHIND; `--dry-run` listed nine
+   sets, 22,387,851,562 bytes (20.8 GiB), against 119 GiB free.
+3. 15:22 to 15:35, the first `make backup-offsite` (774 s): the three DuckDB sets
+   (3,908,590,670 / 3,973,340,238 / 4,051,459,150 bytes in 174 / 219 / 194 s) and the three
+   bundle sets (588.5 MB each in 70 / 58 / 58 s) copied and read back, about 22 MB/s of set data
+   through the Docker file server. **The Postgres store failed at once:** `pg_dump` creates its
+   dump folder 0700 as the `postgres` user (uid 70), and `appuser` (uid 1001) in the `jobs`
+   container could not open it ("Permission denied"). The fix: `db/backup/pg_backup.sh` runs
+   `chmod -R u=rwX,go=rX` on the set before the manifest lands (step 4b; the host folder's own
+   permissions guard the files), and `tests/unit/test_sim525_pg_backup_sh.py` now creates the
+   fake dump folder 0700 and requires a complete set to be readable by another user (25 pass).
+   The three existing sets were opened by hand as the `postgres` user.
+4. 15:35 to 15:44, the second run (507 s): the three Postgres sets (2,895,264,234 /
+   2,896,533,430 / 2,897,058,654 bytes in 167 / 168 / 169 s), six `COPY SKIP`, exit 0;
+   `nightly-backup-offsite.last` reads exit 0. `--status`: three stores MIRRORED, 3 sets each. A
+   third run skipped all nine sets in 2 s. The gauge refreshed on its 600 s schedule (DuckDB and
+   bundle 5.7 h at 15:44; a read that falls mid-copy shows the sets complete at that moment); at
+   16:04 the local and the off-site gauges agreed for every store (5.94 to 5.99 h).
+5. The OneDrive upload, watched on the host by the files OneDrive turns into placeholders
+   (the `ReparsePoint` attribute, a poll every two minutes): the last file, a 3.77 GB DuckDB
+   copy, became a placeholder at 16:45:04 UTC. From the first copied file (15:22) that is
+   1 h 23 min for 20.8 GiB, about 4.5 MB/s on average over Wi-Fi (a 30 s adapter sample read
+   5.0 MB/s, 40 Mbit/s). One night's 7.5 GB therefore reaches the cloud in about half an hour.
+6. 15:44 to 15:59, the drill from the copy (`make backup-drill OFFSITE=1`): PASS in 881 s.
+   The scratch cluster restored the Postgres set `20261017T100000Z` from the OneDrive folder in
+   760 s with every one of the 36 tables at its exact count (the 10:00 dump ran with no live
+   writer); `RESTORE OK` was the last line. The data verify ran through `/offsite` in 117 s: the
+   DuckDB copy's hashes and counts match, and the bundle copy loaded with the production loader
+   in 10.8 s. The scratch container and volume were removed; the report is the OneDrive
+   folder's `drills/20261017T154450Z.json`, with `"source": "offsite"`.
+
+**Found on the way.** The Postgres dump folder's 0700 mode (above). The pre-existing test
+`tests/unit/test_docs_duckdb_version.py` matched the SIM-525 line `:: Expected: 0030 (head)` in
+`WORKFLOW.md` and failed on `master`; the line now reads `:: Expected: alembic prints 0030
+(head)`. In Git Bash `grep -c $'\r'` inside `$(...)` reports a count for every line; count CR
+bytes with `tr -cd '\r' | wc -c`. The copy runs 10:30 to about 10:45 UTC, so the quiet window for
+a recreate of `jobs`, `app` or `scheduler` now opens at about 11:00 UTC, and only when no
+`/data/ingest_marks/*.running` mark exists.
+
+**Open.** Whether OneDrive's recycle bin holds a pruned set against the quota: read the OneDrive
+storage figure after the first off-site prune (2026-10-18, when the fourth local set exists). The
+DuckDB and bundle restores straight from `/offsite` (`--restore-duckdb ... --backups-root
+/offsite`) are documented but not drilled; the drill runs the verify through `/offsite`.
+Follow-ups unchanged: SIM-567 (pin `ODDS_PROVIDER=mock`), a Grafana panel and alert for the two
+backup-age gauges.
+
 # DEPLOYED — the scheduled backups of the three data stores, with a restore drill — SIM-525, 2026-10-15
 
 **Why.** The platform keeps its data in three stores, and none had a backup: the Postgres

@@ -78,3 +78,6 @@ frontend/
 # SIM-525: the default backup folder (./backups, when BACKUP_DIR is unset).
 # Without this line every image build would ship the backup sets as context.
 backups/
+# SIM-568: the default off-site copy folder (./backups_offsite, when
+# OFFSITE_BACKUP_DIR is unset).
+backups_offsite/

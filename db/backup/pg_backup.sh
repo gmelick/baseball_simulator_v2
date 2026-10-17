@@ -227,6 +227,13 @@ take_counts "$partial/counts_after.tsv"
 alembic_head=$(psql_q -c "select version_num from public.alembic_version") \
     || fail "cannot read the alembic head"
 
+# --- 4b. The set must be readable by the off-site copy (SIM-568). --------------
+# pg_dump creates the dump folder 0700. The off-site copy reads the set from
+# the jobs container as appuser, another uid, so a 0700 folder fails it with
+# "Permission denied" (seen 2026-10-17 on the first copy). The host folder's
+# own permissions guard the files; on the bind mount these bits are metadata.
+chmod -R u=rwX,go=rX "$partial" || fail "cannot make the set readable"
+
 # --- 5. The manifest, written last. -------------------------------------------
 files_list="$partial/.files.list"
 files_part="$partial/.files.part"

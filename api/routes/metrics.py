@@ -66,6 +66,18 @@ without touching this file's contract:
                                                               when the store has none. Read
                                                               from BACKUPS_ROOT at most every
                                                               10 minutes.
+    baseball_sim_offsite_backup_age_hours{store=...} gauge
+                                                              The off-site copy (SIM-568) —
+                                                              the age in hours of each store's
+                                                              newest backup set that is
+                                                              complete off-site, counted from
+                                                              the set's creation (not from the
+                                                              copy); -1 when none. One daemon
+                                                              thread reads OFFSITE_ROOT at most
+                                                              every 10 minutes, one read at a
+                                                              time. The scrape never reads the
+                                                              off-site folder: it ages the last
+                                                              reading to the scrape time.
 
 The values are read from ``request.app.state`` where available (so no DB / Redis
 connection is required — this module is fully import-safe and the endpoint never
@@ -76,7 +88,9 @@ Owner: QA / DevOps (SIM-374).
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -112,6 +126,13 @@ router = APIRouter(tags=["ops"], dependencies=[Depends(require_auth)])
 # App build version surfaced as a label on the info gauge. Kept in sync with
 # api/main.py's FastAPI(version=...) intent; overridable via env for releases.
 _APP_VERSION = os.environ.get("APP_VERSION", "0.1.0-phase7")
+
+#: The off-site copy (SIM-568): the help text of the off-site backup-age gauge.
+#: The age counts from the set's creation, because the off-site manifest is a
+#: verbatim copy of the local one.
+OFFSITE_BACKUP_AGE_HELP = (
+    "Age in hours of the store's newest backup set that is complete off-site; -1 when none."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +192,14 @@ if _PROM_AVAILABLE:
     _BACKUP_AGE = Gauge(
         "baseball_sim_backup_age_hours",
         "Hours since the newest complete backup set of the store; -1 when none.",
+        ["store"],
+        registry=_REGISTRY,
+    )
+
+    # The off-site copy (SIM-568).
+    _OFFSITE_BACKUP_AGE = Gauge(
+        "baseball_sim_offsite_backup_age_hours",
+        OFFSITE_BACKUP_AGE_HELP,
         ["store"],
         registry=_REGISTRY,
     )
@@ -295,6 +324,15 @@ def _schedule_finals_refresh(app_state: Any) -> None:
     if now - float(getattr(app_state, "heartbeat_checked_at", 0.0) or 0.0) >= HEARTBEAT_REFRESH_S:
         app_state.heartbeat_checked_at = now
         app_state.heartbeat_refresh_task = loop.create_task(_refresh_live_heartbeat(app_state))
+    # The off-site copy (SIM-568): a read of the off-site folder can stall on a
+    # dehydrated OneDrive file, so it runs on a daemon thread, never in the scrape.
+    # One read runs at a time: while a read stalls, no scrape starts another.
+    offsite_due = (
+        now - float(getattr(app_state, "offsite_checked_at", 0.0) or 0.0) >= OFFSITE_AGE_REFRESH_S
+    )
+    if offsite_due and not _offsite_read_in_flight(app_state):
+        app_state.offsite_checked_at = now
+        app_state.offsite_refresh_task = loop.create_task(_refresh_offsite_ages(app_state))
 
 
 def _finals_age_hours(app_state: Any) -> float:
@@ -321,12 +359,12 @@ def _no_backup_ages() -> dict[str, float]:
     return dict.fromkeys(BACKUP_STORES, -1.0)
 
 
-def _read_backup_ages() -> dict[str, float]:
+def _read_ages(env_name: str, default_root: str) -> dict[str, float]:
     """Read the age in hours of the newest complete set of each backup store.
 
-    The backup root is ``BACKUPS_ROOT`` (default ``/backups``). A missing root,
-    a missing reader module or any read error gives -1 for every store. The
-    reader never raises.
+    The root is the value of the environment variable ``env_name``, else
+    ``default_root``. A missing root, a missing reader module or any read error
+    gives -1 for every store. The reader never raises.
     """
     try:
         from pipeline.backup.status import age_hours, newest_complete_sets
@@ -334,7 +372,7 @@ def _read_backup_ages() -> dict[str, float]:
         return _no_backup_ages()
     ages = _no_backup_ages()
     try:
-        root = Path(os.environ.get("BACKUPS_ROOT", "/backups"))
+        root = Path(os.environ.get(env_name, default_root))
         if not root.is_dir():
             return ages
         sets = newest_complete_sets(root)
@@ -343,6 +381,131 @@ def _read_backup_ages() -> dict[str, float]:
             ages[store] = float(age_hours(sets.get(store), now))
     except Exception:  # noqa: BLE001 -- a metric must never fail the app
         return _no_backup_ages()
+    return ages
+
+
+def _read_backup_ages() -> dict[str, float]:
+    """Read the local backup ages from ``BACKUPS_ROOT`` (default ``/backups``)."""
+    return _read_ages("BACKUPS_ROOT", "/backups")
+
+
+#: The off-site copy (SIM-568): the off-site folder is read at most this often.
+OFFSITE_AGE_REFRESH_S = 600
+
+#: The off-site copy (SIM-568): the name of the daemon thread that reads the folder.
+OFFSITE_READ_THREAD_NAME = "offsite-backup-age"
+
+#: The off-site copy (SIM-568): one reading of the folder and the time of the read.
+_OffsiteReading = tuple[dict[str, float], float]
+
+
+def _read_offsite_ages() -> dict[str, float]:
+    """Read the off-site copy's ages from ``OFFSITE_ROOT`` (default ``/offsite``) (SIM-568)."""
+    return _read_ages("OFFSITE_ROOT", "/offsite")
+
+
+def _read_offsite_ages_now() -> _OffsiteReading:
+    """Read the off-site ages, then take the time of the read (SIM-568).
+
+    The scrape adds the hours since this time to each age.
+    """
+    ages = _read_offsite_ages()
+    return ages, time.time()
+
+
+def _offsite_read_in_flight(app_state: Any) -> bool:
+    """Return True while the last off-site read has not finished (SIM-568)."""
+    task = getattr(app_state, "offsite_refresh_task", None)
+    if task is None:
+        return False
+    try:
+        return not task.done()
+    except Exception:  # noqa: BLE001 -- a metric must never fail the app
+        return False
+
+
+async def _read_offsite_on_daemon_thread() -> _OffsiteReading:
+    """Run the off-site read on a daemon thread of its own (SIM-568).
+
+    The read never takes a thread from the loop's default executor, which
+    ``/simulate``, the what-if and the other routes share. A read that stalls on
+    OneDrive therefore holds only its own thread. A daemon thread also never
+    holds back the exit of the process, so the restart on a new bundle still
+    exits. The thread hands its result to the loop with
+    ``call_soon_threadsafe``. A result that arrives after its task was
+    cancelled, or after the loop closed, is dropped.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[_OffsiteReading] = loop.create_future()
+
+    def deliver(outcome: _OffsiteReading | BaseException) -> None:
+        if future.done():  # The task was cancelled while the read ran.
+            return
+        if isinstance(outcome, BaseException):
+            future.set_exception(outcome)
+        else:
+            future.set_result(outcome)
+
+    def work() -> None:
+        outcome: _OffsiteReading | BaseException = RuntimeError(
+            "the off-site read ended without a result"
+        )
+        try:
+            outcome = _read_offsite_ages_now()
+        except Exception as exc:  # noqa: BLE001 -- the task receives the error
+            outcome = exc
+        finally:
+            try:
+                loop.call_soon_threadsafe(deliver, outcome)
+            except RuntimeError:  # The loop closed while the read ran.
+                pass
+
+    threading.Thread(target=work, name=OFFSITE_READ_THREAD_NAME, daemon=True).start()
+    return await future
+
+
+async def _refresh_offsite_ages(app_state: Any) -> None:
+    """Read the off-site ages on a daemon thread into ``app.state`` (SIM-568).
+
+    The task stores the reading in ``app.state.offsite_backup_ages`` and the
+    time of the read in ``app.state.offsite_backup_read_at``. It never raises:
+    a metric must never fail the app.
+    """
+    try:
+        ages, read_at = await _read_offsite_on_daemon_thread()
+        app_state.offsite_backup_ages = ages
+        app_state.offsite_backup_read_at = read_at
+    except Exception:  # noqa: BLE001 -- a metric must never fail the app
+        return
+
+
+def _offsite_ages(app_state: Any) -> dict[str, float]:
+    """Return the stored off-site ages, aged to now; -1 for every store before the first read.
+
+    The scrape reads only ``app.state.offsite_backup_ages`` and
+    ``app.state.offsite_backup_read_at``; the background read of
+    :func:`_schedule_finals_refresh` fills both (the off-site copy, SIM-568).
+    Each age grows by the hours since the read, so a read that stalls never
+    freezes the gauge at a fresh value. A store with no set reads -1 and does
+    not grow. With no read time, the stored ages render as they are.
+    """
+    stored = getattr(app_state, "offsite_backup_ages", None)
+    ages = _no_backup_ages()
+    if not isinstance(stored, dict):
+        return ages
+    since_read_h = 0.0
+    read_at = getattr(app_state, "offsite_backup_read_at", None)
+    if read_at is not None:
+        try:
+            since_read_h = max(0.0, time.time() - float(read_at)) / 3600.0
+        except (TypeError, ValueError):
+            since_read_h = 0.0
+    for store in BACKUP_STORES:
+        try:
+            age = float(stored.get(store, -1.0))
+        except (TypeError, ValueError):
+            age = -1.0
+        ages[store] = -1.0 if age < 0 else age + since_read_h
     return ages
 
 
@@ -445,6 +608,16 @@ def _render_fallback(app_state: Any, scrape_count: int) -> str:
                 for store, age in _backup_ages(app_state).items()
             ],
         ),
+        # The off-site copy (SIM-568).
+        _metric_block(
+            "baseball_sim_offsite_backup_age_hours",
+            OFFSITE_BACKUP_AGE_HELP,
+            "gauge",
+            [
+                f'baseball_sim_offsite_backup_age_hours{{store="{store}"}} {age:g}'
+                for store, age in _offsite_ages(app_state).items()
+            ],
+        ),
     ]
     return "".join(blocks)
 
@@ -487,6 +660,9 @@ async def metrics(request: Request) -> Response:
         _FINALS_AGE.set(vals["finals_age"])
         for store, age in _backup_ages(app_state).items():
             _BACKUP_AGE.labels(store=store).set(age)
+        # The off-site copy (SIM-568): the stored reading only, never a disk read.
+        for store, age in _offsite_ages(app_state).items():
+            _OFFSITE_BACKUP_AGE.labels(store=store).set(age)
         body = generate_latest(_REGISTRY)
         return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 

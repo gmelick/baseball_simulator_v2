@@ -83,7 +83,7 @@ The scheduled backups (SIM-525): back up, verify and restore the DuckDB analytic
 | `status_rows(root, now)` | The newest complete set of each store (set id, created at, age in hours, bytes, number of sets), as plain data. | `print_status` (`--status`, `make backup-status`) | `pipeline.backup.status` |
 | `main(argv, *, clock, sleep, opener)` | The command line: `--status [--json]`, `--verify-set`, `--restore-duckdb` / `--restore-bundle` (both refuse without `--yes`), or a backup run (`--only`, `--keep`, `--new-set`, `--backups-root`, `--data-root`, and one flag per wait). The test seams make the waits instant. | Ofelia `nightly-backup-data`; `make backup` (with `--new-set`); `make backup-status`; the drill | `run_backup` |
 
-**Depends on:** `pipeline/backup/status.py`, `pipeline/batch/bundle_versions.py`, `pipeline/batch/engine_artifacts.py` (the verify only), `duckdb`
+**Depends on:** `pipeline/backup/status.py`, `pipeline/backup/common.py` (the shared helpers; since the off-site copy, SIM-568), `pipeline/batch/bundle_versions.py`, `pipeline/batch/engine_artifacts.py` (the verify only), `duckdb`
 
 **Used by:** `deploy/ofelia/config.ini [job-exec "nightly-backup-data"]`, `Makefile` (`backup`, `backup-status`), `scripts/backup_drill.py`
 
@@ -101,16 +101,69 @@ The scheduled backups (SIM-525): which sets exist and how old they are. Pure sta
 |---|---|---|---|
 | `SetInfo` | One complete set: store, set id, path, created at (UTC), bytes. | everywhere below | — |
 | `parse_set_id(set_id)` | The UTC time a set id (`%Y%m%dT%H%M%SZ`) names, or None. | `_read_set`, `data_stores.recent_sets` | — |
-| `complete_sets(root, store)` / `newest_complete_set(root, store)` / `newest_complete_sets(root)` | Every complete set of a store, the oldest first; the newest one; the newest of each of `postgres`, `duckdb`, `bundle`. | `pipeline.backup.data_stores`, `api/routes/metrics.py` | — |
-| `age_hours(info, now)` | Hours since the set's creation; -1.0 when there is no set. | `api/routes/metrics.py` (`baseball_sim_backup_age_hours{store}`, read from `BACKUPS_ROOT` at most every 600 s), `data_stores.status_rows` | — |
+| `complete_sets(root, store)` / `newest_complete_set(root, store)` / `newest_complete_sets(root)` | Every complete set of a store, the oldest first; the newest one; the newest of each of `postgres`, `duckdb`, `bundle`. | `pipeline.backup.data_stores`, `pipeline.backup.offsite`, `api/routes/metrics.py` | — |
+| `age_hours(info, now)` | Hours since the set's creation; -1.0 when there is no set. | `api/routes/metrics.py` (`baseball_sim_backup_age_hours{store}`, read from `BACKUPS_ROOT` at most every 600 s; `baseball_sim_offsite_backup_age_hours{store}`, read from `OFFSITE_ROOT` by a background task at most every 600 s), `data_stores.status_rows`, `offsite.status_rows` | — |
 
-**Used by:** `pipeline/backup/data_stores.py`, `api/routes/metrics.py`
+**Used by:** `pipeline/backup/data_stores.py`, `pipeline/backup/offsite.py`, `api/routes/metrics.py`
+
+---
+
+### `pipeline/backup/common.py`
+
+The scheduled backups (SIM-525) and the off-site copy (SIM-568): the helpers that both backup modules share. Pure standard library: `data_stores.py` imports duckdb at module level, and the off-site copy must never import it. `data_stores.py` imports every name back under its old name, so its callers and tests did not change.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `GIB`, `CHUNK` | One GiB in bytes; the read size of every chunked copy and hash (8 MiB). | `data_stores`, `offsite` | — |
+| `Clock`, `Sleep` | The types of the clock (epoch seconds) and of the sleep. The tests pass fakes of both, so the waits run at once. | `data_stores.main`, `offsite.main` | — |
+| `human_bytes(n)` | A size in B, KiB, MiB or GiB, for the log and status lines. | `data_stores`, `offsite` | — |
+| `sha256_file(path)` | The sha256 of a file, read in `CHUNK` reads (the DuckDB file is about 4 GB). | `data_stores` (the manifests, the verify), `offsite` (the read-back, the resume check) | `hashlib` |
+| `fsync_path(path)` / `copy_file_synced(src, dest)` | Flushes a file or a folder's entries to the disk; copies one file and flushes the copy. | `data_stores`; `offsite` (`fsync_path` only) | `shutil.copyfile` |
+| `fresh_marks(mark_dir, names, stale_s, now)` | The jobs among `names` whose `<name>.running` mark exists and is younger than `stale_s`. An older mark was left by a job that died. | `data_stores._fresh_marks` (the writer marks), `offsite.busy_reasons` (the `nightly-backup` mark) | the marks `scripts/with_mark.sh` writes in `/data/ingest_marks` |
+
+**Used by:** `pipeline/backup/data_stores.py`, `pipeline/backup/offsite.py`
+
+---
+
+### `pipeline/backup/offsite.py`
+
+The off-site copy of the backup sets (SIM-568): copy the newest complete sets of each store from `/backups` to `/offsite`, run as `python -m pipeline.backup.offsite` in the `jobs` container as `appuser`. `/offsite` is the host folder `OFFSITE_BACKUP_DIR` (the owner's OneDrive folder), so the OneDrive client uploads the copy off the machine; the module cannot see that upload. The Ofelia job `nightly-backup-offsite` runs it at 10:30 UTC inside `with_mark.sh nightly-backup-offsite` and `with_retry.sh 2`. Pure standard library: it imports only `status` and `common`, never duckdb. The module docstring is the design in prose; `docs/audit/2026-10-17-sim568-offsite-copy.md` holds the design and the run book.
+
+A run refuses (exit 2) when a root is missing, the off-site root cannot be written, the two roots are one folder, another copy run holds the copy lock, or the free-space guard says no. It takes the copy lock, then waits while a backup job runs. Per store it deletes the dead off-site folders that no wanted set needs, copies every wanted set that is not mirrored (the oldest first), then prunes the store. A set is *mirrored* when its off-site `manifest.json` equals the local one byte for byte and every file the manifest lists has its size off-site. Exit 0 every store copied or already in sync (also `--status` and `--dry-run`); 1 a store failed (the others were still attempted, and the failed store prunes nothing); 2 a refusal before any write.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `check_roots(backups_root, offsite_root, *, dry_run)` | The reason to refuse, or None. Two mounts of one folder have different paths, so it writes the probe file `offsite-probe-<pid>.tmp` off-site, refuses when the probe shows under the backup root, and deletes it. A dry run compares the real paths only. | `run_copy` | `os.access`, `os.path.realpath` |
+| `busy_reasons(backups_root, mark_dir, *, stale_s, lock_stale_s, now)` / `postgres_lock_epoch(backups_root)` | The backup jobs that run now: a fresh `nightly-backup.running` mark (the data job), or a start epoch in `postgres/.lock/owner` (the Postgres job) younger than `lock_stale_s`. A `postgres/*.partial` folder with no lock is a dead run, so it never counts. | `wait_until_quiet`, `run_copy` (the dry run) | `common.fresh_marks` |
+| `take_lock(mark_dir, *, lock_stale_s, now)` / `lock_holder(lock, *, lock_stale_s, now)` / `release_lock(lock)` | The copy lock `offsite-copy.lock` in the mark folder: one copy run at a time. `take_lock` creates the file with `O_EXCL` and writes `<pid> <start epoch> <host>`; a live holder makes the run refuse. A lock older than `lock_stale_s`, or one this host wrote whose pid is gone, is stale and taken over, so the crash rerun of `with_retry.sh` goes on. A mark folder that cannot be written runs the copy unlocked. `release_lock` deletes the lock only when this pid owns it. | `run_copy` (the dry run reads `lock_holder` only) | `os.open`, `socket.gethostname` |
+| `wait_until_quiet(backups_root, mark_dir, *, grace_s, wait_s, poll_s, stale_s, lock_stale_s, clock, sleep)` | Sleeps `grace_s` (0), then polls `busy_reasons` every `poll_s` (60 s) for up to `wait_s` (2 h). False on a timeout; the run then logs it and copies anyway. | `run_copy` | — |
+| `plan_store(backups_root, offsite_root, store, keep)` | The wanted sets (the newest `keep` complete local sets, the oldest first) and the work list (the wanted sets that are not mirrored). | `run_copy` | `status.complete_sets`, `is_mirrored` |
+| `free_space_ok(offsite_root, needed_bytes, *, min_free_gb, factor)` | True when the disk under `/offsite` has the larger of `BACKUP_MIN_FREE_GB` (10 GiB) and `BACKUP_FREE_FACTOR` (1.5) times the work list's bytes. It reads the local disk, C:, not the OneDrive quota, and says so in its log line. It runs once, before any write, and only when the work list holds bytes. | `run_copy` | `shutil.disk_usage` |
+| `is_mirrored(info, dest)` / `read_manifest_bytes(set_dir)` | The mirrored check (a byte compare of the manifests, then a `stat` per file, which never downloads an online-only file); the manifest's bytes and its file list. A manifest path that is absolute or holds `..` is refused. | `plan_store`, `status_rows`, `copy_set` | — |
+| `copy_set(info, offsite_root, *, use_hash, sleep)` | Copies one set into `<store>/<set id>/` with no `.partial` folder and no rename. It checks the source sizes against the manifest first (`check_source`), removes an old off-site manifest, keeps each destination file that already matches (size, and sha256 unless `--no-hash`), copies the rest with `copy_and_hash`, re-reads each copy with `sha256_file` (skipped by `--no-hash`), and writes the manifest last. Returns `CopyResult(copied, kept, size, seconds)`. | `mirror_store` | `copy_and_hash`, `write_manifest` |
+| `copy_and_hash(src, dest)` | Copies in `CHUNK` (8 MiB) reads, hashes the source bytes in flight, flushes the copy through its own handle, and returns the source sha256. Plain reads and writes, not `shutil.copyfile`: its `sendfile` path over the Docker Desktop bind mount is unpredictable. | `copy_set` | `hashlib` |
+| `write_manifest(manifest_bytes, dest, *, tries, delay_s, sleep)` | Writes the source manifest's bytes verbatim to `manifest.json.tmp`, flushes it, and moves it over `manifest.json` with `os.replace`. The move retries on `PermissionError` (OneDrive holds the folder) 10 times, 3 s apart; on give-up it deletes the `.tmp` and the store fails. | `copy_set` | — |
+| `dead_folders(...)` / `clean_dead_folders(offsite_root, store, wanted)` | Lists and deletes the off-site folders of a store that end in `.partial` or have no manifest, and whose id is not wanted. A dead folder of a wanted set is resumed, not deleted. | `mirror_store`, `print_dry_run` | `shutil.rmtree(ignore_errors=True)` |
+| `prune_offsite(offsite_root, store, keep, protect)` / `prune_victims(sets, keep, protect)` | Keeps the newest `keep` complete off-site sets of a store, never a wanted set (`protect`). Without that rule an off-site set newer than every local set would push a wanted set out, and the next run would copy it back. Each victim loses `manifest.json` first, then its folder, so a half-deleted set never reads as complete; a file OneDrive still holds stays until the next run's dead-folder clean. | `mirror_store` (after the store copied cleanly) | `status.complete_sets` |
+| `mirror_store(plan, offsite_root, keep, *, use_hash, sleep)` | One store: the dead-folder clean, `COPY OK <store> <set> <bytes> bytes <seconds> s` or `COPY SKIP <store> <set> (already off-site)` per wanted set, then the prune. | `run_copy` | — |
+| `run_copy(backups_root, offsite_root, mark_dir, stores, keep, args, *, clock, sleep)` | The run: the refusals, the copy lock (held through the wait and the copy, released after a failure too), the wait, the plans, the guard, then each store. A store that raises logs `FAIL <store>: ...` and the run goes on to the next store. A dry run takes no lock and does not wait. | `main` | everything above |
+| `resolve_keep(flag)` | `--keep`, else `OFFSITE_KEEP`, else `BACKUP_KEEP`, else 3; 0 or less reads as 1. | `main` | — |
+| `status_rows(backups_root, offsite_root, now)` / `print_status(backups_root, offsite_root, as_json)` | Per store: the newest local set, the newest off-site set (its age, bytes and the number of sets) and `mirrored`. The text lines end `MIRRORED`, `BEHIND` or `none`; `--json` prints the same as JSON. | `--status` (`make backup-status`, its second block) | `status` |
+| `main(argv, *, clock, sleep)` | The command line: `--backups-root` (`BACKUP_ROOT`, `/backups`), `--offsite-root` (`OFFSITE_ROOT`, `/offsite`), `--mark-dir` (`INGEST_MARK_DIR`, `/data/ingest_marks`), `--only` (repeatable), `--keep`, `--no-hash`, `--dry-run` (prints `WOULD COPY` / `WOULD SKIP` / `WOULD PRUNE` / `WOULD DELETE` lines and writes nothing), `--status [--json]`, and the waits `--grace-s 0`, `--wait-s 7200`, `--poll-s 60`, `--stale-s 21600`, `--lock-stale-s 21600`. The test seams make the waits instant. | Ofelia `nightly-backup-offsite`; `make backup-offsite`; `make backup-status` | `run_copy`, `print_status` |
+
+**Depends on:** `pipeline/backup/status.py`, `pipeline/backup/common.py` (standard library only)
+
+**Used by:** `deploy/ofelia/config.ini [job-exec "nightly-backup-offsite"]`, `Makefile` (`backup-offsite`, `backup-status`)
+
+**Environment flags read here:** `BACKUP_ROOT` (default `/backups`), `OFFSITE_ROOT` (default `/offsite`), `INGEST_MARK_DIR` (default `/data/ingest_marks`), `OFFSITE_KEEP`, `BACKUP_KEEP` (3), `BACKUP_MIN_FREE_GB` (10), `BACKUP_FREE_FACTOR` (1.5)
+
+> **Notes for anyone changing this file:** Never add a `.partial` folder or a folder rename: OneDrive holds new files open while it uploads them, and a Windows folder rename fails then. The manifest last is the completeness rule. Keep the manifest verbatim: `status._read_set` reads a manifest that does not parse as complete with 0 bytes, and the mirrored check compares bytes. The module lives in a bind-mounted folder, so an edit needs no image rebuild.
 
 ---
 
 ### `scripts/backup_drill.py`
 
-The scheduled backups (SIM-525): the restore drill, on the host with the Windows `py` launcher (standard library only; it calls `docker` with list argv, so Git Bash cannot rewrite its paths). `make backup-drill` runs `py scripts/backup_drill.py --set latest` (`SET=<TS>` names a set). The drill never touches the live database.
+The scheduled backups (SIM-525): the restore drill, on the host with the Windows `py` launcher (standard library only; it calls `docker` with list argv, so Git Bash cannot rewrite its paths). `make backup-drill` runs `py scripts/backup_drill.py --set latest` (`SET=<TS>` names a set). `make backup-drill OFFSITE=1` adds `--offsite`, and only the value 1 does: the drill then reads the off-site copy (SIM-568). The drill never touches the live database.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
@@ -119,8 +172,10 @@ The scheduled backups (SIM-525): the restore drill, on the host with the Windows
 | `docker_run_argv(set_dir, backup_scripts)` | Starts `postgres:15-alpine` as `sim525_drill_pg`: trust auth, `--network none`, no port, the named volume `sim525_drill_pg` (Postgres refuses a Windows bind mount as its data directory; the volume takes about 20 GB inside the disk image while the drill runs), the set at `/restore:ro`, `db/backup` at `/opt/baseball/backup:ro`. | `_restore_postgres` | — |
 | `wait_ready(...)` | Polls `pg_isready -h 127.0.0.1` until the final server answers (the socket also answers the image's temporary init server). | `_restore_postgres` | — |
 | `restore_ok(exit_code, output)` | Passes the restore on exit 0, no "errors ignored" line and `RESTORE OK` as the last line. | `_restore_postgres` | `db/backup/pg_restore.sh` |
-| `_verify_data(data_set, timeout_s)` | Runs `docker compose run --rm -T jobs python -m pipeline.backup.data_stores --verify-set <TS>`. | `main` | `pipeline.backup.data_stores.verify_set` |
-| `main(argv)` | Refuses on a leftover, a missing set, or a `--backup-dir` that is not the folder compose mounts in `jobs`; restores, verifies, always removes the container and the volume (unless `--keep-cluster`), and writes `BACKUP_DIR/drills/<TS>.json`. Exit 0 pass, 1 a step failed, 2 a refusal. | `make backup-drill` | `BACKUP_DIR` in `.env` (default `./backups`) |
+| `compose_value(key, repo)` | The value docker compose reads for a variable: the shell environment first, then the repo's `.env` (SIM-568). So the drill's folders match the jobs container's mounts. | `resolve_backup_dir`, `resolve_offsite_dir` | `read_env_file` |
+| `resolve_offsite_dir(flag, repo)` | The off-site folder (SIM-568): the flag, else `OFFSITE_BACKUP_DIR` (through `compose_value`), else `./backups_offsite`, the default that compose mounts at `/offsite`. | `main` | `compose_value` |
+| `verify_argv(data_set, container_root)` / `_verify_data(data_set, timeout_s, container_root)` | Runs `docker compose run --rm -T jobs python -m pipeline.backup.data_stores --verify-set <TS>`; for the off-site copy the argv ends `--backups-root /offsite`. | `main` | `pipeline.backup.data_stores.verify_set` |
+| `main(argv)` | Refuses on a leftover, a missing set, or a `--backup-dir` that is neither the folder compose mounts at `/backups` nor the one it mounts at `/offsite`; restores, verifies, always removes the container and the volume (unless `--keep-cluster`), and writes `drills/<TS>.json` in the folder it read. The report's `source` is `local` or `offsite`. Exit 0 pass, 1 a step failed, 2 a refusal. | `make backup-drill` | `BACKUP_DIR` (default `./backups`) and `OFFSITE_BACKUP_DIR` (default `./backups_offsite`), from the shell environment, then `.env` |
 
 **Depends on:** `db/backup/pg_restore.sh`, `pipeline/backup/data_stores.py`, the Docker CLI on the host
 

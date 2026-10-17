@@ -16,7 +16,7 @@
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke profile-computor engine-artifacts calibrate \
         validate-props load-historical-odds ingest-catch-up live-logs db-roles gen-secrets \
-        backup backup-status backup-drill restore-postgres
+        backup backup-status backup-drill restore-postgres backup-offsite
 
 # Default target — show help.
 ##
@@ -24,7 +24,7 @@
 ## Windows cmd.exe prints the literal "" instead of a blank line for
 ## `echo ""`, so the bash form was visually broken under Windows GNU Make.
 help:
-	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n  make gen-secrets       Append any missing secret to .env (passwords, keys)\n  make db-roles          Create/refresh the baseball_app + baseball_ro roles\n                         (ROTATE_ADMIN_PASSWORD=1 also resets baseball_user)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n\n  make backup            Back up Postgres, DuckDB and the bundle into BACKUP_DIR\n  make backup-status     Show the newest backup set of each store and its age\n  make backup-drill      Restore the newest set into a scratch cluster and check it\n                         (SET=<ts> picks a set)\n  make restore-postgres  Restore SET=<ts> into an EMPTY database (refuses a full one)\n''')"
+	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n  make gen-secrets       Append any missing secret to .env (passwords, keys)\n  make db-roles          Create/refresh the baseball_app + baseball_ro roles\n                         (ROTATE_ADMIN_PASSWORD=1 also resets baseball_user)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n\n  make backup            Back up Postgres, DuckDB and the bundle into BACKUP_DIR\n  make backup-offsite    Copy the newest sets to OFFSITE_BACKUP_DIR (OneDrive) now\n  make backup-status     Show the newest backup set of each store and its age,\n                         and whether the off-site copy mirrors it\n  make backup-drill      Restore the newest set into a scratch cluster and check it\n                         (SET=<ts> picks a set; OFFSITE=1 restores from the copy)\n  make restore-postgres  Restore SET=<ts> into an EMPTY database (refuses a full one)\n''')"
 
 # ---------------------------------------------------------------------------
 # Docker Compose shortcuts
@@ -79,7 +79,9 @@ gen-secrets:
 # Backups of the three data stores (SIM-525)
 # ---------------------------------------------------------------------------
 # The scheduler runs the same two steps every day at 10:00 UTC. The sets land
-# in BACKUP_DIR (.env; default ./backups), mounted at /backups.
+# in BACKUP_DIR (.env; default ./backups), mounted at /backups. At 10:30 UTC
+# the off-site copy (SIM-568) copies the newest sets into OFFSITE_BACKUP_DIR
+# (.env; default ./backups_offsite), mounted at /offsite in the jobs container.
 
 ## Back up now. The Postgres dump runs in the db container as the postgres OS
 ## user, over the socket. The data step copies the DuckDB file, the bundle and
@@ -91,16 +93,39 @@ backup: _require_env_file
 	docker compose exec -T -u postgres db sh /opt/baseball/backup/pg_backup.sh
 	docker compose exec -T jobs sh /app/scripts/with_mark.sh nightly-backup python -m pipeline.backup.data_stores --new-set
 
-## Show the newest complete set of each store, its age and its size.
+## Show the newest complete set of each store, its age and its size. The
+## second line shows the off-site copy of each store (SIM-568): MIRRORED when
+## it holds the newest local set, else BEHIND or none.
 backup-status: _require_env_file
 	docker compose exec -T jobs python -m pipeline.backup.data_stores --status
+	docker compose exec -T jobs python -m pipeline.backup.offsite --status
+
+## The off-site copy now (SIM-568): copy the newest complete set of each store
+## from BACKUP_DIR into OFFSITE_BACKUP_DIR (the OneDrive folder), mounted at
+## /offsite in the jobs container. The scheduler runs the same step at 10:30
+## UTC. It leaves nightly-backup-offsite.last. Run it from cmd.exe.
+## Never run it during the scheduled copy (from 10:30 UTC until its mark
+## goes), and never during a `make backup` (that run can prune a local set
+## while the copy reads it).
+## The first line refuses (exit 2) while another copy runs, that is while a
+## nightly-backup-offsite.running mark is under 6 hours old (360 minutes, the
+## copy's own limit for a stale mark). An older mark is a dead run's, and the
+## copy goes ahead. The script holds no $ and no %, so make, Git Bash and
+## cmd.exe pass it to the container unchanged.
+backup-offsite: _require_env_file
+	docker compose exec -T jobs sh -c "if find /data/ingest_marks -maxdepth 1 -name nightly-backup-offsite.running -mmin -360 2>/dev/null | grep -q .; then echo 'another off-site copy runs (a nightly-backup-offsite.running mark under 6 hours old)' >&2; exit 2; fi"
+	docker compose exec -T jobs sh /app/scripts/with_mark.sh nightly-backup-offsite python -m pipeline.backup.offsite
 
 ## The restore drill: restore a Postgres set into a scratch cluster, check the
 ## table counts, verify the DuckDB and bundle copies, then remove the cluster.
 ## It runs on the host and leaves a report in BACKUP_DIR/drills/.
+## OFFSITE=1 restores from the off-site copy instead (SIM-568); the report
+## then lands in OFFSITE_BACKUP_DIR/drills/. Only the value 1 turns it on:
+## OFFSITE=0 (or any other value) runs the local drill.
 ##   make backup-drill SET=20261015T100000Z
+##   make backup-drill OFFSITE=1
 backup-drill: _require_env_file
-	py scripts/backup_drill.py --set $(or $(SET),latest)
+	py scripts/backup_drill.py --set $(or $(SET),latest) $(if $(filter 1,$(OFFSITE)),--offsite,)
 
 ## Restore one Postgres set into the running db container. The script refuses
 ## a database that still holds the raw or sim schema, so it never overwrites

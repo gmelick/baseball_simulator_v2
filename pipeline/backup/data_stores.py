@@ -38,7 +38,6 @@ attempted); 2 a refusal before any write.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -52,6 +51,17 @@ from typing import Any
 
 import duckdb
 
+from pipeline.backup.common import (  # the shared helpers moved there (SIM-568)
+    CHUNK,  # noqa: F401  (re-exported under its old name)
+    GIB,
+    Clock,
+    Sleep,
+    copy_file_synced,
+    fresh_marks,
+    fsync_path,
+    human_bytes,
+    sha256_file,
+)
 from pipeline.backup.status import (
     MANIFEST,
     PARTIAL_SUFFIX,
@@ -89,8 +99,6 @@ WRITER_MARKS = ("nightly-rebuild", "nightly-finals", "weekly-refresh")
 #: The link to the published bundle version, inside the play-pool folder.
 BUNDLE_LINK = "engine_artifacts"
 
-GIB = 1024**3
-CHUNK = 8 * 1024 * 1024
 
 #: The default waits, in seconds. Each one has a command-line flag.
 DEFAULTS: dict[str, float] = {
@@ -103,8 +111,6 @@ DEFAULTS: dict[str, float] = {
     "rerun_window_s": 3600.0,
 }
 
-Clock = Callable[[], float]
-Sleep = Callable[[float], object]
 Opener = Callable[..., Any]
 
 
@@ -124,48 +130,6 @@ def _iso(dt: datetime) -> str:
 def log(message: str) -> None:
     """Print one log line with a UTC stamp."""
     print(f"[backup-data {_iso(datetime.now(UTC))}] {message}", flush=True)
-
-
-def human_bytes(n: int) -> str:
-    """A size in the largest unit that keeps the number at 1 or more (up to GiB)."""
-    size = float(n)
-    if size < 1024:
-        return f"{int(size)} B"
-    for unit in ("KiB", "MiB", "GiB"):
-        size /= 1024
-        if size < 1024 or unit == "GiB":
-            break
-    return f"{size:.1f} {unit}"
-
-
-def sha256_file(path: Path) -> str:
-    """The sha256 of a file, read in chunks (the DuckDB file is 3.6 GB)."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        while chunk := fh.read(CHUNK):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def fsync_path(path: Path) -> None:
-    """Flush a file, or a folder's entries, to the disk."""
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return  # Windows cannot open a folder; there is nothing to flush there
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
-
-
-def copy_file_synced(src: Path, dest: Path) -> None:
-    """Copy one file and flush the copy to the disk."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
-    fsync_path(dest)
 
 
 def _files_under(base: Path) -> list[Path]:
@@ -250,16 +214,8 @@ def prune_sets(root: Path, store: str, keep: int, current: str | None) -> list[s
 
 
 def _fresh_marks(mark_dir: Path, stale_s: float, now: float) -> list[str]:
-    fresh: list[str] = []
-    for name in WRITER_MARKS:
-        path = mark_dir / f"{name}.running"
-        try:
-            started = float(path.read_text(encoding="utf-8").strip() or 0)
-        except (OSError, ValueError):
-            continue
-        if now - started < stale_s:
-            fresh.append(name)
-    return fresh
+    """The writer jobs that run now (the body is ``common.fresh_marks``, SIM-568)."""
+    return fresh_marks(mark_dir, WRITER_MARKS, stale_s, now)
 
 
 def wait_for_marks(

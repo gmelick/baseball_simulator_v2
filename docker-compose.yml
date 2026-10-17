@@ -413,6 +413,9 @@ services:
       # SIM-525: the backup age gauge reads the newest complete set of each store
       # from this folder (api/routes/metrics.py, baseball_sim_backup_age_hours).
       BACKUPS_ROOT: /backups
+      # SIM-568: the off-site age gauge reads the newest complete off-site copy
+      # of each store from this folder (baseball_sim_offsite_backup_age_hours).
+      OFFSITE_ROOT: /offsite
     ports:
       # Host port is overridable via APP_HOST_PORT (default 8000).
       # SIM-443a: loopback only. The LAN reaches the API through nginx :80.
@@ -435,6 +438,10 @@ services:
       # SIM-525: the backup folder, read-only. The app only reads the set ages
       # for the backup age gauge; it never writes a backup.
       - ${BACKUP_DIR:-./backups}:/backups:ro
+      # SIM-568: the off-site copy folder (OFFSITE_BACKUP_DIR, the OneDrive
+      # folder), read-only. The app only reads the copy ages for the off-site
+      # age gauge. No `:?`: a worktree without the value still composes.
+      - ${OFFSITE_BACKUP_DIR:-./backups_offsite}:/offsite:ro
     command: >
       uvicorn api.main:app
         --host 0.0.0.0
@@ -558,6 +565,10 @@ services:
       # SIM-525: the data backup writes the DuckDB file, the bundle and the small
       # /data files into the host folder BACKUP_DIR (pipeline/backup/data_stores.py).
       - ${BACKUP_DIR:-./backups}:/backups
+      # SIM-568: the off-site copy (pipeline/backup/offsite.py) writes the newest
+      # complete sets from /backups into the host folder OFFSITE_BACKUP_DIR (the
+      # OneDrive folder; its client uploads them off the machine). Read-write.
+      - ${OFFSITE_BACKUP_DIR:-./backups_offsite}:/offsite
     healthcheck:
       # The image's own check probes :8000, which this container never serves.
       # The jobs need a writable /data (the ingest marks, the DuckDB file).
@@ -726,8 +737,9 @@ services:
   # season sweep on Sunday, each run inside the `jobs` container through
   # scripts/with_retry.sh (SIM-443b); the SIM-546 closing pass inside the app
   # container. SIM-525: the two backup jobs at 10:00 UTC, the Postgres dump in
-  # the db container and the DuckDB + bundle copy in the `jobs` container. A
-  # stopped `jobs` container fails its four jobs; Ofelia logs the exec error.
+  # the db container and the DuckDB + bundle copy in the `jobs` container.
+  # SIM-568: the off-site copy at 10:30 UTC in the `jobs` container. A stopped
+  # `jobs` container fails its five jobs; Ofelia logs the exec error.
   scheduler:
     image: mcuadros/ofelia:latest
     # SIM-519 Part D (decision D6): no profile gate — the scheduler starts with
