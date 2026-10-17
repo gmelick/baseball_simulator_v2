@@ -596,8 +596,10 @@ from the copy. A copy of the set folder back into the local folder, as for Postg
    set folders (the 2026-10-15, -16 and -17 sets of each store), 373 files, 20.85 GB, every file
    uploaded (a placeholder). The OneDrive client's registry key carries no quota figure, but it
    says the account's Microsoft 365 subscription is active with auto-renew (expiry in mid-2027),
-   so the plan is the 1 TB one. The storage figure for the recycle-bin question (§9) is read on
-   the OneDrive settings page or at
-   onedrive.live.com, before and after the first scheduled run of 2026-10-18 (10:30 UTC), which
-   copies one new set per store and prunes the 2026-10-15 set of each store off-site. The run's
-   readings go here as item 8.
+   so the plan is the 1 TB one. The owner read the storage figure on the OneDrive settings page
+   at about 19:40 UTC: **382.4 GB used of 1.0 TB (37%)**, with the nine sets (20.85 GB) uploaded.
+   That is the before figure for the recycle-bin question (§9). The first scheduled run of
+   2026-10-18 (10:30 UTC) copies one new set per store (about 7.5 GB) and prunes the 2026-10-15
+   set of each store off-site (about 7.4 GB). If the figure after the upload reads about
+   382 GB, the recycle bin does not count against the quota; if it reads about 390 GB, it does.
+   The owner reads the figure again after the run; the run's readings go here as item 8.
