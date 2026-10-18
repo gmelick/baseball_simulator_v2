@@ -603,3 +603,19 @@ from the copy. A copy of the set folder back into the local folder, as for Postg
    set of each store off-site (about 7.4 GB). If the figure after the upload reads about
    382 GB, the recycle bin does not count against the quota; if it reads about 390 GB, it does.
    The owner reads the figure again after the run; the run's readings go here as item 8.
+8. **The first scheduled run (2026-10-18, a Sunday).** The scheduler started
+   `nightly-backup-offsite` at 10:30:00 UTC and reported it finished at 10:37:49, "failed:
+   false". The night's chain before it: the finals load 07:00, the Sunday sweep 08:00, the
+   rebuild to 09:29, the data backup to 10:06. The copy found no job running, so it did not
+   wait; the guard asked for 10.6 GiB of 101.0 GiB free (C: now holds the sets twice, local and
+   off-site, until OneDrive dehydrates the copies). It copied the three new sets
+   (`20261018T100000Z`: Postgres 2,897,521,568 bytes in 183 s, DuckDB 4,068,760,722 bytes in
+   229 s, the bundle 588,584,471 bytes in 53 s), skipped the six sets already off-site, and
+   pruned the `20261015T100000Z` set of each store off-site (10:33, 10:36, 10:37), the first
+   off-site prune. `nightly-backup-offsite.last` reads `2026-10-18 0 2026-10-18T10:37:49Z`; no
+   running mark and no copy lock were left. At 10:55 `--status` read every store MIRRORED with
+   3 sets, both gauges agreed at 0.76 to 0.83 h, and the OneDrive folder held exactly the
+   2026-10-16, -17 and -18 set of each store, every one with its manifest, and no 2026-10-15
+   folder. The upload: 374 of 375 files were placeholders at 10:56; the last, the day's 3.79 GB
+   DuckDB copy, became one at 11:03:39, 26 minutes after the copy ended, inside the half-hour
+   estimate of item 5. The quota after the first prune: [QUOTA PENDING, the owner's reading].
