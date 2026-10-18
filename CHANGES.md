@@ -1,3 +1,46 @@
+# DEPLOYED — nginx follows the app's address after a recreate — SIM-570, 2026-10-18
+
+**Why.** nginx (`deploy/nginx/nginx.conf`, the LAN entry on port 80) looked the app's name up
+once, when nginx started: the `baseball_app` upstream block had `server app:8000;` and no
+resolver. A `docker compose up -d app` that recreates the app container can give it a new
+address on `baseball_net`, and nginx kept sending traffic to the old one: every route on port
+80 answered 502 while the app itself was healthy on its own port. Found on the SIM-569 deploy
+(2026-10-17; cleared then by `docker compose restart nginx`). An in-place restart (`docker
+compose restart app`, the nightly self-restart of SIM-563) keeps the address and never hit it.
+
+**What runs.** Three directives in the upstream block, which open-source nginx supports since
+1.27.3 (the image runs 1.27.5): `zone baseball_app 64k;` (the group in shared memory, which
+`resolve` needs), `resolver 127.0.0.11 valid=10s ipv6=off;` (Docker's embedded DNS, which
+answers from the compose network's own table; an old address lives at most 10 s; the network
+has no IPv6) and `server app:8000 resolve;`. Every location keeps `proxy_pass
+http://baseball_app`, so the group's `keepalive 32` stays (the alternative, a variable in
+`proxy_pass`, would have dropped it). The config is baked into the nginx image
+(`frontend/Dockerfile`): the change needed `docker compose build nginx` (the frontend stage
+came from the cache) and `docker compose up -d nginx`. `deploy/README.md` says what nginx does
+on an address change; `tests/unit/test_sim570_nginx_resolve.py` (five tests, the config read as
+text) guards the three directives, the `proxy_pass` target of every location, the keep-alive
+and the `X-Real-IP` lines the rate limiter trusts (SIM-569).
+
+**The run (2026-10-18, 03:19–03:22 UTC; no running mark).** `nginx -t` on the candidate config
+in a throwaway container: syntax ok. nginx recreated on the new image: healthy, `nginx -T`
+shows the three directives, health through nginx 200. A first `docker compose up
+--force-recreate app` gave the new container the SAME address (172.19.0.10), so it proved
+nothing; the second run removed the app container, parked a holder (`alpine:3.20 sleep 600`)
+on `baseball_net`, which took the freed .10, and brought the app back on .11. The app turned
+healthy after 52 s, and the route through nginx answered 200 at that same second with nginx
+untouched (its start time unchanged); nginx then resolved `app` to .11; the WebSocket handshake
+answered 403 (the login) and an API route 401, both from the app, not 502. nginx logged one
+line in the window with no app container at all, `app could not be resolved (3: Host not
+found)`, and recovered by itself. Latency of /health through nginx, 200 requests, quiet:
+median 3.4 ms / p95 24.6 ms before, 3.7 / 22.5 after. The holder is removed.
+
+**The gates.** The guard test in the container with the tree mounted: 5 passed; `ruff check .`
+and `ruff format --check .` pass. No Python code changed, so the unit lane did not rerun.
+
+**Not done.** The TLS server block stub (commented out) would need the same upstream; it has
+no upstream of its own today. A test that forces an address change on the real stack is a
+run-book step (above), not a lane.
+
 # BUILT — behind nginx the rate limiter counts a request against the real client — SIM-569, 2026-10-17
 
 **Why.** The rate limiter (`RateLimitMiddleware`, `api/auth.py`; off unless `RATE_LIMIT_PER_MINUTE`

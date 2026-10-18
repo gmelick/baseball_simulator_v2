@@ -167,6 +167,20 @@ Override host ports via env (`.env`): `NGINX_HTTP_PORT`, `NGINX_HTTPS_PORT`,
 `APP_HOST_PORT`, `DB_HOST_PORT`, `REDIS_HOST_PORT`, `PROMETHEUS_HOST_PORT`,
 `GRAFANA_HOST_PORT`.
 
+### When the app container's address changes (SIM-570)
+
+A `docker compose up -d app` that recreates the app container gives it a new
+address on `baseball_net`. An in-place restart (`docker compose restart app`,
+the nightly self-restart of SIM-563) keeps the address. nginx follows a change
+by itself: the `baseball_app` upstream block carries `zone`, a `resolver` on
+Docker's embedded DNS (`127.0.0.11`, `valid=10s`) and `resolve` on the server
+line, so nginx looks the name up again at most every 10 s and routes to the new
+container within that time with no restart. Before SIM-570 nginx looked the
+name up once, at its own start, and every route on port 80 answered 502 until
+`docker compose restart nginx`. The config is baked into the nginx image: a
+config change needs `docker compose build nginx` and `docker compose up -d
+nginx`. `tests/unit/test_sim570_nginx_resolve.py` guards the three directives.
+
 ## Environment tiers
 
 | Setting                       | development (`.env.example`) | staging (`.env.staging.example`) | production (`.env.production.example`) |
