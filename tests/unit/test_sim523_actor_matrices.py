@@ -138,7 +138,7 @@ def stub_engines(monkeypatch):
 
 
 def _load_npz(path: str) -> tuple[dict, np.ndarray]:
-    z = np.load(path, allow_pickle=True)
+    z = np.load(path, allow_pickle=False)
     return json.loads(str(z["index"])), z["matrix"]
 
 

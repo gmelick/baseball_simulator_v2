@@ -1822,7 +1822,7 @@ def build_pitcher_sim_matrix(
             j = index.get(tk)
             if j is not None:
                 sim_matrix[i, j] = v
-    np.savez_compressed(
+    _savez_plain(
         os.path.join(out_dir, "pitcher_sim.npz"),
         index=json.dumps(index),
         sims=json.dumps(sims),
@@ -1959,8 +1959,26 @@ def _matrix_from_queries(
     return index, mat
 
 
+def _savez_plain(path: str, **arrays: Any) -> None:
+    """Write a compressed npz file that loads without a pickle (SIM-565).
+
+    The bundle loader reads every file with ``allow_pickle=False``. An object
+    array needs a pickle, so the loader refuses it. This writer refuses it
+    first, at build time, and names the file and the member. A JSON string
+    member is safe: numpy stores a Python ``str`` as fixed-width unicode.
+    """
+    plain = {name: np.asarray(value) for name, value in arrays.items()}
+    for name, arr in plain.items():
+        if arr.dtype.hasobject:
+            raise ValueError(
+                f"{path}: member {name!r} is an object array ({arr.dtype}); "
+                "the bundle loader refuses a pickle, so the builder cannot write one"
+            )
+    np.savez_compressed(path, **plain)
+
+
 def _write_actor_sim(out_dir: str, name: str, index: dict[str, int], mat: np.ndarray) -> None:
-    np.savez_compressed(os.path.join(out_dir, f"{name}.npz"), index=json.dumps(index), matrix=mat)
+    _savez_plain(os.path.join(out_dir, f"{name}.npz"), index=json.dumps(index), matrix=mat)
 
 
 def build_actor_sim_matrices(
@@ -2116,7 +2134,7 @@ def concentration_report(
         p = os.path.join(sim_dir, f"{name}.npz")
         if not os.path.exists(p):
             return None, None
-        z = np.load(p, allow_pickle=True)
+        z = np.load(p, allow_pickle=False)
         return json.loads(str(z["index"])), z["matrix"]
 
     def _summarize(entries: list[tuple[float, float, float]]) -> dict:
@@ -2288,7 +2306,7 @@ def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
         mean = np.nan_to_num(np.nanmean(mat, axis=0)).astype(np.float32)
         std = np.nan_to_num(np.nanstd(mat, axis=0), nan=1.0).astype(np.float32)
         std[std == 0.0] = 1.0
-        np.savez_compressed(
+        _savez_plain(
             os.path.join(out_dir, f"{actor}_emb.npz"),
             keys=json.dumps(keys),
             vecs=np.nan_to_num(mat).astype(np.float32),
@@ -3025,7 +3043,7 @@ class EngineArtifacts:
             v = views.get(key)
             if isinstance(v, np.ndarray):
                 return v
-            return np.load(disk_path)
+            return np.load(disk_path, allow_pickle=False)
 
         def _bb_take(
             hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
@@ -3172,7 +3190,9 @@ class EngineArtifacts:
                         views.get(f"pool.{hand}.bb_row")
                         if isinstance(views.get(f"pool.{hand}.bb_row"), np.ndarray)
                         else (
-                            np.load(os.path.join(pool_dir, f"{hand}.bb_row.npy"))
+                            np.load(
+                                os.path.join(pool_dir, f"{hand}.bb_row.npy"), allow_pickle=False
+                            )
                             if os.path.exists(os.path.join(pool_dir, f"{hand}.bb_row.npy"))
                             else None
                         )
@@ -3335,7 +3355,11 @@ class EngineArtifacts:
                         pgeom=(
                             pgeom_view
                             if isinstance(pgeom_view, np.ndarray)
-                            else (np.load(pgeom_path) if os.path.exists(pgeom_path) else None)
+                            else (
+                                np.load(pgeom_path, allow_pickle=False)
+                                if os.path.exists(pgeom_path)
+                                else None
+                            )
                         ),
                         pitcher_id=_bb_take(hand, m, "pitcher_id", "pitcher_id", np.int64, 0),
                         # SIM-523 part C: the batted-ball class (None before part C).
@@ -3553,7 +3577,9 @@ class EngineArtifacts:
             # SKIP json-parsing the ~2 GB ``sims`` dict. The dict is parsed solely
             # on a legacy bundle that has no ``pitcher_sim_matrix`` array.
             mv = views.get("pitcher_sim.matrix")
-            z = np.load(ps_path, allow_pickle=True)
+            # SIM-565: the bundle never carries a pickle. Every load here refuses
+            # one, and ``_savez_plain`` keeps the builder from writing one.
+            z = np.load(ps_path, allow_pickle=False)
             ps_index = json.loads(str(z["index"]))
             if isinstance(mv, np.ndarray):
                 ps_matrix = mv
@@ -3571,7 +3597,7 @@ class EngineArtifacts:
                 p = os.path.join(sim_dir, f"{name}.npz")
                 if not os.path.exists(p):
                     continue
-                z = np.load(p, allow_pickle=True)
+                z = np.load(p, allow_pickle=False)
                 mv = views.get(f"actor_sim.{name}.matrix")
                 actor_sim[name] = {
                     "index": json.loads(str(z["index"])),
@@ -3595,13 +3621,13 @@ class EngineArtifacts:
             if os.path.exists(p):
                 # When all three shareable arrays for this actor are in views,
                 # SKIP the .npz load entirely — load only the keys + features
-                # (the small picklable members) from a lightweight read.
+                # (the small JSON members) from a lightweight read.
                 vecs_v = views.get(f"actor_emb.{actor}.vecs")
                 mean_v = views.get(f"actor_emb.{actor}.mean")
                 std_v = views.get(f"actor_emb.{actor}.std")
                 if all(isinstance(v, np.ndarray) for v in (vecs_v, mean_v, std_v)):
                     # Cheap partial-load of the npz: keys + features are tiny.
-                    z = np.load(p, allow_pickle=True)
+                    z = np.load(p, allow_pickle=False)
                     keys = json.loads(str(z["keys"]))
                     features = json.loads(str(z["features"]))
                     actor_emb[actor] = {
@@ -3612,7 +3638,7 @@ class EngineArtifacts:
                         "features": features,
                     }
                 else:
-                    z = np.load(p, allow_pickle=True)
+                    z = np.load(p, allow_pickle=False)
                     keys = json.loads(str(z["keys"]))
                     actor_emb[actor] = {
                         "key_index": {k: i for i, k in enumerate(keys)},
