@@ -257,7 +257,7 @@ def _seed_actors(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def _load_keys(out_dir: str, actor: str) -> list[str]:
-    z = np.load(os.path.join(out_dir, f"{actor}_emb.npz"), allow_pickle=True)
+    z = np.load(os.path.join(out_dir, f"{actor}_emb.npz"), allow_pickle=False)
     return list(json.loads(str(z["keys"])))
 
 

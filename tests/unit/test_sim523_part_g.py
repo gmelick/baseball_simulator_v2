@@ -227,10 +227,10 @@ class TestGotAwayOutOfTheCatcherEmbedding:
             build_actor_embeddings(con, str(tmp_path))
         finally:
             con.close()
-        z = np.load(os.path.join(str(tmp_path), "catcher_emb.npz"), allow_pickle=True)
+        z = np.load(os.path.join(str(tmp_path), "catcher_emb.npz"), allow_pickle=False)
         feats = list(json.loads(str(z["features"])))
         assert feats == ["cs_rate", "pop_time_mean"]
         for name in _EMBEDDING_EXCLUDE["catcher"]:
             assert name not in feats
-        fz = np.load(os.path.join(str(tmp_path), "fielder_emb.npz"), allow_pickle=True)
+        fz = np.load(os.path.join(str(tmp_path), "fielder_emb.npz"), allow_pickle=False)
         assert "sprint_speed" in list(json.loads(str(fz["features"])))

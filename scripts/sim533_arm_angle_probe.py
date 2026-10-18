@@ -750,7 +750,7 @@ OUTCOME_ALL = (
 
 def part_c(csv_dir: Path) -> None:
     rng = np.random.default_rng(HALF_SPLIT_SEED)
-    z = np.load(csv_dir / "pitcher_sim.npz", allow_pickle=True)
+    z = np.load(csv_dir / "pitcher_sim.npz", allow_pickle=False)
     index = json.loads(str(z["index"]))
     M = z["pitcher_sim_matrix"]
     print("\n=== C. THE PAIR TEST (what each number adds to the production score) ===")
