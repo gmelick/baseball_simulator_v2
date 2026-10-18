@@ -174,6 +174,7 @@ Override host ports via env (`.env`): `NGINX_HTTP_PORT`, `NGINX_HTTPS_PORT`,
 | `ENVIRONMENT`                 | `development`                | `staging`                        | `production` |
 | Login (cookie or `API_KEYS`)  | **enforced** (SIM-443c)      | **enforced**                     | **enforced** |
 | `RATE_LIMIT_PER_MINUTE`       | unset / 0 (off)              | `120`                            | `300` |
+| `TRUSTED_PROXY_HOSTS`         | `nginx` (compose default)    | `nginx`                          | `nginx` (the proxy in front of the app; SIM-569) |
 | `CORS_ORIGINS`                | `*` (dev fallback)           | staging frontend origin          | prod frontend origin (**never `*`**) |
 | `WORKERS`                     | `1`                          | `3`                              | `9` (≈ 2·vCPU+1) |
 | `LIVE_PIPELINE_ENABLED`       | `false`                      | `true`                           | `true` |
@@ -187,7 +188,10 @@ Auth/CORS behavior is driven by `api/auth.py`. In every tier a missing or
 invalid credential returns `401`. Outside `development` the wildcard CORS
 fallback is disabled and the session cookie is marked `secure`, so the
 browser sends it over HTTPS only: keep `ENVIRONMENT=development` on a stack
-that serves plain HTTP, or the login loops.
+that serves plain HTTP, or the login loops. The rate limiter counts a keyless
+request against the client address. Behind nginx that address is the real
+client's only when `TRUSTED_PROXY_HOSTS` names the proxy (SIM-569); the
+compose file sets `nginx`, and an empty value in `.env` turns the trust off.
 
 ### Usage
 

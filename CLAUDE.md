@@ -519,7 +519,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   runs only on the read-only pool; without that pool it answers 503. Redis requires a
   password, and the sim cache stores typed JSON (`simulation/cache_codec.py`, keys `sim443:`),
   never a pickle. The tests' conftest sets `AUTH_DISABLED=1`; two auth test files remove it.
-  Follow-ups: SIM-565 and SIM-566 (P3); the rate limiter's bucket (SIM-564) CLOSED 2026-10-17, its proxy-address follow-on is SIM-569. The design and the cutover run book:
+  Follow-ups: SIM-565 and SIM-566 (P3); the rate limiter's bucket (SIM-564) and its proxy-address follow-on (SIM-569, `TRUSTED_PROXY_HOSTS`) both CLOSED 2026-10-17. The design and the cutover run book:
   `docs/audit/2026-10-13-sim443-security-hardening.md`; the record: `CHANGES.md` 2026-10-13.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
