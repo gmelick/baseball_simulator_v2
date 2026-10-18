@@ -82,8 +82,8 @@ on `localhost` and on a bad name.
 
 **The live check (2026-10-17).** Inside the compose network the new code resolves `nginx` to
 the nginx container's address (`docker inspect` agrees), and a bad name to nothing. The
-serving app still runs the old env: the deploy is `docker compose up -d app` (the app service
-only; the compose edit is one env line), after the backup window.
+serving app ran the old env until the deploy below (`docker compose up -d app`: the app service
+only, the compose edit is one env line).
 
 **Deployed 2026-10-18 03:10 UTC (the evening of 2026-10-17 local).** Merged into `master` as
 c69ac0b together with SIM-564 and pushed; both branches deleted. `docker compose up -d app`
@@ -93,7 +93,8 @@ resolves `app` once, when nginx starts (its upstream block has no `resolver` dir
 the recreated container had a new address (172.19.0.8 → .10). `docker compose restart nginx`
 cleared it (health 200, the frontend 200, an API route 401 as the login requires). The trap is
 new to the record: an in-place restart (`docker compose restart app`, the SIM-563 self-restart)
-keeps the address; a recreate does not. Filed as SIM-570 (P3).
+keeps the address; a recreate does not. Filed as SIM-570 (P3); CLOSED 2026-10-18 (the entry
+above).
 
 **The gates.** On the host: the nine new tests and the twelve rate-limit tests pass, `ruff
 check`, `ruff format --check` and `mypy api/auth.py` pass. The whole unit lane in the container (the working tree mounted,
@@ -159,9 +160,12 @@ one term ("made-up key") for the unverified key, the two extra tests. 713k token
 - Behind nginx the client address is the proxy's: nginx sends `X-Forwarded-For`, but uvicorn
   trusts it only from 127.0.0.1, so with the limiter ON every browser user on the LAN would
   share one bucket. Pre-existing and off by default; the review found it; filed as SIM-569
-  (P3): tell uvicorn which proxy to trust (`FORWARDED_ALLOW_IPS`).
+  (P3): tell uvicorn which proxy to trust (`FORWARDED_ALLOW_IPS`). CLOSED 2026-10-17 (the
+  entry above; the app, not uvicorn, names the proxy).
 - The `BACKLOG.xlsx` edit (delete the SIM-564 row, add SIM-569, next free ID SIM-570) waits
-  on the workbook: Excel held it open during this session, so the save was refused.
+  on the workbook: Excel held it open during this session, so the save was refused. DONE
+  2026-10-17 (commit 673cb25): the SIM-564 row deleted, no SIM-569 row (it closed on arrival),
+  the next free ID SIM-570; SIM-570 was then filed and closed, so the ID is SIM-571.
 
 # DEPLOYED — an off-machine copy of the backup sets, on OneDrive — SIM-568, 2026-10-17
 
