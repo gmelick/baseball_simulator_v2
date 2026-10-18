@@ -42,6 +42,16 @@ the nginx container's address (`docker inspect` agrees), and a bad name to nothi
 serving app still runs the old env: the deploy is `docker compose up -d app` (the app service
 only; the compose edit is one env line), after the backup window.
 
+**Deployed 2026-10-18 03:10 UTC (the evening of 2026-10-17 local).** Merged into `master` as
+c69ac0b together with SIM-564 and pushed; both branches deleted. `docker compose up -d app`
+recreated the app (healthy in 55 s; `TRUSTED_PROXY_HOSTS=nginx` inside the container, the
+trust set resolved to nginx's 172.19.0.2). Then every route on port 80 answered 502: nginx
+resolves `app` once, when nginx starts (its upstream block has no `resolver` directive), and
+the recreated container had a new address (172.19.0.8 → .10). `docker compose restart nginx`
+cleared it (health 200, the frontend 200, an API route 401 as the login requires). The trap is
+new to the record: an in-place restart (`docker compose restart app`, the SIM-563 self-restart)
+keeps the address; a recreate does not. Filed as SIM-570 (P3).
+
 **The gates.** On the host: the nine new tests and the twelve rate-limit tests pass, `ruff
 check`, `ruff format --check` and `mypy api/auth.py` pass. The whole unit lane in the container (the working tree mounted,
 13 chunks of 20 files): 6,349 passed, 12 failed, and the twelve are the odds tests of the open
