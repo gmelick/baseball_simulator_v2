@@ -67,9 +67,8 @@ worktree, add `-v "<worktree>/<dir>:/app/<dir>"` for each of the five. Every gat
 with those mounts (the first unit-lane pass without them failed the two new tests on master's
 code, which is how the agents found it).
 
-**The state.** `BACKLOG.xlsx` was still open in Excel at the deploy, so the SIM-565 row's deletion is
-held: the one step left is to delete that row (row 10 of the `Open Tickets` tab) once
-Excel releases the workbook; the next free ID stays SIM-571. `CLAUDE.md` §2b's SIM-443 bullet and the hardening
+**The state.** The SIM-565 row is deleted from `BACKLOG.xlsx` (Excel released the workbook
+after the deploy); the next free ID stays SIM-571. `CLAUDE.md` §2b's SIM-443 bullet and the hardening
 design doc record the closure. The branch merged into `master` (9588a01) and was pushed.
 **Deployed 2026-10-18 05:18–05:20 UTC:** `docker compose restart app` (the mounted
 `pipeline/` is the new loader; no image rebuild). The app turned healthy in 85 s, pinned and
