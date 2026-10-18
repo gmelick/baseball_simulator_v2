@@ -21,8 +21,11 @@ Redis). It provides these seams:
     the handler calls this first. A failed check closes the socket with code 1008 (policy
     violation) before the handshake is accepted.
 
-  - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter
-    keyed by API key (falling back to client IP). Defaults to
+  - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter.
+    It counts a request against a configured API key when the request
+    presents one, else against the client address (SIM-564). Behind a proxy
+    named in ``TRUSTED_PROXY_HOSTS`` the client address is the one the proxy
+    sends in ``X-Real-IP`` (SIM-569). Defaults to
     ``RATE_LIMIT_PER_MINUTE`` requests/min and returns ``429`` when exceeded.
     Disabled when ``RATE_LIMIT_ENABLED`` is false or the per-minute limit is
     ``<= 0`` (the test/dev default), so it never interferes with the suite
@@ -51,6 +54,7 @@ import hashlib
 import hmac
 import json
 import os
+import socket
 import time
 from collections import defaultdict, deque
 from collections.abc import Mapping
@@ -359,6 +363,80 @@ async def authenticate_websocket(websocket: WebSocket) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# The client address behind a trusted proxy (SIM-569)
+# ---------------------------------------------------------------------------
+
+TRUSTED_PROXY_HOSTS_ENV = "TRUSTED_PROXY_HOSTS"
+REAL_IP_HEADER = "X-Real-IP"
+#: How long a resolved list of proxy addresses stays valid, in seconds.
+_PROXY_RESOLVE_TTL_S = 60.0
+#: The one cached resolution: the raw variable -> (expiry, addresses).
+_proxy_cache: dict[str, tuple[float, frozenset[str]]] = {}
+
+
+def _resolve_proxy_host(name: str) -> set[str]:
+    """Return every address ``name`` resolves to, or an empty set.
+
+    A name that does not resolve adds no address and raises nothing. Inside
+    the compose network Docker's embedded DNS answers from its own table, so
+    the call returns at once.
+    """
+    try:
+        return {str(info[4][0]) for info in socket.getaddrinfo(name, None)}
+    except OSError:
+        return set()
+
+
+def _trusted_proxy_addresses() -> frozenset[str]:
+    """Return the addresses of the proxies ``TRUSTED_PROXY_HOSTS`` names (SIM-569).
+
+    The variable is a comma-separated list of host names or addresses. Empty,
+    the default, trusts nothing. The names resolve at most once per
+    ``_PROXY_RESOLVE_TTL_S``: a recreated nginx with a new address is trusted
+    again within a minute, and no request in between pays a lookup.
+    """
+    spec = os.environ.get(TRUSTED_PROXY_HOSTS_ENV, "").strip()
+    if not spec:
+        return frozenset()
+    now = time.monotonic()
+    cached = _proxy_cache.get(spec)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    addresses: set[str] = set()
+    for name in spec.split(","):
+        name = name.strip()
+        if name:
+            addresses |= _resolve_proxy_host(name)
+    result = frozenset(addresses)
+    _proxy_cache.clear()
+    _proxy_cache[spec] = (now + _PROXY_RESOLVE_TTL_S, result)
+    return result
+
+
+def _reset_trusted_proxy_cache() -> None:
+    """Forget the cached resolution (the tests call this)."""
+    _proxy_cache.clear()
+
+
+def _client_address(request: Request) -> str:
+    """Return the address a request comes from (SIM-569).
+
+    The connection's own address is the answer, with one exception. When the
+    connection comes from a trusted proxy, the answer is the address in the
+    proxy's ``X-Real-IP`` header. nginx sets that header to the connection's
+    address on every request it forwards, so a value a browser sends never
+    reaches the app. A request with no connection address reads ``unknown``.
+    """
+    client = request.client
+    host = client.host if client else None
+    if host and host in _trusted_proxy_addresses():
+        real = request.headers.get(REAL_IP_HEADER)
+        if real and real.strip():
+            return real.strip()
+    return host or "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Rate-limit middleware (SIM-351)
 # ---------------------------------------------------------------------------
 
@@ -366,11 +444,12 @@ async def authenticate_websocket(websocket: WebSocket) -> str | None:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """In-memory sliding-window rate limiter (pure stdlib).
 
-    Keyed by API key when present (so a single shared NAT'd IP with distinct
-    keys isn't collectively throttled), else by client IP. Each key gets a
-    ``deque`` of recent request timestamps; on every request we evict
-    timestamps older than ``window_s`` and reject with ``429`` once the deque
-    length reaches ``limit``.
+    The limiter counts a request against a configured API key when the
+    request presents one, else against the client address (SIM-564).
+    Callers with distinct configured API keys behind one shared address keep
+    separate buckets. Each bucket holds a ``deque`` of recent request
+    timestamps. On every request the limiter evicts timestamps older than
+    ``window_s``. It answers ``429`` once the deque length reaches ``limit``.
 
     Constructor knobs (all overridable for tests; defaults read from env):
       limit     — max requests per window (``RATE_LIMIT_PER_MINUTE``)
@@ -417,13 +496,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_key(request: Request) -> str:
-        """Bucket key: API key if presented, else client IP, else 'unknown'."""
-        api_key = request.headers.get(API_KEY_HEADER)
-        if api_key:
-            return f"key:{api_key}"
-        client = request.client
-        ip = client.host if client else "unknown"
-        return f"ip:{ip}"
+        """Return the bucket name of a request (SIM-564).
+
+        The limiter reads the key the same way the login does. A request
+        that presents a configured API key counts against that key. The
+        bucket name is then ``key:`` plus 16 hex characters of the key's
+        SHA-256 digest. The bucket name never holds the text of the key.
+
+        Every other request counts against the client address: no key, a
+        made-up key, or no configured keys. Behind a trusted proxy the client
+        address is the real client's (``_client_address``, SIM-569). A request
+        with no client address counts against the bucket named ``ip:unknown``.
+        The limiter never uses the raw header text, so a made-up key cannot
+        open a new bucket.
+        """
+        presented = _presented_api_key(request.headers)
+        if presented:
+            keys = _configured_api_keys()
+            if keys and _key_matches(presented, keys):
+                digest = hashlib.sha256(presented.encode()).hexdigest()[:16]
+                return f"key:{digest}"
+        return f"ip:{_client_address(request)}"
 
     async def dispatch(self, request: Request, call_next):
         if not self._enabled or self._limit <= 0:

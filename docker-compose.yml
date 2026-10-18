@@ -176,6 +176,13 @@ services:
       BASEBALL_RO_DB_PASSWORD: ""
       GRAFANA_ADMIN_PASSWORD: ""
       ENVIRONMENT:     ${ENVIRONMENT:-development}
+      # SIM-569: the rate limiter counts a keyless request against the client
+      # address. Every browser request arrives through nginx, so the connection's
+      # address is nginx's. The app takes the real address from nginx's X-Real-IP
+      # header, only on a connection from a host named here (the names resolve at
+      # most once a minute). An empty value in .env turns the trust off; unset
+      # in .env = nginx.
+      TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS-nginx}
       # SIM-402 pre-warm: how many workers warm their full-pool cache at once
       # (default 2). At 14 workers (2026-09-15, the WSL cap raised to 16 vCPU /
       # 20 GB) waves of 2 mean 7 waves; 4 keeps the warm inside its 120 s deadline.

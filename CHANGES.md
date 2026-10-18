@@ -1,3 +1,115 @@
+# BUILT — behind nginx the rate limiter counts a request against the real client — SIM-569, 2026-10-17
+
+**Why.** The rate limiter (`RateLimitMiddleware`, `api/auth.py`; off unless `RATE_LIMIT_PER_MINUTE`
+is set) counts a request with no configured API key against the client address, the address
+of the connection (SIM-564, the entry below). Every browser request reaches the app through
+nginx, so that address is the nginx container's on all of them: with the limiter ON, every LAN
+user would share one bucket, and one busy user would get everyone a 429. nginx already sends
+the real address (`X-Real-IP`, set to the connection's own address on every request it
+forwards, so a browser cannot forge it; `X-Forwarded-For` too), but uvicorn 0.50.1 trusts
+forwarded headers only from 127.0.0.1 by default, and nginx is not on that address. The
+SIM-564 review found it; filed as SIM-569 (P3) and closed on arrival (owner decision
+2026-10-17: build it at once).
+
+**What runs.** `TRUSTED_PROXY_HOSTS` names the proxies the app believes, as a comma-separated
+list of host names or addresses; the compose app service sets `${TRUSTED_PROXY_HOSTS-nginx}`
+(unset in `.env` = `nginx`; an empty value turns the trust off). `api.auth._client_address`
+returns the connection's address, with one exception: a connection from a trusted proxy
+reads the `X-Real-IP` value instead. `_trusted_proxy_addresses` resolves the names through
+`socket.getaddrinfo` at most once a minute (`_PROXY_RESOLVE_TTL_S`), so a recreated nginx
+with a new address is trusted again within a minute, and no request in between pays a
+lookup; a name that does not resolve adds no address and raises nothing. The limiter's
+`_client_key` reads `_client_address` for its address bucket. Not uvicorn's own
+`FORWARDED_ALLOW_IPS`: it takes addresses, not names, nginx's compose address is not fixed,
+and a static address would mean a static subnet on `baseball_net` and a recreate of the whole
+stack; the in-app rule needs a recreate of the app service only. With the variable unset
+(the unit lane, a deploy with no proxy) the app reads the connection's address and nothing
+else, as before. Documented in `docs/technical/api.md`, `deploy/README.md` (the tiers table)
+and the two env examples.
+
+**The tests** (`tests/unit/test_sim569_trusted_proxy.py`, nine, the resolver patched so no
+test touches DNS except the `localhost` one): with the variable unset, `X-Real-IP` changes
+nothing; behind a trusted proxy two real clients get separate buckets (one at its limit
+answers 429, the other 200); a connection that is not the proxy keeps its own address, so a
+forged header picks nothing; a trusted proxy that sends no header counts against its own
+address; the helper's direct cases (no client → `unknown`, a trusted proxy with a padded
+header, an untrusted one); a list of names and literal addresses; the resolution cached for
+the TTL and renewed after it; a name that does not resolve trusts nothing; the real resolver
+on `localhost` and on a bad name.
+
+**The live check (2026-10-17).** Inside the compose network the new code resolves `nginx` to
+the nginx container's address (`docker inspect` agrees), and a bad name to nothing. The
+serving app still runs the old env: the deploy is `docker compose up -d app` (the app service
+only; the compose edit is one env line), after the backup window.
+
+**The gates.** On the host: the nine new tests and the twelve rate-limit tests pass, `ruff
+check`, `ruff format --check` and `mypy api/auth.py` pass. The whole unit lane in the container (the working tree mounted,
+13 chunks of 20 files): 6,349 passed, 12 failed, and the twelve are the odds tests of the open
+SIM-567 (they pass with `-e ODDS_PROVIDER=mock`); no segfault this run. The CLAUDE.md edit
+stays one line, so the line-897 citation test holds.
+
+# FIXED — the rate limiter opens a bucket only for a configured API key — SIM-564, 2026-10-17
+
+**Why.** The API's per-minute rate limiter (`RateLimitMiddleware` in `api/auth.py`, off unless
+`RATE_LIMIT_PER_MINUTE` is set) told callers apart by the raw `X-API-Key` header, before any
+check that the key was real. A caller could send a new made-up key on every request and never
+reach the limit, or send another caller's key and use up that caller's allowance. The security
+hardening (SIM-443a–f, 2026-10-13) filed it as a P3 follow-up.
+
+**What changed.** `RateLimitMiddleware._client_key` now reads the key the way the login does
+(`_presented_api_key`: `X-API-Key`, else `Authorization: Bearer`) and checks it against the
+configured keys with `_key_matches` (constant time over every key). A match opens the bucket
+`key:` plus 16 hex characters of the key's SHA-256 digest, so the in-memory dict never holds a
+key in clear. Every other request counts against the client address (`ip:<host>`, or
+`ip:unknown` with no client): no key, a made-up key, or no configured keys. The raw header
+text is never a bucket name. The exempt paths and the disabled limiter return before the
+bucket choice, so neither changes. The module and class docstrings and the limiter's row in
+`docs/technical/api.md` say the same thing; the key helpers' row now lists the limiter as a
+caller.
+
+**The tests** (`tests/unit/test_api_main_wiring.py`, next to the SIM-351 rate-limit tests;
+nine new, each on the tiny app with a limit of 2 or 5): three requests with three made-up keys
+answer 200, 200, 429; twenty requests with random keys at limit 5 answer 429 from the sixth on;
+a configured key fills its own bucket while a request with no key still answers 200, and the
+mirror; a key in `X-API-Key` and the same key in `Authorization: Bearer` share one bucket; with
+no configured keys (unset, empty, or `" , "`) every key counts against the address; no bucket
+name holds the text of either key; made-up keys fill the address bucket and leave the real
+key's bucket empty; two configured keys keep separate buckets. Five of the first seven failed
+on the old code (the two real-key tests guard against an over-fix to the address only, and
+passed before too); the last two came from the review.
+
+**The gates.** In the app container with the working tree mounted over the image's copy
+(`-v "$PWD:/app"`, `MSYS_NO_PATHCONV=1`): the three auth test files, 104 passed in 24 s (95
+before). The whole `tests/unit/ -m "not slow"` lane the same way: 6,339 passed, 13 failed, and both
+failures are not this change: the twelve odds tests of the open SIM-567 (the container lane
+reads the stack's `ODDS_PROVIDER=bettingpros`; the same three files pass 172 / 172 with
+`-e ODDS_PROVIDER=mock`), and `test_the_cited_line_still_says_it`, which cites CLAUDE.md
+line 897 and failed while a four-line CLAUDE.md edit sat above it (the edit is one line now;
+the citation tests pass, 199 / 199). On the host: `ruff check .`, `ruff format --check .` (500 files) and
+`mypy api/` (27 files) pass. The host Python cannot run the API tests on its own: it lacks
+`sqlglot` (the SQL console's parser), so every test that imports `api.main` fails there with
+`ModuleNotFoundError`; that is the environment, not the change. Two whole-lane runs in the
+container died with the stochastic segfault (exit 139; once at 41% inside FastAPI's router
+wiring, once during pytest's assertion rewriting), no DuckDB writer running; the probe
+(`scripts/genexpr_crash_probe.py`, every shape clean at 6.7 million evaluations) read as on
+2026-09-16: the shape does not decide it. The lane then ran in 13 chunks of 20 files with a
+retry per segfault.
+
+**How it was built.** A workflow of six Opus 5.5 agents: one builder (the tests first, red on
+the old code, then the fix), three reviewers in parallel with one lens each (security and
+correctness, test quality, the writing standard and the reference table), one fixer for their
+findings and one verifier. The security review found no request that picks its own bucket.
+The reviews' findings that landed: the reference table's two stale cells, four prose fixes,
+one term ("made-up key") for the unverified key, the two extra tests. 713k tokens, 61 min.
+
+**Not done.**
+- Behind nginx the client address is the proxy's: nginx sends `X-Forwarded-For`, but uvicorn
+  trusts it only from 127.0.0.1, so with the limiter ON every browser user on the LAN would
+  share one bucket. Pre-existing and off by default; the review found it; filed as SIM-569
+  (P3): tell uvicorn which proxy to trust (`FORWARDED_ALLOW_IPS`).
+- The `BACKLOG.xlsx` edit (delete the SIM-564 row, add SIM-569, next free ID SIM-570) waits
+  on the workbook: Excel held it open during this session, so the save was refused.
+
 # DEPLOYED — an off-machine copy of the backup sets, on OneDrive — SIM-568, 2026-10-17
 
 **Why.** The scheduled backups (SIM-525) write the Postgres dump, the DuckDB file and the engine
