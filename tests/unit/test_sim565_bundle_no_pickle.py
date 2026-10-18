@@ -77,10 +77,12 @@ def test_detector_can_fail():
     with_true = "import numpy as np\np = 'x'\nz = np.load(p, allow_pickle=True)\n"
     bare = "import numpy as np\np = 'x'\nz = np.load(p)\n"
     imported = "from numpy import load\np = 'x'\nz = load(p)\n"
+    qualified = "import numpy\np = 'x'\nz = numpy.load(p)\n"
     good = "import numpy as np\np = 'x'\nz = np.load(p, allow_pickle=False)\n"
     assert _np_load_calls_without_false(with_true) == [3]
     assert _np_load_calls_without_false(bare) == [3]
     assert _np_load_calls_without_false(imported) == [3]
+    assert _np_load_calls_without_false(qualified) == [3]
     assert _np_load_calls_without_false(good) == []
 
 

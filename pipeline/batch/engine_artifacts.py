@@ -3621,7 +3621,7 @@ class EngineArtifacts:
             if os.path.exists(p):
                 # When all three shareable arrays for this actor are in views,
                 # SKIP the .npz load entirely — load only the keys + features
-                # (the small picklable members) from a lightweight read.
+                # (the small JSON members) from a lightweight read.
                 vecs_v = views.get(f"actor_emb.{actor}.vecs")
                 mean_v = views.get(f"actor_emb.{actor}.mean")
                 std_v = views.get(f"actor_emb.{actor}.std")
