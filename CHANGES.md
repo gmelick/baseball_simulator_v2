@@ -1,4 +1,4 @@
-# CLOSED — the engine bundle loads with allow_pickle=False — SIM-565, 2026-10-18
+# DEPLOYED — the engine bundle loads with allow_pickle=False — SIM-565, 2026-10-18
 
 **Why.** The simulator's prepared data files (the engine bundle under
 `/data/play_pool/engine_artifacts`) were loaded with numpy's `allow_pickle=True` in
@@ -67,12 +67,15 @@ worktree, add `-v "<worktree>/<dir>:/app/<dir>"` for each of the five. Every gat
 with those mounts (the first unit-lane pass without them failed the two new tests on master's
 code, which is how the agents found it).
 
-**The state.** `BACKLOG.xlsx` was open in Excel at the close, so the SIM-565 row's deletion
-is held: the one step left is to delete that row (row 10 of the `Open Tickets` tab) once
-Excel releases the workbook; the next free ID stays SIM-571. `CLAUDE.md` §2b's SIM-443 bullet and the hardening design doc record the closure.
-The branch merged into `master` and was pushed the same day; the app runs the mounted
-`pipeline/`, so a restart puts the new loader into production and the `jobs` container's
-nightly build runs the writer guard from its own mount.
+**The state.** `BACKLOG.xlsx` was still open in Excel at the deploy, so the SIM-565 row's deletion is
+held: the one step left is to delete that row (row 10 of the `Open Tickets` tab) once
+Excel releases the workbook; the next free ID stays SIM-571. `CLAUDE.md` §2b's SIM-443 bullet and the hardening
+design doc record the closure. The branch merged into `master` (9588a01) and was pushed.
+**Deployed 2026-10-18 05:18–05:20 UTC:** `docker compose restart app` (the mounted
+`pipeline/` is the new loader; no image rebuild). The app turned healthy in 85 s, pinned and
+loaded bundle version `20261017T083956Z` through the pickle-free loads, published 227
+arrays (641.8 MB) into shared memory, started its 10 workers, and `/health` answers ok. The
+`jobs` container mounts `pipeline/` too, so tonight's nightly build runs the writer guard.
 
 # DEPLOYED — nginx follows the app's address after a recreate — SIM-570, 2026-10-18
 
