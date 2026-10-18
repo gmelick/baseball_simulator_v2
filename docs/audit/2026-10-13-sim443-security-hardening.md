@@ -189,7 +189,8 @@ only place that pickled them.
   review found that behind nginx the client address is the proxy's: SIM-569, CLOSED the same
   day (`TRUSTED_PROXY_HOSTS` names the proxy whose `X-Real-IP` the limiter believes).
 - SIM-565: the engine bundle loads with `np.load(..., allow_pickle=True)`; check the live bundle
-  for object arrays first.
+  for object arrays first. CLOSED 2026-10-18: none of the 86 arrays is one; every load passes
+  `allow_pickle=False` and the builder refuses to write an object array (`CHANGES.md`).
 - SIM-566: `/api/schema`, `/api/analytics/*` and `/api/players/*` run fixed queries on the main
   pool; move them to the read-only pool.
 

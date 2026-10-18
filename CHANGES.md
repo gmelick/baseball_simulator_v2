@@ -1,3 +1,79 @@
+# CLOSED — the engine bundle loads with allow_pickle=False — SIM-565, 2026-10-18
+
+**Why.** The simulator's prepared data files (the engine bundle under
+`/data/play_pool/engine_artifacts`) were loaded with numpy's `allow_pickle=True` in
+`pipeline/batch/engine_artifacts.py`: five calls on the `.npz` files (the pitcher similarity
+matrix, the fourteen actor score matrices, the six actor embeddings) and three with no keyword
+on the `.npy` pools. That setting lets a data file carry a pickle, and loading a pickle runs
+code. Only the nightly build writes the bundle, so the risk was small, but a tampered file in
+the data folder would have run code in every simulator worker. The JSON cache (SIM-443f) took
+pickle off the Redis path; this was the last pickle load on the hot path (filed P3 by the
+security hardening, SIM-443).
+
+**What the bundle holds.** The ticket asked first which arrays are object arrays, because
+`allow_pickle=False` refuses only those. None is one. All 86 arrays of the live version
+(`20261017T083956Z`; also the oldest kept version and the pre-SIM-553 copy) are `float32`,
+`int32`, `int64` or a 0-d fixed-width unicode string (`<U…`) that holds JSON text: every
+string member is a `json.dumps` Python string, which numpy stores as unicode, never as an
+object. So the builder needed no data rewrite, and no bundle has to be rebuilt.
+
+**What was built (branch `sim565-bundle-no-pickle`, b21f181 and one follow-up commit).**
+Every one of the eight `np.load` calls in the loader passes `allow_pickle=False` explicitly
+(the five Trues and the three bare calls; a bare call would lean on numpy's default). A new
+writer, `_savez_plain`, refuses an object array with a `ValueError` that names the file and
+the member, then writes the compressed `.npz`; the three npz writers (`pitcher_sim.npz`,
+`_write_actor_sim`, the actor embeddings) go through it, so a build that would write a file the
+loader refuses fails at build time, before the version link moves (SIM-563), not at the app's
+next boot. The three unit tests and the arm-angle probe script that read bundle npz files with
+pickle now read without it; `scripts/sim548_offline_fit.py` keeps `allow_pickle=True` for its
+own object-array checkpoint, which is not the bundle. The new
+`tests/unit/test_sim565_bundle_no_pickle.py` (six tests) reads the loader's source with `ast`
+and fails on any numpy load that lacks `allow_pickle=False` (`np.load`, `numpy.load` or a bare
+`load` imported from numpy; a missing keyword fails too), pins at least eight loads so a
+deleted load cannot pass, proves its own detector can fail, forbids a pickle import, and
+round-trips `_savez_plain` and `_write_actor_sim` through a pickle-free load.
+
+**The gates (a workflow of nine Opus 5.5 agents: one builder, three gate agents, two
+adversarial reviewers, two smoke arms and the comparison; no repair round was needed).**
+
+| Gate | Result |
+|---|---|
+| Unit lane in the container, the worktree's code mounted (`-m "not slow"`, `ODDS_PROVIDER=mock`) | 6,371 passed, 2 skipped, 22 deselected in 283 s |
+| `ruff check .` / `ruff format --check .` / `mypy similarity/ pipeline/ api/` | all clean (503 files formatted; 77 source files typed) |
+| The live bundle, old loader vs new loader (a digest of every field `EngineArtifacts.load` returns: 71,708 keys, 247 of them arrays hashed byte for byte) | equal on every key; each load 2.2 s |
+| Every `.npz` / `.npy` member of the live version opened with `allow_pickle=False` | 86 members, 0 object arrays, 0 errors (the 1.3 GB `sims` string read by header) |
+| The mutation check (one load back to `True`; one keyword removed) | the new test reds on each, naming the line; green on restore |
+| The ten-game smoke, 10 × 50, seeds 0–49, the version pinned, master vs the branch (`scripts/sim565_smoke.txt`, the two JSON files) | identical on all 10,587 values; the SIM-557 outs check 0 mismatches on both; 567 s / 534 s |
+
+**The reviews.** Both refuters (correctness; coverage and the definition of done) found no
+blocker. Their minor notes: the detector reads only the spellings the file uses (an alias
+other than `np`, a local name bound to `np.load` or `np.lib.format.read_array` would escape
+it); the round-trip test also passes on master, so it describes the format rather than guards
+a regression; no unit test loads a builder-written `pitcher_sim.npz` through
+`EngineArtifacts.load` (the live-bundle probe covers that path); a stale comment called the
+embedding keys "picklable" (fixed in the follow-up commit, with a `numpy.load` case in the
+detector's self-test).
+
+**Not done.** The ten `np.save` writers of the `.npy` pools have no build-time guard; each
+writes an array cast to `float32`, `int32` or `int64`, and the loader refuses an object `.npy`
+at boot, so nothing is open today.
+
+**A trap for the next worktree build.** A whole-tree mount of a worktree over `/app`
+(`-v "<worktree>:/app"`) does NOT run the worktree's `api/`, `pipeline/`, `similarity/`,
+`simulation/` or `db/`: compose's own bind mounts of the main checkout's five folders sit on
+top of it, and the container runs master's code there. The recipe of 2026-10-17 looked right
+only because it ran from the main checkout, where both point at the same files. From a
+worktree, add `-v "<worktree>/<dir>:/app/<dir>"` for each of the five. Every gate above ran
+with those mounts (the first unit-lane pass without them failed the two new tests on master's
+code, which is how the agents found it).
+
+**The state.** `BACKLOG.xlsx` was open in Excel at the close, so the SIM-565 row's deletion
+is held: the one step left is to delete that row (row 10 of the `Open Tickets` tab) once
+Excel releases the workbook; the next free ID stays SIM-571. `CLAUDE.md` §2b's SIM-443 bullet and the hardening design doc record the closure.
+The branch merged into `master` and was pushed the same day; the app runs the mounted
+`pipeline/`, so a restart puts the new loader into production and the `jobs` container's
+nightly build runs the writer guard from its own mount.
+
 # DEPLOYED — nginx follows the app's address after a recreate — SIM-570, 2026-10-18
 
 **Why.** nginx (`deploy/nginx/nginx.conf`, the LAN entry on port 80) looked the app's name up
