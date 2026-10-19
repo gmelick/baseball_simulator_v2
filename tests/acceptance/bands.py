@@ -1370,7 +1370,7 @@ POOL_REFERENCES: dict[str, PoolReference] = {
     # --- per opportunity ---------------------------------------------------
     # SIM-476 (step 0): the steal bands. Centres are the artifact steal
     # pools' OWN recency-weighted rates (printed by
-    # scripts/sim476_steal_probe.py from the loaded bundle — the exact object
+    # the SIM-476 steal probe, now in git history, from the loaded bundle — the exact object
     # the draw samples). The -15% deficit these guard was the aggression
     # multiplier's leverage factor, deleted 2026-08-30.
     "STEAL_ATT_OPP_2B": PoolReference(

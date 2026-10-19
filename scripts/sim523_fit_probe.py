@@ -41,9 +41,8 @@ the factor reads, matches the pool's own conditional. Read per opportunity:
     the ordering check (the pitcher strongest, then the batter, then
     recency).
 
-The fielder factor's own conditional read stays in
-scripts/sim476_fielder_probe.py (per-position OAA tiers); run it on the
-same environment.
+The fielder factor's own conditional read was the SIM-476 fielder probe
+(per-position OAA tiers), deleted 2026-10-19; git history holds it.
 
     MSYS_NO_PATHCONV=1 docker compose run --rm -T -e SIM_MANAGER=1 \\
         -e SIM_PITCH_RESULT_SPLIT=1 -e SIM_PITCH_PITCHER_POWER=2 \\

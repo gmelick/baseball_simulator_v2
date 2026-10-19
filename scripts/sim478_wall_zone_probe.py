@@ -4,7 +4,7 @@ scripts/sim478_wall_zone_probe.py — the wall-play check (SIM-478/479/480, plan
 WHAT IT MEASURES
 ================
 The fielding draw on the balls that reach the wall. The tap is the split probe's
-(``scripts/sim523_split_probe.py``): the born batted ball against the drawn play.
+(the SIM-523 split probe, now in git history): the born batted ball against the drawn play.
 Here it keeps only born AIR balls (a line drive or a fly ball) whose carry sits
 within 30 ft of the LIVE park's fence line at the ball's direction, and it
 splits them by the side of the fence: short (carry under the line) and over

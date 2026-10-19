@@ -61,8 +61,6 @@ def test_version_file_matches_the_newest_migration() -> None:
         ("WORKFLOW.md", r"latest migration \(currently `(\d+)`\)"),
         # agent_team.md: the tech-stack line.
         ("agent_team.md", r"DuckDB v(\d+) \(in-process\)"),
-        # The Phase-6 handoff's persistence line.
-        ("docs/HANDOFF_PHASE6.md", r"DuckDB v(\d+) /"),
         # The technical reference's migration-system note.
         ("docs/technical/pipeline-betting-db.md", r"duckdb_schema_version\.txt \((\d+) as of"),
     ],

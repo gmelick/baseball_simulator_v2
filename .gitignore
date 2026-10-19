@@ -43,6 +43,8 @@ ENV/
 # Testing & coverage
 # ---------------------------------------------------------------------------
 .pytest_cache/
+# pytest's temp folder when it cannot rename its cache into place (a June commit picked one up)
+pytest-cache-files-*/
 .coverage
 .coverage.*
 coverage.xml
@@ -89,9 +91,6 @@ dmypy.json
 # Build artifacts
 # ---------------------------------------------------------------------------
 *.docx
-# Exception: the official executive guide (docs/technical/README.md and CLAUDE.md §13
-# reference it) — 2026-09-10, tracked on purpose, not a build artifact.
-!/Baseball Simulator - Executive Guide.docx
 *.log
 *.pid
 
