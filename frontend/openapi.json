@@ -237,6 +237,11 @@
             "default": false,
             "title": "Starting Pitcher",
             "type": "boolean"
+          },
+          "synthetic": {
+            "default": false,
+            "title": "Synthetic",
+            "type": "boolean"
           }
         },
         "required": [
@@ -746,6 +751,17 @@
             ],
             "title": "Price Book Name"
           },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
           "side": {
             "title": "Side",
             "type": "string"
@@ -807,6 +823,20 @@
             },
             "title": "Fair Book Name",
             "type": "object"
+          },
+          "final": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final"
           },
           "game_pk": {
             "title": "Game Pk",
@@ -2251,6 +2281,28 @@
             ],
             "title": "Away Losses"
           },
+          "away_probable_pitcher_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Probable Pitcher Name"
+          },
+          "away_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Score"
+          },
           "away_score_final": {
             "anyOf": [
               {
@@ -2306,9 +2358,42 @@
             ],
             "title": "Away Wins"
           },
+          "detailed_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detailed State"
+          },
+          "double_header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Double Header"
+          },
           "game_date": {
             "title": "Game Date",
             "type": "string"
+          },
+          "game_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Number"
           },
           "game_pk": {
             "title": "Game Pk",
@@ -2328,6 +2413,28 @@
               }
             ],
             "title": "Home Losses"
+          },
+          "home_probable_pitcher_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Probable Pitcher Name"
+          },
+          "home_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Score"
           },
           "home_score_final": {
             "anyOf": [
@@ -2392,6 +2499,17 @@
             "title": "Season",
             "type": "integer"
           },
+          "series_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Description"
+          },
           "sim_summary": {
             "anyOf": [
               {
@@ -2401,6 +2519,28 @@
                 "type": "null"
               }
             ]
+          },
+          "start_time_tbd": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time Tbd"
+          },
+          "start_utc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Utc"
           },
           "venue_city": {
             "anyOf": [
@@ -3414,6 +3554,40 @@
         "title": "LinescoreModel",
         "type": "object"
       },
+      "LineupSpot": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "slot": {
+            "title": "Slot",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "id",
+          "name"
+        ],
+        "title": "LineupSpot",
+        "type": "object"
+      },
       "LiveGameStateResponse": {
         "additionalProperties": false,
         "description": "SIM-386 response: live in-progress game state from ``sim.lineup_state``.\n\nFields are extracted from the ``game_state`` JSONB blob written by the live\ningestion pipeline (:class:`~pipeline.live.live_ingestion_pipeline.GameStateBuilder`).\nAll fields default to neutral / empty values so a partially-built game_state\n(e.g. a game that just went Live with no pitches yet) never breaks\ndeserialization -- the frontend handles sparse state gracefully.\n\n``updated_at`` (ISO-8601 string) is the pipeline's last-write timestamp; the\nfrontend can use it to detect staleness (> ~30s without an update may mean\nthe pipeline lost the WS signal and is polling-fallback).",
@@ -3714,6 +3888,81 @@
           }
         },
         "title": "OverrideDeltaModel",
+        "type": "object"
+      },
+      "PaStateModel": {
+        "description": "``GET /api/games/{game_pk}/feed/state``: the game at the start of a plate\nappearance (``at_bat`` omitted = first pitch), for the what-if panel. ``live``\nhas the shape of the slate's field, so the page draws it with ``CardField``.",
+        "properties": {
+          "at_bat": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Bat"
+          },
+          "away": {
+            "$ref": "#/components/schemas/SideState"
+          },
+          "away_score": {
+            "title": "Away Score",
+            "type": "integer"
+          },
+          "batting_side": {
+            "enum": [
+              "away",
+              "home"
+            ],
+            "title": "Batting Side",
+            "type": "string"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "half": {
+            "enum": [
+              "top",
+              "bottom"
+            ],
+            "title": "Half",
+            "type": "string"
+          },
+          "home": {
+            "$ref": "#/components/schemas/SideState"
+          },
+          "home_score": {
+            "title": "Home Score",
+            "type": "integer"
+          },
+          "inning": {
+            "title": "Inning",
+            "type": "integer"
+          },
+          "live": {
+            "$ref": "#/components/schemas/FeedLive"
+          },
+          "outs": {
+            "title": "Outs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "game_pk",
+          "inning",
+          "half",
+          "outs",
+          "away_score",
+          "home_score",
+          "batting_side",
+          "live",
+          "away",
+          "home"
+        ],
+        "title": "PaStateModel",
         "type": "object"
       },
       "PitcherDecisionsModel": {
@@ -4162,6 +4411,57 @@
         "title": "PlayerHit",
         "type": "object"
       },
+      "PlayerOption": {
+        "properties": {
+          "bats": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bats"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "throws": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Throws"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "PlayerOption",
+        "type": "object"
+      },
       "PlayerRefModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.PlayerRef`.\n\nA player reference: integer id + optional display label.",
@@ -4262,6 +4562,17 @@
             "title": "Player Id",
             "type": "integer"
           },
+          "player_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player Name"
+          },
           "pmf": {
             "additionalProperties": {
               "type": "number"
@@ -4303,6 +4614,269 @@
           "std"
         ],
         "title": "PropEdgeResponse",
+        "type": "object"
+      },
+      "RealPitch": {
+        "properties": {
+          "call": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "title": "RealPitch",
+        "type": "object"
+      },
+      "RealPlay": {
+        "properties": {
+          "at_bat": {
+            "title": "At Bat",
+            "type": "integer"
+          },
+          "away_score_after": {
+            "default": 0,
+            "title": "Away Score After",
+            "type": "integer"
+          },
+          "away_score_before": {
+            "default": 0,
+            "title": "Away Score Before",
+            "type": "integer"
+          },
+          "batter_finished": {
+            "default": true,
+            "title": "Batter Finished",
+            "type": "boolean"
+          },
+          "batter_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batter Id"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "event_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Type"
+          },
+          "half": {
+            "enum": [
+              "top",
+              "bottom"
+            ],
+            "title": "Half",
+            "type": "string"
+          },
+          "home_score_after": {
+            "default": 0,
+            "title": "Home Score After",
+            "type": "integer"
+          },
+          "home_score_before": {
+            "default": 0,
+            "title": "Home Score Before",
+            "type": "integer"
+          },
+          "inning": {
+            "title": "Inning",
+            "type": "integer"
+          },
+          "is_complete": {
+            "default": true,
+            "title": "Is Complete",
+            "type": "boolean"
+          },
+          "outs_after": {
+            "default": 0,
+            "title": "Outs After",
+            "type": "integer"
+          },
+          "outs_before": {
+            "default": 0,
+            "title": "Outs Before",
+            "type": "integer"
+          },
+          "pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pitcher Id"
+          },
+          "pitches": {
+            "items": {
+              "$ref": "#/components/schemas/RealPitch"
+            },
+            "title": "Pitches",
+            "type": "array"
+          },
+          "rbi": {
+            "default": 0,
+            "title": "Rbi",
+            "type": "integer"
+          },
+          "runners": {
+            "$ref": "#/components/schemas/RealPlayRunners"
+          }
+        },
+        "required": [
+          "at_bat",
+          "inning",
+          "half"
+        ],
+        "title": "RealPlay",
+        "type": "object"
+      },
+      "RealPlayRunners": {
+        "properties": {
+          "first": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First"
+          },
+          "second": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second"
+          },
+          "third": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Third"
+          }
+        },
+        "title": "RealPlayRunners",
+        "type": "object"
+      },
+      "RealPlaysModel": {
+        "description": "``GET /api/games/{game_pk}/feed/plays``: the real game's plate appearances.",
+        "properties": {
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "object"
+          },
+          "plays": {
+            "items": {
+              "$ref": "#/components/schemas/RealPlay"
+            },
+            "title": "Plays",
+            "type": "array"
+          },
+          "source": {
+            "default": "feed",
+            "enum": [
+              "feed",
+              "feed_cached"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "live",
+              "final",
+              "postponed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "game_pk",
+          "status"
+        ],
+        "title": "RealPlaysModel",
         "type": "object"
       },
       "RosterOverride": {
@@ -4519,6 +5093,55 @@
         "title": "SeasonCoverage",
         "type": "object"
       },
+      "SideState": {
+        "properties": {
+          "bench": {
+            "items": {
+              "$ref": "#/components/schemas/PlayerOption"
+            },
+            "title": "Bench",
+            "type": "array"
+          },
+          "bullpen": {
+            "items": {
+              "$ref": "#/components/schemas/PlayerOption"
+            },
+            "title": "Bullpen",
+            "type": "array"
+          },
+          "defense": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlayerOption"
+            },
+            "title": "Defense",
+            "type": "object"
+          },
+          "lineup": {
+            "items": {
+              "$ref": "#/components/schemas/LineupSpot"
+            },
+            "title": "Lineup",
+            "type": "array"
+          },
+          "pitcher": {
+            "$ref": "#/components/schemas/PlayerOption"
+          },
+          "used": {
+            "items": {
+              "$ref": "#/components/schemas/PlayerOption"
+            },
+            "title": "Used",
+            "type": "array"
+          }
+        },
+        "required": [
+          "lineup",
+          "pitcher",
+          "defense"
+        ],
+        "title": "SideState",
+        "type": "object"
+      },
       "SignalsResponse": {
         "description": "The ``GET /api/betting/games/{game_pk}/signals`` envelope.\n\nCarries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the\nrun metadata, the gate config that produced them (min_edge / min_ev /\nkelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags\n(\"injected\" / \"stored\" / \"mock\"). SIM-555: ``fair_book`` as on /edges; each\nsignal names the book of its offered price (``price_book``).",
         "properties": {
@@ -4663,6 +5286,7 @@
             "type": "integer"
           },
           "extra": {
+            "additionalProperties": true,
             "default": {},
             "title": "Extra",
             "type": "object"
@@ -4725,6 +5349,7 @@
             "type": "array"
           },
           "subject": {
+            "additionalProperties": true,
             "title": "Subject",
             "type": "object"
           }
@@ -4748,6 +5373,7 @@
             "type": "array"
           },
           "diagnostic": {
+            "additionalProperties": true,
             "title": "Diagnostic",
             "type": "object"
           },
@@ -4795,6 +5421,7 @@
             "type": "array"
           },
           "subject": {
+            "additionalProperties": true,
             "title": "Subject",
             "type": "object"
           },
@@ -4821,6 +5448,186 @@
           "top_n"
         ],
         "title": "SimQueryResponse",
+        "type": "object"
+      },
+      "SimRunModel": {
+        "description": "One run job (a ``sim.sim_runs`` row).",
+        "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
+          "bullpen_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bullpen Source"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "existing": {
+            "default": false,
+            "title": "Existing",
+            "type": "boolean"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "lineup_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineup Source"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "position_in_queue": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position In Queue"
+          },
+          "progress_done": {
+            "default": 0,
+            "title": "Progress Done",
+            "type": "integer"
+          },
+          "replay_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay Run Id"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameSimSummaryLite"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "run_id",
+          "game_pk",
+          "status",
+          "n_iterations"
+        ],
+        "title": "SimRunModel",
+        "type": "object"
+      },
+      "SimRunRequest": {
+        "description": "``POST /api/games/{game_pk}/simulate`` body.",
+        "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
+          "n_iterations": {
+            "default": 100,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "N Iterations",
+            "type": "integer"
+          }
+        },
+        "title": "SimRunRequest",
         "type": "object"
       },
       "SimilarityDistributionResponse": {
@@ -5232,6 +6039,171 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WhatIfChanges": {
+        "properties": {
+          "defense": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Defense",
+            "type": "array"
+          },
+          "pinch_hit": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Pinch Hit",
+            "type": "array"
+          },
+          "pinch_run": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Pinch Run",
+            "type": "array"
+          },
+          "pitcher": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pitcher"
+          }
+        },
+        "title": "WhatIfChanges",
+        "type": "object"
+      },
+      "WhatIfRequest": {
+        "properties": {
+          "at_bat": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Bat"
+          },
+          "changes": {
+            "$ref": "#/components/schemas/WhatIfChanges"
+          },
+          "n_iterations": {
+            "default": 100,
+            "maximum": 1000.0,
+            "minimum": 10.0,
+            "title": "N Iterations",
+            "type": "integer"
+          }
+        },
+        "title": "WhatIfRequest",
+        "type": "object"
+      },
+      "WhatIfResult": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/SimRunModel"
+          },
+          "change": {
+            "$ref": "#/components/schemas/SimRunModel"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "real_final": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Final"
+          },
+          "start_score": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Score"
+          }
+        },
+        "required": [
+          "game_pk",
+          "base",
+          "change"
+        ],
+        "title": "WhatIfResult",
+        "type": "object"
+      },
+      "WhatIfStarted": {
+        "properties": {
+          "at_bat": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Bat"
+          },
+          "base_run_id": {
+            "title": "Base Run Id",
+            "type": "integer"
+          },
+          "base_seed": {
+            "title": "Base Seed",
+            "type": "integer"
+          },
+          "change_run_id": {
+            "title": "Change Run Id",
+            "type": "integer"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "game_pk",
+          "base_run_id",
+          "change_run_id",
+          "base_seed"
+        ],
+        "title": "WhatIfStarted",
+        "type": "object"
+      },
       "WithOverrideResponse": {
         "description": "The ``POST .../simulate/with_override`` envelope (SIM-358).\n\nCarries the BASELINE summary, the OVERRIDE summary (both run at the SAME\nbase seed for an apples-to-apples comparison), and the OverrideDelta diff.",
         "properties": {
@@ -5481,6 +6453,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response By Season Api Analytics By Season Get",
@@ -5553,6 +6526,22 @@
               "title": "Include Flagged",
               "type": "boolean"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5561,6 +6550,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Count State Api Analytics Count State Get",
@@ -5673,6 +6663,22 @@
               ],
               "title": "Vs Hand"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5681,6 +6687,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Batter Leaderboard Api Analytics Leaderboard Batters Get",
@@ -5755,6 +6762,22 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5763,6 +6786,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pitcher Leaderboard Api Analytics Leaderboard Pitchers Get",
@@ -5846,6 +6870,22 @@
               "title": "Include Flagged",
               "type": "boolean"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5854,6 +6894,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pa Outcomes Api Analytics Pa Outcomes Get",
@@ -5937,6 +6978,22 @@
               "title": "Include Flagged",
               "type": "boolean"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5945,6 +7002,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pitch Type Mix Api Analytics Pitch Type Mix Get",
@@ -6028,6 +7086,22 @@
               "title": "Include Flagged",
               "type": "boolean"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6036,6 +7110,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Velo Distribution Api Analytics Velo Distribution Get",
@@ -6102,6 +7177,22 @@
               "title": "Include Flagged",
               "type": "boolean"
             }
+          },
+          {
+            "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+            "in": "query",
+            "name": "game_type",
+            "required": false,
+            "schema": {
+              "default": "R",
+              "description": "R (the default) reads the regular season alone. all reads every game of the season, the postseason included.",
+              "enum": [
+                "R",
+                "all"
+              ],
+              "title": "Game Type",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6110,6 +7201,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Zone Api Analytics Zone Get",
@@ -7135,6 +8227,36 @@
               "description": "Reproducibility seed for the batch",
               "title": "Base Seed"
             }
+          },
+          {
+            "description": "SIM-519: read this stored run, no batch",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SIM-519: read this stored run, no batch",
+              "title": "Run Id"
+            }
+          },
+          {
+            "description": "SIM-519: read the game's newest done run",
+            "in": "query",
+            "name": "latest_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "SIM-519: read the game's newest done run",
+              "title": "Latest Run",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -7299,6 +8421,109 @@
           }
         },
         "summary": "The real game behind a slate card (SIM-519 Part I)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/feed/plays": {
+      "get": {
+        "description": "Every plate appearance of the real game from the league feed (the same cached copy as /feed): inning, half, batter, pitcher, the event and its description, outs and score before and after, the runners at its start, and its pitches. 503 with Retry-After when the feed is unavailable.",
+        "operationId": "get_real_plays_api_games__game_pk__feed_plays_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealPlaysModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The real game's play-by-play",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/feed/state": {
+      "get": {
+        "description": "The game as it stood at the start of plate appearance `at_bat` (the feed's atBatIndex; omitted = first pitch): inning, half, outs, score, runners, both lineups with positions, each side's pitcher and defense, and the bench and bullpen still available. 404 for an unknown plate appearance.",
+        "operationId": "get_pa_state_api_games__game_pk__feed_state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "at_bat",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "At Bat"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaStateModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The real game at the start of a plate appearance (the what-if)",
         "tags": [
           "games"
         ]
@@ -7613,6 +8838,36 @@
               "title": "Bet Side",
               "type": "string"
             }
+          },
+          {
+            "description": "SIM-519: read this stored run, no batch",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SIM-519: read this stored run, no batch",
+              "title": "Run Id"
+            }
+          },
+          {
+            "description": "SIM-519: read the game's newest done run",
+            "in": "query",
+            "name": "latest_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "SIM-519: read the game's newest done run",
+              "title": "Latest Run",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -7786,6 +9041,200 @@
           }
         },
         "summary": "Simulate a game (Monte-Carlo)",
+        "tags": [
+          "games"
+        ]
+      },
+      "post": {
+        "description": "Queue one Monte-Carlo run of the game: N iterations from first pitch. The run is a durable row; poll GET /simulate/runs/{run_id} for its state and progress. A run with the same game, seed and N that is queued or running is returned instead (existing=true). When done, the row holds the summary, every player's prop distributions and the inning grids, and the panels read it. 503 with Retry-After when the lineup is not yet published; 404 for an unknown game.",
+        "operationId": "start_simulation_run_api_games__game_pk__simulate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimRunModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start a simulation run (SIM-519 Part E)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/simulate/runs/latest": {
+      "get": {
+        "operationId": "get_latest_simulation_run_api_games__game_pk__simulate_runs_latest_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimRunModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The game's newest run, any state (SIM-519 Part E)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/simulate/runs/{run_id}": {
+      "delete": {
+        "description": "A queued run is cancelled at once; a running run stops after its current chunk of games (it keeps the games it played). Idempotent. 409 when the run already finished; 404 when unknown.",
+        "operationId": "cancel_simulation_run_api_games__game_pk__simulate_runs__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimRunModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel a run (SIM-519 Part E)",
+        "tags": [
+          "games"
+        ]
+      },
+      "get": {
+        "operationId": "get_simulation_run_api_games__game_pk__simulate_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimRunModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One run's state, progress and summary (SIM-519 Part E)",
         "tags": [
           "games"
         ]
@@ -7993,6 +9442,119 @@
         ]
       }
     },
+    "/api/games/{game_pk}/what-if": {
+      "post": {
+        "description": "Builds the real game's state at the start of `at_bat` (or first pitch), applies the changes (pinch-hit, reliever, pinch-run, defense), and queues TWO runs with the same seed and N: as the game really stood, and with the changes. Poll GET /what-if/{base_run_id}/{change_run_id}. 422 for an illegal change.",
+        "operationId": "start_what_if_api_games__game_pk__what_if_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatIfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatIfStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulate the rest of the game from a plate appearance, with managerial changes",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/what-if/{base_run_id}/{change_run_id}": {
+      "get": {
+        "operationId": "get_what_if_api_games__game_pk__what_if__base_run_id___change_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "base_run_id",
+            "required": true,
+            "schema": {
+              "title": "Base Run Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "change_run_id",
+            "required": true,
+            "schema": {
+              "title": "Change Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatIfResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A what-if's two runs and the real final",
+        "tags": [
+          "games"
+        ]
+      }
+    },
     "/api/odds/today/all": {
       "get": {
         "description": "Returns mock odds for every game scheduled today.",
@@ -8003,6 +9565,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Get Todays Odds Api Odds Today All Get",
@@ -8039,6 +9602,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Game Odds Api Odds  Game Pk  Get",
                   "type": "object"
                 }
@@ -8653,7 +10217,7 @@
     },
     "/api/sql/run": {
       "post": {
-        "description": "Executes a single SELECT / WITH query in a read-only transaction with a statement timeout and a hard row cap. Only raw.* (Postgres) is reachable; derived.*/sim.* live in DuckDB and are not on this pool. 400 on a rejected or failing query; 503 with no pool.",
+        "description": "Executes a single SELECT / WITH query in a read-only transaction with a statement timeout and a hard row cap, on the read-only database role. Every table must be written as raw.<table> (or be a CTE of the query); any other schema or an unqualified table name is rejected. 400 on a rejected or failing query; 503 when the read-only pool is not open.",
         "operationId": "run_sql_api_sql_run_post",
         "requestBody": {
           "content": {
@@ -8695,7 +10259,7 @@
     },
     "/auth/login": {
       "post": {
-        "description": "Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie (sim_session). The cookie is Secure + SameSite=strict in non-development environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). Returns 401 on an incorrect password.",
+        "description": "Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie (sim_session). The cookie is Secure + SameSite=strict in non-development environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). Returns 401 on an incorrect password, and 503 when the server has no AUTH_PASSWORD or SECRET_KEY.",
         "operationId": "login_auth_login_post",
         "requestBody": {
           "content": {
@@ -8712,6 +10276,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Login Auth Login Post",
                   "type": "object"
                 }
@@ -8745,6 +10310,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Logout Auth Logout Post",
                   "type": "object"
                 }
@@ -8789,6 +10355,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }

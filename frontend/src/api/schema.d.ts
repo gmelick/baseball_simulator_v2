@@ -411,6 +411,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/games/{game_pk}/feed/plays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The real game's play-by-play
+         * @description Every plate appearance of the real game from the league feed (the same cached copy as /feed): inning, half, batter, pitcher, the event and its description, outs and score before and after, the runners at its start, and its pitches. 503 with Retry-After when the feed is unavailable.
+         */
+        get: operations["get_real_plays_api_games__game_pk__feed_plays_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/feed/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The real game at the start of a plate appearance (the what-if)
+         * @description The game as it stood at the start of plate appearance `at_bat` (the feed's atBatIndex; omitted = first pitch): inning, half, outs, score, runners, both lineups with positions, each side's pitcher and defense, and the bench and bullpen still available. 404 for an unknown plate appearance.
+         */
+        get: operations["get_pa_state_api_games__game_pk__feed_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/games/{game_pk}/linescore": {
         parameters: {
             query?: never;
@@ -524,8 +564,50 @@ export interface paths {
          */
         get: operations["simulate_game_endpoint_api_games__game_pk__simulate_get"];
         put?: never;
+        /**
+         * Start a simulation run (SIM-519 Part E)
+         * @description Queue one Monte-Carlo run of the game: N iterations from first pitch. The run is a durable row; poll GET /simulate/runs/{run_id} for its state and progress. A run with the same game, seed and N that is queued or running is returned instead (existing=true). When done, the row holds the summary, every player's prop distributions and the inning grids, and the panels read it. 503 with Retry-After when the lineup is not yet published; 404 for an unknown game.
+         */
+        post: operations["start_simulation_run_api_games__game_pk__simulate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/simulate/runs/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The game's newest run, any state (SIM-519 Part E) */
+        get: operations["get_latest_simulation_run_api_games__game_pk__simulate_runs_latest_get"];
+        put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/simulate/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One run's state, progress and summary (SIM-519 Part E) */
+        get: operations["get_simulation_run_api_games__game_pk__simulate_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel a run (SIM-519 Part E)
+         * @description A queued run is cancelled at once; a running run stops after its current chunk of games (it keeps the games it played). Idempotent. 409 when the run already finished; 404 when unknown.
+         */
+        delete: operations["cancel_simulation_run_api_games__game_pk__simulate_runs__run_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -583,6 +665,43 @@ export interface paths {
          * @description Return a single game's enriched identity (SIM-383 team names + records + venue), 3-state status enum (scheduled/live/final/postponed), final scores when available, and the most recently persisted Monte-Carlo sim summary as a lite projection (no raw score arrays). Intended for the Day Summary 3-state game cards (SIM-391). ``sim_summary`` is None when no sim has been run yet or when Postgres is unavailable. ``odds`` is reserved for the Phase-6 odds-provider integration (SIM-405). Returns 404 when game_pk is not in raw.games, 503 when no DB pool is attached.
          */
         get: operations["get_game_status_card_api_games__game_pk__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/what-if": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate the rest of the game from a plate appearance, with managerial changes
+         * @description Builds the real game's state at the start of `at_bat` (or first pitch), applies the changes (pinch-hit, reliever, pinch-run, defense), and queues TWO runs with the same seed and N: as the game really stood, and with the changes. Poll GET /what-if/{base_run_id}/{change_run_id}. 422 for an illegal change.
+         */
+        post: operations["start_what_if_api_games__game_pk__what_if_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/what-if/{base_run_id}/{change_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A what-if's two runs and the real final */
+        get: operations["get_what_if_api_games__game_pk__what_if__base_run_id___change_run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -801,7 +920,7 @@ export interface paths {
         put?: never;
         /**
          * Run a read-only SQL query against raw.* (Postgres)
-         * @description Executes a single SELECT / WITH query in a read-only transaction with a statement timeout and a hard row cap. Only raw.* (Postgres) is reachable; derived.*\/sim.* live in DuckDB and are not on this pool. 400 on a rejected or failing query; 503 with no pool.
+         * @description Executes a single SELECT / WITH query in a read-only transaction with a statement timeout and a hard row cap, on the read-only database role. Every table must be written as raw.<table> (or be a CTE of the query); any other schema or an unqualified table name is rejected. 400 on a rejected or failing query; 503 when the read-only pool is not open.
          */
         post: operations["run_sql_api_sql_run_post"];
         delete?: never;
@@ -821,7 +940,7 @@ export interface paths {
         put?: never;
         /**
          * Exchange password for session cookie
-         * @description Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie (sim_session). The cookie is Secure + SameSite=strict in non-development environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). Returns 401 on an incorrect password.
+         * @description Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie (sim_session). The cookie is Secure + SameSite=strict in non-development environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). Returns 401 on an incorrect password, and 503 when the server has no AUTH_PASSWORD or SECRET_KEY.
          */
         post: operations["login_auth_login_post"];
         delete?: never;
@@ -1032,6 +1151,11 @@ export interface components {
              * @default false
              */
             starting_pitcher: boolean;
+            /**
+             * Synthetic
+             * @default false
+             */
+            synthetic: boolean;
         };
         /**
          * CLVModel
@@ -1266,6 +1390,8 @@ export interface components {
             price_book?: string | null;
             /** Price Book Name */
             price_book_name?: string | null;
+            /** Result */
+            result?: string | null;
             /** Side */
             side: string;
             /** Sim Fair American */
@@ -1299,6 +1425,10 @@ export interface components {
             fair_book_name?: {
                 [key: string]: string;
             };
+            /** Final */
+            final?: {
+                [key: string]: number;
+            } | null;
             /** Game Pk */
             game_pk: number;
             /** Market Names */
@@ -1697,6 +1827,10 @@ export interface components {
         GameCardAggregateResponse: {
             /** Away Losses */
             away_losses?: number | null;
+            /** Away Probable Pitcher Name */
+            away_probable_pitcher_name?: string | null;
+            /** Away Score */
+            away_score?: number | null;
             /** Away Score Final */
             away_score_final?: number | null;
             /** Away Team Abbrev */
@@ -1707,14 +1841,24 @@ export interface components {
             away_team_name?: string | null;
             /** Away Wins */
             away_wins?: number | null;
+            /** Detailed State */
+            detailed_state?: string | null;
+            /** Double Header */
+            double_header?: string | null;
             /** Game Date */
             game_date: string;
+            /** Game Number */
+            game_number?: number | null;
             /** Game Pk */
             game_pk: number;
             /** Game Status */
             game_status: string;
             /** Home Losses */
             home_losses?: number | null;
+            /** Home Probable Pitcher Name */
+            home_probable_pitcher_name?: string | null;
+            /** Home Score */
+            home_score?: number | null;
             /** Home Score Final */
             home_score_final?: number | null;
             /** Home Team Abbrev */
@@ -1729,7 +1873,13 @@ export interface components {
             odds?: null;
             /** Season */
             season: number;
+            /** Series Description */
+            series_description?: string | null;
             sim_summary?: components["schemas"]["GameSimSummaryLite"] | null;
+            /** Start Time Tbd */
+            start_time_tbd?: boolean | null;
+            /** Start Utc */
+            start_utc?: string | null;
             /** Venue City */
             venue_city?: string | null;
             /** Venue Id */
@@ -2140,6 +2290,17 @@ export interface components {
              */
             n_innings: number;
         };
+        /** LineupSpot */
+        LineupSpot: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Position */
+            position?: string | null;
+            /** Slot */
+            slot: number;
+        };
         /**
          * LiveGameStateResponse
          * @description SIM-386 response: live in-progress game state from ``sim.lineup_state``.
@@ -2278,6 +2439,39 @@ export interface components {
             metrics?: {
                 [key: string]: components["schemas"]["MetricDeltaModel"];
             };
+        };
+        /**
+         * PaStateModel
+         * @description ``GET /api/games/{game_pk}/feed/state``: the game at the start of a plate
+         *     appearance (``at_bat`` omitted = first pitch), for the what-if panel. ``live``
+         *     has the shape of the slate's field, so the page draws it with ``CardField``.
+         */
+        PaStateModel: {
+            /** At Bat */
+            at_bat?: number | null;
+            away: components["schemas"]["SideState"];
+            /** Away Score */
+            away_score: number;
+            /**
+             * Batting Side
+             * @enum {string}
+             */
+            batting_side: "away" | "home";
+            /** Game Pk */
+            game_pk: number;
+            /**
+             * Half
+             * @enum {string}
+             */
+            half: "top" | "bottom";
+            home: components["schemas"]["SideState"];
+            /** Home Score */
+            home_score: number;
+            /** Inning */
+            inning: number;
+            live: components["schemas"]["FeedLive"];
+            /** Outs */
+            outs: number;
         };
         /**
          * PitcherDecisionsModel
@@ -2435,6 +2629,19 @@ export interface components {
             /** Throws */
             throws?: string | null;
         };
+        /** PlayerOption */
+        PlayerOption: {
+            /** Bats */
+            bats?: string | null;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Position */
+            position?: string | null;
+            /** Throws */
+            throws?: string | null;
+        };
         /**
          * PlayerRefModel
          * @description Response model for :class:`simulation.snapshots.PlayerRef`.
@@ -2483,6 +2690,8 @@ export interface components {
             p_under?: number | null;
             /** Player Id */
             player_id: number;
+            /** Player Name */
+            player_name?: string | null;
             /** Pmf */
             pmf?: {
                 [key: string]: number;
@@ -2495,6 +2704,119 @@ export interface components {
             std: number;
             /** Support */
             support: number[];
+        };
+        /** RealPitch */
+        RealPitch: {
+            /** Call */
+            call?: string | null;
+            /** Speed */
+            speed?: number | null;
+            /** Type */
+            type?: string | null;
+        };
+        /** RealPlay */
+        RealPlay: {
+            /** At Bat */
+            at_bat: number;
+            /**
+             * Away Score After
+             * @default 0
+             */
+            away_score_after: number;
+            /**
+             * Away Score Before
+             * @default 0
+             */
+            away_score_before: number;
+            /**
+             * Batter Finished
+             * @default true
+             */
+            batter_finished: boolean;
+            /** Batter Id */
+            batter_id?: number | null;
+            /** Description */
+            description?: string | null;
+            /** Event */
+            event?: string | null;
+            /** Event Type */
+            event_type?: string | null;
+            /**
+             * Half
+             * @enum {string}
+             */
+            half: "top" | "bottom";
+            /**
+             * Home Score After
+             * @default 0
+             */
+            home_score_after: number;
+            /**
+             * Home Score Before
+             * @default 0
+             */
+            home_score_before: number;
+            /** Inning */
+            inning: number;
+            /**
+             * Is Complete
+             * @default true
+             */
+            is_complete: boolean;
+            /**
+             * Outs After
+             * @default 0
+             */
+            outs_after: number;
+            /**
+             * Outs Before
+             * @default 0
+             */
+            outs_before: number;
+            /** Pitcher Id */
+            pitcher_id?: number | null;
+            /** Pitches */
+            pitches?: components["schemas"]["RealPitch"][];
+            /**
+             * Rbi
+             * @default 0
+             */
+            rbi: number;
+            runners?: components["schemas"]["RealPlayRunners"];
+        };
+        /** RealPlayRunners */
+        RealPlayRunners: {
+            /** First */
+            first?: number | null;
+            /** Second */
+            second?: number | null;
+            /** Third */
+            third?: number | null;
+        };
+        /**
+         * RealPlaysModel
+         * @description ``GET /api/games/{game_pk}/feed/plays``: the real game's plate appearances.
+         */
+        RealPlaysModel: {
+            /** Game Pk */
+            game_pk: number;
+            /** Names */
+            names?: {
+                [key: string]: string;
+            };
+            /** Plays */
+            plays?: components["schemas"]["RealPlay"][];
+            /**
+             * Source
+             * @default feed
+             * @enum {string}
+             */
+            source: "feed" | "feed_cached";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "scheduled" | "live" | "final" | "postponed";
         };
         /**
          * RosterOverride
@@ -2591,6 +2913,22 @@ export interface components {
             /** Season */
             season: number;
         };
+        /** SideState */
+        SideState: {
+            /** Bench */
+            bench?: components["schemas"]["PlayerOption"][];
+            /** Bullpen */
+            bullpen?: components["schemas"]["PlayerOption"][];
+            /** Defense */
+            defense: {
+                [key: string]: components["schemas"]["PlayerOption"];
+            };
+            /** Lineup */
+            lineup: components["schemas"]["LineupSpot"][];
+            pitcher: components["schemas"]["PlayerOption"];
+            /** Used */
+            used?: components["schemas"]["PlayerOption"][];
+        };
         /**
          * SignalsResponse
          * @description The ``GET /api/betting/games/{game_pk}/signals`` envelope.
@@ -2661,7 +2999,9 @@ export interface components {
              * Extra
              * @default {}
              */
-            extra: Record<string, never>;
+            extra: {
+                [key: string]: unknown;
+            };
             /** Name */
             name: string;
             /** Sample */
@@ -2688,14 +3028,18 @@ export interface components {
             /** Sub Scores Meta */
             sub_scores_meta: components["schemas"]["SubScoreMeta"][];
             /** Subject */
-            subject: Record<string, never>;
+            subject: {
+                [key: string]: unknown;
+            };
         };
         /** SimQueryResponse */
         SimQueryResponse: {
             /** Bins */
             bins: components["schemas"]["SimBin"][];
             /** Diagnostic */
-            diagnostic: Record<string, never>;
+            diagnostic: {
+                [key: string]: unknown;
+            };
             /** Engine */
             engine: string;
             /** Method */
@@ -2720,9 +3064,70 @@ export interface components {
             /** Sub Scores Meta */
             sub_scores_meta: components["schemas"]["SubScoreMeta"][];
             /** Subject */
-            subject: Record<string, never>;
+            subject: {
+                [key: string]: unknown;
+            };
             /** Top N */
             top_n: components["schemas"]["SimMember"][];
+        };
+        /**
+         * SimRunModel
+         * @description One run job (a ``sim.sim_runs`` row).
+         */
+        SimRunModel: {
+            /** Base Seed */
+            base_seed?: number | null;
+            /** Bullpen Source */
+            bullpen_source?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Existing
+             * @default false
+             */
+            existing: boolean;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Game Pk */
+            game_pk: number;
+            /** Lineup Source */
+            lineup_source?: string | null;
+            /** N Iterations */
+            n_iterations: number;
+            /** Position In Queue */
+            position_in_queue?: number | null;
+            /**
+             * Progress Done
+             * @default 0
+             */
+            progress_done: number;
+            /** Replay Run Id */
+            replay_run_id?: number | null;
+            /** Requested At */
+            requested_at?: string | null;
+            /** Run Id */
+            run_id: number;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "done" | "failed" | "cancelled";
+            summary?: components["schemas"]["GameSimSummaryLite"] | null;
+        };
+        /**
+         * SimRunRequest
+         * @description ``POST /api/games/{game_pk}/simulate`` body.
+         */
+        SimRunRequest: {
+            /** Base Seed */
+            base_seed?: number | null;
+            /**
+             * N Iterations
+             * @default 100
+             */
+            n_iterations: number;
         };
         /**
          * SimilarityDistributionResponse
@@ -2945,6 +3350,66 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** WhatIfChanges */
+        WhatIfChanges: {
+            /** Defense */
+            defense?: {
+                [key: string]: unknown;
+            }[];
+            /** Pinch Hit */
+            pinch_hit?: {
+                [key: string]: unknown;
+            }[];
+            /** Pinch Run */
+            pinch_run?: {
+                [key: string]: unknown;
+            }[];
+            /** Pitcher */
+            pitcher?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** WhatIfRequest */
+        WhatIfRequest: {
+            /** At Bat */
+            at_bat?: number | null;
+            changes?: components["schemas"]["WhatIfChanges"];
+            /**
+             * N Iterations
+             * @default 100
+             */
+            n_iterations: number;
+        };
+        /** WhatIfResult */
+        WhatIfResult: {
+            base: components["schemas"]["SimRunModel"];
+            change: components["schemas"]["SimRunModel"];
+            /** Game Pk */
+            game_pk: number;
+            /** Real Final */
+            real_final?: {
+                [key: string]: number;
+            } | null;
+            /** Start Score */
+            start_score?: {
+                [key: string]: number;
+            } | null;
+        };
+        /** WhatIfStarted */
+        WhatIfStarted: {
+            /** At Bat */
+            at_bat?: number | null;
+            /** Base Run Id */
+            base_run_id: number;
+            /** Base Seed */
+            base_seed: number;
+            /** Change Run Id */
+            change_run_id: number;
+            /** Changes */
+            changes?: string[];
+            /** Game Pk */
+            game_pk: number;
+        };
         /**
          * WithOverrideResponse
          * @description The ``POST .../simulate/with_override`` envelope (SIM-358).
@@ -3061,7 +3526,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };
@@ -3073,6 +3540,8 @@ export interface operations {
                 pitcher?: number | null;
                 batter?: number | null;
                 include_flagged?: boolean;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3086,7 +3555,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3128,6 +3599,8 @@ export interface operations {
                 min_pa?: number;
                 limit?: number;
                 vs_hand?: string | null;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3141,7 +3614,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3162,6 +3637,8 @@ export interface operations {
                 metric?: string;
                 min_pa?: number;
                 limit?: number;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3175,7 +3652,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3196,6 +3675,8 @@ export interface operations {
                 batter?: number | null;
                 p_throws?: string | null;
                 include_flagged?: boolean;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3209,7 +3690,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3230,6 +3713,8 @@ export interface operations {
                 pitcher?: number | null;
                 stand?: string | null;
                 include_flagged?: boolean;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3243,7 +3728,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3264,6 +3751,8 @@ export interface operations {
                 pitcher?: number | null;
                 pitch_type?: string | null;
                 include_flagged?: boolean;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3277,7 +3766,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3297,6 +3788,8 @@ export interface operations {
                 season: number;
                 pitcher?: number | null;
                 include_flagged?: boolean;
+                /** @description R (the default) reads the regular season alone. all reads every game of the season, the postseason included. */
+                game_type?: "R" | "all";
             };
             header?: never;
             path?: never;
@@ -3310,7 +3803,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3669,6 +4164,10 @@ export interface operations {
                 n_iterations?: number;
                 /** @description Reproducibility seed for the batch */
                 base_seed?: number | null;
+                /** @description SIM-519: read this stored run, no batch */
+                run_id?: number | null;
+                /** @description SIM-519: read the game's newest done run */
+                latest_run?: boolean;
             };
             header?: never;
             path: {
@@ -3780,6 +4279,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GameFeedCardModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_real_plays_api_games__game_pk__feed_plays_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealPlaysModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pa_state_api_games__game_pk__feed_state_get: {
+        parameters: {
+            query?: {
+                at_bat?: number | null;
+            };
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaStateModel"];
                 };
             };
             /** @description Validation Error */
@@ -3908,6 +4471,10 @@ export interface operations {
                 under_ml?: number | null;
                 /** @description Side to compute edge for ('over' or 'under') */
                 bet_side?: string;
+                /** @description SIM-519: read this stored run, no batch */
+                run_id?: number | null;
+                /** @description SIM-519: read the game's newest done run */
+                latest_run?: boolean;
             };
             header?: never;
             path: {
@@ -3998,6 +4565,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SimulateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_simulation_run_api_games__game_pk__simulate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SimRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimRunModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_latest_simulation_run_api_games__game_pk__simulate_runs_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimRunModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_simulation_run_api_games__game_pk__simulate_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimRunModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_simulation_run_api_games__game_pk__simulate_runs__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimRunModel"];
                 };
             };
             /** @description Validation Error */
@@ -4117,6 +4814,74 @@ export interface operations {
             };
         };
     };
+    start_what_if_api_games__game_pk__what_if_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WhatIfRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhatIfStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_what_if_api_games__game_pk__what_if__base_run_id___change_run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+                base_run_id: number;
+                change_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhatIfResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_todays_odds_api_odds_today_all_get: {
         parameters: {
             query?: never;
@@ -4132,7 +4897,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };
@@ -4154,7 +4921,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4508,7 +5277,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4537,7 +5308,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -4577,7 +5350,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
