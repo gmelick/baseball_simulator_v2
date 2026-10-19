@@ -4,6 +4,10 @@
  * pitcher filter bar drive a responsive grid of cards, each independently
  * loaded (one failing card never blanks the page) and each with an
  * "Open in Console" deep-link to its underlying SQL.
+ *
+ * SIM-572: the "Games" choice reads the regular season alone (the default) or
+ * every game of the season. The KPI strip and "Pitches by season" describe the
+ * whole store, so they ignore it.
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -17,6 +21,7 @@ import {
   fetchPitchTypeMix,
   fetchVeloDistribution,
   fetchZone,
+  type GameType,
 } from '@/api/lab'
 import type { PlayerHit } from '@/api/players'
 import { BarList, ColumnChart, HeatGrid } from '@/components/charts'
@@ -66,17 +71,25 @@ function SummaryCards({
   season,
   pitcher,
   stand,
+  gameType,
 }: {
   season: number
   pitcher: number | null
   stand: string | null
+  gameType: GameType
 }): React.ReactElement {
   const bySeason = useAsync(() => fetchBySeason(), [])
-  const mix = useAsync(() => fetchPitchTypeMix({ season, pitcher, stand }), [season, pitcher, stand])
-  const outcomes = useAsync(() => fetchPaOutcomes({ season }), [season])
-  const counts = useAsync(() => fetchCountState({ season, pitcher }), [season, pitcher])
-  const velo = useAsync(() => fetchVeloDistribution({ season, pitcher }), [season, pitcher])
-  const zone = useAsync(() => fetchZone({ season, pitcher }), [season, pitcher])
+  const mix = useAsync(
+    () => fetchPitchTypeMix({ season, pitcher, stand, gameType }),
+    [season, pitcher, stand, gameType],
+  )
+  const outcomes = useAsync(() => fetchPaOutcomes({ season, gameType }), [season, gameType])
+  const counts = useAsync(() => fetchCountState({ season, pitcher, gameType }), [season, pitcher, gameType])
+  const velo = useAsync(() => fetchVeloDistribution({ season, pitcher, gameType }), [season, pitcher, gameType])
+  const zone = useAsync(() => fetchZone({ season, pitcher, gameType }), [season, pitcher, gameType])
+  // The card titles name the games read; the console SQL carries the same filter.
+  const seasonLabel = gameType === 'all' ? `${season} incl. postseason` : `${season}`
+  const gameSql = gameType === 'R' ? " AND game_pk IN (SELECT game_pk FROM raw.games WHERE game_type='R')" : ''
 
   return (
     <div className={styles.grid}>
@@ -94,10 +107,10 @@ function SummaryCards({
       />
 
       <ChartCard
-        title={`Pitch-type mix${pitcher ? '' : ' (league)'} · ${season}`}
+        title={`Pitch-type mix${pitcher ? '' : ' (league)'} · ${seasonLabel}`}
         note="Usage% with average velo per pitch — the shape the arsenal engine models."
         state={mix}
-        sql={`SELECT pitch_type, COUNT(*) n, ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER (),1) usage_pct, ROUND(AVG(release_speed)::numeric,1) avg_velo FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''}${stand ? ` AND stand='${stand}'` : ''} AND data_quality_flag=FALSE GROUP BY pitch_type ORDER BY n DESC;`}
+        sql={`SELECT pitch_type, COUNT(*) n, ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER (),1) usage_pct, ROUND(AVG(release_speed)::numeric,1) avg_velo FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''}${stand ? ` AND stand='${stand}'` : ''} AND data_quality_flag=FALSE${gameSql} GROUP BY pitch_type ORDER BY n DESC;`}
         render={(rows) =>
           rows.length === 0 ? (
             <p className={styles.message}>No pitches match this filter.</p>
@@ -116,9 +129,9 @@ function SummaryCards({
       />
 
       <ChartCard
-        title={`Plate-appearance outcomes · ${season}`}
+        title={`Plate-appearance outcomes · ${seasonLabel}`}
         state={outcomes}
-        sql={`SELECT events AS event, COUNT(*) n FROM raw.pitches WHERE season=${season} AND events IS NOT NULL AND data_quality_flag=FALSE GROUP BY events ORDER BY n DESC;`}
+        sql={`SELECT events AS event, COUNT(*) n FROM raw.pitches WHERE season=${season} AND events IS NOT NULL AND data_quality_flag=FALSE${gameSql} GROUP BY events ORDER BY n DESC;`}
         render={(rows) => (
           <BarList
             ariaLabel="PA outcomes"
@@ -130,10 +143,10 @@ function SummaryCards({
       />
 
       <ChartCard
-        title={`Whiff% by count · ${season}`}
+        title={`Whiff% by count · ${seasonLabel}`}
         note="Rows = balls, columns = strikes. Darker = higher whiff rate."
         state={counts}
-        sql={`SELECT balls, strikes, COUNT(*) pitches FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''} AND data_quality_flag=FALSE GROUP BY balls, strikes ORDER BY balls, strikes;`}
+        sql={`SELECT balls, strikes, COUNT(*) pitches FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''} AND data_quality_flag=FALSE${gameSql} GROUP BY balls, strikes ORDER BY balls, strikes;`}
         render={(rows) => (
           <HeatGrid
             rows={4}
@@ -151,9 +164,9 @@ function SummaryCards({
       />
 
       <ChartCard
-        title={`Release-velo distribution · ${season}`}
+        title={`Release-velo distribution · ${seasonLabel}`}
         state={velo}
-        sql={`SELECT FLOOR(release_speed)::int velo, COUNT(*) n FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''} AND release_speed IS NOT NULL AND data_quality_flag=FALSE GROUP BY 1 ORDER BY 1;`}
+        sql={`SELECT FLOOR(release_speed)::int velo, COUNT(*) n FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''} AND release_speed IS NOT NULL AND data_quality_flag=FALSE${gameSql} GROUP BY 1 ORDER BY 1;`}
         render={(rows) =>
           rows.length === 0 ? (
             <p className={styles.message}>No velocity data.</p>
@@ -164,10 +177,10 @@ function SummaryCards({
       />
 
       <ChartCard
-        title={`Whiff% by zone · ${season}`}
+        title={`Whiff% by zone · ${seasonLabel}`}
         note="Statcast zones 1–9 (catcher's view). Darker = higher whiff rate."
         state={zone}
-        sql={`SELECT zone, COUNT(*) pitches FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''} AND zone IS NOT NULL AND data_quality_flag=FALSE GROUP BY zone ORDER BY zone;`}
+        sql={`SELECT zone, COUNT(*) pitches FROM raw.pitches WHERE season=${season}${pitcher ? ` AND pitcher=${pitcher}` : ''} AND zone IS NOT NULL AND data_quality_flag=FALSE${gameSql} GROUP BY zone ORDER BY zone;`}
         render={(rows) => (
           <HeatGrid
             rows={3}
@@ -193,6 +206,7 @@ export function SummaryPage(): React.ReactElement {
   const [season, setSeason] = useState<number | undefined>(undefined)
   const [pitcher, setPitcher] = useState<PlayerHit | null>(null)
   const [stand, setStand] = useState<string>('')
+  const [gameType, setGameType] = useState<GameType>('R')
 
   const seasons = useMemo(() => (kpis.kind === 'ok' ? kpis.data.seasons : []), [kpis])
 
@@ -256,10 +270,20 @@ export function SummaryPage(): React.ReactElement {
           <option value="L">L</option>
           <option value="R">R</option>
         </select>
+        <span className={styles.filterLabel}>Games</span>
+        <select
+          className={styles.select}
+          value={gameType}
+          onChange={(e) => setGameType(e.target.value as GameType)}
+          aria-label="Games"
+        >
+          <option value="R">Regular season</option>
+          <option value="all">Incl. postseason</option>
+        </select>
       </div>
 
       {season !== undefined ? (
-        <SummaryCards season={season} pitcher={pitcher?.player_id ?? null} stand={stand || null} />
+        <SummaryCards season={season} pitcher={pitcher?.player_id ?? null} stand={stand || null} gameType={gameType} />
       ) : (
         kpis.kind === 'ok' && <p className={styles.message}>No seasons ingested yet.</p>
       )}

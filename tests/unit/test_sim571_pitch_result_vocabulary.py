@@ -519,31 +519,33 @@ def _route_sql(path: str) -> tuple[str, tuple[Any, ...]]:
     return pool.calls[0]
 
 
+# Each route's arguments end their WHERE part with the game type, "R" by default
+# (the Data Lab game-type filter, SIM-572).
 _ROUTE_CASES = [
     pytest.param(
         "/api/analytics/count-state?season=2025&pitcher=1&batter=2",
-        (2025, 1, 2),
+        (2025, 1, 2, "R"),
         (sql_swing(), sql_savant_whiff()),
         False,
         id="count-state",
     ),
     pytest.param(
         "/api/analytics/zone?season=2025&pitcher=1",
-        (2025, 1),
+        (2025, 1, "R"),
         (sql_swing(), sql_savant_whiff(), sql_called_strike()),
         False,
         id="zone",
     ),
     pytest.param(
         "/api/analytics/leaderboard/pitchers?season=2025&min_pa=0",
-        (2025, 0, 50),
+        (2025, "R", 0, 50),
         (sql_swing("p."), sql_savant_whiff("p."), sql_csw("p.")),
         True,
         id="pitcher-board",
     ),
     pytest.param(
-        "/api/analytics/leaderboard/batters?season=2025&min_pa=0&vs_hand=R",
-        (2025, "R", 0, 50),
+        "/api/analytics/leaderboard/batters?season=2025&min_pa=0&vs_hand=L",
+        (2025, "L", "R", 0, 50),
         (sql_in_play("p."),),
         True,
         id="batter-board",
@@ -572,11 +574,16 @@ def test_each_rate_route_answers_with_the_code_set_filters(
 
 
 _PITCHES_DDL = (
-    "CREATE TABLE raw.pitches (season INTEGER, balls INTEGER, strikes INTEGER, "
-    "zone INTEGER, pitcher INTEGER, batter INTEGER, p_throws VARCHAR, type VARCHAR, "
-    "description VARCHAR, events VARCHAR, launch_speed DOUBLE, data_quality_flag BOOLEAN)"
+    "CREATE TABLE raw.pitches (game_pk INTEGER, season INTEGER, balls INTEGER, "
+    "strikes INTEGER, zone INTEGER, pitcher INTEGER, batter INTEGER, p_throws VARCHAR, "
+    "type VARCHAR, description VARCHAR, events VARCHAR, launch_speed DOUBLE, "
+    "data_quality_flag BOOLEAN)"
 )
 _PLAYERS_DDL = "CREATE TABLE raw.players (player_id INTEGER, full_name VARCHAR)"
+#: The routes keep the regular season by default (SIM-572), so each seed row
+#: sits in a regular-season game: game 1 in 2025, game 2 in 2024.
+_GAMES_DDL = "CREATE TABLE raw.games (game_pk INTEGER, season INTEGER, game_type VARCHAR)"
+_GAMES: list[tuple[int, int, str]] = [(1, 2025, "R"), (2, 2024, "R")]
 
 #: The event and the exit velocity of the three in-play codes. Every other row
 #: has neither.
@@ -597,9 +604,9 @@ def _seed_rows() -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
     for description, code, _, _ in _LOADER_PAIRS:
         events, speed = _BATTED.get(code, (None, None))
-        rows.append((2025, 0, 0, 5, 1, 2, "R", code, description, events, speed, False))
-    rows.append((2025, 0, 0, 5, 1, 2, "R", "S", "Swinging Strike", None, None, True))
-    rows.append((2024, 0, 0, 5, 1, 2, "R", "S", "Swinging Strike", None, None, False))
+        rows.append((1, 2025, 0, 0, 5, 1, 2, "R", code, description, events, speed, False))
+    rows.append((1, 2025, 0, 0, 5, 1, 2, "R", "S", "Swinging Strike", None, None, True))
+    rows.append((2, 2024, 0, 0, 5, 1, 2, "R", "S", "Swinging Strike", None, None, False))
     return rows
 
 
@@ -618,10 +625,12 @@ def _run_in_duckdb(sql: str, args: tuple[Any, ...]) -> list[dict[str, Any]]:
         con.execute("CREATE SCHEMA raw")
         con.execute(_PITCHES_DDL)
         con.execute(_PLAYERS_DDL)
+        con.execute(_GAMES_DDL)
         con.executemany(
-            "INSERT INTO raw.pitches VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO raw.pitches VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             _seed_rows(),
         )
+        con.executemany("INSERT INTO raw.games VALUES (?, ?, ?)", _GAMES)
         con.executemany(
             "INSERT INTO raw.players VALUES (?, ?)", [(1, "Test Pitcher"), (2, "Test Batter")]
         )

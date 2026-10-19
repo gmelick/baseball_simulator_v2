@@ -97,36 +97,57 @@ export interface ZoneRow {
 
 export type LeaderRow = Record<string, number | string | null>
 
+/**
+ * SIM-572: the games a season read covers. 'R' (the API's default) reads the
+ * regular season alone; 'all' adds the postseason.
+ */
+export type GameType = 'R' | 'all'
+
 export interface AnalyticsFilter {
   season: number
   pitcher?: number | null
   batter?: number | null
   stand?: string | null
   pThrows?: string | null
+  gameType?: GameType
 }
 
 export const fetchKpis = (): Promise<Kpis> => getJson<Kpis>('/api/analytics/kpis')
 export const fetchBySeason = (): Promise<SeasonRow[]> => getJson<SeasonRow[]>('/api/analytics/by-season')
 
 export const fetchPitchTypeMix = (f: AnalyticsFilter): Promise<PitchTypeRow[]> =>
-  getJson<PitchTypeRow[]>(`/api/analytics/pitch-type-mix${qs({ season: f.season, pitcher: f.pitcher, stand: f.stand })}`)
+  getJson<PitchTypeRow[]>(
+    `/api/analytics/pitch-type-mix${qs({ season: f.season, pitcher: f.pitcher, stand: f.stand, game_type: f.gameType })}`,
+  )
 
 export const fetchPaOutcomes = (f: AnalyticsFilter): Promise<OutcomeRow[]> =>
-  getJson<OutcomeRow[]>(`/api/analytics/pa-outcomes${qs({ season: f.season, batter: f.batter, p_throws: f.pThrows })}`)
+  getJson<OutcomeRow[]>(
+    `/api/analytics/pa-outcomes${qs({ season: f.season, batter: f.batter, p_throws: f.pThrows, game_type: f.gameType })}`,
+  )
 
 export const fetchCountState = (f: AnalyticsFilter): Promise<CountStateRow[]> =>
-  getJson<CountStateRow[]>(`/api/analytics/count-state${qs({ season: f.season, pitcher: f.pitcher, batter: f.batter })}`)
+  getJson<CountStateRow[]>(
+    `/api/analytics/count-state${qs({ season: f.season, pitcher: f.pitcher, batter: f.batter, game_type: f.gameType })}`,
+  )
 
 export const fetchVeloDistribution = (f: AnalyticsFilter & { pitchType?: string }): Promise<VeloBucketRow[]> =>
   getJson<VeloBucketRow[]>(
-    `/api/analytics/velo-distribution${qs({ season: f.season, pitcher: f.pitcher, pitch_type: f.pitchType })}`,
+    `/api/analytics/velo-distribution${qs({ season: f.season, pitcher: f.pitcher, pitch_type: f.pitchType, game_type: f.gameType })}`,
   )
 
 export const fetchZone = (f: AnalyticsFilter): Promise<ZoneRow[]> =>
-  getJson<ZoneRow[]>(`/api/analytics/zone${qs({ season: f.season, pitcher: f.pitcher })}`)
+  getJson<ZoneRow[]>(`/api/analytics/zone${qs({ season: f.season, pitcher: f.pitcher, game_type: f.gameType })}`)
 
-export const fetchPitcherLeaders = (season: number, metric: string, minPa = 200, limit = 50): Promise<LeaderRow[]> =>
-  getJson<LeaderRow[]>(`/api/analytics/leaderboard/pitchers${qs({ season, metric, min_pa: minPa, limit })}`)
+export const fetchPitcherLeaders = (
+  season: number,
+  metric: string,
+  minPa = 200,
+  limit = 50,
+  gameType?: GameType,
+): Promise<LeaderRow[]> =>
+  getJson<LeaderRow[]>(
+    `/api/analytics/leaderboard/pitchers${qs({ season, metric, min_pa: minPa, limit, game_type: gameType })}`,
+  )
 
 export const fetchBatterLeaders = (
   season: number,
@@ -134,8 +155,11 @@ export const fetchBatterLeaders = (
   minPa = 200,
   limit = 50,
   vsHand?: string,
+  gameType?: GameType,
 ): Promise<LeaderRow[]> =>
-  getJson<LeaderRow[]>(`/api/analytics/leaderboard/batters${qs({ season, metric, min_pa: minPa, limit, vs_hand: vsHand })}`)
+  getJson<LeaderRow[]>(
+    `/api/analytics/leaderboard/batters${qs({ season, metric, min_pa: minPa, limit, vs_hand: vsHand, game_type: gameType })}`,
+  )
 
 // ---------------------------------------------------------------------------
 // Data freshness (existing endpoint)
