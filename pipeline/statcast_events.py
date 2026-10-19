@@ -6,7 +6,9 @@ measured it clean over the full sweep (32 distinct values, all interpretable),
 while ``outs_on_pitch`` is zero on 92.6% of batted-ball outs and 100% of
 strikeouts in the swept data. Every out label therefore derives from
 ``events``. Do not read ``outs_on_pitch`` in the profile computor —
-``tests/unit/test_sim501a_out_label.py`` fails if any site does.
+``tests/unit/test_sim501a_out_label.py`` fails if any site does. Since the
+Data Lab vocabulary fix (SIM-571), this module also holds the pitch ``type``
+code sets.
 
 Two DIFFERENT questions, and the sets that answer them. Do not conflate them:
 
@@ -127,14 +129,78 @@ BATTER_RETIRED_EVENTS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Pitch `type` codes — ball-in-play row filter
+# Pitch `type` codes — the one pitch-result vocabulary
 # ---------------------------------------------------------------------------
+# `raw.pitches.type` holds the feed's pitch-result code, `details.code`.
+# `raw.pitches.description` holds the display text of the same code ("Called
+# Strike", "In play, out(s)"). It never holds Statcast's snake_case names
+# (lower case, with underscores: "called_strike"). So a filter on
+# `description` matches no row. Filter on `type`.
+#
+# The pool build (SQL_OUTCOME_TYPE) and the Data Lab routes render their
+# filters from these sets. The pitcher profile reads SQL_WHIFF and SQL_SWING.
+# Its csw_rate still spells a code list of its own inline. The batter profile
+# SQL still spells the swing list inline. A test pins that text. The sets
+# moved here from the profile computor in the Data Lab vocabulary fix
+# (SIM-571). The API reads them here, without the computor's duckdb and
+# sklearn imports.
+# `tests/unit/test_sim571_pitch_result_vocabulary.py` holds the 17
+# (description, code) pairs that the loader stores.
+
+#: A ball: 'B', '*B' a ball in the dirt, 'P' a pitchout the batter took.
+BALL_TYPES: tuple[str, ...] = ("B", "*B", "P")
+
+#: A called strike: the umpire called it; the batter did not swing.
+CALLED_STRIKE_TYPES: tuple[str, ...] = ("C",)
+
+#: A swing and a miss: 'S' swinging strike, 'W' swinging strike the catcher did
+#: not hold, 'M' missed bunt, 'Q' a swing and a miss at a pitchout.  Foul tips
+#: ('T', 'O') are CONTACT — the bat touches the ball — so they are excluded: the
+#: pool build classifies them as fouls below two strikes and as strike three
+#: at two (STRIKE_THREE_FOUL_TYPES).
+#: Measured on 2024: 23.22% of swings, against an MLB whiff rate near 24%.
+WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M", "Q")
+
+#: The bat touched the ball and the ball was not put in play: 'F' foul, 'T' foul
+#: tip, 'L' foul bunt, 'O' a foul tip (the feed's own description; Retrosheet
+#: reads it as a foul tip on a bunt), 'R' foul pitchout. Each adds a strike
+#: below two strikes.
+FOUL_TYPES: tuple[str, ...] = ("F", "T", "L", "O", "R")
+
+#: SIM-553: the fouls that are STRIKE THREE with two strikes. A foul tip is a
+#: strike at any count (the rulebook's definition of a strike; it must be caught
+#: to be a foul tip), and so is a bunt fouled off (Rule 5.09(a)(4): the batter
+#: is out when he bunts foul on the third strike). A plain foul ('F', 'R') with
+#: two strikes is not. Before SIM-553 the pool coded 'T' and 'L' as 'foul' and
+#: 'O' as 'ball' at two strikes, so the count machine pitched on after a real
+#: strikeout: 7.1% of 2025's strikeouts end this way, and the count chain put
+#: the simulator's loss at 4.4% of its strikeouts
+#: (docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
+STRIKE_THREE_FOUL_TYPES: tuple[str, ...] = ("T", "O", "L")
+
+#: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
+#: pitchout, blocked ball.  A swing is the complement of this set, which makes it
+#: the denominator of every swing-conditioned rate.
+NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
 
 #: The three in-play `type` codes. X = in play with out(s) and no run;
 #: D = in play, no out, no run; E = in play with run(s). X alone is 65% of
 #: balls in play, and the missing 35% ARE the hits — filtering on X was the
 #: SIM-457 defect.
 IN_PLAY_TYPES: tuple[str, ...] = ("X", "D", "E")
+
+#: The foul tips: the bat touches the ball and the catcher holds it. 'T' is
+#: the foul tip; 'O' is the feed's foul tip on a bunt. The model counts a foul
+#: tip as contact (the profile code sets, SIM-501), so WHIFF_TYPES excludes
+#: them. Baseball Savant (the public Statcast site) counts a foul tip as a
+#: whiff. The Data Lab shows Savant's whiff (owner ruling 2026-10-19, the Data
+#: Lab vocabulary fix, SIM-571).
+FOUL_TIP_TYPES: tuple[str, ...] = ("T", "O")
+
+#: Savant's whiff: the model's whiff plus the foul tips. The Data Lab reads
+#: this set; the profiles and the pool build never do. It renders as
+#: ('S', 'W', 'M', 'Q', 'T', 'O').
+SAVANT_WHIFF_TYPES: tuple[str, ...] = WHIFF_TYPES + FOUL_TIP_TYPES
 
 
 #: Events whose out-count on the row already includes an out that the steal
@@ -161,6 +227,32 @@ def sql_list(values: tuple[str, ...] | list[str]) -> str:
 def sql_in_play(q: str = "") -> str:
     """Ball-in-play row filter. ``q`` prefixes the column (e.g. ``"rp."``)."""
     return f"{q}type IN {sql_list(IN_PLAY_TYPES)}"
+
+
+def sql_swing(q: str = "") -> str:
+    """Swing row filter: the bat left the shoulder. ``q`` prefixes the column."""
+    return f"{q}type NOT IN {sql_list(NON_SWING_TYPES)}"
+
+
+def sql_savant_whiff(q: str = "") -> str:
+    """Savant's whiff row filter: a swing and a miss, or a foul tip.
+
+    Only the Data Lab reads it. The model's whiff is ``WHIFF_TYPES``.
+    """
+    return f"{q}type IN {sql_list(SAVANT_WHIFF_TYPES)}"
+
+
+def sql_called_strike(q: str = "") -> str:
+    """Called-strike row filter: the umpire called a strike on a taken pitch."""
+    return f"{q}type IN {sql_list(CALLED_STRIKE_TYPES)}"
+
+
+def sql_csw(q: str = "") -> str:
+    """CSW row filter: a called strike or a Savant whiff.
+
+    CSW means "called strikes plus whiffs". Its denominator is every pitch.
+    """
+    return f"({sql_called_strike(q)} OR {sql_savant_whiff(q)})"
 
 
 def _outs_groups() -> list[tuple[int, list[str]]]:

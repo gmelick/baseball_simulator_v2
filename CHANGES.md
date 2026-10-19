@@ -1,3 +1,184 @@
+# CLOSED — the Data Lab's swing, whiff and called-strike rates read the pitch-result code — SIM-571, 2026-10-19
+
+**Why.** The Data Lab analytics routes in `api/routes/analytics.py` compute four pitch rates:
+swing, whiff, CSW (called strikes plus whiffs) and called strike. The routes are
+`GET /api/analytics/count-state`, `/zone`, `/leaderboard/pitchers` and `/leaderboard/batters`.
+Their filters matched `raw.pitches.description` against Statcast's snake_case names (lower
+case, with underscores: `swinging_strike`, `called_strike`, `hit_into_play`). The loader stores
+the MLB Stats API's display text in that column ("Swinging Strike", "Called Strike", "In play,
+out(s)"). So no filter matched a row. On live data the swing rate read 0 and the whiff rate
+read null. The called-strike and CSW rates read 0 for every pitcher, count and zone. The
+summary page's two whiff heat grids showed a dash in every cell. The review of the read-only
+routes fix (SIM-566) found the defect on 2026-10-18. The simulator does not read these filters.
+The column `raw.pitches.type` (CHAR(2)) already holds the feed's pitch-result code. A read of
+the live table on 2026-10-19 (2017-2026, as `baseball_ro`) found exactly 17 (description, code)
+pairs and no NULL. Three sibling sites carried the same wrong vocabulary: the AI assistant's
+prompt, three starter queries of the SQL console and a balls-in-play filter. That filter,
+`p.type = 'X'`, keeps only the outs, 65% of the balls in play. So the batter leaderboard read
+hard-hit% and exit velocity on outs alone. The owner added the three sites to the ticket on
+2026-10-19.
+
+**What was built (branch `sim571-pitch-result-vocabulary`: `1d39f46` the build, `af745f2` the
+review fixes).** `pipeline/statcast_events.py` now holds the one pitch-result vocabulary. The
+module is light: constants and string helpers, with no numpy or duckdb import. Six code sets
+moved there verbatim from `pipeline/batch/player_profile_computor.py`: `BALL_TYPES`,
+`CALLED_STRIKE_TYPES`, `WHIFF_TYPES`, `FOUL_TYPES`, `STRIKE_THREE_FOUL_TYPES` and
+`NON_SWING_TYPES`. The computor imports the six names, so
+`from pipeline.batch.player_profile_computor import WHIFF_TYPES` still works. The two pinning
+tests and `scripts/sim553_rebuild_pitch_pool.py` import that way. The computor keeps `sql_in`,
+`SQL_WHIFF`, `SQL_OUTCOME_TYPE` and `SQL_SWING`. Their rendered text is byte-identical to
+master's. Two sets are new. `FOUL_TIP_TYPES` is `("T", "O")`. `SAVANT_WHIFF_TYPES` is
+`WHIFF_TYPES + FOUL_TIP_TYPES`, which renders `('S', 'W', 'M', 'Q', 'T', 'O')`. The owner ruled
+on 2026-10-19 that the Data Lab shows Baseball Savant's whiff. Savant is the public Statcast
+site, and it counts a foul tip as a whiff. The model's whiff does not change: `WHIFF_TYPES`
+stays `('S', 'W', 'M', 'Q')`. The profiles and the pool build count a foul tip as contact. Two
+tests pin that rule: `test_sim501_profile_code_sets.py` and
+`test_sim553_foul_tip_strike_three.py`. Four helpers join `sql_in_play`: `sql_swing`,
+`sql_savant_whiff`, `sql_called_strike` and `sql_csw`. Each helper takes a column prefix, such
+as `"p."`. The API must not import the computor. The computor imports duckdb, numpy, pandas and
+sklearn, and it calls `logging.basicConfig` at import.
+
+`api/routes/analytics.py` imports the five helpers and holds seven module constants. `_SWING`,
+`_WHIFF` and `_CALLED_STRIKE` serve the one-table queries (count-state and zone). `_SWING_P`,
+`_WHIFF_P`, `_CSW_P` and `_IN_PLAY_P` serve the two leaderboards, which join `raw.players`. The
+zone route's called-strike filter reads `{_CALLED_STRIKE}`. The pitcher leaderboard reads
+`{_CSW_P}`, `{_WHIFF_P}` and `{_SWING_P}`. Before, it used the unprefixed fragments in a joined
+query. The batter leaderboard's five `p.type = 'X'` filters read `{_IN_PLAY_P}`, which renders
+`p.type IN ('X', 'D', 'E')`. No query reads `description` now. A comment block lists each
+rendered predicate in plain words. No `summary=` or `description=` string changed. The OpenAPI
+schema keeps its sha256, so `frontend/openapi.json` stays current.
+
+`api/routes/ai_assistant.py` imports four of the helpers. The schema catalog calls `type` the
+pitch-result code (one letter, or `'*B'`). The catalog now explains all 17 codes. It says that
+`description` holds the feed's display text, never the snake_case names. It tells the model to
+filter on `type`. The system prompt's rules for a swing, Savant's whiff, a called strike and
+the balls in play render from the helpers. The prompt also defines CSW.
+
+`frontend/src/components/lab/starterQueries.ts` rewrites three starter queries of the SQL
+console on `type`: "League whiff-rate leaders", "Chase rate" and "Count-state behavior". They
+hold the same rendered lists, so a Python test can read the text. The batted-ball query's
+`p.type = 'X'` became `p.type IN ('X', 'D', 'E')`. Each changed query opens with one `--`
+comment that names the codes in plain words. The nine queries keep their names, shapes, sample
+floors and limits. `docs/technical/api.md` and `docs/technical/pipeline-betting-db.md` describe
+the sets, the helpers, the seven constants and the rule. The api.md leaderboard row says that
+`frontend/src/api/lab.ts` holds the two leaderboard fetchers, and no page calls them yet.
+
+The new `tests/unit/test_sim571_pitch_result_vocabulary.py` holds 56 tests. It opens no
+database and no socket. Its fixture is the 17 pairs inline, with the read's SQL and date in a
+comment. The code-set tests prove five rules. Each code falls in exactly one class. The sets
+name the loader codes and nothing else, in both directions. A swing is the complement of the
+non-swings. Savant's whiff is the model's whiff plus the foul tips. No stored description is a
+snake_case name. A drift guard computes the 2025 league rates with the sets: swing 47.8%, whiff
+25.4% of swings, called strike 16.3% and CSW 28.4%. The fragment tests prove that each of the
+seven constants equals its helper's render. The computor re-exports the six sets as the same
+objects. The Data Lab's swing equals the computor's `SQL_SWING` byte for byte. A subprocess
+proves that `import api.routes.analytics` loads no computor, duckdb or sklearn. A source guard
+reads the module's string constants. It finds no `description` comparison, no Statcast literal
+and no inline code. Each rate route answers 200 through a recording pool, a fake pool that
+keeps each query and its arguments. Two more tests pin the rendered lists in the assistant's
+prompt and in the starter queries.
+
+Four tests run each route's captured SQL unchanged in DuckDB, the in-process analytics
+database. The seed holds one row per loader pair, plus a flagged `S` row and a 2024 `S` row.
+Each docstring holds the hand arithmetic of its expected values. The count-state route reads 17
+pitches, swing 70.6 and whiff 50.0. The zone route reads called strike 5.9. The pitcher board
+reads CSW 41.2. The batter board reads 3 balls in play and hard-hit 33.3. One trap: a DuckDB
+VARCHAR keeps a trailing space, so the seed holds the bare codes (`"S"`, not `"S "`). The live
+column is CHAR(2). Postgres ignores the padding when it compares a CHAR(2) with a text literal.
+So the route SQL needs no TRIM. The plan checked the SQL on DuckDB 1.1.3. The image holds
+DuckDB 1.5.6, and the SQL runs there unchanged.
+
+**The gates (a workflow of Opus 5.5 agents: three builders, one gate agent, two adversarial
+reviewers, one fix round, a second gate run and one record agent).** The gate agent committed
+the build and ran every check on `1d39f46`. It ran every check again on `af745f2`, after the
+fix round. The table gives the second run. Every container check ran with the worktree mounted
+over `/app` and over the five code folders. A mutation is a deliberate defect that proves a
+test fails on it. Each mutation ran alone on the new file, `test_sim501_profile_code_sets.py`
+and `test_sim553_foul_tip_strike_three.py` (163 tests). A copy of the file restored it, and
+`git status --porcelain` read empty after each restore.
+
+| Gate | Result |
+|---|---|
+| Mount proof: `grep -c SAVANT_WHIFF_TYPES pipeline/statcast_events.py` in the container | `2` (master's copy holds 0). The fix round's marker line printed `1` |
+| 1. The new file and six neighbours: sim501, sim553, sim566, the console pool, `test_sql_safety.py`, `test_api_main_wiring.py` | `395 passed, 2 warnings in 37.74s` |
+| 2. The full unit lane (`-m "not slow"`) | `6469 passed, 2 skipped, 22 deselected, 10 warnings in 406.39s (0:06:46)`: the 6,413 of the last lane plus the new file's 56 |
+| 3a. `ruff check .` | `All checks passed!` |
+| 3b. `ruff format --check .` | `506 files already formatted` |
+| 3c. `mypy similarity/ pipeline/ api/` | `Success: no issues found in 77 source files` |
+| 4. The frontend: `npm run type-check`, then `npm run lint` | `tsc --noEmit` exit 0, no output; `eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0` exit 0, no output |
+| Mutation 1: `SAVANT_WHIFF_TYPES = WHIFF_TYPES` (the foul tips dropped) | `10 failed, 153 passed, 2 warnings in 17.74s`. Red: the drift guard (`assert 23.2 == 25.4`), the DuckDB count-state, the Savant-whiff set test, the `_WHIFF`, `_WHIFF_P` and `_CSW_P` fragment tests, the same-swing test, the DuckDB zone and pitcher tests, the starter-query test |
+| Mutation 2: `WHIFF_TYPES = ("S", "W", "M", "Q", "T")` | `17 failed, 146 passed, 2 warnings in 18.07s`. Red: sim501 `test_foul_tips_are_not_whiffs` and `test_a_strike_three_foul_is_not_a_whiff`, five sim553 tests, the Savant-whiff set test, the drift guard (27.5 vs 25.4), three fragment tests, the same-swing and starter-query tests |
+| Mutation 3: the zone route back on `description = 'called_strike'` | `4 failed, 159 passed, 2 warnings in 17.67s`. Red: the source guard, the zone 200 test, the DuckDB zone, the zone's fragment-use test |
+| Mutation 4: the batter board back on `p.type = 'X'` (five sites) | `4 failed, 159 passed, 2 warnings in 18.64s`. Red: the batter 200 test, the DuckDB batter (hard_hit 0.0 vs 33.3; bip 1 vs 3 on the first run), the source guard, the batter's fragment-use test |
+| Mutation 5: `_CSW_P = _WHIFF_P` | `3 failed, 160 passed, 2 warnings in 18.23s`. Red: the `_CSW_P` fragment test, the DuckDB pitcher board, the pitcher 200 test |
+| Mutation 6: `_WHIFF` spelled inline as `"type IN ('S', 'W', 'M', 'Q', 'T', 'O')"` | `1 failed, 162 passed, 2 warnings in 17.85s`. Red: the no-inline-code source guard |
+
+The first run on `1d39f46` read `395 passed` in 38.08 s and `6469 passed` in 412.09 s. Its
+mutations failed the same counts of tests. No run died with exit 139, so nothing was retried.
+The full lane ran whole; it needed no split into halves.
+
+**The reviews.** Reviewer 1 checked correctness on the live database. It ran the routes' own
+SQL as `baseball_ro` on 2025. The league reads were swing 47.8, Savant whiff 25.4 of swings,
+called strike 16.3 and CSW 28.4: the values of the definition of done. The 12 ball-strike
+counts held 723,055 pitches. Both leaderboards read non-zero rates. The batter board's balls in
+play now count the hits: Roman Anthony reads 173, against 93 on outs alone. The four changed
+starter queries passed the console's validator and ran as the read-only role. All 82 upper-case
+constants of the computor rendered byte-identical to master's. Reviewer 1 filed one should-fix
+finding and one note. The finding: the assistant's catalog still called `type` a "single-char"
+code beside `'*B'`. The note: the Data Lab's season includes the postseason. In 2025 that is 47
+games and 14,085 of the 723,055 pitches. So the batter board shows Ohtani with 63 home runs;
+his regular season ended at 55. That defect predates this ticket.
+
+Reviewer 2 checked the definition of done, the tests' power and the words. It recomputed the
+DuckDB expectations by hand, and every value matched. It filed four should-fix findings and
+four notes. The four findings:
+
+- A new comment said that the profile SQL renders from the sets. Three more places repeated the
+  claim. The batter profile spells the swing list inline at ten sites. The pitcher profile's
+  `csw_rate` spells a third CSW set.
+- The catalog's "single-char" and the "one-letter" of the test file and a doc gave the code
+  three names. Two names were wrong for `'*B'`.
+- Two new sentences in the code ran over 20 words.
+- Three new sentences in the docs ran over 20 words.
+
+The four notes: "Savant" and "snake_case" had no gloss on first use. The prompt test did not
+pin the called-strike and CSW rules. Two tests read only the inline fixture. The build commit's
+body broke the writing standard.
+
+The fix round (`af745f2`) confirmed and fixed every should-fix finding. It merged the two
+reviewers' catalog texts into "the pitch-result code (one letter, or '*B')". It made
+"pitch-result code" the one term in the test file and the doc. It corrected the vocabulary
+claim in five places: the module comment, `analytics.py`, both docs and the test docstring. The
+claim now says that the pool build and the pitcher profile read the sets. It split the long
+sentences. It applied two notes: the glosses, and the called-strike and CSW assertions in the
+prompt test. It skipped three notes. The postseason note predates the ticket and asks for no
+change here. The fixture note asks for no change. A `--strict` check of the 17 pairs in
+`scripts/pool_window_census.py` could tie the fixture to the live table later. The commit-body
+note needs an amend, and the note forbids one. The **Why.** paragraph above carries the
+corrected summary.
+
+**Deploy.** The merge into `master` is the deploy for `api/` and `pipeline/`. The app
+bind-mounts both folders and hot-reloads them. When the app log shows no reload,
+`docker compose restart app` applies the change. The starter queries ship in the frontend
+bundle, so the nginx image needs a rebuild: `docker compose build nginx`, then
+`docker compose up -d nginx`. No migration runs. The profile and pool-build SQL renders as
+before, so no profile recompute or bundle rebuild follows. The live check of the four routes
+and the summary page's heat grids is the session's, and it is pending.
+
+**Not done.**
+
+- The computor's own pitcher `csw_rate` spells `('C','M','O','S','T','W')`: the foul tips in,
+  `Q` out. It sits at line 2490 since the move (line 2515 on master before it). No test pins
+  it. It differs from the Data Lab's CSW only on the `Q` rows, two in ten seasons. So no ticket
+  is filed.
+- The batter profile SQL spells the swing list inline at ten sites. The text equals
+  `NON_SWING_TYPES`, and a profile test reads it. The fix round left it.
+- `frontend/src/pages/SummaryPage.tsx` lines 136 and 170 show a "SQL" text under the two whiff
+  heat grids. That text lacks the rate columns that the route computes. The defect is cosmetic.
+- The Data Lab's season includes the postseason (reviewer 1's note). A filter on
+  `raw.games.game_type = 'R'` fixes it. No ticket is filed; the owner decides.
+- No ticket was filed, so the next free ID stays SIM-572.
+
 # CLOSED — the test lane pins the odds provider to the mock, and make test-unit tests the checkout — SIM-567, 2026-10-19
 
 **Why.** The unit-test lane runs inside the app container. That container reads the stack's

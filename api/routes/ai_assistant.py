@@ -49,6 +49,7 @@ from api.routes.sql_safety import (
     SqlValidationError,
     run_read_only_sql,
 )
+from pipeline.statcast_events import sql_called_strike, sql_in_play, sql_savant_whiff, sql_swing
 
 log = logging.getLogger("api.routes.ai_assistant")
 
@@ -93,12 +94,15 @@ TABLE raw.pitches — one row per pitch (~700K/season, 2015-2026, ~10^7 rows tot
     bat_hand('L'/'R'/'S') — the ROSTER-DECLARED side, constant per player and 'S'
       for every switch hitter (~10-13% of rows). Do NOT use it as per-PA handedness.
   Count/outs/score: balls(0-3), strikes(0-2), outs(0-2), bat_score, fld_score, home_score, away_score.
-  Result: type — single-char pitch result code. Balls in play split THREE ways:
+  Result: type — the pitch-result code (one letter, or '*B'). Balls in play split THREE ways:
     'X' (in play, out(s), no run), 'D' (in play, no out, no run), 'E' (in play, run(s)).
     A ball-in-play filter is type IN ('X','D','E') — filtering on 'X' alone keeps only
-    the outs (65%) and drops the hits. Other codes: 'B' ball, 'C' called strike,
-    'S'/'W' swinging strike, 'F' foul, 'T' foul tip, 'H' HBP.
-    description(e.g. 'called_strike','swinging_strike','foul','hit_into_play'),
+    the outs (65%) and drops the hits. Other codes: 'B' ball, '*B' ball in the dirt,
+    'P' pitchout, 'C' called strike, 'S' swinging strike, 'W' swinging strike (blocked),
+    'M' missed bunt, 'Q' swinging pitchout, 'F' foul, 'T' foul tip, 'O' foul tip on a bunt,
+    'L' foul bunt, 'R' foul pitchout, 'H' HBP.
+    description — the feed's DISPLAY TEXT of the same code ('Called Strike', 'Swinging Strike',
+    'In play, out(s)'), never Statcast's snake_case names. Filter on type, never on description.
     events (PA outcome, non-NULL only on the last pitch: 'single','double','triple','home_run',
     'strikeout','strikeout_double_play','walk','field_out','hit_by_pitch',...), zone(1-9 in-zone, 11-14 out).
   Pitch physics: release_speed(mph), release_spin_rate(rpm), break_vertical_induced(IVB, in),
@@ -137,8 +141,9 @@ raw.pitches has ~10^7 rows — an unbounded query is unacceptable.
 - Add `WHERE data_quality_flag = FALSE` unless the user explicitly wants flagged rows.
 - Resolve player NAMES to ids by joining/filtering raw.players (e.g. full_name ILIKE '%cole%'); show names.
 - `events` is non-NULL only on the terminal pitch of a plate appearance — use it for PA-level outcomes.
-- A swing = description LIKE '%swinging_strike%' OR description IN ('foul','hit_into_play','foul_tip'); \
-a whiff = description LIKE '%swinging_strike%'; chase = out-of-zone (zone IN (11,12,13,14)) swings.
+- A swing = `{sql_swing()}`; a whiff = `{sql_savant_whiff()}` (Savant's whiff: a foul tip \
+counts); a called strike = `{sql_called_strike()}`; CSW = (called strikes + whiffs) / all pitches; \
+balls in play = `{sql_in_play()}`; chase = out-of-zone (zone IN (11,12,13,14)) swings.
 
 ANALYST GUARDRAILS (state these when relevant, do not bury them):
 - Attach a minimum-sample floor to every rate stat (pitchers ~hundreds of batters faced; batters ~100-150 \
