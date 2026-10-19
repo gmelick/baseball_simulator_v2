@@ -187,9 +187,10 @@ validate-props: _require_env_file
 ## raw.game_odds / raw.prop_odds so the accuracy comparison has closing lines
 ## to score against.  SIM-555: one row per book (`bp:<id>`), guarded, batched.
 ## Network-bound.  FLAGS must name the provider: --provider bettingpros (the
-## app container carries ODDS_API_KEY; ODDS_PROVIDER is not set there), or
-## --provider mock for the deterministic wiring smoke; the loader refuses to
-## run the mock unasked.  --book NAME loads one book's rows.  Example:
+## app container reads ODDS_PROVIDER and ODDS_API_KEY from .env; --provider on
+## the command line wins), or --provider mock for the deterministic wiring
+## smoke; the loader refuses to run the mock unasked.  --book NAME loads one
+## book's rows.  Example:
 ## FLAGS="--seasons 2024 --max-games 5 --provider bettingpros".
 load-historical-odds: _require_env_file
 	docker compose run --rm app python scripts/load_historical_odds.py $(FLAGS)
@@ -206,35 +207,45 @@ shell:
 # Tests
 # ---------------------------------------------------------------------------
 
+## SIM-567 (the test lane's odds provider): compose mounts only the five code
+## dirs (api/, pipeline/, similarity/, simulation/, db/). The -v "$(CURDIR):/app"
+## mount below puts the whole checkout over the image's copy, tests/, scripts/
+## and pyproject.toml included. These targets then test the checkout, not the
+## last image build. From a worktree, compose's five mounts of the main
+## checkout shadow the worktree's code dirs. Run these targets from the main
+## checkout.
+TESTS ?= tests/unit/
+
 ## Run the full test suite inside Docker (unit + integration)
 ##
 ## BASEBALL_DB_DSN and REDIS_URL come from .env via env_file (docker-compose.yml).
 ## Cross-platform: no bash $${VAR:-default} substitution that breaks on cmd.exe.
 test: _require_env_file
-	docker compose run --rm app \
+	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/ -v --tb=short --timeout=60 \
 	       --cov=similarity --cov=pipeline --cov=api \
 	       --cov-report=term-missing --cov-report=xml:coverage.xml
 
 ## Unit tests only — no live DB or Redis required, fast feedback loop
 ## Can run locally without Docker if deps are installed in a venv.
+## TESTS="tests/unit/test_x.py tests/unit/test_y.py" names the files to run.
 test-unit:
-	docker compose run --rm app \
-	  pytest tests/unit/ -v --tb=short --timeout=30 \
+	docker compose run --rm -v "$(CURDIR):/app" app \
+	  pytest $(TESTS) -v --tb=short --timeout=30 \
 	         --cov=similarity --cov=pipeline \
 	         --cov-report=term-missing
 
 ## Integration tests — testcontainers spins up ephemeral PostgreSQL + Redis
 ## Mirrors the CI weekly integration job.
 test-regression:
-	docker compose run --rm app \
+	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/regression/ -v --tb=short --timeout=60 \
 	         -m regression
 
 ## Integration tests — testcontainers spins up ephemeral PostgreSQL + Redis
 ## Mirrors the CI weekly integration job.
 test-integration: _require_env_file
-	docker compose run --rm app \
+	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/integration/ -v --tb=short --timeout=120 \
 	         -m integration
 
@@ -244,15 +255,15 @@ test-integration: _require_env_file
 
 ## Ruff: lint all Python source (same config as CI Job 2)
 lint:
-	docker compose run --rm app ruff check . --output-format=full
+	docker compose run --rm -v "$(CURDIR):/app" app ruff check . --output-format=full
 
 ## Ruff: auto-format source files
 format:
-	docker compose run --rm app ruff format .
+	docker compose run --rm -v "$(CURDIR):/app" app ruff format .
 
 ## Mypy: static type checking (same config as CI Job 2)
 type-check:
-	docker compose run --rm app \
+	docker compose run --rm -v "$(CURDIR):/app" app \
 	  mypy similarity/ pipeline/ api/ --ignore-missing-imports \
 	       --python-version 3.13
 
