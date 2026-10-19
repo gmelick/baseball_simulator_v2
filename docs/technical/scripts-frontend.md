@@ -652,7 +652,7 @@ SIM-420 -- exports the FastAPI app's OpenAPI schema to frontend/openapi.json, th
 
 **Used by:** `frontend/openapi.json feeds npm run gen:api (openapi-typescript) which writes frontend/src/api/schema.d.ts, which frontend/src/api/typed.ts re-exports from`
 
-> **Notes for anyone changing this file:** Needs no server or live DB -- create_app only registers routes. Must be followed by cd frontend && npm run gen:api and a commit of the regenerated schema.d.ts so the frontend's typed client never silently drifts from the backend contract.
+> **Notes for anyone changing this file:** Needs no server or live DB -- create_app only registers routes. Must be followed by cd frontend && npm run gen:api and a commit of the regenerated schema.d.ts so the frontend's typed client never silently drifts from the backend contract. Run it in the app image with the checkout mounted, never on the host: the host's Pydantic 2.10 drops `additionalProperties: true` from the free-form objects. Two checks hold the copy since SIM-573 (2026-10-19). `tests/unit/test_sim573_openapi_snapshot.py` fails when `frontend/openapi.json` differs from `app.openapi()`. It ignores only `additionalProperties: true`, whose presence depends on the Pydantic version and means the same as its absence. The CI frontend job runs `npm run gen:api` and fails when `schema.d.ts` changes.
 
 ---
 

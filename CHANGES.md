@@ -1,3 +1,97 @@
+# BUILT — the frontend's API snapshot and its generated types match the API again, and two checks keep them there — SIM-573, 2026-10-19
+
+**Why.** `frontend/openapi.json` is a copy of the API's contract, its OpenAPI schema.
+`scripts/export_openapi.py` writes it from `app.openapi()`. openapi-typescript (`npm run
+gen:api`) turns it into `frontend/src/api/schema.d.ts`, the frontend's typed API client. Nothing
+checked that anyone ran the export. The last export was the live slate's (commit `10a8845`,
+2026-10-09). On 2026-10-19 a fresh export differed from the copy by 1,739 added and 172 removed
+lines. The old copy also came from the host's Python. The host's Pydantic 2.10 drops
+`"additionalProperties": true` from a free-form object, so openapi-typescript typed 19 objects as
+`Record<string, never>`, a type that admits no field. The owner asked for the work on
+2026-10-19, in the session of the Data Lab game-type filter (SIM-572).
+
+**What the export carries, by source.**
+
+- The live slate (SIM-519, 2026-10-09). `GameCardAggregateResponse` gains ten schedule fields:
+  the start time and its to-be-decided flag, the two scores, the two probable pitchers' names,
+  the detailed state, the doubleheader code, the game number and the series text (`3777005`).
+  The durable run job adds `POST /api/games/{game_pk}/simulate`, `/simulate/runs/latest`,
+  `/simulate/runs/{run_id}`, the schemas `SimRunModel` and `SimRunRequest`, and the `run_id` and
+  `latest_run` parameters of `/boxscore` and `/props/{player_id}/{prop}` (`7cf0f86`).
+  `BoxscoreCardRowModel.synthetic` and `PropEdgeResponse.player_name` follow (`a6bb142`).
+- The game page's "what if" (SIM-562, 2026-10-09). The routes `/feed/plays`, `/feed/state`,
+  `POST /what-if` and `/what-if/{base_run_id}/{change_run_id}`, with 12 schemas (`LineupSpot`,
+  `PaStateModel`, `PlayerOption`, `RealPitch`, `RealPlay`, `RealPlayRunners`, `RealPlaysModel`,
+  `SideState`, `WhatIfChanges`, `WhatIfRequest`, `WhatIfResult`, `WhatIfStarted`), and
+  `EdgesResponse.final` (`208d79c`). `EdgeReportModel.result` grades a bet on the real final
+  (`886a31a`).
+- The security hardening (SIM-443c and SIM-443d, 2026-10-13). Two description texts change:
+  `POST /auth/login` answers 503 when the server has no password set (`d373207`), and
+  `POST /api/sql/run` requires every table as `raw.<table>` (`4ffb13c`).
+- The Data Lab game-type filter (SIM-572, this branch). The seven season routes gain
+  `game_type`.
+- The image's Pydantic 2.14.1. Seventeen free-form objects of the old copy gain
+  `"additionalProperties": true`. Thirteen are route answers: the Data Lab's eight, the two odds
+  routes, login, logout and the health probe. Four are schema fields: `SimMember.extra`,
+  `SimPairResponse.subject`, `SimQueryResponse.diagnostic` and `SimQueryResponse.subject`. The
+  API does not change.
+
+In `schema.d.ts`, those 17 types no longer read `Record<string, never>`. The two that stay are
+openapi-typescript's empty `webhooks` and `$defs` stubs.
+
+**What was built (branch `claude/interesting-newton-3ca06d`, stacked on SIM-572).** The export ran
+in the app image with the worktree mounted. An export with an empty environment (`env -i`) gave
+the same bytes, so the schema does not depend on the stack's `.env`. `npm run gen:api`
+regenerated the types. First I proved that the committed types were plain generator output: a
+generation from the old copy matched them byte for byte. The frontend's type-check and lint pass
+on the new types with no code change.
+
+Two checks keep the copy in step. The new `tests/unit/test_sim573_openapi_snapshot.py` holds 4
+tests. The main test compares the copy with `app.openapi()`. On a failure it names the routes and
+schemas that differ, the Pydantic and FastAPI versions, and the commands that fix it. The test
+drops `"additionalProperties": true` on both sides before it compares. JSON Schema reads an
+absent key the same way. The key's presence depends on the Pydantic version: CI installs the
+newest one that `requirements.txt` allows, and the image holds the one of its build day. Without
+the normalisation, a Pydantic release could red CI with no API change. A second test pins the
+image's marker on the by-season answer, so a host export fails. A third proves that the
+normalisation keeps `false`, a schema value and a field of that name. The fourth test checks that
+`schema.d.ts` names every route of the copy, and no other. The CI frontend job gains a step
+before the type-check: `npm run gen:api`, then `git diff --exit-code -- src/api/schema.d.ts`.
+`npm ci` installs openapi-typescript 7.13.0 from the lock file, so the check is deterministic.
+`docs/technical/scripts-frontend.md` and `docs/technical/api.md` describe both checks.
+
+**The gates.** Every container check ran with the worktree mounted over `/app` and over the five
+code folders. A mutation is a deliberate defect that proves a test fails on it; a copy of each
+file restored it.
+
+| Gate | Result |
+|---|---|
+| 1. The new file and `test_backend_sim101_to_106_148_153.py` (it reads `ci.yml`) | `31 passed, 1 warning in 12.90s`; the new file alone after a docstring edit: `4 passed` |
+| 2. The full unit lane (`-m "not slow"`) | `6516 passed, 2 skipped, 22 deselected, 10 warnings in 446.99s (0:07:26)`: the 6,512 of the SIM-572 lane plus the new 4 |
+| 3a. `ruff check .` | `All checks passed!` |
+| 3b. `ruff format --check .` | `508 files already formatted` |
+| 3c. `mypy similarity/ pipeline/ api/` | `Success: no issues found in 77 source files` |
+| 3d. `ci.yml` through `yaml.safe_load` | parses |
+| 4. The frontend: `npm run type-check`, then `npm run lint` | both exit 0, no output |
+| 5. The CI step's commands, after the commit | `npm run gen:api`, then `git diff --exit-code -- src/api/schema.d.ts`: exit 0 |
+| Mutation 1: the old copy and its old types restored | `2 failed, 2 passed`: 18 routes and 19 schemas differ; the marker test reds |
+| Mutation 2: the types lose the zone route | `1 failed, 3 passed`: "schema.d.ts lacks these routes" |
+| Mutation 3: the copy loses the zone route's `game_type` | `1 failed, 3 passed`: one route differs |
+
+No run died with exit 139, so nothing was retried.
+
+**Deploy.** Nothing to deploy for the API. The types ship in the frontend bundle, but no code
+reads a changed type, so the bundle behaves the same.
+
+**Not done.**
+
+- I ran the CI step's two commands locally, not in GitHub Actions.
+- A lock file for the Python packages would retire the normalisation. `requirements.txt` names
+  one as the durable fix (SIM-470 in its comment), and no open ticket in `BACKLOG.xlsx` carries
+  it.
+- The test ignores nothing else. A description edit in a route's code therefore reds it until the
+  export runs again. That is the intended behaviour: the description reaches the generated types.
+
 # BUILT — the Data Lab reads the regular season alone by default — SIM-572, 2026-10-19
 
 **Why.** The Data Lab analytics routes in `api/routes/analytics.py` bounded each read with

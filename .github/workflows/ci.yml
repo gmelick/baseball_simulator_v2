@@ -658,6 +658,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # SIM-573: the generated API types must equal a fresh generation from the
+      # committed snapshot (frontend/openapi.json). The unit test
+      # tests/unit/test_sim573_openapi_snapshot.py holds the snapshot to the API.
+      - name: Generated API types match the snapshot
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/schema.d.ts
+
       - name: TypeScript type-check
         run: npm run type-check
 
