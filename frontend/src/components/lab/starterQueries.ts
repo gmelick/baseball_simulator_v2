@@ -29,26 +29,25 @@ ORDER BY pitches DESC;`,
   },
   {
     name: 'League whiff-rate leaders (min swing sample)',
-    sql: `SELECT p.pitcher,
+    sql: `-- A whiff is a swing and a miss. A foul tip counts as a whiff. A swing is any pitch but a ball, called strike, hit by pitch or taken pitchout.
+SELECT p.pitcher,
        pl.full_name AS pitcher_name,
-       COUNT(*) FILTER (WHERE p.description LIKE '%swinging_strike%')                        AS whiffs,
-       COUNT(*) FILTER (WHERE p.description LIKE '%swinging_strike%'
-                          OR p.description IN ('foul','hit_into_play','foul_tip'))            AS swings,
-       ROUND(100.0 * COUNT(*) FILTER (WHERE p.description LIKE '%swinging_strike%')
-             / NULLIF(COUNT(*) FILTER (WHERE p.description LIKE '%swinging_strike%'
-                          OR p.description IN ('foul','hit_into_play','foul_tip')), 0), 1)    AS whiff_pct
+       COUNT(*) FILTER (WHERE p.type IN ('S', 'W', 'M', 'Q', 'T', 'O'))                      AS whiffs,
+       COUNT(*) FILTER (WHERE p.type NOT IN ('B', 'C', 'H', 'P', '*B'))                      AS swings,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE p.type IN ('S', 'W', 'M', 'Q', 'T', 'O'))
+             / NULLIF(COUNT(*) FILTER (WHERE p.type NOT IN ('B', 'C', 'H', 'P', '*B')), 0), 1) AS whiff_pct
 FROM raw.pitches p
 JOIN raw.players pl ON pl.player_id = p.pitcher
 WHERE p.season = 2024 AND p.data_quality_flag = FALSE
 GROUP BY p.pitcher, pl.full_name
-HAVING COUNT(*) FILTER (WHERE p.description LIKE '%swinging_strike%'
-                          OR p.description IN ('foul','hit_into_play','foul_tip')) >= 500
+HAVING COUNT(*) FILTER (WHERE p.type NOT IN ('B', 'C', 'H', 'P', '*B')) >= 500
 ORDER BY whiff_pct DESC
 LIMIT 25;`,
   },
   {
     name: 'Batter batted-ball quality (EV / hard-hit / sweet-spot)',
-    sql: `SELECT p.batter,
+    sql: `-- A ball in play has one of three codes: X (an out), D (no out) or E (a run scores).
+SELECT p.batter,
        pl.full_name AS batter_name,
        COUNT(*)                                                                              AS batted_balls,
        ROUND(AVG(p.launch_speed)::numeric, 1)                                                AS avg_ev,
@@ -57,7 +56,7 @@ LIMIT 25;`,
        ROUND(100.0 * COUNT(*) FILTER (WHERE p.launch_angle BETWEEN 8 AND 32) / COUNT(*), 1)  AS sweet_spot_pct
 FROM raw.pitches p
 JOIN raw.players pl ON pl.player_id = p.batter
-WHERE p.season = 2024 AND p.type = 'X' AND p.launch_speed IS NOT NULL AND p.data_quality_flag = FALSE
+WHERE p.season = 2024 AND p.type IN ('X', 'D', 'E') AND p.launch_speed IS NOT NULL AND p.data_quality_flag = FALSE
 GROUP BY p.batter, pl.full_name
 HAVING COUNT(*) >= 150
 ORDER BY hard_hit_pct DESC
@@ -65,12 +64,12 @@ LIMIT 25;`,
   },
   {
     name: 'Chase rate — out-of-zone swing%',
-    sql: `SELECT p.pitcher,
+    sql: `-- A swing is any pitch but a ball, called strike, hit by pitch or taken pitchout.
+SELECT p.pitcher,
        pl.full_name AS pitcher_name,
        COUNT(*) FILTER (WHERE p.zone IN (11,12,13,14))                                       AS ooz_pitches,
        ROUND(100.0 * COUNT(*) FILTER (WHERE p.zone IN (11,12,13,14)
-                        AND (p.description LIKE '%swinging_strike%'
-                             OR p.description IN ('foul','hit_into_play','foul_tip')))
+                        AND p.type NOT IN ('B', 'C', 'H', 'P', '*B'))
              / NULLIF(COUNT(*) FILTER (WHERE p.zone IN (11,12,13,14)), 0), 1)                AS chase_pct
 FROM raw.pitches p
 JOIN raw.players pl ON pl.player_id = p.pitcher
@@ -82,13 +81,12 @@ LIMIT 25;`,
   },
   {
     name: 'Count-state behavior (swing & whiff by count)',
-    sql: `SELECT balls, strikes,
+    sql: `-- A whiff is a swing and a miss. A foul tip counts as a whiff. A swing is any pitch but a ball, called strike, hit by pitch or taken pitchout.
+SELECT balls, strikes,
        COUNT(*)                                                                              AS pitches,
-       ROUND(100.0 * COUNT(*) FILTER (WHERE description LIKE '%swinging_strike%'
-                          OR description IN ('foul','hit_into_play','foul_tip')) / COUNT(*), 1) AS swing_pct,
-       ROUND(100.0 * COUNT(*) FILTER (WHERE description LIKE '%swinging_strike%')
-             / NULLIF(COUNT(*) FILTER (WHERE description LIKE '%swinging_strike%'
-                          OR description IN ('foul','hit_into_play','foul_tip')), 0), 1)      AS whiff_pct
+       ROUND(100.0 * COUNT(*) FILTER (WHERE type NOT IN ('B', 'C', 'H', 'P', '*B')) / COUNT(*), 1) AS swing_pct,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE type IN ('S', 'W', 'M', 'Q', 'T', 'O'))
+             / NULLIF(COUNT(*) FILTER (WHERE type NOT IN ('B', 'C', 'H', 'P', '*B')), 0), 1) AS whiff_pct
 FROM raw.pitches
 WHERE season = 2024 AND data_quality_flag = FALSE
   AND balls BETWEEN 0 AND 3 AND strikes BETWEEN 0 AND 2

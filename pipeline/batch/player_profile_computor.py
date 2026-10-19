@@ -75,7 +75,13 @@ from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 from pipeline.statcast_events import (
+    BALL_TYPES,
+    CALLED_STRIKE_TYPES,
+    FOUL_TYPES,
     IN_PLAY_TYPES,
+    NON_SWING_TYPES,
+    STRIKE_THREE_FOUL_TYPES,
+    WHIFF_TYPES,
     batter_retired,
     play_outs,
     sql_batter_dest,
@@ -178,43 +184,12 @@ _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 # `tests/unit/test_sim501_profile_code_sets.py` and
 # `tests/unit/test_sim553_foul_tip_strike_three.py` run the expression and fail
 # if the two ever diverge.
+#
+# The sets live in pipeline/statcast_events.py since the Data Lab vocabulary
+# fix (SIM-571). The API reads them there, without this module's duckdb and
+# sklearn imports. This module imports the sets and keeps their names, so
+# `from pipeline.batch.player_profile_computor import WHIFF_TYPES` still works.
 # ---------------------------------------------------------------------------
-
-#: A ball: 'B', '*B' a ball in the dirt, 'P' a pitchout the batter took.
-BALL_TYPES: tuple[str, ...] = ("B", "*B", "P")
-
-#: A called strike: the umpire called it; the batter did not swing.
-CALLED_STRIKE_TYPES: tuple[str, ...] = ("C",)
-
-#: A swing and a miss: 'S' swinging strike, 'W' swinging strike the catcher did
-#: not hold, 'M' missed bunt, 'Q' a swing and a miss at a pitchout.  Foul tips
-#: ('T', 'O') are CONTACT — the bat touches the ball — so they are excluded: the
-#: pool build classifies them as fouls below two strikes and as strike three
-#: at two (STRIKE_THREE_FOUL_TYPES).
-#: Measured on 2024: 23.22% of swings, against an MLB whiff rate near 24%.
-WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M", "Q")
-
-#: The bat touched the ball and the ball was not put in play: 'F' foul, 'T' foul
-#: tip, 'L' foul bunt, 'O' a foul tip (the feed's own description; Retrosheet
-#: reads it as a foul tip on a bunt), 'R' foul pitchout. Each adds a strike
-#: below two strikes.
-FOUL_TYPES: tuple[str, ...] = ("F", "T", "L", "O", "R")
-
-#: SIM-553: the fouls that are STRIKE THREE with two strikes. A foul tip is a
-#: strike at any count (the rulebook's definition of a strike; it must be caught
-#: to be a foul tip), and so is a bunt fouled off (Rule 5.09(a)(4): the batter
-#: is out when he bunts foul on the third strike). A plain foul ('F', 'R') with
-#: two strikes is not. Before SIM-553 the pool coded 'T' and 'L' as 'foul' and
-#: 'O' as 'ball' at two strikes, so the count machine pitched on after a real
-#: strikeout: 7.1% of 2025's strikeouts end this way, and the count chain put
-#: the simulator's loss at 4.4% of its strikeouts
-#: (docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
-STRIKE_THREE_FOUL_TYPES: tuple[str, ...] = ("T", "O", "L")
-
-#: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
-#: pitchout, blocked ball.  A swing is the complement of this set, which makes it
-#: the denominator of every swing-conditioned rate.
-NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
 
 
 def sql_in(types: tuple[str, ...]) -> str:

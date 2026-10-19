@@ -19,8 +19,10 @@ this is the curated, safe counterpart to the ad-hoc SQL console.
     GET /api/analytics/leaderboard/pitchers?season=&metric=&min_pa=&limit=
     GET /api/analytics/leaderboard/batters?season=&metric=&min_pa=&limit=&vs_hand=
 
-Metric definitions follow the Baseball Analyst's spec (swing/whiff via the
-``description`` text, chase via the out-of-zone buckets, etc.).
+The swing, whiff, called-strike and CSW (called strikes plus whiffs) rates filter
+on the ``type`` code (the Data Lab vocabulary fix, SIM-571). The code sets live in
+``pipeline/statcast_events.py``. ``description`` holds the feed's display text,
+and no query reads it. The whiff is Savant's: a foul tip counts.
 
 Every route reads through the read-only pool, ``app.state.pg_pool_ro`` (SIM-566,
 the Data Lab read routes on the read-only pool). The pool's role reads ``raw.*``
@@ -39,18 +41,42 @@ from pydantic import BaseModel
 
 from api.auth import require_auth
 from api.routes._common import _get_ro_pool
+from pipeline.statcast_events import (
+    sql_called_strike,
+    sql_csw,
+    sql_in_play,
+    sql_savant_whiff,
+    sql_swing,
+)
 
 log = logging.getLogger("api.routes.analytics")
 
 router = APIRouter(prefix="/api/analytics", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
-# A swing = a swinging strike (incl. tip / bunt miss) OR a foul OR a ball put in
-# play. Used across whiff/swing rate calculations.
-_SWING = (
-    "(description LIKE '%swinging_strike%' "
-    "OR description IN ('foul','hit_into_play','foul_tip','missed_bunt','foul_bunt'))"
-)
-_WHIFF = "(description LIKE '%swinging_strike%' OR description IN ('foul_tip','missed_bunt'))"
+# The pitch-result filters (the Data Lab vocabulary fix, SIM-571). Every rate
+# filters on the `type` code, never on `description`. The loader stores the
+# feed's display text in `description`, so a snake_case match finds no row.
+# The fragments render from the code sets in pipeline/statcast_events.py. The
+# profiles and the pool build read the same sets. The rendered predicates:
+#   swing          type NOT IN ('B', 'C', 'H', 'P', '*B')
+#                  The bat left the shoulder.
+#   whiff          type IN ('S', 'W', 'M', 'Q', 'T', 'O')
+#                  Savant's whiff: a swing and a miss, or a foul tip.
+#   called strike  type IN ('C')
+#                  The umpire called a strike on a taken pitch.
+#   CSW            (a called strike OR a whiff)
+#                  CSW means called strikes plus whiffs. Its denominator is every pitch.
+#   in play        type IN ('X', 'D', 'E')
+#                  'X' alone is the outs, 65% of balls in play. It drops most hits.
+# The unprefixed fragments serve the one-table queries (count-state, zone).
+# The "p." fragments serve the two leaderboards, which also read raw.players.
+_SWING = sql_swing()
+_WHIFF = sql_savant_whiff()
+_CALLED_STRIKE = sql_called_strike()
+_SWING_P = sql_swing("p.")
+_WHIFF_P = sql_savant_whiff("p.")
+_CSW_P = sql_csw("p.")
+_IN_PLAY_P = sql_in_play("p.")
 
 
 async def _fetch(pool, sql: str, *args) -> list[Any]:
@@ -279,7 +305,7 @@ async def zone(
                COUNT(*) AS pitches,
                ROUND((100.0 * COUNT(*) FILTER (WHERE {_WHIFF})
                      / NULLIF(COUNT(*) FILTER (WHERE {_SWING}), 0))::numeric, 1)::float8 AS whiff_pct,
-               ROUND((100.0 * COUNT(*) FILTER (WHERE description = 'called_strike')
+               ROUND((100.0 * COUNT(*) FILTER (WHERE {_CALLED_STRIKE})
                      / NULLIF(COUNT(*), 0))::numeric, 1)::float8 AS called_strike_pct
           FROM raw.pitches
          WHERE {" AND ".join(where)}{_quality_clause(include_flagged)}
@@ -315,11 +341,10 @@ async def pitcher_leaderboard(
                      / NULLIF(COUNT(*) FILTER (WHERE p.events IS NOT NULL), 0))::numeric, 1)::float8 AS k_pct,
                ROUND((100.0 * COUNT(*) FILTER (WHERE p.events = 'walk')
                      / NULLIF(COUNT(*) FILTER (WHERE p.events IS NOT NULL), 0))::numeric, 1)::float8 AS bb_pct,
-               ROUND((100.0 * COUNT(*) FILTER (WHERE p.description = 'called_strike'
-                                            OR p.description LIKE '%swinging_strike%')
+               ROUND((100.0 * COUNT(*) FILTER (WHERE {_CSW_P})
                      / NULLIF(COUNT(*), 0))::numeric, 1)::float8 AS csw_pct,
-               ROUND((100.0 * COUNT(*) FILTER (WHERE {_WHIFF})
-                     / NULLIF(COUNT(*) FILTER (WHERE {_SWING}), 0))::numeric, 1)::float8 AS whiff_pct
+               ROUND((100.0 * COUNT(*) FILTER (WHERE {_WHIFF_P})
+                     / NULLIF(COUNT(*) FILTER (WHERE {_SWING_P}), 0))::numeric, 1)::float8 AS whiff_pct
           FROM raw.pitches p
           JOIN raw.players pl ON pl.player_id = p.pitcher
          WHERE p.season = $1 AND p.data_quality_flag = FALSE
@@ -355,11 +380,11 @@ async def batter_leaderboard(
         SELECT p.batter AS player_id,
                pl.full_name AS name,
                COUNT(*) FILTER (WHERE p.events IS NOT NULL) AS pa,
-               COUNT(*) FILTER (WHERE p.type = 'X' AND p.launch_speed IS NOT NULL) AS bip,
-               ROUND(AVG(p.launch_speed) FILTER (WHERE p.type = 'X')::numeric, 1)::float8 AS avg_ev,
-               MAX(p.launch_speed) FILTER (WHERE p.type = 'X')::float8 AS max_ev,
-               ROUND((100.0 * COUNT(*) FILTER (WHERE p.type = 'X' AND p.launch_speed >= 95)
-                     / NULLIF(COUNT(*) FILTER (WHERE p.type = 'X' AND p.launch_speed IS NOT NULL), 0))::numeric, 1)::float8 AS hard_hit_pct,
+               COUNT(*) FILTER (WHERE {_IN_PLAY_P} AND p.launch_speed IS NOT NULL) AS bip,
+               ROUND(AVG(p.launch_speed) FILTER (WHERE {_IN_PLAY_P})::numeric, 1)::float8 AS avg_ev,
+               MAX(p.launch_speed) FILTER (WHERE {_IN_PLAY_P})::float8 AS max_ev,
+               ROUND((100.0 * COUNT(*) FILTER (WHERE {_IN_PLAY_P} AND p.launch_speed >= 95)
+                     / NULLIF(COUNT(*) FILTER (WHERE {_IN_PLAY_P} AND p.launch_speed IS NOT NULL), 0))::numeric, 1)::float8 AS hard_hit_pct,
                ROUND((100.0 * COUNT(*) FILTER (WHERE p.events IN ('strikeout','strikeout_double_play'))
                      / NULLIF(COUNT(*) FILTER (WHERE p.events IS NOT NULL), 0))::numeric, 1)::float8 AS k_pct,
                ROUND((100.0 * COUNT(*) FILTER (WHERE p.events = 'walk')
