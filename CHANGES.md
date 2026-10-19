@@ -251,8 +251,10 @@ one term ("made-up key") for the unverified key, the two extra tests. 713k token
 0: it copied the three new sets (7.6 GB in 183 + 229 + 53 s), skipped the six already off-site
 and made the first off-site prune (the 2026-10-15 set of each store). Every store MIRRORED with
 3 sets, both gauges under 1 h, nine folders on OneDrive with their manifests. The day's 7.6 GB
-reached the cloud at 11:03:39 UTC, 26 minutes after the copy ended. [QUOTA PENDING, the owner's
-reading after the first prune]
+reached the cloud at 11:03:39 UTC, 26 minutes after the copy ended. The OneDrive storage page
+read about 382 GB used of 1.0 TB before and after the run (7.6 GB in, 7.4 GB pruned), so a
+pruned set in the recycle bin does not count against the quota: the off-site footprint stays at
+three nights' sets, about 21 GB.
 
 **Why.** The scheduled backups (SIM-525) write the Postgres dump, the DuckDB file and the engine
 bundle every night into `C:/Users/grego/Documents/baseball_backups`, on the laptop's only disk.

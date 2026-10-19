@@ -547,8 +547,8 @@ from the copy. A copy of the set folder back into the local folder, as for Postg
 ## 9. Open points
 
 - The plan's timings for the copy and the upload are estimates. §10 records the measured ones.
-- Whether OneDrive's recycle bin counts against the quota is unknown until the first off-site
-  prune (§6 step 10).
+- ~~Whether OneDrive's recycle bin counts against the quota~~ Answered 2026-10-18 (§10 item 8):
+  it does not. The storage figure stayed at about 382 GB through the first off-site prune.
 - The restore of the DuckDB and bundle stores straight from `/offsite` is not drilled (§7.2).
 
 ## 10. The run record (2026-10-17, UTC)
@@ -618,4 +618,8 @@ from the copy. A copy of the set folder back into the local folder, as for Postg
    2026-10-16, -17 and -18 set of each store, every one with its manifest, and no 2026-10-15
    folder. The upload: 374 of 375 files were placeholders at 10:56; the last, the day's 3.79 GB
    DuckDB copy, became one at 11:03:39, 26 minutes after the copy ended, inside the half-hour
-   estimate of item 5. The quota after the first prune: [QUOTA PENDING, the owner's reading].
+   estimate of item 5. The quota after the first prune: the owner read the OneDrive storage page
+   at about 11:15 UTC, **about 382 GB used of 1.0 TB**, the same as the 382.4 GB before the run.
+   The run added 7.6 GB and pruned 7.4 GB, so a pruned set in OneDrive's recycle bin does NOT
+   count against the quota on this personal account. The standing footprint off-site is three
+   nights' sets, about 21 GB, and the quota headroom is about 618 GB.
