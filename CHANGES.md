@@ -78,9 +78,21 @@ every season from 2017 to 2025 ("Called Strike", "Swinging Strike", "Swinging St
 (Blocked)", "Foul", "Foul Tip", "In play, out(s)" and so on). Filed as SIM-571 (P3): match the
 analytics filters to the descriptions the loader stores.
 
-**Deploy.** The app hot-reloads the bind-mounted `api/` folder, so the merge into `master` is
-the deploy; no image rebuild is needed. The live check after the merge (the Data Lab pages load
-and the typeahead ranks by similarity) is pending.
+**Deploy.** The app hot-reloads the bind-mounted `api/` folder, so the merge into `master`
+(fa39c8c, 02:19 UTC on 2026-10-19) was the deploy; no image rebuild was needed. The reloader
+picked up the eight files at once, and the app answered again 80 s later with the new boot line
+("read-only pool open as baseball_ro ... it serves the SQL console, the assistant and the Data
+Lab read routes"). **The live check PASSED.** The session captured nine answers from the app on
+`master` before the merge and the same nine after it, with the API key from `.env`: `/health`,
+`/api/schema`, the KPIs, the per-season counts, the pitcher leaderboard for 2025, the "judge"
+and "garcia" player searches, Aaron Judge's detail and the data freshness. Every body is
+identical, byte for byte, the ranked order of the ten Garcias included (Greg, Luis, Rico, …,
+not alphabetical), so the typeahead still ranks by similarity on the read-only pool. The SQL
+console answered `select count(*) from raw.games` with 200 and 23,177. The app log holds no
+"pg_trgm similarity() unavailable" warning. One transient: the first leaderboard request, sent
+while the app's workers were still loading the bundle after the boot, timed out at 60 s; a
+minute later it took 1.1 s, and Postgres runs that query with the same plan in about 1 s as
+either role, so the read-only role costs nothing.
 
 **Not done.** The `/health` key keeps its `sql_console` name, though the read-only pool now
 serves more routes. The assistant's `_pool` keeps returning None when the read-only pool is
