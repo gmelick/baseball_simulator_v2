@@ -576,7 +576,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `docker compose up -d app` (recreate).  Edits to the mounted dirs are picked up by
   `docker compose restart app` alone.
 - **The container test and lint targets run the checkout, and no unit test reaches the odds
-  vendor (SIM-567, 2026-10-18).** The seven Makefile targets (`test`, `test-unit`,
+  vendor (SIM-567, 2026-10-19).** The seven Makefile targets (`test`, `test-unit`,
   `test-regression`, `test-integration`, `lint`, `format`, `type-check`) mount the checkout over
   `/app`. `make test-unit` therefore tests the checkout's `tests/` and `tests/conftest.py`, not
   the image's copy from the last build. `make test-unit TESTS="tests/unit/test_x.py"` names the

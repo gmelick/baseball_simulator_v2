@@ -1,4 +1,4 @@
-# CLOSED — the test lane pins the odds provider to the mock, and make test-unit tests the checkout — SIM-567, 2026-10-18
+# CLOSED — the test lane pins the odds provider to the mock, and make test-unit tests the checkout — SIM-567, 2026-10-19
 
 **Why.** The unit-test lane runs inside the app container. That container reads the stack's
 `.env` through `env_file` (`docker-compose.yml` line 156). Since 2026-10-09, `.env` carries
