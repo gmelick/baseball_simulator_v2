@@ -11,13 +11,19 @@ this is the curated, safe counterpart to the ad-hoc SQL console.
 
     GET /api/analytics/kpis
     GET /api/analytics/by-season
-    GET /api/analytics/pitch-type-mix?season=&pitcher=&stand=
-    GET /api/analytics/pa-outcomes?season=&batter=&p_throws=
-    GET /api/analytics/count-state?season=&pitcher=&batter=
-    GET /api/analytics/velo-distribution?season=&pitcher=&pitch_type=
-    GET /api/analytics/zone?season=&pitcher=
-    GET /api/analytics/leaderboard/pitchers?season=&metric=&min_pa=&limit=
-    GET /api/analytics/leaderboard/batters?season=&metric=&min_pa=&limit=&vs_hand=
+    GET /api/analytics/pitch-type-mix?season=&pitcher=&stand=&game_type=
+    GET /api/analytics/pa-outcomes?season=&batter=&p_throws=&game_type=
+    GET /api/analytics/count-state?season=&pitcher=&batter=&game_type=
+    GET /api/analytics/velo-distribution?season=&pitcher=&pitch_type=&game_type=
+    GET /api/analytics/zone?season=&pitcher=&game_type=
+    GET /api/analytics/leaderboard/pitchers?season=&metric=&min_pa=&limit=&game_type=
+    GET /api/analytics/leaderboard/batters?season=&metric=&min_pa=&limit=&vs_hand=&game_type=
+
+A season of ``raw.pitches`` holds the regular season and the postseason. The
+seven routes that take ``season`` also take ``game_type`` (the Data Lab
+game-type filter, SIM-572). ``R``, the default, reads the regular season alone.
+``all`` reads every game of the season, the postseason included. The two
+coverage routes (kpis, by-season) describe the whole store and take no game type.
 
 The swing, whiff, called-strike and CSW (called strikes plus whiffs) rates filter
 on the ``type`` code. The Data Lab vocabulary fix (SIM-571) made that change. The
@@ -35,7 +41,7 @@ read-only role can read that catalog.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
@@ -79,6 +85,44 @@ _SWING_P = sql_swing("p.")
 _WHIFF_P = sql_savant_whiff("p.")
 _CSW_P = sql_csw("p.")
 _IN_PLAY_P = sql_in_play("p.")
+
+# The game-type filter (the Data Lab game-type filter, SIM-572). raw.games marks
+# the type of each game: 'R' is the regular season, and 'F', 'D', 'L' and 'W'
+# are the four postseason rounds. In 2025 the postseason holds 47 games and
+# 14,085 of the 723,055 clean pitches. The filter is a semi-join on game_pk: it
+# keeps a pitch when its game has the type. A plain join would clash on
+# `season`, which both tables hold. 'all' adds no filter.
+
+#: The game types a route reads: the regular season alone, or every game.
+GameType = Literal["R", "all"]
+#: The code of a regular-season game in ``raw.games.game_type``; the default.
+REGULAR_SEASON: GameType = "R"
+_GameTypeQuery = Annotated[
+    GameType,
+    Query(
+        description=(
+            "R (the default) reads the regular season alone. "
+            "all reads every game of the season, the postseason included."
+        ),
+    ),
+]
+
+
+def _filter_game_type(
+    where: list[str], args: list[Any], game_type: GameType, prefix: str = ""
+) -> None:
+    """Keep only the pitches whose game has ``game_type``; ``all`` keeps every game.
+
+    The filter takes the next query argument. So call it before the route
+    appends an argument that the WHERE clause does not read (the leaderboards'
+    ``min_pa`` and ``limit``).
+    """
+    if game_type == "all":
+        return
+    args.append(game_type)
+    where.append(
+        f"{prefix}game_pk IN (SELECT g.game_pk FROM raw.games g WHERE g.game_type = ${len(args)})"
+    )
 
 
 async def _fetch(pool, sql: str, *args) -> list[Any]:
@@ -177,6 +221,7 @@ async def pitch_type_mix(
     pitcher: int | None = None,
     stand: str | None = Query(None, pattern="^[LRS]$"),
     include_flagged: bool = False,
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     where = ["season = $1", "pitch_type IS NOT NULL"]
@@ -187,6 +232,7 @@ async def pitch_type_mix(
     if stand:
         args.append(stand)
         where.append(f"stand = ${len(args)}")
+    _filter_game_type(where, args, game_type)
     sql = f"""
         SELECT pitch_type,
                COUNT(*)                                            AS n,
@@ -211,6 +257,7 @@ async def pa_outcomes(
     batter: int | None = None,
     p_throws: str | None = Query(None, pattern="^[LR]$"),
     include_flagged: bool = False,
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     where = ["season = $1", "events IS NOT NULL"]
@@ -221,6 +268,7 @@ async def pa_outcomes(
     if p_throws:
         args.append(p_throws)
         where.append(f"p_throws = ${len(args)}")
+    _filter_game_type(where, args, game_type)
     sql = f"""
         SELECT events AS event, COUNT(*) AS n
           FROM raw.pitches
@@ -238,6 +286,7 @@ async def count_state(
     pitcher: int | None = None,
     batter: int | None = None,
     include_flagged: bool = False,
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     where = ["season = $1", "balls BETWEEN 0 AND 3", "strikes BETWEEN 0 AND 2"]
@@ -248,6 +297,7 @@ async def count_state(
     if batter is not None:
         args.append(batter)
         where.append(f"batter = ${len(args)}")
+    _filter_game_type(where, args, game_type)
     sql = f"""
         SELECT balls, strikes,
                COUNT(*) AS pitches,
@@ -269,6 +319,7 @@ async def velo_distribution(
     pitcher: int | None = None,
     pitch_type: str | None = Query(None, max_length=5),
     include_flagged: bool = False,
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     where = ["season = $1", "release_speed IS NOT NULL"]
@@ -279,6 +330,7 @@ async def velo_distribution(
     if pitch_type:
         args.append(pitch_type)
         where.append(f"pitch_type = ${len(args)}")
+    _filter_game_type(where, args, game_type)
     sql = f"""
         SELECT FLOOR(release_speed)::int AS velo_bucket, COUNT(*) AS n
           FROM raw.pitches
@@ -295,6 +347,7 @@ async def zone(
     season: int = Query(..., ge=2015, le=2027),
     pitcher: int | None = None,
     include_flagged: bool = False,
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     where = ["season = $1", "zone IS NOT NULL"]
@@ -302,6 +355,7 @@ async def zone(
     if pitcher is not None:
         args.append(pitcher)
         where.append(f"pitcher = ${len(args)}")
+    _filter_game_type(where, args, game_type)
     sql = f"""
         SELECT zone,
                COUNT(*) AS pitches,
@@ -332,9 +386,17 @@ async def pitcher_leaderboard(
     metric: str = Query("k_pct"),
     min_pa: int = Query(200, ge=0, le=5000),
     limit: int = Query(50, ge=1, le=200),
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     order = metric if metric in _PITCHER_METRICS else "k_pct"
+    where = ["p.season = $1", "p.data_quality_flag = FALSE"]
+    args: list[Any] = [season]
+    _filter_game_type(where, args, game_type, "p.")
+    args.append(min_pa)
+    having_idx = len(args)
+    args.append(limit)
+    limit_idx = len(args)
     sql = f"""
         SELECT p.pitcher AS player_id,
                pl.full_name AS name,
@@ -349,13 +411,13 @@ async def pitcher_leaderboard(
                      / NULLIF(COUNT(*) FILTER (WHERE {_SWING_P}), 0))::numeric, 1)::float8 AS whiff_pct
           FROM raw.pitches p
           JOIN raw.players pl ON pl.player_id = p.pitcher
-         WHERE p.season = $1 AND p.data_quality_flag = FALSE
+         WHERE {" AND ".join(where)}
          GROUP BY p.pitcher, pl.full_name
-        HAVING COUNT(*) FILTER (WHERE p.events IS NOT NULL) >= $2
+        HAVING COUNT(*) FILTER (WHERE p.events IS NOT NULL) >= ${having_idx}
          ORDER BY {order} DESC NULLS LAST
-         LIMIT $3
+         LIMIT ${limit_idx}
     """
-    return _dicts(await _fetch(pool, sql, season, min_pa, limit))
+    return _dicts(await _fetch(pool, sql, *args))
 
 
 @router.get("/leaderboard/batters", summary="Batter contact-quality leaderboard")
@@ -366,6 +428,7 @@ async def batter_leaderboard(
     min_pa: int = Query(200, ge=0, le=5000),
     limit: int = Query(50, ge=1, le=200),
     vs_hand: str | None = Query(None, pattern="^[LR]$"),
+    game_type: _GameTypeQuery = REGULAR_SEASON,
 ) -> list[dict[str, Any]]:
     pool = _get_ro_pool(request)
     order = metric if metric in _BATTER_METRICS else "hard_hit_pct"
@@ -374,6 +437,7 @@ async def batter_leaderboard(
     if vs_hand:
         args.append(vs_hand)
         where.append(f"p.p_throws = ${len(args)}")
+    _filter_game_type(where, args, game_type, "p.")
     args.append(min_pa)
     having_idx = len(args)
     args.append(limit)
@@ -403,4 +467,4 @@ async def batter_leaderboard(
     return _dicts(await _fetch(pool, sql, *args))
 
 
-__all__ = ["router", "KpisResponse"]
+__all__ = ["router", "KpisResponse", "GameType", "REGULAR_SEASON"]
