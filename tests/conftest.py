@@ -138,16 +138,17 @@ os.environ.setdefault("AUTH_DISABLED", "1")
 # stack's .env through env_file. The .env file names the vendor:
 # ODDS_PROVIDER=bettingpros. Twelve tests build the live pipeline with
 # __new__ (no constructor) and set no provider. The pipeline's lazy
-# fallback then reads the environment. Before this pin, those tests called
-# the vendor and failed with HTTP 404. The pin is a hard one, not
-# setdefault, because the explicit .env value is the defect. A test that
-# wants the vendor name sets it with monkeypatch
-# (tests/unit/test_sim555_writers.py). The clean_env fixture of
-# tests/unit/test_odds_provider_sim370.py deletes it. Monkeypatch restores
-# the pinned value on teardown. The pin removes the API key too. A test
-# that still builds the vendor's provider then fails at its first call.
-# The provider's own "needs an API key" error stops that test before it
-# reaches the vendor. No test reads the key from the environment.
+# fallback then reads the environment. Before this pin, those tests built
+# the vendor's provider. The MLB Stats API answered its reads with HTTP
+# 404. The pin is a hard one, not setdefault, because the explicit .env
+# value is the defect. A test that wants the vendor name sets it with
+# monkeypatch (tests/unit/test_sim555_writers.py). The clean_env fixture
+# of tests/unit/test_odds_provider_sim370.py deletes it. Monkeypatch
+# restores the pinned value on teardown. The pin removes the API key too.
+# A test that still builds the vendor's provider then sends no BettingPros
+# request. The provider's _bp_get raises "needs an API key" first. The
+# public methods catch that error and return empty rows. The MLB Stats
+# API reads (_mlb_get) need no key, so they still try the network.
 os.environ["ODDS_PROVIDER"] = "mock"
 os.environ.pop("ODDS_API_KEY", None)
 

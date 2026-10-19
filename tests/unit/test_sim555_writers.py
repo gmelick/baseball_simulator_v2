@@ -677,7 +677,7 @@ class TestLoaderRefusesTheImplicitMock:
     with no ``--provider`` wrote about 2,472 games of made-up ``consensus``
     prices into a real season, with nothing to warn the operator. The app
     container reads ODDS_PROVIDER from the stack's .env (bettingpros since
-    2026-10-09); the unit-test lane pins the mock in tests/conftest.py."""
+    2026-10-09). The unit-test lane pins the mock in tests/conftest.py."""
 
     def test_the_provider_selection(self, monkeypatch) -> None:
         monkeypatch.delenv("ODDS_PROVIDER", raising=False)

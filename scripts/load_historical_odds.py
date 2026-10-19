@@ -474,12 +474,12 @@ def _select_provider(requested: str | None) -> str:
     """SIM-555: the odds provider this run reads; never the mock unless asked.
 
     ``--provider`` wins, then the ``ODDS_PROVIDER`` environment variable, then
-    the registry's default (the mock). The mock writes made-up prices, so a
-    run whose provider resolves to it without ``--provider mock`` on the
-    command line raises ``ValueError``: a real season must never get mock
-    rows by default. The app container reads ``ODDS_PROVIDER`` and
-    ``ODDS_API_KEY`` from the stack's ``.env`` (bettingpros since
-    2026-10-09). The unit-test lane pins the mock in ``tests/conftest.py``.
+    the registry's default (the mock). The mock writes made-up prices. A run
+    whose provider resolves to the mock without ``--provider mock`` raises
+    ``ValueError``. A real season must never get mock rows by default. The app
+    container reads ``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's
+    ``.env`` (bettingpros since 2026-10-09). The unit-test lane pins the mock
+    in ``tests/conftest.py``.
     """
     asked = (requested or "").strip().lower()
     name = (asked or os.environ.get(ODDS_PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()

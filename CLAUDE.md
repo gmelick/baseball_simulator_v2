@@ -29,8 +29,8 @@
   `simulation/synthetic_bundle.py`.
 - **The production flags live in the `app` service env of `docker-compose.yml`.**
   `tests/conftest.py` pins `SIM_MANAGER` and `SIM_BB_PLATOON` OFF, so the unit lane stays
-  byte-identical. The conftest also pins the odds provider to the mock and removes the
-  vendor key, `ODDS_API_KEY` (the test lane's odds provider pin, SIM-567).
+  byte-identical. The conftest also pins the odds provider to the mock. The conftest
+  removes the vendor key, `ODDS_API_KEY`, too (the test lane's odds provider pin, SIM-567).
 - **Calibration is live.** The app applies `/data/calibration.json` at boot. `make calibrate`
   drops the win-probability reliability curve; the §2b manager-draw bullet says how to restore it.
 - **§2b holds the current state, the owner's standing rulings and the in-flight work.** The open
@@ -577,17 +577,17 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `docker compose restart app` alone.
 - **The container test and lint targets run the checkout, and no unit test reaches the odds
   vendor (SIM-567, 2026-10-18).** The seven Makefile targets (`test`, `test-unit`,
-  `test-regression`, `test-integration`, `lint`, `format`, `type-check`) mount the checkout
-  over `/app`. `make test-unit` therefore tests the checkout's `tests/` and
-  `tests/conftest.py`, not the image's copy from the last build. `TESTS="tests/unit/test_x.py"`
-  names the files. An ad-hoc `docker compose run app pytest` with no `-v` still runs the
-  image's copy. From a worktree, compose's five bind mounts of the main checkout cover the
-  worktree's code dirs. Add `-v "<worktree>/api:/app/api"` and the same for `pipeline/`,
-  `similarity/`, `simulation/` and `db/`. `tests/conftest.py` pins `ODDS_PROVIDER=mock` and
-  removes `ODDS_API_KEY`. The pin is hard: the stack's `.env` says `bettingpros`, and
-  `setdefault` cannot beat a value that is set. The lane needs no `-e ODDS_PROVIDER=mock`
-  any more. A test that still builds the vendor's provider fails at its first call, with
-  the provider's own "needs an API key" error.
+  `test-regression`, `test-integration`, `lint`, `format`, `type-check`) mount the checkout over
+  `/app`. `make test-unit` therefore tests the checkout's `tests/` and `tests/conftest.py`, not
+  the image's copy from the last build. `make test-unit TESTS="tests/unit/test_x.py"` names the
+  files. An ad-hoc `docker compose run app pytest` with no `-v` still runs the image's copy. From
+  a worktree, `make` reads the worktree's own compose file and `.env`. That project has no app
+  image yet, so compose builds one. Run these targets from the main checkout. They test its code,
+  not a worktree's. `tests/conftest.py` pins `ODDS_PROVIDER=mock` and removes `ODDS_API_KEY`. The
+  pin is hard, because `setdefault` cannot beat the stack's `.env` value, `bettingpros`. The lane
+  needs no `-e ODDS_PROVIDER=mock` any more. Without the key, the vendor's provider sends no
+  BettingPros request. Its MLB Stats API reads (`_mlb_get`) still try the network. The provider
+  returns empty rows and raises no error.
 - **The app holds `/data/replay.duckdb` writable (SIM-561).** No other process can open it
   while the app runs, even read-only; read a stored game through the API (`/plays`,
   `/linescore`). Stop the app to inspect the file. A host-side edit to a mounted `api/`

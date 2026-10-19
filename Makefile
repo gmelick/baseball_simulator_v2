@@ -186,11 +186,11 @@ validate-props: _require_env_file
 ## Offline (SIM-435): backfill OPENING + CLOSING odds for Final games into
 ## raw.game_odds / raw.prop_odds so the accuracy comparison has closing lines
 ## to score against.  SIM-555: one row per book (`bp:<id>`), guarded, batched.
-## Network-bound.  FLAGS must name the provider: --provider bettingpros (the
-## app container reads ODDS_PROVIDER and ODDS_API_KEY from .env; --provider on
-## the command line wins), or --provider mock for the deterministic wiring
-## smoke; the loader refuses to run the mock unasked.  --book NAME loads one
-## book's rows.  Example:
+## Network-bound.  Name the provider in FLAGS: --provider bettingpros for real
+## lines, or --provider mock for the deterministic wiring smoke.  The loader
+## refuses to run the mock unasked.  The app container reads ODDS_PROVIDER and
+## ODDS_API_KEY from .env.  A --provider flag wins over .env.
+## --book NAME loads one book's rows.  Example:
 ## FLAGS="--seasons 2024 --max-games 5 --provider bettingpros".
 load-historical-odds: _require_env_file
 	docker compose run --rm app python scripts/load_historical_odds.py $(FLAGS)
@@ -211,10 +211,11 @@ shell:
 ## dirs (api/, pipeline/, similarity/, simulation/, db/). The -v "$(CURDIR):/app"
 ## mount below puts the whole checkout over the image's copy, tests/, scripts/
 ## and pyproject.toml included. These targets then test the checkout, not the
-## last image build. From a worktree, compose's five mounts of the main
-## checkout shadow the worktree's code dirs. Run these targets from the main
-## checkout.
-TESTS ?= tests/unit/
+## last image build. From a worktree, compose reads the worktree's own
+## compose file and .env. That project has no app image, so compose builds
+## one. Run these targets from the main checkout. They test its code, not a
+## worktree's.
+TESTS = tests/unit/
 
 ## Run the full test suite inside Docker (unit + integration)
 ##

@@ -8,14 +8,14 @@ The unit lane runs inside the app container. That container reads the stack's
 unit tests build the live pipeline with ``__new__`` (a build that skips the
 constructor) and set no provider. The pipeline's lazy fallback (the provider
 lookup on first use) then reads the environment. Before the pin, those tests
-built the vendor's provider and called the vendor.
+built the vendor's provider, which read the MLB Stats API.
 
 ``tests/conftest.py`` now pins ``ODDS_PROVIDER`` to "mock" and removes
 ``ODDS_API_KEY``. These tests prove four things:
 
   1. The pin reaches the test process, and the process holds no vendor key.
   2. The provider factory and a bare pipeline both answer the mock.
-  3. A test that still names the vendor fails before any request leaves.
+  3. The vendor's request seam (``_bp_get``) refuses to send without the key.
   4. The conftest keeps both pinned lines.
 
 No test here opens a database or a socket.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+import urllib.request
 from unittest.mock import AsyncMock
 
 import pytest
@@ -70,8 +71,8 @@ def _make_pipeline_via_new() -> LiveIngestionPipeline:
 def test_the_lane_pins_the_mock() -> None:
     """The conftest pin reaches this process: ``ODDS_PROVIDER`` reads "mock".
 
-    The test lane's odds provider pin (SIM-567) beats the vendor name that
-    the app container reads from the stack's .env file.
+    The test lane's odds provider pin (SIM-567) beats the vendor name in the
+    stack's .env file.
     """
     value = os.environ.get(ODDS_PROVIDER_ENV)
     assert value == "mock", (
@@ -107,22 +108,24 @@ def test_a_bare_pipeline_draws_the_mock() -> None:
     assert p._odds is provider
 
 
-def test_the_vendor_provider_fails_before_any_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The vendor's provider with no key raises before any request leaves.
+def test_the_vendor_seam_refuses_without_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The vendor's request seam with no key raises before its request leaves.
 
     The test names the vendor the way the stack's .env file does. The
-    provider's key check raises a ``RuntimeError`` that names ``ODDS_API_KEY``.
-    The stub on the network seam fails the test if a request ever goes first.
+    seam's key check raises a ``RuntimeError`` that names ``ODDS_API_KEY``.
+    Two stubs fail the test if a request goes first. One sits on the
+    provider's network seam. The other sits on ``urllib.request.urlopen``.
     """
     monkeypatch.setenv(ODDS_PROVIDER_ENV, "bettingpros")
     monkeypatch.delenv(_KEY_ENV, raising=False)
     provider = get_odds_provider()
     assert isinstance(provider, BettingProsOddsProvider), type(provider).__name__
 
-    def _no_request(url: str, headers: dict[str, str] | None = None) -> dict:
+    def _no_request(*args: object, **kwargs: object) -> dict:
         raise AssertionError("a request left the process")
 
     monkeypatch.setattr(provider, "_http_get_json", _no_request)
+    monkeypatch.setattr(urllib.request, "urlopen", _no_request)
     with pytest.raises(RuntimeError, match=_KEY_ENV):
         provider._bp_get("x", {})
 
@@ -132,7 +135,7 @@ def test_the_conftest_keeps_both_lines() -> None:
 
     The check compares whole lines with the indent removed. A commented-out
     line does not count. The test lane's odds provider pin (SIM-567) needs
-    both lines: the pin of the mock and the removal of the key.
+    both lines. One pins the mock, and one removes the key.
     """
     lines = {ln.strip() for ln in _CONFTEST.read_text(encoding="utf-8").splitlines()}
     for expected in (_PIN_LINE, _POP_LINE):
