@@ -176,9 +176,9 @@ standing owner rulings that govern all new work:
   `scripts/sim554_rebuild_steal_pool.py --apply-migration` applied 0031 inside its one
   transaction, wrote the 394 pickoff rows (91 / 108 / 95 / 100 for 2023-2026) and passed
   every check; the export round-tripped row for row. The census (both arms, 45 × 20,
-  `scripts/sim554_census_report.txt`) moved the steals' share on a foul, a ball in play or a
+  `CHANGES.md` 2026-10-03) moved the steals' share on a foul, a ball in play or a
   hit by pitch from 38.8% to 0.85% (real 1.0%), the pickoffs per draw ×1.24 (the pool's
-  ×1.28), the attempt volume within noise; the 45 × 130 lane (`scripts/sim554_lane.txt`)
+  ×1.28), the attempt volume within noise; the 45 × 130 lane (same entry)
   reads the same six non-passes as before the change (walks +3.4%, hit by pitch +8.5%,
   doubles +5.0%, steal attempts −10.0% / −21.3% — the steal-weight volume ticket, SIM-556 —
   and the underpowered home-win share), runs 4.47 a team-game. To rerun the rebuild on
@@ -244,7 +244,7 @@ pitching change as a draw (`SIM_MANAGER_DRAW`, `--what manager`) — **FLIPPED O
 adds: sprint speed in both profiles (migration 0024, schema v24), the fielding chain on the
 batted-ball pool (builder sim523g.1; the chain FACTOR is a follow-on), the catcher embedding
 without its got-away columns, the SIM-469 rebuild. The grade: the balanced 45-game set at
-45 × 130 (two lanes 2026-09-09, `scripts/sim523_lane_h.txt`) — the certified arm is green on
+45 × 130 (two lanes 2026-09-09, `CHANGES.md` 2026-09-09) — the certified arm is green on
 every pool band, runs +0.1% (with the fence stage inert; the 2026-09-21 lane with the stage
 active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade bullet).
 
@@ -294,7 +294,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   the API's `/edges` and the game page still served the three full-game markets — SIM-546,
   CLOSED 2026-10-09: the inning grid now rides in the summary through the cache, which stores
   it as JSON since SIM-443f (`simulation/cache_codec.py`). Details: `CHANGES.md` (2026-09-12,
-  two entries) and the build record in `docs/audit/2026-09-11-sim421-prop-market-scrape.md`.
+  two entries), which also hold the build record.
 
 - **Each team's real manager decides the pitching change (SIM-427, CLOSED 2026-09-13 —
   FLIPPED into production the same day; plan `docs/audit/2026-09-13-sim427-build-plan.md`,
@@ -320,7 +320,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   ±0.0011). The fatigue composition read the fatigue plan flagged is repaired by the draw
   (the pitch share by band / times through sits on the pool's). Instruments:
   `scripts/sim427_manager_probe.py`, `scripts/sim427_pen_check.py`,
-  `scripts/sim427_accuracy_pair.sh` + `scripts/sim518_pair_accuracy.py`. Two traps found on
+  `scripts/sim518_pair_accuracy.py` (the paired accuracy comparison). Two traps found on
   the way: `make calibrate` DROPS the win-probability reliability curve from
   `/data/calibration.json` (write it back from `/data/prop_validation.json` through
   `write_reliability_curve_to_calibration_report`, or the app boots uncalibrated); the
@@ -345,13 +345,13 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   calibration refit, SIM-491 flag re-validation. All four SIM-502
   defects (a..d) closed; the THIRD adversarial review ran (four angles, ~1,100 game-loads) — one
   confirmed fix landed (mid-PA pitcher attribution on pickoff/stepoff rows) and SIM-504 was filed
-  for the consumer wiring. The re-sweep (2017-2026, ~6 h, `scripts/resumable_sweep.py`, log in
-  `.sweep_progress/sweep_20260813.log`; the pre-sweep progress files are archived in
-  `.sweep_progress_pre_sim501_20260813/`) rewrites `raw.pitches` with the fixed parser AND fills
+  for the consumer wiring. The re-sweep (2017-2026, ~6 h, `scripts/resumable_sweep.py`; its
+  logs and progress files were removed in the 2026-10-19 clean-up, so a new sweep starts
+  clean) rewrites `raw.pitches` with the fixed parser AND fills
   `raw.play_events` — the first `intent_walk` rows this database has ever held. **SIM-458 is
   RE-LANDED** (2026-08-13, the c11c919 run-expectancy fix, verbatim). After the sweep: SIM-459
   (the recompute picks up SIM-501a/457/503 + 458 + the corrected pool `result_outs` in one pass).
-- **The re-sweep takes ~6 hours, not 55.** Measured from `.sweep_progress/`: 2017-2025 ran in
+- **The re-sweep takes ~6 hours, not 55.** Measured from its progress files: 2017-2025 ran in
   6 h 9 m. The old figure took a SPAN between file timestamps as a duration.
 - **One cutoff per profile table (SIM-551, 2026-09-16).** Eight `derived.*` profile tables
   carry `asof_date`, the date a row's data runs through, and every engine refuses a table
@@ -360,8 +360,8 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   09-16 and the app booted `build_all_engines: 10/11`. Now the computor refuses such a
   rebuild BEFORE it writes and stamps the whole table after its insert. The rule for a
   partial recompute: include the season in progress in `--seasons` (the CLI default is the
-  current season). The batter table was rebuilt at one date with
-  `scripts/sim551_batter_recompute.py` (11 s, the app stopped); the batter matrix came back
+  current season). The batter table was rebuilt at one date by a one-off script
+  (11 s, the app stopped; removed in the 2026-10-19 clean-up); the batter matrix came back
   byte-identical.
 - **The lineup table's position is the one each starter STARTED at (SIM-559, FOUND + BUILT
   2026-10-06; MERGED and the backfill RAN 2026-10-07: 17,279 rows repaired in 10,415 games, zero
@@ -372,15 +372,15 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   same last-position value and keeps it (the official box shows it). The loader now stores
   `allPositions[0]` (a two-way starter who pitches and bats as the designated hitter is 'P');
   `scripts/sim559_backfill_start_positions.py` repaired the loaded games (one UPDATE per game,
-  1 h 44 min at `--sleep 0.1`, Postgres only, the app served throughout; the record is
-  `scripts/sim559_backfill_run.txt`, the census after `scripts/sim559_census_after.txt`). A game
+  1 h 44 min at `--sleep 0.1`, Postgres only, the app served throughout; the record and the
+  census after are in `CHANGES.md` 2026-10-07). A game
   the nightly loaded between the merge and the backfill's pass keeps the old coding: `--seasons
-  2026` repairs it. The 45 × 130 lane of 2026-10-07 (`scripts/sim559_lane.txt`) reads the same six
+  2026` repairs it. The 45 × 130 lane of 2026-10-07 (`CHANGES.md`) reads the same six
   non-passes as 2026-10-03 at like sizes; no band moved. The API answers 503 with Retry-After,
   not 404, for a known game whose lineup has no pitcher or no batting order
   (`LineupIncompleteError`, a sibling of the unpublished-lineup error; a game not in `raw.games`
   still answers 404).
-  The ten-game smoke (`scripts/sim559_smoke.txt`): the fielder factor read a missing or wrong
+  The ten-game smoke (`CHANGES.md` 2026-10-07): the fielder factor read a missing or wrong
   defender on 7.4% of balls in play, the steal and pickoff draws had no catcher on 4.9% of their
   reads, no channel moved beyond noise (every power is 1). `scripts/sim523_game_set.py` reads the
   starters from the box now (89 of 90 before). Plan and run book:
@@ -739,13 +739,13 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
 - `deploy/` — nginx + Prometheus/Grafana. `frontend/` — **React 18 + Vite + TypeScript** app
   (`src/`, `components/`, `pages/`, `graphics/`, `e2e/` Playwright, `vite.config.ts`, `openapi.json`).
-- `docs/` — `HANDOFF_PHASE6.md` (the Phase 6 onboarding, kept for history), `audit/` (active investigation docs),
-  `architecture/` (active design records), `technical/` (the per-subsystem code reference —
-  see §13), `archive/` (superseded audit/architecture/perf/sprint/handoff docs, kept for
-  history, mirrored under `audit/`, `architecture/`, `perf/`, `sprints/`; plus
-  `BACKLOG-history.md`, the frozen narrative BACKLOG.md used to be — see §2b). Root:
+- `docs/` — `audit/` (the plans of the open tickets, the run books, and the closed plans that
+  live code or tests cite), `architecture/` (active design records), `technical/` (the
+  per-subsystem code reference — see §13), `archive/` (the two frozen history files,
+  `BACKLOG-history.md` and `CLAUDE-md-history.md` — see §2b — plus three old design docs
+  that WORKFLOW.md, the DuckDB schema and a benchmark cite; the rest went on 2026-10-19). Root:
   `BACKLOG.xlsx` (the open-ticket source of truth — see §2b), `CHANGES.md`, `agent_team.md`,
-  `README.md`, `WORKFLOW.md`, `PRODUCT_GUIDE.md`.
+  `README.md`, `WORKFLOW.md`.
 
 ## 6. The 9-agent team (see `agent_team.md` for full scopes)
 
@@ -804,8 +804,8 @@ consolidates; QA cross-validates and never self-certifies its own work.
   tags talk about per-batter hands, the starters carried onto the state, the outcome-type fix
   and the replay proportions; they live in `simulation/sim_loop.py`, `game_state.py`,
   `lineup_resolver.py`, `sim_kwargs.py`, `validation/replay_chi_squared.py`,
-  `pipeline/batch/engine_artifacts.py`, `pipeline/batch/player_profile_computor.py` and
-  `scripts/archive/rebuild_pools.py`. (b) `SIM-421` the ticket is the prop-market work (P1,
+  `pipeline/batch/engine_artifacts.py` and `pipeline/batch/player_profile_computor.py`.
+  (b) `SIM-421` the ticket is the prop-market work (P1,
   code complete 2026-09-12). Its tags talk about prop markets, odds, the box score and the
   per-player prop lines; they live in `simulation/prop_distributions.py`,
   `pipeline/odds_provider.py`, `pipeline/bettingpros_odds_provider.py`,
@@ -931,9 +931,6 @@ commit.
 
 ## 13. Key references
 
-- `docs/HANDOFF_PHASE6.md`, `docs/audit/2026-09-02-phase6-prioritized-tickets.md` and
-  `docs/audit/2026-09-02-phase5-close-program-audit.md` — the Phase 5 close and the Phase 6
-  plan, kept for history.
 - `BACKLOG.xlsx` — the authoritative open-ticket list (one tab, ranked by priority, with a
   plain-English description, definition of done, and proposed solution per ticket); verify a
   ticket's status here before acting on it. `docs/archive/BACKLOG-history.md` holds the frozen

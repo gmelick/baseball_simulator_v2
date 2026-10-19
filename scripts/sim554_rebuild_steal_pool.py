@@ -1372,7 +1372,7 @@ def steal_centres(
     ``pitch_class`` holds the class codes (1-6; 0 = a pickoff row), or None
     for a pool without classes (every row a pitch row). The attempt rate is
     recency-weighted and the safe share is not, as the steal probe that set
-    the band centres computed them (``scripts/archive/sim476_steal_probe.py``).
+    the band centres computed them (``scripts/archive/sim476_steal_probe.py``, git history).
     The pickoff outcomes count every row: the tags on pitch rows and the
     pickoff rows, over the pitch rows.
     """

@@ -296,18 +296,6 @@ The SIM-538 sim-vs-closing-line accuracy comparison, the platform's gold-standar
 
 ---
 
-### `scripts/sim558_starter_census.py`
-
-**Purpose:** SIM-558 — does every game resolve its real starters? A READ-ONLY count over every Final game. For each side it compares the lineup's pitcher row alone (`raw.game_lineups`, the resolver before SIM-558), the official box (`raw.game_player_stats.p_started`) and the resolver as it runs now. It sorts each disagreement into its cause: `missing` (a two-way starter, coded by his batting position), `on the mound` (a position player who finished the game pitching; the lineup stores the LAST position a player held) and `scratched` (an announced starter who threw no pitch). `--async-sample N` resolves N games through the real path (`resolve_game_state` against Postgres): every game with a disagreement plus a random rest. Exit 1 when the resolver leaves any side missing or different from the box. The record of 2026-10-05 is `scripts/sim558_starter_census.txt` (80 missing, 308 on the mound, 9 scratched in 392 of 22,742 games before the fix; 0 after).
-
----
-
-### `scripts/sim558_game_probe.py`
-
-**Purpose:** SIM-558 — what the starter fix changes in one game. `run GAME N OUT.json` simulates one game N times through the production machine and counts, for each batting side, the plate appearances, strikeouts, walks, hit by pitches, hits by type, balls in play and runs, and which pitcher faced each side. `compare OLD.json FIXED.json` prints the paired read and the size of the move in the 45 x 130 lane's totals. The records of 2026-10-05 for game 823372 are `scripts/sim558_game_823372_old.json`, `..._fixed.json` and `..._paired.txt`.
-
----
-
 ### `scripts/sim555_book_probe.py`
 
 **Purpose:** SIM-555 run book step 3 — the gate before the re-load. A READ-ONLY census of N games (default 300, stratified by season 2019-2026 and month, from Final games with a stored closing moneyline) read from the vendor through the provider's by-book methods at `--rate` reads a second (default 1.0): the moneyline, run line, total, the first-inning and first-five moneyline / run line / total, and one strikeout prop per game. It reports, per market: the offers, the books quoting, the opener's coverage and the rows by book; the stamp's distance from the scheduled start by season; the guard's refusals by rule, market and book; the first-five exclusions (dated / twin) by book; and the GATE: (a) every two-way offer quoted by a book on `GRADED_BOOK_PREFERENCE`; (b) per (market, line type, book), the kept first-five rows that still look first-inning-shaped (a price more than 0.15 implied probability from the other books' median at the same line, a copy of the book's own first-inning row, or a shape the guard names) under 0.5%; (c) no book fails (b) — a failing book off the list, or a listed book flagged before its date, names the fix (add it to `F5_EXCLUDED_BOOKS`, or move its date). Gates (b) and (c) grade the bettable books only; the blend's, the pick'em apps', the exchanges' and the prediction markets' flags are printed beside the gate (`non_bettable_flags`), and the rows the load guard refuses are counted, not graded (they are never stored). A read that failed makes an item UNKNOWN; `--game-pks` re-reads the listed games. `--regate FILE` re-applies the CURRENT guard and dated exclusion to a saved census JSON without a vendor or database read (a rule change needs no second hour of vendor reads). Writes nothing to the database. `--out` writes every row, the summary and the gate as JSON.
@@ -388,20 +376,6 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim551_batter_recompute.py`
-
-**Purpose:** SIM-551 — rebuild the batter profiles (`derived.batter_season_metrics`) at ONE cutoff, on their own, after a partial rebuild left the table at two dates and the batter engine refused to build (`build_all_engines: 10/11`, 2026-09-11 → 09-16). The app must be STOPPED (a DuckDB write). Runs the computor's own `_compute_batter_profiles` for the seasons in one transaction (the seasons' old rows deleted first), recomputes ONLY the `batter` rows of `derived.league_averages` (the writer's other blocks would overwrite the runner rows the SIM-531 recompute wrote with their new keys), then verifies. Ran 2026-09-17: ten seasons in 11 s, one stamp on 7,885 rows, the batter engine built 4,371 profiles.
-
-| Function | What it does | Called by | Depends on |
-|---|---|---|---|
-| `stamps(duckdb_path)` | Read-only: the distinct `asof_date` stamps on the table with their season range and row count — printed before and after the rebuild. | `main()` | — |
-| `recompute_batter_league_averages(duckdb_path, seasons)` | The `batter` block of `LeagueAverageProfiles.compute`, alone (INSERT OR REPLACE on the batter rows for the seasons). | `main()` | — |
-| `verify(duckdb_path, seasons)` | Read-only: rows per season with the physical block's coverage (a floor of 500 batter-seasons with a bat-speed figure on a completed season from 2023 on), exactly ONE stamp on the table, a batter league row per season, and a build of `BatterSimilarityEngine` over every season — the build the app runs at boot; raises on any problem. | `main()` | `similarity.engines.batter_similarity.BatterSimilarityEngine` |
-
-**Used by:** `operator CLI only. Then \`docker compose start app\` (check the boot log for \`build_all_engines: 11/11\`) and \`python -m pipeline.batch.engine_artifacts --what actors_sim --matrix batter\` (read-only).`
-
----
-
 ### `scripts/sim532_fielder_recompute.py`
 
 **Purpose:** SIM-532 — Savant's per-position outs above average and the outfield jump in the fielder profile (`derived.fielder_season_metrics`), rebuilt on their own after the two board loads: run-book step 4 of `docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md`. The app must be STOPPED (a DuckDB write; the forkserver's writer lock, SIM-524). Applies the DuckDB migration `0030_sim532_fielder_oaa_jump.sql` (idempotent; the six columns after `asof_date`), runs the FIELDER CHAIN through the computor's own methods with Postgres attached — the run-expectancy matrix, the six per-play builders, the aggregator with its two new Savant joins, then the outfield arm fill again (the aggregator writes the arm block NULL) — recomputes `derived.league_averages` for the seasons, then verifies. Not the pitcher GMM, not the pools: well under an hour. Seasons 2017 to 2026 by default (`raw.pitches` starts in 2017; the boards' 2016 rows stay in the raw tables). A partial season list must include the season in progress, or the script refuses it before the computor's one-cutoff guard would (`--allow-partial` hands the decision to the guard). Ran 2026-09-17 on the live data: the migration applied, the fielder chain recomputed in 80 s (10 seasons), the league rows written, every verify check passed (1,145–1,291 fielder rows a season with a Savant figure; 297–496 outfield rows with a jump — a jump row joins every outfield position a player has a row at; the named 2024 checks value for value).
@@ -414,20 +388,6 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 | `missing_current_season(seasons, today)` | The season in progress when the list omits it — the refusal `main()` makes before any write unless `--allow-partial` or `--skip-profiles` is passed. | `main()` | — |
 
 **Used by:** `operator CLI only (run-book step 4). Then \`make calibrate\` (write the win-probability curve back — the SIM-427 trap), copy \`sigma_of_range\` and the range weights into the module defaults, \`python -m pipeline.batch.engine_artifacts --what actors_sim --matrix fielder_LF …\` for the seven fielder matrices, \`docker compose start app\`. No paired accuracy run follows (owner ruling 2026-09-16).`
-
----
-
-### `scripts/sim532_by_position.py`
-
-**Purpose:** SIM-532 — the design session's probe (plan §2.2b), in the repo so a re-run after the loads can be compared with the numbers it printed on 2026-09-17 (they sit in its docstring). It measures, WITHIN one position, the year-to-year repeat of the fielder's batter-hand split (Savant's outs above average against left-handed batters minus his figure against right-handed batters, as a count and per 100 of our chances), of Savant's outs above average per 100 of our chances, and of our own outs above average per 100 — on players at that position in consecutive seasons with 100 or more of our chances in both, two season pairs pooled per era (the shift era 2018→19 and 2021→22; the ban era 2023→24 and 2024→25) — then the gap's mean size for regulars (250 or more chances). The finding: the hand gap repeats only at shortstop (0.36 to 0.38) and Savant's figure beats every one of our range components at every position but first base, so the split is stored and unread and Savant's figure joins both range groups. Reads Savant's rows from Postgres `raw.savant_outs_above_average` and ours from DuckDB `derived.fielder_season_metrics` (read-only; the app may stay up); `--csv-dir` reads the design session's CSV layout instead.
-
-| Function | What it does | Called by | Depends on |
-|---|---|---|---|
-| `read_from_databases(dsn, duckdb_path)` / `read_from_csv(csv_dir)` | The two sources, in one shape: ours keyed (player, position, season) → (chances, outs above average); Savant's keyed the same → {oaa, rhh, lhh}. | `main()` | `raw.savant_outs_above_average`<br>`derived.fielder_season_metrics` |
-| `pairs(ours, sav, pos, mn, get, years)` | The year-to-year Pearson r of one feature at one position over the qualifying player pairs (n, r; r None below six pairs). | `report()` | — |
-| `report(ours, sav)` | Prints the two era tables (four features × seven positions, with n) and the gap's mean size by position and era. | `main()` | — |
-
-**Used by:** `operator CLI only (a read; the plan's §2.2b evidence).`
 
 ---
 
@@ -486,22 +446,6 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 | `report(args)` | Pairs the arm JSONs (the first is the baseline) and prints the five reads; `--scan-json scripts/sim518_fatigue_scan.json` supplies the pool's row share for the composition read. | `main()` | — |
 
 **Used by:** `operator CLI only (part 4f's fits: the manager power ladder 0 / 1 / 2 / 4 / 8, then the reliever weights; the usage read is the first of the two flip conditions in the plan's §5).`
-
----
-
-### `scripts/sim427_accuracy_pair.sh`
-
-**Purpose:** SIM-427's paired accuracy run — the second flip condition of the plan's §5. Runs INSIDE the app container (`docker compose run -d ... app sh scripts/sim427_accuracy_pair.sh`): first the ON arm (`SIM_MANAGER_DRAW=1`, `SIM_BULLPEN_SOURCE=box`, manager power 4, role 0.1, rest 0.5, pitched-in-2-days 0.25, pitches-in-3-days 10 — the fitted values), then the OFF arm (the container's own env: production today), each a `scripts/clv_backtest.py --seasons 2024 --iterations 100 --workers 5 [--max-games N]` writing `scripts/sim427_accuracy_{on,off}.json` and its log; `sim427_accuracy_pair.log` carries the arms' start / exit lines. `SIM427_ITERS` / `SIM427_WORKERS` override the two numbers; `SIM427_MAX_GAMES` caps the run to the first N Final games by game_pk (a prefix spans the whole season — the first 250 cover 150 dates; the owner chose 250 on 2026-09-13 after the full season measured at 43 hours). Pair the reports with `scripts/sim518_pair_accuracy.py`. Five workers, not six: the Docker VM has 9.7 GiB and each worker holds ~1.2 GB beside the two Postgres containers.
-
-**Used by:** `operator CLI only. RAN 2026-09-13 on the first 250 games of 2024 (the owner's choice over the 43-hour season): the draw read more accurate on the starter strikeout market (−0.0156 Brier, range [−0.0255, −0.0066]) and the moneyline (−0.0062), flat elsewhere — the second flip condition; the pairing is scripts/sim427_accuracy_pair.{txt,json}.`
-
----
-
-### `scripts/sim518_accuracy_fatigue.sh`
-
-**Purpose:** the fatigue plan's §6 grade — two paired accuracy arms INSIDE the app container on the flipped production (the manager draw, the real pen): the fatigue weight with the pitch-count term OFF and the times-through bandwidth at 0.5, then 0.7 (`SIM_FATIGUE_PC_SIGMA=0 SIM_FATIGUE_TTO_SIGMA=$SIGMA`), each `scripts/clv_backtest.py --seasons 2024 --iterations 100 --workers 5 --max-games 250` on the same games, seeds and bundle as the manager flip's ON arm (`scripts/sim427_accuracy_on.json`), which is their baseline. Writes `scripts/sim518_accuracy_tto{05,07}.json` and logs; `sim518_accuracy_fatigue.log` carries the start / exit lines. The same `SIM427_ITERS` / `SIM427_WORKERS` / `SIM427_MAX_GAMES` overrides.
-
-**Used by:** `operator CLI only. RAN 2026-09-14 (2 h 22 + 2 h 30): flat on every market at both bandwidths (pooled −0.0004 / −0.0001 Brier; starter strikeouts −0.0033 / +0.0004); the 0.5 arm's three two-standard-error rows did not repeat at 0.7. The pairings are scripts/sim518_accuracy_pair_tto{05,07}.{txt,json}. The owner landed the weight at 0.5 the same day, so scripts/sim518_accuracy_tto05.json is production's accuracy baseline from then on.`
 
 ---
 
@@ -656,24 +600,6 @@ SIM-420 -- exports the FastAPI app's OpenAPI schema to frontend/openapi.json, th
 
 ---
 
-### `scripts/rebuild_pools.py`
-
-Lightweight operational tool that rebuilds ONLY sim.pitch_pool and sim.outcome_pool for the given seasons, skipping the expensive full engine-profile recompute -- used when only the play pools need to be re-materialized after a pool-affecting fix.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `module-level script body` | Connects a PlayerProfileComputor directly (bypassing its normal orchestration) and calls _build_pitch_pool(seasons, incremental=False) then _build_outcome_pool(seasons, incremental=False) for the seasons given on argv. | — | `pipeline.batch.player_profile_computor.PlayerProfileComputor._connect/_build_pitch_pool/_build_outcome_pool/_close` |
-
-**Depends on:** `pipeline/batch/player_profile_computor.py`
-
-**Used by:** `operator CLI only: python scripts/rebuild_pools.py [season ...] (default season 2026)`
-
-**Environment flags read here:** `BASEBALL_DB_DSN (required, no default -- raises KeyError if unset)`, `BASEBALL_DUCKDB_PATH (default /data/baseball_sim.duckdb)`
-
-> **Notes for anyone changing this file:** Bypasses the computor's normal connect-then-orchestrate flow by calling the private _build_pitch_pool/_build_outcome_pool methods directly with incremental=False, so it always fully replaces the named seasons' pool rows rather than incrementally updating them. Does not rebuild the engine-artifact bundle afterward -- a caller must separately run pipeline.batch.engine_artifacts --what pool to make the new pool rows visible to the production sampler.
-
----
-
 ### `scripts/resumable_sweep.py`
 
 Drives the corrective ETL reload sweep to completion across a stochastic CPython interpreter crash (a since-mostly-fixed inline-cache corruption bug, SIM-445/446) by re-launching HistoricalDataLoader.refresh_seasons as a subprocess and recording every successfully-loaded game_pk to a progress file, so a crash only costs lost progress, not correctness.
@@ -713,66 +639,6 @@ Corrective reload tool for specific games or every discovered ETL gap. Distingui
 
 ---
 
-### `scripts/sim515_build_ibb_rates.py`
-
-Applies DuckDB migration 0020 and builds sim.ibb_rates -- the per-cell (runner state x outs x late x close) intentional-walk rate table the simulator draws from per plate appearance (SIM-515, replacing an older hardcoded 2.64x IBB formula).
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `main()` | Applies migration 0020, calls PlayerProfileComputor._build_ibb_rates(seasons), then prints the built cells (sorted by issued count) and the implied league IBB-per-team-game rate as a sanity check against MLB. | `operator CLI only, run detached in the app container with scripts/ bind-mounted` | `pipeline.batch.player_profile_computor.PlayerProfileComputor._build_ibb_rates` |
-
-**Depends on:** `pipeline/batch/player_profile_computor.py (_build_ibb_rates)`, `db/migrations/duckdb/0020_sim515_ibb_rates.sql`
-
-**Used by:** `simulation/full_pool_sampler.py's per-PA IBB draw reads the sim.ibb_rates table this script builds`
-
-**Environment flags read here:** `BASEBALL_DUCKDB_PATH (default /data/baseball_sim.duckdb)`, `BASEBALL_DB_DSN (required, no default)`
-
-> **Notes for anyone changing this file:** The season window passed via --seasons MUST match the pool's recency-floor window (the last three completed seasons plus the current one, per the 2026-08-20 owner ruling) -- this is the live mechanism CLAUDE.md section 2b names for the SIM-515 IBB-rate table. scripts/ is not baked into the running image, so it must be run with -v "$PWD/scripts:/app/scripts" bind-mounted in.
-
----
-
-### `scripts/sim518_rebuild_pools.py`
-
-End-to-end pool-only rebuild (SIM-469/SIM-518): applies DuckDB migration 0023, rebuilds sim.pitch_pool with three new conditioning columns (bat_home, pitcher_pitch_count, times_through_order), verifies the rebuild against an independently-recomputed sample, re-exports the engine-artifact pools, and verifies the loader round-trip -- about 2 hours detached versus the 5.7-hour full profile recompute.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `_season_counts(con)` | Returns per-season sim.pitch_pool row counts, used to verify the rebuild changed no row count. | — | — |
-| `main()` | Runs 5 numbered steps in order: apply the migration, rebuild the pitch pool via PlayerProfileComputor._build_pitch_pool, verify (row counts plus an independent correlated-subquery recomputation of the 3 new columns on a random game sample), re-export the artifacts, and check the loader round-trip on the exported EngineArtifacts bundle. | `operator CLI, run detached with scripts/ bind-mounted; CLAUDE.md records it as having run on 2026-09-09 as part of the SIM-523 part-G rebuild chain` | `pipeline.batch.player_profile_computor.PlayerProfileComputor._build_pitch_pool`<br>`pipeline.batch.player_profile_computor.POOL_BUILDER_VERSION`<br>`pipeline.batch.engine_artifacts.main (--what pool)`<br>`pipeline.batch.engine_artifacts.EngineArtifacts.load` |
-
-**Depends on:** `pipeline/batch/player_profile_computor.py`, `pipeline/batch/engine_artifacts.py`, `db/migrations/duckdb/0023_sim518_pitch_pool_conditioning.sql`
-
-**Used by:** `simulation/full_pool_sampler.py's draw-conditioning weights (SIM_FATIGUE_PC_SIGMA / SIM_FATIGUE_TTO_SIGMA / SIM_PITCH_HOME_OFF_WEIGHT), still gated OFF pending their fit, read the columns this rebuild adds`
-
-**Environment flags read here:** `BASEBALL_DUCKDB_PATH (default /data/baseball_sim.duckdb)`, `BASEBALL_ENGINE_ARTIFACT_DIR (default /data/play_pool/engine_artifacts)`, `SIM518_SAMPLE_GAMES (default 500 -- size of the independent-verification game sample)`, `BASEBALL_DB_DSN`
-
-> **Notes for anyone changing this file:** Asserts POOL_BUILDER_VERSION is one of (sim518.1, sim523g.1) -- this ties the script to a specific pool-builder version chain; the live version has since moved past sim518.1 to sim523g.1 (see scripts/sim523_part_g_rebuild.py), which this script tolerates but does not itself produce. Elsewhere documented as needing to run with the app STOPPED, because the forkserver holds a DuckDB writer lock (the still-open SIM-524 ticket).
-
----
-
-### `scripts/sim523_part_g_rebuild.py`
-
-The current, most complete data-rebuild chain for the play-picker redesign (SIM-523 part G): adds sprint speed to the batter/fielder profiles, rebuilds the pitch pool via sim518_rebuild_pools.py's steps, rebuilds the outcome pool with the current sim523g.1 builder (adding the fielding-chain putout/assist masks), and re-exports the batted-ball pool and actor embeddings.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `step_migration_and_speed()` | Applies DuckDB migration 0024 and loads sprint speed from raw.sprint_speed into derived.baserunner_season_metrics and derived.fielder_season_metrics via the Postgres attachment. | — | — |
-| `step_sim469()` | Runs the SIM-469 pitch-pool rebuild by re-using scripts/sim518_rebuild_pools.py's steps as-is. | — | — |
-| `step_outcome_pool()` | Rebuilds sim.outcome_pool for the window seasons with the sim523g.1 builder, verifying row counts and that putout/assist masks are set correctly on out plays and double plays. | — | `pipeline.batch.player_profile_computor.PlayerProfileComputor._build_outcome_pool` |
-| `step_round_trip()` | Re-exports the batted-ball pool and actor embeddings, then verifies BattedBallPool.fielders/putout_mask/assist_mask are present at the expected rates. | — | `pipeline.batch.engine_artifacts.main` |
-| `main()` | Runs the four steps in order, logging progress with timestamps. | `operator CLI, run with the app STOPPED (docker compose stop app, then this script, then docker compose up -d app); CLAUDE.md records this as builder sim523g.1, run 2026-09-09` | — |
-
-**Depends on:** `scripts/sim518_rebuild_pools.py (re-run as one step)`, `pipeline/batch/player_profile_computor.py`, `pipeline/batch/engine_artifacts.py`, `db/migrations/duckdb/0024_sim523_part_g_data_adds.sql`, `raw.sprint_speed table`
-
-**Used by:** `the sim523g.1-built pools are what production reads today (see the POOL_BUILDER_VERSION check in sim518_rebuild_pools.py); the fielder/baserunner sprint-speed columns feed the SIM-521 fielder-arm-features and steal/advancement actor-matrix work`
-
-**Environment flags read here:** `BASEBALL_DUCKDB_PATH`, `BASEBALL_ENGINE_ARTIFACT_DIR`, `BASEBALL_DB_DSN`
-
-> **Notes for anyone changing this file:** This was the full data-rebuild chain of 2026-09-09 -- it produced sim523g.1. Since 2026-09-25 the pitch pool is on sim553.1 (`scripts/sim553_rebuild_pitch_pool.py`); the outcome, steal and advancement pools of 2023-2026 still read sim523g.1. Must run with the app container stopped, because the DuckDB forkserver holds a writer lock that blocks concurrent rebuilds (tracked as the still-open SIM-524 ticket). A future season/window extension would re-run this chain, or its constituent steps, again.
-
-
----
-
 ### `scripts/sim553_rebuild_pitch_pool.py`
 
 SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or foul bunt as strike three. It rebuilds `sim.pitch_pool` for all ten seasons in ONE transaction with the `sim553.1` builder, checks it, and exports the pitch pool only into the engine-artifact bundle. Run it with the app STOPPED (the app holds the DuckDB lock, SIM-524): `docker compose stop app`, then `MSYS_NO_PATHCONV=1 docker compose run -d --rm -v "$PWD/scripts:/app/scripts" app python scripts/sim553_rebuild_pitch_pool.py`, then `docker compose up -d app`. `--check-only` runs the pre-flight and check d read-only while the app runs.
@@ -790,7 +656,7 @@ SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or 
 
 ### `scripts/sim559_backfill_start_positions.py`
 
-Repairs the starters' positions in `raw.game_lineups` (SIM-559). The historical loader wrote each starter's `position_code` from the box feed's `position` field, the LAST position the player held in the game; `allPositions[0]` is where he started. A fielder who moved mid-game therefore held his final slot in the simulator's defense map, his starting slot was empty, and the player who really started at his final slot lost his glove — one team-game in four (10,802 + 1,091 of 45,484 team-games with a hole, 301 with no catcher; 29 defective team-games in the balanced set's 90). **RAN 2026-10-07:** 22,742 games, 17,279 rows repaired in 10,415 games, zero failures, 1 h 44 min at `--sleep 0.1`; the census after reads every team-game with eight gloves and a catcher (`scripts/sim559_census_after.txt`). The script fetches each Final game's box (`/api/v1/game/{pk}/boxscore`, the same request the box-score backfill makes), compares the parsed starting positions with the stored lineup codes, and writes one UPDATE per game over the rows that differ. The box-score table keeps the last position (what the official box shows).
+Repairs the starters' positions in `raw.game_lineups` (SIM-559). The historical loader wrote each starter's `position_code` from the box feed's `position` field, the LAST position the player held in the game; `allPositions[0]` is where he started. A fielder who moved mid-game therefore held his final slot in the simulator's defense map, his starting slot was empty, and the player who really started at his final slot lost his glove — one team-game in four (10,802 + 1,091 of 45,484 team-games with a hole, 301 with no catcher; 29 defective team-games in the balanced set's 90). **RAN 2026-10-07:** 22,742 games, 17,279 rows repaired in 10,415 games, zero failures, 1 h 44 min at `--sleep 0.1`; the census after reads every team-game with eight gloves and a catcher (the record is in `CHANGES.md`, 2026-10-07). The script fetches each Final game's box (`/api/v1/game/{pk}/boxscore`, the same request the box-score backfill makes), compares the parsed starting positions with the stored lineup codes, and writes one UPDATE per game over the rows that differ. The box-score table keeps the last position (what the official box shows).
 
     python scripts/sim559_backfill_start_positions.py --dry-run --max-games 200
     python scripts/sim559_backfill_start_positions.py --done-file /data/sim559_done.txt
@@ -808,8 +674,6 @@ Repairs the starters' positions in `raw.game_lineups` (SIM-559). The historical 
 **Environment flags read here:** `BASEBALL_DB_DSN`
 
 > **Notes for anyone changing this file:** The lineup insert in the historical loader is `ON CONFLICT DO NOTHING`, so a re-load of a game never repairs its lineup rows — this UPDATE is the only repair path. Only a row whose code differs is written, so `raw.game_lineups.updated_at > created_at` marks exactly the repaired rows; re-run the hole census (`tests/unit/test_sim559_starting_position.py` documents the defect; the census SQL is in the plan, `docs/audit/2026-10-06-sim559-starting-position-plan.md`) after the run.
-
-**Companion instruments (SIM-559).** `scripts/sim559_defense_map_compare.py` rebuilds each team-game's defense map exactly as production does (`resolve_lineup_from_rows` + `build_team_defense_map`) and compares it slot by slot with the box feed's `allPositions[0]` (`--balanced` the 45 certifying games, `--random N --seed`, `--game-pks`; `--expect-clean` exits 1 on any missing or wrong slot: the definition of done). It sees the swaps the hole census cannot. `scripts/sim559_smoke_arm.py` is the two-arm ten-game smoke (`--arm stored` = the maps production builds today, `--arm true` = the slots and the catcher rebuilt from the box feed, the same seeds): it tallies, per fielding draw, a missing or wrong live defender at the drawn position and, per pickoff or steal draw, a missing or wrong catcher, and prints `sim_stats.py`'s channel report. The record of 2026-10-06 is `scripts/sim559_smoke.txt` (+ `sim559_smoke_stored.json` / `sim559_smoke_true.json`).
 
 ---
 

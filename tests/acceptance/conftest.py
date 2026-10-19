@@ -585,7 +585,7 @@ def _install_probes(
     SIM-511 production resolution path (SIM-486 deleted the legacy
     ``_full_pool_out_advancement`` it used to bypass).
 
-    The wrapper pattern matches ``scripts/archive/diag_dp.py:64-78``.
+    The wrapper pattern matches the old ``scripts/archive/diag_dp.py:64-78`` (git history).
     """
     from simulation.constants import resolve_event_to_canonical
     from simulation.sim_loop import _DOUBLE_PLAY_EVENTS
