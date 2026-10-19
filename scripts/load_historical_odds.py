@@ -160,10 +160,13 @@ USAGE
 This is an OFFLINE backfill job. It is network-bound; cap a smoke run with
 ``--max-games``. SIM-555 (review fix 2026-09-28): the job refuses the
 deterministic MockOddsAPI unless ``--provider mock`` is on the command line.
-The app container leaves ``ODDS_PROVIDER`` unset and the registry's default
-is the mock, so a run with no ``--provider`` used to write made-up
-``consensus`` prices into a real season. ``--provider mock`` still gives the
-no-network synthetic-line smoke / wiring check.
+The registry's default is the mock. A run with no ``--provider`` used to
+write made-up ``consensus`` prices into a real season. The app container
+reads ``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's ``.env``
+(bettingpros since 2026-10-09). The unit-test lane pins the mock in
+``tests/conftest.py`` (the test lane's odds provider pin, SIM-567).
+``--provider mock`` still gives the no-network synthetic-line smoke / wiring
+check.
 
 The BettingPros provider caches one ``/offers`` response per (event, market)
 for a time-to-live (SIM-421). The live pipeline needs a short one (30 s) so a
@@ -471,11 +474,12 @@ def _select_provider(requested: str | None) -> str:
     """SIM-555: the odds provider this run reads; never the mock unless asked.
 
     ``--provider`` wins, then the ``ODDS_PROVIDER`` environment variable, then
-    the registry's default (the mock). The mock writes made-up prices, so a
-    run whose provider resolves to it without ``--provider mock`` on the
-    command line raises ``ValueError``: the app container leaves
-    ``ODDS_PROVIDER`` unset, and a real season must never get mock rows by
-    default.
+    the registry's default (the mock). The mock writes made-up prices. A run
+    whose provider resolves to the mock without ``--provider mock`` raises
+    ``ValueError``. A real season must never get mock rows by default. The app
+    container reads ``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's
+    ``.env`` (bettingpros since 2026-10-09). The unit-test lane pins the mock
+    in ``tests/conftest.py``.
     """
     asked = (requested or "").strip().lower()
     name = (asked or os.environ.get(ODDS_PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()

@@ -1,3 +1,165 @@
+# CLOSED — the test lane pins the odds provider to the mock, and make test-unit tests the checkout — SIM-567, 2026-10-19
+
+**Why.** The unit-test lane runs inside the app container. That container reads the stack's
+`.env` through `env_file` (`docker-compose.yml` line 156). Since 2026-10-09, `.env` carries
+`ODDS_PROVIDER=bettingpros`. The one reader of that variable is `get_odds_provider()` in
+`pipeline/odds_provider.py`. An explicit name wins there, then the environment, then the mock
+(the provider of deterministic made-up prices). Twelve unit tests build the live pipeline with
+`LiveIngestionPipeline.__new__` (a build that skips the constructor) and set no provider. The
+pipeline's lazy fallback (`_odds_provider()`, the provider lookup on first use) then built the
+real BettingPros provider. That provider's lookups on the MLB Stats API answered HTTP 404. The
+provider returned no rows, and the twelve tests failed. Six of them sit in
+`test_data_engineer_sim340.py`, two in `test_live_pipeline_sim348.py` and four in
+`test_sim421_odds_vocabulary.py`. The three files hold 172 tests. CI never saw the failures,
+because CI has no `.env`. The build of the scheduled backups (SIM-525) found them on
+2026-10-15. Since then, every container lane ran with `-e ODDS_PROVIDER=mock`. A second defect
+sat under the first. The Makefile's container targets mounted nothing. Compose bind-mounts only
+the five code folders: `api/`, `pipeline/`, `similarity/`, `simulation/` and `db/`. So
+`make test-unit` ran the image's copy of `tests/` and `tests/conftest.py` (`Dockerfile` line
+148). That copy dates from the last image build. A fix to the checkout's conftest could not
+reach `make test-unit` without a rebuild.
+
+**What was built (branch `sim567-pin-test-odds-provider`: `779b08f` the build, `22dc00d` the
+review fixes).** `tests/conftest.py` now sets `os.environ["ODDS_PROVIDER"] = "mock"`, right
+after the `AUTH_DISABLED` block. The next line runs `os.environ.pop("ODDS_API_KEY", None)`. The
+pin is hard, like the `SIM_MANAGER` pin. A `setdefault` cannot beat the explicit `.env` value,
+and that value is the defect. Two test files change the variable with monkeypatch (the pytest
+fixture that undoes its changes after each test). `test_sim555_writers.py` sets the vendor
+name. The `clean_env` fixture of `test_odds_provider_sim370.py` deletes the variable.
+Monkeypatch restores the pinned value on teardown, so both files keep working. The pin removes
+the API key too. A test that still builds the vendor's provider then sends no BettingPros
+request. The provider's request seam to BettingPros, `_bp_get`, raises "needs an API key"
+first. The provider's public methods catch that error and return empty rows. Its MLB Stats API
+reads (`_mlb_get`) need no key, so they still try the network.
+
+The seven container targets of the `Makefile` (`test`, `test-unit`, `test-regression`,
+`test-integration`, `lint`, `format`, `type-check`) now run
+`docker compose run --rm -v "$(CURDIR):/app" app`. The mount puts the whole checkout over the
+image's copy, `tests/`, `scripts/` and `pyproject.toml` included. GNU Make 3.81 runs the
+recipes in cmd.exe, where `$(CURDIR)` expands to
+`C:/Users/grego/Documents/baseball_simulator_v2`. A new variable, `TESTS = tests/unit/`, names
+the files that `make test-unit` runs. `make test-unit TESTS="tests/unit/test_x.py"` runs one
+file. The variable takes a plain `=`, not `?=`, so a `TESTS` value in the shell's environment
+cannot narrow the target. A comment under the Tests banner explains the mount. The comment says
+to run these targets from the main checkout. From a worktree, `make` reads the worktree's own
+compose file and `.env`. That project has no app image, so compose builds one.
+
+The new `tests/unit/test_sim567_odds_provider_pin.py` holds six tests. No test opens a database
+or a socket. `test_the_lane_pins_the_mock` proves that `ODDS_PROVIDER` reads "mock" in the test
+process. `test_the_lane_holds_no_vendor_key` proves that the process holds no `ODDS_API_KEY`.
+`test_the_factory_answers_the_mock` proves that `get_odds_provider()` with no name returns a
+`MockOddsAPI`. `test_a_bare_pipeline_draws_the_mock` builds a pipeline with `__new__`, the
+twelve tests' path. The pipeline answers a `MockOddsAPI` and keeps it for the next lookup.
+`test_the_vendor_seam_refuses_without_the_key` names the vendor and removes the key. It proves
+that `_bp_get` raises a `RuntimeError` that names `ODDS_API_KEY`. Two stubs, on
+`_http_get_json` and on `urllib.request.urlopen`, raise `AssertionError`. So the test fails if
+a request ever leaves before the key check. `test_the_conftest_keeps_both_lines` reads
+`tests/conftest.py` and requires both pinned lines as whole lines. A commented-out line does
+not count. The test builds the two lines from the readers' constants, so a renamed variable
+fails it.
+
+Six comments said that the app container leaves `ODDS_PROVIDER` unset. Each now says that the
+app container reads `ODDS_PROVIDER` and `ODDS_API_KEY` from the stack's `.env` (bettingpros
+since 2026-10-09). Each also says that the unit-test lane pins the mock. Two of the six sit in
+`scripts/load_historical_odds.py`: the module docstring and the `_select_provider` docstring.
+The loader still refuses an implicit mock, because a real season must never get made-up prices.
+Two sit in `docs/technical/scripts-frontend.md`: the flags of the nightly closing-lines job and
+the loader notes. One sits in `WORKFLOW.md`. One sits in the docstring of
+`TestLoaderRefusesTheImplicitMock` (`tests/unit/test_sim555_writers.py`). The Makefile's note
+on the `load-historical-odds` target gets the same correction. A reviewer found one more copy
+of the claim in `deploy/ofelia/config.ini`. The fix round corrected it. The change is a
+comment, so the scheduler needs no recreate. `.env.example` now documents `ODDS_PROVIDER` after
+`ODDS_API_BASE`. The note names the readers, the app and the live service. `mock` is the
+default when the variable is unset. `bettingpros` is the live BettingPros v3 provider, and
+`real` names the same provider. The note also says that the unit-test lane pins the mock,
+whatever the file says.
+
+`CLAUDE.md` gets two notes. Section 2 says that the conftest also pins the odds provider and
+removes the vendor key. Section 2a gets a new bullet after the "`scripts/` is NOT
+volume-mounted" bullet. The bullet covers the seven targets, the mount, `TESTS=`, the worktree
+caveat and the hard pin. The edits move the two cited lines of section 11 down by 14. "Runs run
+~7-8% low" moves from line 897 to line 911. "home_win_pct stuck at the structural-only" moves
+from line 900 to line 914. Every `CLAUDE.md:897` and `CLAUDE.md:900` citation under `tests/`
+now names the new line. `_CLAUDE_MD_GAP_LINE` reads 911. The re-pointed files are
+`tests/acceptance/bands.py`, `tests/acceptance/conftest.py`,
+`tests/acceptance/test_band_arithmetic_sim450.py`,
+`tests/acceptance/test_production_config_bands_sim450.py` and
+`tests/unit/test_sim449_sim_kwargs.py`. The fix round kept the new bullet at 13 lines, so the
+two citations still hold.
+
+**The gates (a workflow of Opus 5.5 agents: three builders, one gate agent, two adversarial
+reviewers, one fix round and one record agent).** The gate agent ran checks 0 to 7 on the build
+commit. The last five rows are the fix round's reruns after its edits.
+
+| Gate | Result |
+|---|---|
+| 0. Commit the build | `60346d2`: 14 files changed, 259 insertions(+), 64 deletions(-). The fix round reworded its message only; the same tree is now `779b08f` |
+| 1. The definition of done: `make test-unit` from PowerShell, `TESTS=` the three files and the guard file, no override | `178 passed, 2 warnings in 20.80s` (172 + the 6 guard tests). The warning cites `/app/tests/conftest.py:384`, the checkout's line, so the mount works |
+| 2. The negative control: the three files on the image's old conftest, no mount | 12 failed, 160 passed of 172, exit 1: exactly the ticket's twelve. A rerun of one test logged "BettingPros: could not resolve player_id 1: HTTP Error 404: Not Found" and cited `/app/tests/conftest.py:367`, the image's old line |
+| 3. The mutation: the two pinned lines commented out, the checkout mounted | 17 failed, 161 passed of 178, exit 1: the twelve, plus guard tests 1, 2, 3, 4 and 6. Guard test 5 passes by design, because it sets its own environment. The restore left `tests/conftest.py` equal to HEAD |
+| 4. The full unit lane (`-m "not slow"`), the checkout mounted, no override | `6413 passed, 2 skipped, 22 deselected, 10 warnings in 348.49s (0:05:48)`. No run died with exit 139, so no retry |
+| 5a. `make lint` | `All checks passed!` |
+| 5b. `ruff format --check .`, the checkout mounted | `505 files already formatted` |
+| 5c. `make type-check` | `Success: no issues found in 77 source files` |
+| 6. `make test-regression` (the engine invariant gate) | `33 passed, 1 warning in 1.95s` |
+| 7. The citation tests (`test_band_arithmetic_sim450.py`, `test_sim449_sim_kwargs.py`), the checkout mounted | `199 passed, 2 warnings in 10.47s` |
+| Fix round: the definition of done again, `Env:TESTS` and `Env:ODDS_PROVIDER` removed first | `178 passed, 2 warnings in 28.08s`. The coverage report marks `_bp_get` after its key check and all of `_mlb_get` as not run: the vendor's provider sent no request |
+| Fix round: the mutation again | 17 failed, 161 passed: the same seventeen. Restored |
+| Fix round: `make lint`; `ruff format --check .` | `All checks passed!`; `505 files already formatted` |
+| Fix round: the citation tests plus `test_sim525_schedule.py`; `make test-regression` | 228 passed, none failed or skipped; `33 passed, 1 warning in 1.86s` |
+| Fix round: `$env:TESTS='tests/unit/envx.py'`, then `make -n test-unit` | The recipe prints `pytest tests/unit/`. `TESTS=tests/unit/cli.py` on the command line prints `pytest tests/unit/cli.py` |
+
+Checks 2 and 3 printed no stats line. The `addopts` of `pyproject.toml` already carry `-q`, and
+a second `-q` makes `-qq`. The gate agent counted those two runs from the progress marks and
+the FAILED list. Checks 2 and 3 ran with the stack's key, so they reached the network by
+design. The logged 404 came from the MLB Stats API's player lookup. `make test-unit` rewrote
+the checkout's `.coverage` through the mount. Git ignores the file.
+
+**The reviews.** Reviewer 1 found no blocking finding and filed three notes. First, the pin's
+comments promised a loud failure that does not exist. Only `_bp_get` checks the key. The public
+methods catch its error and return empty rows. `_mlb_get` still reads statsapi.mlb.com. The 404
+of the defect came from the MLB people lookup, not from BettingPros. Second, the worktree
+advice in the Makefile comment was wrong. The comment also contradicted the new `CLAUDE.md`
+bullet. Third, `TESTS ?=` took a value from the shell's environment. Reviewer 2 filed seven
+blocking findings and five notes. The seven blocking findings:
+
+- The same false safety claim sat in `CLAUDE.md`, the conftest and the guard file.
+- The worktree advice in the Makefile and `CLAUDE.md` was false. Reviewer 2 proved it with
+  `docker compose config app` on a copy of the compose file. Compose resolves `./api` against
+  the copy's own folder.
+- A sentence in `CLAUDE.md` section 2 ran to 23 words.
+- A 22-word sentence in `scripts-frontend.md` contradicted the refusal before it.
+- The Makefile comment on `load-historical-odds` ran to 40 words. It also read false: `FLAGS`
+  need not name the provider now.
+- A sentence in the `_select_provider` docstring ran to 32 words.
+- The build commit's message broke the writing standard.
+
+The five notes:
+
+- A semicolon join in `test_sim555_writers.py`, and two long sentences in the guard file's
+  docstrings.
+- One more copy of the claim in `deploy/ofelia/config.ini`.
+- A fragment in `.env.example` that also named "the jobs" as a reader.
+- A stub on `urllib.request.urlopen` for guard test 5.
+- "`TESTS=` names the files" in `CLAUDE.md`, though only `test-unit` reads `TESTS`.
+
+The fix round confirmed every finding. It fixed all of them but one part of one note. It
+rewrote the safety claim in all four places. It renamed guard test 5 to
+`test_the_vendor_seam_refuses_without_the_key`. It took reviewer 2's worktree text and added
+"They test its code, not a worktree's." to both files. It changed `TESTS ?=` to `TESTS =`. It
+amended the build commit's message only (`60346d2` became `779b08f`, the same tree). The branch
+has no upstream, so the amend rewrote nothing that another copy holds. The skipped part:
+reviewer 1 pointed to a worktree recipe in `CLAUDE.md` section 2a. Reviewer 2's fix removes
+that recipe, so the pointer would lead nowhere. The added sentence covers reviewer 1's concern,
+a false pass on worktree work.
+
+**Deploy and not done.** Nothing deploys. No production code path changed. The image needs no
+rebuild, because the mount reaches the checkout. An ad-hoc `docker compose run app pytest` with
+no `-v` still runs the image's copy of `tests/`. One thought, not a ticket: `--no-deps` on the
+`test-unit` and `test-regression` targets would skip the start of `db` and `redis`. The comment
+above `test-regression` still says "Integration tests". That error is older than this change.
+No ticket was filed, so the next free ID stays SIM-572.
+
 # DEPLOYED — the Data Lab read routes run on the read-only pool — SIM-566, 2026-10-18
 
 **Why.** The security hardening (SIM-443) put the SQL console and the AI assistant on the

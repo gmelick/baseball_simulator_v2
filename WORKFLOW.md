@@ -240,9 +240,11 @@ make validate-props FLAGS="--seasons 2024 --max-games 50"
 :: raw.game_odds / raw.prop_odds, one row per book ('bp:<id>'), each row checked
 :: by the load guard (the closing lines the accuracy comparison scores against).
 :: Network-bound. Name the provider in FLAGS: --provider bettingpros for real
-:: lines (ODDS_API_KEY is in the app container; an ODDS_PROVIDER set on the host
-:: never reaches it), --provider mock for the wiring smoke (the loader refuses
-:: the mock unasked). --book NAME (draftkings, bp:12, ...) loads one book.
+:: lines, --provider mock for the wiring smoke (the loader refuses the mock
+:: unasked). The app container reads ODDS_PROVIDER and ODDS_API_KEY from the
+:: host's .env through env_file (bettingpros since 2026-10-09). A variable set
+:: only in your host shell never reaches the container. --book NAME
+:: (draftkings, bp:12, ...) loads one book.
 make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
 ::   smoke run:  make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --provider bettingpros --book draftkings"
 ```

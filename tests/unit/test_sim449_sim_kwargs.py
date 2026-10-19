@@ -935,7 +935,7 @@ _DOCUMENTED_RUN_GAP = 0.07
 #: reads CLAUDE.md and fails if it stops saying this, so the citation cannot rot
 #: into a number nobody can trace.
 _CLAUDE_MD_GAP_PHRASE = "Runs run ~7-8% low"
-_CLAUDE_MD_GAP_LINE = 897
+_CLAUDE_MD_GAP_LINE = 911
 
 
 def _repo_file_or_skip(rel_path: str) -> Path:
@@ -958,7 +958,7 @@ def _repo_file_or_skip(rel_path: str) -> Path:
 
 
 def test_the_cited_line_still_says_it():
-    """The citation is checkable. If CLAUDE.md:897 changes, re-calibrate on purpose."""
+    """The citation is checkable. If CLAUDE.md:911 changes, re-calibrate on purpose."""
     lines = _repo_file_or_skip("CLAUDE.md").read_text(encoding="utf-8").splitlines()
     hits = [i + 1 for i, line in enumerate(lines) if _CLAUDE_MD_GAP_PHRASE in line]
     assert hits, (
@@ -1013,7 +1013,7 @@ async def test_the_silent_neutral_error_exceeds_the_documented_run_gap():
 
     Venue 680 measures 0.8726 in 2024. A dark source sends 1.0 instead. That is a
     12.8% error in the run environment of every game played there — larger than the
-    ~7-8% run-conversion residual CLAUDE.md:897 records as the open modelling gap.
+    ~7-8% run-conversion residual CLAUDE.md:911 records as the open modelling gap.
     A dark park factor is therefore not a rounding concern. It is bigger than the
     thing the fund is currently trying to fix.
     """
