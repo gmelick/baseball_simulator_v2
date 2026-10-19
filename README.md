@@ -23,11 +23,8 @@
 
 ## Documentation
 
-Three references, for three audiences — none of them require reading this README first:
+Two references, for two audiences — neither requires reading this README first:
 
-- **For a non-technical reader** (what this platform does, how the simulator "thinks," and how
-  betting-edge validation works, no baseball/statistics/programming background needed): the
-  executive guide, [`Baseball Simulator - Executive Guide.docx`](Baseball%20Simulator%20-%20Executive%20Guide.docx).
 - **For an engineer** looking for where a specific piece of logic lives, who calls it, and what
   it depends on: [`docs/technical/README.md`](docs/technical/README.md) — also viewable as a
   searchable website, see that file for how.

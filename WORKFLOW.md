@@ -614,13 +614,11 @@ echo %BASEBALL_DB_DSN%
 
 ## Companion documents
 
-- `BACKLOG.md` — open tickets, sprint plans, audit follow-ups.
-- `CHANGES.md` — every shipped sprint with per-ticket detail.
+- `BACKLOG.xlsx` — the open tickets, ranked by priority.
+- `CHANGES.md` — every shipped change with per-ticket detail.
 - `agent_team.md` — 9-agent role definitions.
-- `PRODUCT_GUIDE.md` — newcomer onboarding.
-- `docs\audit\2026-05-21-program-audit.md` — full audit findings.
-- `docs\audit\2026-05-21-prioritized-tickets.md` — priority-ranked tier list.
-- `docs\architecture\2026-05-20-play-pool.md` — Phase 3 sampler spec.
+- `docs\technical\README.md` — the per-subsystem code reference.
+- `docs\archive\architecture\2026-05-20-play-pool.md` — Phase 3 sampler spec.
 - `docs\similarity_visualization_spec.md` — similarity-explorer design + endpoint contract.
 - `docs\perf\2026-05-13-index-acceptance.md` — SIM-158 acceptance harness.
 - `docs\data_quality\2026-05-20-bat-side-coverage.md` — SIM-160 audit.

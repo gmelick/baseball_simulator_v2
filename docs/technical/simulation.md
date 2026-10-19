@@ -384,7 +384,7 @@ The ONE shared definition of the pitch-draw hard-filter cell algebra (base occup
 | `cell_key / decode_cell` | Encode/decode a situation into/from its 0..2879 cell id, most-significant-dimension-first (so sorting by cell id groups by base state). decode_cell is the exact inverse of cell_key. | `simulation.full_pool_sampler.FullPoolSampler._cell_meta (uses the same encode inline rather than calling cell_key directly, but shares SCORE_BAND_EDGES/N_* constants)`<br>`scripts/measure_filter_cells.py` | `score_band`<br>`count_bucket` |
 | `score_band / score_band_array` | Maps a (clamped +/-5) score differential to one of 5 bands by counting how many SCORE_BAND_EDGES it exceeds; score_band_array is the vectorized numpy form used per-pool-row. | `simulation.full_pool_sampler.FullPoolSampler._cell_meta / _new_plate_appearance_cell` | — |
 
-**Used by:** `simulation.full_pool_sampler (N_BASE/N_OUTS/N_COUNT/N_BAND/N_HOME/DEFAULT_MIN_CELL/score_band_array/score_band)`, `simulation.production_factory (DEFAULT_MIN_CELL)`, `scripts/measure_filter_cells.py, sim523_kernel_scan.py`
+**Used by:** `simulation.full_pool_sampler (N_BASE/N_OUTS/N_COUNT/N_BAND/N_HOME/DEFAULT_MIN_CELL/score_band_array/score_band)`, `simulation.production_factory (DEFAULT_MIN_CELL)`, `scripts/measure_filter_cells.py`
 
 > **Notes for anyone changing this file:** A cell id computed under a different edge definition is NOT comparable with any prior SIM-451 measurement report -- SCORE_BAND_EDGES is validated at import time to be strictly increasing precisely so nobody can silently reorder it and desync a report from the live code.
 

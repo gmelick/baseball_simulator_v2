@@ -92,6 +92,51 @@ reads a changed type, so the bundle behaves the same.
 - The test ignores nothing else. A description edit in a route's code therefore reds it until the
   export runs again. That is the intended behaviour: the description reaches the generated types.
 
+# CLEAN-UP — the repository keeps only what the program and the open tickets still need: 170 tracked files deleted, 135 untracked items sent to the Recycle Bin — part of the code-hygiene refactor (SIM-493), 2026-10-19
+
+**Why.** The owner asked for a clean-up of every file that a closed ticket or an old version
+of the program left behind. I checked each file for readers: the code, the tests, the
+Makefile, compose, CI, the live docs (CLAUDE.md, README, WORKFLOW, `docs/technical/`) and the
+five open tickets in `BACKLOG.xlsx`. A file with no reader was deleted. The owner answered four
+questions on the unsure groups and chose to delete each one.
+
+**What went (git history keeps every tracked file).**
+- `docs/archive/`: 47 of 52 files. The five kept: `BACKLOG-history.md`, `CLAUDE-md-history.md`,
+  and three design docs that WORKFLOW.md, the DuckDB schema and a benchmark cite.
+- `scripts/archive/`: all 31 files (old probes and pool rebuilds).
+- `docs/audit/`: 15 closed-ticket plans that no code, test or run book cites. Among them are
+  the bet-selection plan (proposed, never filed), the SIM-427, SIM-484 and SIM-546 plans, and
+  the two phase 5 / phase 6 audits.
+- `scripts/`: 70 run outputs and one-off probes of closed tickets. They include the SIM-427
+  and SIM-518 paired reads, the SIM-523 fit tools, and the SIM-551, 553, 554, 558, 559 and
+  565 records. CLAUDE.md now cites the `CHANGES.md` entry for each record.
+- `docs/HANDOFF_PHASE6.md`, `PRODUCT_GUIDE.md`, the Executive Guide .docx and
+  `design/Daily Diamond v2.dc.html`.
+- Two stray copies (`live_ingestion_pipeline.py.clean`, `test_data_engineer_sim085_to_091.py.tmp`)
+  and a pytest cache folder that a June commit picked up.
+
+**What went to the Recycle Bin (untracked, so git cannot restore them).** The auto-mode
+classifier refused a permanent delete, so each item went to the Windows Recycle Bin:
+`.sweep_progress/` and `.sweep_progress_pre_sim501_20260813/` (the 2026-08-13 re-sweep's logs
+and progress files), `.idea/`, the cheat-sheet .docx and its Word lock file, the empty
+`.benchmarks/` and `backups/` folders, the closed-ticket logs in `scripts/` and `tests/`, the
+untracked SIM-427 / 518 / 553 / 555 logs and probes, and the caches (`.mypy_cache`,
+`.pytest_cache`, `.ruff_cache`, `.coverage`, `__pycache__`, `frontend/dist`,
+`frontend/test-results`).
+
+**What stays on purpose.** Every file the open tickets use: all `sim548_*` files and the
+SIM-548 baselines (`sim427_accuracy_on.json`, `sim427_probe_*.json`,
+`sim518_accuracy_tto05.json`, untracked); the steal-weight probe and its records (SIM-556);
+`sim478_lane.txt`; `sim523_receiving_probe.py` (SIM-526); `sim427_manager_probe.py` and
+`sim427_pen_check.py` (SIM-547). Every script a test loads by name, every script a migration
+names, every plan that a code comment or a test cites, and the run books in CLAUDE.md.
+
+**The edits.** CLAUDE.md re-points its citations to `CHANGES.md`. Its line count above line
+911 is unchanged, so the citations of lines 911 and 914 in `tests/acceptance/bands.py` and
+`tests/unit/test_sim449_sim_kwargs.py` still hold. README, WORKFLOW, `.gitignore` and the
+technical reference drop the deleted files. `test_docs_duckdb_version.py` drops the handoff's
+row. Five code comments say that a script they name is now in git history.
+
 # BUILT — the Data Lab reads the regular season alone by default — SIM-572, 2026-10-19
 
 **Why.** The Data Lab analytics routes in `api/routes/analytics.py` bounded each read with
