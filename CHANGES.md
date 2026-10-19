@@ -1,3 +1,107 @@
+# BUILT — the Data Lab reads the regular season alone by default — SIM-572, 2026-10-19
+
+**Why.** The Data Lab analytics routes in `api/routes/analytics.py` bounded each read with
+`season = $1` alone. A season of `raw.pitches` holds the regular season and the postseason, so
+the leaderboards and the league rates mixed the two. I read the live tables on 2026-10-19 as the
+read-only role `baseball_ro`. In 2025 the postseason holds 47 games: 11 wild-card games, 18
+division-series games, 11 league-championship games and 7 World Series games. They hold 14,085
+of the 723,055 clean pitches. The batter board showed Shohei Ohtani with 63 home runs; his
+regular season ended at 55. `raw.games.game_type` marks the type of each game. The table holds
+five codes: 'R' for the regular season, and 'F', 'D', 'L' and 'W' for the four postseason
+rounds. Every 2025 pitch has its game in `raw.games`, and no pitch's season differs from its
+game's. Reviewer 1 of the Data Lab vocabulary fix (SIM-571) found the defect. The simulator does
+not read these routes.
+
+**What was built (branch `claude/interesting-newton-3ca06d`).** Seven routes take `season`:
+pitch-type-mix, pa-outcomes, count-state, velo-distribution, zone and the two leaderboards. Each
+now takes `game_type`, typed `'R' | 'all'`. 'R', the default, reads the regular season alone.
+'all' reads every game of the season, as the routes did before. Any other value answers 422. The
+new helper `_filter_game_type` adds one filter to the route's WHERE list:
+`game_pk IN (SELECT g.game_pk FROM raw.games g WHERE g.game_type = $n)`. The type rides as the
+next query argument, so the SQL spells no code. The filter is a semi-join: it keeps a pitch when
+its game has the type. A plain join would clash on `season`, which both tables hold. The five
+one-table queries would then need a table prefix on every column. With 'all' the helper adds
+nothing, so the SQL and its arguments equal master's. The pitcher leaderboard now builds its
+WHERE list and its argument numbers as the batter leaderboard does.
+
+The brief named all nine routes. I put the parameter on seven. The two coverage routes, kpis and
+by-season, take no season, and they describe the whole store. The KPI strip's pitch count is a
+catalog estimate (`pg_class`), and no filter can narrow it. A filtered game count beside it would
+mix two windows. A new test pins the rule: a route takes `game_type` exactly when it takes
+`season`.
+
+The summary page (`frontend/src/pages/SummaryPage.tsx`) gains a "Games" choice in its filter
+bar: "Regular season" (the default) or "Incl. postseason". The five season cards send the
+choice. Their titles name it ("2025 incl. postseason"). Their "Open in Console" SQL carries the
+same filter; the console's validator accepts it. The KPI strip and the "Pitches by season" card
+ignore the choice. `frontend/src/api/lab.ts` gains the type `GameType`. The five card fetchers and
+the two leaderboard fetchers pass it. `docs/technical/api.md` describes the filter in a new row,
+in the route rows and in the notes.
+
+The new `tests/unit/test_sim572_game_type_filter.py` holds 43 tests. It opens no database and no
+socket. A guard walks the router: the router holds the seven season routes and the two coverage
+routes. A route takes `game_type`, typed 'R' or 'all' with 'R' the default, exactly when it takes
+`season`. The OpenAPI schema lists the parameter on the seven paths. Three tests prove the
+helper. For each route, a recording pool (a fake pool that keeps each query and its arguments)
+captures the SQL. The default SQL carries one filter with the right prefix, and its argument is
+'R'. The argument sits right after the route's own WHERE arguments. With 'all' the SQL names no
+`raw.games`. Six unknown values answer 422 and run no query. Seven DuckDB tests run each route's
+own SQL over two 2025 games of ten pitches each. Game 1 is a regular-season game, and game 2 is a
+World Series game. The batter board reads 1 home run by default and 2 with 'all': Ohtani's case
+in small. `tests/unit/test_sim571_pitch_result_vocabulary.py` changes in three places. Its
+argument tuples carry the default 'R'. Its batter case uses `vs_hand=L`, so the hand and the game
+type no longer read alike. Its DuckDB harness gains a `raw.games` table with two regular-season
+games. No expected rate changes.
+
+**The live read.** I captured each leaderboard's SQL and ran it unchanged as `baseball_ro` on
+2025. The home-run leaders by default: Cal Raleigh 60, Kyle Schwarber 56, Ohtani 55, Aaron Judge
+53, Eugenio Suárez 49. With 'all': Raleigh 65, Ohtani 63, Schwarber 58, Judge 54, Suárez 52. The
+pitcher board by plate appearances leads with Logan Webb (854) by default. With 'all' Kevin
+Gausman (889) leads, with his postseason. Each query ran in 1.6 to 2.2 s. The filter adds at most
+about 0.4 s; the full unit lane ran beside these reads, so the timings are noisy.
+
+**The gates.** Every container check ran with the worktree mounted over `/app` and over the five
+code folders; `grep -c _filter_game_type api/routes/analytics.py` in the container printed `8`.
+A mutation is a deliberate defect that proves a test fails on it. Each mutation ran alone on the
+new file, and a copy of the module restored it.
+
+| Gate | Result |
+|---|---|
+| 1. The new file, `test_sim566_read_only_routes.py` and `test_sim571_pitch_result_vocabulary.py` | `135 passed, 2 warnings in 18.14s` (43 + 36 + 56) |
+| 2. The full unit lane (`-m "not slow"`) | `6512 passed, 2 skipped, 22 deselected, 10 warnings in 372.62s (0:06:12)`: the 6,469 of the SIM-571 lane plus the new file's 43 |
+| 3a. `ruff check .` | `All checks passed!` |
+| 3b. `ruff format --check .` | `507 files already formatted` |
+| 3c. `mypy similarity/ pipeline/ api/` | `Success: no issues found in 77 source files` |
+| 4. The frontend: `npm run type-check`, then `npm run lint` | both exit 0, no output |
+| 5. The console's validator on the summary page's new SQL | `validate_read_only_sql` and `validate_relation_allowlist` accept it |
+| Mutation 1: the helper never adds the filter | `16 failed, 27 passed` |
+| Mutation 2: the zone route loses its `game_type` | `10 failed, 33 passed` |
+| Mutation 3: the batter board adds the filter after `min_pa` | `2 failed, 41 passed` |
+| Mutation 4: the filter reads `game_type <> $n` (it keeps the postseason) | `14 failed, 29 passed` |
+
+No run died with exit 139, so nothing was retried.
+
+**The owner's decision.** The default is the regular season, the reading of Baseball Savant and
+the league's own leaderboards. The owner has not ruled on it. To keep the old reading, change
+`REGULAR_SEASON` to 'all' as the default of the seven routes, and the page's initial choice.
+
+**Deploy.** The merge into `master` deploys `api/`: the app bind-mounts it and hot-reloads.
+When the app log shows no reload, `docker compose restart app` applies the change. The summary
+page ships in the frontend bundle, so the nginx image needs a rebuild: `docker compose build
+nginx`, then `docker compose up -d nginx`. No migration runs. No profile, pool or bundle rebuild
+follows.
+
+**Not done.**
+
+- `frontend/openapi.json` and `frontend/src/api/schema.d.ts` stay as they are. The snapshot was
+  stale before this ticket. An export of this branch's app before the change differed from it by
+  1,601 added and 146 removed lines. The last regeneration was SIM-519's, on 2026-10-09. A
+  regeneration here would sweep other tickets' contract changes into this branch.
+- I did not open the summary page in a browser. The type-check and the lint pass.
+- No value reads the postseason alone. A third value could; nobody asked for it.
+- The branch is pushed and not merged. The ticket row in `BACKLOG.xlsx` stays open until the
+  merge.
+
 # CLOSED — the Data Lab's swing, whiff and called-strike rates read the pitch-result code — SIM-571, 2026-10-19
 
 **Why.** The Data Lab analytics routes in `api/routes/analytics.py` compute four pitch rates:
