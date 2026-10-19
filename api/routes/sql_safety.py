@@ -34,14 +34,19 @@ Layered guarantees (see ``docs`` / the SIM-439 build spec):
      the ``BASEBALL_DB_RO_DSN`` pool, a role that can read ``raw.*`` and nothing
      else. The lifespan in ``api/main.py`` checks the role with
      :func:`check_read_only_role` and refuses a superuser. With no such pool the
-     routes answer 503; they never fall back to the main pool.
+     routes answer 503; they never fall back to the main pool. The Data Lab read
+     routes (schema, analytics, players, data freshness) also run only on this
+     pool (SIM-566). The 503 text, ``RO_POOL_UNAVAILABLE_DETAIL``, lives in
+     ``api/routes/_common.py``; this module re-exports it.
 
 The query must name its tables as ``raw.<table>``. An unqualified name is
 rejected even though the pool's ``search_path`` is ``raw``, so the rule never
 depends on a session setting.
 
-This module is pure (no FastAPI, no engines) so the validator is unit-tested
-without an HTTP layer or a live DB (``tests/unit/test_sql_safety.py``).
+This module has no route and no engine, so the validator is unit-tested
+without an HTTP layer or a live DB (``tests/unit/test_sql_safety.py``). It
+imports one constant from ``api.routes._common``, which pulls in FastAPI's
+``HTTPException`` and nothing else.
 """
 
 from __future__ import annotations
@@ -58,6 +63,9 @@ from typing import Any
 import sqlglot
 from sqlglot import exp
 
+# The 503 text for a missing read-only pool lives in ``_common.py`` (the
+# read-only Data Lab routes use it too); this module re-exports it.
+from api.routes._common import RO_POOL_UNAVAILABLE_DETAIL
 from api.serialization import to_jsonable
 
 # ---------------------------------------------------------------------------
@@ -198,13 +206,6 @@ _TABLE_FUNCTIONS_ALLOWED = frozenset(
         "regexp_matches",
         "string_to_table",
     }
-)
-
-#: The 503 detail the SQL console and the assistant return when the read-only
-#: pool is missing (SIM-443e). One string, so the two routes say the same thing.
-RO_POOL_UNAVAILABLE_DETAIL = (
-    "The SQL console is unavailable: the read-only database pool is not open. "
-    "Set BASEBALL_DB_RO_DSN to the baseball_ro role and restart the app."
 )
 
 

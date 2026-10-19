@@ -11,6 +11,11 @@ are NOT on this pool, so exposing them here would invite cross-database joins
 that can't run. Structure only (no row data), but it still needs a login
 (SIM-443c: the table and column names are not public); cached on
 ``app.state`` for the process lifetime (the schema is static between deploys).
+
+The route reads ``information_schema.columns`` through the read-only pool,
+``app.state.pg_pool_ro`` (SIM-566, the Data Lab read routes on the read-only
+pool). The read-only role sees every ``raw`` column there. Without the pool, the
+route answers 503; it never falls back to the main pool.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from api.auth import require_auth
-from api.routes._common import _get_pool, _row_get
+from api.routes._common import _get_ro_pool, _row_get
 
 # SIM-443c: every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/schema", tags=["data-lab"], dependencies=[Depends(require_auth)])
@@ -70,7 +75,7 @@ async def get_schema(request: Request) -> SchemaResponse:
     if cached is not None:
         return cached
 
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     rows = await _fetch(pool, _COLUMNS_SQL)
 
     by_table: dict[str, list[ColumnInfo]] = {}

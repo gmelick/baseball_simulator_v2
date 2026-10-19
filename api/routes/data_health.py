@@ -8,9 +8,11 @@ can show a "data as of …" badge and warn when the store is stale or empty:
 
     GET /api/data/freshness  ->  DataFreshnessResponse
 
-Reads the asyncpg pool off ``app.state.pg_pool`` (503 if not attached). Pure
-aggregate counts + timestamps — no per-player detail and nothing sensitive —
-so it sits alongside the ops probes (/health, /ready) without auth. Source:
+Reads the read-only pool, ``app.state.pg_pool_ro`` (SIM-566, the Data Lab read
+routes on the read-only pool). Without the pool, the route answers 503; it
+never falls back to the main pool. The route returns pure aggregate counts and
+timestamps — no per-player detail and nothing sensitive. It still needs a login
+(SIM-443c, every route behind a login). Source:
 ``raw.etl_data_freshness`` (last-ingest watermark) + ``raw.games`` /
 ``raw.pitches`` (coverage). An empty store returns zeros / nulls, not an error.
 """
@@ -23,7 +25,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
-from api.routes._common import _get_pool, _row_get
+from api.routes._common import _get_ro_pool, _row_get
 
 # SIM-443c: every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/data", tags=["data"], dependencies=[Depends(require_auth)])
@@ -71,16 +73,6 @@ _PER_SEASON_SQL = """
 """
 
 
-# ``_get_pool`` + ``_row_get`` are imported from api.routes._common (audit
-# 2026-06-03 "api/ duplication").  ``_get_pool`` was byte-identical to games.py's
-# copy.  The canonical ``_common._row_get`` is the games.py variant (it takes an
-# explicit ``default`` and collapses present-but-None to it).  data_health's old
-# local copy never passed a non-None default and wraps every read in ``_iso(...)``
-# / ``int(... or 0)``, so the canonical version is behaviour-identical for every
-# call site here (the only drift -- None-vs-default collapse -- is unobservable
-# without a non-None default).
-
-
 def _iso(value: Any) -> str | None:
     if value is None:
         return None
@@ -100,7 +92,7 @@ def _iso(value: Any) -> str | None:
     ),
 )
 async def get_data_freshness(request: Request) -> DataFreshnessResponse:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     acquire = getattr(pool, "acquire", None)
     if acquire is not None:
         async with pool.acquire() as conn:

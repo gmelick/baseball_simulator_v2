@@ -4,10 +4,20 @@ api/routes/_common.py
 Shared route helpers hoisted out of the individual ``api/routes/*`` modules to
 remove copy-paste drift (audit ``2026-06-03`` — the ``api/ duplication`` row).
 
-Currently houses the two helpers that were byte-identical across routers:
+The module holds three helpers and one constant:
 
-  * :func:`_get_pool` — the ``app.state.pg_pool`` accessor (503 when unattached),
-    previously duplicated in ``games.py`` and ``data_health.py``.
+  * :func:`_get_pool` — the ``app.state.pg_pool`` accessor (503 when unattached).
+    The routes that write or read ``sim.*`` use it: games and betting.
+    ``metrics.py`` reads ``app.state.pg_pool`` directly.
+  * :func:`_get_ro_pool` — the ``app.state.pg_pool_ro`` accessor (503 when
+    unattached). The read-only pool logs in as ``baseball_ro``, a role that can
+    read ``raw.*`` and nothing else. The SQL console and the Data Lab read
+    routes (schema, analytics, players, data freshness) use it (SIM-566, the
+    Data Lab read routes on the read-only pool).
+  * :data:`RO_POOL_UNAVAILABLE_DETAIL` — the one 503 text for a missing
+    read-only pool. ``sql_safety.py`` re-exports it for the assistant and for
+    the console's tests. The constant lives here so the route modules do not
+    import ``sqlglot`` through ``sql_safety.py``.
   * :func:`_row_get` — uniform column read over an asyncpg ``Record`` OR a plain
     dict (the unit-test stub shape).  The canonical implementation is the
     ``games.py`` variant, which additionally takes an explicit ``default`` and
@@ -40,6 +50,31 @@ def _get_pool(request: Request) -> Any:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="database pool unavailable",
+        )
+    return pool
+
+
+#: The 503 detail every read-only route returns when the read-only pool is
+#: missing (the SQL console and the assistant since SIM-443e; the Data Lab read
+#: routes since SIM-566). One string, so every route says the same thing.
+RO_POOL_UNAVAILABLE_DETAIL = (
+    "The read-only database pool is not open. "
+    "Set BASEBALL_DB_RO_DSN to the baseball_ro role and restart the app."
+)
+
+
+def _get_ro_pool(request: Request) -> Any:
+    """Return the read-only pool, or raise 503 when the lifespan has none.
+
+    SIM-566 (the Data Lab read routes on the read-only pool): the pool logs in
+    as ``baseball_ro``, which can read ``raw.*`` and nothing else. There is no
+    fallback to the main pool, because the main pool's role can write.
+    """
+    pool = getattr(request.app.state, "pg_pool_ro", None)
+    if pool is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=RO_POOL_UNAVAILABLE_DETAIL,
         )
     return pool
 
