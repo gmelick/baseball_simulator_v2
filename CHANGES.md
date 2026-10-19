@@ -1,4 +1,4 @@
-# BUILT — the frontend's API snapshot and its generated types match the API again, and two checks keep them there — SIM-573, 2026-10-19
+# CLOSED — the frontend's API snapshot and its generated types match the API again, and two checks keep them there — SIM-573, 2026-10-19
 
 **Why.** `frontend/openapi.json` is a copy of the API's contract, its OpenAPI schema.
 `scripts/export_openapi.py` writes it from `app.openapi()`. openapi-typescript (`npm run
@@ -80,12 +80,19 @@ file restored it.
 
 No run died with exit 139, so nothing was retried.
 
-**Deploy.** Nothing to deploy for the API. The types ship in the frontend bundle, but no code
-reads a changed type, so the bundle behaves the same.
+**Deploy.** The owner asked for the merge and the deploy on 2026-10-19. Master took the clean-up
+of the same day first, so I merged master into the branch (`36891e6`). Only `CHANGES.md`
+conflicted, and both entries stay. The full unit lane on the merged tree read `6515 passed, 2
+skipped, 22 deselected, 10 warnings in 387.15s`. The clean-up dropped one parametrized docs case,
+hence one fewer than 6,516. The merge into `master` is `b43919e`. It changes no file that the app
+serves, so the app did not reload and needed no restart. The types ship in the frontend bundle;
+the nginx rebuild below covers them. No code reads a changed type, so the bundle behaves the
+same.
 
 **Not done.**
 
-- I ran the CI step's two commands locally, not in GitHub Actions.
+- I ran the CI step's two commands locally. The push of `master` starts the first GitHub
+  Actions run of the step; I did not watch it.
 - A lock file for the Python packages would retire the normalisation. `requirements.txt` names
   one as the durable fix (SIM-470 in its comment), and no open ticket in `BACKLOG.xlsx` carries
   it.
@@ -137,7 +144,7 @@ names, every plan that a code comment or a test cites, and the run books in CLAU
 technical reference drop the deleted files. `test_docs_duckdb_version.py` drops the handoff's
 row. Five code comments say that a script they name is now in git history.
 
-# BUILT — the Data Lab reads the regular season alone by default — SIM-572, 2026-10-19
+# CLOSED — the Data Lab reads the regular season alone by default — SIM-572, 2026-10-19
 
 **Why.** The Data Lab analytics routes in `api/routes/analytics.py` bounded each read with
 `season = $1` alone. A season of `raw.pitches` holds the regular season and the postseason, so
@@ -221,25 +228,37 @@ new file, and a copy of the module restored it.
 No run died with exit 139, so nothing was retried.
 
 **The owner's decision.** The default is the regular season, the reading of Baseball Savant and
-the league's own leaderboards. The owner has not ruled on it. To keep the old reading, change
-`REGULAR_SEASON` to 'all' as the default of the seven routes, and the page's initial choice.
+the league's own leaderboards. The owner chose it on 2026-10-19 ("SIM-572 with the
+regular-season default"). To restore the old reading, change `REGULAR_SEASON` to 'all' as the
+default of the seven routes, and the page's initial choice.
 
 **Deploy.** The merge into `master` deploys `api/`: the app bind-mounts it and hot-reloads.
 When the app log shows no reload, `docker compose restart app` applies the change. The summary
 page ships in the frontend bundle, so the nginx image needs a rebuild: `docker compose build
 nginx`, then `docker compose up -d nginx`. No migration runs. No profile, pool or bundle rebuild
-follows.
+follows. **Deployed 2026-10-19.** The merge into `master` is `e06ad90`. The app reloaded on
+`api/routes/analytics.py` at 18:03 UTC. The nginx image was rebuilt and the container recreated
+at 18:55 UTC, after the snapshot merge (SIM-573). The served bundle holds the summary page's
+"Games" choice and sends `game_type`. `docker builder prune -f` reclaimed 435.7 MB. **The live
+check PASSED** through the API (the app's own key, inside its container), on 2025:
+
+- the batter board by default: Raleigh 60, Schwarber 56, Ohtani 55, Judge 53, Suárez 49;
+- with `game_type=all`: Raleigh 65, Ohtani 63, Schwarber 58, Judge 54, Suárez 52;
+- the count-state rows sum to 708,970 pitches by default and 723,055 with `all`;
+- the pitcher board by plate appearances leads with Logan Webb (854);
+- `game_type=P` answers 422;
+- the live `/openapi.json` lists `game_type` on the zone route.
 
 **Not done.**
 
 - `frontend/openapi.json` and `frontend/src/api/schema.d.ts` stay as they are. The snapshot was
   stale before this ticket. An export of this branch's app before the change differed from it by
   1,601 added and 146 removed lines. The last regeneration was SIM-519's, on 2026-10-09. A
-  regeneration here would sweep other tickets' contract changes into this branch.
-- I did not open the summary page in a browser. The type-check and the lint pass.
+  regeneration here would sweep other tickets' contract changes into this branch. SIM-573
+  regenerated both the same day, on the same branch.
+- I did not open the summary page in a browser, before or after the deploy. The type-check and
+  the lint pass, and the served bundle holds the new text.
 - No value reads the postseason alone. A third value could; nobody asked for it.
-- The branch is pushed and not merged. The ticket row in `BACKLOG.xlsx` stays open until the
-  merge.
 
 # CLOSED — the Data Lab's swing, whiff and called-strike rates read the pitch-result code — SIM-571, 2026-10-19
 

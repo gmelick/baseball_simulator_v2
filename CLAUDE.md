@@ -520,7 +520,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   runs only on the read-only pool; without that pool it answers 503. Redis requires a
   password, and the sim cache stores typed JSON (`simulation/cache_codec.py`, keys `sim443:`),
   never a pickle. The tests' conftest sets `AUTH_DISABLED=1`; two auth test files remove it.
-  Follow-ups: the Data Lab read routes on the read-only pool (SIM-566) CLOSED 2026-10-18; the bundle loads with `allow_pickle=False` (SIM-565) CLOSED 2026-10-18; the rate limiter's bucket (SIM-564) and its proxy-address follow-on (SIM-569, `TRUSTED_PROXY_HOSTS`) both CLOSED 2026-10-17; nginx re-resolves the app after a recreate (SIM-570) CLOSED 2026-10-18; the Data Lab rates on the pitch-result code (SIM-571) CLOSED 2026-10-19. The design and the cutover run book:
+  Follow-ups: the Data Lab read routes on the read-only pool (SIM-566) CLOSED 2026-10-18; the bundle loads with `allow_pickle=False` (SIM-565) CLOSED 2026-10-18; the rate limiter's bucket (SIM-564) and its proxy-address follow-on (SIM-569, `TRUSTED_PROXY_HOSTS`) both CLOSED 2026-10-17; nginx re-resolves the app after a recreate (SIM-570) CLOSED 2026-10-18; the Data Lab rates on the pitch-result code (SIM-571) CLOSED 2026-10-19; the Data Lab reads the regular season alone by default, `game_type=all` adds the postseason (SIM-572) CLOSED 2026-10-19. The design and the cutover run book:
   `docs/audit/2026-10-13-sim443-security-hardening.md`; the record: `CHANGES.md` 2026-10-13.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
@@ -1002,3 +1002,9 @@ ticket description, docstring, and inline comment.
 - Prefer surgical edits to `simulation/sim_loop.py` (it's the largest, most-touched file).
 - Follow the branch lifecycle in §7: one branch per ticket, commit before the session ends, and
   delete the branch on the day it merges.
+- Ship a fresh API snapshot with every change to the API's contract (SIM-573): a route, a
+  parameter, a field or a route's description. In the same commit, run
+  `python scripts/export_openapi.py` in the app image with the checkout mounted, never on the
+  host: the host's Pydantic 2.10 drops `additionalProperties: true`. Then run
+  `cd frontend && npm run gen:api`. `tests/unit/test_sim573_openapi_snapshot.py` and a step of
+  the CI frontend job fail on a stale `frontend/openapi.json` or `schema.d.ts`.
