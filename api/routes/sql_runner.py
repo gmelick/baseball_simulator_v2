@@ -19,22 +19,23 @@ Errors:
     that reads a table outside ``raw.*`` is one of these rejections (SIM-443d).
   * 503 — the read-only pool is not open (SIM-443e). The console runs ONLY on
     ``app.state.pg_pool_ro``, the ``BASEBALL_DB_RO_DSN`` pool that the lifespan
-    opened and checked; it never falls back to the main pool.
+    opened and checked; it never falls back to the main pool. The shared
+    helper ``_get_ro_pool`` in ``api/routes/_common.py`` reads the pool and
+    raises the 503 (SIM-566, the Data Lab read routes on the read-only pool).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
+from api.routes._common import _get_ro_pool
 from api.routes.sql_safety import (
     DEFAULT_MAX_ROWS,
     DEFAULT_TIMEOUT_MS,
-    RO_POOL_UNAVAILABLE_DETAIL,
     SqlValidationError,
     run_read_only_sql,
 )
@@ -65,21 +66,6 @@ class SqlRunResponse(BaseModel):
     timeout_ms: int
 
 
-def _ro_pool(request: Request) -> Any:
-    """Return the read-only pool, or raise 503 when the lifespan has none.
-
-    SIM-443e: there is no fallback. The main pool's role can write, so user
-    SQL never runs on it.
-    """
-    ro = getattr(request.app.state, "pg_pool_ro", None)
-    if ro is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=RO_POOL_UNAVAILABLE_DETAIL,
-        )
-    return ro
-
-
 @router.post(
     "/run",
     response_model=SqlRunResponse,
@@ -94,7 +80,7 @@ def _ro_pool(request: Request) -> Any:
     dependencies=[Depends(require_auth)],
 )
 async def run_sql(request: Request, body: SqlRunRequest) -> SqlRunResponse:
-    pool = _ro_pool(request)
+    pool = _get_ro_pool(request)
     try:
         result = await run_read_only_sql(pool, body.sql, max_rows=body.max_rows)
     except SqlValidationError as exc:

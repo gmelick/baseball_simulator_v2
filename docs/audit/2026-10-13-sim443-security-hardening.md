@@ -192,7 +192,9 @@ only place that pickled them.
   for object arrays first. CLOSED 2026-10-18: none of the 86 arrays is one; every load passes
   `allow_pickle=False` and the builder refuses to write an object array (`CHANGES.md`).
 - SIM-566: `/api/schema`, `/api/analytics/*` and `/api/players/*` run fixed queries on the main
-  pool; move them to the read-only pool.
+  pool; move them to the read-only pool. CLOSED 2026-10-18: the three groups and a fourth the
+  owner added, `/api/data/freshness`, read through `_get_ro_pool` and answer 503 without the
+  read-only pool; the typeahead calls `public.similarity()` (`CHANGES.md`).
 
 ## Risks to carry into the cutover
 

@@ -21,6 +21,12 @@ this is the curated, safe counterpart to the ad-hoc SQL console.
 
 Metric definitions follow the Baseball Analyst's spec (swing/whiff via the
 ``description`` text, chase via the out-of-zone buckets, etc.).
+
+Every route reads through the read-only pool, ``app.state.pg_pool_ro`` (SIM-566,
+the Data Lab read routes on the read-only pool). The pool's role reads ``raw.*``
+and nothing else. Without the pool, every route answers 503; no route falls back
+to the main pool. The KPIs route also reads ``pg_class`` for a row estimate; the
+read-only role can read that catalog.
 """
 
 from __future__ import annotations
@@ -32,7 +38,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
 from api.auth import require_auth
-from api.routes._common import _get_pool
+from api.routes._common import _get_ro_pool
 
 log = logging.getLogger("api.routes.analytics")
 
@@ -84,7 +90,7 @@ class KpisResponse(BaseModel):
 
 @router.get("/kpis", response_model=KpisResponse, summary="Top-line coverage KPIs")
 async def get_kpis(request: Request) -> KpisResponse:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     # total_pitches: pg_class estimate (instant) instead of a 10^7-row COUNT(*).
     est_rows = await _fetch(
         pool,
@@ -116,7 +122,7 @@ async def get_kpis(request: Request) -> KpisResponse:
 
 @router.get("/by-season", summary="Games + pitches per season")
 async def by_season(request: Request) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     rows = await _fetch(
         pool,
         """
@@ -144,7 +150,7 @@ async def pitch_type_mix(
     stand: str | None = Query(None, pattern="^[LRS]$"),
     include_flagged: bool = False,
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     where = ["season = $1", "pitch_type IS NOT NULL"]
     args: list[Any] = [season]
     if pitcher is not None:
@@ -178,7 +184,7 @@ async def pa_outcomes(
     p_throws: str | None = Query(None, pattern="^[LR]$"),
     include_flagged: bool = False,
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     where = ["season = $1", "events IS NOT NULL"]
     args: list[Any] = [season]
     if batter is not None:
@@ -205,7 +211,7 @@ async def count_state(
     batter: int | None = None,
     include_flagged: bool = False,
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     where = ["season = $1", "balls BETWEEN 0 AND 3", "strikes BETWEEN 0 AND 2"]
     args: list[Any] = [season]
     if pitcher is not None:
@@ -236,7 +242,7 @@ async def velo_distribution(
     pitch_type: str | None = Query(None, max_length=5),
     include_flagged: bool = False,
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     where = ["season = $1", "release_speed IS NOT NULL"]
     args: list[Any] = [season]
     if pitcher is not None:
@@ -262,7 +268,7 @@ async def zone(
     pitcher: int | None = None,
     include_flagged: bool = False,
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     where = ["season = $1", "zone IS NOT NULL"]
     args: list[Any] = [season]
     if pitcher is not None:
@@ -299,7 +305,7 @@ async def pitcher_leaderboard(
     min_pa: int = Query(200, ge=0, le=5000),
     limit: int = Query(50, ge=1, le=200),
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     order = metric if metric in _PITCHER_METRICS else "k_pct"
     sql = f"""
         SELECT p.pitcher AS player_id,
@@ -334,7 +340,7 @@ async def batter_leaderboard(
     limit: int = Query(50, ge=1, le=200),
     vs_hand: str | None = Query(None, pattern="^[LR]$"),
 ) -> list[dict[str, Any]]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     order = metric if metric in _BATTER_METRICS else "hard_hit_pct"
     where = ["p.season = $1", "p.data_quality_flag = FALSE"]
     args: list[Any] = [season]

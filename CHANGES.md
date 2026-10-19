@@ -1,3 +1,93 @@
+# DEPLOYED — the Data Lab read routes run on the read-only pool — SIM-566, 2026-10-18
+
+**Why.** The security hardening (SIM-443) put the SQL console and the AI assistant on the
+read-only pool (`app.state.pg_pool_ro`). That pool logs in as `baseball_ro`, which can read
+`raw.*` and nothing else. Four route groups with fixed queries still read through the main pool
+(`app.state.pg_pool`), whose `baseball_app` login can write: `GET /api/schema`, the nine
+`GET /api/analytics/*` routes, the two `GET /api/players/*` routes and `GET /api/data/freshness`.
+The owner added the fourth group, the data freshness route, to the ticket on 2026-10-18. The
+queries were fixed text and safe, but a route that only reads `raw.*` has no reason to hold a
+login that can write (filed P3 by the security hardening).
+
+**What was built (branch `sim566-read-only-pool-routes`).** `api/routes/_common.py` gains
+`_get_ro_pool(request)`: it returns `app.state.pg_pool_ro`, or it raises a 503 with the new
+constant `RO_POOL_UNAVAILABLE_DETAIL` ("The read-only database pool is not open. Set
+BASEBALL_DB_RO_DSN to the baseball_ro role and restart the app."). It never falls back to the
+main pool. The constant moved from `sql_safety.py` to `_common.py`, so the route modules do not
+import `sqlglot`; `sql_safety.py` imports it back and keeps the name in `__all__`, so the
+assistant's import still works. The SQL console drops its local `_ro_pool` and calls the shared
+helper. The analytics (nine call sites), players (two), schema (one) and data freshness (one)
+modules call `_get_ro_pool`; none of them imports `_get_pool` now. `_get_pool` stays for the
+routes that write or read `sim.*` (games and betting; metrics reads the main pool directly).
+One query changed: the player typeahead orders by `public.similarity(full_name, $1)`. The
+read-only pool's session sets `search_path = raw`, and the pg_trgm extension lives in `public`,
+so an unqualified `similarity()` fails there and the route falls silently into its ILIKE
+fallback. The ILIKE fallback stays. The boot-log lines and comments in `api/main.py` now name
+the routes the read-only pool serves. No route's `summary=` or `description=` text changed, so
+the frontend's `openapi.json` snapshot stays current. The new
+`tests/unit/test_sim566_read_only_routes.py` (36 cases) runs every route on a bare app whose
+main pool raises on any use: all 13 GET routes and the console answer 503 with the one text
+when the read-only pool is missing; each route group answers 200 on a fake read-only pool; the
+schema cache runs no second query; an `ast` guard fails if any of the five modules names
+`_get_pool`; a query guard fails on any FROM or JOIN target other than `raw.<name>`, `pg_class`
+or `information_schema.columns`; and the typeahead query must call `public.similarity(`. The
+data freshness test now sets the read-only pool, and its 503 test keeps a usable main pool
+present, so it proves that the route does not fall back.
+
+**The gates (a workflow of Opus 5.5 agents: one code builder, one test builder, one gate
+agent, two adversarial reviewers and one record agent; no repair or fix round was needed).**
+The session then applied the reviewers' notes by hand and reran the gates (the last two rows).
+
+| Gate | Result |
+|---|---|
+| The six targeted test files in the container, the worktree's code mounted | 284 passed in 31 s; 284 passed in 25 s on the rerun after the mutation restore |
+| The unit lane in the container (`-m "not slow"`, `ODDS_PROVIDER=mock`), run 1 | 6,406 passed, 1 failed, 2 skipped, 22 deselected in 270 s. The one failure, `test_game_page_whatif.py::test_first_pitch_state`, is in a file this change does not touch; the file passes alone (53 passed) |
+| The unit lane, run 2 | 6,407 passed, 2 skipped, 22 deselected in 270 s; neither run hit the segmentation fault |
+| `ruff check .` / `ruff format --check .` | all clean (504 files formatted) |
+| `mypy similarity/ pipeline/ api/` | no issues in 77 source files |
+| The mutation check (players.py back on `_get_pool` at both call sites; the unqualified `similarity()`) | the new test file reds 6 tests (the source guard names the lines; the query guard names the unqualified call); green on restore |
+| The session's rerun after the reviewers' notes: the six targeted files, `ruff check .`, `ruff format --check .`, `mypy similarity/ pipeline/ api/` | 284 passed in 31 s; all clean (504 files formatted); no issues in 77 source files |
+| The session's full lane after the notes, in two halves (`--ignore-glob` on the test files n–z, then a–m) | 1,683 passed, 1 skipped, 3 deselected in 63 s; 4,724 passed, 1 skipped, 19 deselected in 218 s: 6,407 passed in all, the count of run 2. Three attempts to run the lane whole died in test collection with the stochastic segmentation fault (exit 139, three different sites in plain Python); the halves ran clean |
+
+The gate agent's restore of `players.py` after the mutation check used `git checkout`, which also
+erased the builder's uncommitted edits to that file; the agent rebuilt them by hand from the plan,
+and the session's reruns above cover the rebuilt file.
+
+**The reviews.** Both reviewers found no defect that blocks the merge. Reviewer 1 ran the four
+modules' route code on the live database through a real `baseball_ro` login: all 13 GET routes
+answered 200 with real data (the schema 33 tables and 586 columns; the KPIs estimate
+6,588,765; the typeahead ranked by similarity with no fallback warning). Reviewer 2 ran the
+routes' SQL as `baseball_ro` inside a read-only transaction and found the same; an unqualified
+`similarity()` failed there, which confirms the schema name is needed. Reviewer 2's mutants (a
+fallback in `_get_ro_pool`, a second copy of the constant, a `sim.*` query in analytics) each
+redded the tests. Their notes, all fixed by the session after the workflow: the query guard's
+regex matched upper-case FROM and JOIN only, so a lower-case `from sim.x` would have passed it
+(the guard now reads every string constant of each module, docstrings excluded, in any case; a
+check proved it reds on `from sim.x` and on `FROM derived.x`, and stays green on prose in a
+docstring); the `_common.py` docstring said metrics uses `_get_pool` (it reads
+`app.state.pg_pool` directly) and said `sql_safety.py` re-exports the constant "for the
+console" (the re-export serves the assistant and the console's security test); three comments
+broke the writing standard (one 24-word sentence in `players.py`, a bare ticket number in
+`sql_runner.py` and in `api/main.py`, a test docstring that described the old state in the
+present tense). The `docs/technical/api.md` rows the reviewers flagged are updated here. One
+old defect that this change did not cause: the analytics swing, whiff, CSW and called-strike
+filters match Statcast's snake_case descriptions, but `raw.pitches` holds the MLB Stats API's
+display text, so on live data the swing rate reads 0, the whiff rate reads null and the
+called-strike rate reads 0. The session checked the table: the same ten display-text values in
+every season from 2017 to 2025 ("Called Strike", "Swinging Strike", "Swinging Strike
+(Blocked)", "Foul", "Foul Tip", "In play, out(s)" and so on). Filed as SIM-571 (P3): match the
+analytics filters to the descriptions the loader stores.
+
+**Deploy.** The app hot-reloads the bind-mounted `api/` folder, so the merge into `master` is
+the deploy; no image rebuild is needed. The live check after the merge (the Data Lab pages load
+and the typeahead ranks by similarity) is pending.
+
+**Not done.** The `/health` key keeps its `sql_console` name, though the read-only pool now
+serves more routes. The assistant's `_pool` keeps returning None when the read-only pool is
+missing, because its stream guard reads that value; it does not call `_get_ro_pool`. One
+ticket was filed, SIM-571 (the analytics filter vocabulary, above); the next free ID is
+SIM-572.
+
 # DEPLOYED — the engine bundle loads with allow_pickle=False — SIM-565, 2026-10-18
 
 **Why.** The simulator's prepared data files (the engine bundle under

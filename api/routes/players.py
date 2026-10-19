@@ -7,10 +7,14 @@ SIM-439 — player name typeahead + identity for the Data Lab / Similarity UI.
     GET /api/players/{player_id}           -> PlayerDetail
 
 ``raw.players`` carries a ``pg_trgm`` GIN index on ``full_name``
-(``idx_players_full_name_trgm``), so the typeahead ranks by ``similarity()``;
+(``idx_players_full_name_trgm``), so the typeahead ranks by ``public.similarity()``;
 if the extension is somehow unavailable it degrades to a plain ``ILIKE`` match
 (logged once). Every id the rest of the UI shows is resolved to a name here so
 users never read raw player ids.
+
+Both routes read the read-only pool, ``app.state.pg_pool_ro`` (the Data Lab read
+routes on the ``baseball_ro`` login, SIM-566). Without that pool each route
+answers 503. Neither route falls back to the main pool.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from api.auth import require_auth
-from api.routes._common import _get_pool, _row_get
+from api.routes._common import _get_ro_pool, _row_get
 
 log = logging.getLogger("api.routes.players")
 
@@ -46,11 +50,15 @@ class PlayerDetail(BaseModel):
     seasons: list[int] = []
 
 
+# The query names the function's schema. The read-only pool's session sets
+# search_path = raw, and pg_trgm lives in public. On that pool an unqualified
+# ``similarity()`` fails. The route then drops to the ILIKE fallback, which
+# sorts by name and does not rank.
 _SEARCH_TRGM = """
     SELECT player_id, full_name AS name, bats, throws, primary_position AS position
       FROM raw.players
      WHERE full_name ILIKE '%' || $1 || '%'
-     ORDER BY similarity(full_name, $1) DESC, full_name ASC
+     ORDER BY public.similarity(full_name, $1) DESC, full_name ASC
      LIMIT $2
 """
 
@@ -95,7 +103,7 @@ async def search_players(
     q: str = Query(..., min_length=2, max_length=60, description="Name fragment (>= 2 chars)."),
     limit: int = Query(20, ge=1, le=50),
 ) -> list[PlayerHit]:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     term = q.strip()
     if len(term) < 2:
         return []
@@ -125,7 +133,7 @@ async def search_players(
     summary="Player identity + seasons on file",
 )
 async def get_player(request: Request, player_id: int) -> PlayerDetail:
-    pool = _get_pool(request)
+    pool = _get_ro_pool(request)
     rows = await _fetch(pool, _DETAIL, player_id)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="player not found")

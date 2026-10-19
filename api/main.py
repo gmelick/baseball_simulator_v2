@@ -286,10 +286,12 @@ async def lifespan(app: FastAPI):
     #     ONLY when ANTHROPIC_API_KEY is set (best-effort; None otherwise so the
     #     assistant route 503s and /api/assistant/status reports configured:false).
     #   - app.state.pg_pool_ro       : the read-only Postgres pool
-    #     (BASEBALL_DB_RO_DSN → the baseball_ro role, SELECT on raw.* only) for
-    #     the SQL console + assistant. SIM-443e: it is the ONLY pool they use.
-    #     The lifespan checks the role and refuses a superuser or a role that
-    #     can write; with no acceptable pool the two routes answer 503.
+    #     (BASEBALL_DB_RO_DSN → the baseball_ro role, SELECT on raw.* only). It
+    #     serves the SQL console, the assistant (SIM-443e) and the Data Lab read
+    #     routes: schema, analytics, players and data freshness (SIM-566). It is
+    #     the ONLY pool they use. The lifespan checks the role and refuses a
+    #     superuser or a role that can write; with no acceptable pool every one
+    #     of those routes answers 503.
     # Neither is in _REQUIRED_ENV_VARS — absence never blocks boot (mirrors
     # ODDS_API_KEY / the calibration report).
     # ----------------------------------------------------------------
@@ -315,8 +317,9 @@ async def lifespan(app: FastAPI):
             "(SQL console + analytics still work)."
         )
 
-    # SIM-443e: open the SQL console's read-only pool, check its role, and
-    # keep it only when the role is safe. No fallback to the main pool.
+    # SIM-443e: open the read-only pool, check its role, and keep it only when
+    # the role is safe. The pool serves the SQL console, the assistant and the
+    # Data Lab read routes (SIM-566). No route falls back to the main pool.
     from api.routes.sql_safety import ReadOnlyRoleCheck, check_read_only_role
     from api.state import redact_dsn
 
@@ -325,7 +328,8 @@ async def lifespan(app: FastAPI):
     ro_dsn = os.environ.get("BASEBALL_DB_RO_DSN", "").strip()
     if not ro_dsn:
         log.warning(
-            "SIM-443e: BASEBALL_DB_RO_DSN is unset; the SQL console and the assistant answer 503."
+            "SIM-443e: BASEBALL_DB_RO_DSN is unset; the SQL console, the assistant and the "
+            "Data Lab read routes (schema, analytics, players, data freshness) answer 503."
         )
     else:
         ro_pool = None
@@ -335,15 +339,17 @@ async def lifespan(app: FastAPI):
             role_check = await check_read_only_role(ro_pool)
         except Exception as exc:  # noqa: BLE001 — a driver message can echo the DSN
             log.error(
-                "SIM-443e: the SQL console's read-only pool failed to open or to "
-                "check its role (%s); the console answers 503.",
+                "SIM-443e: the read-only pool failed to open or to check its role "
+                "(%s); the SQL console, the assistant and the Data Lab read routes "
+                "(schema, analytics, players, data freshness) answer 503.",
                 type(exc).__name__,
             )
             role_check = None
         if role_check is not None and not role_check.acceptable:
             log.error(
-                "SIM-443e: refused the SQL console pool: role %s is not read-only "
-                "(%s); the console answers 503.",
+                "SIM-443e: refused the read-only pool: role %s is not read-only "
+                "(%s); the SQL console, the assistant and the Data Lab read routes "
+                "(schema, analytics, players, data freshness) answer 503.",
                 role_check.role,
                 role_check.flags(),
             )
@@ -357,7 +363,9 @@ async def lifespan(app: FastAPI):
             app.state.pg_pool_ro = ro_pool
             app.state.sql_console_role = role_check.role
             log.info(
-                "SIM-443e: SQL console read-only pool open as %s (superuser=False) at %s",
+                "SIM-443e: read-only pool open as %s (superuser=False) at %s; it serves "
+                "the SQL console, the assistant and the Data Lab read routes "
+                "(schema, analytics, players, data freshness)",
                 role_check.role,
                 redact_dsn(ro_dsn),
             )
@@ -896,7 +904,9 @@ def create_app() -> FastAPI:
 
     # SIM-417: data-freshness / health surface for the UI.
     #   GET /api/data/freshness — ingest watermark + per-season coverage.
-    # Reads app.state.pg_pool (503 without a pool); aggregate counts only.
+    # The route reads app.state.pg_pool_ro, the read-only pool (SIM-566, the
+    # Data Lab read routes on the read-only pool). It answers 503 without that
+    # pool and never falls back to the main pool. Aggregate counts only.
     from api.routes.data_health import router as data_health_router
 
     app.include_router(data_health_router)
@@ -935,6 +945,10 @@ def create_app() -> FastAPI:
     #   *    /api/assistant/*       — optional AI assistant (gated on ANTHROPIC_API_KEY)
     # Registered unconditionally (route registration needs no live DB/engine); the
     # handlers read app.state and 503 gracefully when a dependency is missing.
+    # The SQL console, the assistant, analytics, players and schema read ONLY
+    # app.state.pg_pool_ro, the read-only pool (SIM-443e; SIM-566 for the three
+    # Data Lab read routers). Without it they answer 503; none falls back to the
+    # main pool. The similarity explorer reads the engines, not Postgres.
     from api.routes.ai_assistant import router as ai_assistant_router
     from api.routes.analytics import router as analytics_router
     from api.routes.players import router as players_router

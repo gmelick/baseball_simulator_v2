@@ -4,6 +4,10 @@ test_api_data_health_sim417.py
 Unit tests for the SIM-417 data-freshness API. Builds a tiny app with only the
 data_health router and a fake asyncpg pool that returns canned aggregate +
 per-season rows — no live DB.
+
+The route reads the read-only pool, ``app.state.pg_pool_ro`` (SIM-566: the Data
+Lab read routes run on the ``baseball_ro`` login). The main pool is a sentinel
+that fails the test on any use, so a fallback to it cannot pass.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from datetime import date, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.routes._common import RO_POOL_UNAVAILABLE_DETAIL
 from api.routes.data_health import router as data_health_router
 
 
@@ -30,10 +35,24 @@ class _FakePool:
         return self._seasons
 
 
+class _SentinelPool:
+    """The main pool. Any use of it fails the test."""
+
+    def acquire(self):
+        raise AssertionError("the freshness route must never use the main pool")
+
+    async def fetchrow(self, sql, *args):
+        raise AssertionError("the freshness route must never use the main pool")
+
+    async def fetch(self, sql, *args):
+        raise AssertionError("the freshness route must never use the main pool")
+
+
 def _build_app(pool) -> FastAPI:
     app = FastAPI()
     app.include_router(data_health_router)
-    app.state.pg_pool = pool
+    app.state.pg_pool_ro = pool
+    app.state.pg_pool = _SentinelPool()
     return app
 
 
@@ -86,11 +105,15 @@ def test_empty_store_returns_zeros_not_error():
 
 
 def test_no_pool_returns_503():
+    # A usable main pool is present: the route must still refuse, not fall back.
     app = FastAPI()
     app.include_router(data_health_router)
-    app.state.pg_pool = None
+    app.state.pg_pool_ro = None
+    app.state.pg_pool = _FakePool(agg=_AGG, seasons=_SEASONS)
     client = TestClient(app)
-    assert client.get("/api/data/freshness").status_code == 503
+    resp = client.get("/api/data/freshness")
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == RO_POOL_UNAVAILABLE_DETAIL
 
 
 def test_response_is_json_serializable():

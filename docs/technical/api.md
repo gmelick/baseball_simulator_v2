@@ -49,7 +49,7 @@ Boot-time resource builders for app.state: the 11 similarity engines, the win-pr
 | `load_calibration_map(path=None)` | Convenience wrapper returning a CalibrationMap (or IDENTITY_CALIBRATION) from a persisted report. | `tests/unit/test_ml_engines_sim361.py (test/legacy only — no production caller; api/main.py does the same thing inline so the loaded report can also feed apply_calibration_to_engines)` | `load_calibration_report`<br>`simulation.win_probability.CalibrationMap.from_report` |
 | `make_pg_name_resolver(pool)` | Builds an async closure resolving a set of player_ids to full names in one round trip against raw.players. | `api.main.lifespan (assigned to app.state.player_name_resolver)` | `asyncpg pool.fetch on raw.players` |
 | `open_redis_cache(redis_url)` | Opens an aioredis client, pings it (fail-fast), and wraps it in RedisSimilarityCache. | `api.main.lifespan` | `redis.asyncio.from_url` |
-| `open_pg_pool(dsn, min_size=2, max_size=10, server_settings=None)` | Opens an asyncpg connection pool. `server_settings` sets session parameters on every connection (SIM-443e: the SQL console's pool sets `search_path` to `raw`). | `api.main.lifespan (main pool and, when BASEBALL_DB_RO_DSN is set, the read-only pool)` | `asyncpg.create_pool` |
+| `open_pg_pool(dsn, min_size=2, max_size=10, server_settings=None)` | Opens an asyncpg connection pool. `server_settings` sets session parameters on every connection (SIM-443e: the read-only pool sets `search_path` to `raw`). | `api.main.lifespan (main pool and, when BASEBALL_DB_RO_DSN is set, the read-only pool; the read-only pool serves the SQL console, the assistant and the Data Lab read routes: schema, analytics, players and data freshness)` | `asyncpg.create_pool` |
 | `redact_dsn(dsn)` | Returns the DSN as `scheme://user:***@host:port/db` for a log line: the password masked, any query string dropped, `<redacted>` when the DSN does not parse (SIM-443e). | `api.main.lifespan (the one INFO line that names the console pool)` | `urllib.parse.urlsplit` |
 
 **Depends on:** `similarity.engines.* (11 engine classes, lazily imported)`, `similarity.similarity_calibration.CalibrationReport`, `simulation.win_probability.CalibrationMap / IDENTITY_CALIBRATION`, `asyncpg`, `redis.asyncio`
@@ -155,18 +155,20 @@ Package docstring only; no code. Documents that each module in api/routes owns e
 
 ### `api/routes/_common.py`
 
-Two tiny helpers hoisted out of games.py/data_health.py to remove copy-paste drift: the app.state.pg_pool accessor (503 on missing) and a uniform asyncpg-Record-or-dict column reader.
+Three small helpers and one constant, shared by the route modules so that no module keeps its own copy: the main-pool accessor, the read-only-pool accessor, the one 503 text for a missing read-only pool, and a column reader that works on an asyncpg Record or a plain dict.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `_get_pool(request)` | Returns request.app.state.pg_pool, or raises 503 if the lifespan never attached one. | `api/routes/games.py`<br>`api/routes/betting.py`<br>`api/routes/data_health.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py`<br>`api/routes/analytics.py` | — |
+| `_get_pool(request)` | Returns request.app.state.pg_pool, or raises 503 if the lifespan never attached one. The main pool logs in as `baseball_app`, which can write; only the routes that write or read `sim.*` use it. | `api/routes/games.py`<br>`api/routes/betting.py` | — |
+| `_get_ro_pool(request)` | Returns request.app.state.pg_pool_ro (the `baseball_ro` pool the lifespan checked), or raises 503 with `RO_POOL_UNAVAILABLE_DETAIL`. It never falls back to the main pool, because the main pool's role can write. The read-only pool sets `search_path = raw` and can read `raw.*` and nothing else. | `api/routes/sql_runner.py`<br>`api/routes/analytics.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py`<br>`api/routes/data_health.py` | `RO_POOL_UNAVAILABLE_DETAIL` |
+| `RO_POOL_UNAVAILABLE_DETAIL` | The one 503 text for a missing read-only pool. The constant lives here, not in sql_safety.py, so the route modules do not import `sqlglot`. | `_get_ro_pool`<br>`api/routes/sql_safety.py (re-export)`<br>`api/routes/ai_assistant.py (through sql_safety)` | — |
 | `_row_get(row, key, default=None)` | Reads key from an asyncpg Record OR a plain dict uniformly, collapsing a present-but-None value to default. | `api/routes/games.py`<br>`api/routes/data_health.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py` | — |
 
 **Depends on:** `fastapi`
 
-**Used by:** `api.routes.games`, `api.routes.betting`, `api.routes.data_health`, `api.routes.players`, `api.routes.schema_introspect`, `api.routes.analytics`
+**Used by:** `api.routes.games`, `api.routes.betting`, `api.routes.data_health`, `api.routes.players`, `api.routes.schema_introspect`, `api.routes.analytics`, `api.routes.sql_runner`, `api.routes.sql_safety`
 
-> **Notes for anyone changing this file:** This is the canonical implementation chosen by the 2026-06-03 audit's 'api/ duplication' cleanup — do not re-introduce a per-file copy of either helper; every other route module should import from here.
+> **Notes for anyone changing this file:** This is the canonical implementation chosen by the 2026-06-03 audit's 'api/ duplication' cleanup — do not re-introduce a per-file copy of any helper; every other route module should import from here. A new route that only reads `raw.*` uses `_get_ro_pool`, never `_get_pool` (the Data Lab read routes on the read-only pool, SIM-566). `metrics.py` reads `app.state.pg_pool` directly and imports neither helper.
 
 ---
 
@@ -317,13 +319,13 @@ SIM-417 data-freshness endpoint for the UI's 'data as of...' badge: aggregate in
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `get_data_freshness(request)` | GET /api/data/freshness — runs one aggregate query plus a per-season GROUP BY and returns last_ingest_at, latest_game_date, totals, and per-season SeasonCoverage rows. | `frontend header/data-status badge` | `api.routes._common._get_pool/_row_get` |
+| `get_data_freshness(request)` | GET /api/data/freshness — runs one aggregate query plus a per-season GROUP BY on the read-only pool and returns last_ingest_at, latest_game_date, totals, and per-season SeasonCoverage rows. It answers 503 when the read-only pool is not open. | `frontend header/data-status badge` | `api.routes._common._get_ro_pool/_row_get` |
 
 **Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
 
 **Used by:** `api.main.create_app`
 
-> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before; only /health, /ready, /, /auth/* and the docs stay open). An empty store returns zeros, never an error.
+> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before; only /health, /ready, /, /auth/* and the docs stay open). The route reads the read-only pool since SIM-566 and answers 503 without it; it never falls back to the main pool. An empty store returns zeros, never an error.
 
 ---
 
@@ -337,6 +339,7 @@ The single shared read-only SQL validation + execution path used by BOTH the SQL
 | `validate_relation_allowlist(sql)` | SIM-443d. Parses the query with sqlglot (Postgres dialect) and rejects it unless every table is `raw.<name>` or a CTE in scope at that point (a non-recursive CTE sees only the CTEs before it). Also rejects: a parse error, more than one statement, a statement that is not a query, `SELECT ... INTO`, the `TABLE name` shorthand, a three-part name, and any function in a FROM clause (plain or LATERAL) that is not on `_TABLE_FUNCTIONS_ALLOWED`. Fails closed. | `validate_read_only_sql` | `sqlglot.parse`<br>`_ctes_in_scope`<br>`_strip_sql_noise` |
 | `check_read_only_role(pool)` / `ReadOnlyRoleCheck` | SIM-443e. One query reads the pool's role, whether it is a superuser, whether it can use the `sim` schema, and whether it can INSERT into / SELECT from `raw.pitches`. `acceptable` is true when it is not a superuser, has no `sim` usage and no `raw` insert. | `api.main.lifespan` | `pool.fetchrow` |
 | `run_read_only_sql(pool, sql, max_rows=DEFAULT_MAX_ROWS, timeout_ms=DEFAULT_TIMEOUT_MS)` | Validates the query, wraps it in a row-capped subquery, executes it inside a read-only transaction with SET LOCAL statement_timeout, and returns a JSON-safe {columns, rows, row_count, truncated, elapsed_ms} payload. | `api/routes/sql_runner.py run_sql`<br>`api/routes/ai_assistant.py _run_conversation` | `validate_read_only_sql`<br>`_execute`<br>`api.serialization.to_jsonable` |
+| `RO_POOL_UNAVAILABLE_DETAIL` | The 503 text for a missing read-only pool. sql_safety.py no longer defines it: it imports the constant from `api.routes._common` and keeps the name in `__all__`, so `from api.routes.sql_safety import RO_POOL_UNAVAILABLE_DETAIL` still works. | `api/routes/ai_assistant.py`<br>`tests/unit/test_sim443_sql_console_pool.py` | `api.routes._common.RO_POOL_UNAVAILABLE_DETAIL` |
 | `_strip_sql_noise(sql, keep_identifiers=False)` | Blanks out comments and string literals (and, unless keep_identifiers, quoted identifiers) while preserving character offsets, so keyword/function scans never trip on literal text — but preserves quoted-identifier TEXT when keep_identifiers=True because a quoted identifier is executable code (Postgres folds unquoted names to lower case, so \"pg_read_file\" IS pg_read_file). | `validate_read_only_sql (called twice: once blanking identifiers for the keyword scan, once preserving them for the dangerous-function scan)` | — |
 
 **Depends on:** `api.serialization.to_jsonable`, `sqlglot` (imported at module top: a missing package fails the boot)
@@ -355,10 +358,9 @@ POST /api/sql/run — the Data Lab SQL Console's HTTP endpoint. A thin wrapper t
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `run_sql(request, body)` | Runs body.sql through run_read_only_sql on the read-only pool and maps SqlValidationError / any DB exception to a 400 with the message verbatim in detail. | `frontend SQL Console` | `_ro_pool`<br>`api.routes.sql_safety.run_read_only_sql` |
-| `_ro_pool(request)` | Returns app.state.pg_pool_ro (the baseball_ro pool the lifespan checked), or raises 503 with `RO_POOL_UNAVAILABLE_DETAIL`. SIM-443e: no fallback to the main pool, whose role can write. | `run_sql` | `api.routes.sql_safety.RO_POOL_UNAVAILABLE_DETAIL` |
+| `run_sql(request, body)` | Runs body.sql through run_read_only_sql on the read-only pool and maps SqlValidationError / any DB exception to a 400 with the message verbatim in detail. It answers 503 when the read-only pool is not open; it never falls back to the main pool, whose role can write. | `frontend SQL Console` | `api.routes._common._get_ro_pool`<br>`api.routes.sql_safety.run_read_only_sql` |
 
-**Depends on:** `api.auth.require_auth`, `api.routes.sql_safety`
+**Depends on:** `api.auth.require_auth`, `api.routes._common`, `api.routes.sql_safety`
 
 **Used by:** `api.main.create_app`
 
@@ -368,18 +370,18 @@ POST /api/sql/run — the Data Lab SQL Console's HTTP endpoint. A thin wrapper t
 
 ### `api/routes/players.py`
 
-Player name typeahead + identity lookup for the Data Lab / Similarity UI, backed by raw.players (pg_trgm similarity ranking with an ILIKE fallback).
+Player name typeahead + identity lookup for the Data Lab / Similarity UI, backed by raw.players (pg_trgm similarity ranking with an ILIKE fallback). Both routes read the read-only pool and answer 503 without it.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `search_players(request, q, limit)` | GET /api/players/search — ranks raw.players by pg_trgm similarity(); degrades to plain ILIKE ordering (logged once) if the extension/function is unavailable. | `frontend player search boxes (Data Lab, Similarity Explorer)` | `_fetch`<br>`api.routes._common._get_pool/_row_get` |
-| `get_player(request, player_id)` | GET /api/players/{player_id} — identity + the distinct seasons the player appears in raw.pitches as pitcher or batter. | `frontend player detail panel` | `_fetch` |
+| `search_players(request, q, limit)` | GET /api/players/search — ranks raw.players by pg_trgm `public.similarity()`; degrades to plain ILIKE ordering (logged once) if the extension/function is unavailable. | `frontend player search boxes (Data Lab, Similarity Explorer)` | `_fetch`<br>`api.routes._common._get_ro_pool/_row_get` |
+| `get_player(request, player_id)` | GET /api/players/{player_id} — identity + the distinct seasons the player appears in raw.pitches as pitcher or batter. | `frontend player detail panel` | `_fetch`<br>`api.routes._common._get_ro_pool` |
 
 **Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
 
 **Used by:** `api.main.create_app`
 
-> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before). The pg_trgm fallback path means a search that silently ISN'T similarity-ranked (alphabetical ILIKE instead) is possible in an environment missing the extension — worth checking server logs if search relevance looks off.
+> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before). The pg_trgm fallback path means a search that silently ISN'T similarity-ranked (alphabetical ILIKE instead) is possible in an environment missing the extension — worth checking server logs if search relevance looks off. The typeahead query calls `public.similarity(full_name, $1)` with the schema named. The read-only pool's session sets `search_path = raw`, and the pg_trgm extension lives in `public`, so an unqualified `similarity()` fails there and the route falls into the ILIKE fallback. Keep the schema name.
 
 ---
 
@@ -389,7 +391,7 @@ GET /api/schema — the raw.* table/column tree consumed by the SQL Console's sc
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `get_schema(request)` | Queries information_schema.columns for table_schema='raw', groups into TableInfo/ColumnInfo, caches the built SchemaResponse on request.app.state._schema_cache. | `frontend SQL Console schema browser` | `api.routes._common._get_pool/_row_get` |
+| `get_schema(request)` | Queries information_schema.columns for table_schema='raw' on the read-only pool, groups into TableInfo/ColumnInfo, caches the built SchemaResponse on request.app.state._schema_cache. It answers 503 when the read-only pool is not open. The `baseball_ro` role sees the same 33 tables and 586 columns as the owner. | `frontend SQL Console schema browser` | `api.routes._common._get_ro_pool/_row_get` |
 
 **Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
 
@@ -405,6 +407,7 @@ Curated, parameterised (never ad-hoc) descriptive-analytics endpoints over raw.p
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
+| (every route) | Each of the nine routes reads the read-only pool and answers 503 when that pool is not open. Every query names only `raw.*` tables, plus `pg_class` for the KPIs row estimate. | — | `api.routes._common._get_ro_pool` |
 | `get_kpis(request)` | GET /api/analytics/kpis — fast top-line coverage using pg_class.reltuples as a row-count estimate instead of COUNT(*) on a ~10^7-row table. | `frontend Data Lab dashboard header` | `_fetch` |
 | `pitch_type_mix / pa_outcomes / count_state / velo_distribution / zone` | Season-bounded, optionally player/hand-filtered GROUP BY queries returning usage/velocity/movement/outcome/whiff breakdowns; each defaults to excluding data_quality_flag=TRUE rows unless include_flagged is set. | `frontend dashboard cards` | `_fetch`<br>`_dicts`<br>`_quality_clause` |
 | `pitcher_leaderboard / batter_leaderboard` | Rate-stat leaderboards (K%/BB%/CSW%/whiff% for pitchers; hard-hit%/EV/K%/BB%/HR for batters) with a minimum-PA HAVING floor, joined to raw.players for names. | `frontend leaderboard views, deep-linking into the Similarity engines` | `_fetch` |
