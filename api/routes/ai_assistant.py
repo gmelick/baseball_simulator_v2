@@ -94,7 +94,7 @@ TABLE raw.pitches — one row per pitch (~700K/season, 2015-2026, ~10^7 rows tot
     bat_hand('L'/'R'/'S') — the ROSTER-DECLARED side, constant per player and 'S'
       for every switch hitter (~10-13% of rows). Do NOT use it as per-PA handedness.
   Count/outs/score: balls(0-3), strikes(0-2), outs(0-2), bat_score, fld_score, home_score, away_score.
-  Result: type — single-char pitch result code. Balls in play split THREE ways:
+  Result: type — the pitch-result code (one letter, or '*B'). Balls in play split THREE ways:
     'X' (in play, out(s), no run), 'D' (in play, no out, no run), 'E' (in play, run(s)).
     A ball-in-play filter is type IN ('X','D','E') — filtering on 'X' alone keeps only
     the outs (65%) and drops the hits. Other codes: 'B' ball, '*B' ball in the dirt,

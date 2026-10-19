@@ -20,9 +20,10 @@ this is the curated, safe counterpart to the ad-hoc SQL console.
     GET /api/analytics/leaderboard/batters?season=&metric=&min_pa=&limit=&vs_hand=
 
 The swing, whiff, called-strike and CSW (called strikes plus whiffs) rates filter
-on the ``type`` code (the Data Lab vocabulary fix, SIM-571). The code sets live in
-``pipeline/statcast_events.py``. ``description`` holds the feed's display text,
-and no query reads it. The whiff is Savant's: a foul tip counts.
+on the ``type`` code. The Data Lab vocabulary fix (SIM-571) made that change. The
+code sets live in ``pipeline/statcast_events.py``. ``description`` holds the
+feed's display text, and no query reads it. The whiff is Baseball Savant's (the
+public Statcast site): a foul tip counts.
 
 Every route reads through the read-only pool, ``app.state.pg_pool_ro`` (SIM-566,
 the Data Lab read routes on the read-only pool). The pool's role reads ``raw.*``
@@ -55,9 +56,10 @@ router = APIRouter(prefix="/api/analytics", tags=["data-lab"], dependencies=[Dep
 
 # The pitch-result filters (the Data Lab vocabulary fix, SIM-571). Every rate
 # filters on the `type` code, never on `description`. The loader stores the
-# feed's display text in `description`, so a snake_case match finds no row.
-# The fragments render from the code sets in pipeline/statcast_events.py. The
-# profiles and the pool build read the same sets. The rendered predicates:
+# feed's display text in `description`. So a match on a snake_case name (lower
+# case, with underscores: "called_strike") finds no row. The fragments render
+# from the code sets in pipeline/statcast_events.py. The pool build reads the
+# same sets. The rendered predicates:
 #   swing          type NOT IN ('B', 'C', 'H', 'P', '*B')
 #                  The bat left the shoulder.
 #   whiff          type IN ('S', 'W', 'M', 'Q', 'T', 'O')

@@ -134,14 +134,16 @@ BATTER_RETIRED_EVENTS: frozenset[str] = frozenset(
 # `raw.pitches.type` holds the feed's pitch-result code, `details.code`.
 # `raw.pitches.description` holds the display text of the same code ("Called
 # Strike", "In play, out(s)"). It never holds Statcast's snake_case names
-# ("called_strike"), so a filter on `description` matches no row. Filter on
-# `type`.
+# (lower case, with underscores: "called_strike"). So a filter on
+# `description` matches no row. Filter on `type`.
 #
-# The pool build (SQL_OUTCOME_TYPE in the profile computor), the profile SQL
-# and the Data Lab routes render their filters from these sets. So the
-# product has one vocabulary. The sets moved here from the profile computor in
-# the Data Lab vocabulary fix (SIM-571). The API reads them here, without the
-# computor's duckdb and sklearn imports.
+# The pool build (SQL_OUTCOME_TYPE) and the Data Lab routes render their
+# filters from these sets. The pitcher profile reads SQL_WHIFF and SQL_SWING.
+# Its csw_rate still spells a code list of its own inline. The batter profile
+# SQL still spells the swing list inline. A test pins that text. The sets
+# moved here from the profile computor in the Data Lab vocabulary fix
+# (SIM-571). The API reads them here, without the computor's duckdb and
+# sklearn imports.
 # `tests/unit/test_sim571_pitch_result_vocabulary.py` holds the 17
 # (description, code) pairs that the loader stores.
 
@@ -190,8 +192,9 @@ IN_PLAY_TYPES: tuple[str, ...] = ("X", "D", "E")
 #: The foul tips: the bat touches the ball and the catcher holds it. 'T' is
 #: the foul tip; 'O' is the feed's foul tip on a bunt. The model counts a foul
 #: tip as contact (the profile code sets, SIM-501), so WHIFF_TYPES excludes
-#: them. Savant counts a foul tip as a whiff. The Data Lab shows Savant's whiff
-#: (owner ruling 2026-10-19, the Data Lab vocabulary fix, SIM-571).
+#: them. Baseball Savant (the public Statcast site) counts a foul tip as a
+#: whiff. The Data Lab shows Savant's whiff (owner ruling 2026-10-19, the Data
+#: Lab vocabulary fix, SIM-571).
 FOUL_TIP_TYPES: tuple[str, ...] = ("T", "O")
 
 #: Savant's whiff: the model's whiff plus the foul tips. The Data Lab reads

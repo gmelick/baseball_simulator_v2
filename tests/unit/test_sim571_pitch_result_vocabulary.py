@@ -1,7 +1,7 @@
 """
 tests/unit/test_sim571_pitch_result_vocabulary.py
 =================================================
-The Data Lab reads each pitch result from its one-letter code (the Data Lab
+The Data Lab reads each pitch result from the pitch-result code (the Data Lab
 vocabulary fix, SIM-571).
 
 The Data Lab is the web app's analytics area. Four of its routes show pitch
@@ -13,10 +13,9 @@ snake_case name is a lower-case name with underscores between the words. The
 loader stores the MLB feed's display text in that column ("Swinging Strike").
 So on live data the swing rate read 0 and the whiff rate read null.
 
-The column ``raw.pitches.type`` holds the feed's one-letter result code. The fix
+The column ``raw.pitches.type`` holds the feed's pitch-result code. The fix
 filters on that code with the named code sets in ``pipeline/statcast_events.py``.
-The profiles and the pool build read the same sets, so one vocabulary serves
-the whole product.
+The pool build and the pitcher profile read the same sets.
 
 The owner ruled on 2026-10-19 that the Data Lab shows Savant's whiff. Savant
 (Baseball Savant) is the public Statcast site, and its whiff counts a foul tip.
@@ -610,9 +609,9 @@ def _run_in_duckdb(sql: str, args: tuple[Any, ...]) -> list[dict[str, Any]]:
     DuckDB accepts the route's Postgres text as it stands: the ``$1``
     parameters, ``COUNT(*) FILTER``, ``::numeric``, ``::float8`` and
     ``NULLS LAST``. The seed rows hold the BARE codes ('S', not 'S '). The live
-    column is CHAR(2), and Postgres ignores the padding when it compares a
-    CHAR(2) with a text literal, so the route SQL needs no TRIM. A DuckDB
-    VARCHAR keeps a trailing space, so a padded seed code would match nothing.
+    column is CHAR(2). Postgres ignores the padding when it compares a CHAR(2)
+    with a text literal. So the route SQL needs no TRIM. A DuckDB VARCHAR keeps
+    a trailing space, so a padded seed code would match nothing.
     """
     con = duckdb.connect(":memory:")
     try:
@@ -720,12 +719,14 @@ def test_batter_leaderboard_counts_every_ball_in_play() -> None:
 def test_the_assistant_prompt_teaches_the_type_codes() -> None:
     """The assistant's prompt defines each rate on the ``type`` code.
 
-    The prompt holds the rendered swing, Savant-whiff and in-play filters. It
-    holds no ``description`` comparison and no Statcast LIKE pattern. It names
-    the display text that ``description`` really holds.
+    The prompt holds the rendered swing, Savant-whiff, called-strike and in-play
+    filters, and the CSW rule. It holds no ``description`` comparison and no
+    Statcast LIKE pattern. It names the display text that ``description``
+    really holds.
     """
-    for fragment in (sql_swing(), sql_savant_whiff(), sql_in_play()):
+    for fragment in (sql_swing(), sql_savant_whiff(), sql_called_strike(), sql_in_play()):
         assert fragment in _SYSTEM_PROMPT, fragment
+    assert "CSW = (called strikes + whiffs) / all pitches" in _SYSTEM_PROMPT
     assert _DESCRIPTION_COMPARE_UPPER.search(_SYSTEM_PROMPT) is None
     assert "%swinging_strike%" not in _SYSTEM_PROMPT
     assert any(
