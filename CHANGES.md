@@ -162,8 +162,16 @@ bind-mounts both folders and hot-reloads them. When the app log shows no reload,
 `docker compose restart app` applies the change. The starter queries ship in the frontend
 bundle, so the nginx image needs a rebuild: `docker compose build nginx`, then
 `docker compose up -d nginx`. No migration runs. The profile and pool-build SQL renders as
-before, so no profile recompute or bundle rebuild follows. The live check of the four routes
-and the summary page's heat grids is the session's, and it is pending.
+before, so no profile recompute or bundle rebuild follows. **The live check PASSED** after the
+merge (1ab7a0e, 2026-10-19): the watcher reloaded the app on the merge, and it booted at 17:34
+UTC. The four routes then answered the league values on 2025 through the API with the key from
+`.env`: the count-state rows pool to swing 47.77 and whiff 25.36; the zone rows pool to called
+strike 16.28; the pitcher board leads with Mason Miller at CSW 38.0 and whiff 46.1; the batter
+board counts the hits (Kyle Schwarber 416 balls in play, 264 before the change). Before the
+merge the same reads were swing 0.0, whiff null and called strike 0.0 on every row. The nginx
+image was rebuilt and the container recreated; the served bundle holds the new starter-query
+text; `docker builder prune -f` reclaimed 435.6 MB. The summary page was not opened in a
+browser; its two heat grids format `whiff_pct`, which now carries a value in every cell.
 
 **Not done.**
 
