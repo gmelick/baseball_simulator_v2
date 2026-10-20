@@ -1,27 +1,23 @@
 """
 test_api_schemas.py
 ===================
-Unit tests for SIM-350 -- the **API response-serialization contract**
-(:mod:`api.schemas` + :mod:`api.serialization`), Phase 5, Sprint 1.
+The API's response models (:mod:`api.schemas`) and :mod:`api.serialization`.
 
-WHAT THESE ASSERT
------------------
-The Phase-4 output dataclasses hold numpy arrays / numpy scalars, which plain
-``json.dumps`` cannot serialise.  SIM-350 adds a Pydantic v2 response model +
-``from_dataclass`` converter for each.  For EVERY target dataclass these tests:
+The simulation and betting dataclasses hold numpy arrays and numpy scalars,
+which plain ``json.dumps`` cannot write. Each response model has a
+``from_dataclass`` converter. For each model these tests:
 
-  (a) build the SOURCE dataclass with representative numpy-bearing data -- using
-      the dataclass's OWN factory methods where they exist (``GameSimSummary.
-      from_results``, ``win_probability(...)``, ``PlayByPlay.from_play_results``,
-      ``OverrideDelta.from_summaries``, ``PropDistributionSet.from_boxscores``,
-      the ``betting.clv_engine`` report builders), otherwise a minimal instance;
-  (b) convert via the model's ``from_dataclass`` and assert
-      ``model.model_dump_json()`` succeeds;
-  (c) ``json.loads`` the JSON and assert it round-trips to PLAIN Python types
-      with NO numpy anywhere in the tree (a deep ``_assert_no_numpy`` walk);
-  (d) assert key numeric values match the source dataclass.
+  (a) build the source dataclass with numpy-bearing data, through the
+      dataclass's own factory where it has one (``GameSimSummary.from_results``,
+      ``win_probability(...)``, ``PlayByPlay.from_play_results``,
+      ``OverrideDelta.from_summaries``, the ``betting.clv_engine`` report
+      builders), else a minimal instance;
+  (b) convert it with ``from_dataclass`` and check ``model.model_dump_json()``;
+  (c) ``json.loads`` the JSON and check that it holds plain Python types only,
+      with no numpy anywhere in the tree (``_assert_no_numpy``);
+  (d) check the key values against the source dataclass.
 
-No DB, no FAISS, no live API, no RNG -- pure construction + conversion.
+No database, no FAISS, no live API, no randomness.
 """
 
 from __future__ import annotations
@@ -32,8 +28,6 @@ import numpy as np
 import pytest
 
 from api.schemas import (
-    BoxScoreModel,
-    CalibrationMapModel,
     CLVModel,
     ConfidenceIntervalModel,
     EdgeReportModel,
@@ -45,11 +39,7 @@ from api.schemas import (
     PlayByPlayEntryModel,
     PlayByPlayModel,
     PlayerRefModel,
-    PlayerStatLineModel,
-    PropDistributionModel,
-    PropDistributionSetModel,
     StateAtPitchModel,
-    WinProbabilityModel,
 )
 from api.serialization import to_jsonable
 from betting.clv_engine import (
@@ -61,9 +51,9 @@ from betting.clv_engine import (
     prop_edge_report,
 )
 from simulation.game_state import Bases, GameState, Half, PlayResult
-from simulation.prop_distributions import PropDistribution, PropDistributionSet
+from simulation.prop_distributions import PropDistribution
 from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
-from simulation.sim_loop import BoxScore, PlayerStatLine
+from simulation.sim_loop import BoxScore
 from simulation.snapshots import (
     FieldSnapshot,
     OverrideDelta,
@@ -71,7 +61,7 @@ from simulation.snapshots import (
     PlayerRef,
     StateAtPitch,
 )
-from simulation.win_probability import IDENTITY_CALIBRATION, TieHandling, win_probability
+from simulation.win_probability import win_probability
 
 # ===========================================================================
 # Helpers
@@ -81,7 +71,7 @@ from simulation.win_probability import IDENTITY_CALIBRATION, TieHandling, win_pr
 def _assert_no_numpy(obj) -> None:
     """Recursively assert ``obj`` contains ONLY plain JSON-native Python types.
 
-    The whole point of SIM-350: after ``json.loads`` nothing in the tree may be
+    The point of the contract: after ``json.loads`` nothing in the tree may be
     a numpy scalar/array (or any non-JSON type).  ``json.loads`` itself only ever
     yields dict/list/str/int/float/bool/None, so a positive find here would mean
     the JSON text smuggled a numpy repr -- but we walk defensively anyway.
@@ -133,20 +123,6 @@ def _summary() -> GameSimSummary:
 
 def _result_list() -> list[GameSimResult]:
     return [_result(h, a) for (h, a) in [(5, 1), (4, 2), (3, 3), (1, 4), (6, 2), (2, 7)]]
-
-
-def _boxscores() -> list[BoxScore]:
-    """N per-game boxscores so PropDistributionSet builds real numpy PMFs."""
-    boxes: list[BoxScore] = []
-    # Pitcher id 900 (K/BB/ER/OUTS), batter id 101 (AB/H/HR/RBI).
-    for k, h, hr in [(6, 2, 1), (8, 1, 0), (5, 3, 1), (7, 0, 0)]:
-        box = BoxScore()
-        p = box.line(900)
-        p.outs_recorded, p.k, p.bb, p.er = 18, k, 2, 2
-        b = box.line(101)
-        b.ab, b.h, b.hr, b.rbi = 4, h, hr, hr + 1
-        boxes.append(box)
-    return boxes
 
 
 # ===========================================================================
@@ -227,56 +203,6 @@ def test_game_sim_summary_lite_has_no_raw_arrays():
     assert "total_scores" not in loaded
     assert loaded["n_iterations"] == s.n_iterations
     assert loaded["total_score_mean"] == pytest.approx(s.total_score_mean)
-
-
-# ===========================================================================
-# sim_loop.py boxscore -- PlayerStatLine, BoxScore
-# ===========================================================================
-
-
-def test_player_stat_line_model_roundtrips():
-    ln = PlayerStatLine(player_id=900, outs_recorded=19, k=7, bb=2, er=3)
-    model = PlayerStatLineModel.from_dataclass(ln)
-    loaded = _roundtrip(model)
-    assert loaded["player_id"] == 900
-    assert loaded["k"] == 7
-    assert loaded["ip_outs"] == 19
-    assert loaded["ip"] == pytest.approx(ln.ip)  # 19 outs -> 6.1
-    assert loaded["ip_thirds"] == pytest.approx(19 / 3.0)
-
-
-def test_boxscore_model_roundtrips_with_str_keys():
-    box = _boxscores()[0]
-    model = BoxScoreModel.from_dataclass(box)
-    loaded = _roundtrip(model)
-    # JSON object keys are strings (the player ids stringified).
-    assert set(loaded["lines"].keys()) == {"900", "101"}
-    assert loaded["lines"]["900"]["k"] == box.lines[900].k
-    assert "900" in loaded["pitchers"]
-    assert "101" in loaded["batters"]
-
-
-# ===========================================================================
-# win_probability.py -- CalibrationMap, WinProbability
-# ===========================================================================
-
-
-def test_calibration_map_model_roundtrips():
-    model = CalibrationMapModel.from_dataclass(IDENTITY_CALIBRATION)
-    loaded = _roundtrip(model)
-    assert loaded["name"] == "identity"
-
-
-def test_win_probability_model_roundtrips():
-    wp = win_probability(_summary(), tie_handling=TieHandling.SPLIT)
-    model = WinProbabilityModel.from_dataclass(wp)
-    loaded = _roundtrip(model)
-    assert loaded["home_win_prob"] == pytest.approx(wp.home_win_prob)
-    assert loaded["away_win_prob"] == pytest.approx(wp.away_win_prob)
-    assert loaded["home_win_prob"] + loaded["away_win_prob"] == pytest.approx(1.0)
-    # Enum serialised to its string value.
-    assert loaded["tie_handling"] == "split"
-    assert loaded["home_win_ci"]["point"] == pytest.approx(wp.home_win_ci.point)
 
 
 # ===========================================================================
@@ -384,37 +310,6 @@ def test_metric_delta_model_roundtrips_standalone():
     loaded = _roundtrip(model)
     assert loaded["metric"] == "home_score_mean"
     assert loaded["delta"] == pytest.approx(0.0)  # same summary -> zero delta
-
-
-# ===========================================================================
-# prop_distributions.py -- PropDistribution, PropDistributionSet
-# ===========================================================================
-
-
-def test_prop_distribution_model_roundtrips():
-    dist = PropDistribution.from_samples(900, "K", [6, 8, 5, 7, 6, 8])
-    model = PropDistributionModel.from_dataclass(dist)
-    loaded = _roundtrip(model)
-    # support / probabilities became plain int / float lists.
-    assert loaded["support"] == dist.support.tolist()
-    assert loaded["probabilities"] == pytest.approx(dist.probabilities.tolist())
-    assert sum(loaded["probabilities"]) == pytest.approx(1.0)
-    # pmf keys are stringified ints.
-    assert all(isinstance(k, str) for k in loaded["pmf"])
-    assert loaded["pmf"]["6"] == pytest.approx(dist.prob(6))
-    assert loaded["mean"] == pytest.approx(dist.mean)
-
-
-def test_prop_distribution_set_model_roundtrips():
-    dist_set = PropDistributionSet.from_boxscores(_boxscores())
-    model = PropDistributionSetModel.from_dataclass(dist_set)
-    loaded = _roundtrip(model)
-    assert loaded["n_iterations"] == dist_set.n_iterations
-    # player-id keys stringified; pitcher 900 has a K PMF.
-    assert "900" in loaded["by_player"]
-    k_dist = loaded["by_player"]["900"]["K"]
-    assert sum(k_dist["probabilities"]) == pytest.approx(1.0)
-    assert k_dist["player_id"] == 900
 
 
 # ===========================================================================

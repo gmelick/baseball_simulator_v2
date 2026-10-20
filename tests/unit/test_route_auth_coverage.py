@@ -1,7 +1,4 @@
-"""
-tests/unit/test_route_auth_coverage.py — SIM-443c
-
-The API requires a login on every data route, in every environment.
+"""The API requires a login on every data route, in every environment.
 
 These tests check four things:
   - every non-exempt HTTP route of the real app carries ``require_auth`` in its
@@ -11,7 +8,7 @@ These tests check four things:
   - ``ENVIRONMENT`` plays no part: a protected route answers 401 in
     development, staging, production and with the variable unset;
   - ``AUTH_DISABLED=1`` is the one opt-out, and ``/health``, ``/auth/me`` and
-    ``validate_environment`` report it.
+    ``validate_environment`` (``api/env_check.py``) report it.
 
 tests/conftest.py sets AUTH_DISABLED=1 for the whole suite. Every test here
 deletes it with monkeypatch first, unless the test is about the opt-out.
@@ -288,7 +285,7 @@ def test_auth_me_matrix(monkeypatch):
 
 
 def test_validate_environment_requires_the_secrets_in_development(monkeypatch):
-    from api.main import validate_environment
+    from api.env_check import validate_environment
 
     _env(monkeypatch, environment="development")
     monkeypatch.delenv("SECRET_KEY")
@@ -300,7 +297,7 @@ def test_validate_environment_requires_the_secrets_in_development(monkeypatch):
 
 
 def test_validate_environment_treats_whitespace_as_missing(monkeypatch):
-    from api.main import validate_environment
+    from api.env_check import validate_environment
 
     _env(monkeypatch, environment="production")
     monkeypatch.setenv("SECRET_KEY", "   ")
@@ -311,7 +308,7 @@ def test_validate_environment_treats_whitespace_as_missing(monkeypatch):
 
 
 def test_validate_environment_warns_and_passes_when_auth_is_disabled(monkeypatch, caplog):
-    from api.main import validate_environment
+    from api.env_check import validate_environment
 
     _env(monkeypatch)
     monkeypatch.delenv("SECRET_KEY")

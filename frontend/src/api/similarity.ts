@@ -1,36 +1,12 @@
 /**
- * similarity.ts — SIM-439
- * Client for the generalized Similarity Explorer (api/routes/similarity_explorer.py).
- * Handles the 8 score engines (comps + component sub-scores) and the situation
- * (distance) engine. 503 → engine warming; 404 → subject not found / distance
- * engine on a score path.
+ * similarity.ts — the client for the Similarity Explorer
+ * (api/routes/similarity_explorer.py). It serves the 8 score engines (comps
+ * and component sub-scores) and the situation (distance) engine. A 503 means
+ * the engine is warming. A 404 means the subject is not found, or a distance
+ * engine was asked on a score path.
  */
-import { GamesApiError } from '@/api/games'
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { getJson, postJson } from '@/api/http'
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
-async function postJson<T>(url: string, payload: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 function qs(params: Record<string, string | number | undefined | null>): string {
   const sp = new URLSearchParams()
@@ -56,20 +32,6 @@ export interface SubScoreMeta {
   field: string
   label: string
   weight: number | null
-}
-
-export interface EngineMeta {
-  engine: string
-  method: string
-  partition: string
-  sub_scores: SubScoreMeta[]
-  sample_field: string
-  min_sample: number
-  supports_vs_hand: boolean
-  position_keyed: boolean
-  built: boolean
-  profile_count: number
-  note: string
 }
 
 export interface SimMember {
@@ -143,9 +105,6 @@ export interface SimQueryParams {
 
 export const fetchEngineCatalog = (): Promise<EngineCatalogEntry[]> =>
   getJson<EngineCatalogEntry[]>('/api/similarity/engines')
-
-export const fetchEngineMeta = (engine: string, position?: string, vsHand?: string): Promise<EngineMeta> =>
-  getJson<EngineMeta>(`/api/similarity/${engine}/meta${qs({ position, vs_hand: vsHand })}`)
 
 export const fetchSimilarity = (engine: string, p: SimQueryParams): Promise<SimQueryResponse> =>
   getJson<SimQueryResponse>(

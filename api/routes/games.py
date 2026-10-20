@@ -1,60 +1,63 @@
 """
 api/routes/games.py
 ===================
-Phase-5 Game Simulation endpoints (Sprint 2).
+The game routes (prefix ``/api/games``) and the simulation seam they share.
 
-Routes (prefix ``/api/games``):
+This module holds the aggregate ``router`` (a login on every route) and every
+route that runs a simulation:
 
-    GET  /api/games/{date}                          (SIM-355)
-        list the games scheduled on a date (YYYY-MM-DD), read from raw.games.
+    GET  /{game_pk}/simulate                  an N-game Monte-Carlo summary
+    POST /{game_pk}/simulate                  queue a durable run (a sim.sim_runs row)
+    POST /{game_pk}/what-if                   two runs from a plate appearance, as played and changed
+    POST /{game_pk}/sample-game               simulate and store one game for the game page
+    POST /{game_pk}/simulate/with_override    a baseline run and an override run at one seed
+    GET  /{game_pk}/boxscore                  every player's prop means over N games
+    GET  /{game_pk}/props/{player_id}/{prop}  one player's prop distribution and edge
 
-    GET  /api/games/{game_pk}/simulate              (SIM-355)
-        resolve the game's lineup -> GameState -> run an N-iteration
-        Monte-Carlo batch -> return the GameSimSummary (numpy-free JSON).
+It also holds the reads of the replay store, one stored game per run:
+``/plays``, ``/state/{at_bat}/{pitch}``, ``/linescore``, ``/decisions`` and
+``/card``.
 
-    POST /api/games/{game_pk}/simulate/with_override (SIM-358)
-        run a BASELINE sim (resolved lineup) AND an OVERRIDE sim (a modified
-        roster) at the SAME base seed, and return both summaries plus the
-        baseline-vs-override OverrideDelta.
+The routers it includes add the rest: the slate (``games_slate``), the real
+game (``games_feed``) and the run reads (``games_runs``). Their models live in
+``games_models``. Each sub-router is a bare ``APIRouter()``: the aggregate's
+prefix, tag and login apply to its routes, so the OpenAPI contract does not
+depend on the module a route lives in.
 
-DESIGN -- thin handlers over existing seams
--------------------------------------------
-This router is intentionally thin and mirrors ``api/routes/similarity.py``:
-it reads resources off ``request.app.state`` (the asyncpg pool + an optional
-sim cache), delegates lineup resolution to ``simulation.lineup_resolver``
-(SIM-353), the Monte-Carlo run to ``simulation.batch_runner.BatchRunner``
-(SIM-332), the override diff to ``simulation.snapshots.OverrideDelta`` (SIM-331),
-and JSON serialization to ``api.schemas`` (SIM-350) -- so NO numpy ever reaches
-the wire and this file owns only the HTTP contract.
+THE FACTORY SEAM
+----------------
+A simulated game needs a ``StateMachine`` factory. The production factory
+builds a sampler over the engine-artifact bundle, which a unit test does not
+have. So :func:`resolve_factory_ref` picks the dotted factory ref in this order:
 
-THE FACTORY-REF TESTABILITY SEAM (SIM-355)
-------------------------------------------
-A simulated game needs a ``StateMachine`` factory.  The PRODUCTION factory
-builds a sampler over a live DuckDB we do not have in unit tests, so the dotted
-factory ref is **overridable** via :func:`resolve_factory_ref`, in precedence:
+    1. ``request.app.state.sim_factory_ref``   (an override on the app)
+    2. ``$SIM_MACHINE_FACTORY_REF``            (an override in the environment)
+    3. :data:`PRODUCTION_FACTORY_REF`           (the production default)
 
-    1. ``request.app.state.sim_factory_ref``      (explicit per-app override)
-    2. ``$SIM_MACHINE_FACTORY_REF``               (env override)
-    3. module-level :data:`PRODUCTION_FACTORY_REF` (the production default)
+A unit test sets the first, or patches the third, to the no-DB factory
+``simulation.batch_runner:rng_driven_machine_factory``.
 
-A unit test monkeypatches :data:`PRODUCTION_FACTORY_REF` (or sets
-``app.state.sim_factory_ref``) to the no-DB
-``simulation.batch_runner:rng_driven_machine_factory`` so ``/simulate`` runs a
-real (fast, no-DB) batch with no live sampler.
+EVERY ROUTE RESOLVES THE PARK FACTOR
+------------------------------------
+:func:`_resolve_state_or_error` marks the park factor of every game state as
+unresolved, and :func:`_resolved_sim_kwargs` looks the venue's factor up before
+it builds the sim kwargs. A route that skipped the lookup would raise at build
+time instead of running a park-blind simulation (the park-factor resolution,
+SIM-452).
 
-CACHING (SIM-359)
------------------
-Two layers, both no-op-safe optimizations (never a correctness requirement):
-  * ``BatchRunner``'s OWN SimCache memoizes a summary keyed on
-    (spec + base seed + N) at SIM_RESULT_TTL_S (60s).  The runner is built with
-    the app's cache (``request.app.state.sim_cache``) when present, else its
-    default ``make_cache()`` (Redis-if-reachable, else in-memory).
-  * the date listing (a pool read) is memoized at POOL_QUERY_TTL_S (300s) when a
-    sim cache is attached.
-Caching is disabled for a request via ``?use_cache=false`` (tests use this to
-prove a second call still works on both the cached and uncached path).
+CACHING
+-------
+``BatchRunner`` memoizes a summary by (spec, seed, N) for ``SIM_RESULT_TTL_S``,
+in the app's cache (``app.state.sim_cache``) when one is attached.
+``?use_cache=false`` skips the cache. The cache only saves work; no route needs
+it.
 
-Owner: Backend Developer (SIM-355 / SIM-358 / SIM-359).
+THE REPLAY STORE
+----------------
+The replay store is a DuckDB file of its own (``app.state.replay_duckdb``; the
+replay store, SIM-561). It holds one recorded game per run: the play stream,
+the state after each pitch, the linescore and the pitcher decisions. A route
+records the game on the worker pool and writes it under the file's next run id.
 """
 
 from __future__ import annotations
@@ -66,24 +69,33 @@ import secrets
 import threading
 import time
 from collections.abc import Mapping
-from datetime import date as _date
-from datetime import datetime
-from enum import StrEnum
-from typing import Any, Literal, NamedTuple
-from zoneinfo import ZoneInfo
+from typing import Any, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
 
 from api.auth import require_auth
-from api.routes._common import _get_pool, _row_get
+from api.routes import games_feed, games_runs, games_slate
+from api.routes._common import _get_pool, _get_sim_cache, _row_get
+from api.routes.games_feed import _feed_lineup_rows, _league_game_payload, _start_state
+from api.routes.games_models import (
+    GameCardResponse,
+    RosterOverride,
+    SampleGameResponse,
+    SimRunModel,
+    SimRunRequest,
+    SimulateResponse,
+    WhatIfRequest,
+    WhatIfStarted,
+    WithOverrideResponse,
+    _sim_summary_lite_from_stored,  # noqa: F401 # re-export: removed in the integration pass
+    _with_half_width,  # noqa: F401 # re-export: removed in the integration pass
+)
+from api.routes.games_runs import _get_sim_jobs, _run_model, _stored_prop_set
 from api.schemas import (
     BoxscoreCardModel,
     EdgeReportModel,
-    GameSimSummaryLite,
     GameSimSummaryModel,
     LinescoreModel,
-    LiveGameStateResponse,
     OverrideDeltaModel,
     PitcherDecisionsModel,
     PlayByPlayModel,
@@ -94,11 +106,7 @@ from api.serialization import to_jsonable
 from betting import MarketSide, OddsQuote, TwoWayMarket
 from betting import prop_edge_report as _prop_edge_report
 from db import sim_store
-from simulation.batch_runner import (
-    POOL_QUERY_TTL_S,
-    BatchRunner,
-    GameSpec,
-)
+from simulation.batch_runner import BatchRunner, GameSpec
 from simulation.flags import read_str
 from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
@@ -122,15 +130,11 @@ from simulation.sim_kwargs import (
 from simulation.sim_kwargs import (
     mark_park_factor_unresolved,
 )
-
-# SIM-449 re-exports. Nothing in THIS module calls them any more -- every route
-# goes through ``_resolved_sim_kwargs`` (SIM-452) -- but importers outside the
-# package (``scripts/``, the unit tests) still reach them here under these names.
-from simulation.sim_kwargs import (  # noqa: F401 -- kept as a public re-export
-    resolve_park_run_factor as _resolve_park_run_factor,
+from simulation.sim_kwargs import (
+    resolve_park_run_factor as _resolve_park_run_factor,  # noqa: F401 # re-export: removed in the integration pass
 )
-from simulation.sim_kwargs import (  # noqa: F401 -- kept as a public re-export
-    sim_kwargs_from_state as _sim_kwargs_from_state,
+from simulation.sim_kwargs import (
+    sim_kwargs_from_state as _sim_kwargs_from_state,  # noqa: F401 # re-export: removed in the integration pass
 )
 from simulation.snapshots import (
     FieldSnapshot,
@@ -144,26 +148,32 @@ from simulation.snapshots import (
 
 log = logging.getLogger("api.routes.games")
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+#: The aggregate router: every route under /api/games requires a login (cookie
+#: or API key). The three sub-routers join it here, ahead of this module's own
+#: routes.
 router = APIRouter(prefix="/api/games", tags=["games"], dependencies=[Depends(require_auth)])
+router.include_router(games_slate.router)
+router.include_router(games_feed.router)
+router.include_router(games_runs.router)
 
 
 # ---------------------------------------------------------------------------
-# The factory-ref testability seam (SIM-355)
+# The factory seam and the app.state accessors
 # ---------------------------------------------------------------------------
 
-#: The PRODUCTION machine-factory dotted ref.  Builds a sampler over the live
-#: DuckDB -- NOT available in unit tests.  Tests monkeypatch this module-level
-#: default (or set ``app.state.sim_factory_ref``) to the no-DB rng factory
-#: ``"simulation.batch_runner:rng_driven_machine_factory"``.
+#: The production machine factory's dotted ref. It builds a sampler over the
+#: engine-artifact bundle, which a unit test does not have; a test patches this
+#: default, or sets ``app.state.sim_factory_ref``, to the no-DB factory
+#: ``"simulation.batch_runner:rng_driven_machine_factory"``. The string is part
+#: of the result and prop-set cache keys.
 PRODUCTION_FACTORY_REF = "simulation.production_factory:production_machine_factory"
 
 
 def resolve_factory_ref(request: Request) -> str:
-    """The machine-factory dotted ref for this request (the testability seam).
+    """The machine factory's dotted ref for this request.
 
-    Precedence: ``app.state.sim_factory_ref`` -> ``$SIM_MACHINE_FACTORY_REF`` ->
-    the module-level :data:`PRODUCTION_FACTORY_REF`.  See the module docstring.
+    The order: ``app.state.sim_factory_ref``, then ``$SIM_MACHINE_FACTORY_REF``,
+    then :data:`PRODUCTION_FACTORY_REF` (the module docstring, THE FACTORY SEAM).
     """
     override = getattr(request.app.state, "sim_factory_ref", None)
     if override:
@@ -174,55 +184,35 @@ def resolve_factory_ref(request: Request) -> str:
     return PRODUCTION_FACTORY_REF
 
 
-# ---------------------------------------------------------------------------
-# app.state accessors (mirror similarity.py's get_* dependencies)
-# ---------------------------------------------------------------------------
-#
-# ``_get_pool`` (the ``app.state.pg_pool`` accessor) lives in
-# ``api.routes._common`` and is imported above -- it was byte-identical to
-# data_health.py's copy (audit 2026-06-03 "api/ duplication"); it is re-exported
-# here for the existing ``from api.routes.games import _get_pool`` callers
-# (betting.py uses the _common import directly).
-
-
-def _get_sim_cache(request: Request) -> Any:
-    """The optional sim cache attached to app.state, or None.
-
-    ``None`` means "let BatchRunner pick its own cache backend"; the route never
-    hard-depends on a cache (SIM-359: caching is a no-op-safe optimization).
-    """
-    return getattr(request.app.state, "sim_cache", None)
-
-
 def _get_sim_duckdb(request: Request) -> Any:
-    """The optional sim DuckDB connection on app.state, or None (SIM-357).
+    """The analytics DuckDB connection on ``app.state.sim_duckdb``, or None.
 
-    The play-stream + state-snapshot stores (``db.sim_store``) are DuckDB-backed;
-    the lifespan attaches a live ``duckdb`` connection as ``app.state.sim_duckdb``
-    when available.  ``None`` means "no replay store wired" -> persistence is
-    skipped silently and the /plays + /state reads 404.  Like the cache, this is
-    a best-effort optimization: a missing store never breaks /simulate.
+    The park-factor lookup (:func:`_resolved_sim_kwargs`) reads the venue's run
+    factor through it. The lifespan never attaches one: with None the lookup
+    reads the snapshot that the lifespan primed (``prime_park_factor_source``),
+    so the app never holds the analytics file open. A test attaches a fake
+    connection to feed the lookup.
     """
     return getattr(request.app.state, "sim_duckdb", None)
 
 
 def _get_replay_store(request: Request) -> Any:
-    """The replay file's DuckDB connection on app.state, or None (SIM-561).
+    """The replay file's DuckDB connection on app.state, or None.
 
     The lifespan opens it when ``REPLAY_PERSISTENCE_ENABLED`` is on: a file of its
     own (``REPLAY_DUCKDB_PATH``, default ``/data/replay.duckdb``) that only the app
-    writes.  It is NOT the analytics connection (:func:`_get_sim_duckdb`), so the
-    app never holds a write lock on the analytics file.  ``None`` means the store
+    writes. It is not the analytics connection (:func:`_get_sim_duckdb`), so the
+    app never holds a write lock on the analytics file. ``None`` means the store
     is off: the replay reads answer 503 and the writes skip.
     """
     return getattr(request.app.state, "replay_duckdb", None)
 
 
 def _replay_call(con: Any, fn: Any, /, **kwargs: Any) -> Any:
-    """Run ``fn(cursor, **kwargs)`` on a cursor of its own, then close it (SIM-561).
+    """Run ``fn(cursor, **kwargs)`` on a cursor of its own, then close it.
 
     A DuckDB connection is not safe to share across threads; a cursor per call
-    is.  The routes run every replay read and write in a worker thread.
+    is. The routes run every replay read and write in a worker thread.
     """
     cur = con.cursor()
     try:
@@ -232,22 +222,17 @@ def _replay_call(con: Any, fn: Any, /, **kwargs: Any) -> Any:
 
 
 def _build_runner(request: Request) -> BatchRunner:
-    """The BatchRunner for this request -- the shared one if present (SIM-360).
+    """The BatchRunner for this request: the app's shared runner when attached.
 
-    SIM-360: when the lifespan has attached a long-lived ``app.state.sim_runner``
-    (a persistent BatchRunner that REUSES one warm ProcessPoolExecutor + the
-    SIM-333 shared-mem segments across requests), reuse it rather than building a
-    fresh runner per request -- so a long-lived API does not pay the fork +
-    publish/unlink cost on every ``/simulate``.  The runner's OWN SimCache still
-    memoizes summaries at SIM_RESULT_TTL_S, and the heavy run is offloaded to a
-    worker thread by the caller via ``asyncio.to_thread``.
+    The lifespan attaches one long-lived runner as ``app.state.sim_runner``. It
+    keeps one warm worker pool and the shared-memory arrays across requests, so
+    a request pays no fork and no publish. The caller runs the batch in a worker
+    thread (``asyncio.to_thread``).
 
-    FALLBACK (SIM-359): if no shared runner is attached (e.g. a unit test that
-    builds the app without entering the lifespan), build a transient one wired
-    with the app's sim cache when present (so a repeat matchup/seed/N hits the
-    memoized summary), else its own ``make_cache()``.  ``max_workers=1`` runs the
-    batch synchronously in THIS process -- no fork, no pickling -- the fast,
-    deterministic test path.
+    With no shared runner (a unit test that builds the app without the
+    lifespan), the route builds a runner of its own on the app's sim cache, else
+    on the runner's default cache. ``max_workers=1`` runs the batch in this
+    process: no fork and no pickling.
     """
     shared = getattr(request.app.state, "sim_runner", None)
     if shared is not None:
@@ -257,419 +242,27 @@ def _build_runner(request: Request) -> BatchRunner:
 
 
 # ---------------------------------------------------------------------------
-# Response / request models
-# ---------------------------------------------------------------------------
-
-
-class GameCard(BaseModel):
-    """One row of ``GET /api/games/{date}`` -- a scheduled game's identity.
-
-    SIM-383 enrichment adds team names, abbreviations, venue name + city, and
-    season-to-date win/loss records (computed through the day before ``game_date``
-    from ``raw.games`` final results).  All enrichment fields are ``Optional``
-    so existing cached payloads and unit-test stubs that only supply the raw
-    ID columns continue to deserialise without error.
-    """
-
-    game_pk: int
-    season: int
-    game_date: str
-    status: str | None = None
-    home_team_id: int | None = None
-    away_team_id: int | None = None
-    venue_id: int | None = None
-    # SIM-383 enrichment -------------------------------------------------------
-    home_team_name: str | None = None
-    home_team_abbrev: str | None = None
-    away_team_name: str | None = None
-    away_team_abbrev: str | None = None
-    venue_name: str | None = None
-    venue_city: str | None = None
-    # Season records entering the game (all games with status='Final' AND
-    # game_date < this game's date).  0-0 when no prior results exist.
-    home_wins: int | None = None
-    home_losses: int | None = None
-    away_wins: int | None = None
-    away_losses: int | None = None
-    # SIM-409: True when raw.game_lineups has at least one row for this game;
-    # False for scheduled games whose lineups haven't been published yet.
-    # None when the caller did not include the lineup check (older code paths).
-    lineup_ready: bool | None = None
-    # SIM-519 Part A: the schedule-driven card. Every field is optional, so a
-    # stored payload, a unit stub or an old mock still deserialises.
-    game_status: Literal["scheduled", "live", "final", "postponed"] | None = None
-    detailed_state: str | None = None
-    reason: str | None = None
-    start_utc: str | None = None
-    start_time_tbd: bool | None = None
-    double_header: str | None = None
-    game_number: int | None = None
-    game_type: str | None = None
-    series_description: str | None = None
-    away_score: int | None = None
-    home_score: int | None = None
-    inning: int | None = None
-    inning_half: str | None = None
-    outs: int | None = None
-    n_innings: int | None = None
-    away_probable_pitcher_id: int | None = None
-    away_probable_pitcher_name: str | None = None
-    home_probable_pitcher_id: int | None = None
-    home_probable_pitcher_name: str | None = None
-    rescheduled_to: str | None = None
-    rescheduled_from: str | None = None
-    lineup_source: str | None = None
-    sim_summary: GameSimSummaryLite | None = None
-    sim_run_at: str | None = None
-    db_known: bool | None = None
-
-
-class GamesOnDateResponse(BaseModel):
-    """The ``GET /api/games/{date}`` envelope: the date echo + its game cards.
-
-    SIM-519 Part A: ``source`` says where the list came from -- ``schedule``
-    (the league's schedule, fresh or from the 20-second cache),
-    ``schedule_cached`` (the last good schedule after a feed error) or ``db``
-    (the stored listing). ``feed_error`` carries the error on a degraded read.
-    """
-
-    date: str
-    count: int
-    games: list[GameCard] = Field(default_factory=list)
-    source: Literal["schedule", "schedule_cached", "db"] | None = None
-    feed_error: str | None = None
-    fetched_at: str | None = None
-
-
-class SampleGameResponse(BaseModel):
-    """The ``POST /api/games/{game_pk}/sample-game`` envelope (SIM-561).
-
-    The stored game's run id and seed.  The page then reads the game through
-    /linescore, /decisions and /plays, which serve this run until a newer one.
-    """
-
-    game_pk: int
-    run_id: int
-    base_seed: int
-
-
-class SimulateResponse(BaseModel):
-    """The ``GET /api/games/{game_pk}/simulate`` envelope."""
-
-    game_pk: int
-    n_iterations: int
-    base_seed: int | None = None
-    from_cache: bool = False
-    summary: GameSimSummaryModel
-
-
-class SubstitutionSlot(BaseModel):
-    """A single targeted player substitution (SIM-388).
-
-    Replaces the player at a specific batting-order slot on one side of the
-    lineup, without having to know or pass the other 8 slots.  One or more of
-    these can appear in :attr:`RosterOverride.substitutions` to stage a
-    multi-sub override queue.
-
-      * ``batting_order`` -- 1-indexed slot (1 = leadoff … 9 = ninth).
-      * ``player_id``     -- the replacement player's MLB player ID.
-      * ``side``          -- ``"home"`` or ``"away"``.
-
-    Multiple ``SubstitutionSlot`` items for the SAME (side, batting_order) in
-    a single request are applied left-to-right, so the last one wins.
-    """
-
-    batting_order: int = Field(..., ge=1, le=9, description="1-indexed lineup slot (1–9)")
-    player_id: int = Field(..., gt=0, description="MLB player_id of the substitute")
-    side: Literal["home", "away"] = Field(..., description="Which side's lineup to modify")
-
-
-class RosterOverride(BaseModel):
-    """The ``POST .../simulate/with_override`` request body (SIM-358 + SIM-388).
-
-    Every field is OPTIONAL; an unset field keeps the resolved (baseline) value.
-    At least one field SHOULD be set for the override to differ from baseline,
-    but an all-empty body is accepted (it yields an all-zero delta -- a valid,
-    if uninteresting, comparison).
-
-      * ``home_lineup`` / ``away_lineup`` -- full 1..9 batting orders (player
-        ids) to swap in for that side.  When set, REPLACES the entire lineup
-        before any ``substitutions`` are applied.
-      * ``substitutions`` -- SIM-388: a list of :class:`SubstitutionSlot`
-        targeted single-player changes applied AFTER any full-lineup replacements.
-        Use this to stage individual subs without knowing the full batting order.
-        Left-to-right application; same-slot conflicts → last entry wins.
-      * ``pitcher_id`` -- the pitcher to face the batters for the simulated half.
-      * ``bat_hand`` -- the leadoff batter's hand override ('L'/'R'/'S'); the
-        sampler pre-filter key.
-      * ``description`` -- free text recorded on the returned OverrideDelta.
-    """
-
-    home_lineup: list[int] | None = None
-    away_lineup: list[int] | None = None
-    # SIM-388: targeted substitution list (applied after full-lineup overrides)
-    substitutions: list[SubstitutionSlot] | None = None
-    pitcher_id: int | None = None
-    bat_hand: str | None = Field(default=None, max_length=1)
-    description: str | None = None
-
-
-class WithOverrideResponse(BaseModel):
-    """The ``POST .../simulate/with_override`` envelope (SIM-358).
-
-    Carries the BASELINE summary, the OVERRIDE summary (both run at the SAME
-    base seed for an apples-to-apples comparison), and the OverrideDelta diff.
-    """
-
-    game_pk: int
-    n_iterations: int
-    base_seed: int | None = None
-    baseline: GameSimSummaryModel
-    override: GameSimSummaryModel
-    delta: OverrideDeltaModel
-
-
-# ---------------------------------------------------------------------------
-# SIM-384 -- game-status enum + aggregate card model + query
-# ---------------------------------------------------------------------------
-
-
-class GameStatus(StrEnum):
-    """3-state (+ postponed) game status for the Day Summary UI.
-
-    Maps the 8 raw ``raw.games.status`` values to the 4 canonical UI states:
-      * ``scheduled`` -- game not yet started (Preview / Warmup / Pre-Game)
-      * ``live``      -- game in progress
-      * ``final``     -- game completed
-      * ``postponed`` -- game postponed, suspended, or cancelled
-    """
-
-    SCHEDULED = "scheduled"
-    LIVE = "live"
-    FINAL = "final"
-    POSTPONED = "postponed"
-
-
-_RAW_STATUS_TO_GAME_STATUS: dict[str, GameStatus] = {
-    "Preview": GameStatus.SCHEDULED,
-    "Warmup": GameStatus.SCHEDULED,
-    "Pre-Game": GameStatus.SCHEDULED,
-    "Live": GameStatus.LIVE,
-    "Final": GameStatus.FINAL,
-    "Postponed": GameStatus.POSTPONED,
-    "Suspended": GameStatus.POSTPONED,
-    "Cancelled": GameStatus.POSTPONED,
-}
-
-
-class GameCardAggregateResponse(BaseModel):
-    """Response for ``GET /api/games/{game_pk}/card`` (SIM-384).
-
-    Aggregates the identity, status, SIM-383 enrichment, and the most recent
-    persisted Monte-Carlo summary into a single payload for the Day Summary
-    3-state game cards.  ``sim_summary`` is ``None`` when no sim has been run
-    yet (or when Postgres is unavailable).  ``odds`` is reserved for Phase 6
-    Sprint 4+ (odds provider integration — SIM-405).
-    """
-
-    game_pk: int
-    game_status: str  # one of GameStatus values
-    game_date: str
-    season: int
-    # SIM-383 enrichment (all optional -- None when DB join has no matching row)
-    home_team_id: int | None = None
-    away_team_id: int | None = None
-    venue_id: int | None = None
-    home_team_name: str | None = None
-    home_team_abbrev: str | None = None
-    away_team_name: str | None = None
-    away_team_abbrev: str | None = None
-    venue_name: str | None = None
-    venue_city: str | None = None
-    home_wins: int | None = None
-    home_losses: int | None = None
-    away_wins: int | None = None
-    away_losses: int | None = None
-    # Final scores (populated when game_status == "final")
-    home_score_final: int | None = None
-    away_score_final: int | None = None
-    # Most-recent Monte-Carlo summary (None when no run has been persisted yet)
-    sim_summary: GameSimSummaryLite | None = None
-    # Odds (Phase 6 Sprint 4+ -- SIM-405/SIM-395)
-    odds: None = None
-    # SIM-519 Part A: the schedule's fields for the game page header (best
-    # effort; None when the league feed has no entry for the game).
-    detailed_state: str | None = None
-    start_utc: str | None = None
-    start_time_tbd: bool | None = None
-    game_number: int | None = None
-    double_header: str | None = None
-    series_description: str | None = None
-    away_probable_pitcher_name: str | None = None
-    home_probable_pitcher_name: str | None = None
-    away_score: int | None = None
-    home_score: int | None = None
-
-
-# ---------------------------------------------------------------------------
-# Shared SIM-383 win/loss-records SQL (audit 2026-06-03 "api/ duplication")
-# ---------------------------------------------------------------------------
-# The ``team_records`` CTE (season-to-date W/L from ``raw.games`` finals strictly
-# before a cutoff date) and the team/venue/records JOIN tail were copy-pasted in
-# both _GAME_CARD_SQL and _GAMES_ON_DATE_SQL.  They are factored here so any
-# change to the records computation happens in ONE place.  The ONLY thing that
-# varies between the two callers is the date-cutoff expression, threaded in via
-# ``{cutoff}``: a single game_pk lookup vs the listed date param ``$1``.
-
-
-def _team_records_cte(cutoff: str) -> str:
-    """The ``team_records`` CTE body, with the date cutoff expression spliced in.
-
-    ``cutoff`` is a trusted SQL fragment (a literal/sub-select chosen by THIS
-    module, never user input) -- e.g. ``"$1"`` or
-    ``"(SELECT game_date FROM game_date_lookup)"``.
-    """
-    return f"""team_records AS (
-        -- Season-to-date records: only Final games BEFORE the cutoff date.
-        SELECT team_id, season,
-               SUM(CASE WHEN (is_home AND home_score_final > away_score_final)
-                             OR (NOT is_home AND away_score_final > home_score_final)
-                        THEN 1 ELSE 0 END) AS wins,
-               SUM(CASE WHEN (is_home AND home_score_final < away_score_final)
-                             OR (NOT is_home AND away_score_final < home_score_final)
-                        THEN 1 ELSE 0 END) AS losses
-          FROM (
-                SELECT home_team_id AS team_id, season, TRUE::BOOLEAN AS is_home,
-                       home_score_final, away_score_final
-                  FROM raw.games
-                 WHERE status = 'Final' AND game_date < {cutoff}
-                UNION ALL
-                SELECT away_team_id AS team_id, season, FALSE::BOOLEAN AS is_home,
-                       home_score_final, away_score_final
-                  FROM raw.games
-                 WHERE status = 'Final' AND game_date < {cutoff}
-               ) t
-         GROUP BY team_id, season
-    )"""
-
-
-#: The team/venue/records LEFT JOIN tail shared by both record-bearing queries
-#: (byte-identical in the original two copies).
-_TEAM_RECORDS_JOIN_TAIL = """      FROM raw.games g
-      LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
-      LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
-      LEFT JOIN raw.venues    v  ON  v.venue_id = g.venue_id     AND  v.season  = g.season
-      LEFT JOIN team_records hr  ON hr.team_id  = g.home_team_id AND hr.season  = g.season
-      LEFT JOIN team_records ar  ON ar.team_id  = g.away_team_id AND ar.season  = g.season"""
-
-
-#: SQL to fetch the SIM-383-enriched identity + final scores for a single
-#: game_pk.  The ``team_records`` CTE computes season-to-date win/loss records
-#: from ``raw.games`` final results strictly before the game's own date.
-#: Single parameter: ``$1 = game_pk (int)``.
-_GAME_CARD_SQL = f"""
-    WITH game_date_lookup AS (
-        SELECT game_date, season FROM raw.games WHERE game_pk = $1
-    ),
-    {_team_records_cte("(SELECT game_date FROM game_date_lookup)")}
-    SELECT g.game_pk, g.season, g.game_date, g.status,
-           g.home_team_id, g.away_team_id, g.venue_id,
-           g.home_score_final, g.away_score_final,
-           ht.team_name     AS home_team_name,
-           ht.team_abbrev   AS home_team_abbrev,
-           at_.team_name    AS away_team_name,
-           at_.team_abbrev  AS away_team_abbrev,
-           v.venue_name,
-           v.city           AS venue_city,
-           COALESCE(hr.wins,   0) AS home_wins,
-           COALESCE(hr.losses, 0) AS home_losses,
-           COALESCE(ar.wins,   0) AS away_wins,
-           COALESCE(ar.losses, 0) AS away_losses,
-           EXISTS(
-               SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
-           ) AS lineup_ready
-{_TEAM_RECORDS_JOIN_TAIL}
-     WHERE g.game_pk = $1
-"""
-
-
-def _with_half_width(ci: Any) -> Any:
-    """A stored interval dict with ``half_width`` filled from its bounds.
-
-    SIM-546 review: the stored JSON lacks the field (see
-    ``_sim_summary_lite_from_stored``). A value that is not such a dict
-    passes through unchanged, and the model then rejects it.
-    """
-    if (
-        isinstance(ci, dict)
-        and "half_width" not in ci
-        and isinstance(ci.get("low"), (int, float))
-        and isinstance(ci.get("high"), (int, float))
-    ):
-        return {**ci, "half_width": (ci["high"] - ci["low"]) / 2.0}
-    return ci
-
-
-def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | None:
-    """Build a ``GameSimSummaryLite`` from a stored (JSONB) summary dict.
-
-    Strips the three raw per-iteration score arrays (``home_scores``,
-    ``away_scores``, ``total_scores``) and the per-iteration inning grid
-    (``inning_grids``, SIM-546) before passing to ``model_validate``
-    because ``GameSimSummaryLite`` does not carry those fields and the base
-    ``_ApiModel`` uses ``extra="forbid"``.  Returns ``None`` on any failure
-    (missing keys, type errors, unknown format) so callers never see an
-    exception from a sim-history read.
-
-    SIM-546 review: the stored summary carries no ``half_width`` on its
-    intervals. ``half_width`` is a property of the interval dataclass, and
-    ``to_jsonable`` writes fields only. The lite model requires it, so the
-    projection fills it from ``(high - low) / 2`` on each ``*_ci`` dict that
-    lacks it. Without the fill every stored summary read None.
-    """
-    if not summary:
-        return None
-    try:
-        lite_dict = {
-            k: _with_half_width(v) if k.endswith("_ci") else v
-            for k, v in summary.items()
-            if k not in ("home_scores", "away_scores", "total_scores", "inning_grids")
-        }
-        return GameSimSummaryLite.model_validate(lite_dict)
-    except Exception:  # noqa: BLE001 -- best-effort deserialization
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Helpers -- sim_kwargs assembly from a resolved GameState
+# The game state and its sim kwargs
 #
-# SIM-449: ``_sim_kwargs_from_state`` and ``_resolve_park_run_factor`` MOVED to
-# ``simulation/sim_kwargs.py``. This module imports them above under their
-# original names, so every existing caller and importer is unchanged.
-# ``scripts/sim_stats.py`` held a second copy of the builder that dropped the two
-# defense maps and the park factor, so SIM_FIELDER_RBF and SIM_PARK_FACTOR ran as
-# no-ops under the validation harness. One definition now serves both callers.
-#
-# SIM-452: SIM-449 unified the BUILDER but not the park-factor RESOLUTION. Five of
-# the eight call sites never looked the venue up, so they sent the GameState
-# default 1.0 and SIM_PARK_FACTOR was inert for them. ``_resolved_sim_kwargs``
-# below is now the ONLY way a route gets sim kwargs, and it always resolves first.
+# ``_resolved_sim_kwargs`` is the one way a route gets sim kwargs, and it looks
+# the venue's park factor up first (the park-factor resolution, SIM-452). The
+# builder itself lives in ``simulation/sim_kwargs.py``.
 # ---------------------------------------------------------------------------
 
 
 async def _resolved_sim_kwargs(
     request: Request, pool: Any, state: Any, game_pk: int
 ) -> dict[str, Any]:
-    """Resolve the venue park factor onto ``state``, then build the sim kwargs (SIM-452).
+    """Resolve the venue's park factor onto ``state``, then build the sim kwargs.
 
-    Every route uses this. ``_resolve_state_or_error`` stamps the unresolved
-    sentinel on the state, and ``simulation.sim_kwargs.build_sim_kwargs`` clears the
-    sentinel by writing the looked-up factor. A route that called the bare builder
-    instead would raise ``UnresolvedParkFactorError``.
+    Every route uses this. ``_resolve_state_or_error`` marks the factor as
+    unresolved, and ``simulation.sim_kwargs.build_sim_kwargs`` replaces the mark
+    with the looked-up factor. A route that called the bare builder instead
+    would raise ``UnresolvedParkFactorError``.
 
-    The DuckDB connection comes from ``app.state.sim_duckdb``. When it is absent the
-    resolver returns a real neutral ``1.0``, which is a resolved answer, not a
-    skipped lookup.
+    The lookup reads ``app.state.sim_duckdb`` (:func:`_get_sim_duckdb`), else the
+    primed snapshot. With neither, the resolver returns a neutral ``1.0``, which
+    is a resolved answer, not a skipped lookup.
     """
     return await _build_sim_kwargs(
         state,
@@ -680,20 +273,19 @@ async def _resolved_sim_kwargs(
 
 
 def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> dict[str, Any]:
-    """Return a COPY of ``base_kwargs`` with the override's set fields applied.
+    """Return a copy of ``base_kwargs`` with the override's set fields applied.
 
-    Processing order (SIM-358 + SIM-388):
-    1. Full-lineup replacements (``home_lineup`` / ``away_lineup``) are applied first,
-       completely replacing that side's batting order.
-    2. Targeted substitutions (``substitutions``) are applied left-to-right to the
-       CURRENT lineup after step 1 (whether it was replaced or carried from baseline).
-       Out-of-range ``batting_order`` values are silently skipped so a malformed slot
-       never prevents the rest of the override from running.
-    3. Pitcher and bat-hand overrides are applied last.
+    The order:
 
-    Only fields the caller actually set (non-None) replace the baseline value;
-    everything else is carried through unchanged so a single-field override
-    (e.g. just the pitcher) leaves both lineups intact.
+    1. A full lineup (``home_lineup`` / ``away_lineup``) replaces that side's
+       batting order.
+    2. The ``substitutions`` apply left to right to the lineup that step 1
+       left. A ``batting_order`` outside the lineup is skipped, so one bad slot
+       does not stop the rest of the override.
+    3. The pitcher and the bat hand apply last.
+
+    Only a field the caller set (not None) replaces the baseline value, so an
+    override of the pitcher alone leaves both lineups as they were.
     """
     kw = dict(base_kwargs)
 
@@ -703,7 +295,7 @@ def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> di
     if override.away_lineup is not None:
         kw["away_lineup"] = [int(x) for x in override.away_lineup]
 
-    # Step 2 (SIM-388): targeted single-player substitutions.
+    # Step 2: the single-player substitutions.
     if override.substitutions:
         home_lineup = list(kw.get("home_lineup") or [])
         away_lineup = list(kw.get("away_lineup") or [])
@@ -713,11 +305,11 @@ def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> di
                 home_lineup[slot] = int(sub.player_id)
             elif sub.side == "away" and 0 <= slot < len(away_lineup):
                 away_lineup[slot] = int(sub.player_id)
-            # Out-of-range slot (e.g. lineup shorter than expected): silently skip.
+            # A slot outside the lineup is skipped.
         kw["home_lineup"] = home_lineup
         kw["away_lineup"] = away_lineup
 
-    # Step 3: pitcher + bat-hand.
+    # Step 3: the pitcher and the bat hand.
     if override.pitcher_id is not None:
         kw["pitcher_id"] = int(override.pitcher_id)
     if override.bat_hand is not None:
@@ -728,26 +320,27 @@ def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> di
 async def _resolve_state_or_error(
     pool: Any, game_pk: int, *, fallback_rows: list[dict[str, Any]] | None = None
 ) -> Any:
-    """Resolve a game's GameState via SIM-353, mapping failures to HTTP errors.
+    """Resolve a game's GameState from its lineup; map a failure to an HTTP error.
 
-    A connection is acquired from the pool (asyncpg-style ``async with
-    pool.acquire()``); a pool that IS a connection (the mock-pool test idiom)
-    is used directly.
+    The function acquires a connection from the pool (asyncpg's ``async with
+    pool.acquire()``); a pool that IS a connection (the mock-pool test idiom) is
+    used directly. ``fallback_rows`` are lineup rows to use when the table has
+    none (the what-if builds them from the league feed).
 
-    Error mapping (SIM-409, SIM-559):
-    * ``LineupNotIngestedError`` (game exists, lineups not yet published by MLB)
-      → 503 Service Unavailable with a Retry-After: 900 hint.
-    * ``LineupIncompleteError`` (game exists, its lineup rows do not make a
-      playable game: a side with no pitcher, an empty batting order)
-      → 503 with the same Retry-After hint. The gap is data a later lineup
-      publish or the box backfill fills; the game is not missing (SIM-559).
-    * ``LineupResolutionError`` (game not found in raw.games) → 404 Not Found.
+    The errors:
 
-    SIM-452: every state this factory returns leaves stamped with
-    ``UNRESOLVED_PARK_FACTOR``. This is the ONE state factory all eight sim-kwargs
-    call sites use, so the stamp reaches all eight. A caller that skips the venue
-    lookup now raises ``UnresolvedParkFactorError`` at build time instead of
-    running a park-blind simulation that reports success.
+    * ``LineupNotIngestedError`` (the game exists, its lineup is not published
+      yet) is a 503 with ``Retry-After: 900``.
+    * ``LineupIncompleteError`` (the game exists, its lineup rows do not make a
+      playable game: a side with no pitcher, an empty batting order) is the
+      same 503. A later lineup publish or the box backfill fills the gap; the
+      game is not missing (the incomplete-lineup answer, SIM-559).
+    * ``LineupResolutionError`` (the game is not in ``raw.games``) is a 404.
+
+    Every state it returns carries the unresolved park-factor mark. Every
+    sim-kwargs call site gets its state here, so a caller that skips the venue
+    lookup raises ``UnresolvedParkFactorError`` at build time instead of running
+    a park-blind simulation that reports success.
     """
     acquire = getattr(pool, "acquire", None)
     try:
@@ -755,13 +348,13 @@ async def _resolve_state_or_error(
             async with pool.acquire() as conn:
                 state = await resolve_game_state(conn, game_pk, fallback_rows=fallback_rows)
         else:
-            # The pool itself exposes fetch/fetchrow (mock-pool / direct-conn path).
+            # The pool itself exposes fetch / fetchrow (a mock pool or a connection).
             state = await resolve_game_state(pool, game_pk, fallback_rows=fallback_rows)
         mark_park_factor_unresolved(state)
         return state
     except (LineupNotIngestedError, LineupIncompleteError) as exc:
         # Transient: the lineup is not published yet, or its rows do not yet
-        # make a playable game (SIM-559). Suggest a retry in 15 min.
+        # make a playable game. Suggest a retry in 15 minutes.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
@@ -782,10 +375,10 @@ def _run_batch(
     base_seed: int | None,
     use_cache: bool,
 ):
-    """Run the Monte-Carlo batch (a sync call -- offloaded to a worker thread).
+    """Run the Monte-Carlo batch (sync; the route runs it in a worker thread).
 
-    Wraps ``BatchRunner.run`` so the route can ``await asyncio.to_thread(...)``
-    it, keeping the event loop responsive during the CPU-bound game loop.
+    The wrapper lets the route ``await asyncio.to_thread(...)`` the batch, so
+    the event loop stays free while the games run.
     """
     return runner.run(
         spec,
@@ -796,7 +389,7 @@ def _run_batch(
 
 
 # ---------------------------------------------------------------------------
-# StateAtPitch rebuild (SIM-357) -- stored jsonable dict -> response model
+# A stored pitch state back to its response model
 # ---------------------------------------------------------------------------
 
 
@@ -811,16 +404,15 @@ def _player_ref_from_jsonable(ref: Any) -> PlayerRef | None:
 
 
 def _state_at_pitch_model_from_snapshot(snapshot: Mapping[str, Any]) -> StateAtPitchModel:
-    """Rebuild a :class:`StateAtPitchModel` from a stored jsonable StateAtPitch.
+    """Rebuild a :class:`StateAtPitchModel` from a stored StateAtPitch.
 
-    The stored ``snapshot`` is ``to_jsonable(StateAtPitch)`` -- a dict
-    ``{at_bat, pitch, sequence, field}`` whose ``field`` mirrors the
-    :class:`~simulation.snapshots.FieldSnapshot` dataclass FIELDS only (the
-    derived ``occupied_bases`` / ``runners_on`` properties are NOT serialized by
-    ``to_jsonable``).  So we reconstruct the real dataclasses (which recompute
-    those properties) and round-trip through ``StateAtPitchModel.from_dataclass``
-    -- the same converter the live snapshot path uses -- guaranteeing the wire
-    shape is identical whether served fresh or from the store.
+    The stored ``snapshot`` is ``to_jsonable(StateAtPitch)``: a dict
+    ``{at_bat, pitch, sequence, field}`` whose ``field`` holds the
+    :class:`~simulation.snapshots.FieldSnapshot` dataclass fields only;
+    ``to_jsonable`` does not write the derived ``occupied_bases`` and
+    ``runners_on`` properties. So the function rebuilds the dataclasses, which
+    recompute them, and converts through ``StateAtPitchModel.from_dataclass``,
+    the converter of a fresh snapshot. The wire shape is the same either way.
     """
     f = snapshot["field"]
     field_snap = FieldSnapshot(
@@ -852,12 +444,13 @@ def _state_at_pitch_model_from_snapshot(snapshot: Mapping[str, Any]) -> StateAtP
 
 
 # ---------------------------------------------------------------------------
-# Record -> persist flow (SIM-357) -- best-effort, never breaks /simulate
+# Record one game and store it in the replay file (a store failure never
+# breaks a route)
 # ---------------------------------------------------------------------------
 
 
 class ReplayArtifacts(NamedTuple):
-    """One recorded game, built for the replay store (SIM-357; SIM-561 adds ``result``)."""
+    """One recorded game, built for the replay store."""
 
     play_by_play: PlayByPlay
     snapshots: list[dict]
@@ -873,10 +466,13 @@ def _record_and_build(
     sim_kwargs: dict[str, Any],
     resolved: Any = None,
 ) -> ReplayArtifacts:
-    """Record one game in THIS process and build its replay artifacts (sync).
+    """Record one game in this process and build its replay artifacts (sync).
 
-    The routes record on the worker pool instead (SIM-561,
-    ``BatchRunner.record_game``) and call :func:`_build_replay_artifacts`.
+    No route calls this: the routes record on the worker pool
+    (``BatchRunner.record_game``) and call :func:`_build_replay_artifacts`. A
+    test drives the builder through it with ``record_game`` patched, and two
+    tests patch ``record_game`` here to prove no route records in the API
+    process.
     """
     recorded = record_game(
         factory_ref=factory_ref,
@@ -887,61 +483,44 @@ def _record_and_build(
 
 
 def _build_replay_artifacts(recorded: RecordedGame, *, resolved: Any = None) -> ReplayArtifacts:
-    """Build the replay artifacts of ONE recorded game (sync).
+    """Build the replay artifacts of one recorded game (pure and sync).
 
     From a :class:`~simulation.play_recorder.RecordedGame` (the game, its plays
-    and the state before each), this derives:
+    and the state before each), the function derives:
 
-      * a :class:`~simulation.snapshots.PlayByPlay` (the /plays scroll),
-      * one jsonable :class:`~simulation.snapshots.StateAtPitch` per pitch (the
-        /state lookup rows), tagged with each pitch's at_bat / pitch / sequence
-        from the matching PlayByPlay entry and built from that ``PlayResult``'s
-        committed ``next_state`` (the GameState after the pitch),
-      * the jsonable :class:`~simulation.linescore.Linescore` (SIM-362) and
-        :class:`~simulation.pitcher_decisions.PitcherDecisions` (SIM-364) DERIVED
-        from the recorded ``PlayResult`` list -- computed HERE, at record time,
-        because both read ``PlayResult.next_state`` which the persisted
-        ``PlayByPlayEntry`` rows drop (so they cannot be re-derived at read time).
+      * a :class:`~simulation.snapshots.PlayByPlay` (the /plays scroll); each
+        entry carries its inning, half, outs, batter, pitcher and the score
+        after it;
+      * one stored :class:`~simulation.snapshots.StateAtPitch` per pitch (the
+        /state rows), tagged with the pitch's at_bat, pitch and sequence from
+        its play-by-play entry and built from the result's ``next_state`` (the
+        GameState after the pitch);
+      * the :class:`~simulation.linescore.Linescore` and the
+        :class:`~simulation.pitcher_decisions.PitcherDecisions`. Both read
+        ``PlayResult.next_state``, which the stored entries drop, so they are
+        built here, at record time.
 
-    SIM-363 -- POPULATING THE 9 FIELDERS: when a ``resolved``
-    :class:`~simulation.lineup_resolver.ResolvedLineup` is supplied, each per-pitch
-    StateAtPitch is built with the fielding side's ``defense_positions`` map
-    (``build_defense_map_for_state``), so the persisted snapshots carry the 9
-    fielders and ``GET /state`` returns them populated.  The map depends only on
-    the half (which side is fielding) + substitutions, so it is cached per
-    ``(half, fielding-side)`` key across the game.  With no ``resolved`` lineup the
-    9 slots stay present-but-empty (the prior behaviour).
+    With a ``resolved`` :class:`~simulation.lineup_resolver.ResolvedLineup`,
+    each pitch's state carries the fielding side's nine fielders
+    (``build_defense_map_for_state``); without one the nine slots are empty.
 
-    SIM-554 -- A RESULT WITH NO PITCH: a pickoff before the pitch that makes
-    the third out returns a result with no pitch thrown (``NO_PITCH``).  The
-    play-by-play and the per-pitch snapshots hold the thrown pitches only.  The
-    linescore and the decisions read the whole stream, because the pickoff's
-    out lives on that result.
-
-    SIM-561 -- WHO, WHEN, THE SCORE: the recorder also captures the state before
-    each pitch, so every play-by-play entry carries its inning, half, outs,
-    batter, pitcher and the score after it.
-
-    Returns a :class:`ReplayArtifacts` (the play-by-play, the state-snapshot
-    dicts, the linescore and decisions JSON, and the recorded game result).
-    A pitch whose ``next_state`` is missing is skipped for the state stream (its
-    /plays entry still persists).  Pure + sync so the caller can run it in a
-    worker thread.
+    A pickoff before the pitch that makes the third out returns a result with
+    no pitch (``NO_PITCH``). The play-by-play and the states hold the thrown
+    pitches only; the linescore and the decisions read the whole stream,
+    because the pickoff's out lives on that result. A pitch with no
+    ``next_state`` gets no state row; its play-by-play entry stays.
     """
     plays = recorded.plays
     pbp = PlayByPlay.from_play_results(plays, recorded.contexts)
     pitched = thrown_pitches(plays)
 
-    # SIM-362 / SIM-364: derive the game card from the recorded PlayResult list
-    # (these read PlayResult.next_state, dropped by the persisted entries, so they
-    # MUST be computed here at record time). Both read the WHOLE stream: a
-    # no-pitch result carries the pickoff's out (SIM-554).
+    # Both read the whole stream: a no-pitch result carries the pickoff's out.
     linescore = linescore_from_plays(plays)
     decisions = decisions_from_plays(plays)
 
-    # SIM-363: cache the fielding-side defense map per (half, fielding-side) so we
-    # build it at most twice per inning rather than per pitch (it changes only on a
-    # substitution, which the resolver's "latest occupant" map already reflects).
+    # The defense map changes only with the half (which side fields) and a
+    # substitution, which the resolver's "latest occupant" map already holds.
+    # So it is built once per half, not per pitch.
     defense_cache: dict[Any, dict[str, int] | None] = {}
 
     def _defense_for(next_state: Any) -> dict[str, int] | None:
@@ -955,10 +534,10 @@ def _build_replay_artifacts(recorded: RecordedGame, *, resolved: Any = None) -> 
                 defense_cache[key] = None
         return defense_cache[key]
 
-    # The thrown pitches and pbp.entries are 1:1 in order (SIM-554: a no-pitch
+    # The thrown pitches and pbp.entries pair one to one, in order (a no-pitch
     # result makes no entry), so zip pairs each PlayResult with its entry's
-    # (at_bat, pitch, sequence) indices. strict=True fails loudly on a slip
-    # rather than storing every later snapshot one pitch off.
+    # (at_bat, pitch, sequence). strict=True fails loudly on a slip rather than
+    # storing every later state one pitch off.
     snapshots: list[dict] = []
     for play, entry in zip(pitched, pbp.entries, strict=True):
         next_state = getattr(play, "next_state", None)
@@ -990,44 +569,40 @@ async def _persist_replay_artifacts(
     sim_kwargs: dict[str, Any],
     batch: Any = None,
 ) -> int | None:
-    """Record one game and store it in the replay file; return its run id (SIM-357).
+    """Record one game and store it in the replay file; return its run id.
 
-    Records ONE game at ``base_seed`` on the warm worker pool and stores its
-    play-stream, per-pitch state snapshots and game card in the replay file
-    (SIM-561: a DuckDB file of its own, which numbers its own runs).  ``batch``
-    is the /simulate batch: its summary goes to the Postgres sim-run history
-    (SIM-356).  A sample game or the projections' first game (``batch`` None)
-    writes no history row: a one-game summary is not a Monte-Carlo run.
+    The function records one game at ``base_seed`` on the warm worker pool and
+    stores its play stream, its per-pitch states and its game card in the
+    replay file, which numbers its own runs. ``batch`` is the /simulate batch:
+    its summary goes to the Postgres sim-run history. A sample game or the
+    projections' first game (``batch`` None) writes no history row: a one-game
+    summary is not a Monte-Carlo run.
 
-    Best-effort: a missing replay store returns None at once, and any failure
-    logs a warning and returns None.  It never raises, so a store failure never
-    breaks /simulate or /boxscore; the sample-game route checks for None.  After
-    a store, the game keeps only its newest :data:`db.sim_store.REPLAY_RUNS_KEPT`
+    It never raises. A missing replay store returns None at once, and any
+    failure logs a warning and returns None, so a store failure never breaks
+    /simulate or /boxscore; the sample-game route checks for None. After a
+    store, the game keeps only its newest :data:`db.sim_store.REPLAY_RUNS_KEPT`
     runs.
     """
     con = _get_replay_store(request)
     pool = getattr(request.app.state, "pg_pool", None)
 
     # Nothing to write the replay stream to: the replay reads answer 503
-    # "replay store unavailable". SIM-519: a /simulate batch still keeps its
-    # summary in the Postgres history (the slate card's sim line reads it);
-    # before, the early return skipped that write on the default stack.
+    # "replay store unavailable". A /simulate batch still keeps its summary in
+    # the Postgres history, which the slate card's sim line reads.
     if con is None:
         if batch is not None and pool is not None:
             await _store_history_run(pool, game_pk=game_pk, batch=batch, base_seed=base_seed)
         return None
 
     try:
-        # SIM-363: resolve the lineup ONCE (best-effort) so the recorded snapshots
-        # can carry the 9 fielders for whichever side is fielding.  A resolution
-        # failure (e.g. a mock pool with no game_lineups) just leaves the fielder
-        # slots empty -- the replay still persists, /state still 200s with empty
-        # positions, so this is strictly additive.
+        # The lineup gives the stored states their nine fielders. A failed
+        # resolve (a mock pool with no lineup rows) leaves the slots empty; the
+        # game is still stored and /state still answers.
         resolved = await _resolve_lineup_best_effort(pool, game_pk)
 
-        # 1) Record the game on the warm worker pool (SIM-561: the API process
-        #    never loads the sim bundle), then build the artifacts here.  The
-        #    build also derives the SIM-362 linescore + SIM-364 decisions card.
+        # 1) Record the game on the warm worker pool (the API process never
+        #    loads the sim bundle), then build the artifacts here.
         runner = _build_runner(request)
         spec = GameSpec(machine_factory=factory_ref, sim_kwargs=sim_kwargs)
         recorded = await asyncio.to_thread(runner.record_game, spec, base_seed)
@@ -1048,10 +623,10 @@ async def _persist_replay_artifacts(
 
 
 async def _store_history_run(pool: Any, *, game_pk: int, batch: Any, base_seed: int | None) -> None:
-    """Keep a /simulate batch's summary in the Postgres sim-run history (SIM-356).
+    """Keep a /simulate batch's summary in the Postgres sim-run history.
 
-    Best-effort: a failure logs a warning.  Since SIM-561 the history row's id is
-    its own; the replay file numbers its runs apart.
+    A failure logs a warning and returns. The history row's id is its own; the
+    replay file numbers its runs apart.
     """
     try:
         summary_json = to_jsonable(batch.summary)
@@ -1077,20 +652,20 @@ async def _store_history_run(pool: Any, *, game_pk: int, batch: Any, base_seed: 
         log.warning("sim-run history persist failed for game %s: %s", game_pk, exc)
 
 
-#: SIM-561: one replay write at a time in this process.  The run id is the file's
-#: max + 1, and two prunes of the same game conflict in DuckDB ("Conflict on
-#: tuple deletion"), so the id draw, the store and the prune run under it.
+#: One replay write at a time in this process. The run id is the file's max + 1,
+#: and two prunes of the same game conflict in DuckDB ("Conflict on tuple
+#: deletion"), so the id draw, the store and the prune run under this lock.
 _REPLAY_WRITE_LOCK = threading.Lock()
 
 
 def _store_replay_run(
     cur: Any, *, game_pk: int, built: ReplayArtifacts, base_seed: int | None
 ) -> int:
-    """Write one recorded game to the replay file on ``cur``; return its run id.
+    """Write one recorded game to the replay file on ``cur``; return its run id (sync).
 
-    Sync (SIM-561).  The play stream, the snapshots and the game card go in one
-    transaction under the file's next run id.  The prune of the game's older runs
-    follows; a prune failure logs a warning and keeps the stored game.
+    The play stream, the states and the game card go in one transaction under
+    the file's next run id. The prune of the game's older runs follows; a
+    prune failure logs a warning and keeps the stored game.
     """
     play_rows = [dataclasses.asdict(e) for e in built.play_by_play.entries]
     with _REPLAY_WRITE_LOCK:
@@ -1101,8 +676,8 @@ def _store_replay_run(
             sim_store.store_state_snapshots(
                 cur, game_pk=game_pk, run_id=run_id, snapshots=built.snapshots
             )
-            # SIM-362/364: the game card (linescore + decisions), derived at record
-            # time (they need PlayResult.next_state) and keyed on the same run_id.
+            # The game card (linescore and decisions), built at record time and
+            # keyed on the same run_id.
             sim_store.store_game_card(
                 cur,
                 game_pk=game_pk,
@@ -1123,13 +698,11 @@ def _store_replay_run(
 
 
 async def _resolve_lineup_best_effort(pool: Any, game_pk: int) -> Any:
-    """Resolve a game's :class:`ResolvedLineup` (SIM-363), or None on any failure.
+    """Resolve a game's :class:`ResolvedLineup`, or None on any failure.
 
-    Used by :func:`_persist_replay_artifacts` to populate the 9 FieldSnapshot
-    fielders.  Strictly best-effort: a missing pool, an unknown game, or no
-    lineup rows simply yields ``None`` (the snapshots are then built with empty
-    fielder slots, the prior behaviour) -- a fielder-map failure NEVER breaks the
-    replay persist or the /simulate response.
+    :func:`_persist_replay_artifacts` uses it to fill the nine fielders of each
+    stored state. A missing pool, an unknown game or no lineup rows gives None:
+    the states then have empty fielder slots, and the store goes on.
     """
     if pool is None:
         return None
@@ -1144,1111 +717,8 @@ async def _resolve_lineup_best_effort(pool: Any, game_pk: int) -> Any:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Queries
-# ---------------------------------------------------------------------------
-
-_GAMES_ON_DATE_SQL = f"""
-    WITH {_team_records_cte("$1")}
-    SELECT g.game_pk, g.season, g.game_date, g.status,
-           g.home_team_id, g.away_team_id, g.venue_id,
-           ht.team_name     AS home_team_name,
-           ht.team_abbrev   AS home_team_abbrev,
-           at_.team_name    AS away_team_name,
-           at_.team_abbrev  AS away_team_abbrev,
-           v.venue_name,
-           v.city           AS venue_city,
-           COALESCE(hr.wins,   0) AS home_wins,
-           COALESCE(hr.losses, 0) AS home_losses,
-           COALESCE(ar.wins,   0) AS away_wins,
-           COALESCE(ar.losses, 0) AS away_losses,
-           EXISTS(
-               SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
-           ) AS lineup_ready
-{_TEAM_RECORDS_JOIN_TAIL}
-     WHERE g.game_date = $1
-     ORDER BY g.game_pk
-"""
-
-
-def _parse_date(date_str: str) -> _date:
-    """Parse a ``YYYY-MM-DD`` path param, 422 on a malformed value.
-
-    FastAPI does not coerce a path str to a date for us here (the param is a
-    plain str so the same path can also match a numeric game_pk on the sibling
-    routes), so we validate explicitly and raise 422 on a bad format -- the same
-    status FastAPI uses for a validation error.
-    """
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").date()
-    except (ValueError, TypeError) as exc:
-        # 422 (the FastAPI validation-error status). Used as a literal int rather
-        # than status.HTTP_422_* because that constant's name changed across
-        # Starlette versions (ENTITY -> CONTENT); the numeric code is stable.
-        raise HTTPException(
-            status_code=422,
-            detail=f"invalid date {date_str!r}; expected YYYY-MM-DD",
-        ) from exc
-
-
-# ``_row_get`` (uniform Record/dict column read) lives in api.routes._common and
-# is imported at the top of this module -- it was the canonical variant the audit
-# (2026-06-03 "api/ duplication") chose over data_health.py's near-identical copy.
-
-
-def _opt_str(row: Any, key: str) -> str | None:
-    """``str(row[key])`` or ``None`` when the column is absent/NULL.
-
-    Module-level (takes ``row`` explicitly) so the identical _game_card /
-    _enriched_game_card closures share one definition -- audit 2026-06-03
-    "api/ duplication".
-    """
-    v = _row_get(row, key)
-    return None if v is None else str(v)
-
-
-def _opt_int(row: Any, key: str) -> int | None:
-    """``int(row[key])`` or ``None`` when the column is absent/NULL (see _opt_str)."""
-    v = _row_get(row, key)
-    return None if v is None else int(v)
-
-
-def _game_card(row: Any) -> GameCard:
-    """Map one raw.games row (Record or dict) to a GameCard.
-
-    SIM-383: the enriched query joins ``raw.teams`` (×2) + ``raw.venues`` +
-    the ``team_records`` CTE so the row carries name, abbreviation, city, and
-    season-to-date win/loss fields.  All new fields are optional -- rows that
-    don't include them (e.g. old cached payloads, unit-test stubs) silently
-    default to ``None``.
-    """
-    gd = _row_get(row, "game_date")
-    # game_date may be a date/datetime (asyncpg) or an ISO string (canned rows).
-    game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
-
-    return GameCard(
-        game_pk=int(_row_get(row, "game_pk")),
-        season=int(_row_get(row, "season", 0) or 0),
-        game_date=game_date,
-        status=_opt_str(row, "status"),
-        home_team_id=_opt_int(row, "home_team_id"),
-        away_team_id=_opt_int(row, "away_team_id"),
-        venue_id=_opt_int(row, "venue_id"),
-        # SIM-383 enrichment fields (None when the row predates the enriched query)
-        home_team_name=_opt_str(row, "home_team_name"),
-        home_team_abbrev=_opt_str(row, "home_team_abbrev"),
-        away_team_name=_opt_str(row, "away_team_name"),
-        away_team_abbrev=_opt_str(row, "away_team_abbrev"),
-        venue_name=_opt_str(row, "venue_name"),
-        venue_city=_opt_str(row, "venue_city"),
-        home_wins=_opt_int(row, "home_wins"),
-        home_losses=_opt_int(row, "home_losses"),
-        away_wins=_opt_int(row, "away_wins"),
-        away_losses=_opt_int(row, "away_losses"),
-        # SIM-409: bool from the EXISTS(...) subquery; None when absent.
-        lineup_ready=bool(_row_get(row, "lineup_ready"))
-        if _row_get(row, "lineup_ready") is not None
-        else None,
-    )
-
-
 # ===========================================================================
-# SIM-355 -- GET /api/games/{date}
-# ===========================================================================
-
-
-# ---------------------------------------------------------------------------
-# SIM-519 Part A -- the schedule-driven slate
-# ---------------------------------------------------------------------------
-
-#: The slate's calendar: the league keys games on the local (official) date,
-#: and "today" is today in Eastern time, where the league's day turns over.
-SLATE_TZ = ZoneInfo("America/New_York")
-
-#: The schedule cache's time to live by date class (SIM-519 §4.3).
-SLATE_TTL_PAST_S = 24 * 3600
-SLATE_TTL_TODAY_S = 20
-SLATE_TTL_FUTURE_S = 600
-#: The last good schedule of a date, served when the feed errors.
-SLATE_LAST_GOOD_TTL_S = 24 * 3600
-
-#: The stored enrichment of the schedule's games, in one query (SIM-519 §4.3).
-_SLATE_ENRICH_SQL = """
-    SELECT g.game_pk, g.status, v.city AS venue_city,
-           EXISTS(
-               SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
-           ) AS lineup_ready
-      FROM raw.games g
-      LEFT JOIN raw.venues v ON v.venue_id = g.venue_id AND v.season = g.season
-     WHERE g.game_pk = ANY($1::int[])
-"""
-
-#: The same, with the source of the lineup the simulator would read (Alembic
-#: 0029, SIM-519 Part B): the final box first, then a published, then a
-#: projected lineup.
-_SLATE_ENRICH_SOURCE_SQL = """
-    SELECT g.game_pk, g.status, v.city AS venue_city,
-           ls.source IS NOT NULL AS lineup_ready,
-           ls.source AS lineup_source
-      FROM raw.games g
-      LEFT JOIN raw.venues v ON v.venue_id = g.venue_id AND v.season = g.season
-      LEFT JOIN LATERAL (
-            SELECT CASE WHEN bool_or(gl.source = 'box') THEN 'box'
-                        WHEN bool_or(gl.source = 'published') THEN 'published'
-                        WHEN bool_or(gl.source = 'projected') THEN 'projected' END AS source
-              FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
-      ) ls ON TRUE
-     WHERE g.game_pk = ANY($1::int[])
-"""
-
-#: The newest stored run of each of the schedule's games, in one query.
-_SLATE_RUNS_SQL = """
-    SELECT DISTINCT ON (game_pk) game_pk, run_id, n_iterations, summary, created_at
-      FROM sim.sim_runs
-     WHERE game_pk = ANY($1::int[])
-     ORDER BY game_pk, created_at DESC
-"""
-
-#: The same, the game's own finished simulation only (Alembic 0030: not a
-#: what-if run, and a run with a summary).
-_SLATE_PREGAME_RUNS_SQL = """
-    SELECT DISTINCT ON (game_pk) game_pk, run_id, n_iterations, summary, created_at
-      FROM sim.sim_runs
-     WHERE game_pk = ANY($1::int[]) AND kind = 'pregame' AND summary IS NOT NULL
-     ORDER BY game_pk, created_at DESC
-"""
-
-
-def _slate_today() -> _date:
-    return datetime.now(SLATE_TZ).date()
-
-
-def _slate_ttl(day: _date, today: _date) -> int:
-    """The schedule cache's TTL for a date: past 24 h, today 20 s, future 10 min."""
-    if day < today:
-        return SLATE_TTL_PAST_S
-    if day == today:
-        return SLATE_TTL_TODAY_S
-    return SLATE_TTL_FUTURE_S
-
-
-def _iso(v: Any) -> str | None:
-    if v is None:
-        return None
-    return v.isoformat() if hasattr(v, "isoformat") else str(v)
-
-
-def _stored_summary(run: Mapping[str, Any] | None) -> GameSimSummaryLite | None:
-    if run is None:
-        return None
-    stored = _row_get(run, "summary")
-    if isinstance(stored, str | bytes | bytearray):
-        import json
-
-        try:
-            stored = json.loads(stored)
-        except ValueError:
-            return None
-    return _sim_summary_lite_from_stored(stored)
-
-
-def _schedule_card(g: Any, enrich: Any | None, run: Any | None) -> GameCard:
-    """One schedule game + our stored data → a GameCard (D1: the schedule's records)."""
-    from pipeline.mlb_schedule import card_state
-
-    state = card_state(g)
-    played = state in ("live", "final")
-    away_pp, home_pp = g.away.probable_pitcher, g.home.probable_pitcher
-    return GameCard(
-        game_pk=g.game_pk,
-        season=g.season,
-        game_date=g.official_date.isoformat(),
-        status=g.detailed_state or (_opt_str(enrich, "status") if enrich is not None else None),
-        home_team_id=g.home.team_id or None,
-        away_team_id=g.away.team_id or None,
-        venue_id=g.venue_id,
-        home_team_name=g.home.name,
-        home_team_abbrev=g.home.abbreviation,
-        away_team_name=g.away.name,
-        away_team_abbrev=g.away.abbreviation,
-        venue_name=g.venue_name,
-        venue_city=_opt_str(enrich, "venue_city") if enrich is not None else None,
-        home_wins=g.home.wins,
-        home_losses=g.home.losses,
-        away_wins=g.away.wins,
-        away_losses=g.away.losses,
-        lineup_ready=bool(_row_get(enrich, "lineup_ready")) if enrich is not None else False,
-        lineup_source=_opt_str(enrich, "lineup_source") if enrich is not None else None,
-        game_status=state,
-        detailed_state=g.detailed_state or None,
-        reason=g.reason,
-        start_utc=_iso(g.start_utc),
-        start_time_tbd=g.start_time_tbd,
-        double_header=g.double_header,
-        game_number=g.game_number,
-        game_type=g.game_type or None,
-        series_description=g.series_description,
-        away_score=g.away.score if played else None,
-        home_score=g.home.score if played else None,
-        inning=g.inning,
-        inning_half=g.inning_half,
-        outs=g.outs,
-        n_innings=g.n_innings if played else None,
-        away_probable_pitcher_id=away_pp.player_id if away_pp else None,
-        away_probable_pitcher_name=away_pp.name if away_pp else None,
-        home_probable_pitcher_id=home_pp.player_id if home_pp else None,
-        home_probable_pitcher_name=home_pp.name if home_pp else None,
-        rescheduled_to=_iso(g.rescheduled_to),
-        rescheduled_from=_iso(g.rescheduled_from),
-        sim_summary=_stored_summary(run),
-        sim_run_at=_iso(_row_get(run, "created_at")) if run is not None else None,
-        db_known=enrich is not None,
-    )
-
-
-async def _slate_schedule_payload(
-    request: Request, day: _date, *, use_cache: bool
-) -> tuple[Any, str, str | None]:
-    """The schedule response for ``day``, with its source and any feed error.
-
-    Order: the cache (``slate:v2:{date}``, TTL by date class), then the feed,
-    then the last good copy (``slate:last:{date}``). Returns ``(None, "db",
-    error)`` when all three miss; the caller then serves the stored listing.
-    """
-    feed = getattr(request.app.state, "league_feed", None)
-    cache = _get_sim_cache(request)
-    key, last_key = f"slate:v2:{day.isoformat()}", f"slate:last:{day.isoformat()}"
-    if use_cache and cache is not None:
-        try:
-            hit = cache.get(key)
-        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
-            hit = None
-        if hit is not None:
-            return hit, "schedule", None
-    if feed is None:
-        return None, "db", None
-    try:
-        payload = await feed.schedule_payload(day, day)
-    except Exception as exc:  # noqa: BLE001 -- degrade, never fail (SIM-519 §4.3)
-        error = f"{type(exc).__name__}: {exc}"[:300]
-        log.warning("slate: the league schedule read failed for %s: %s", day, error)
-        last = None
-        if cache is not None:
-            try:
-                last = cache.get(last_key)
-            except Exception:  # noqa: BLE001
-                last = None
-        if last is not None:
-            return last, "schedule_cached", error
-        return None, "db", error
-    if cache is not None:
-        try:
-            cache.set(key, payload, _slate_ttl(day, _slate_today()))
-            cache.set(last_key, payload, SLATE_LAST_GOOD_TTL_S)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("slate cache write failed for %s: %s", key, exc)
-    return payload, "schedule", None
-
-
-async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], dict[int, Any]]:
-    """The stored enrichment and the newest run per game: two queries, best effort."""
-    enrich: dict[int, Any] = {}
-    runs: dict[int, Any] = {}
-    if pool is None or not pks:
-        return enrich, runs
-    for sql in (_SLATE_ENRICH_SOURCE_SQL, _SLATE_ENRICH_SQL):
-        try:
-            for r in await pool.fetch(sql, pks) or []:
-                enrich[int(_row_get(r, "game_pk"))] = r
-            break
-        except Exception as exc:  # noqa: BLE001 -- before 0029, the plain read; else no enrichment
-            log.warning("slate: the stored enrichment read failed: %s", exc)
-    for sql in (_SLATE_PREGAME_RUNS_SQL, _SLATE_RUNS_SQL):
-        try:
-            for r in await pool.fetch(sql, pks) or []:
-                runs[int(_row_get(r, "game_pk"))] = r
-            break
-        except Exception as exc:  # noqa: BLE001 -- before 0030 the plain read; no table = no sim line
-            log.warning("slate: the sim-run read failed: %s", exc)
-    return enrich, runs
-
-
-async def _slate_from_db(pool: Any, parsed: _date) -> list[GameCard]:
-    """The stored listing, each row mapped through the one status mapper."""
-    from pipeline.mlb_schedule import card_state_from_raw
-
-    rows = await pool.fetch(_GAMES_ON_DATE_SQL, parsed)
-    games = []
-    for r in rows or []:
-        card = _game_card(r)
-        card.game_status = card_state_from_raw(card.status)  # type: ignore[assignment]
-        card.db_known = True
-        games.append(card)
-    return games
-
-
-@router.get(
-    "/{date}",
-    response_model=GamesOnDateResponse,
-    summary="Games scheduled on a date",
-    description=(
-        "List the games on a date (YYYY-MM-DD). SIM-519: the league's schedule says "
-        "which games exist and what state they are in; our database adds the lineup "
-        "flag and the newest simulation run per game. The schedule is cached 20 s for "
-        "today, 10 min for a future date and 24 h for a past one. When the league feed "
-        "fails, the endpoint serves the last good schedule, else the stored listing, and "
-        "says which in `source`. 422 on a bad date; 503 when the feed is down and no "
-        "database pool is attached."
-    ),
-)
-async def get_games_on_date(
-    date: str,
-    request: Request,
-    use_cache: bool = Query(True, description="Consult/populate the schedule cache"),
-) -> GamesOnDateResponse:
-    from pipeline.mlb_schedule import parse_schedule
-
-    parsed = _parse_date(date)
-    payload, source, feed_error = await _slate_schedule_payload(
-        request, parsed, use_cache=use_cache
-    )
-    fetched_at = datetime.now(SLATE_TZ).isoformat()
-
-    if payload is not None:
-        # A suspended game appears on its resume day too; keep one card per game.
-        sched = list({g.game_pk: g for g in parse_schedule(payload)}.values())
-        pool = getattr(request.app.state, "pg_pool", None)
-        enrich, runs = await _slate_merge_rows(pool, [g.game_pk for g in sched])
-        games = [_schedule_card(g, enrich.get(g.game_pk), runs.get(g.game_pk)) for g in sched]
-        return GamesOnDateResponse(
-            date=parsed.isoformat(),
-            count=len(games),
-            games=games,
-            source=source,  # type: ignore[arg-type]
-            feed_error=feed_error,
-            fetched_at=fetched_at,
-        )
-
-    # The stored listing, memoized at POOL_QUERY_TTL_S (SIM-359).
-    pool = _get_pool(request)
-    cache = _get_sim_cache(request)
-    db_key = f"games:on_date:{parsed.isoformat()}"
-    if use_cache and cache is not None:
-        try:
-            cached = cache.get(db_key)
-        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
-            cached = None
-        if cached is not None:
-            return GamesOnDateResponse(**{**cached, "feed_error": feed_error})
-    games = await _slate_from_db(pool, parsed)
-    resp = GamesOnDateResponse(
-        date=parsed.isoformat(),
-        count=len(games),
-        games=games,
-        source="db",
-        feed_error=feed_error,
-        fetched_at=fetched_at,
-    )
-    if use_cache and cache is not None:
-        try:
-            # SIM-443f: the Redis cache stores JSON only, so dump the dates as text.
-            cache.set(db_key, resp.model_dump(mode="json"), POOL_QUERY_TTL_S)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("listing cache write failed for %s: %s", db_key, exc)
-    return resp
-
-
-# ===========================================================================
-# SIM-384 -- GET /api/games/{game_pk}/card
-# ===========================================================================
-
-
-@router.get(
-    "/{game_pk}/status",
-    response_model=GameCardAggregateResponse,
-    summary="Game-status aggregate (identity + 3-state status + sim summary)",
-    description=(
-        "Return a single game's enriched identity (SIM-383 team names + records + venue), "
-        "3-state status enum (scheduled/live/final/postponed), final scores when available, "
-        "and the most recently persisted Monte-Carlo sim summary as a lite projection "
-        "(no raw score arrays). Intended for the Day Summary 3-state game cards (SIM-391). "
-        "``sim_summary`` is None when no sim has been run yet or when Postgres is unavailable. "
-        "``odds`` is reserved for the Phase-6 odds-provider integration (SIM-405). "
-        "Returns 404 when game_pk is not in raw.games, 503 when no DB pool is attached."
-    ),
-)
-async def get_game_status_card(
-    game_pk: int,
-    request: Request,
-) -> GameCardAggregateResponse:
-    pool = _get_pool(request)
-
-    # 1. Fetch the enriched game identity row.
-    acquire = getattr(pool, "acquire", None)
-    if acquire is not None:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(_GAME_CARD_SQL, int(game_pk))
-    else:
-        row = await pool.fetchrow(_GAME_CARD_SQL, int(game_pk))
-
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"game_pk {game_pk} not found",
-        )
-
-    # 2. Map raw status → 3-state enum.
-    raw_status = _row_get(row, "status")
-    game_status = _RAW_STATUS_TO_GAME_STATUS.get(raw_status or "", GameStatus.SCHEDULED).value
-
-    # 3. Load the most-recent persisted sim summary (best-effort; never breaks the response).
-    sim_summary: GameSimSummaryLite | None = None
-    try:
-        if acquire is not None:
-            async with pool.acquire() as conn:
-                run = await sim_store.load_latest_sim_run(conn, int(game_pk))
-        else:
-            run = await sim_store.load_latest_sim_run(pool, int(game_pk))
-        if run is not None:
-            sim_summary = _sim_summary_lite_from_stored(run.get("summary"))
-    except Exception:  # noqa: BLE001 -- sim history is best-effort
-        pass
-
-    # 4. Build and return the aggregate response.
-    gd = _row_get(row, "game_date")
-    game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
-
-    # SIM-519: the schedule's view of the game (state, start, probables), from
-    # the slate's cached schedule for the date. Best effort.
-    sched = await _schedule_game_for(request, gd, int(game_pk))
-    extra: dict[str, Any] = {}
-    if sched is not None:
-        from pipeline.mlb_schedule import card_state
-
-        game_status = card_state(sched)
-        played = game_status in ("live", "final")
-        extra = {
-            "detailed_state": sched.detailed_state or None,
-            "start_utc": _iso(sched.start_utc),
-            "start_time_tbd": sched.start_time_tbd,
-            "game_number": sched.game_number,
-            "double_header": sched.double_header,
-            "series_description": sched.series_description,
-            "away_probable_pitcher_name": sched.away.probable_pitcher.name
-            if sched.away.probable_pitcher
-            else None,
-            "home_probable_pitcher_name": sched.home.probable_pitcher.name
-            if sched.home.probable_pitcher
-            else None,
-            "away_score": sched.away.score if played else None,
-            "home_score": sched.home.score if played else None,
-        }
-
-    return GameCardAggregateResponse(
-        **extra,
-        game_pk=int(_row_get(row, "game_pk")),
-        game_status=game_status,
-        game_date=game_date,
-        season=int(_row_get(row, "season", 0) or 0),
-        home_team_id=_opt_int(row, "home_team_id"),
-        away_team_id=_opt_int(row, "away_team_id"),
-        venue_id=_opt_int(row, "venue_id"),
-        home_team_name=_opt_str(row, "home_team_name"),
-        home_team_abbrev=_opt_str(row, "home_team_abbrev"),
-        away_team_name=_opt_str(row, "away_team_name"),
-        away_team_abbrev=_opt_str(row, "away_team_abbrev"),
-        venue_name=_opt_str(row, "venue_name"),
-        venue_city=_opt_str(row, "venue_city"),
-        home_wins=_opt_int(row, "home_wins"),
-        home_losses=_opt_int(row, "home_losses"),
-        away_wins=_opt_int(row, "away_wins"),
-        away_losses=_opt_int(row, "away_losses"),
-        home_score_final=_opt_int(row, "home_score_final"),
-        away_score_final=_opt_int(row, "away_score_final"),
-        sim_summary=sim_summary,
-        odds=None,
-    )
-
-
-# ---------------------------------------------------------------------------
-# SIM-519 Part I — the card detail: the league's per-game feed, cached
-# ---------------------------------------------------------------------------
-
-#: The feed cache's time to live by card state (SIM-519 Part I).
-FEED_TTL_BY_STATE_S = {"live": 10, "scheduled": 600, "final": 24 * 3600, "postponed": 24 * 3600}
-#: The last good feed of a game, served when the league read fails.
-FEED_LAST_GOOD_TTL_S = 24 * 3600
-
-
-class FeedPerson(BaseModel):
-    id: int
-    name: str
-
-
-class FeedPitcher(FeedPerson):
-    np: int | None = None
-
-
-class FeedInning(BaseModel):
-    num: int | None = None
-    away: int | None = None
-    home: int | None = None
-
-
-class FeedTotals(BaseModel):
-    runs: int | None = None
-    hits: int | None = None
-    errors: int | None = None
-
-
-class FeedLinescore(BaseModel):
-    innings: list[FeedInning] = Field(default_factory=list)
-    away: FeedTotals = Field(default_factory=FeedTotals)
-    home: FeedTotals = Field(default_factory=FeedTotals)
-    home_did_not_bat_last: bool = False
-    current_inning: int | None = None
-    inning_half: str | None = None
-
-
-class FeedLineupSlot(BaseModel):
-    order: int
-    id: int | None = None
-    name: str
-    pos: str | None = None
-
-
-class FeedLineups(BaseModel):
-    away: list[FeedLineupSlot] = Field(default_factory=list)
-    home: list[FeedLineupSlot] = Field(default_factory=list)
-    away_probable_pitcher: FeedPerson | None = None
-    home_probable_pitcher: FeedPerson | None = None
-
-
-class FeedBatterLine(BaseModel):
-    id: int | None = None
-    name: str
-    pos: str | None = None
-    batting_order: int | None = None
-    is_sub: bool = False
-    ab: int | None = None
-    r: int | None = None
-    h: int | None = None
-    rbi: int | None = None
-    bb: int | None = None
-    k: int | None = None
-    hr: int | None = None
-    avg: str | None = None
-
-
-class FeedPitcherLine(BaseModel):
-    id: int | None = None
-    name: str
-    outs: int | None = None
-    ip: str | None = None
-    h: int | None = None
-    r: int | None = None
-    er: int | None = None
-    bb: int | None = None
-    k: int | None = None
-    np: int | None = None
-    era: str | None = None
-
-
-class FeedBoxSide(BaseModel):
-    batters: list[FeedBatterLine] = Field(default_factory=list)
-    pitchers: list[FeedPitcherLine] = Field(default_factory=list)
-
-
-class FeedBox(BaseModel):
-    away: FeedBoxSide = Field(default_factory=FeedBoxSide)
-    home: FeedBoxSide = Field(default_factory=FeedBoxSide)
-
-
-class FeedRunners(BaseModel):
-    first: FeedPerson | None = None
-    second: FeedPerson | None = None
-    third: FeedPerson | None = None
-
-
-class FeedLive(BaseModel):
-    balls: int | None = None
-    strikes: int | None = None
-    outs: int | None = None
-    offense: Literal["away", "home"] | None = None
-    runners: FeedRunners = Field(default_factory=FeedRunners)
-    batter: FeedPerson | None = None
-    pitcher: FeedPitcher | None = None
-    fielders: dict[str, str | None] = Field(default_factory=dict)
-    last_play: str | None = None
-
-
-class GameFeedCardModel(BaseModel):
-    """``GET /api/games/{game_pk}/feed``: the real game behind a slate card.
-
-    ``linescore`` and ``box`` are set on a live or final game; ``live`` on a
-    live game only; ``lineups`` carries the posted batting orders (empty until
-    the league posts them) and the probable pitchers. ``source`` is ``feed``
-    (fresh or cached) or ``feed_cached`` (the last good copy after an error).
-    """
-
-    game_pk: int | None = None
-    status: Literal["scheduled", "live", "final", "postponed"]
-    detailed_state: str | None = None
-    linescore: FeedLinescore | None = None
-    lineups: FeedLineups = Field(default_factory=FeedLineups)
-    box: FeedBox | None = None
-    live: FeedLive | None = None
-    source: Literal["feed", "feed_cached"] = "feed"
-    feed_error: str | None = None
-
-
-async def _league_game_payload(
-    request: Request, game_pk: int, *, use_cache: bool = True
-) -> tuple[Any, str, str | None]:
-    """The league's raw feed of one game, cached; ``(payload, source, error)``.
-
-    One cached copy serves the slate card (``/feed``), the real play-by-play
-    (``/feed/plays``) and the what-if state (``/feed/state``). The TTL follows
-    the game's state (10 s live, 10 min before the game, 24 h final). On a league
-    error the last good copy is served (``source = feed_cached``); with none the
-    payload is None.
-    """
-    from pipeline.mlb_game_feed import feed_state
-
-    feed = getattr(request.app.state, "league_feed", None)
-    cache = _get_sim_cache(request)
-    key, last_key = f"feed:raw:v1:{game_pk}", f"feed:rawlast:v1:{game_pk}"
-    if use_cache and cache is not None:
-        try:
-            hit = cache.get(key)
-        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
-            hit = None
-        if hit is not None:
-            return hit, "feed", None
-    error: str | None = None
-    if feed is None:
-        error = "no league feed attached"
-    else:
-        try:
-            payload = await feed.game_feed_payload(int(game_pk))
-        except Exception as exc:  # noqa: BLE001 -- degrade to the last good copy
-            error = f"{type(exc).__name__}: {exc}"[:300]
-            log.warning("feed: the league read failed for %s: %s", game_pk, error)
-        else:
-            if cache is not None:
-                try:
-                    state = feed_state((payload.get("gameData") or {}).get("status") or {})
-                    cache.set(key, payload, FEED_TTL_BY_STATE_S.get(state, 60))
-                    cache.set(last_key, payload, FEED_LAST_GOOD_TTL_S)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("feed cache write failed for %s: %s", key, exc)
-            return payload, "feed", None
-    last = None
-    if cache is not None:
-        try:
-            last = cache.get(last_key)
-        except Exception:  # noqa: BLE001
-            last = None
-    if last is not None:
-        return last, "feed_cached", error
-    return None, "none", error
-
-
-def _feed_unavailable(game_pk: int, error: str | None) -> Any:
-    from fastapi.responses import JSONResponse
-
-    return JSONResponse(
-        status_code=503,
-        content={
-            "detail": f"the league feed for game {game_pk} is unavailable",
-            "feed_error": error,
-        },
-        headers={"Retry-After": "30"},
-    )
-
-
-@router.get(
-    "/{game_pk}/feed",
-    response_model=GameFeedCardModel,
-    summary="The real game behind a slate card (SIM-519 Part I)",
-    description=(
-        "The league's live feed for one game, reduced to what the Daily Diamond card "
-        "shows: the linescore, both box scores, the posted lineups and probable "
-        "pitchers, and for a live game the count, runners, fielders, the pitcher's "
-        "pitch count and the last play. Cached 10 s while live, 10 min before the "
-        "game and 24 h once final. On a league error the last good copy is served "
-        "(`source = feed_cached`); with none, 503 with Retry-After."
-    ),
-)
-async def get_game_feed(game_pk: int, request: Request, use_cache: bool = Query(True)) -> Any:
-    from pipeline.mlb_game_feed import parse_game_feed
-
-    payload, source, error = await _league_game_payload(request, game_pk, use_cache=use_cache)
-    if payload is None:
-        return _feed_unavailable(game_pk, error)
-    try:
-        card = GameFeedCardModel(**parse_game_feed(payload))
-    except Exception as exc:  # noqa: BLE001 -- a malformed feed is a league error
-        log.warning("feed: the league feed for %s did not parse: %s", game_pk, exc)
-        return _feed_unavailable(game_pk, f"{type(exc).__name__}: {exc}"[:300])
-    if source == "feed_cached":
-        card.source = "feed_cached"
-        card.feed_error = error
-    return card
-
-
-class RealPlayRunners(BaseModel):
-    first: int | None = None
-    second: int | None = None
-    third: int | None = None
-
-
-class RealPitch(BaseModel):
-    call: str | None = None
-    type: str | None = None
-    speed: float | None = None
-
-
-class RealPlay(BaseModel):
-    at_bat: int
-    inning: int
-    half: Literal["top", "bottom"]
-    batter_id: int | None = None
-    pitcher_id: int | None = None
-    event: str | None = None
-    event_type: str | None = None
-    description: str | None = None
-    rbi: int = 0
-    batter_finished: bool = True
-    outs_before: int = 0
-    outs_after: int = 0
-    away_score_before: int = 0
-    home_score_before: int = 0
-    away_score_after: int = 0
-    home_score_after: int = 0
-    runners: RealPlayRunners = Field(default_factory=RealPlayRunners)
-    pitches: list[RealPitch] = Field(default_factory=list)
-    is_complete: bool = True
-
-
-class RealPlaysModel(BaseModel):
-    """``GET /api/games/{game_pk}/feed/plays``: the real game's plate appearances."""
-
-    game_pk: int
-    status: Literal["scheduled", "live", "final", "postponed"]
-    plays: list[RealPlay] = Field(default_factory=list)
-    names: dict[str, str] = Field(default_factory=dict)
-    source: Literal["feed", "feed_cached"] = "feed"
-
-
-@router.get(
-    "/{game_pk}/feed/plays",
-    response_model=RealPlaysModel,
-    summary="The real game's play-by-play",
-    description=(
-        "Every plate appearance of the real game from the league feed (the same cached "
-        "copy as /feed): inning, half, batter, pitcher, the event and its description, "
-        "outs and score before and after, the runners at its start, and its pitches. "
-        "503 with Retry-After when the feed is unavailable."
-    ),
-)
-async def get_real_plays(game_pk: int, request: Request) -> Any:
-    from pipeline.mlb_game_feed import feed_state, parse_plays
-
-    payload, source, error = await _league_game_payload(request, game_pk)
-    if payload is None:
-        return _feed_unavailable(game_pk, error)
-    parsed = parse_plays(payload)
-    return RealPlaysModel(
-        game_pk=int(game_pk),
-        status=feed_state((payload.get("gameData") or {}).get("status") or {}),  # type: ignore[arg-type]
-        plays=[RealPlay(**p) for p in parsed["plays"]],
-        names={str(k): v for k, v in parsed["names"].items()},
-        source="feed_cached" if source == "feed_cached" else "feed",
-    )
-
-
-class PlayerOption(BaseModel):
-    id: int
-    name: str
-    position: str | None = None
-    bats: str | None = None
-    throws: str | None = None
-
-
-class LineupSpot(BaseModel):
-    slot: int
-    id: int
-    name: str
-    position: str | None = None
-
-
-class SideState(BaseModel):
-    lineup: list[LineupSpot]
-    pitcher: PlayerOption
-    defense: dict[str, PlayerOption]
-    bench: list[PlayerOption] = Field(default_factory=list)
-    bullpen: list[PlayerOption] = Field(default_factory=list)
-    used: list[PlayerOption] = Field(default_factory=list)
-
-
-class PaStateModel(BaseModel):
-    """``GET /api/games/{game_pk}/feed/state``: the game at the start of a plate
-    appearance (``at_bat`` omitted = first pitch), for the what-if panel. ``live``
-    has the shape of the slate's field, so the page draws it with ``CardField``."""
-
-    game_pk: int
-    at_bat: int | None = None
-    inning: int
-    half: Literal["top", "bottom"]
-    outs: int
-    away_score: int
-    home_score: int
-    batting_side: Literal["away", "home"]
-    live: FeedLive
-    away: SideState
-    home: SideState
-
-
-def _option(ss: Mapping[str, Any], pid: int, position: str | None = None) -> PlayerOption:
-    return PlayerOption(
-        id=int(pid),
-        name=str((ss.get("names") or {}).get(str(pid), f"Player {pid}")),
-        position=position,
-        bats=(ss.get("bat_hands") or {}).get(str(pid)),
-        throws=(ss.get("throw_hands") or {}).get(str(pid)),
-    )
-
-
-def _pa_state_model(game_pk: int, ss: Mapping[str, Any]) -> PaStateModel:
-    sides: dict[str, SideState] = {}
-    for side in ("away", "home"):
-        defense = ss[f"{side}_defense"]
-        pos_of = {int(v): k for k, v in defense.items()}
-        sides[side] = SideState(
-            lineup=[
-                LineupSpot(
-                    slot=i,
-                    id=int(pid),
-                    name=_option(ss, pid).name,
-                    position=pos_of.get(int(pid), "DH"),
-                )
-                for i, pid in enumerate(ss[f"{side}_lineup"])
-            ],
-            pitcher=_option(ss, ss[f"{side}_pitcher"], "P"),
-            defense={pos: _option(ss, pid, pos) for pos, pid in defense.items()},
-            bench=[_option(ss, p) for p in ss["eligible"][side]["hitters"]],
-            bullpen=[_option(ss, p, "P") for p in ss["eligible"][side]["pitchers"]],
-            used=[_option(ss, p) for p in ss["used"][side]],
-        )
-    batting = ss["batting_side"]
-    fielding = "home" if batting == "away" else "away"
-    due = ss[f"{batting}_lineup"][ss[f"{batting}_slot"]]
-    pitcher = int(ss[f"{fielding}_pitcher"])
-
-    def person(pid: Any) -> FeedPerson | None:
-        return None if pid is None else FeedPerson(id=int(pid), name=_option(ss, pid).name)
-
-    live = FeedLive(
-        balls=0,
-        strikes=0,
-        outs=int(ss["outs"]),
-        offense=batting,  # type: ignore[arg-type]
-        runners=FeedRunners(
-            **{b: person(ss["runners"].get(b)) for b in ("first", "second", "third")}
-        ),
-        batter=person(due),
-        pitcher=FeedPitcher(
-            id=pitcher,
-            name=_option(ss, pitcher).name,
-            np=int((ss.get("pitch_counts") or {}).get(str(pitcher), 0)),
-        ),
-        fielders={pos: _option(ss, pid).name for pos, pid in ss[f"{fielding}_defense"].items()},
-        last_play=None,
-    )
-    return PaStateModel(
-        game_pk=int(game_pk),
-        at_bat=ss.get("at_bat"),
-        inning=int(ss["inning"]),
-        half=ss["half"],
-        outs=int(ss["outs"]),
-        away_score=int(ss["away_score"]),
-        home_score=int(ss["home_score"]),
-        batting_side=batting,
-        live=live,
-        away=sides["away"],
-        home=sides["home"],
-    )
-
-
-def _feed_lineup_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Both starting lineups from a league feed, as ``raw.game_lineups`` rows.
-
-    The loader's own builder reads the box: each starter at his starting
-    position and the starting pitcher. A game whose box lists no starter yet (a
-    preview game without posted lineups) gives no rows.
-    """
-    from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows
-
-    game_pk = int(((payload.get("gameData") or {}).get("game") or {}).get("pk") or 0)
-    season = int(((payload.get("gameData") or {}).get("game") or {}).get("season") or 0)
-    return [
-        {
-            "team_id": r[2],
-            "player_id": r[3],
-            "batting_order": r[4],
-            "position_code": r[5],
-            "is_starter": r[6],
-            "sequence": r[7],
-            "entered_inning": None,
-            "entered_at_bat": None,
-            "pinch_role": None,
-        }
-        for r in _build_starting_lineup_rows(game_pk, season, dict(payload))
-    ]
-
-
-async def _start_state(request: Request, game_pk: int, at_bat: int | None) -> dict[str, Any]:
-    """The start state at a plate appearance, or an HTTP error."""
-    from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
-
-    payload, _source, error = await _league_game_payload(request, game_pk)
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"the league feed for game {game_pk} is unavailable: {error}",
-            headers={"Retry-After": "30"},
-        )
-    try:
-        return state_at_pa(payload, at_bat)
-    except PlateAppearanceNotFound as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
-
-@router.get(
-    "/{game_pk}/feed/state",
-    response_model=PaStateModel,
-    summary="The real game at the start of a plate appearance (the what-if)",
-    description=(
-        "The game as it stood at the start of plate appearance `at_bat` (the feed's "
-        "atBatIndex; omitted = first pitch): inning, half, outs, score, runners, both "
-        "lineups with positions, each side's pitcher and defense, and the bench and "
-        "bullpen still available. 404 for an unknown plate appearance."
-    ),
-)
-async def get_pa_state(
-    game_pk: int, request: Request, at_bat: int | None = Query(None, ge=0)
-) -> PaStateModel:
-    return _pa_state_model(game_pk, await _start_state(request, game_pk, at_bat))
-
-
-async def _schedule_game_for(request: Request, game_date: Any, game_pk: int) -> Any:
-    """The schedule entry of one game (the slate's cached read), or None."""
-    from pipeline.mlb_schedule import parse_schedule
-
-    try:
-        day = game_date if isinstance(game_date, _date) else _parse_date(str(game_date)[:10])
-        payload, _source, _err = await _slate_schedule_payload(request, day, use_cache=True)
-        if payload is None:
-            return None
-        return next((g for g in parse_schedule(payload) if g.game_pk == game_pk), None)
-    except Exception as exc:  # noqa: BLE001 -- the header degrades to the stored fields
-        log.debug("schedule entry unavailable for %s: %s", game_pk, exc)
-        return None
-
-
-# ---------------------------------------------------------------------------
-# SIM-386 — Live in-progress game-state read path
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/{game_pk}/live",
-    response_model=LiveGameStateResponse,
-    summary="Live in-progress game state (SIM-386)",
-    description=(
-        "Read the live game state from ``sim.lineup_state`` for an in-progress game.  "
-        "The live ingestion pipeline (port :8001) writes the game state JSONB on every "
-        "MLB WebSocket signal; this endpoint surfaces it on the main API so the frontend "
-        "does not need to reach the pipeline app directly.  Fields mirror the "
-        "``game_state`` JSONB blob: inning/half/outs/score/baserunners/lineup/roster.  "
-        "``updated_at`` (ISO-8601) marks when the pipeline last wrote; the frontend "
-        "may treat a gap > 30s as a potential pipeline staleness signal.  "
-        "Returns 404 when no live row exists for ``game_pk`` (game not yet live, "
-        "already finished, or pipeline has not ingested it yet). "
-        "Returns 503 when no DB pool is attached."
-    ),
-)
-async def get_live_game_state(
-    game_pk: int,
-    request: Request,
-) -> LiveGameStateResponse:
-    pool = _get_pool(request)
-    acquire = getattr(pool, "acquire", None)
-    if acquire is not None:
-        async with pool.acquire() as conn:
-            live = await sim_store.load_live_game_state(conn, int(game_pk))
-    else:
-        live = await sim_store.load_live_game_state(pool, int(game_pk))
-
-    if live is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"No live game state found for game_pk {game_pk}. "
-                "The game may not be in-progress or the pipeline has not "
-                "ingested it yet."
-            ),
-        )
-
-    gs: dict[str, Any] = live.get("game_state") or {}
-
-    def _i(key: str, default: int = 0) -> int:
-        v = gs.get(key, default)
-        return default if v is None else int(v)
-
-    def _opt_i(key: str) -> int | None:
-        v = gs.get(key)
-        return None if v is None else int(v)
-
-    def _ids(key: str) -> list[int]:
-        # The live service stores each roster entry as an object with a
-        # ``player_id`` (GameStateBuilder._parse_roster); older rows hold bare ids.
-        v = gs.get(key)
-        if not v:
-            return []
-        ids = (x.get("player_id") if isinstance(x, Mapping) else x for x in v)
-        return [int(x) for x in ids if x is not None]
-
-    return LiveGameStateResponse(
-        game_pk=int(live["game_pk"]),
-        session_id=str(live["session_id"]),
-        inning=_i("inning", 1),
-        half=str(gs.get("half", "Top")),
-        outs=_i("outs"),
-        balls=_i("balls"),
-        strikes=_i("strikes"),
-        home_score=_i("home_score"),
-        away_score=_i("away_score"),
-        batting_team_id=_opt_i("batting_team_id"),
-        fielding_team_id=_opt_i("fielding_team_id"),
-        on_1b=_opt_i("on_1b"),
-        on_2b=_opt_i("on_2b"),
-        on_3b=_opt_i("on_3b"),
-        current_batter_id=_opt_i("current_batter_id"),
-        current_pitcher_id=_opt_i("current_pitcher_id"),
-        home_lineup=_ids("home_lineup"),
-        away_lineup=_ids("away_lineup"),
-        home_bullpen=_ids("home_bullpen"),
-        away_bullpen=_ids("away_bullpen"),
-        home_bench=_ids("home_bench"),
-        away_bench=_ids("away_bench"),
-        updated_at=live.get("updated_at"),
-    )
-
-
-# ===========================================================================
-# SIM-355 -- GET /api/games/{game_pk}/simulate
+# GET /simulate: an N-game Monte-Carlo summary
 # ===========================================================================
 
 
@@ -2276,14 +746,14 @@ async def simulate_game_endpoint(
     state = await _resolve_state_or_error(pool, game_pk)
 
     factory_ref = resolve_factory_ref(request)
-    # SIM-411 / SIM-452: resolve the venue park factor, THEN build the kwargs.
+    # The venue's park factor resolves before the kwargs build.
     spec = GameSpec(
         machine_factory=factory_ref,
         sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
     )
     runner = _build_runner(request)
 
-    # The batch is CPU-bound -- offload to a worker thread so the loop stays free.
+    # The batch is CPU-bound: a worker thread runs it, so the event loop stays free.
     _t0 = time.perf_counter()
     batch = await asyncio.to_thread(
         _run_batch,
@@ -2293,9 +763,9 @@ async def simulate_game_endpoint(
         base_seed=base_seed,
         use_cache=use_cache,
     )
-    # SIM-374 metrics: record the batch wall-clock so baseball_sim_latency_seconds
-    # reflects real /simulate cost (the gauge previously had no production caller).
-    # Best-effort, never breaks the response; skipped on a cache hit (no real sim ran).
+    # The batch's wall-clock time feeds the baseball_sim_latency_seconds gauge.
+    # A cache hit ran no games, so it records nothing; a failure never breaks
+    # the response.
     if not batch.from_cache:
         try:
             from api.routes.metrics import record_sim_latency
@@ -2304,9 +774,9 @@ async def simulate_game_endpoint(
         except Exception:  # noqa: BLE001
             pass
 
-    # SIM-357: persist the /plays + /state replay artifacts (record ONE game at
-    # the run's base_seed -> play-stream + per-pitch state snapshots + sim-run
-    # history).  Best-effort: a persistence failure NEVER breaks this response.
+    # Store one game at the run's base_seed for /plays and /state, and the
+    # batch's summary in the sim-run history. A store failure never breaks the
+    # response.
     await _persist_replay_artifacts(
         request,
         game_pk=int(game_pk),
@@ -2326,40 +796,13 @@ async def simulate_game_endpoint(
 
 
 # ===========================================================================
-# SIM-519 Part E -- one simulation run per game: POST /simulate + /simulate/runs
+# The run jobs: POST /simulate and POST /what-if
 # ===========================================================================
 
 
-class SimRunRequest(BaseModel):
-    """``POST /api/games/{game_pk}/simulate`` body."""
-
-    n_iterations: int = Field(100, ge=1, le=10000)
-    base_seed: int | None = None
-
-
-class SimRunModel(BaseModel):
-    """One run job (a ``sim.sim_runs`` row)."""
-
-    run_id: int
-    game_pk: int
-    status: Literal["queued", "running", "done", "failed", "cancelled"]
-    n_iterations: int
-    progress_done: int = 0
-    base_seed: int | None = None
-    position_in_queue: int | None = None
-    existing: bool = False
-    requested_at: str | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
-    error: str | None = None
-    lineup_source: str | None = None
-    bullpen_source: str | None = None
-    replay_run_id: int | None = None
-    summary: GameSimSummaryLite | None = None
-
-
-#: The lineup the simulator reads for a game: the box, else a published, else a
-#: projected lineup (Alembic 0029). None before 0029 or with no row.
+#: The source of the lineup the simulator reads for a game: the box, else a
+#: published, else a projected lineup (the ``source`` column, Alembic 0029).
+#: None before 0029 or with no row.
 _SQL_LINEUP_SOURCE = """
     SELECT CASE WHEN bool_or(source = 'box') THEN 'box'
                 WHEN bool_or(source = 'published') THEN 'published'
@@ -2368,39 +811,8 @@ _SQL_LINEUP_SOURCE = """
 """
 
 
-def _get_sim_jobs(request: Request) -> Any:
-    jobs = getattr(request.app.state, "sim_jobs", None)
-    if jobs is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="the run registry is not attached (no database pool)",
-        )
-    return jobs
-
-
-def _run_model(run: Mapping[str, Any], *, existing: bool = False) -> SimRunModel:
-    summary = run.get("summary")
-    return SimRunModel(
-        run_id=int(run["run_id"]),
-        game_pk=int(run["game_pk"]),
-        status=run.get("status") or "done",
-        n_iterations=int(run["n_iterations"]),
-        progress_done=int(run.get("progress_done") or 0),
-        base_seed=run.get("base_seed"),
-        position_in_queue=run.get("position_in_queue"),
-        existing=existing,
-        requested_at=_iso(run.get("requested_at")),
-        started_at=_iso(run.get("started_at")),
-        finished_at=_iso(run.get("finished_at")),
-        error=run.get("error"),
-        lineup_source=run.get("lineup_source"),
-        bullpen_source=run.get("bullpen_source"),
-        replay_run_id=run.get("replay_run_id"),
-        summary=_sim_summary_lite_from_stored(summary) if isinstance(summary, dict) else None,
-    )
-
-
 async def _lineup_source(pool: Any, game_pk: int) -> str | None:
+    """The source of the game's lineup (:data:`_SQL_LINEUP_SOURCE`), or None."""
     try:
         return await pool.fetchval(_SQL_LINEUP_SOURCE, int(game_pk))
     except Exception:  # noqa: BLE001 -- before 0029 there is no source column
@@ -2434,8 +846,8 @@ async def start_simulation_run(game_pk: int, request: Request, body: SimRunReque
     runner = _build_runner(request)
 
     async def record_game(seed: int | None) -> int | None:
-        # The run's representative game, stored in the replay file (SIM-561):
-        # the linescore and play-by-play panels show it.
+        # The run's representative game, stored in the replay file: the
+        # linescore and play-by-play panels show it.
         return await _persist_replay_artifacts(
             request,
             game_pk=int(game_pk),
@@ -2464,96 +876,6 @@ async def start_simulation_run(game_pk: int, request: Request, body: SimRunReque
             ) from exc
         raise
     return _run_model(run, existing=existing)
-
-
-@router.get(
-    "/{game_pk}/simulate/runs/latest",
-    response_model=SimRunModel,
-    summary="The game's newest run, any state (SIM-519 Part E)",
-)
-async def get_latest_simulation_run(game_pk: int, request: Request) -> SimRunModel:
-    run = await _get_sim_jobs(request).latest(int(game_pk))
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"detail": "no simulation run for this game", "hint": "POST /simulate"},
-        )
-    return _run_model(run)
-
-
-@router.get(
-    "/{game_pk}/simulate/runs/{run_id}",
-    response_model=SimRunModel,
-    summary="One run's state, progress and summary (SIM-519 Part E)",
-)
-async def get_simulation_run(game_pk: int, run_id: int, request: Request) -> SimRunModel:
-    run = await _get_sim_jobs(request).get(int(game_pk), int(run_id))
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"run {run_id} not found")
-    return _run_model(run)
-
-
-@router.delete(
-    "/{game_pk}/simulate/runs/{run_id}",
-    response_model=SimRunModel,
-    summary="Cancel a run (SIM-519 Part E)",
-    dependencies=[Depends(require_auth)],
-    description=(
-        "A queued run is cancelled at once; a running run stops after its current chunk "
-        "of games (it keeps the games it played). Idempotent. 409 when the run already "
-        "finished; 404 when unknown."
-    ),
-)
-async def cancel_simulation_run(game_pk: int, run_id: int, request: Request) -> SimRunModel:
-    run = await _get_sim_jobs(request).cancel(int(game_pk), int(run_id))
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"run {run_id} not found")
-    if run["status"] in ("done", "failed"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=f"run {run_id} is {run['status']}"
-        )
-    return _run_model(run)
-
-
-async def _stored_prop_set(
-    request: Request, game_pk: int, run_id: int | None
-) -> tuple[PropDistributionSet, dict[str, Any]]:
-    """A run's prop set (``run_id``, else the newest done run); 404 with a hint when none."""
-    jobs = _get_sim_jobs(request)
-    row = await jobs.prop_set_row(int(game_pk), run_id)
-    if row is None or not row.get("prop_set"):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"detail": "no simulation run for this game", "hint": "POST /simulate"},
-        )
-    return PropDistributionSet.from_json(row["prop_set"]), row
-
-
-# ---------------------------------------------------------------------------
-# The game page's "what if": simulate the rest of the game from a plate appearance
-# ---------------------------------------------------------------------------
-
-
-class WhatIfChanges(BaseModel):
-    pinch_hit: list[dict[str, Any]] = Field(default_factory=list)
-    pitcher: dict[str, Any] | None = None
-    pinch_run: list[dict[str, Any]] = Field(default_factory=list)
-    defense: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class WhatIfRequest(BaseModel):
-    at_bat: int | None = Field(None, ge=0)
-    changes: WhatIfChanges = Field(default_factory=WhatIfChanges)
-    n_iterations: int = Field(100, ge=10, le=1000)
-
-
-class WhatIfStarted(BaseModel):
-    game_pk: int
-    at_bat: int | None = None
-    base_run_id: int
-    change_run_id: int
-    base_seed: int
-    changes: list[str] = Field(default_factory=list)
 
 
 @router.post(
@@ -2642,60 +964,8 @@ async def start_what_if(game_pk: int, request: Request, body: WhatIfRequest) -> 
     )
 
 
-class WhatIfResult(BaseModel):
-    game_pk: int
-    base: SimRunModel
-    change: SimRunModel
-    real_final: dict[str, int] | None = None
-    start_score: dict[str, int] | None = None
-
-
-@router.get(
-    "/{game_pk}/what-if/{base_run_id}/{change_run_id}",
-    response_model=WhatIfResult,
-    summary="A what-if's two runs and the real final",
-)
-async def get_what_if(
-    game_pk: int, base_run_id: int, change_run_id: int, request: Request
-) -> WhatIfResult:
-    jobs = _get_sim_jobs(request)
-    base = await jobs.get(int(game_pk), int(base_run_id))
-    change = await jobs.get(int(game_pk), int(change_run_id))
-    if base is None or change is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="what-if run not found")
-    real_final = None
-    start_score = None
-    payload, _source, _error = await _league_game_payload(request, game_pk)
-    if payload is not None:
-        from pipeline.mlb_game_feed import parse_game_feed
-
-        card = parse_game_feed(payload)
-        ls = card.get("linescore") or {}
-        if card.get("status") == "final" and ls:
-            real_final = {
-                "away": int(ls["away"]["runs"] or 0),
-                "home": int(ls["home"]["runs"] or 0),
-            }
-        at_bat = base.get("start_at_bat")
-        if at_bat is not None or base.get("kind") == "whatif_base":
-            from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
-
-            try:
-                ss = state_at_pa(payload, at_bat)
-                start_score = {"away": int(ss["away_score"]), "home": int(ss["home_score"])}
-            except PlateAppearanceNotFound:
-                start_score = None
-    return WhatIfResult(
-        game_pk=int(game_pk),
-        base=_run_model(base),
-        change=_run_model(change),
-        real_final=real_final,
-        start_score=start_score,
-    )
-
-
 # ===========================================================================
-# SIM-561 -- POST /api/games/{game_pk}/sample-game
+# POST /sample-game and POST /simulate/with_override
 # ===========================================================================
 
 
@@ -2744,11 +1014,6 @@ async def simulate_sample_game(
     return SampleGameResponse(game_pk=int(game_pk), run_id=int(run_id), base_seed=seed)
 
 
-# ===========================================================================
-# SIM-358 -- POST /api/games/{game_pk}/simulate/with_override
-# ===========================================================================
-
-
 @router.post(
     "/{game_pk}/simulate/with_override",
     response_model=WithOverrideResponse,
@@ -2775,15 +1040,15 @@ async def simulate_with_override_endpoint(
     factory_ref = resolve_factory_ref(request)
     runner = _build_runner(request)
 
-    # SIM-411 / SIM-452: one resolved park factor, shared by baseline + override.
+    # One resolved park factor serves the baseline and the override.
     base_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
     override_kwargs = _apply_override(base_kwargs, override)
 
     baseline_spec = GameSpec(machine_factory=factory_ref, sim_kwargs=base_kwargs)
     override_spec = GameSpec(machine_factory=factory_ref, sim_kwargs=override_kwargs)
 
-    # Both batches at the SAME base seed -> the only difference between the two
-    # summaries is the roster change (apples-to-apples comparison).
+    # Both batches run at the same base seed, so the roster change is the only
+    # difference between the two summaries.
     baseline_batch = await asyncio.to_thread(
         _run_batch,
         runner,
@@ -2818,16 +1083,16 @@ async def simulate_with_override_endpoint(
 
 
 # ===========================================================================
-# SIM-561 -- the replay reads: the newest complete run, and the players' names
+# The replay reads: the newest complete run, and the players' names
 # ===========================================================================
 
 
 def _read_newest_plays(
     cur: Any, *, game_pk: int, run_id: int | None = None
 ) -> tuple[int | None, int | None, list[dict]]:
-    """A complete run's id, seed and play stream (sync; SIM-561).
+    """A complete run's id, seed and play stream (sync).
 
-    ``run_id`` None reads the newest complete run.  A run with no game card is
+    ``run_id`` None reads the newest complete run. A run with no game card is
     not complete and reads as empty.
     """
     card = sim_store.load_game_card(cur, game_pk=game_pk, run_id=run_id)
@@ -2838,7 +1103,7 @@ def _read_newest_plays(
 
 
 def _read_newest_state(cur: Any, *, game_pk: int, at_bat: int, pitch: int) -> dict | None:
-    """One pitch's stored state in the newest complete run (sync; SIM-561)."""
+    """One pitch's stored state in the newest complete run (sync)."""
     run_id = sim_store.latest_replay_run_id(cur, game_pk=game_pk)
     if run_id is None:
         return None
@@ -2855,8 +1120,8 @@ async def _replay_player_names(request: Request, player_ids: list[int]) -> dict[
     """Names for the ids in a replay: ``raw.players`` and the placeholder arms.
 
     A placeholder reliever (a game with no pen in the box) reads "Generic
-    reliever N".  Best-effort like :func:`_player_names`: with no pool, or a
-    failed lookup, the real players stay unnamed.
+    reliever N". As in :func:`_player_names`, a missing pool or a failed lookup
+    leaves the real players unnamed.
     """
     names = {
         pid: f"Generic reliever {n}"
@@ -2870,7 +1135,7 @@ async def _replay_player_names(request: Request, player_ids: list[int]) -> dict[
 
 
 # ===========================================================================
-# SIM-357 -- GET /api/games/{game_pk}/plays
+# GET /plays and GET /state/{at_bat}/{pitch}
 # ===========================================================================
 
 
@@ -2911,8 +1176,8 @@ async def get_game_plays(
             detail="replay store unavailable",
         )
 
-    # SIM-561: one complete run only (the newest, unless the caller names one);
-    # the store keeps several per game.
+    # One complete run only (the newest, unless the caller names one); the
+    # store keeps several per game.
     stored_run, base_seed, rows = await asyncio.to_thread(
         _replay_call, con, _read_newest_plays, game_pk=int(game_pk), run_id=run_id
     )
@@ -2922,8 +1187,8 @@ async def get_game_plays(
             detail=f"no persisted plays for game_pk={game_pk}",
         )
 
-    # Build the FULL collection first so n_pitches / n_plate_appearances reflect
-    # the whole game regardless of paging (SIM-415).
+    # The whole stream builds first, so n_pitches and n_plate_appearances count
+    # the whole game whatever the page.
     pbp = PlayByPlay(entries=[PlayByPlayEntry(**row) for row in rows])
     model = PlayByPlayModel.from_dataclass(pbp)
     model.run_id = stored_run
@@ -2934,7 +1199,7 @@ async def get_game_plays(
     }
 
     if limit is None:
-        return model  # unchanged full-collection response
+        return model  # the whole stream, unpaged
 
     total = len(model.entries)
     model.entries = model.entries[offset : offset + limit]
@@ -2943,11 +1208,6 @@ async def get_game_plays(
     model.page_limit = limit
     model.returned_entries = len(model.entries)
     return model
-
-
-# ===========================================================================
-# SIM-357 -- GET /api/games/{game_pk}/state/{at_bat}/{pitch}
-# ===========================================================================
 
 
 @router.get(
@@ -2989,42 +1249,22 @@ async def get_game_state_at_pitch(
             detail=(f"no persisted state for game_pk={game_pk} at_bat={at_bat} pitch={pitch}"),
         )
 
-    # ``row["snapshot"]`` is the stored, numpy-free jsonable StateAtPitch dict
-    # ({at_bat, pitch, field, sequence}).  Rebuild the dataclasses (so the
-    # FieldSnapshot's derived occupied_bases / runners_on recompute) and run them
-    # through the SAME StateAtPitchModel.from_dataclass converter the live path
-    # uses -- no GameState replay needed.
+    # ``row["snapshot"]`` is the stored StateAtPitch dict; the rebuild needs no
+    # replay of the game.
     return _state_at_pitch_model_from_snapshot(row["snapshot"])
 
 
 # ===========================================================================
-# SIM-362/364 -- GET /linescore + /decisions + /card (the persisted game card)
+# GET /linescore, /decisions and /card: the stored game card
 # ===========================================================================
 
 
-class GameCardResponse(BaseModel):
-    """The combined ``GET /api/games/{game_pk}/card`` envelope (SIM-362/364).
-
-    Carries both derived loop outputs for the game's most-recent persisted run:
-    the per-inning :class:`~api.schemas.LinescoreModel` (R/H/E grid) and the
-    :class:`~api.schemas.PitcherDecisionsModel` (W/L/Save).
-    """
-
-    game_pk: int
-    linescore: LinescoreModel
-    decisions: PitcherDecisionsModel
-    #: SIM-561: the stored run and its seed; /plays?run_id= reads the same game.
-    run_id: int | None = None
-    base_seed: int | None = None
-
-
 async def _load_game_card_or_error(request: Request, game_pk: int) -> dict:
-    """Load the persisted game card, mapping no-store/no-card to 503/404.
+    """Load the newest stored game card; 503 with no store, 404 with no card.
 
-    Shared by /linescore, /decisions, and /card: 503 when no DuckDB replay store
-    is wired, 404 when nothing has been persisted for the game (no /simulate run,
-    or the card persist was skipped).  Returns the parsed
-    ``{run_id, game_pk, linescore, decisions}`` dict on success.
+    /linescore, /decisions and /card share it. The 404 means nothing is stored
+    for the game (no run, or the store skipped the card). Returns the parsed
+    ``{run_id, game_pk, linescore, decisions, base_seed}`` dict.
     """
     con = _get_replay_store(request)
     if con is None:
@@ -3032,7 +1272,7 @@ async def _load_game_card_or_error(request: Request, game_pk: int) -> dict:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="replay store unavailable",
         )
-    # The newest card: the same run /plays and /state read (SIM-561).
+    # The newest card: the same run that /plays and /state read.
     card = await asyncio.to_thread(
         _replay_call, con, sim_store.load_game_card, game_pk=int(game_pk)
     )
@@ -3111,7 +1351,7 @@ async def get_game_card(
 
 
 # ===========================================================================
-# SIM-366 -- GET /api/games/{game_pk}/boxscore (per-player prop MEANS card)
+# GET /boxscore: every player's prop means over N games
 # ===========================================================================
 
 
@@ -3122,25 +1362,22 @@ def _build_prop_set(
     n_iterations: int,
     base_seed: int | None,
 ) -> PropDistributionSet:
-    """Build the run's :class:`PropDistributionSet` on the batch runner (SIM-560).
+    """Build the run's :class:`PropDistributionSet` on the batch runner.
 
-    The runner fans the N games out to its worker pool, the same pool
-    ``/simulate`` uses, and caches a seeded set.  So the projections card and
-    every prop the user then clicks read ONE run.  Before SIM-560 this replayed
-    the N games one after another in the API process through the play recorder:
-    about 2.5 minutes for the card's 100 games, and again for every click.
-
-    Sync and CPU-bound; the caller offloads it to a worker thread.
+    The runner fans the N games out to its worker pool, the pool ``/simulate``
+    uses, and caches a seeded set. So the projections card and every prop the
+    user then clicks read one run (the projections on the worker pool,
+    SIM-560). Sync and CPU-bound; the caller runs it in a worker thread.
     """
     return runner.run_prop_set(spec, n_iterations=n_iterations, base_seed=base_seed)
 
 
 @dataclasses.dataclass
 class _PlayerTag:
-    """Where one player sits in the simulated game (SIM-560).
+    """Where one player sits in the simulated game.
 
-    ``side`` is 'away' or 'home'.  ``lineup_slot`` is the 1-9 batting-order
-    slot, or None for a player who does not bat.  ``starting_pitcher`` marks
+    ``side`` is 'away' or 'home'. ``lineup_slot`` is the 1-9 batting-order
+    slot, or None for a player who does not bat. ``starting_pitcher`` marks
     each side's starter; a pitcher who also bats keeps his slot.
     """
 
@@ -3153,8 +1390,8 @@ def _placeholder_pens(sim_kwargs: Mapping[str, Any]) -> dict[int, list[int]]:
     """The factory's placeholder pen for this game, keyed 0 = away and 1 = home.
 
     A game with no pen in the box (a scheduled game: only the historical loader
-    writes ``raw.game_bullpen``) pitches these arms.  Their ids are negative and
-    built from each starter's id, so this asks the factory's own builder.
+    writes ``raw.game_bullpen``) pitches these arms. Their ids are negative and
+    built from each starter's id, so the function asks the factory's own builder.
     """
     return _default_bullpen_for_spec(GameSpec(sim_kwargs=dict(sim_kwargs)))
 
@@ -3169,13 +1406,13 @@ def _placeholder_names(sim_kwargs: Mapping[str, Any]) -> dict[int, str]:
 
 
 def _player_tags(sim_kwargs: Mapping[str, Any]) -> dict[int, _PlayerTag]:
-    """Tag every player the sim can use with a side, a slot and a role (SIM-560).
+    """Tag every player the sim can use with a side, a slot and a role.
 
-    The sim kwargs already name the game's players: the two batting orders,
-    the two starters, and each side's pen (``bullpen``, keyed 0 = away and
-    1 = home).  A game with no pen in the box pitches the factory's placeholder
-    arms instead (:func:`_placeholder_pens`).  The loop pinch-hits nobody, so
-    these are every player a box score can hold.
+    The sim kwargs name the game's players: the two batting orders, the two
+    starters, and each side's pen (``bullpen``, keyed 0 = away and 1 = home). A
+    game with no pen in the box pitches the factory's placeholder arms instead
+    (:func:`_placeholder_pens`). The loop pinch-hits nobody, so these are every
+    player a box score can hold.
     """
     tags: dict[int, _PlayerTag] = {}
 
@@ -3225,9 +1462,9 @@ async def _query_player_names(pool: Any, player_ids: list[int]) -> dict[int, str
 
 
 async def _player_names(pool: Any, player_ids: list[int]) -> dict[int, str]:
-    """The players' names, or an empty map when the lookup fails (SIM-560).
+    """The players' names, or an empty map when the lookup fails.
 
-    A name is a label.  A failed lookup leaves the card's names empty and the
+    A name is a label. A failed lookup leaves the card's names empty and the
     panel shows the player id instead; it never fails the card.
     """
     if not player_ids:
@@ -3270,13 +1507,12 @@ async def get_game_boxscore(
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
 
-    # SIM-452: this route was one of the five park-blind callers. It resolves now.
     spec = GameSpec(
         machine_factory=resolve_factory_ref(request),
         sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
     )
     if run_id is not None or latest_run:
-        # SIM-519 Part E: the panel reads the run; no second batch.
+        # The panel reads the stored run; no second batch.
         stored, row = await _stored_prop_set(request, int(game_pk), run_id)
         names = _placeholder_names(spec.sim_kwargs)
         names.update(await _player_names(pool, sorted(pid for pid in stored.by_player if pid > 0)))
@@ -3288,9 +1524,9 @@ async def get_game_boxscore(
                 pid: dataclasses.asdict(tag) for pid, tag in _player_tags(spec.sim_kwargs).items()
             },
         )
-    # SIM-561: store the run's first game for the linescore and play-by-play
-    # panels, while the pool runs the batch.  Game 0's seed is base_seed itself
-    # (derive_seed(base_seed, 0)), so the panels show one of these games.  A store
+    # Store the run's first game for the linescore and play-by-play panels
+    # while the pool runs the batch. Game 0's seed is base_seed itself
+    # (derive_seed(base_seed, 0)), so the panels show one of these games. A store
     # failure never breaks the card; with the replay store off it returns at once.
     pset, _run_id = await asyncio.gather(
         asyncio.to_thread(
@@ -3319,12 +1555,11 @@ async def get_game_boxscore(
 
 
 # ---------------------------------------------------------------------------
-# SIM-390 — Player-prop edge/signal endpoint
+# GET /props/{player_id}/{prop}: one player's prop distribution and edge
 # ---------------------------------------------------------------------------
 
-#: All valid prop names (pitcher + batter).  A request for any other prop name
-#: is a 422 (validation error) not a 404, because the prop name is a constant
-#: from the simulation model, not a dynamic per-game ID.
+#: Every valid prop name (pitcher and batter). Any other name is a 422, not a
+#: 404: the prop name is a constant of the model, not a per-game id.
 _VALID_PROP_NAMES: frozenset[str] = frozenset(ALL_PROPS)
 
 
@@ -3359,7 +1594,7 @@ async def get_player_prop_edge(
     run_id: int | None = Query(None, description="SIM-519: read this stored run, no batch"),
     latest_run: bool = Query(False, description="SIM-519: read the game's newest done run"),
 ) -> PropEdgeResponse:
-    # ---- parameter validation ----
+    # ---- the parameters ----
     prop_upper = prop.upper()
     if prop_upper not in _VALID_PROP_NAMES:
         raise HTTPException(
@@ -3377,14 +1612,13 @@ async def get_player_prop_edge(
             detail="over_ml/under_ml require a line to be supplied",
         )
 
-    # ---- build prop set (same path as /boxscore; SIM-560: a seeded run is cached) ----
+    # ---- the prop set (the /boxscore path; a seeded run is cached) ----
     if run_id is not None or latest_run:
-        # SIM-519 Part E: the stored run's distributions; no batch.
+        # The stored run's distributions; no batch.
         pset, _row = await _stored_prop_set(request, int(game_pk), run_id)
     else:
         pool = _get_pool(request)
         state = await _resolve_state_or_error(pool, game_pk)
-        # SIM-452: this route was one of the five park-blind callers. It resolves now.
         spec = GameSpec(
             machine_factory=resolve_factory_ref(request),
             sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
@@ -3397,7 +1631,7 @@ async def get_player_prop_edge(
             base_seed=base_seed,
         )
 
-    # ---- look up the requested player + prop ----
+    # ---- the requested player and prop ----
     dist = pset.get(int(player_id), prop_upper)
     if dist is None:
         raise HTTPException(
@@ -3409,7 +1643,7 @@ async def get_player_prop_edge(
             ),
         )
 
-    # ---- optional over/under probabilities ----
+    # ---- the over / under probabilities, when a line is given ----
     p_over_val: float | None = None
     p_under_val: float | None = None
     p_push_val: float | None = None
@@ -3418,7 +1652,7 @@ async def get_player_prop_edge(
         p_under_val = float(dist.p_under(float(line)))
         p_push_val = float(dist.p_push(float(line)))
 
-    # ---- optional edge report ----
+    # ---- the edge report, when the line and both prices are given ----
     edge_rpt: EdgeReportModel | None = None
     if line is not None and over_ml is not None and under_ml is not None:
         mkt_side = MarketSide.OVER if bet_side == "over" else MarketSide.UNDER
@@ -3433,10 +1667,10 @@ async def get_player_prop_edge(
         try:
             raw_report = _prop_edge_report(dist, market, side=mkt_side)
             edge_rpt = EdgeReportModel.from_dataclass(raw_report)
-        except Exception as exc:  # noqa: BLE001 -- best-effort; odds can be degenerate
+        except Exception as exc:  # noqa: BLE001 -- degenerate odds give no report
             log.warning("prop_edge_report failed for %d/%s: %s", player_id, prop_upper, exc)
 
-    # SIM-519 Part F: name the player in the chart header (best effort).
+    # The player's name for the chart header; a failed lookup leaves None.
     player_name = None
     if int(player_id) > 0:
         name_pool = getattr(request.app.state, "pg_pool", None)
@@ -3466,10 +1700,4 @@ __all__ = [
     "router",
     "PRODUCTION_FACTORY_REF",
     "resolve_factory_ref",
-    "GameCard",
-    "GamesOnDateResponse",
-    "SimulateResponse",
-    "RosterOverride",
-    "WithOverrideResponse",
-    "GameCardResponse",
 ]

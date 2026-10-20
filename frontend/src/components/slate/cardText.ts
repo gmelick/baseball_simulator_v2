@@ -1,6 +1,6 @@
 /**
- * cardText.ts — the words on a Daily Diamond card's header (SIM-519): the
- * state tag, the line under the score and our sim line.
+ * cardText.ts — the words on a Daily Diamond card's header: the state tag,
+ * the line under the score and our sim line.
  */
 import { cardStatus, type GameCard as GameCardRow, type GameStatus } from '@/api/games'
 

@@ -1,89 +1,53 @@
 """
 api/routes/metrics.py
 =====================
-Phase-5 Prometheus metrics endpoint (SIM-374 — monitoring, FINAL ticket).
+The Prometheus metrics endpoint.
 
-Route:
+    GET /metrics   (login required; not in the OpenAPI schema)
+        The app's metrics in the Prometheus text exposition format
+        (``text/plain; version=0.0.4``), for the Prometheus scrape
+        (deploy/monitoring/prometheus.yml) and the Grafana dashboards
+        (deploy/monitoring/grafana/).
 
-    GET /metrics            (ops; excluded from the OpenAPI schema)
-        Returns the application's metrics in the Prometheus **text exposition
-        format** (Content-Type ``text/plain; version=0.0.4``) so a Prometheus
-        server (deploy/monitoring/prometheus.yml) can scrape them and Grafana
-        (deploy/monitoring/grafana/) can dashboard them.
+``prometheus_client`` is optional (it is not in requirements.txt). When it
+imports, the module uses its registry (``Counter``, ``Gauge``,
+``generate_latest``); when it does not, a small hand-rolled writer
+(:func:`_render_fallback`) emits the same metric names and the same ``# HELP``
+and ``# TYPE`` lines. The scrape and the dashboards bind to the same series
+either way.
 
-DEPENDENCY POLICY — optional ``prometheus_client``
---------------------------------------------------
-``prometheus_client`` is NOT a hard dependency of this project (it is not in
-requirements.txt). This module therefore tries to import it and, when present,
-uses the real collector registry (``Counter`` / ``Histogram`` / ``Gauge`` +
-``generate_latest`` + ``CONTENT_TYPE_LATEST``). When it is absent, it falls back
-to a tiny hand-rolled text-exposition writer (:func:`_render_fallback`) that
-emits the IDENTICAL metric names / ``# HELP`` / ``# TYPE`` lines. The endpoint
-and its unit test therefore work in either environment with no code change and
-the scrape config / dashboards bind to the same series either way.
+THE SERIES
+----------
+    baseball_sim_app_info{version=...}       gauge    always 1; the build version is a label.
+    baseball_sim_metrics_scrapes_total       counter  one per /metrics scrape.
+    baseball_sim_requests_total              gauge    the requests served
+                                                      (``LatencyMiddleware`` counts them
+                                                      through :func:`record_request`).
+    baseball_sim_latency_seconds             gauge    the wall-clock time of the newest
+                                                      /simulate batch (:func:`record_sim_latency`).
+    baseball_sim_api_p95_seconds             gauge    the API's p95 latency over the last
+                                                      200 requests (``LatencyMiddleware``).
+    baseball_sim_pipeline_freshness_seconds  gauge    seconds since the live service's
+                                                      heartbeat, else since the last
+                                                      in-process re-sim signal; -1 with none.
+    baseball_sim_finals_age_hours            gauge    hours since the newest final game of the
+                                                      current season loaded; -1 when unknown.
+    baseball_sim_backup_age_hours{store=...} gauge    hours since the newest complete backup
+                                                      set of each store (postgres, duckdb,
+                                                      bundle); -1 when the store has none
+                                                      (the scheduled backups, SIM-525).
+    baseball_sim_offsite_backup_age_hours{store=...}
+                                             gauge    the age in hours of each store's newest
+                                                      set that is complete off-site, counted
+                                                      from the set's creation; -1 when none
+                                                      (the off-site copy, SIM-568).
 
-WHAT THE METRICS MEAN — live vs. placeholder-for-instrumentation
-----------------------------------------------------------------
-This is the monitoring *surface* (SIM-374). A few series carry real data the
-moment the app is up; the rest are registered with the correct names / help /
-type so the Prometheus scrape and the Grafana dashboards bind immediately, and
-the corresponding request handlers can populate them as instrumentation lands
-without touching this file's contract:
-
-    baseball_sim_app_info{version=...}      gauge      LIVE  — always 1; carries
-                                                              the build version as
-                                                              a label.
-    baseball_sim_metrics_scrapes_total      counter    LIVE  — incremented on
-                                                              every /metrics scrape.
-    baseball_sim_requests_total             counter    LIVE-where-recorded —
-                                                              mirrors the request
-                                                              counter on app.state
-                                                              (see record_request);
-                                                              0 until a handler bumps it.
-    baseball_sim_latency_seconds            histogram  POPULATED-FROM-STATE — the
-                                                              games router can record
-                                                              the last sim wall-clock
-                                                              via record_sim_latency();
-                                                              exposed as a summary-style
-                                                              gauge set (last/count) in
-                                                              the fallback path.
-    baseball_sim_api_p95_seconds            gauge      Live API p95 latency, fed by the
-                                                              SIM-410 LatencyMiddleware
-                                                              (rolling 200-request window).
-    baseball_sim_pipeline_freshness_seconds gauge      LIVE-WHERE-WIRED — seconds
-                                                              since the last live re-sim
-                                                              signal (app.state.last_resim_signal),
-                                                              else -1 (no data yet).
-    baseball_sim_finals_age_hours           gauge      SIM-519 Part D — hours since the
-                                                              newest final game of the
-                                                              current season loaded; -1 when
-                                                              unknown. A background task reads
-                                                              it at most every 10 minutes.
-    baseball_sim_backup_age_hours{store=...} gauge     The scheduled backups (SIM-525) —
-                                                              hours since the newest complete
-                                                              backup set of each store
-                                                              (postgres, duckdb, bundle); -1
-                                                              when the store has none. Read
-                                                              from BACKUPS_ROOT at most every
-                                                              10 minutes.
-    baseball_sim_offsite_backup_age_hours{store=...} gauge
-                                                              The off-site copy (SIM-568) —
-                                                              the age in hours of each store's
-                                                              newest backup set that is
-                                                              complete off-site, counted from
-                                                              the set's creation (not from the
-                                                              copy); -1 when none. One daemon
-                                                              thread reads OFFSITE_ROOT at most
-                                                              every 10 minutes, one read at a
-                                                              time. The scrape never reads the
-                                                              off-site folder: it ages the last
-                                                              reading to the scrape time.
-
-The values are read from ``request.app.state`` where available (so no DB / Redis
-connection is required — this module is fully import-safe and the endpoint never
-5xxs on a cold app) and otherwise reported as not-yet-populated.
-
-Owner: QA / DevOps (SIM-374).
+The scrape reads ``request.app.state`` only, so it needs no database or Redis
+connection and never fails on a cold app. The values that need a read (the
+newest final game, the live heartbeat, the backup folders) refresh in the
+background at most every few minutes (:func:`_schedule_finals_refresh`); a read
+of the off-site folder runs on a daemon thread of its own, because a OneDrive
+file can stall it.
 """
 
 from __future__ import annotations
@@ -102,7 +66,7 @@ from fastapi.responses import Response
 from api.auth import require_auth
 
 # ---------------------------------------------------------------------------
-# Optional prometheus_client — used when importable, else a hand-rolled writer.
+# prometheus_client when it imports, else the hand-rolled writer
 # ---------------------------------------------------------------------------
 try:  # pragma: no cover - exercised whichever branch the environment provides
     from prometheus_client import (
@@ -120,27 +84,27 @@ except Exception:  # noqa: BLE001 - any import failure → fallback path
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
 
 
-# SIM-443c: /metrics requires a login; Prometheus sends an Authorization: Bearer key.
+# /metrics requires a login; Prometheus sends an Authorization: Bearer key.
 router = APIRouter(tags=["ops"], dependencies=[Depends(require_auth)])
 
-# App build version surfaced as a label on the info gauge. Kept in sync with
-# api/main.py's FastAPI(version=...) intent; overridable via env for releases.
+# The build version, a label of the info gauge: APP_VERSION, else the
+# version create_app gives FastAPI.
 _APP_VERSION = os.environ.get("APP_VERSION", "0.1.0-phase7")
 
-#: The off-site copy (SIM-568): the help text of the off-site backup-age gauge.
-#: The age counts from the set's creation, because the off-site manifest is a
-#: verbatim copy of the local one.
+#: The help text of the off-site backup-age gauge. The age counts from the
+#: set's creation, because the off-site manifest is a verbatim copy of the
+#: local one.
 OFFSITE_BACKUP_AGE_HELP = (
     "Age in hours of the store's newest backup set that is complete off-site; -1 when none."
 )
 
 
 # ---------------------------------------------------------------------------
-# prometheus_client registry (only built when the dependency is present).
+# The prometheus_client registry (built only when the library imports)
 #
-# A fresh CollectorRegistry (not the global default) keeps this module's series
-# self-contained and avoids duplicate-timeseries errors if the app is created
-# more than once in a single process (e.g. across tests).
+# A registry of its own, not the global default, keeps this module's series
+# apart and avoids duplicate-series errors when one process builds the app
+# more than once (the tests do).
 # ---------------------------------------------------------------------------
 if _PROM_AVAILABLE:
     _REGISTRY = CollectorRegistry()
@@ -196,7 +160,6 @@ if _PROM_AVAILABLE:
         registry=_REGISTRY,
     )
 
-    # The off-site copy (SIM-568).
     _OFFSITE_BACKUP_AGE = Gauge(
         "baseball_sim_offsite_backup_age_hours",
         OFFSITE_BACKUP_AGE_HELP,
@@ -206,20 +169,19 @@ if _PROM_AVAILABLE:
 
 
 # ---------------------------------------------------------------------------
-# Public instrumentation helpers — import-safe no-ops when prometheus is absent.
+# The recorders other modules call
 #
-# Other routers (notably api/routes/games.py) can call these to feed real data
-# into the metrics without importing prometheus_client themselves. They are also
-# the single seam the fallback path reads from app.state.
+# The games routes and LatencyMiddleware feed the metrics through these, with no
+# import of prometheus_client. They store each value on app.state, where both
+# render paths read it.
 # ---------------------------------------------------------------------------
 
 
 def record_sim_latency(app_state: Any, seconds: float) -> None:
     """Record the wall-clock latency of the most recent simulation run.
 
-    Stores the value on ``app.state`` (read by the fallback renderer) and, when
-    prometheus_client is present, also updates the gauge. Safe to call from any
-    handler — never raises.
+    It stores the value on ``app.state`` and, when prometheus_client is
+    present, sets the gauge too. It never raises.
     """
     try:
         app_state.sim_latency_last_seconds = float(seconds)
@@ -232,8 +194,7 @@ def record_sim_latency(app_state: Any, seconds: float) -> None:
 def record_request(app_state: Any) -> None:
     """Increment the served-request counter on ``app.state``.
 
-    Best-effort; never raises. The /metrics handler mirrors the resulting count
-    into the prometheus gauge at scrape time.
+    It never raises. The scrape copies the count into the gauge.
     """
     try:
         app_state.request_count = int(getattr(app_state, "request_count", 0)) + 1
@@ -242,18 +203,18 @@ def record_request(app_state: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Value collection — pull current readings off app.state (no DB / Redis).
+# The readings: from app.state, refreshed in the background
 # ---------------------------------------------------------------------------
 
 
 def _pipeline_freshness_seconds(app_state: Any) -> float:
-    """Seconds since the last live re-sim signal, or -1 if none observed yet.
+    """Seconds since the live service's heartbeat, else since the last re-sim signal.
 
-    Reads ``app.state.last_resim_signal_ts`` (a unix timestamp the pipeline hook
-    may set) when present; otherwise reports -1 (no data) so the gauge exists for
-    the dashboard without fabricating a freshness reading.
+    The heartbeat (``app.state.live_heartbeat_ts``, read in the background from
+    Redis) comes first; an in-process pipeline's signal
+    (``app.state.last_resim_signal_ts``) is the fallback. With neither the gauge
+    reads -1, so it exists for the dashboard without a made-up reading.
     """
-    # SIM-519 Part C: the live service's heartbeat, when the background read has one.
     hb = getattr(app_state, "live_heartbeat_ts", None)
     ts = hb if hb is not None else getattr(app_state, "last_resim_signal_ts", None)
     if ts is None:
@@ -264,9 +225,10 @@ def _pipeline_freshness_seconds(app_state: Any) -> float:
         return -1.0
 
 
-#: SIM-519 Part D: the newest final game's date is read at most this often.
+#: The newest final game's date is read at most this often, in seconds.
 FINALS_AGE_REFRESH_S = 600
 
+#: The date of the newest final game of the current season.
 _SQL_NEWEST_FINAL = """
     SELECT MAX(game_date) AS newest FROM raw.games
      WHERE status = 'Final' AND season = EXTRACT(YEAR FROM NOW())::int
@@ -300,20 +262,19 @@ async def _refresh_live_heartbeat(app_state: Any) -> None:
         return
 
 
-#: SIM-519 Part C: the heartbeat stamp is read at most this often.
+#: The heartbeat stamp is read at most this often, in seconds.
 HEARTBEAT_REFRESH_S = 15
 
 
 def _schedule_finals_refresh(app_state: Any) -> None:
-    """Start the refresh in the background when the stored date is stale.
+    """Start each background refresh whose reading is stale.
 
-    The scrape itself never waits on the database: it reads the last stored
-    value, and the next scrape sees the new one.
+    The newest final game, the live heartbeat and the off-site ages each have
+    their own interval. The scrape never waits on a read: it serves the last
+    stored value, and the next scrape sees the new one.
     """
     now = time.time()
     try:
-        import asyncio
-
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
@@ -324,9 +285,9 @@ def _schedule_finals_refresh(app_state: Any) -> None:
     if now - float(getattr(app_state, "heartbeat_checked_at", 0.0) or 0.0) >= HEARTBEAT_REFRESH_S:
         app_state.heartbeat_checked_at = now
         app_state.heartbeat_refresh_task = loop.create_task(_refresh_live_heartbeat(app_state))
-    # The off-site copy (SIM-568): a read of the off-site folder can stall on a
-    # dehydrated OneDrive file, so it runs on a daemon thread, never in the scrape.
-    # One read runs at a time: while a read stalls, no scrape starts another.
+    # A read of the off-site folder can stall on a OneDrive file that is only
+    # online, so it runs on a daemon thread, never in the scrape. One read runs
+    # at a time: while a read stalls, no scrape starts another.
     offsite_due = (
         now - float(getattr(app_state, "offsite_checked_at", 0.0) or 0.0) >= OFFSITE_AGE_REFRESH_S
     )
@@ -347,7 +308,7 @@ def _finals_age_hours(app_state: Any) -> float:
         return -1.0
 
 
-#: The scheduled backups (SIM-525): the backup root is read at most this often.
+#: The backup root is read at most this often, in seconds.
 BACKUP_AGE_REFRESH_S = 600
 
 #: The three backup stores, in the order the gauge lists them.
@@ -389,23 +350,23 @@ def _read_backup_ages() -> dict[str, float]:
     return _read_ages("BACKUPS_ROOT", "/backups")
 
 
-#: The off-site copy (SIM-568): the off-site folder is read at most this often.
+#: The off-site folder is read at most this often, in seconds.
 OFFSITE_AGE_REFRESH_S = 600
 
-#: The off-site copy (SIM-568): the name of the daemon thread that reads the folder.
+#: The name of the daemon thread that reads the off-site folder.
 OFFSITE_READ_THREAD_NAME = "offsite-backup-age"
 
-#: The off-site copy (SIM-568): one reading of the folder and the time of the read.
+#: One reading of the off-site folder and the time of the read.
 _OffsiteReading = tuple[dict[str, float], float]
 
 
 def _read_offsite_ages() -> dict[str, float]:
-    """Read the off-site copy's ages from ``OFFSITE_ROOT`` (default ``/offsite``) (SIM-568)."""
+    """Read the off-site copy's ages from ``OFFSITE_ROOT`` (default ``/offsite``)."""
     return _read_ages("OFFSITE_ROOT", "/offsite")
 
 
 def _read_offsite_ages_now() -> _OffsiteReading:
-    """Read the off-site ages, then take the time of the read (SIM-568).
+    """Read the off-site ages, then take the time of the read.
 
     The scrape adds the hours since this time to each age.
     """
@@ -414,7 +375,7 @@ def _read_offsite_ages_now() -> _OffsiteReading:
 
 
 def _offsite_read_in_flight(app_state: Any) -> bool:
-    """Return True while the last off-site read has not finished (SIM-568)."""
+    """Return True while the last off-site read has not finished."""
     task = getattr(app_state, "offsite_refresh_task", None)
     if task is None:
         return False
@@ -425,7 +386,7 @@ def _offsite_read_in_flight(app_state: Any) -> bool:
 
 
 async def _read_offsite_on_daemon_thread() -> _OffsiteReading:
-    """Run the off-site read on a daemon thread of its own (SIM-568).
+    """Run the off-site read on a daemon thread of its own.
 
     The read never takes a thread from the loop's default executor, which
     ``/simulate``, the what-if and the other routes share. A read that stalls on
@@ -465,7 +426,7 @@ async def _read_offsite_on_daemon_thread() -> _OffsiteReading:
 
 
 async def _refresh_offsite_ages(app_state: Any) -> None:
-    """Read the off-site ages on a daemon thread into ``app.state`` (SIM-568).
+    """Read the off-site ages on a daemon thread into ``app.state``.
 
     The task stores the reading in ``app.state.offsite_backup_ages`` and the
     time of the read in ``app.state.offsite_backup_read_at``. It never raises:
@@ -484,7 +445,7 @@ def _offsite_ages(app_state: Any) -> dict[str, float]:
 
     The scrape reads only ``app.state.offsite_backup_ages`` and
     ``app.state.offsite_backup_read_at``; the background read of
-    :func:`_schedule_finals_refresh` fills both (the off-site copy, SIM-568).
+    :func:`_schedule_finals_refresh` fills both.
     Each age grows by the hours since the read, so a read that stalls never
     freezes the gauge at a fresh value. A store with no set reads -1 and does
     not grow. With no read time, the stored ages render as they are.
@@ -541,13 +502,13 @@ def _collect(app_state: Any) -> dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
-# Hand-rolled text-exposition writer (fallback when prometheus_client absent).
-# Emits the SAME metric names / HELP / TYPE lines as the prometheus path so the
-# scrape config + dashboards bind identically.
+# The hand-rolled text-exposition writer, for when prometheus_client is absent.
+# It emits the same metric names and HELP and TYPE lines as the library path.
 # ---------------------------------------------------------------------------
 
 
 def _metric_block(name: str, help_text: str, mtype: str, lines: list[str]) -> str:
+    """One metric's ``# HELP`` and ``# TYPE`` lines and its sample lines."""
     return f"# HELP {name} {help_text}\n# TYPE {name} {mtype}\n" + "".join(
         f"{ln}\n" for ln in lines
     )
@@ -608,7 +569,6 @@ def _render_fallback(app_state: Any, scrape_count: int) -> str:
                 for store, age in _backup_ages(app_state).items()
             ],
         ),
-        # The off-site copy (SIM-568).
         _metric_block(
             "baseball_sim_offsite_backup_age_hours",
             OFFSITE_BACKUP_AGE_HELP,
@@ -622,13 +582,13 @@ def _render_fallback(app_state: Any, scrape_count: int) -> str:
     return "".join(blocks)
 
 
-# Module-level scrape counter for the fallback path (the prometheus path has its
-# own Counter). Kept here so the count survives across requests in one process.
+# The fallback path's scrape counter (the library path has its own Counter),
+# at module level, so the count lasts across the requests of one process.
 _FALLBACK_SCRAPE_COUNT = 0
 
 
 # ---------------------------------------------------------------------------
-# The endpoint.
+# The endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -649,8 +609,8 @@ async def metrics(request: Request) -> Response:
     _schedule_finals_refresh(app_state)
 
     if _PROM_AVAILABLE:
-        # Refresh the gauges from app.state at scrape time, bump the scrape
-        # counter, and let prometheus_client serialize the registry.
+        # Set the gauges from app.state, count the scrape, and let
+        # prometheus_client write the registry.
         _SCRAPES.inc()
         vals = _collect(app_state)
         _REQUESTS.set(vals["requests_total"])
@@ -660,13 +620,13 @@ async def metrics(request: Request) -> Response:
         _FINALS_AGE.set(vals["finals_age"])
         for store, age in _backup_ages(app_state).items():
             _BACKUP_AGE.labels(store=store).set(age)
-        # The off-site copy (SIM-568): the stored reading only, never a disk read.
+        # The stored off-site reading only, never a disk read.
         for store, age in _offsite_ages(app_state).items():
             _OFFSITE_BACKUP_AGE.labels(store=store).set(age)
         body = generate_latest(_REGISTRY)
         return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 
-    # Fallback: hand-rolled exposition with the identical series.
+    # The fallback: the hand-rolled exposition of the same series.
     global _FALLBACK_SCRAPE_COUNT
     _FALLBACK_SCRAPE_COUNT += 1
     body = _render_fallback(app_state, _FALLBACK_SCRAPE_COUNT)

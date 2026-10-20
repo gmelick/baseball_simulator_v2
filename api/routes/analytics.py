@@ -1,7 +1,7 @@
 """
 api/routes/analytics.py
 =======================
-SIM-439 — descriptive summary analytics over raw.pitches for the Data Lab.
+The Data Lab's summary analytics over raw.pitches.
 
 Every endpoint is GET, season-bounded (an indexed predicate is mandatory on the
 ~10⁷-row table), defaults to ``data_quality_flag = FALSE`` (the sim's view, with
@@ -26,13 +26,12 @@ game-type filter, SIM-572). ``R``, the default, reads the regular season alone.
 coverage routes (kpis, by-season) describe the whole store and take no game type.
 
 The swing, whiff, called-strike and CSW (called strikes plus whiffs) rates filter
-on the ``type`` code. The Data Lab vocabulary fix (SIM-571) made that change. The
-code sets live in ``pipeline/statcast_events.py``. ``description`` holds the
+on the ``type`` code (the Data Lab vocabulary, SIM-571). The code sets live in
+``pipeline/statcast_events.py``. ``description`` holds the
 feed's display text, and no query reads it. The whiff is Baseball Savant's (the
 public Statcast site): a foul tip counts.
 
-Every route reads through the read-only pool, ``app.state.pg_pool_ro`` (SIM-566,
-the Data Lab read routes on the read-only pool). The pool's role reads ``raw.*``
+Every route reads through the read-only pool, ``app.state.pg_pool_ro``. The pool's role reads ``raw.*``
 and nothing else. Without the pool, every route answers 503; no route falls back
 to the main pool. The KPIs route also reads ``pg_class`` for a row estimate; the
 read-only role can read that catalog.

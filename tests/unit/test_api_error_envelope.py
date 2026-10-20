@@ -1,14 +1,11 @@
-"""
-test_api_error_envelope.py
-=========================
-Unit tests for the SIM-416 app-level exception handler / structured error
-envelope. Builds a tiny FastAPI app and installs the same handler used by
-``create_app`` (via ``api.errors.install_exception_handlers``) so the behaviour
-is exercised without the DB-dependent lifespan.
+"""The app's exception handler and its structured error envelope (``api/errors.py``).
 
-TestClient is built with ``raise_server_exceptions=False`` so the handler's
-JSON response is returned instead of the exception being re-raised into the
-test (the default test behaviour).
+The tests build a small FastAPI app and install the handlers that ``create_app``
+installs (``api.errors.install_exception_handlers``). So the tests run without the
+lifespan, which needs a database.
+
+The TestClient uses ``raise_server_exceptions=False``. The client then returns the
+handler's JSON response. By default, the client raises the exception into the test.
 """
 
 from __future__ import annotations

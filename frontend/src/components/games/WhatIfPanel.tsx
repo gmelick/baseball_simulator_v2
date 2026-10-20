@@ -3,18 +3,18 @@
  * managerial changes, and simulate the rest of the game from there.
  *
  * The panel reads the game as it stood at the start of the chosen plate
- * appearance (GET /feed/state) and draws it on the slate's field. The manager
- * stages changes — a pinch hitter, a reliever, a pinch runner, a defensive
- * change (before first pitch: either side's lineup and starter) — then runs
- * 100 games twice from that spot with the same seeds: as it really stood and
- * with the changes. The result compares the two beside the real final.
+ * appearance (GET /feed/state) and draws it on the slate's field. The user
+ * stages changes: a pinch hitter, a reliever, a pinch runner, a defensive
+ * change (before first pitch: either side's lineup and starter). The panel
+ * then runs 100 games twice from that spot with the same seeds: as it really
+ * stood and with the changes. The result compares the two beside the real
+ * final.
  */
 import React, { useEffect, useMemo, useState } from 'react'
 
 import {
   fetchPaState,
   fetchWhatIf,
-  GamesApiError,
   startWhatIf,
   type PaState,
   type PlayerOption,
@@ -23,6 +23,7 @@ import {
   type WhatIfResult,
   type WhatIfStarted,
 } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 import { CardField } from '@/components/slate/CardField'
 import { ordinal, shortName } from '@/components/slate/format'
 

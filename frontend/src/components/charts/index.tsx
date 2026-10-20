@@ -1,11 +1,11 @@
 /**
- * charts/index.tsx — SIM-439
+ * charts/index.tsx — one hand-rolled chart system for the Data Lab and the
+ * Similarity Explorer.
  *
- * One hand-rolled chart system for the Data Lab + Similarity Explorer. No chart
- * library — pure SVG (fixed viewBox, tokenized fills) + a little CSS, matching
- * the PropDistributionChart house style. Every chart is theme-safe (uses only
- * --sim-* semantic/primary tokens), labels values in-mark (never hue-only), and
- * carries role="img" + an aria-label.
+ * It uses no chart library: pure SVG (a fixed viewBox, token fills) and a
+ * little CSS, in the PropDistributionChart house style. Every chart uses only
+ * the --sim-* tokens, never shows a value by hue alone, and carries
+ * role="img" and an aria-label.
  *
  * Exports: ScoreBar, BarList, ColumnChart, HeatGrid, RadarChart.
  */

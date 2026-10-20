@@ -1,5 +1,5 @@
 /**
- * slate.ts — the slate's order and refresh interval (SIM-519 Part A).
+ * slate.ts — the slate's order and refresh interval.
  */
 import { cardStatus, type GameCard as GameCardRow, type GameStatus } from '@/api/games'
 
@@ -8,7 +8,7 @@ export const SLATE_POLL_MS = 30_000
 
 const RANK: Record<GameStatus, number> = { live: 0, scheduled: 1, final: 2, postponed: 3 }
 
-/** Live, then scheduled by first pitch, then final, then postponed (stable). */
+/** Live, then scheduled, then final, then postponed; each group by first pitch (stable). */
 export function sortSlate(games: GameCardRow[]): GameCardRow[] {
   return games
     .map((g, i) => ({ g, i }))

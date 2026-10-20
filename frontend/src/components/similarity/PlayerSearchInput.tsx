@@ -1,8 +1,9 @@
 /**
- * PlayerSearchInput.tsx — SIM-439
- * Debounced name type-ahead against /api/players/search (raw.players pg_trgm).
- * A proper combobox/listbox: arrow/enter/escape keyboard nav, aria-activedescendant.
- * The single most-reused control across the Data Lab + Similarity Explorer.
+ * PlayerSearchInput.tsx — the debounced name type-ahead over
+ * /api/players/search (a pg_trgm search of raw.players). It is a proper
+ * combobox and listbox: arrow / Enter / Escape keyboard navigation and
+ * aria-activedescendant. The Data Lab and the Similarity Explorer reuse it
+ * more than any other control.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 

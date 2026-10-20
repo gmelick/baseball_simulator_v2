@@ -1,20 +1,10 @@
 /**
- * players.ts — SIM-439
- * Name typeahead + player identity (api/routes/players.py). Reused by the
- * universal PlayerSearchInput and the Player Detail hub.
+ * players.ts — the name typeahead and the player identity client
+ * (api/routes/players.py). The universal PlayerSearchInput and the Player
+ * Detail hub use it.
  */
-import { GamesApiError } from '@/api/games'
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { getJson } from '@/api/http'
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { credentials: 'include', signal })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 export interface PlayerHit {
   player_id: number

@@ -1,40 +1,31 @@
 """
 api/serialization.py
 ====================
-SIM-350 -- the **array-safe JSON helper** under the Phase-5 API response
-contract (Phase 5, Sprint 1).
+The array-safe JSON helper of the API's response models.
 
-WHAT THIS IS
-------------
-The Phase-4 simulation output dataclasses
-(:mod:`simulation.results` / :mod:`simulation.win_probability` /
-:mod:`simulation.snapshots` / :mod:`simulation.prop_distributions` /
-:mod:`betting.clv_engine`) hold **numpy arrays and numpy scalars**
-(``NDArray[np.int64]`` score arrays, prop PMF ``support`` / ``probabilities``,
-etc.).  ``json.dumps`` cannot serialise those, and the only pre-SIM-350 JSON
-path stringified them with ``default=str`` -- which turns an array into an
-unparseable ``"[1 2 3]"`` repr (a numpy str, NOT JSON).
+The simulation and betting dataclasses (:mod:`simulation.results`,
+:mod:`simulation.win_probability`, :mod:`simulation.snapshots`,
+:mod:`simulation.prop_distributions`, :mod:`betting.clv_engine`) hold numpy
+arrays and numpy scalars (``NDArray[np.int64]`` score arrays, a prop PMF's
+``support`` and ``probabilities``). ``json.dumps`` cannot write those, and
+``default=str`` turns an array into an unparseable ``"[1 2 3]"``.
 
-This module is the single, small, reusable building block the SIM-350 Pydantic
-converters in :mod:`api.schemas` lean on: :func:`to_jsonable` recursively walks
-an arbitrary object graph (numpy arrays / numpy scalars / dataclasses / dicts /
-sequences / datetimes / enums) and returns an equivalent structure built
-ENTIRELY from JSON-native Python types (``int`` / ``float`` / ``str`` / ``bool``
-/ ``None`` / ``list`` / ``dict``).  The result is guaranteed to survive
-``json.dumps`` with NO custom ``default=`` hook -- i.e. no numpy ever leaks into
-the wire format.
+:func:`to_jsonable` walks any object graph (numpy arrays and scalars,
+dataclasses, dicts, sequences, datetimes, enums) and returns the same structure
+built only of JSON-native types (``int``, ``float``, ``str``, ``bool``,
+``None``, ``list``, ``dict``). The result survives ``json.dumps`` with no
+``default=`` hook, so no numpy value reaches the wire. The converters in
+:mod:`api.schemas` and the replay store use it.
 
 DESIGN
 ------
-  * **Pure + dependency-light.**  numpy + stdlib only; no Pydantic, no DB, no
-    FAISS, no RNG.  This keeps the helper usable both inside the Pydantic
-    converters and in any plain-``json`` code path.
-  * **Lossless for the contract's value types.**  numpy ints -> ``int``, numpy
+  * **Pure and light.** numpy and the standard library only: no Pydantic, no
+    database, no FAISS, no randomness, so the helper serves the Pydantic
+    converters and any plain ``json`` path alike.
+  * **Lossless for the contract's value types.** numpy ints -> ``int``, numpy
     floats -> ``float``, numpy bools -> ``bool``, arrays -> nested ``list``s,
-    datetimes -> ISO-8601 strings, enums -> their ``.value``.  We do NOT round,
-    truncate, or drop any element -- the contract layer must never silently lose
-    data (a consumer that wants a summary-only view trims at the endpoint, not
-    here).
+    datetimes -> ISO-8601 strings, enums -> their ``.value``. Nothing is
+    rounded, cut or dropped; a route that wants a summary trims it itself.
   * **Recursion-safe shapes.**  dataclass instances are expanded field-by-field
     (so a nested ``ConfidenceInterval`` inside a ``GameSimSummary`` is handled),
     and mapping keys are coerced to ``str`` (JSON object keys must be strings).

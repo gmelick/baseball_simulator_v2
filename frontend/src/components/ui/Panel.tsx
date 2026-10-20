@@ -1,17 +1,15 @@
 /**
- * Panel — SIM-380 design system primitive
+ * Panel — the design system's content section. It groups related information
+ * inside a Card or as a standalone block. The game page uses it for the
+ * Projections and Betting sections.
  *
- * A content section that groups related information inside a Card or
- * as a standalone block. Used for the per-player simulation panels on
- * the Game page, the betting edge section, and the override comparison area.
- *
- * Panels are lighter than Cards (no shadow by default, subtle bg tint).
+ * A Panel is lighter than a Card (no shadow, a subtle background tint).
  * A ``collapsible`` panel's heading opens and closes it; ``storageKey``
  * remembers the choice in the browser.
  *
  * @example
- * <Panel label="Win Probability" accent="primary">
- *   <WinProbabilityChart data={winProb} />
+ * <Panel label="Betting" collapsible defaultOpen={false} storageKey="gamepage.betting">
+ *   {bettingCard}
  * </Panel>
  */
 import React, { useState } from 'react'

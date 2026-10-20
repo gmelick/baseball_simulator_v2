@@ -1,19 +1,14 @@
-"""
-tests/unit/test_trusted_proxy.py
-=======================================
-SIM-569: behind nginx, the rate limiter counts a request against the real
-client's address, not the proxy's.
+"""The rate limiter behind nginx counts a request against the real client's address.
 
-nginx sets ``X-Real-IP`` to the connection's own address on every request,
-so a browser cannot forge it. The app believes that header only when the
-connection comes from a proxy named in ``TRUSTED_PROXY_HOSTS``; the names
-resolve to addresses at most once a minute. With the variable unset, the
-app reads the connection's address and nothing else (the behaviour before
-SIM-569).
+nginx sets ``X-Real-IP`` to the connection's own address on every request, so a
+browser cannot forge it. The app believes that header only when the connection
+comes from a proxy named in ``TRUSTED_PROXY_HOSTS``. The names resolve to addresses
+at most once a minute. With the variable unset, the app reads the connection's
+address and nothing else.
 
-The tests patch the resolver, so no test touches DNS except the one that
-resolves ``localhost``. Starlette's TestClient connects from the host
-``testclient``, which the tests name as the trusted proxy.
+The tests patch the resolver, so only the test that resolves ``localhost`` touches
+DNS. Starlette's TestClient connects from the host ``testclient``, which the tests
+name as the trusted proxy.
 """
 
 from __future__ import annotations
@@ -66,7 +61,7 @@ def _get(client: TestClient, real_ip: str | None):
 
 
 def test_no_trusted_proxy_ignores_the_real_ip_header():
-    """SIM-569: with TRUSTED_PROXY_HOSTS unset, every request counts against the connection."""
+    """With TRUSTED_PROXY_HOSTS unset, every request counts against the connection."""
     client = TestClient(_app(limit=2))
     assert _get(client, _CLIENT_A).status_code == 200
     assert _get(client, _CLIENT_B).status_code == 200
@@ -74,7 +69,7 @@ def test_no_trusted_proxy_ignores_the_real_ip_header():
 
 
 def test_trusted_proxy_keeps_a_bucket_per_real_client(monkeypatch):
-    """SIM-569: behind a trusted proxy, two real clients get separate buckets."""
+    """Behind a trusted proxy, two real clients get separate buckets."""
     _trust(monkeypatch, {"nginx": {_PROXY}})
     client = TestClient(_app(limit=2))
     assert _get(client, _CLIENT_A).status_code == 200
@@ -86,7 +81,7 @@ def test_trusted_proxy_keeps_a_bucket_per_real_client(monkeypatch):
 
 
 def test_untrusted_connection_cannot_pick_its_address(monkeypatch):
-    """SIM-569: a connection that is not the proxy keeps its own address.
+    """A connection that is not the proxy keeps its own address.
 
     The proxy name resolves to another address, so the TestClient's
     connection is untrusted and its X-Real-IP header changes nothing.
@@ -99,7 +94,7 @@ def test_untrusted_connection_cannot_pick_its_address(monkeypatch):
 
 
 def test_trusted_proxy_without_the_header_counts_the_connection(monkeypatch):
-    """SIM-569: a trusted proxy that sends no X-Real-IP counts against its own address."""
+    """A trusted proxy that sends no X-Real-IP counts against its own address."""
     _trust(monkeypatch, {"nginx": {_PROXY}})
     client = TestClient(_app(limit=2))
     assert _get(client, None).status_code == 200
@@ -108,7 +103,7 @@ def test_trusted_proxy_without_the_header_counts_the_connection(monkeypatch):
 
 
 def test_client_address_direct_cases(monkeypatch):
-    """SIM-569: the address helper on its own: no client, a trusted proxy, an untrusted one."""
+    """The address helper on its own: no client, a trusted proxy, an untrusted one."""
     _trust(monkeypatch, {"nginx": {"172.30.0.5"}})
     no_client = SimpleNamespace(client=None, headers={"X-Real-IP": _CLIENT_A})
     assert auth._client_address(no_client) == "unknown"
@@ -123,7 +118,7 @@ def test_client_address_direct_cases(monkeypatch):
 
 
 def test_several_names_and_a_literal_address(monkeypatch):
-    """SIM-569: the variable takes a comma-separated list; every entry resolves."""
+    """The variable takes a comma-separated list; every entry resolves."""
     _trust(
         monkeypatch, {"nginx": {"172.30.0.5"}, "10.1.1.1": {"10.1.1.1"}}, hosts="nginx, 10.1.1.1 ,"
     )
@@ -131,7 +126,7 @@ def test_several_names_and_a_literal_address(monkeypatch):
 
 
 def test_resolution_is_cached_for_the_ttl(monkeypatch):
-    """SIM-569: the names resolve once per TTL, not once per request."""
+    """The names resolve once per TTL (time to live), not once per request."""
     calls: list[str] = []
 
     def resolver(name: str) -> set[str]:
@@ -156,7 +151,7 @@ def test_resolution_is_cached_for_the_ttl(monkeypatch):
 
 
 def test_a_name_that_does_not_resolve_trusts_nothing(monkeypatch):
-    """SIM-569: an unresolved name adds no address and raises nothing; the request still runs."""
+    """An unresolved name adds no address and raises nothing; the request still runs."""
     monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "no-such-proxy")
     monkeypatch.setattr(auth, "_resolve_proxy_host", lambda name: set())
     assert auth._trusted_proxy_addresses() == frozenset()
@@ -167,6 +162,6 @@ def test_a_name_that_does_not_resolve_trusts_nothing(monkeypatch):
 
 
 def test_the_real_resolver_resolves_localhost_and_swallows_a_bad_name():
-    """SIM-569: the resolver returns the addresses of a name and an empty set for a bad one."""
+    """The resolver returns the addresses of a name and an empty set for a bad one."""
     assert "127.0.0.1" in auth._resolve_proxy_host("localhost")
     assert auth._resolve_proxy_host("no-such-host.invalid") == set()

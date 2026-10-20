@@ -1,5 +1,5 @@
 /**
- * PlayByPlayList.module.css — SIM-393, SIM-561
+ * PlayByPlayList.module.css — the simulated game's play-by-play list.
  */
 
 .scroll {
@@ -61,7 +61,7 @@
   min-width: 0;
 }
 
-/* SIM-561: the batter and the pitcher of the plate appearance. */
+/* The batter and the pitcher of the plate appearance. */
 .matchup {
   font-size: var(--sim-text-sm);
 }
@@ -86,7 +86,7 @@
   color: var(--sim-color-text-muted);
 }
 
-/* SIM-561: one block per half-inning, its header pinned while you scroll it. */
+/* One block per half-inning. Its header stays pinned while you scroll the block. */
 .half + .half {
   border-top: 1px solid var(--sim-color-border);
 }

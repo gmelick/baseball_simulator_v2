@@ -1,24 +1,28 @@
 /**
- * useGameSocket.ts — SIM-393 (consumes the SIM-385 WS schema)
+ * useGameSocket.ts — the hook for the per-game live WebSocket.
  *
- * Subscribes to the per-game live WebSocket (`/ws/games/{gamePk}`, proxied by
- * Vite to the backend) and surfaces the latest live state + connection status.
+ * The hook subscribes to `/ws/games/{gamePk}` (the Vite dev server proxies it
+ * to the backend). It returns the latest live state and the connection status.
+ * The live service builds each event as a plain dict
+ * (pipeline/live/live_ingestion_pipeline.py) and publishes it through
+ * pipeline/live/broadcast.py. The types in this file are the frontend's
+ * description of those events.
  *
- * Event handling (SIM-385 WsEventType):
- *   - game_state_update → updates `liveState` (+ `resimPending` from resim_triggered)
- *   - resim_pending     → sets `resimPending` true (a new sim is being queued)
+ * Event handling:
+ *   - game_state_update → updates `liveState` (and `resimPending` from resim_triggered)
+ *   - resim_pending     → sets `resimPending` true (a new sim is queued)
  *   - ping              → replies with a pong (keepalive)
- *   - pong              → ignored
+ *   - pong              → records liveness only
  *
- * Reconnects with a fixed backoff on unexpected close. Returns a stable object
- * the Game page reads each render.
+ * The hook reconnects after a fixed delay on an unexpected close. The Game
+ * page reads the returned state each render.
  */
 import { useEffect, useRef, useState } from 'react'
 
 export type SocketStatus = 'connecting' | 'open' | 'closed'
 
-/** Normalized live state from a WS game_state_update (field names unified with
- *  the REST /live payload: on_1b/on_2b/on_3b). All fields optional — the wire
+/** The live state from a WS game_state_update. The runner fields use the REST
+ *  /live names (on_1b/on_2b/on_3b). Every field is optional, because the wire
  *  state can be partial. */
 export interface WsLiveState {
   inning?: number | null
@@ -40,7 +44,7 @@ export interface GameSocketState {
   status: SocketStatus
   liveState: WsLiveState | null
   resimPending: boolean
-  /** epoch ms of the last message, or null. */
+  /** The epoch ms of the last message, or null. */
   lastEventAt: number | null
 }
 
@@ -80,8 +84,8 @@ function mapWsState(gs: WsGameStatePayload): WsLiveState {
 
 const RECONNECT_MS = 3000
 
-/** Subscribe to the live WS for one game. Pass `enabled=false` to not connect
- *  (e.g. for a final game that will never emit). */
+/** Subscribe to the live WS for one game. Pass `enabled=false` to skip the
+ *  connection (for example, a final game that sends nothing). */
 export function useGameSocket(gamePk: number, enabled = true): GameSocketState {
   const [state, setState] = useState<GameSocketState>({
     status: 'closed',
@@ -145,7 +149,7 @@ export function useGameSocket(gamePk: number, enabled = true): GameSocketState {
             setState((s) => ({ ...s, lastEventAt: now }))
             break
           default:
-            // pong / unknown — just record liveness.
+            // A pong or an unknown type: record liveness only.
             setState((s) => ({ ...s, lastEventAt: now }))
         }
       }

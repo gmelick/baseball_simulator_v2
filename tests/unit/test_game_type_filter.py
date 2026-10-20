@@ -1,21 +1,17 @@
-"""
-tests/unit/test_game_type_filter.py
-==========================================
-The Data Lab reads the regular season alone by default (the Data Lab game-type
+"""The Data Lab reads the regular season alone by default (the Data Lab game-type
 filter, SIM-572).
 
-The Data Lab is the web app's analytics area. Its routes bounded each read with
-``season = $1`` alone. A season of ``raw.pitches`` holds the regular season and
-the postseason, so the leaderboards and the league rates mixed the two. In 2025
-the postseason holds 47 games and 14,085 of the 723,055 clean pitches. The
-batter board showed Shohei Ohtani with 63 home runs; his regular season ended
-at 55.
+The Data Lab is the web app's analytics area. A season of ``raw.pitches`` holds
+the regular season and the postseason. A read bounded by ``season = $1`` alone
+mixes the two in the leaderboards and the league rates. In 2025 the postseason
+holds 47 games and 14,085 of the 723,055 clean pitches. With both, the batter
+board shows Shohei Ohtani with 63 home runs; his regular season ended at 55.
 
 ``raw.games.game_type`` marks the type of each game: 'R' is the regular season,
 and 'F', 'D', 'L' and 'W' are the four postseason rounds. Each of the seven
-routes that take ``season`` now takes ``game_type``. 'R', the default, keeps the
+routes that take ``season`` also takes ``game_type``. 'R', the default, keeps the
 pitches of regular-season games. 'all' adds no filter, so it reads every game of
-the season, as the routes did before. The filter is a semi-join on ``game_pk``:
+the season. The filter is a semi-join on ``game_pk``:
 it keeps a pitch when its game has the type. The two coverage routes (kpis,
 by-season) describe the whole store and take no game type.
 

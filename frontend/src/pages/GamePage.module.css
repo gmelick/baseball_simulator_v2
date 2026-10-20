@@ -1,5 +1,5 @@
 /**
- * GamePage.module.css — SIM-393
+ * GamePage.module.css — the game page.
  */
 
 .page {
@@ -79,34 +79,12 @@
   margin-bottom: var(--sim-space-4);
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--sim-space-4);
-  align-items: start;
-}
-
-.leftCol,
-.rightCol {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sim-space-4);
-  min-width: 0;
-}
-
 .muted {
   color: var(--sim-color-text-muted);
   font-size: var(--sim-text-sm);
 }
 
-/* Stack to one column on narrow viewports. */
-@media (max-width: 768px) {
-  .grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* SIM-561: the linescore card's "Simulate a game" button and its caption. */
+/* The linescore card's "Simulate a game" button and its caption. */
 .simButton {
   padding: var(--sim-space-1) var(--sim-space-3);
   font-family: var(--sim-font-sans);
@@ -134,7 +112,7 @@
   color: var(--sim-color-text-muted);
 }
 
-/* SIM-519: the header in the Daily Diamond card's layout. */
+/* The header in the Daily Diamond card's layout. */
 .matchupDD {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

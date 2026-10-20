@@ -1,5 +1,5 @@
 /**
- * format.ts — the Daily Diamond text helpers (SIM-519).
+ * format.ts — the Daily Diamond text helpers.
  *
  * Small pure functions the slate card and its sections share: ordinals,
  * short names, American odds, run lines, local start times, and the
@@ -86,7 +86,7 @@ export function shiftIso(iso: string, delta: number): string {
   return toIso(d)
 }
 
-/** "Fri, Oct 9" (or with the weekday and year on a wide screen). */
+/** "Oct 9", or "Fri, Oct 9, 2026" (with the weekday and year) on a wide screen. */
 export function shortDateLabel(iso: string, wide: boolean): string {
   return parseIso(iso).toLocaleDateString(
     [],

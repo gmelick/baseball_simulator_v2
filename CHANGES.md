@@ -183,6 +183,180 @@ including the `SIM-486:` / `SIM-511:` error texts and both dotted factory string
 scores and pitch counts of ten seeds (`OUTCOMES_AT_80E3F46`), which works like the golden
 snapshots the owner ruled out on 2026-09-10; it was kept.
 
+# THE API AND FRONTEND CLEAN-UP — four large API files split by responsibility, dead code deleted, comments to the standard, one fetch-helper module — SIM-493 (B3), 2026-10-20
+
+**Why.** This is session B3 of the code clean-up (SIM-493; the plan is
+`docs/audit/2026-10-19-sim493-code-cleanup-plan.md` §9). B3 owns `api/`, `frontend/src` and
+the API tests. Every change is behaviour-neutral: the route table and the OpenAPI contract
+are unchanged, and the read routes answer the same JSON as the live app (see "Neutral
+checks"). The branch is `claude/sim493-api-frontend-41074d`, cut from `sim493-groundwork`
+(`690375c`).
+
+**The splits.** Each sub-router is a bare `APIRouter()`: the aggregate router gives it its
+prefix, tags and login dependency at include time, so the routes, their order and the
+operation IDs stay the same.
+
+- `api/routes/games.py` (3,475 lines → 1,703) keeps the aggregate router, the simulation
+  seam (`_build_runner`, `_resolved_sim_kwargs`, `_resolve_state_or_error`, `_run_batch`),
+  every route that runs a simulation (`/simulate` GET and POST, `/what-if`, `/sample-game`,
+  `/simulate/with_override`, `/boxscore`, the props), the replay reads (`/plays`, `/state`,
+  `/linescore`, `/decisions`, `/card`) and the replay cluster. Four modules are new:
+  - `games_slate.py` (650): the day slate and `/{game_pk}/status`;
+  - `games_feed.py` (397): the league feed, `/feed/plays`, `/feed/state` and `/live`;
+  - `games_runs.py` (172): the stored runs (`runs/latest` stays before `runs/{run_id}`) and
+    the stored what-if pair;
+  - `games_models.py` (592): every game response model, byte for byte.
+- `api/routes/betting.py` (2,257 → 624) keeps `_summary_and_winprob`, the edge and signal
+  models, the grading against the real final, `/edges` and `/signals`. Four modules are new:
+  `betting_pricing.py` (891, every market's pricing), `betting_stored_odds.py` (467, the
+  stored-odds reads), `betting_lines.py` (172, line movement and CLV) and `betting_card.py`
+  (177, the slate card's lines).
+- `api/schemas.py` (1,498) is now the package `api/schemas/` (seven modules by source:
+  `summary`, `snapshots`, `game_card`, `props`, `markets`, `live`, `_base`). The
+  `__init__` re-exports `__all__`, so every `from api.schemas import X` still works.
+- `api/main.py` (1,082 → 461) keeps `lifespan`, `_background_prewarm`, `create_app` and the
+  steps that tests patch or read (the pg pool, the name resolver, Redis, the replay store,
+  the park-factor prime). Three modules are new: `api/startup.py` (457, the steps no test
+  patches), `api/env_check.py` (68, `validate_environment`) and `api/middleware.py` (49, the
+  park-factor header). The moved code keeps its logger names (`api.routes.games`,
+  `api.routes.betting`, `api.main`), because the tests' `caplog` filters match them.
+- The pyproject coverage omit list adds the seven modules split from omitted files.
+- The helpers that two split modules share moved to `api/routes/_common.py`
+  (`_get_sim_cache`, `_opt_str`, `_opt_int`, `_iso`); `data_health.py` reads `_iso` from
+  there instead of its own copy.
+- The frontend's five copies of `getJson` and three of `postJson`, plus the inline DELETE in
+  `cancelSimRun`, are one module, `frontend/src/api/http.ts` (`getJson`, `postJson`,
+  `deleteJson`, `GamesApiError`). Only the game routes' POSTs put the Retry-After header on
+  the error, as before.
+
+**Deleted (no caller in the program, the scripts or the config).**
+
+- `api/websocket/` (288 lines) and `tests/unit/test_api_websocket_schemas.py`: event models
+  that no code built or read. The live service builds its events as plain dicts.
+- Six response models no route returns: `PlayerStatLineModel`, `BoxScoreModel`,
+  `CalibrationMapModel`, `WinProbabilityModel`, `PropDistributionModel`,
+  `PropDistributionSetModel`, with their six tests in `test_api_schemas.py`.
+- `api/state.load_calibration_map`. Its two tests in `test_calibration_report_json.py` (a B4
+  file) go; the env-var test there now calls `load_calibration_report()` directly (a forced
+  edit, commit `97d7a04`).
+- `metrics.py`'s second, inline `import asyncio`.
+- Frontend: `fetchLinescore`, `fetchPitcherLeaders`, `fetchBatterLeaders`, `LeaderRow`,
+  `fetchEngineMeta` and `EngineMeta`; the `typed.ts` aliases `GamesOnDate`,
+  `LiveGameState`, `WithOverrideResponse`, `RosterOverride` and `LineMovementResponse`;
+  `lab.ts`'s re-export of `GamesApiError`; the component `BaseballFieldGraphic` and its CSS
+  (exported, never rendered; the game page draws the field with the slate's `CardField`);
+  and seven unused CSS rules (`ghostBtn`, `.input`, `.labShell.wide`, `.errorHint`, the
+  game page's `.grid`, `.leftCol` and `.rightCol`) with their media query.
+
+**Comments.** Every file in `api/`, every frontend file (except the generated
+`schema.d.ts`) and the 30 B3 test files follow CLAUDE.md §14 and plan rule 3: the ticket,
+phase, sprint and owner labels and the history narratives go. More than 30 comments that the
+code contradicted now say what the code does. Examples: the CORS docstring said development falls
+back to `"*"` (no default is the wildcard); AuthContext's `loading` is true while the probe
+runs, not after it; seven test comments said the no-DB factory runs "with no sampler" (it runs
+the real sampler over the synthetic bundle). Pydantic model docstrings, route descriptions and
+endpoint docstrings feed the OpenAPI contract, so they did not change.
+
+**Left for the integration pass (Phase C).**
+
+- Marked re-exports (`# re-export: removed in the integration pass`):
+  - `api.routes.games`: `_sim_summary_lite_from_stored` and `_with_half_width`
+    (`tests/unit/test_inning_grid.py`, B1); `_sim_kwargs_from_state`
+    (`scripts/accuracy_comparison.py`, `scripts/validate_props.py`, B5). Both park-factor
+    aliases are also pinned by the anti-drift tests in `tests/unit/test_sim_kwargs.py`
+    (`g._sim_kwargs_from_state is sim_kwargs_from_state`); re-point those with the
+    scripts.
+  - `api.routes.betting`: `_at_offered_price` and eleven stored-odds names
+    (`tests/unit/test_odds_live_pages.py`, `test_odds_last_seen.py`,
+    `test_segment_edges.py`, B4).
+- `games._record_and_build` has no caller in the program; two B1 tests patch the
+  `record_game` it calls. Delete both together.
+- `api/state.redact_dsn` and `pipeline/db_dsn.dsn_label` do the same job in two formats.
+- `docs/technical/simulation.md` (B1) cites the box score model in `api/schemas.py`, now
+  deleted.
+- Commit `e374c42`'s message names `frontend/src/api/ws.ts`. The WebSocket types live in
+  `frontend/src/hooks/useGameSocket.ts`.
+
+**Files over 1,500 lines.** `api/routes/games.py` (1,703). It holds every route that runs a
+simulation and the replay cluster they write through. The tests patch eight module globals
+there (`resolve_game_state`, `record_game`, `sim_store`, `_build_prop_set`, ...), and
+`tests/unit/test_sim_kwargs.py` counts the eight sim-kwarg calls in this file. Moving a route
+out moves its patch targets, so the file stays whole until those tests are re-pointed.
+
+**Neutral checks and gates.**
+
+- The route table: 63 routes, the OpenAPI dict and the order of the routes that can match
+  one URL are equal before and after every split.
+- Every comment pass: the AST without docstrings is the same; the schema classes' docstrings
+  are the same.
+- The live comparison: a worktree app on 127.0.0.1:8010 against the live app on :8000.
+  - The read routes for three final games (849816, 849817, 822679) and their slates: 37
+    same, 6 different. The six are `/plays` and `/card`: 404 on the live app (nothing
+    stored) and 503 on the worktree app, which ran with its replay store off by design.
+  - The stored runs, the box scores, the what-if pair and three props on stored runs: 23
+    same, 0 different.
+  - `/edges` and `/signals` at a fixed seed, cache off, two games: 4 same, 0 different.
+- `tests/unit/test_openapi_snapshot.py`: passes with no regeneration.
+- The frontend: the 56 TypeScript files of the comment pass print the same with comments
+  removed; the unminified builds match on JS for every comment and deletion commit, and on
+  CSS except the deleted rules;
+  `npm run type-check`, `npm run lint` and `npm run build` pass; the Playwright e2e passes
+  21 of 21 on Chromium (with `API_TARGET` at a closed port; see bug 5).
+- ruff, the format check and `mypy similarity/ pipeline/ api/`: pass.
+- The B3 share of the unit lane in the container (the 30 B3 test files and the 22 other
+  unit test files that import or read `api/`): 1,425 passed, 0 failed, in 4 min 23 s.
+
+**Bugs found (to file).**
+
+1. **CORS lets any site read the API with the user's cookie when `CORS_ORIGINS=*`.**
+   - Evidence: `api/main.py:233` sets `allow_credentials=True` for every origin list.
+     `api/auth.py:623` (`resolve_cors_origins`) returns `["*"]` when an operator sets
+     `CORS_ORIGINS=*`. Starlette then echoes the caller's Origin on a request with a cookie.
+     Production sets neither variable today, so the defect is latent.
+   - Done: `CORS_ORIGINS=*` either fails the boot or turns credentials off.
+   - Proposed fix: refuse `*` in `resolve_cors_origins` while credentials are on.
+2. **The live WebSocket hook reads the runners under names the live service never sends.**
+   - Evidence: `frontend/src/hooks/useGameSocket.ts:59` reads `runner_on_first` /
+     `_second` / `_third`; `pipeline/live/live_ingestion_pipeline.py:1268` sends `on_1b` /
+     `on_2b` / `on_3b`. The hook's `on_1b`-`on_3b` are always undefined. No page reads them
+     today, so nothing on screen is wrong yet.
+   - Done: a `game_state_update` with runners fills the hook's `on_1b`-`on_3b`.
+   - Proposed fix: read `gs.on_1b`, `gs.on_2b` and `gs.on_3b` in `mapWsState`.
+3. **The slate card's `odds` field is described as "reserved for the Phase-6 odds-provider
+   integration (SIM-405)".**
+   - Evidence: `api/routes/games_slate.py:556` (the route description) and
+     `api/routes/games_models.py:117`. The field is always None: the card's lines come from
+     `/api/betting/games/{pk}/card-odds`.
+   - Done: both texts say that, with a fresh API snapshot (CLAUDE.md §15).
+   - Proposed fix: rewrite both texts; run `scripts/export_openapi.py` in the image and
+     `npm run gen:api`.
+4. **Stale runtime strings.**
+   - Evidence: `api/main.py:220` (the app version `0.1.0-phase7`), `:351` (`"phase": "6"`
+     on `/health`) and `:450` (`"6 — Frontend Build (in progress)"` on `/`).
+   - Done: the strings name the current state, or go.
+   - Proposed fix: drop the `phase` keys and set the version from one constant.
+5. **The Playwright smoke tests are not hermetic.**
+   - Evidence: `frontend/e2e/smoke.spec.ts:140`, `:259` and `:305` fail on the owner's host
+     at the branch base and at HEAD. A request the test does not mock goes through the
+     preview server's proxy to `localhost:8000`. The live app there answers 401, and the page
+     shows the login. With `API_TARGET=http://127.0.0.1:9` all 21 tests pass. CI has no
+     backend, so CI passes.
+   - Done: the e2e suite passes with the live app running.
+   - Proposed fix: set `API_TARGET` to a closed port in `playwright.config.ts`'s
+     `webServer.env`, or end each spec with a catch-all `**/api/**` route that answers 404.
+6. **Two tests check less than their names say.**
+   - Evidence: `tests/unit/test_api_betting.py:385`
+     (`test_clv_snapshot_returns_only_series_with_clv`) makes a GET and asserts nothing.
+     `tests/unit/test_api_games_plays.py:302`
+     (`test_simulate_ok_without_duckdb_then_plays_404`) never requests `/plays`.
+   - Done: each test asserts what its name says.
+   - Proposed fix: add the assertions (the CLV series' filter; `/plays` → 503 with no replay
+     store), then rename the second test.
+
+**Not a bug, an open decision.** `frontend/src/api/typed.ts` names the generated types, and
+nothing imports it. The July audit (H4, SIM-475) asks the owner to wire it in or delete it. It
+stays.
+
 # SIMILARITY AND BETTING — the calibration split into one mixin per engine, one shared kernel, the pitcher's distance cache in its own module, dead code out, every comment to the standard — SIM-493 session B4, 2026-10-20
 
 **Why.** The project-wide clean-up (SIM-493, plan `docs/audit/2026-10-19-sim493-code-cleanup-plan.md`

@@ -1,7 +1,7 @@
 """
 api/routes/players.py
 =====================
-SIM-439 — player name typeahead + identity for the Data Lab / Similarity UI.
+The player name typeahead and a player's identity, for the Data Lab and the similarity UI.
 
     GET /api/players/search?q=&limit=      -> [PlayerHit]        (name typeahead)
     GET /api/players/{player_id}           -> PlayerDetail
@@ -12,9 +12,9 @@ if the extension is somehow unavailable it degrades to a plain ``ILIKE`` match
 (logged once). Every id the rest of the UI shows is resolved to a name here so
 users never read raw player ids.
 
-Both routes read the read-only pool, ``app.state.pg_pool_ro`` (the Data Lab read
-routes on the ``baseball_ro`` login, SIM-566). Without that pool each route
-answers 503. Neither route falls back to the main pool.
+Both routes read the read-only pool, ``app.state.pg_pool_ro`` (the
+``baseball_ro`` login). Without that pool each route answers 503. Neither
+route falls back to the main pool.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from api.routes._common import _get_ro_pool, _row_get
 
 log = logging.getLogger("api.routes.players")
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+# Every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/players", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 

@@ -1,30 +1,27 @@
-"""
-test_api_betting.py
-==========================
-Unit tests for api/routes/betting.py -- the Phase-5 betting API surface
-(SIM-367 spread/run-line edges, SIM-368 line-movement, SIM-369 +EV bet signals)
-exposed under the ``/api/betting`` prefix.
+"""The betting routes under ``/api/betting``.
 
-ISOLATION STRATEGY (mirrors test_api_games.py)
-----------------------------------------------
-These tests build a TINY FastAPI app that includes ONLY the betting router (NOT
-``api.main.create_app()``), so the heavy similarity-engine lifespan + the live
-ingestion pipeline are never started. The router reads ``app.state.pg_pool`` and
-reuses the games router's sim seam (``sim_factory_ref``), both attached directly:
+The routes give the edges, the +EV bet signals, the line movement and the closing
+line value (CLV). /edges and /signals live in api/routes/betting.py; /line-movement
+and /clv live in api/routes/betting_lines.py, which the betting router includes.
 
-  * ``pg_pool`` -- a fake asyncpg pool/connection. For /edges + /signals it is
-    handed to a MONKEYPATCHED ``resolve_game_state`` so the sim runs with no live
-    Postgres/DuckDB; for /line-movement + /clv it serves canned ``raw.game_odds``
-    rows from its ``fetch``.
-  * ``sim_factory_ref`` -- the no-DB rng factory so the BatchRunner runs a real
-    (fast, in-process) batch with NO live sampler.
+ISOLATION STRATEGY (as in test_api_games.py)
+--------------------------------------------
+These tests build a small FastAPI app with only the betting router, not
+``api.main.create_app()``. So the similarity-engine lifespan and the live ingestion
+pipeline never start. The router reads ``app.state.pg_pool`` and the games
+router's simulation seam (``sim_factory_ref``). The tests attach both directly:
 
-The /edges + /signals paths therefore exercise the REAL sim loop + the real
-SIM-367/369 betting math + the SIM-350 serializers; odds default to the
-deterministic MockOddsAPI (or injected query params). /line-movement + /clv
-exercise the REAL SIM-368 ``fetch_line_movement`` over the canned odds rows.
+  * ``pg_pool`` -- a fake asyncpg pool and connection. For /edges and /signals, the
+    route hands it to a monkeypatched ``resolve_game_state``, so the simulation
+    runs with no live Postgres or DuckDB. For /line-movement and /clv, its
+    ``fetch`` serves canned ``raw.game_odds`` rows.
+  * ``sim_factory_ref`` -- the no-DB factory, so the BatchRunner runs a real, fast,
+    in-process batch over the in-memory synthetic bundle.
 
-Owned by Backend Developer + Betting Analyst (SIM-367 / SIM-368 / SIM-369).
+So /edges and /signals run the real simulation loop, the real betting math and the
+real serializers. The odds default to the deterministic MockOddsAPI, or to the
+injected query parameters. /line-movement and /clv run the real
+``fetch_line_movement`` over the canned odds rows.
 """
 
 from __future__ import annotations
@@ -39,8 +36,8 @@ import api.routes.games as games_mod
 from api.routes.betting import router as betting_router
 from simulation.game_state import GameState
 
-# The no-DB, picklable rng factory -- the production ref is swapped to this so
-# /edges + /signals run a real batch with no live sampler/DuckDB.
+# The no-DB, picklable factory. The app's factory ref points here, so /edges and
+# /signals run a real batch over the in-memory synthetic bundle, with no DuckDB.
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
@@ -127,7 +124,7 @@ CANNED_ODDS_ROWS = [
 
 
 def _build_app(*, pool, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
-    """A tiny app with ONLY the betting router + the app.state the route reads."""
+    """A small app with only the betting router and the app.state the routes read."""
     app = FastAPI()
     app.include_router(betting_router)
     app.state.pg_pool = pool
@@ -149,7 +146,7 @@ def patch_resolver(monkeypatch):
 
 
 # ===========================================================================
-# GET /api/betting/games/{game_pk}/edges  (SIM-367 + SIM-339)
+# GET /api/betting/games/{game_pk}/edges
 # ===========================================================================
 
 
@@ -157,15 +154,12 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
     app = _build_app(pool=_FakePool())
     client = TestClient(app)
 
-    # The no-DB rng factory produces low-scoring games (totals ~0-4, margins
-    # ~-4..2), so we inject a total_line + run_line that sit INSIDE that
-    # distribution -- otherwise a realistic mock line (e.g. total 9.5) puts every
-    # iteration on one side (a degenerate 0/1 sim prob that carries no priceable
-    # edge and is skipped). The moneyline prices are NOT injected, so that market
-    # still exercises the mock-odds path.
-    # SIM-546: the twelve segment and team markets. The default request now
-    # prices all fifteen game markets (test_segment_edges.py covers
-    # it), so this case names the three full-game markets it was written for.
+    # The case injects a total_line and a run_line that sit inside the simulated
+    # distribution. A line outside it puts every iteration on one side: a 0/1 sim
+    # prob carries no priceable edge, and the route skips it. The moneyline prices
+    # are not injected, so that market still runs the mock-odds path.
+    # The default request prices all fifteen game markets (test_segment_edges.py
+    # covers them), so this case names the three full-game markets.
     resp = client.get(
         "/api/betting/games/745001/edges?n_iterations=120&base_seed=7&total_line=1.5"
         "&run_line=-0.5&markets=moneyline,total,runline"
@@ -177,7 +171,7 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
     labels = {e["label"] for e in body["edges"]}
     assert "moneyline" in labels
     assert "total" in labels
-    assert "run_line" in labels  # SIM-367 run-line is present.
+    assert "run_line" in labels  # the run line is present
     assert len(body["edges"]) == 6
 
     # Each report is the EdgeReportModel shape (numpy-free).
@@ -214,8 +208,8 @@ def test_edges_respects_injected_odds_and_market_filter(patch_resolver):
     # The injected price is reflected on the offered side.
     for e in body["edges"]:
         assert e["offered_american"] == -110.0
-    # SIM-549: each side carries its OWN spread — home -1.5, away +1.5 (the
-    # away side used to carry the home spread).
+    # Each side carries its own spread: home -1.5, away +1.5 (the run lines
+    # scored by shape, SIM-549).
     assert {e["side"]: e["line"] for e in body["edges"]} == {"home": -1.5, "away": 1.5}
     assert body["run_line_pricing"] == {
         "shape": "pair",
@@ -257,7 +251,7 @@ def test_edges_unknown_game_is_404(monkeypatch):
 
 
 # ===========================================================================
-# GET /api/betting/games/{game_pk}/signals  (SIM-369)
+# GET /api/betting/games/{game_pk}/signals
 # ===========================================================================
 
 
@@ -314,7 +308,7 @@ def test_signals_no_pool_is_503():
 
 
 # ===========================================================================
-# GET /api/betting/games/{game_pk}/line-movement  (SIM-368)
+# GET /api/betting/games/{game_pk}/line-movement
 # ===========================================================================
 
 
@@ -384,7 +378,7 @@ def test_line_movement_empty_when_no_odds():
 
 
 # ===========================================================================
-# GET /api/betting/games/{game_pk}/clv  (SIM-339/SIM-368 snapshot)
+# GET /api/betting/games/{game_pk}/clv  (the CLV snapshot)
 # ===========================================================================
 
 
@@ -395,12 +389,12 @@ def test_clv_snapshot_returns_only_series_with_clv():
 
 
 # ===========================================================================
-# SIM-387 — calibration wiring in /edges
+# The calibration wiring in /edges
 # ===========================================================================
 
 
 def test_edges_uses_calibration_map_from_app_state(patch_resolver):
-    """SIM-387: calibration_map on app.state must be threaded to win_probability.
+    """The route passes app.state.calibration_map to win_probability.
 
     Strategy: attach a calibration map that always returns 0.1 (strongly
     away-biased) and verify the moneyline HOME sim_prob is ~0.1 — far from the
@@ -431,8 +425,9 @@ def test_edges_uses_calibration_map_from_app_state(patch_resolver):
 
 
 def test_edges_falls_back_to_identity_when_no_calibration_map(patch_resolver):
-    """SIM-387: when app.state has no calibration_map the endpoint still works
-    (falls back to IDENTITY_CALIBRATION -- no AttributeError / crash)."""
+    """With no calibration_map on app.state, the route still works.
+
+    The route falls back to IDENTITY_CALIBRATION, with no AttributeError."""
     app = _build_app(pool=_FakePool())
     # Deliberately do NOT set app.state.calibration_map.
     client = TestClient(app)

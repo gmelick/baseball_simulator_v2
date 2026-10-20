@@ -1,11 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
 
 /**
- * smoke.spec.ts — SIM-400
+ * smoke.spec.ts — the frontend's cross-browser smoke tests.
  *
- * Cross-browser smoke tests for the frontend, run against the built preview
- * server with the backend fully mocked via page.route. These verify rendering,
- * routing, and auth-gating in isolation — no live API/DB required.
+ * They run against the built preview server, and page.route mocks the whole
+ * backend. They check the rendering, the routing and the auth gate in
+ * isolation; they need no live API or database.
  */
 
 const DATE = '2024-08-15'
@@ -127,8 +127,8 @@ test('day summary renders the slate with a game count', async ({ page }) => {
   await mockSlate(page)
   await page.goto(`/date/${DATE}`)
 
-  // SIM-519: the Daily Diamond slate. An old payload (no game_status) still
-  // maps its stored status to a card state.
+  // The Daily Diamond slate. A payload with no game_status (the older shape)
+  // still maps its stored status to a card state.
   await expect(page.getByRole('heading', { name: 'Thursday, August 15' })).toBeVisible()
   await expect(page.getByText('2 games')).toBeVisible()
   await expect(page.getByText('Yankees')).toBeVisible()
@@ -141,7 +141,7 @@ test('an open card links to the game page', async ({ page }) => {
   await mockAuthed(page)
   await mockSlate(page)
   await mockGame(page)
-  // SIM-519: the open card reads the feed and the card odds; none here.
+  // The open card reads the feed and the card odds; none here.
   await page.route('**/api/games/745001/feed', (route) =>
     route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"down"}' }),
   )
@@ -176,9 +176,9 @@ test('date navigation advances the day', async ({ page }) => {
 })
 
 /**
- * SIM-546: the fifteen game markets, as the edge route answers with the mock
- * provider (every market priced from the mock's prices). Each market carries its
- * kind's sides: a three-way market adds the tie ('draw').
+ * The fifteen game markets, as the edge route answers with the mock provider
+ * (every market priced from the mock's prices). Each market carries its kind's
+ * sides: a three-way market adds the tie ('draw').
  */
 const EDGE_MARKETS: Array<{ type: string; label: string; name: string; sides: string[] }> = [
   { type: 'moneyline', label: 'moneyline', name: 'Moneyline', sides: ['home', 'away'] },
@@ -267,7 +267,7 @@ test('the betting card renders all fifteen game markets with a tie side', async 
   await card.getByRole('button', { name: 'Betting', exact: true }).click()
   await card.getByRole('button', { name: 'Load betting' }).click()
 
-  // SIM-546: one section per market, titled from market_names.
+  // One section per market, titled from market_names.
   await expect(card.locator('section')).toHaveCount(15)
   // The four sub-headings, in the card's order.
   await expect(card.locator('h4')).toHaveText([
@@ -303,7 +303,7 @@ test('the betting card renders all fifteen game markets with a tie side', async 
 })
 
 test('the betting card asks for the signals only after the edges answer', async ({ page }) => {
-  // Fired together, the two requests ran two 200-game batches at once and hit
+  // Fired together, the two requests run two 200-game batches at once and hit
   // nginx's 120 s limit (504). In turn, /signals reads the batch /edges cached.
   await mockAuthed(page)
   await mockGame(page)

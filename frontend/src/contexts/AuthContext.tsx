@@ -1,13 +1,12 @@
 /**
- * AuthContext.tsx — SIM-389
+ * AuthContext.tsx — the auth state (authenticated, loading) and the auth
+ * actions (login, logout) for the whole component tree.
  *
- * Provides auth state (authenticated, loading) and actions (login, logout)
- * to the entire component tree.
+ * On mount, the provider calls GET /auth/me to restore an existing session.
+ * A page refresh therefore does NOT log the user out (the httpOnly cookie
+ * persists).
  *
- * On mount, calls GET /auth/me to restore a pre-existing session — so a
- * page refresh does NOT log the user out (the httpOnly cookie persists).
- *
- * SIM-443c: a data client that gets a 401 fires UNAUTHORIZED_EVENT
+ * A data client that gets a 401 fires UNAUTHORIZED_EVENT
  * (@/api/unauthorized). The provider listens and marks the session logged
  * out, so App renders the login page after the session expires.
  *
@@ -36,7 +35,7 @@ import { UNAUTHORIZED_EVENT } from '@/api/unauthorized'
 // ---------------------------------------------------------------------------
 
 interface AuthContextValue {
-  /** True once the /auth/me probe has completed. */
+  /** True while the /auth/me probe runs; false once it completes. */
   loading: boolean
   /** True when the server accepts this browser: a valid session cookie, or
    *  a server that runs with AUTH_DISABLED=1. */
@@ -64,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false)
   const [mode, setMode] = useState('none')
 
-  // Probe the session on mount (restores existing cookie across page reloads).
+  // Probe the session on mount. The probe restores an existing cookie session after a page reload.
   useEffect(() => {
     checkAuth()
       .then((status) => {
@@ -90,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (password: string) => {
     await apiLogin(password)
-    // Re-probe so we get the canonical mode from the server.
+    // Probe again to read the auth mode from the server.
     const status = await checkAuth()
     setAuthenticated(status.authenticated)
     setMode(status.mode)
@@ -114,9 +113,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 // Hook
 // ---------------------------------------------------------------------------
 
-// A context file conventionally co-locates its provider component and its
-// consumer hook; fast-refresh of AuthProvider is not a concern (mounted once
-// at the root), so the react-refresh rule is disabled for this export.
+// A context file keeps its provider and its consumer hook together.
+// AuthProvider mounts once at the root, so fast refresh does not matter here.
+// The react-refresh rule is therefore off for this export.
 // eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext)

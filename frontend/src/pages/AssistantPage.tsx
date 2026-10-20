@@ -1,9 +1,9 @@
 /**
- * AssistantPage.tsx — SIM-439
- * The AI assistant chat. Probes /api/assistant/status on mount; if not
- * configured, renders NotConfiguredState. Otherwise a streaming chat where each
- * assistant turn shows its prose, the exact SQL it ran (Copy / Open in Console),
- * the inline result grid with a transparency line, and any errors.
+ * AssistantPage.tsx — the Data Lab's AI assistant chat. It probes
+ * /api/assistant/status on mount. With no assistant configured, it renders
+ * NotConfiguredState. Otherwise it is a streaming chat: each assistant turn
+ * shows its prose, the exact SQL it ran (Copy / Open in Console), the inline
+ * result grid with a transparency line, and any errors.
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'

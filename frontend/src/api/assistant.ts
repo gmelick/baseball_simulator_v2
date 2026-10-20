@@ -1,8 +1,8 @@
 /**
- * assistant.ts — SIM-439
- * SSE streaming client for the AI assistant (api/routes/ai_assistant.py).
- * The POST body streams newline-delimited `data: {json}` frames; this parser
- * turns them into typed AssistantEvents delivered via an onEvent callback.
+ * assistant.ts — the streaming client (server-sent events) for the AI
+ * assistant (api/routes/ai_assistant.py). The response to the POST streams
+ * `data: {json}` frames, each ended by a blank line. The parser turns them
+ * into typed AssistantEvents and passes each one to an onEvent callback.
  */
 
 import { notifyUnauthorized } from '@/api/unauthorized'
@@ -30,9 +30,9 @@ export interface AssistantHistoryTurn {
 }
 
 /**
- * Stream an assistant answer. Resolves when the stream ends; each parsed frame
- * is delivered to onEvent. A non-2xx response (e.g. 503 not-configured) is
- * surfaced as an {type:'error'} + {type:'done'} pair.
+ * Stream an assistant answer. The promise resolves when the stream ends, and
+ * each parsed frame goes to onEvent. A non-2xx response (for example a 503,
+ * no assistant configured) becomes an {type:'error'} + {type:'done'} pair.
  */
 export async function askAssistant(
   question: string,

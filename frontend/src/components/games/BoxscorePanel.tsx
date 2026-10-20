@@ -1,24 +1,20 @@
 /**
- * BoxscorePanel.tsx — SIM-394, SIM-560
+ * BoxscorePanel.tsx — the per-player projections of the game page.
  *
- * Per-player projections: the 100-iteration boxscore means (SIM-366) plus, on
- * demand, the full prop distribution (SIM-390) with a prop-line marker.
+ * Each player's prop means over a run, and on demand the full distribution of
+ * one prop with a prop-line marker.
  *
- * The boxscore endpoint runs an N-iteration sim, so it's gated behind an
- * explicit "Load projections" button rather than firing on mount. Once loaded,
- * each player's prop means render as chips; clicking a chip fetches that prop's
- * PMF and shows the distribution chart, with an optional line input that
- * redraws the over/under marker.
+ * The panel reads the game's stored run (`runId`, from the Simulation card);
+ * each click reads the same run. With no stored run, a "Quick look" button runs
+ * a batch of N_GAMES that is not stored as a run. The quick look picks one
+ * seed and sends it with every request, so each click reads the cached batch
+ * the chips show; the API stores that batch's first game for the linescore and
+ * the play-by-play, and `onLoaded` tells the page, which reloads both.
  *
- * SIM-560: the panel picks one seed per load and sends it with every request,
- * so each click reads the cached run the chips show. The players are grouped by
- * team: batters in batting order, then pitchers, starter first.
- *
- * SIM-561: the API stores the run's first game for the linescore and the
- * play-by-play; `onLoaded` tells the page, which reloads both.
- *
- * SIM-519 Part E: the panel reads the game's stored run (`runId`, from the
- * Simulation card) and runs no batch of its own; each click reads the same run.
+ * The prop means render as chips; a click on a chip fetches that prop's PMF
+ * and shows the distribution chart, with an optional line input that redraws
+ * the over / under marker. The players are grouped by team: the batters in
+ * batting order, then the pitchers, the starter first.
  */
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -65,9 +61,9 @@ export interface BoxscorePanelProps {
   awayLabel?: string
   /** The home team's display name (falls back to "Home"). */
   homeLabel?: string
-  /** Called once the card loads; the API stored the run's first game (SIM-561). */
+  /** Called once the quick look loads; the API stored its first game. */
   onLoaded?: () => void
-  /** SIM-519 Part E: the stored run to read; null shows the "run a simulation" prompt. */
+  /** The stored run to read; null shows the "run a simulation" prompt. */
   runId?: number | null
 }
 
@@ -165,7 +161,7 @@ export function BoxscorePanel({
       .finally(() => setLoading(false))
   }
 
-  // SIM-519 Part E: a new stored run replaces the card.
+  // A new stored run replaces the card.
   useEffect(() => {
     if (runId == null) return
     let cancelled = false

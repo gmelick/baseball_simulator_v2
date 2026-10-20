@@ -1,4 +1,4 @@
-/* console.module.css — SIM-439 SQL Console */
+/* console.module.css — the Data Lab's SQL Console page. */
 
 .wide {
   max-width: none;
@@ -58,17 +58,13 @@
   opacity: 0.6;
   cursor: default;
 }
-.cancelBtn,
-.ghostBtn {
+.cancelBtn {
   background: var(--sim-color-surface);
   color: var(--sim-color-text);
   border: 1px solid var(--sim-color-border-strong);
   border-radius: var(--sim-radius-md);
   padding: var(--sim-space-1p5) var(--sim-space-3);
   font-size: var(--sim-text-sm);
-}
-.ghostBtn:hover {
-  background: var(--sim-color-surface-alt);
 }
 .select {
   padding: var(--sim-space-1p5) var(--sim-space-2);

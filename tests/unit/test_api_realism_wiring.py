@@ -1,22 +1,21 @@
-"""
-tests/unit/test_api_realism_wiring.py
-=================================================
-SIM-411 / SIM-425b — the API wiring that threads the realism inputs into the
-``simulate_game`` GameSpec so the gated consumers can act in PRODUCTION:
+"""The wiring that carries the realism inputs into the ``simulate_game`` GameSpec.
 
-  * ``_sim_kwargs_from_state`` carries the per-position defense maps (SIM-425b) +
-    the venue park run-factor (SIM-411) off the resolved GameState;
-  * ``_resolve_park_run_factor`` resolves the venue (Postgres) -> park factor
-    (DuckDB ``derived.park_factors``) two-source lookup, defaulting to a neutral
-    1.0 on every missing piece so ``/simulate`` is never broken by it.
+The two helpers live in ``simulation/sim_kwargs.py``; the tests import them from there.
+
+  * ``_sim_kwargs_from_state`` carries the per-position defense maps and the venue's
+    park run factor from the resolved GameState.
+  * ``_resolve_park_run_factor`` reads the venue from Postgres, then the venue's park
+    factor from DuckDB (``derived.park_factors``). Every missing piece gives a value
+    equal to the neutral 1.0, so the lookup never breaks ``/simulate``.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from api.routes.games import _resolve_park_run_factor, _sim_kwargs_from_state
 from simulation.game_state import GameState
+from simulation.sim_kwargs import resolve_park_run_factor as _resolve_park_run_factor
+from simulation.sim_kwargs import sim_kwargs_from_state as _sim_kwargs_from_state
 
 
 def test_sim_kwargs_carries_defense_maps_and_park_factor():

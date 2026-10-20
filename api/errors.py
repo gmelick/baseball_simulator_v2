@@ -1,7 +1,7 @@
 """
 api/errors.py
 =============
-SIM-416 — app-level exception handling + structured error envelope.
+The app's exception handling: a structured error envelope for a 500.
 
 Installs a catch-all handler so an UNHANDLED exception returns a structured
 JSON envelope instead of a bare 500 / leaked traceback:
@@ -14,10 +14,10 @@ The ``request_id`` correlates the client-facing response with the full
 server-side log line (logged with the traceback at ERROR). The internal
 exception message is NEVER sent to the client (no information leak).
 
-HTTPException and RequestValidationError keep their existing FastAPI shapes
-(both already structured; the frontend + tests read ``detail``), so this only
-changes the previously-unstructured 500 path. Extracted into its own module so
-it is unit-testable against a tiny app without the DB-dependent lifespan.
+HTTPException and RequestValidationError keep FastAPI's own shapes (both are
+structured; the frontend and the tests read ``detail``), so only the 500 path
+uses the envelope. The module stands alone, so a test runs it against a small
+app without the lifespan.
 """
 
 from __future__ import annotations

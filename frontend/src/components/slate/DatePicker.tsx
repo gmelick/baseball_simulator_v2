@@ -1,5 +1,5 @@
 /**
- * DatePicker.tsx — the design's date control (SIM-519): ‹ and › step a day,
+ * DatePicker.tsx — the design's date control: ‹ and › step a day,
  * the date button opens a month calendar, and "Today" shows when the slate is
  * on another day. Today's cell carries a grass ring; the chosen day is forest.
  */

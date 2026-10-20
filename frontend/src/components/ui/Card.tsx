@@ -1,13 +1,11 @@
 /**
- * Card — SIM-380 design system primitive
- *
- * A surface container with an optional title and header slot.
- * Used for game cards, player panels, betting cards, and any bounded
- * content region on the Day Summary and Game pages.
+ * Card — the design system's surface container, with an optional title and a
+ * header slot. The pages use it for a bounded content region (for example,
+ * the game page's play-by-play).
  *
  * @example
- * <Card title="Today's Games" count={12}>
- *   <GameCardList games={games} />
+ * <Card title="Play-by-play" count={plays.length}>
+ *   <ActualPlayByPlay plays={plays} names={names} awayLabel="NYM" homeLabel="ATL" />
  * </Card>
  */
 import React from 'react'
@@ -16,7 +14,7 @@ import styles from './Card.module.css'
 export interface CardProps {
   /** Optional header title text */
   title?: React.ReactNode
-  /** Optional count badge shown next to the title (e.g. "12 games") */
+  /** Optional count badge shown next to the title (for example, the number of plays) */
   count?: number
   /** Optional slot for action controls in the card header */
   headerActions?: React.ReactNode
@@ -24,7 +22,7 @@ export interface CardProps {
   children: React.ReactNode
   /** Extra CSS class on the root element */
   className?: string
-  /** Padding variant. 'sm' for compact cards (game list rows). Default: 'md'. */
+  /** Padding variant. 'sm' for compact cards. Default: 'md'. */
   padding?: 'sm' | 'md' | 'lg'
   /** Remove the border (useful when nesting inside a Panel) */
   borderless?: boolean

@@ -1,41 +1,15 @@
 /**
- * lab.ts — SIM-439
- * Browser-side client for the Data Lab surface: summary analytics, the schema
- * tree, the read-only SQL runner, and the AI-assistant capability probe.
+ * lab.ts — the browser's client for the Data Lab: the summary analytics, the
+ * data freshness, the schema tree, the read-only SQL runner and the
+ * AI-assistant capability probe.
  *
- * Mirrors the games.ts client (credentials:'include' so the httpOnly session
- * cookie rides along; the Vite dev proxy forwards /api/* to :8000). Response
- * types are hand-mirrored from the FastAPI models in api/routes/{analytics,
- * schema_introspect,sql_runner,ai_assistant}.py — keep them in sync.
+ * The requests go through the shared helpers in http.ts. The response types mirror the FastAPI models in
+ * api/routes/{analytics,data_health,schema_introspect,sql_runner,ai_assistant}.py
+ * by hand. Keep them in sync.
  */
-import { GamesApiError } from '@/api/games'
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { getJson, postJson } from '@/api/http'
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
-async function postJson<T>(url: string, payload: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal,
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
@@ -95,11 +69,10 @@ export interface ZoneRow {
   called_strike_pct: number | null
 }
 
-export type LeaderRow = Record<string, number | string | null>
-
 /**
- * SIM-572: the games a season read covers. 'R' (the API's default) reads the
- * regular season alone; 'all' adds the postseason.
+ * The games a season read covers (the Data Lab game-type filter, SIM-572).
+ * 'R' (the API's default) reads the regular season alone; 'all' adds the
+ * postseason.
  */
 export type GameType = 'R' | 'all'
 
@@ -138,31 +111,8 @@ export const fetchVeloDistribution = (f: AnalyticsFilter & { pitchType?: string 
 export const fetchZone = (f: AnalyticsFilter): Promise<ZoneRow[]> =>
   getJson<ZoneRow[]>(`/api/analytics/zone${qs({ season: f.season, pitcher: f.pitcher, game_type: f.gameType })}`)
 
-export const fetchPitcherLeaders = (
-  season: number,
-  metric: string,
-  minPa = 200,
-  limit = 50,
-  gameType?: GameType,
-): Promise<LeaderRow[]> =>
-  getJson<LeaderRow[]>(
-    `/api/analytics/leaderboard/pitchers${qs({ season, metric, min_pa: minPa, limit, game_type: gameType })}`,
-  )
-
-export const fetchBatterLeaders = (
-  season: number,
-  metric: string,
-  minPa = 200,
-  limit = 50,
-  vsHand?: string,
-  gameType?: GameType,
-): Promise<LeaderRow[]> =>
-  getJson<LeaderRow[]>(
-    `/api/analytics/leaderboard/batters${qs({ season, metric, min_pa: minPa, limit, vs_hand: vsHand, game_type: gameType })}`,
-  )
-
 // ---------------------------------------------------------------------------
-// Data freshness (existing endpoint)
+// Data freshness
 // ---------------------------------------------------------------------------
 
 export interface DataFreshness {
@@ -206,7 +156,7 @@ export interface SqlRunResponse {
   timeout_ms: number
 }
 export const runSql = (sql: string, maxRows = 1000, signal?: AbortSignal): Promise<SqlRunResponse> =>
-  postJson<SqlRunResponse>('/api/sql/run', { sql, max_rows: maxRows }, signal)
+  postJson<SqlRunResponse>('/api/sql/run', { sql, max_rows: maxRows }, { signal })
 
 // ---------------------------------------------------------------------------
 // Assistant capability probe
@@ -219,4 +169,3 @@ export interface AssistantStatus {
 export const fetchAssistantStatus = (): Promise<AssistantStatus> =>
   getJson<AssistantStatus>('/api/assistant/status')
 
-export { GamesApiError }

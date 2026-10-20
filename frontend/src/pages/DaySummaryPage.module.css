@@ -1,5 +1,5 @@
 /**
- * DaySummaryPage.module.css — the Daily Diamond slate (SIM-519; design 2026-10-08).
+ * DaySummaryPage.module.css — the Daily Diamond slate.
  */
 
 .page {
@@ -108,11 +108,6 @@
   border-radius: 8px;
   background: var(--sim-danger-100);
   color: var(--sim-danger-700);
-}
-
-.errorHint {
-  margin-top: 4px;
-  font-size: 13px;
 }
 
 @media (max-width: 640px) {

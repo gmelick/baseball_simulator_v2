@@ -1,11 +1,11 @@
 /**
- * teams.ts — the 30 MLB clubs by MLB team id (SIM-519 Part T).
+ * teams.ts — the 30 MLB clubs by MLB team id.
  *
  * The Daily Diamond card shows each club's logo and a chip in its primary
  * colour. The API sends the team id, name and abbreviation; this table adds
- * the colour and the bundled logo. The logos are fetched once by
- * `scripts/fetch-logos.mjs` into `public/logos/{id}.svg`, so the page calls no
- * outside host. An id not in the table gets the ink colour and no logo.
+ * the colour and the bundled logo. `scripts/fetch-logos.mjs` fetches the logos
+ * once into `public/logos/{id}.svg`, so the page calls no outside host. An id
+ * not in the table gets the ink colour and no logo.
  */
 
 export interface TeamStyle {

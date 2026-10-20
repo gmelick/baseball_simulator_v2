@@ -1,19 +1,19 @@
 /**
- * games.ts — SIM-391
- * Browser-side client for the games surface.
+ * games.ts — the browser's client of the game routes (/api/games).
  *
- * Mirrors the auth client (credentials:'include' so the httpOnly `sim_session`
- * cookie rides along) and the Vite dev proxy forwards /api/* to localhost:8000.
+ * The requests go through the shared helpers in http.ts, which also define
+ * GamesApiError. The game routes' POSTs put the Retry-After header on the
+ * error.
  *
- * Types are hand-mirrored from the FastAPI response models:
- *   - GameCard / GamesOnDateResponse      → api/routes/games.py (SIM-355 + SIM-383)
- *   - GameCardAggregate                   → GameCardAggregateResponse (SIM-384)
- * Keep them in sync when those models change.
+ * The types here mirror the API's response models by hand: the game models
+ * live in api/routes/games_models.py and api/schemas/. Keep the two in step
+ * when a model changes. src/api/typed.ts names the generated types; no
+ * client imports them yet.
  */
 
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { deleteJson, getJson, postJson } from '@/api/http'
 
-/** The card states. Since SIM-519 the server maps the league's status. */
+/** The four card states; the server maps the league's status to one. */
 export type GameStatus = 'scheduled' | 'live' | 'final' | 'postponed'
 
 /** The array-free sim summary a card carries (GameSimSummaryLite). */
@@ -26,9 +26,9 @@ export interface SimSummaryLite {
   simulated_at: string
 }
 
-/** One game from GET /api/games/{date}. SIM-519: the league's schedule says
- *  which games exist and their state; our database adds the lineup flag and
- *  the newest sim run. Every SIM-519 field is optional (an old mock omits it). */
+/** One game from GET /api/games/{date}. The league's schedule says which
+ *  games exist and their state; our database adds the lineup flag and the
+ *  newest sim run. Every schedule field is optional (an old mock omits it). */
 export interface GameCard {
   game_pk: number
   season: number
@@ -38,7 +38,7 @@ export interface GameCard {
   home_team_id: number | null
   away_team_id: number | null
   venue_id: number | null
-  // SIM-383 enrichment
+  // The names, the venue and the records
   home_team_name: string | null
   home_team_abbrev: string | null
   away_team_name: string | null
@@ -50,7 +50,7 @@ export interface GameCard {
   away_wins: number | null
   away_losses: number | null
   lineup_ready?: boolean | null
-  // SIM-519 Part A
+  // The schedule's view of the game
   game_status?: GameStatus | null
   detailed_state?: string | null
   reason?: string | null
@@ -92,7 +92,7 @@ export interface GamesOnDateResponse {
 }
 
 /** The card state of a row: the server's `game_status`, else a map of the
- *  stored status for an old payload that predates SIM-519. */
+ *  stored status (an old payload carries no `game_status`). */
 export function cardStatus(game: Pick<GameCard, 'game_status' | 'status'>): GameStatus {
   if (game.game_status) return game.game_status
   const raw = game.status ?? ''
@@ -103,7 +103,7 @@ export function cardStatus(game: Pick<GameCard, 'game_status' | 'status'>): Game
 }
 
 // ---------------------------------------------------------------------------
-// The card detail (GET /{game_pk}/feed — GameFeedCardModel, SIM-519 Part I)
+// The card detail (GET /{game_pk}/feed — GameFeedCardModel)
 // ---------------------------------------------------------------------------
 
 export interface FeedPerson {
@@ -203,10 +203,10 @@ export interface GameFeedCard {
   feed_error: string | null
 }
 
-/** Aggregate card from GET /api/games/{game_pk}/status (SIM-384). */
+/** The aggregate card from GET /api/games/{game_pk}/status. */
 export interface GameCardAggregate {
   game_pk: number
-  /** Mapped 3-state status: scheduled | live | final | postponed. */
+  /** The mapped state: scheduled | live | final | postponed. */
   game_status: GameStatus
   game_date: string
   season: number
@@ -225,10 +225,10 @@ export interface GameCardAggregate {
   away_losses: number | null
   home_score_final: number | null
   away_score_final: number | null
-  /** Most-recent persisted Monte-Carlo summary; null when none run yet. */
+  /** The newest stored Monte-Carlo summary; null before the first run. */
   sim_summary: Record<string, unknown> | null
   odds: null
-  // SIM-519: the schedule's fields (absent when the league feed has no entry).
+  // The schedule's fields (absent when the league feed has no entry).
   detailed_state?: string | null
   start_utc?: string | null
   start_time_tbd?: boolean | null
@@ -242,7 +242,7 @@ export interface GameCardAggregate {
 }
 
 // ---------------------------------------------------------------------------
-// Linescore (GET /{game_pk}/linescore — LinescoreModel, SIM-362)
+// The linescore (LinescoreModel, inside GET /{game_pk}/card)
 // ---------------------------------------------------------------------------
 
 export interface InningLine {
@@ -268,7 +268,7 @@ export interface Linescore {
 }
 
 // ---------------------------------------------------------------------------
-// Play-by-play (GET /{game_pk}/plays — PlayByPlayModel, SIM-331)
+// The play-by-play (GET /{game_pk}/plays — PlayByPlayModel)
 // ---------------------------------------------------------------------------
 
 export interface PlayByPlayEntry {
@@ -286,15 +286,15 @@ export interface PlayByPlayEntry {
   spray_angle: number | null
   runs: number
   canonical_event: string | null
-  /** SIM-561: the inning, half, outs and batter BEFORE the pitch; null on an
-   *  older stored stream. */
+  /** The inning, half, outs and batter BEFORE the pitch; null on an older
+   *  stored stream. */
   inning?: number | null
   half?: 'top' | 'bottom' | null
   outs_before?: number | null
   batter_id?: number | null
-  /** SIM-561: the pitcher who threw it. */
+  /** The pitcher who threw it. */
   pitcher_id?: number | null
-  /** SIM-561: the score AFTER the pitch. */
+  /** The score AFTER the pitch. */
   away_score?: number | null
   home_score?: number | null
 }
@@ -303,14 +303,14 @@ export interface PlayByPlay {
   entries: PlayByPlayEntry[]
   n_pitches: number
   n_plate_appearances: number
-  /** SIM-561: the stored run these plays belong to, and its seed. */
+  /** The stored run these plays belong to, and its seed. */
   run_id?: number | null
   base_seed?: number | null
-  /** SIM-561: str(player_id) → name, for every batter and pitcher. */
+  /** str(player_id) → name, for every batter and pitcher. */
   names?: Record<string, string>
 }
 
-/** SIM-561: POST /{game_pk}/sample-game — the stored game's run id and seed. */
+/** POST /{game_pk}/sample-game — the stored game's run id and seed. */
 export interface SampleGame {
   game_pk: number
   run_id: number
@@ -318,7 +318,7 @@ export interface SampleGame {
 }
 
 // ---------------------------------------------------------------------------
-// Live state (GET /{game_pk}/live — LiveGameStateResponse, SIM-386)
+// The live state (GET /{game_pk}/live — LiveGameStateResponse)
 // ---------------------------------------------------------------------------
 
 export interface LiveState {
@@ -348,35 +348,35 @@ export interface LiveState {
 }
 
 // ---------------------------------------------------------------------------
-// Boxscore card (GET /{game_pk}/boxscore — BoxscoreCardModel, SIM-366)
+// The boxscore card (GET /{game_pk}/boxscore — BoxscoreCardModel)
 // ---------------------------------------------------------------------------
 
 export interface BoxscoreRow {
   player_id: number
   /** prop_name → mean over the run (e.g. {"K": 6.4} pitcher, {"H": 1.2} batter). */
   means: Record<string, number>
-  /** SIM-560: the player's full name; null when the lookup has none. */
+  /** The player's full name; null when the lookup has none. */
   name?: string | null
-  /** SIM-560: 'away' or 'home'; null for a player the game does not name. */
+  /** 'away' or 'home'; null for a player the game does not name. */
   side?: 'away' | 'home' | null
-  /** SIM-560: the 1-9 batting-order slot; null for a player who does not bat. */
+  /** The 1-9 batting-order slot; null for a player who does not bat. */
   lineup_slot?: number | null
-  /** SIM-560: true for each side's starting pitcher. */
+  /** True for each side's starting pitcher. */
   starting_pitcher?: boolean
-  /** SIM-519 Part F: the one summed row of a side's generic bullpen. */
+  /** The one summed row of a side's generic bullpen. */
   synthetic?: boolean
 }
 
 export interface BoxscoreCard {
   n_iterations: number
-  /** SIM-560: the run's seed; pass it to fetchPropEdge to read the same run. */
+  /** The run's seed; pass it to fetchPropEdge to read the same run. */
   base_seed?: number | null
   /** str(player_id) → row. */
   players: Record<string, BoxscoreRow>
 }
 
 // ---------------------------------------------------------------------------
-// Prop edge (GET /{game_pk}/props/{player_id}/{prop} — PropEdgeResponse, SIM-390)
+// The prop edge (GET /{game_pk}/props/{player_id}/{prop} — PropEdgeResponse)
 // ---------------------------------------------------------------------------
 
 export interface EdgeReport {
@@ -392,11 +392,11 @@ export interface EdgeReport {
   clv: Record<string, unknown> | null
   positive_edge: boolean
   /**
-   * SIM-555: the stored book label of the offered price (e.g. `bp:10`), when
-   * the market was priced from the stored lines; null for an injected or mock price.
+   * The stored book label of the offered price (e.g. `bp:10`), when the market
+   * was priced from the stored lines; null for an injected or mock price.
    */
   price_book?: string | null
-  /** SIM-555: that book's display name (e.g. "FanDuel"). */
+  /** That book's display name (e.g. "FanDuel"). */
   price_book_name?: string | null
   /** How this side settled on the real final; null before the game is final. */
   result?: 'won' | 'lost' | 'push' | null
@@ -406,7 +406,7 @@ export interface PropEdge {
   player_id: number
   prop: string
   n: number
-  /** SIM-519 Part F: the player's name, when known. */
+  /** The player's name, when known. */
   player_name?: string | null
   support: number[]
   probabilities: number[]
@@ -428,55 +428,8 @@ export interface PropEdgeQuery {
   betSide?: 'over' | 'under'
   nIterations?: number
   baseSeed?: number
-  /** SIM-519: read this stored run instead of running a batch. */
+  /** Read this stored run instead of running a batch. */
   runId?: number | null
-}
-
-// ---------------------------------------------------------------------------
-// Roster override (POST /{game_pk}/simulate/with_override — SIM-358/388)
-// ---------------------------------------------------------------------------
-
-/** Raised for any non-2xx games-API response, carrying the HTTP status. */
-export class GamesApiError extends Error {
-  readonly status: number
-  /** Seconds from a Retry-After header (a 503 for an unpublished lineup). */
-  readonly retryAfter: number | null
-  constructor(status: number, message: string, retryAfter: number | null = null) {
-    super(message)
-    this.name = 'GamesApiError'
-    this.status = status
-    this.retryAfter = retryAfter
-  }
-}
-
-function retryAfterOf(res: Response): number | null {
-  const v = Number(res.headers.get('Retry-After'))
-  return Number.isFinite(v) && v > 0 ? v : null
-}
-
-export async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
-
-async function postJson<T>(url: string, payload: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`, retryAfterOf(res))
-  }
-  return res.json() as Promise<T>
 }
 
 /** GET /api/games/{date} — the slate for a YYYY-MM-DD date. */
@@ -592,11 +545,11 @@ export function startWhatIf(
   changes: WhatIfChanges,
   nIterations = 100,
 ): Promise<WhatIfStarted> {
-  return postJson<WhatIfStarted>(`/api/games/${gamePk}/what-if`, {
-    at_bat: atBat,
-    changes,
-    n_iterations: nIterations,
-  })
+  return postJson<WhatIfStarted>(
+    `/api/games/${gamePk}/what-if`,
+    { at_bat: atBat, changes, n_iterations: nIterations },
+    { retryAfter: true },
+  )
 }
 
 /** GET /api/games/{game_pk}/what-if/{base}/{change} — both runs and the real final. */
@@ -604,7 +557,7 @@ export function fetchWhatIf(gamePk: number, baseRunId: number, changeRunId: numb
   return getJson<WhatIfResult>(`/api/games/${gamePk}/what-if/${baseRunId}/${changeRunId}`)
 }
 
-/** GET /api/games/{game_pk}/feed — the real game behind a slate card (SIM-519 Part I). */
+/** GET /api/games/{game_pk}/feed — the real game behind a slate card. */
 export function fetchGameFeed(gamePk: number): Promise<GameFeedCard> {
   return getJson<GameFeedCard>(`/api/games/${gamePk}/feed`)
 }
@@ -614,19 +567,14 @@ export function fetchGameCard(gamePk: number): Promise<GameCardAggregate> {
   return getJson<GameCardAggregate>(`/api/games/${gamePk}/status`)
 }
 
-/** GET /api/games/{game_pk}/linescore — per-inning R/H/E grid (needs a persisted sim). */
-export function fetchLinescore(gamePk: number): Promise<Linescore> {
-  return getJson<Linescore>(`/api/games/${gamePk}/linescore`)
-}
-
-/** GET /api/games/{game_pk}/plays — pitch-by-pitch scroll (needs a persisted sim).
- *  SIM-561: `runId` reads that stored game; omit it for the newest. */
+/** GET /api/games/{game_pk}/plays — the pitch-by-pitch scroll of a stored game.
+ *  `runId` reads that stored game; omit it for the newest. */
 export function fetchPlays(gamePk: number, runId?: number | null): Promise<PlayByPlay> {
   const qs = runId != null ? `?run_id=${runId}` : ''
   return getJson<PlayByPlay>(`/api/games/${gamePk}/plays${qs}`)
 }
 
-/** SIM-561: GET /api/games/{game_pk}/card — the newest stored simulated game's
+/** GET /api/games/{game_pk}/card — the newest stored simulated game's
  *  linescore, its run id and seed. Read the plays with that run id, so the two
  *  panels always show one game. */
 export interface ReplayCard {
@@ -645,16 +593,16 @@ export function fetchLiveState(gamePk: number): Promise<LiveState> {
   return getJson<LiveState>(`/api/games/${gamePk}/live`)
 }
 
-/** POST /api/games/{game_pk}/sample-game — simulate and store one game (SIM-561).
- *  The linescore, decisions and play-by-play endpoints then serve it. */
+/** POST /api/games/{game_pk}/sample-game — simulate and store one game.
+ *  The linescore, decisions and play-by-play routes then serve it. */
 export function postSampleGame(gamePk: number, baseSeed?: number): Promise<SampleGame> {
   const qs = baseSeed != null ? `?base_seed=${baseSeed}` : ''
-  return postJson<SampleGame>(`/api/games/${gamePk}/sample-game${qs}`, {})
+  return postJson<SampleGame>(`/api/games/${gamePk}/sample-game${qs}`, {}, { retryAfter: true })
 }
 
-/** GET /api/games/{game_pk}/boxscore — per-player prop means over N iterations.
- *  SIM-560: a seeded run is cached, so fetchPropEdge with the same seed and N
- *  reads the same run. */
+/** GET /api/games/{game_pk}/boxscore — each player's prop means over N games.
+ *  A seeded run is cached, so fetchPropEdge with the same seed and N reads the
+ *  same run. `runId` reads a stored run instead. */
 export function fetchBoxscore(
   gamePk: number,
   nIterations?: number,
@@ -672,7 +620,7 @@ export function fetchBoxscore(
 }
 
 // ---------------------------------------------------------------------------
-// One simulation run per game (SIM-519 Part E)
+// One simulation run per game (a sim.sim_runs row)
 // ---------------------------------------------------------------------------
 
 export type SimRunStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -698,7 +646,11 @@ export interface SimRun {
 
 /** POST /api/games/{game_pk}/simulate — queue a run (or get the active one). */
 export function startSimRun(gamePk: number, nIterations: number): Promise<SimRun> {
-  return postJson<SimRun>(`/api/games/${gamePk}/simulate`, { n_iterations: nIterations })
+  return postJson<SimRun>(
+    `/api/games/${gamePk}/simulate`,
+    { n_iterations: nIterations },
+    { retryAfter: true },
+  )
 }
 
 /** GET /api/games/{game_pk}/simulate/runs/latest — 404 when the game has none. */
@@ -712,21 +664,12 @@ export function fetchSimRun(gamePk: number, runId: number): Promise<SimRun> {
 }
 
 /** DELETE /api/games/{game_pk}/simulate/runs/{run_id} — cancel. */
-export async function cancelSimRun(gamePk: number, runId: number): Promise<SimRun> {
-  const res = await fetch(`/api/games/${gamePk}/simulate/runs/${runId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<SimRun>
+export function cancelSimRun(gamePk: number, runId: number): Promise<SimRun> {
+  return deleteJson<SimRun>(`/api/games/${gamePk}/simulate/runs/${runId}`)
 }
 
-/** GET /api/games/{game_pk}/props/{player_id}/{prop} — full PMF (+ optional
- *  over/under + edge report when a line and odds are supplied). */
+/** GET /api/games/{game_pk}/props/{player_id}/{prop} — the full PMF, plus the
+ *  over / under and the edge report when a line and odds are supplied. */
 export function fetchPropEdge(
   gamePk: number,
   playerId: number,

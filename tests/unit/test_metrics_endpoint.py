@@ -1,21 +1,19 @@
-"""
-tests/unit/test_metrics_endpoint.py
-=================================
-SIM-374 — Prometheus metrics endpoint + monitoring config tests.
+"""The Prometheus metrics route (``api/routes/metrics.py``) and the monitoring config.
 
 Covers:
-  1. GET /metrics returns 200 with a ``text/plain`` content type and a body in
-     valid Prometheus text exposition format (``# HELP`` / ``# TYPE`` lines +
-     the expected metric names). Works whether or not ``prometheus_client`` is
-     installed — the route auto-selects the real registry or the hand-rolled
-     fallback, and these assertions hold for either path.
-  2. The instrumentation helpers (record_sim_latency / record_request) feed real
+  1. GET /metrics answers 200 with a ``text/plain`` content type. The body is valid
+     Prometheus text exposition: ``# HELP`` and ``# TYPE`` lines and the expected
+     metric names. The route uses the ``prometheus_client`` registry when the
+     package is installed, else a hand-written fallback. The assertions hold on
+     both paths.
+  2. The instrumentation helpers (record_sim_latency, record_request) feed real
      values into the exposed series.
-  3. deploy/monitoring/prometheus.yml parses as YAML and has a scrape job that
-     targets the app, and the Grafana dashboard JSON parses with panels.
+  3. deploy/monitoring/prometheus.yml parses as YAML and has a scrape job for the
+     app. The Grafana dashboard JSON parses and has panels.
+  4. The finals-age gauge reads the date of the newest stored final.
 
-The test builds a TINY FastAPI app mounting ONLY the metrics router (no DB /
-Redis / lifespan needed) so it runs fast and connection-free in the sandbox.
+The tests build a small FastAPI app with only the metrics router. So they need no
+database, no Redis and no lifespan.
 """
 
 from __future__ import annotations
@@ -35,8 +33,8 @@ from api.routes.metrics import router as metrics_router
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MONITORING = REPO_ROOT / "deploy" / "monitoring"
 
-# The series the scrape config + Grafana dashboards bind to. Exposed in BOTH the
-# prometheus_client path and the hand-rolled fallback path.
+# The series that the scrape config and the Grafana dashboards read. The
+# prometheus_client path and the fallback path both expose them.
 EXPECTED_METRICS = [
     "baseball_sim_app_info",
     "baseball_sim_metrics_scrapes_total",
@@ -169,7 +167,7 @@ def test_grafana_dashboard_json_parses() -> None:
     assert path.is_file(), f"missing {path}"
     dash = json.loads(path.read_text(encoding="utf-8"))
     assert "panels" in dash and len(dash["panels"]) >= 3
-    # Panels should reference the SIM-374 metric series.
+    # The panels read the app's metric series.
     exprs = " ".join(t.get("expr", "") for p in dash["panels"] for t in p.get("targets", []))
     assert "baseball_sim_latency_seconds" in exprs
     assert "baseball_sim_api_p95_seconds" in exprs
@@ -177,7 +175,7 @@ def test_grafana_dashboard_json_parses() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-519 Part D — the finals-age gauge
+# The finals-age gauge
 # ---------------------------------------------------------------------------
 
 

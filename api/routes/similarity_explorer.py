@@ -1,12 +1,11 @@
 """
 api/routes/similarity_explorer.py
 =================================
-SIM-439 — generalized Similarity Explorer across all 11 engines.
+The similarity explorer across all eleven engines.
 
-The original ``api/routes/similarity.py`` serves only the pitcher engine (with
-``arsenal``/``command`` hard-coded). This module generalizes the same idea to
-every engine using each one's REAL component-score fields, WITHOUT touching the
-existing pitcher route (both routers mount under ``/api/similarity``):
+``api/routes/similarity.py`` serves the pitcher engine alone (with ``arsenal``
+and ``command`` fixed). This module serves every engine with each one's own
+component-score fields; both routers mount under ``/api/similarity``:
 
   GET  /api/similarity/engines                     — catalog + build status
   GET  /api/similarity/{engine}/meta               — sub-score fields/labels/weights
@@ -14,7 +13,7 @@ existing pitcher route (both routers mount under ``/api/similarity``):
   GET  /api/similarity/{engine}/pair               — one subject-vs-comp breakdown
   POST /api/similarity/situation/query             — nearest historical game states
 
-Two honesty rules baked into the surface (per the analyst + designer specs):
+Two rules of the surface keep it honest:
   1. The **8 score engines** (pitcher, batter, fielder, catcher, baserunner,
      baserunner_steal, pitcher_steal, manager) return a 0–1 composite with
      component sub-scores. The **3 distance engines** (situation, pitch_pitch,
@@ -22,13 +21,14 @@ Two honesty rules baked into the surface (per the analyst + designer specs):
      player-keyed — the score endpoints 404 them and steer callers to the
      Situation Finder / Data Lab.
   2. The composite is NOT Σ(weight·sub_score): every score engine multiplies by a
-     ``sqrt(min eb_alpha)`` confidence discount (and batter adds a bats penalty).
-     We ship the weights + each comp's sample size so the UI can surface the gap
-     rather than pretend the bar-math reconstructs the headline.
+     ``sqrt(min eb_alpha)`` confidence discount (and the batter engine adds a
+     bats penalty). The response carries the weights and each comp's sample
+     size, so the UI can show the gap rather than pretend the bars add up to
+     the headline.
 
-Reuses the numpy-free pure helpers from ``api.routes.similarity``
-(``compute_score_summary``, ``classify_diagnostic``, ``_BinSpec``) so the
-histogram/diagnostic logic stays in one place.
+The numpy-free helpers of ``api.routes.similarity`` (``compute_score_summary``,
+``classify_diagnostic``, ``_BinSpec``) serve both routers, so the histogram and
+the diagnostic live in one place.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ from api.routes.similarity import (
 
 log = logging.getLogger("api.routes.similarity_explorer")
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+# Every route on this router requires a login (cookie or API key).
 router = APIRouter(
     prefix="/api/similarity", tags=["similarity"], dependencies=[Depends(require_auth)]
 )
@@ -429,7 +429,7 @@ def _member(
         "season": int(result.season),
         "name": names.get(eid, f"#{eid}"),
         "score": float(result.score),
-        # SIM-531: a sub-score the pair could not score (a lead / hold missing
+        # A sub-score the pair could not score (a lead / hold missing
         # on either side) is None on the result and is omitted here.
         "sub_scores": {f: float(v) for f in fields if (v := getattr(result, f, None)) is not None},
         "sample": sample,

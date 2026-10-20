@@ -1,5 +1,5 @@
 /**
- * Design system primitives — barrel export (SIM-380)
+ * The design system's primitives — the barrel export.
  *
  * Import from here rather than the individual modules:
  *   import { Badge, Card, Panel } from '@/components/ui'

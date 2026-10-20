@@ -1,33 +1,30 @@
 """
 api/routes/data_health.py
 =========================
-SIM-417 — data-freshness / health API surface for the UI.
+The data-freshness route of the UI.
 
-Exposes an aggregate view of how current the ingested data is, so the frontend
-can show a "data as of …" badge and warn when the store is stale or empty:
+It reports how current the ingested data is, in aggregate, so the frontend can
+show a "data as of …" badge and warn when the store is stale or empty:
 
     GET /api/data/freshness  ->  DataFreshnessResponse
 
-Reads the read-only pool, ``app.state.pg_pool_ro`` (SIM-566, the Data Lab read
-routes on the read-only pool). Without the pool, the route answers 503; it
-never falls back to the main pool. The route returns pure aggregate counts and
-timestamps — no per-player detail and nothing sensitive. It still needs a login
-(SIM-443c, every route behind a login). Source:
+It reads the read-only pool, ``app.state.pg_pool_ro``. Without the pool, the
+route answers 503; it never falls back to the main pool. The route returns
+aggregate counts and timestamps only, no per-player detail and nothing
+sensitive, and it still needs a login. The sources:
 ``raw.etl_data_freshness`` (last-ingest watermark) + ``raw.games`` /
 ``raw.pitches`` (coverage). An empty store returns zeros / nulls, not an error.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
-from api.routes._common import _get_ro_pool, _row_get
+from api.routes._common import _get_ro_pool, _iso, _row_get
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+# Every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/data", tags=["data"], dependencies=[Depends(require_auth)])
 
 
@@ -71,12 +68,6 @@ _PER_SEASON_SQL = """
      GROUP BY season
      ORDER BY season
 """
-
-
-def _iso(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
 @router.get(

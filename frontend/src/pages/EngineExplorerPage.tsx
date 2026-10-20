@@ -1,8 +1,8 @@
 /**
- * EngineExplorerPage.tsx — SIM-439
- * Search a subject, see the ranked comps + the score-population distribution,
- * and drill into any comp's component-score breakdown. Subject / position /
- * vs-hand / compare all live in the URL for shareable deep-links.
+ * EngineExplorerPage.tsx — one similarity engine's explorer. The user searches
+ * a subject, sees the ranked comps and the score-population distribution, and
+ * drills into any comp's component-score breakdown. The subject, position,
+ * vs-hand and compare choices live in the URL, so a deep link can be shared.
  */
 import React from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'

@@ -1,8 +1,7 @@
 /**
- * starterQueries.ts — SIM-439
- * Curated, ready-to-run example queries (from the Baseball Analyst's spec) that
- * seed the SQL console. Each models a safe pattern: bounded by an indexed
- * predicate, data_quality_flag = FALSE, HAVING sample floors, and a LIMIT.
+ * starterQueries.ts — the curated, ready-to-run example queries that seed the
+ * SQL console. They model safe patterns: an indexed predicate that bounds the
+ * scan, data_quality_flag = FALSE, a HAVING sample floor and a LIMIT.
  */
 export interface StarterQuery {
   name: string

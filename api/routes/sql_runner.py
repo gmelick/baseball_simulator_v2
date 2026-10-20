@@ -1,27 +1,26 @@
 """
 api/routes/sql_runner.py
 ========================
-SIM-439 — read-only ad-hoc SQL execution for the Data Lab SQL Console.
+The Data Lab's SQL console: read-only ad-hoc SQL.
 
     POST /api/sql/run   { sql, max_rows? }  ->  SqlRunResponse
 
-Thin handler: it delegates ALL safety + execution to
-``api.routes.sql_safety.run_read_only_sql`` (the same path the AI assistant
-uses), so there is exactly one read-only executor in the codebase. Guarded by
-``Depends(require_auth)`` (session cookie or API key), matching the other
-expensive/sensitive routes.
+A thin handler: it leaves all the safety and the execution to
+``api.routes.sql_safety.run_read_only_sql``, the path the AI assistant uses
+too, so the codebase has one read-only executor. The route requires a login
+(a session cookie or an API key).
 
-Errors:
-  * 400 — the query was rejected by the validator (non-SELECT, multi-statement,
-    write keyword, dangerous function, too long) OR Postgres raised (syntax,
-    statement-timeout, read-only-transaction). The message is surfaced in
-    ``detail`` so the console's error panel can render it verbatim. A query
-    that reads a table outside ``raw.*`` is one of these rejections (SIM-443d).
-  * 503 — the read-only pool is not open (SIM-443e). The console runs ONLY on
+The errors:
+  * 400 — the validator rejected the query (not a SELECT, several statements, a
+    write keyword, a dangerous function, too long, a table outside ``raw.*``),
+    or Postgres raised (syntax, the statement timeout, the read-only
+    transaction). ``detail`` carries the message, so the console's error panel
+    shows it as it is.
+  * 503 — the read-only pool is not open. The console runs only on
     ``app.state.pg_pool_ro``, the ``BASEBALL_DB_RO_DSN`` pool that the lifespan
     opened and checked; it never falls back to the main pool. The shared
-    helper ``_get_ro_pool`` in ``api/routes/_common.py`` reads the pool and
-    raises the 503 (SIM-566, the Data Lab read routes on the read-only pool).
+    helper ``_get_ro_pool`` (``api/routes/_common.py``) reads the pool and
+    raises the 503.
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ from api.routes.sql_safety import (
 
 log = logging.getLogger("api.routes.sql_runner")
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+# Every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/sql", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 

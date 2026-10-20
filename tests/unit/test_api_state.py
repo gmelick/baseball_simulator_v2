@@ -1,19 +1,13 @@
-"""
-test_api_state.py
-=================
-Unit tests for api/state.py — the boot-time resource builders that the
-FastAPI lifespan attaches to ``app.state``.
+"""The boot-time builders in api/state.py that the lifespan attaches to ``app.state``.
 
-These tests exercise the pieces that don't require a live DuckDB / live
-Postgres / live Redis:
+The tests cover the parts that need no live DuckDB, Postgres or Redis:
 
-  - make_cache_key — pinned format the nightly invalidator will rely on
-  - make_pg_name_resolver — SQL shape and result handling against a
-    stubbed asyncpg pool
-  - RedisSimilarityCache — get/set semantics against an in-memory fake
-  - build_pitcher_engine env-var precedence (mocked engine constructor)
-
-Owned by Backend Developer (Agent 5).
+  - make_cache_key: the key format, which an invalidator can match;
+  - make_pg_name_resolver: the SQL shape and the result handling, against a
+    stub asyncpg pool;
+  - RedisSimilarityCache: get and set, against an in-memory fake;
+  - build_pitcher_engine: which path wins, the argument or the env var (the
+    engine constructor is mocked).
 """
 
 from __future__ import annotations
@@ -51,8 +45,7 @@ class TestCacheKey:
         assert len(keys) == 5
 
     def test_prefix_is_simviz_pitcher(self):
-        # The nightly invalidator (Data Engineer follow-on) will DEL
-        # ``simviz:*`` — confirm the prefix never drifts.
+        # An invalidator can delete ``simviz:*``, so the prefix must not drift.
         key = make_cache_key(10, 2024, 20, 20)
         assert key.startswith("simviz:pitcher:")
 

@@ -1,23 +1,21 @@
 /**
- * betting.ts — SIM-395/396
- * Client for the /api/betting surface (edges, signals, the slate card's lines).
+ * betting.ts — the client of the betting routes (/api/betting): the edges, the
+ * signals and the slate card's lines.
  *
- * Mirrors the FastAPI response models:
- *   - EdgesResponse   → api/routes/betting.py (SIM-367)
- *   - SignalsResponse → SIM-369
- *
- * Reuses the shared EdgeReport shape from the games client and the same
- * credentials/error conventions.
+ * The types mirror the API's response models by hand: EdgesResponse and
+ * SignalsResponse (api/routes/betting.py), CardOddsResponse
+ * (api/routes/betting_card.py). The EdgeReport shape, the credentials and the
+ * error type are the games client's.
  */
-import { type EdgeReport, GamesApiError } from './games'
-import { notifyUnauthorized } from './unauthorized'
+import { type EdgeReport } from './games'
+import { getJson } from './http'
 
 export type { EdgeReport }
 
-/** A fireable +EV recommendation (BetSignalModel, SIM-369). */
+/** A fireable +EV recommendation (BetSignalModel). */
 export interface BetSignal {
   label: string
-  /** 'home' | 'away' | 'over' | 'under', or 'draw' (SIM-546: a three-way market's tie). */
+  /** 'home' | 'away' | 'over' | 'under', or 'draw' (a three-way market's tie). */
   side: string
   line: number | null
   offered_american: number
@@ -27,14 +25,14 @@ export interface BetSignal {
   confidence: number
   rank: number
   report: EdgeReport
-  /** SIM-555: the stored book label of the offered price (null: injected or mock). */
+  /** The stored book label of the offered price (null: injected or mock). */
   price_book?: string | null
-  /** SIM-555: that book's display name (e.g. "FanDuel"). */
+  /** That book's display name (e.g. "FanDuel"). */
   price_book_name?: string | null
 }
 
 /**
- * How the run line was priced (SIM-549). A `pair` is one bet with two sides
+ * How the run line was priced. A `pair` is one bet with two sides
  * (the away spread is the negative of the home spread): the two prices de-vig
  * against each other. `two_bets` is two separate bets (e.g. home -1.5 and
  * away -1.5): each price is read over the game's two-way `reference_margin`.
@@ -54,7 +52,7 @@ export interface EdgesResponse {
   /** The real final once the game is over; each edge's `result` grades its side. */
   final?: { away: number; home: number } | null
   /**
-   * The market types priced, in the vocabulary order (SIM-546: up to fifteen).
+   * The market types priced, in the vocabulary order (up to fifteen).
    * A type is the report label except the full-game run line: 'runline' here,
    * 'run_line' on its edges.
    */
@@ -64,20 +62,20 @@ export interface EdgesResponse {
   edges: EdgeReport[]
   run_line_pricing?: RunLinePricing | null
   /**
-   * SIM-555: market → the stored label of the graded book, the one book whose
-   * row gave the fair probability (stored markets only).
+   * market → the stored label of the graded book, the one book whose row
+   * gave the fair probability (stored markets only).
    */
   fair_book?: Record<string, string>
-  /** SIM-555: market → that book's display name (e.g. "DraftKings"). */
+  /** market → that book's display name (e.g. "DraftKings"). */
   fair_book_name?: Record<string, string>
   /**
-   * SIM-546: report label → the market's plain name ("First five total"). The
+   * report label → the market's plain name ("First five total"). The
    * betting card titles its sections from it.
    */
   market_names?: Record<string, string>
   /**
-   * SIM-546: report label → how that run line was priced, for every priced run
-   * line ("run_line", "f1_runline", "f5_runline").
+   * report label → how that run line was priced, for every priced run line
+   * ("run_line", "f1_runline", "f5_runline").
    */
   run_line_pricing_by_label?: Record<string, RunLinePricing>
 }
@@ -91,30 +89,19 @@ export interface SignalsResponse {
   odds_source: Record<string, string>
   signals: BetSignal[]
   run_line_pricing?: RunLinePricing | null
-  /** SIM-555: market → the graded book's stored label (stored markets only). */
+  /** market → the graded book's stored label (stored markets only). */
   fair_book?: Record<string, string>
-  /** SIM-555: market → that book's display name. */
+  /** market → that book's display name. */
   fair_book_name?: Record<string, string>
-  /** SIM-546: report label → the market's plain name ("First five total"). */
+  /** report label → the market's plain name ("First five total"). */
   market_names?: Record<string, string>
-  /** SIM-546: report label → how that run line was priced (every priced run line). */
+  /** report label → how that run line was priced (every priced run line). */
   run_line_pricing_by_label?: Record<string, RunLinePricing>
 }
 
-// --- the shared GET helper ------------------------------------------------
-
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 // ---------------------------------------------------------------------------
-// The slate card's lines (GET /games/{pk}/card-odds — CardOddsResponse, SIM-519 Part I)
+// The slate card's lines (GET /games/{pk}/card-odds — CardOddsResponse)
 // ---------------------------------------------------------------------------
 
 export interface CardOdds {

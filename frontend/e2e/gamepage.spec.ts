@@ -1,15 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
 
 /**
- * gamepage.spec.ts — the game page review (2026-10-09).
+ * gamepage.spec.ts — the game page's real game, what-if panel and collapsible panels.
  *
  * A final game opens with the real game (the league feed's linescore, box score
  * and play-by-play) above the simulation. "What if from here" on a play opens the
  * what-if panel at that plate appearance; a staged reliever runs the two 100-game
  * runs and the panel compares them. Projections and Betting start collapsed and
  * the browser remembers an opened panel. The Betting card grades each side on
- * the real final and marks a market with no stored line. The Line movement and
- * Managerial override boxes are gone. The backend is mocked with page.route.
+ * the real final and marks a market with no stored line. The page shows no Line
+ * movement or Managerial override box. page.route mocks the backend.
  */
 
 const PK = 746437

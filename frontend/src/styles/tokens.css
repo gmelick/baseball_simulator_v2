@@ -1,10 +1,10 @@
 /**
- * Design system tokens — SIM-380
+ * tokens.css — the design system's tokens.
  *
- * All values are CSS custom properties so components never hard-code colors,
- * spacing, or type ramp values. The palette is the Daily Diamond design
- * (SIM-519 Part T): scorecard paper, forest green, stitch red. The page has no
- * dark mode. The --dd-* tokens hold the design's field and scoreboard colours.
+ * Every value is a CSS custom property, so components never hard-code colours,
+ * spacing or type sizes. The palette is the Daily Diamond design: scorecard
+ * paper, forest green, stitch red. The page has no dark mode. The --dd-* tokens
+ * hold the design's field and scoreboard colours.
  *
  * Naming convention: --sim-{category}-{scale/modifier}
  */
@@ -14,7 +14,7 @@
    * Color palette — Semantic tokens built on a base scale
    * ========================================================================= */
 
-  /* Neutrals: warm scorecard paper → field ink (Daily Diamond, SIM-519 Part T) */
+  /* Neutrals: warm scorecard paper → field ink */
   --sim-gray-50:  #fbf9f3;   /* card paper */
   --sim-gray-100: #f3eee2;   /* chalk */
   --sim-gray-200: #ece6d7;   /* table header band */
@@ -112,7 +112,7 @@
   --sim-font-sans:  'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --sim-font-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* Font sizes (typographic scale: 12–48) */
+  /* Font sizes (typographic scale: 12–36) */
   --sim-text-xs:   0.75rem;   /* 12px */
   --sim-text-sm:   0.875rem;  /* 14px */
   --sim-text-base: 1rem;      /* 16px */
@@ -205,4 +205,4 @@
   --sim-sidebar-width: 280px;
 }
 
-/* No dark mode: the Daily Diamond design is a light scorecard (owner design, 2026-10-08). */
+/* No dark mode: the Daily Diamond design is a light scorecard. */

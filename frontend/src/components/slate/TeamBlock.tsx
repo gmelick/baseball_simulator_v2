@@ -1,6 +1,6 @@
 /**
  * TeamBlock.tsx — one club on a Daily Diamond card: the logo, the colour chip
- * with the abbreviation, the name and the record (SIM-519). The away club
+ * with the abbreviation, the name and the record. The away club
  * aligns left, the home club right; a losing club dims, as in the design.
  */
 import React, { useState } from 'react'

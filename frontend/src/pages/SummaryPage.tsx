@@ -1,13 +1,12 @@
 /**
- * SummaryPage.tsx — SIM-439
- * Descriptive dashboard over raw.pitches. A KPI strip + a season/handedness/
- * pitcher filter bar drive a responsive grid of cards, each independently
- * loaded (one failing card never blanks the page) and each with an
- * "Open in Console" deep-link to its underlying SQL.
+ * SummaryPage.tsx — the descriptive dashboard over raw.pitches. A KPI strip
+ * and a filter bar (season, pitcher, batter side, games) drive a responsive
+ * grid of cards. Each card loads on its own, so one failing card never blanks
+ * the page. Each card has an "Open in Console" deep link to its SQL.
  *
- * SIM-572: the "Games" choice reads the regular season alone (the default) or
- * every game of the season. The KPI strip and "Pitches by season" describe the
- * whole store, so they ignore it.
+ * The "Games" choice (the Data Lab game-type filter, SIM-572) reads the regular
+ * season alone (the default) or every game of the season. The KPI strip and
+ * "Pitches by season" describe the whole store, so they ignore it.
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -246,7 +245,7 @@ export function SummaryPage(): React.ReactElement {
       <div className={styles.filterBar}>
         <span className={styles.filterLabel}>Season</span>
         <select className={styles.select} value={season ?? ''} onChange={(e) => setSeason(Number(e.target.value))} aria-label="Season">
-          {/* SIM-519 Part H: newest first; the default stays the newest. */}
+          {/* Newest first; the default stays the newest. */}
           {[...seasons].reverse().map((s) => (
             <option key={s} value={s}>
               {s}

@@ -94,9 +94,16 @@ omit = [
     # Live-infra wiring + integration/real-DB paths: exercised by the SIM-371
     # E2E suite + integration tests, not unit tests (same rationale as above).
     "api/main.py",
+    "api/env_check.py",
+    "api/middleware.py",
+    "api/startup.py",
     "api/state.py",
     "simulation/production_factory.py",
     "api/routes/games.py",
+    "api/routes/games_feed.py",
+    "api/routes/games_models.py",
+    "api/routes/games_runs.py",
+    "api/routes/games_slate.py",
     # SIM-439 Data Lab / Similarity Explorer: live-DB + engine-backed routes,
     # exercised by integration/E2E, not the unit suite (same rationale as
     # games.py). The pure SELECT-only validator (api/routes/sql_safety.py) is

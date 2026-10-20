@@ -1,4 +1,4 @@
-/* states.module.css — SIM-439 shared page states */
+/* states.module.css — the shared page states (loading, empty, error, warming, not configured). */
 
 .loading {
   display: flex;

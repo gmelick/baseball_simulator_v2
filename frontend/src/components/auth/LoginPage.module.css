@@ -1,8 +1,8 @@
 /**
- * LoginPage.module.css — SIM-389
+ * LoginPage.module.css — the login page.
  */
 
-/* Full-viewport navy backdrop — matches the app header colour */
+/* A full-viewport backdrop in the darkest shade of the header's forest green */
 .backdrop {
   display: flex;
   align-items: center;

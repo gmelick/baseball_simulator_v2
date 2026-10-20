@@ -1,12 +1,9 @@
-/* dataLab.module.css — SIM-439 shared styles for the Data Lab pages */
+/* dataLab.module.css — the shared styles of the Data Lab pages. */
 
 .labShell {
   max-width: var(--sim-max-width);
   margin: 0 auto;
   padding: var(--sim-space-5) var(--sim-space-6);
-}
-.labShell.wide {
-  max-width: none;
 }
 
 .labHeader {
@@ -69,8 +66,7 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.select,
-.input {
+.select {
   padding: var(--sim-space-1p5) var(--sim-space-2);
   font-size: var(--sim-text-sm);
   font-family: var(--sim-font-sans);

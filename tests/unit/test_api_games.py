@@ -1,29 +1,27 @@
-"""
-test_api_games.py
-=================
-Unit tests for api/routes/games.py â€" the Phase-5 game-simulation endpoints
-(SIM-355 GET /{date} + GET /{game_pk}/simulate, SIM-358 POST .../with_override,
-SIM-359 caching).
+"""The game routes under ``/api/games``: the slate, /simulate, the override, the props.
+
+The tests also cover the status card and /live. The routes live in
+api/routes/games.py (/simulate, /simulate/with_override, the props),
+api/routes/games_slate.py (the slate, /status) and api/routes/games_feed.py
+(/live). The games router includes the other two routers.
 
 ISOLATION STRATEGY
 ------------------
-These tests build a TINY FastAPI app that includes ONLY the games router (NOT
-``api.main.create_app()``), so the heavy similarity-engine lifespan and the live
-ingestion pipeline import are never touched. The router reads two things off
-``app.state`` â€" ``pg_pool`` and (optionally) ``sim_cache`` â€" both of which we
-attach directly:
+These tests build a small FastAPI app with only the games router, not
+``api.main.create_app()``. So the similarity-engine lifespan and the live
+ingestion pipeline import never run. The router reads ``pg_pool``, ``sim_cache``
+(optional) and ``sim_factory_ref`` from ``app.state``. The tests attach them
+directly:
 
-  * ``pg_pool``  â€" a fake asyncpg pool/connection that returns canned raw.games
-    rows for ``fetch`` and is also handed to a MONKEYPATCHED ``resolve_game_state``
-    so /simulate runs without a live Postgres/DuckDB.
-  * ``sim_factory_ref`` â€" set to the no-DB rng factory so the BatchRunner runs a
-    real (fast, in-process) batch with NO live sampler.
+  * ``pg_pool`` — a fake asyncpg pool and connection. Its ``fetch`` returns
+    canned raw.games rows. The route hands it to a monkeypatched
+    ``resolve_game_state``, so /simulate runs with no live Postgres or DuckDB.
+  * ``sim_factory_ref`` — the no-DB factory, so the BatchRunner runs a real,
+    fast, in-process batch over the in-memory synthetic bundle.
 
-The ``/simulate`` and ``/with_override`` paths therefore exercise the REAL
-BatchRunner + simulate_game loop + GameSimSummaryModel serialization â€" only the
-DB (lineup resolution) and the production sampler are stubbed.
-
-Owned by Backend Developer (SIM-355 / SIM-358 / SIM-359).
+So the ``/simulate`` and ``/with_override`` paths run the real BatchRunner, the
+real simulate_game loop and the real GameSimSummaryModel serialization. Only the
+database (the lineup resolution) and the production bundle are stubbed.
 """
 
 from __future__ import annotations
@@ -35,12 +33,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import api.routes.games as games_mod
+import api.routes.games_feed as games_feed
+import api.routes.games_slate as games_slate
 from api.routes.games import router as games_router
 from simulation.batch_runner import InMemoryCache
 from simulation.game_state import GameState
 
-# The no-DB, picklable rng factory â€" what the production factory ref is swapped
-# to so /simulate runs a real batch with no live sampler/DuckDB.
+# The no-DB, picklable factory. The app's factory ref points here, so /simulate
+# runs a real batch over the in-memory synthetic bundle, with no DuckDB.
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
@@ -50,13 +50,13 @@ NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
 class _FakePool:
-    """A fake asyncpg pool/connection.
+    """A fake asyncpg pool and connection.
 
-    Exposes ``fetch`` (for the date listing) returning canned rows, and
-    ``fetchrow`` / ``acquire`` so it can stand in as both a pool and a
-    connection. The /simulate path does not actually call fetch on it (we
-    monkeypatch resolve_game_state), but it must be present so the route's
-    ``_get_pool`` does not 503.
+    ``fetch`` returns the canned rows of the date listing. The fake has no
+    ``acquire``, so the routes call ``fetch`` and ``fetchrow`` on it directly, as
+    on a connection. The tests monkeypatch resolve_game_state, so /simulate does
+    not call fetch on it. But a pool must be present, or the route's
+    ``_get_pool`` answers 503.
     """
 
     def __init__(self, rows=None):
@@ -67,7 +67,7 @@ class _FakePool:
         self.fetch_calls.append((sql, args))
         return self._rows
 
-    async def fetchrow(self, sql, *args):  # pragma: no cover â€" not used directly here
+    async def fetchrow(self, sql, *args):  # pragma: no cover -- the /status tests call it
         return self._rows[0] if self._rows else None
 
 
@@ -96,8 +96,8 @@ CANNED_GAMES_ROWS = [
 def _small_game_state() -> GameState:
     """A minimal but valid GameState the monkeypatched resolver returns.
 
-    Full 1..9 lineups + a pitcher + season â€" enough for simulate_game to run a
-    real (no-DB) game via the rng factory.
+    Full 1..9 lineups, a pitcher and a season: enough for simulate_game to run
+    a real no-DB game through the factory.
     """
     state = GameState(pitcher_id=600001, bat_hand="R", season=2024)
     state.away_lineup = [101, 102, 103, 104, 105, 106, 107, 108, 109]
@@ -115,7 +115,7 @@ def _small_game_state() -> GameState:
 
 
 def _build_app(*, pool, cache=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
-    """A tiny app with ONLY the games router + the app.state the route reads."""
+    """A small app with only the games router and the app.state the routes read."""
     app = FastAPI()
     app.include_router(games_router)
     app.state.pg_pool = pool
@@ -126,8 +126,9 @@ def _build_app(*, pool, cache=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
 
 @pytest.fixture
 def patch_resolver(monkeypatch):
-    """Monkeypatch resolve_game_state (as imported into the games module) to
-    return a fixed small GameState â€" no live Postgres/DuckDB."""
+    """Monkeypatch resolve_game_state (as imported into the games module).
+
+    The fake returns a fixed small GameState, with no live Postgres or DuckDB."""
 
     async def _fake_resolve_game_state(conn, game_pk, **kwargs):
         return _small_game_state()
@@ -137,7 +138,7 @@ def patch_resolver(monkeypatch):
 
 
 # ===========================================================================
-# GET /api/games/{date}  (SIM-355)
+# GET /api/games/{date}
 # ===========================================================================
 
 
@@ -168,7 +169,7 @@ def test_games_on_date_empty_list():
     assert resp.status_code == 200
     body = resp.json()
     assert (body["date"], body["count"], body["games"]) == ("2024-01-01", 0, [])
-    # SIM-519: no league feed attached -> the stored listing, and it says so.
+    # No league feed attached -> the stored listing, and the body says so.
     assert body["source"] == "db"
 
 
@@ -191,8 +192,9 @@ def test_games_on_date_no_pool_is_503():
 
 
 def test_games_on_date_uses_listing_cache():
-    """SIM-359: a second call with a shared cache serves from the cache and does
-    NOT re-query the pool."""
+    """A second call with a shared cache serves from the cache.
+
+    The second call does not query the pool again."""
     pool = _FakePool(rows=CANNED_GAMES_ROWS)
     cache = InMemoryCache()
     app = _build_app(pool=pool, cache=cache)
@@ -207,7 +209,7 @@ def test_games_on_date_uses_listing_cache():
 
 
 # ===========================================================================
-# GET /api/games/{game_pk}/simulate  (SIM-355 + SIM-359)
+# GET /api/games/{game_pk}/simulate
 # ===========================================================================
 
 
@@ -222,7 +224,7 @@ def test_simulate_returns_numpy_free_summary(patch_resolver):
     assert body["n_iterations"] == 5
     assert body["base_seed"] == 42
     summary = body["summary"]
-    # The GameSimSummaryModel shape (SIM-350).
+    # The GameSimSummaryModel shape.
     assert summary["n_iterations"] == 5
     for key in ("home_win_pct", "away_win_pct", "home_score_mean", "total_score_mean"):
         assert isinstance(summary[key], int | float)
@@ -247,8 +249,9 @@ def test_simulate_is_deterministic_for_fixed_seed(patch_resolver):
 
 
 def test_simulate_cache_path_does_not_break_second_call(patch_resolver):
-    """SIM-359: a shared sim cache memoizes the summary; the second call returns
-    from_cache=True and an identical summary."""
+    """A shared sim cache memoizes the summary.
+
+    The second call returns from_cache=True and an identical summary."""
     cache = InMemoryCache()
     app = _build_app(pool=_FakePool(), cache=cache)
     client = TestClient(app)
@@ -286,8 +289,9 @@ def test_simulate_unknown_game_is_404(monkeypatch):
 
 
 def test_simulate_lineup_not_ingested_is_503(monkeypatch):
-    """SIM-409: LineupNotIngestedError (game exists but lineup not yet published)
-    -> 503 Service Unavailable with Retry-After header, not 404 or 500."""
+    """LineupNotIngestedError (the game exists, its lineup is not published) -> 503.
+
+    The answer is 503 Service Unavailable with a Retry-After header, not 404 or 500."""
     from simulation.lineup_resolver import LineupNotIngestedError
 
     async def _raise(conn, game_pk, **kwargs):
@@ -307,13 +311,14 @@ def test_simulate_lineup_not_ingested_is_503(monkeypatch):
 
 
 # ===========================================================================
-# SIM-360 -- /simulate REUSES the shared app.state.sim_runner (with fallback)
+# /simulate reuses the shared app.state.sim_runner (with a fallback)
 # ===========================================================================
 
 
 def test_simulate_reuses_shared_sim_runner(patch_resolver):
-    """SIM-360: when the lifespan has attached a long-lived app.state.sim_runner,
-    /simulate REUSES it instead of building a fresh BatchRunner per request."""
+    """When the lifespan attached a long-lived app.state.sim_runner, /simulate reuses it.
+
+    The route builds no fresh BatchRunner per request."""
     from simulation.batch_runner import BatchRunner
     from simulation.batch_runner import InMemoryCache as _IMC
 
@@ -337,8 +342,9 @@ def test_simulate_reuses_shared_sim_runner(patch_resolver):
 
 
 def test_simulate_falls_back_to_transient_runner_without_shared(patch_resolver):
-    """SIM-360: with NO app.state.sim_runner attached (the existing test apps),
-    _build_runner falls back to a transient BatchRunner so /simulate still works."""
+    """With no app.state.sim_runner attached, _build_runner falls back to a transient one.
+
+    The other test apps attach no runner, so /simulate still works for them."""
     from starlette.requests import Request as _Req
 
     import api.routes.games as gm
@@ -359,7 +365,7 @@ def test_simulate_falls_back_to_transient_runner_without_shared(patch_resolver):
 
 
 # ===========================================================================
-# POST /api/games/{game_pk}/simulate/with_override  (SIM-358)
+# POST /api/games/{game_pk}/simulate/with_override
 # ===========================================================================
 
 
@@ -395,8 +401,9 @@ def test_with_override_returns_baseline_override_delta(patch_resolver):
 
 
 def test_with_override_empty_body_is_valid(patch_resolver):
-    """An all-empty override is accepted (yields a zero delta â€" baseline==override
-    at the same seed)."""
+    """An all-empty override is accepted.
+
+    It yields a zero delta: baseline == override at the same seed."""
     app = _build_app(pool=_FakePool())
     client = TestClient(app)
     resp = client.post(
@@ -420,13 +427,14 @@ def test_with_override_no_pool_is_503():
 
 
 # ===========================================================================
-# SIM-388 -- multi-substitution override (SubstitutionSlot + substitutions[])
+# The multi-substitution override (SubstitutionSlot + substitutions[])
 # ===========================================================================
 
 
 class TestMultiSubstitutionOverride:
-    """SIM-388: ``substitutions`` array lets the UI stage targeted single-player
-    changes without passing the full batting order."""
+    """The ``substitutions`` array lets the UI stage single-player changes.
+
+    The UI then need not pass the full batting order."""
 
     def test_single_home_sub_changes_one_slot(self, patch_resolver):
         """A single home substitution changes exactly the specified batting slot."""
@@ -444,10 +452,8 @@ class TestMultiSubstitutionOverride:
         )
         assert resp.status_code == 200, resp.text
         payload = resp.json()
-        # The override sim must have the substitute in slot 3 (0-indexed).
-        # We can verify via the delta — if the swap happened, baseline ≠ override
-        # at the same seed (unless the sub is identical, which is astronomically unlikely).
-        # The delta shape must be valid regardless.
+        # The override run puts the substitute in slot 3 (0-indexed). This test
+        # checks only the delta's shape; the _apply_override test checks the slot.
         assert "home_win_pct" in payload["delta"]["metrics"]
 
     def test_single_away_sub_changes_one_slot(self, patch_resolver):
@@ -538,13 +544,14 @@ class TestMultiSubstitutionOverride:
 
     def test_apply_override_helper_targeted_sub(self):
         """Unit-test _apply_override directly: targeted sub modifies the correct slot."""
-        from api.routes.games import SubstitutionSlot, _apply_override
+        from api.routes.games import _apply_override
+        from api.routes.games_models import RosterOverride, SubstitutionSlot
 
         base = {
             "home_lineup": [1, 2, 3, 4, 5, 6, 7, 8, 9],
             "away_lineup": [10, 11, 12, 13, 14, 15, 16, 17, 18],
         }
-        override = games_mod.RosterOverride(
+        override = RosterOverride(
             substitutions=[
                 SubstitutionSlot(batting_order=4, player_id=999, side="home"),
                 SubstitutionSlot(batting_order=1, player_id=888, side="away"),
@@ -561,7 +568,7 @@ class TestMultiSubstitutionOverride:
 
 
 # ===========================================================================
-# Factory-ref seam (SIM-355)
+# The factory-ref seam
 # ===========================================================================
 
 
@@ -589,12 +596,11 @@ def test_resolve_factory_ref_precedence(monkeypatch):
 
 
 # ===========================================================================
-# SIM-383 -- enriched GameCard (team names + records + venue)
+# The enriched slate card (team names, records, venue)
 # ===========================================================================
 
-#: Canned rows that include the SIM-383 JOIN columns.  The fake pool returns
-#: these verbatim regardless of which SQL is issued, so we just need the row
-#: shape to include all the new keys.
+#: Canned rows that hold the enrichment JOIN columns. The fake pool returns
+#: them as they stand for any SQL, so the rows only need every enrichment key.
 _ENRICHED_CANNED_ROWS = [
     {
         "game_pk": 745001,
@@ -604,7 +610,7 @@ _ENRICHED_CANNED_ROWS = [
         "home_team_id": 147,
         "away_team_id": 111,
         "venue_id": 3313,
-        # SIM-383 enrichment
+        # the enrichment columns
         "home_team_name": "New York Yankees",
         "home_team_abbrev": "NYY",
         "away_team_name": "Boston Red Sox",
@@ -639,8 +645,10 @@ _ENRICHED_CANNED_ROWS = [
 
 
 class TestGameCardEnrichment:
-    """SIM-383: ``GET /api/games/{date}`` returns team names, abbreviations,
-    venue name + city, and season-to-date win/loss records."""
+    """``GET /api/games/{date}`` returns the team names and abbreviations.
+
+    It also returns the venue name and city and the season-to-date win/loss
+    records."""
 
     def test_enriched_rows_populate_team_names(self):
         """Team names and abbreviations appear in the response when the JOIN
@@ -692,8 +700,9 @@ class TestGameCardEnrichment:
         assert g["away_wins"] == 55
 
     def test_bare_rows_without_enrichment_default_to_none(self):
-        """Existing rows that don't include enrichment columns (old cache, stubs)
-        deserialise without error â€" new fields default to ``None``."""
+        """Rows without the enrichment columns (an old cache entry, a stub) deserialise.
+
+        The enrichment fields default to ``None``."""
         app = _build_app(pool=_FakePool(rows=CANNED_GAMES_ROWS))
         client = TestClient(app)
         resp = client.get("/api/games/2024-08-15")
@@ -708,8 +717,9 @@ class TestGameCardEnrichment:
             assert g["away_losses"] is None
 
     def test_lineup_ready_true_when_lineups_exist(self):
-        """SIM-409: lineup_ready=True when the row includes a truthy lineup_ready
-        column (game has been ingested into raw.game_lineups)."""
+        """lineup_ready is True when the row holds a truthy lineup_ready column.
+
+        The column is truthy when raw.game_lineups holds the game's lineup."""
         rows = [{**_ENRICHED_CANNED_ROWS[0], "lineup_ready": True}]
         app = _build_app(pool=_FakePool(rows=rows))
         client = TestClient(app)
@@ -719,7 +729,7 @@ class TestGameCardEnrichment:
         assert g["lineup_ready"] is True
 
     def test_lineup_ready_false_when_lineups_missing(self):
-        """SIM-409: lineup_ready=False for a scheduled game with no lineup rows."""
+        """lineup_ready is False for a scheduled game with no lineup rows."""
         rows = [{**_ENRICHED_CANNED_ROWS[0], "lineup_ready": False}]
         app = _build_app(pool=_FakePool(rows=rows))
         client = TestClient(app)
@@ -729,8 +739,9 @@ class TestGameCardEnrichment:
         assert g["lineup_ready"] is False
 
     def test_lineup_ready_none_when_column_absent(self):
-        """SIM-409: lineup_ready=None when the query row does not include
-        the column (backward compat with old cached responses / stubs)."""
+        """lineup_ready is None when the query row lacks the column.
+
+        An old cached response or a stub lacks it."""
         app = _build_app(pool=_FakePool(rows=CANNED_GAMES_ROWS))
         client = TestClient(app)
         resp = client.get("/api/games/2024-08-15")
@@ -739,8 +750,9 @@ class TestGameCardEnrichment:
             assert g["lineup_ready"] is None
 
     def test_enriched_rows_cached_payload_preserves_enrichment(self):
-        """SIM-359 + SIM-383: the cache round-trip (model_dump â†’ **cached)
-        preserves the enrichment fields; the second call must not drop them."""
+        """The cache round-trip (model_dump → **cached) keeps the enrichment fields.
+
+        The second call does not drop them."""
         from simulation.batch_runner import InMemoryCache as _IMC
 
         cache = _IMC()
@@ -757,7 +769,7 @@ class TestGameCardEnrichment:
             assert g["home_wins"] == 75
 
     def test_enriched_rows_count_and_pks_unchanged(self):
-        """SIM-383 enrichment does not change the count or game_pk set."""
+        """The enrichment does not change the count or the game_pk set."""
         app = _build_app(pool=_FakePool(rows=_ENRICHED_CANNED_ROWS))
         client = TestClient(app)
         resp = client.get("/api/games/2024-08-15")
@@ -767,10 +779,10 @@ class TestGameCardEnrichment:
 
 
 # ===========================================================================
-# SIM-384 -- GET /api/games/{game_pk}/card (aggregate card + status enum)
+# GET /api/games/{game_pk}/status (the aggregate card and its status)
 # ===========================================================================
 
-#: A single enriched game row that also includes the SIM-384 score fields.
+#: One enriched game row that also holds the final-score fields.
 _CARD_ROW = {
     "game_pk": 745001,
     "season": 2024,
@@ -795,8 +807,10 @@ _CARD_ROW = {
 
 
 class TestGameCardAggregate:
-    """SIM-384: ``GET /api/games/{game_pk}/card`` returns the enriched identity
-    + 3-state status + sim summary (if available) in one response."""
+    """``GET /api/games/{game_pk}/status`` returns the whole status card in one response.
+
+    The card holds the enriched identity, the game status and the sim summary
+    (when one exists)."""
 
     def test_card_returns_200_with_correct_game_pk(self):
         """Basic happy-path: card returns 200 with the correct game_pk."""
@@ -807,14 +821,14 @@ class TestGameCardAggregate:
         assert resp.json()["game_pk"] == 745001
 
     def test_card_maps_final_status_correctly(self):
-        """'Final' raw status â†’ 'final' in the response."""
+        """'Final' raw status → 'final' in the response."""
         app = _build_app(pool=_FakePool(rows=[_CARD_ROW]))
         client = TestClient(app)
         resp = client.get("/api/games/745001/status")
         assert resp.json()["game_status"] == "final"
 
     def test_card_maps_live_status(self):
-        """'Live' raw status â†’ 'live'."""
+        """'Live' raw status → 'live'."""
         row = {**_CARD_ROW, "status": "Live"}
         app = _build_app(pool=_FakePool(rows=[row]))
         client = TestClient(app)
@@ -822,7 +836,7 @@ class TestGameCardAggregate:
         assert resp.json()["game_status"] == "live"
 
     def test_card_maps_scheduled_statuses(self):
-        """Preview / Warmup / Pre-Game raw statuses all â†’ 'scheduled'."""
+        """Preview / Warmup / Pre-Game raw statuses all → 'scheduled'."""
         for raw in ("Preview", "Warmup", "Pre-Game"):
             row = {**_CARD_ROW, "status": raw}
             app = _build_app(pool=_FakePool(rows=[row]))
@@ -831,7 +845,7 @@ class TestGameCardAggregate:
             assert resp.json()["game_status"] == "scheduled", f"failed for status={raw!r}"
 
     def test_card_maps_postponed_statuses(self):
-        """Postponed / Suspended / Cancelled â†’ 'postponed'."""
+        """Postponed / Suspended / Cancelled → 'postponed'."""
         for raw in ("Postponed", "Suspended", "Cancelled"):
             row = {**_CARD_ROW, "status": raw}
             app = _build_app(pool=_FakePool(rows=[row]))
@@ -866,12 +880,12 @@ class TestGameCardAggregate:
         app = _build_app(pool=_FakePool(rows=[_CARD_ROW]))
         client = TestClient(app)
         # The fake pool fetchrow will return _CARD_ROW for the sim-run query too,
-        # which fails _sim_run_row_to_dict key access â†’ exception â†’ None.
+        # which fails _sim_run_row_to_dict key access → exception → None.
         body = client.get("/api/games/745001/status").json()
         assert body["sim_summary"] is None
 
     def test_card_odds_is_none_placeholder(self):
-        """odds is None (reserved for Phase 6 Sprint 4+)."""
+        """odds is always None: the slate card's lines come from the card-odds route."""
         app = _build_app(pool=_FakePool(rows=[_CARD_ROW]))
         client = TestClient(app)
         assert client.get("/api/games/745001/status").json()["odds"] is None
@@ -965,7 +979,7 @@ class TestGameCardAggregate:
             }
 
         monkeypatch.setattr(
-            games_mod,
+            games_slate,
             "sim_store",
             type(
                 "_FakeSS",
@@ -985,12 +999,12 @@ class TestGameCardAggregate:
 
 
 # ===========================================================================
-# SIM-390 -- GET /api/games/{game_pk}/props/{player_id}/{prop}
+# GET /api/games/{game_pk}/props/{player_id}/{prop}
 # ===========================================================================
 
 
 def _make_fake_pset():
-    """A minimal :class:`PropDistributionSet` for SIM-390 unit tests.
+    """A minimal :class:`PropDistributionSet` for the prop-route tests.
 
     Player 600001 has a pitcher 'K' PMF with support [4..8] and probabilities
     [0.10, 0.20, 0.40, 0.20, 0.10] (mean=6.0).  Used to verify p_over/p_under
@@ -1014,7 +1028,7 @@ def _make_fake_pset():
 
 
 class TestPlayerPropEdge:
-    """SIM-390: GET /{game_pk}/props/{player_id}/{prop} endpoint.
+    """The GET /{game_pk}/props/{player_id}/{prop} route.
 
     Tests cover: happy-path PMF shape, case-normalisation, line-triggered
     over/under/push, edge report with market odds, under-side edge, validation
@@ -1208,7 +1222,7 @@ class TestPlayerPropEdge:
 
 
 # ===========================================================================
-# SIM-386 -- GET /api/games/{game_pk}/live
+# GET /api/games/{game_pk}/live
 # ===========================================================================
 
 #: Canned game_state JSONB that the fake pool returns for live-state tests.
@@ -1248,7 +1262,7 @@ class _FakePoolWithLive(_FakePool):
 
 
 class TestLiveGameState:
-    """SIM-386: GET /{game_pk}/live endpoint.
+    """The GET /{game_pk}/live route.
 
     Tests cover: happy-path shape, all field types, 404 when not live,
     503 without pool, and JSON-serializable response.
@@ -1277,7 +1291,7 @@ class TestLiveGameState:
             }
 
         monkeypatch.setattr(
-            games_mod,
+            games_feed,
             "sim_store",
             type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
         )
@@ -1320,7 +1334,7 @@ class TestLiveGameState:
             return None
 
         monkeypatch.setattr(
-            games_mod,
+            games_feed,
             "sim_store",
             type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
         )
@@ -1336,7 +1350,7 @@ class TestLiveGameState:
             return self._canned_live_row()
 
         monkeypatch.setattr(
-            games_mod,
+            games_feed,
             "sim_store",
             type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
         )

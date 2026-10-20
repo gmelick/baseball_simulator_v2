@@ -1,12 +1,13 @@
 /**
- * PropDistributionChart.tsx — SIM-394
+ * PropDistributionChart.tsx — a compact bar chart of a prop's PMF (its
+ * probability of each outcome).
  *
- * A compact bar chart of a prop's PMF (one bar per integer outcome in the
- * compact support), with an optional dashed vertical prop-line marker and a
- * mean marker. Bars at/over the line are tinted so the over/under split reads
- * at a glance. Pure SVG, responsive via viewBox.
+ * The chart draws one bar per integer outcome in the compact support, an
+ * optional dashed vertical prop-line marker and a mean marker. The bars over
+ * the line are tinted, so the over/under split reads at a glance. It is pure
+ * SVG and scales through its viewBox.
  *
- * Driven by a SIM-390 PropEdge payload's `support` + `probabilities` arrays.
+ * A PropEdge payload's `support` and `probabilities` arrays drive it.
  */
 import React from 'react'
 
@@ -19,7 +20,7 @@ export interface PropDistributionChartProps {
   probabilities: number[]
   /** Optional betting line; draws a dashed marker and tints the over bars. */
   line?: number | null
-  /** Optional mean marker. */
+  /** The optional mean marker. */
   mean?: number | null
   /** Axis label (e.g. "K", "H"). */
   propLabel?: string
@@ -50,7 +51,7 @@ export function PropDistributionChart({
   const barW = Math.max(2, slotW * 0.7)
   const maxP = Math.max(...probabilities, 1e-9)
 
-  // Map a support value (or fractional line) to an x pixel at the slot center.
+  // Map a support value (or a fractional line) to an x pixel at the slot centre.
   const minV = support[0]
   const maxV = support[n - 1]
   const span = Math.max(1, maxV - minV)

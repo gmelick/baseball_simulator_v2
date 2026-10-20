@@ -1,33 +1,27 @@
-"""
-tests/unit/test_api_games_plays.py
-==================================
-SIM-357 -- unit tests for the /plays + /state replay endpoints and their
-record -> persist backing in api/routes/games.py, plus the DuckDB
-state-snapshot store added to db/sim_store.py (and migration 0009).
+"""The /plays and /state replay routes of api/routes/games.py, and the replay store.
 
 WHAT'S COVERED
 --------------
-  1. DuckDB state-snapshot store (REAL in-memory ``:memory:`` duckdb, migration
-     0009 applied): store_state_snapshots then load_state_at round-trips the
-     right snapshot for a given (at_bat, pitch) and returns None for a missing
-     one; load_state_snapshots returns the whole ordered stream; empty is a
-     no-op; a snapshot missing a required key raises.
-  2. The two endpoints end-to-end via a TINY FastAPI app (ONLY the games router)
-     wired with a fake pg pool, an in-memory DuckDB on ``app.state.sim_duckdb``,
-     and the no-DB rng factory seam: drive GET /simulate (which persists), then
-     GET /plays returns a numpy-free PlayByPlay and GET /state/{at_bat}/{pitch}
-     returns the snapshot; 404s when nothing is persisted / the pitch is unknown.
-  3. Best-effort persistence: with NO DuckDB on app.state, /simulate still 200s
-     and /plays 404s (a persistence failure never breaks /simulate).
+  1. The state-snapshot store of db/sim_store.py, on a real in-memory DuckDB with
+     the replay schema. store_state_snapshots then load_state_at returns the right
+     snapshot for an (at_bat, pitch), and None for a missing one.
+     load_state_snapshots returns the whole stream in order. An empty list writes
+     nothing. A snapshot without a required key raises.
+  2. The two routes end to end, on a small FastAPI app with only the games router.
+     The app has a fake pg pool, an in-memory DuckDB on ``app.state.replay_duckdb``
+     and the no-DB factory. GET /simulate records the game. Then GET /plays returns
+     a numpy-free PlayByPlay, and GET /state/{at_bat}/{pitch} returns the snapshot.
+     Both routes answer 404 when nothing is stored or the pitch is unknown, and 503
+     with no replay store.
+  3. The recording is best effort. With no replay store, /simulate still answers
+     200. A failed run-history write does not break /simulate either.
 
 ISOLATION
 ---------
-Mirrors test_api_games.py's mock-app / fake-pool / patch_resolver idiom (the
-heavy similarity-engine lifespan + production sampler are never touched). The
-ONLY additions are an in-memory DuckDB connection (with migration 0009 + 0008
-applied) attached as ``app.state.sim_duckdb``.
-
-Owned by Backend Developer (SIM-357).
+The tests follow test_api_games.py: a mock app, a fake pool and the patch_resolver
+fixture. So the similarity-engine lifespan and the production sampler never run.
+The one addition is an in-memory DuckDB with the replay schema, attached as
+``app.state.replay_duckdb``.
 """
 
 from __future__ import annotations
@@ -43,8 +37,8 @@ from api.routes.games import router as games_router
 from db import sim_store
 from simulation.game_state import GameState
 
-# The no-DB, picklable rng factory -- the production factory ref is swapped to
-# this so /simulate (and the recorded representative game) run with no sampler.
+# The no-DB, picklable factory. The app's factory ref points here, so /simulate
+# (and the recorded representative game) run over the in-memory synthetic bundle.
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
@@ -54,13 +48,12 @@ NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
 def _fresh_duckdb():
-    """A real in-memory DuckDB with the play-stream (0008) + state (0009)
-    migrations applied."""
+    """A real in-memory DuckDB with the replay schema applied."""
     import duckdb
 
     con = duckdb.connect(":memory:")
-    # SIM-561: the app's own schema setup for the replay file (0008, 0009,
-    # 0010 and 0032), so the test and the app read one source.
+    # The app's own schema setup for the replay file (0008, 0009, 0010 and
+    # 0032), so the test and the app read one source.
     from db.sim_store import ensure_replay_schema
 
     ensure_replay_schema(con)
@@ -75,14 +68,16 @@ def duck_con():
 
 
 # ---------------------------------------------------------------------------
-# Fakes (mirror test_api_games.py)
+# Fakes (as in test_api_games.py)
 # ---------------------------------------------------------------------------
 
 
 class _FakePool:
-    """A fake asyncpg pool/connection. The /simulate path monkeypatches
-    resolve_game_state, but a pool must be present so _get_pool does not 503.
-    fetchval/fetchrow/fetch let it also stand in for the sim-run history conn."""
+    """A fake asyncpg pool and connection.
+
+    The tests monkeypatch resolve_game_state, but a pool must be present, or
+    _get_pool answers 503. fetchval, fetchrow and fetch also let the fake stand
+    in for the run-history connection."""
 
     def __init__(self, rows=None):
         self._rows = rows if rows is not None else []
@@ -95,7 +90,7 @@ class _FakePool:
         return self._rows[0] if self._rows else None
 
     async def fetchval(self, sql, *args):
-        # Stand in as the sim-run INSERT ... RETURNING run_id conn (SIM-356).
+        # Stands in for the run-history INSERT ... RETURNING run_id connection.
         self.store_calls.append((sql, args))
         return 4242
 
@@ -113,13 +108,13 @@ def _small_game_state() -> GameState:
 
 
 def _build_app(*, pool, duck=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
-    """A tiny app with ONLY the games router + the app.state the route reads."""
+    """A small app with only the games router and the app.state the routes read."""
     app = FastAPI()
     app.include_router(games_router)
     app.state.pg_pool = pool
     app.state.sim_cache = None
     app.state.sim_factory_ref = factory_ref
-    app.state.replay_duckdb = duck  # the SIM-357/561 replay store (None => skip persist)
+    app.state.replay_duckdb = duck  # the replay store (None => skip the recording)
     return app
 
 
@@ -138,8 +133,9 @@ def patch_resolver(monkeypatch):
 
 
 def _sample_snapshots() -> list[dict]:
-    """A small ordered per-pitch StateAtPitch stream (the jsonable dict shape
-    SIM-357 hands store_state_snapshots) -- built through the real contracts."""
+    """A small ordered per-pitch StateAtPitch stream, built through the real contracts.
+
+    Each item has the jsonable dict shape that the route hands store_state_snapshots."""
     from api.serialization import to_jsonable
     from simulation.snapshots import StateAtPitch
 
@@ -304,9 +300,10 @@ class TestPlaysAndStateEndpoints:
 
 class TestPersistenceIsBestEffort:
     def test_simulate_ok_without_duckdb_then_plays_404(self, patch_resolver):
-        """No DuckDB on app.state -> /simulate still 200 (persistence skipped),
-        and /plays then 503 (no store) -- a persistence path failure never
-        breaks the /simulate response."""
+        """With no replay store on app.state, /simulate still answers 200.
+
+        The route skips the recording. A recording failure never breaks the
+        /simulate response."""
         app = _build_app(pool=_FakePool(), duck=None)
         client = TestClient(app)
 
@@ -316,9 +313,10 @@ class TestPersistenceIsBestEffort:
         assert sim.json()["summary"]["n_iterations"] == 3
 
     def test_simulate_ok_when_history_pool_store_raises(self, patch_resolver, duck_con):
-        """A pg pool whose fetchval raises (sim-run history write fails) must NOT
-        break /simulate, and the DuckDB play-stream still persists so /plays
-        works (SIM-561: the replay file numbers its own runs)."""
+        """A failed run-history write (the pool's fetchval raises) keeps /simulate up.
+
+        The replay file numbers its own runs, so the play stream still lands and
+        /plays works."""
 
         class _AngryPool(_FakePool):
             async def fetchval(self, sql, *args):

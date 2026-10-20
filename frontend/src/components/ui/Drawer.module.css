@@ -1,4 +1,4 @@
-/* Drawer.module.css — SIM-439 */
+/* Drawer.module.css — the design system's Drawer, a side panel over the page. */
 
 .overlay {
   position: fixed;
@@ -67,7 +67,7 @@
   padding: var(--sim-space-4);
 }
 
-/* Mobile: full-width bottom sheet */
+/* Mobile: a full-width bottom sheet. */
 @media (max-width: 640px) {
   .overlay {
     align-items: flex-end;

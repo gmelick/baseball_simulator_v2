@@ -1,8 +1,8 @@
-"""SIM-519 Part A — the schedule-driven slate endpoint.
+"""The schedule-driven slate route and the /status card (``api/routes/games_slate.py``).
 
-A tiny app with the games router only (the ``test_api_games.py`` idiom). The
-league feed is a fake on ``app.state.league_feed`` that serves a recorded
-schedule response; the pool is a fake that answers the two merge queries.
+The tests build a small app with only the games router, as ``test_api_games.py``
+does. The league feed is a fake on ``app.state.league_feed`` that serves a recorded
+schedule response. The pool is a fake that answers the two merge queries.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import api.routes.games as games_mod
+import api.routes.games_slate as games_slate
 from api.routes.games import router as games_router
+from api.routes.games_models import GamesOnDateResponse
 from simulation.batch_runner import InMemoryCache
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "mlb_schedule"
@@ -285,13 +286,13 @@ def test_suspended_game_is_one_card() -> None:
 @pytest.mark.parametrize(
     ("day", "expected"),
     [
-        (date(2026, 10, 8), games_mod.SLATE_TTL_PAST_S),
-        (date(2026, 10, 9), games_mod.SLATE_TTL_TODAY_S),
-        (date(2026, 10, 10), games_mod.SLATE_TTL_FUTURE_S),
+        (date(2026, 10, 8), games_slate.SLATE_TTL_PAST_S),
+        (date(2026, 10, 9), games_slate.SLATE_TTL_TODAY_S),
+        (date(2026, 10, 10), games_slate.SLATE_TTL_FUTURE_S),
     ],
 )
 def test_ttl_by_date_class(day: date, expected: int) -> None:
-    assert games_mod._slate_ttl(day, date(2026, 10, 9)) == expected  # noqa: SLF001
+    assert games_slate._slate_ttl(day, date(2026, 10, 9)) == expected  # noqa: SLF001
 
 
 def test_the_old_mock_envelope_still_validates() -> None:
@@ -300,7 +301,7 @@ def test_the_old_mock_envelope_still_validates() -> None:
         "count": 1,
         "games": [{"game_pk": 1, "season": 2024, "game_date": "2024-08-15"}],
     }
-    resp = games_mod.GamesOnDateResponse(**old)
+    resp = GamesOnDateResponse(**old)
     assert resp.games[0].game_status is None
 
 

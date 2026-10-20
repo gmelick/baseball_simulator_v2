@@ -1,13 +1,13 @@
 /**
- * SimulationCard.tsx — one simulation run per game (SIM-519 Part E).
+ * SimulationCard.tsx — one simulation run per game.
  *
- * A size menu (100 · 300 · 1,000 games, with a time estimate), Run, and the
- * run's state: queued shows its place in line, running a progress bar
- * (polled every 2 seconds), done shows the size, the age and the lineup the
- * run used, with Re-run; failed shows the error. On mount the card reads the
- * game's newest run, so a reload resumes the bar. Cancel stops a run between
- * chunks of games. A game whose lineup is not published yet shows the server's
- * words and a countdown to the next try.
+ * The card has a size menu (100 · 300 · 1,000 games, with a time estimate), a
+ * Run button and the run's state. Queued shows its place in line. Running
+ * shows a progress bar (polled every 2 seconds). Done shows the size, the age
+ * and the lineup the run used, with Re-run. Failed shows the error. On mount,
+ * the card reads the game's newest run, so a reload resumes the bar. Cancel
+ * stops a run between chunks of games. A game whose lineup is not published
+ * yet shows the server's words and a countdown to the next try.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -15,15 +15,15 @@ import {
   cancelSimRun,
   fetchLatestRun,
   fetchSimRun,
-  GamesApiError,
   startSimRun,
   type SimRun,
 } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 import { ageLabel } from '@/components/slate/format'
 
 import styles from './SimulationCard.module.css'
 
-/** The run sizes on offer (decision D5). */
+/** The run sizes on offer (decision D5 of the live slate design, SIM-519). */
 const RUN_SIZES = [100, 300, 1000] as const
 /** About 0.3 s a game on the warm pool (the n=100 run reads 25–35 s). */
 const SECONDS_PER_GAME = 0.3

@@ -1,13 +1,8 @@
-"""
-test_api_auth.py
-================
-Unit tests for api/auth.py — the SIM-351 auth / CORS primitives.
+"""The CORS allowlist and the latency middleware of ``api/auth.py``.
 
-Covers:
-  - resolve_cors_origins precedence (CORS_ORIGINS > FRONTEND_URL > dev "*"
-    > safe non-dev fallback), and the invariant that non-dev is never "*".
-
-Owned by Backend Developer (SIM-351).
+- ``resolve_cors_origins``: CORS_ORIGINS first, then FRONTEND_URL, then the named
+  dev origins, then one localhost origin. No default is the wildcard ``"*"``.
+- ``LatencyMiddleware``: the p95 latency that it writes on ``app.state``.
 """
 
 from __future__ import annotations
@@ -37,9 +32,10 @@ def test_cors_origins_falls_back_to_frontend_url(monkeypatch):
 
 
 def test_cors_origins_dev_default_uses_specific_origins(monkeypatch):
-    """SIM-389: dev CORS must use specific origins, NOT the wildcard.
-    allow_origins=["*"] + allow_credentials=True is a CORS spec violation
-    that browsers silently reject; specific origins let cookies work correctly.
+    """In development, CORS uses named origins, never the wildcard.
+
+    Browsers reject allow_origins=["*"] with allow_credentials=True. Named origins
+    let the session cookie through.
     """
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
@@ -52,7 +48,7 @@ def test_cors_origins_dev_default_uses_specific_origins(monkeypatch):
 
 
 def test_cors_origins_non_dev_never_wildcard(monkeypatch):
-    """Core SIM-351 invariant: non-dev with nothing configured is NOT "*"."""
+    """Outside development, with nothing configured, the allowlist is never "*"."""
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
     monkeypatch.delenv("FRONTEND_URL", raising=False)
@@ -61,12 +57,12 @@ def test_cors_origins_non_dev_never_wildcard(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# LatencyMiddleware (SIM-410)
+# LatencyMiddleware — the p95 latency of the API
 # ---------------------------------------------------------------------------
 
 
 def _latency_app() -> FastAPI:
-    """Tiny app with LatencyMiddleware and one timed route + one exempt route."""
+    """A small app with LatencyMiddleware, one timed route and one exempt route."""
     app = FastAPI()
     app.add_middleware(LatencyMiddleware)
 
@@ -82,10 +78,10 @@ def _latency_app() -> FastAPI:
 
 
 def test_latency_middleware_populates_p95_after_two_requests():
-    """SIM-410: app.state.api_p95_seconds must be set after ≥2 timed requests."""
+    """The middleware sets app.state.api_p95_seconds after two timed requests."""
     app = _latency_app()
     client = TestClient(app)
-    # Two requests needed so the window has ≥2 samples and the percentile fires.
+    # The percentile needs at least two samples in the window.
     client.get("/ping")
     client.get("/ping")
     p95 = getattr(app.state, "api_p95_seconds", None)
@@ -95,7 +91,7 @@ def test_latency_middleware_populates_p95_after_two_requests():
 
 
 def test_latency_middleware_p95_grows_with_more_requests():
-    """SIM-410: p95 is re-computed after each request; more samples refine it."""
+    """The middleware recomputes the p95 after each timed request."""
     app = _latency_app()
     client = TestClient(app)
     for _ in range(10):
@@ -106,12 +102,12 @@ def test_latency_middleware_p95_grows_with_more_requests():
 
 
 def test_latency_middleware_exempt_paths_do_not_populate_p95():
-    """SIM-410: exempt paths (/health etc.) must NOT trigger p95 computation."""
+    """An exempt path, such as /health, does not feed the p95."""
     app = _latency_app()
     client = TestClient(app)
-    # Only call the exempt /health path; p95 should remain unset (window empty).
+    # Only the exempt /health path runs, so the p95 stays unset.
     client.get("/health")
     client.get("/health")
     p95 = getattr(app.state, "api_p95_seconds", None)
-    # After only exempt requests the window is still empty, so no p95 written.
+    # The window holds no sample, so the middleware writes no p95.
     assert p95 is None, f"exempt path should not populate api_p95_seconds, got {p95}"

@@ -1,11 +1,11 @@
-"""
-tests/unit/test_sql_safety.py
-=============================
-SIM-439 — the read-only SQL guard. This is the security spine shared by the SQL
-console AND the AI assistant, so it is unit-tested hard: the validator must
-accept legitimate SELECT/WITH queries and reject every write / DDL / multi-
-statement / dangerous-function attempt, and the executor must wrap + row-cap +
-run inside a read-only transaction with a statement timeout.
+"""The read-only SQL guard of ``api/routes/sql_safety.py``.
+
+The SQL console and the AI assistant share this guard, so the tests press it hard.
+The validator accepts real SELECT and WITH queries. It rejects every write, every
+DDL statement (a statement that changes the schema), every stacked statement and
+every dangerous function. The executor wraps the query, caps the rows and runs it
+inside a read-only transaction with a statement timeout. The role check confirms
+that the console's pool logs in as a read-only role.
 """
 
 from __future__ import annotations
@@ -195,28 +195,25 @@ async def test_executor_validates_before_db() -> None:
 
 
 # ===========================================================================
-# SIM-442 — quoted-identifier bypass of the dangerous-function blocklist
+# The quoted-identifier bypass of the dangerous-function blocklist
 # ===========================================================================
 
 
 class TestQuotedIdentifierBypass:
     """A quoted identifier is executable code, not inert text.
 
-    ``_strip_sql_noise`` blanked the contents of ``"quoted identifiers"`` along
-    with comments and string literals, and both blocklists were scanned against
-    that blanked copy — while ``validate_read_only_sql`` returns the ORIGINAL
-    string for execution. So::
+    Postgres resolves ``"pg_read_file"`` to the same function as a bare
+    ``pg_read_file``, because unquoted identifiers fold to lower case.
+    ``validate_read_only_sql`` returns the original string for execution. So a
+    function scan on a copy with the quoted identifiers blanked reads::
 
         SELECT "pg_read_file"('/etc/passwd')
 
-    was scanned as ``SELECT              (            )``, tripping no rule, and
-    then executed verbatim. Postgres resolves ``"pg_read_file"`` to exactly the
-    same function as bare ``pg_read_file`` (unquoted identifiers fold to lower
-    case), so this defeated EVERY entry in ``_DANGEROUS_TOKENS``.
-
-    It did not yield a write — the ``readonly=True`` transaction and the
-    statement-keyword list both hold — but it yielded arbitrary server-side file
-    read, directory listing and connection kill as whatever role the pool uses.
+    as ``SELECT              (            )``, and every entry in
+    ``_DANGEROUS_TOKENS`` misses it. The ``readonly=True`` transaction still
+    blocks a write, but the miss gives server-side file reads, directory listings
+    and connection kills as the pool's role. So the function scan keeps the
+    quoted identifiers, and these tests pin that.
     """
 
     @pytest.mark.parametrize(
@@ -245,7 +242,7 @@ class TestQuotedIdentifierBypass:
         ],
     )
     def test_unquoted_form_still_rejected(self, sql: str) -> None:
-        """The original protection must not have regressed."""
+        """The bare form stays rejected too."""
         with pytest.raises(SqlValidationError, match="disallowed function"):
             validate_read_only_sql(sql)
 
@@ -261,36 +258,36 @@ class TestQuotedIdentifierBypass:
         ],
     )
     def test_legitimate_queries_still_pass(self, sql: str) -> None:
-        """Closing the bypass must not start rejecting real queries.
+        """The function scan of the quoted identifiers rejects no real query.
 
-        Note the last case: a dangerous NAME inside a string LITERAL is still
-        inert and must remain allowed — only quoted IDENTIFIERS are executable.
+        The last case holds a dangerous name inside a string literal. A literal is
+        inert, so the query passes; only a quoted identifier executes.
         """
         assert validate_read_only_sql(sql)
 
     def test_quoted_statement_keyword_is_still_allowed(self) -> None:
         """A column named "delete" is an identifier, not the DELETE command.
 
-        The statement-keyword scan deliberately still runs on the blanked copy,
-        so this must not become a false rejection.
+        The statement-keyword scan runs on the blanked copy on purpose, so this
+        column is not a false rejection.
         """
         assert validate_read_only_sql('SELECT "delete" FROM raw.pitches LIMIT 1')
 
 
 # ===========================================================================
-# SIM-443d — the relation allowlist: every table is raw.<name> or a CTE
+# The relation allowlist: every table is raw.<name> or a CTE
 # ===========================================================================
 
 
 class TestRelationAllowlist:
     """The console reads ``raw.*`` only.
 
-    The statement-shape checks above let ``SELECT * FROM pg_authid`` (password
-    hashes), ``pg_stat_activity`` (other sessions' SQL), ``information_schema``
-    and ``sim.sim_runs`` through. A parser (sqlglot) now reads the query, and
-    every table must be ``raw.<name>`` or a CTE in scope. Every case runs
-    through :func:`validate_read_only_sql`, the one entry point of the console
-    and the assistant.
+    The statement-shape checks above, on their own, let ``SELECT * FROM
+    pg_authid`` (password hashes), ``pg_stat_activity`` (other sessions' SQL),
+    ``information_schema`` and ``sim.sim_runs`` through. So a parser (sqlglot)
+    reads the query, and every table must be ``raw.<name>`` or a CTE in scope.
+    Every case runs through :func:`validate_read_only_sql`, the one entry point
+    of the console and the assistant.
     """
 
     @pytest.mark.parametrize(
@@ -412,7 +409,7 @@ class TestRelationAllowlist:
         assert validate_read_only_sql(sql)
 
     def test_quoted_identifier_cases_still_pass(self) -> None:
-        """Every legitimate case of the quoted-identifier fix still passes."""
+        """Every real query of the quoted-identifier tests passes the allowlist too."""
         for sql in (
             "SELECT game_pk, release_speed FROM raw.pitches LIMIT 10",
             'SELECT "pitcher", "batter" FROM raw.pitches LIMIT 5',
@@ -526,7 +523,7 @@ def test_sqlglot_assumptions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-443e — check_read_only_role
+# check_read_only_role: the console's pool logs in as a read-only role
 # ---------------------------------------------------------------------------
 
 

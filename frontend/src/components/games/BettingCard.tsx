@@ -1,20 +1,20 @@
 /**
- * BettingCard.tsx — SIM-395
+ * BettingCard.tsx — the game page's betting card.
  *
- * The betting surface for a game: per-market edge reports with the favored side
- * highlighted, +EV signal badges (stake% + offered price), and a mock-vs-real
- * `odds_source` indicator per market.
- * SIM-555: a market priced from the stored lines (the closing line; before the game
+ * Each market's edge reports with the favored side highlighted, the +EV signal
+ * badges (stake % and offered price), and an `odds_source` indicator per market
+ * (injected, stored or mock).
+ * A market priced from the stored lines (the closing line; before the game
  * starts, also the latest current line) names the book of the fair price and, per
  * side, the book with the best price at that line.
- * SIM-546: the segment and team markets. The card renders every market the response
+ * The segment and team markets. The card renders every market the response
  * carries. It orders the sections by the response's `markets` (the vocabulary order)
  * and titles them from `market_names`. It groups them under four sub-headings: Full
  * game, First five innings, First inning, Team totals.
  *
- * Gated behind a "Load betting" button (the /edges + /signals endpoints run a
- * sim). Edges + signals are fetched together; signals are matched onto their
- * source edge by label+side.
+ * A "Load betting" button starts the load, because /edges and /signals run a
+ * simulation. The card reads /edges, then /signals (see `load`); each signal
+ * matches its source edge by label and side.
  */
 import React, { useState } from 'react'
 
@@ -38,19 +38,19 @@ export interface BettingCardProps {
 // The edge label of a market -> its key in odds_source and fair_book (the API keys
 // the run line's source 'runline' while its edges carry the label 'run_line').
 const SOURCE_KEY: Record<string, string> = { run_line: 'runline' }
-// SIM-546: the reverse. A market type in `markets` -> the label its edges carry.
+// The reverse. A market type in `markets` -> the label its edges carry.
 const LABEL_OF: Record<string, string> = { runline: 'run_line' }
-// SIM-546: the section titles when the response carries no `market_names` (an
+// The section titles when the response carries no `market_names` (an
 // older API that priced only the three full-game markets).
 const FALLBACK_NAMES: Record<string, string> = {
   moneyline: 'Moneyline',
   total: 'Total',
   run_line: 'Run line',
 }
-// SIM-546: the four sub-headings, in the order the card shows them.
+// The four sub-headings, in the order the card shows them.
 const GROUPS = ['Full game', 'First five innings', 'First inning', 'Team totals'] as const
 type Group = (typeof GROUPS)[number]
-// SIM-546: each label's sub-heading, read from the market's segment and side in the
+// Each label's sub-heading, read from the market's segment and side in the
 // vocabulary the API serves (pipeline/odds_provider.py). A team total of any segment
 // sits under Team totals. The grouping is presentation, so it lives in the card.
 const SEGMENT_OF: Record<string, Group> = {
@@ -70,7 +70,7 @@ const SEGMENT_OF: Record<string, Group> = {
   f5_team_total_home: 'Team totals',
   f5_team_total_away: 'Team totals',
 }
-// SIM-546: the yes / no market (a run in the first inning) stores its two sides as
+// The yes / no market (a run in the first inning) stores its two sides as
 // over / under at 0.5. The card names them Yes / No.
 const YES_NO_LABELS = new Set(['first_inning_run'])
 
@@ -90,7 +90,7 @@ function fmtSignedPct(p: number): string {
 }
 
 function sideLabel(label: string, side: string, line: number | null): string {
-  // SIM-546: a three-way market's third outcome is the tie.
+  // A three-way market's third outcome is the tie.
   if (side === 'draw') return 'Tie'
   if (YES_NO_LABELS.has(label)) {
     if (side === 'over') return 'Yes'
@@ -102,7 +102,7 @@ function sideLabel(label: string, side: string, line: number | null): string {
   return `${base} ${line > 0 && (side === 'home' || side === 'away') ? '+' : ''}${line}`
 }
 
-/** SIM-546: the two-bets note's words for the two-way market the margin came from. */
+/** The two-bets note's words for the two-way market the margin came from. */
 function referenceName(source: string, names: Record<string, string>): string {
   if (source === 'total' || source === 'moneyline') return `the game's ${source} margin`
   const label = LABEL_OF[source] ?? source
@@ -120,9 +120,10 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
     setLoading(true)
     setError(null)
     // In sequence, not in parallel: each request runs the same 200-game batch,
-    // and the runner caches it (60 s). Fired together, both missed the cache and
-    // ran two batches on one worker pool (45 s alone became ~100 s each), past
-    // nginx's 120 s limit: a 504. Fired in turn, /signals reads /edges' batch.
+    // and the runner caches it (60 s). Fired together, both miss the cache and
+    // run two batches on one worker pool (45 s alone becomes about 100 s each),
+    // past nginx's 120 s limit: a 504. Fired in turn, /signals reads /edges'
+    // batch.
     fetchEdges(gamePk, 200)
       .then(async (e) => [e, await fetchSignals(gamePk, 200)] as const)
       .then(([e, s]) => {
@@ -158,7 +159,7 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
     signalByKey.set(`${s.label}:${s.side}`, s)
   }
 
-  // SIM-546: the response's market order (the vocabulary order), then any label
+  // The response's market order (the vocabulary order), then any label
   // the response did not list, in the order its edges arrived.
   const ordered = (edges.markets ?? []).map((m) => LABEL_OF[m] ?? m)
   const markets = [
@@ -166,14 +167,14 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
     ...Array.from(byMarket.keys()).filter((m) => !ordered.includes(m)),
   ]
   const names = edges.market_names ?? {}
-  // SIM-546: each sub-heading's markets, in market order. A label the table does
+  // Each sub-heading's markets, in market order. A label the table does
   // not know goes in a last group with no sub-heading.
   const grouped: Array<{ title: Group | null; markets: string[] }> = [
     ...GROUPS.map((g) => ({ title: g, markets: markets.filter((m) => SEGMENT_OF[m] === g) })),
     { title: null, markets: markets.filter((m) => SEGMENT_OF[m] === undefined) },
   ].filter((g) => g.markets.length > 0)
 
-  // SIM-546: how a run line was priced, by label. An older API carries only the
+  // How a run line was priced, by label. An older API carries only the
   // full-game run line's pricing.
   const runLinePricing = (market: string): RunLinePricing | null | undefined =>
     edges.run_line_pricing_by_label?.[market] ??
@@ -182,7 +183,7 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
   const renderMarket = (market: string): React.ReactElement => {
     const sides = byMarket.get(market) ?? []
     const source = edges.odds_source[SOURCE_KEY[market] ?? market]
-    // SIM-555: a market priced from the stored lines names the one book whose
+    // A market priced from the stored lines names the one book whose
     // row gave the fair price.
     const fairBook = edges.fair_book_name?.[SOURCE_KEY[market] ?? market]
     const pricing = runLinePricing(market)
@@ -251,7 +252,7 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
                       <span className={e.edge > 0 ? styles.edgePos : styles.edgeNeg}>
                         edge {fmtSignedPct(e.edge)}
                       </span>
-                      {/* SIM-555: the book with the best price at this line. */}
+                      {/* The book with the best price at this line. */}
                       {e.price_book_name && <span>best at {e.price_book_name}</span>}
                     </>
                   )}

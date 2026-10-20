@@ -1,12 +1,12 @@
 /**
- * useAsync.ts — SIM-439
- * A tiny data-fetch hook: runs `fn(signal)` whenever `deps` change, with an
- * AbortController + cancelled guard (matching the DaySummaryPage pattern) and a
- * discriminated-union state so each caller renders loading / ok / error inline.
+ * useAsync.ts — a small data-fetch hook. It runs `fn(signal)` whenever `deps`
+ * change. Like DaySummaryPage, it drops the result of a stale request; an
+ * AbortController also cancels that request. A discriminated-union state lets
+ * each caller render loading / ok / error inline.
  */
 import { useEffect, useRef, useState } from 'react'
 
-import { GamesApiError } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 
 export type AsyncState<T> =
   | { kind: 'loading' }

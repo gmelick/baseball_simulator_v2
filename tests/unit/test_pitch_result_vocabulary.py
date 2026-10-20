@@ -1,26 +1,23 @@
-"""
-tests/unit/test_pitch_result_vocabulary.py
-=================================================
-The Data Lab reads each pitch result from the pitch-result code (the Data Lab
+"""The Data Lab reads each pitch result from the pitch-result code (the Data Lab
 vocabulary fix, SIM-571).
 
 The Data Lab is the web app's analytics area. Four of its routes show pitch
 rates: count-state, zone and the two leaderboards. A whiff is a swing and a
 miss. CSW (called strikes plus whiffs) is the share of pitches that are a
-called strike or a whiff. The routes matched ``raw.pitches.description``
-against Statcast's snake_case names, such as ``'swinging_strike'``. A
-snake_case name is a lower-case name with underscores between the words. The
-loader stores the MLB feed's display text in that column ("Swinging Strike").
-So on live data the swing rate read 0 and the whiff rate read null.
+called strike or a whiff.
 
-The column ``raw.pitches.type`` holds the feed's pitch-result code. The fix
-filters on that code with the named code sets in ``pipeline/statcast_events.py``.
-The pool build and the pitcher profile read the same sets.
+The loader stores the MLB feed's display text ("Swinging Strike") in
+``raw.pitches.description``, not Statcast's snake_case names, such as
+``'swinging_strike'``. A snake_case name is a lower-case name with underscores
+between the words. A filter on such a name matches no stored row: the swing rate
+reads 0 and the whiff rate reads null. The column ``raw.pitches.type`` holds the
+feed's pitch-result code. So the routes filter on that code with the named code
+sets in ``pipeline/statcast_events.py``. The pool build and the pitcher profile
+read the same sets.
 
-The owner ruled on 2026-10-19 that the Data Lab shows Savant's whiff. Savant
-(Baseball Savant) is the public Statcast site, and its whiff counts a foul tip.
-The model's whiff does not change: a foul tip stays contact for the profiles
-and the pool build.
+The Data Lab shows Savant's whiff, by owner ruling. Savant (Baseball Savant) is
+the public Statcast site, and its whiff counts a foul tip. The model's whiff is
+different: a foul tip stays contact for the profiles and the pool build.
 
 These tests pin the rule:
 
@@ -126,7 +123,7 @@ _CLASSES: dict[str, tuple[str, ...]] = {
     "hit by pitch": _HIT_BY_PITCH,
 }
 
-#: Statcast's names for a pitch result. The old Data Lab filters matched these.
+#: Statcast's names for a pitch result. No stored description is one of them.
 _STATCAST_NAMES: frozenset[str] = frozenset(
     {
         "ball",
@@ -248,8 +245,8 @@ def test_one_description_never_spans_two_classes() -> None:
 def test_the_loader_stores_display_text_not_statcast_names() -> None:
     """No stored description is a Statcast snake_case name.
 
-    This is the root defect. A filter such as description LIKE
-    '%swinging_strike%' matches no stored row.
+    So a filter such as description LIKE '%swinging_strike%' matches no stored
+    row, and the routes filter on the code instead.
     """
     for description, code, _, _ in _LOADER_PAIRS:
         assert description not in _STATCAST_NAMES, (description, code)
@@ -580,8 +577,9 @@ _PITCHES_DDL = (
     "data_quality_flag BOOLEAN)"
 )
 _PLAYERS_DDL = "CREATE TABLE raw.players (player_id INTEGER, full_name VARCHAR)"
-#: The routes keep the regular season by default (SIM-572), so each seed row
-#: sits in a regular-season game: game 1 in 2025, game 2 in 2024.
+#: The routes keep the regular season by default (the Data Lab game-type
+#: filter, SIM-572), so each seed row sits in a regular-season game: game 1 in
+#: 2025, game 2 in 2024.
 _GAMES_DDL = "CREATE TABLE raw.games (game_pk INTEGER, season INTEGER, game_type VARCHAR)"
 _GAMES: list[tuple[int, int, str]] = [(1, 2025, "R"), (2, 2024, "R")]
 
@@ -760,7 +758,7 @@ def _starter(queries: dict[str, str], prefix: str) -> str:
 def test_the_starter_queries_filter_on_type() -> None:
     """The console's starter queries filter on the code with the shared lists.
 
-    No query compares ``description``, spells a Statcast name or keeps the
+    No query compares ``description``, spells a Statcast name or uses the
     outs-only filter ``type = 'X'``. The whiff leaders, the chase rate and the
     count-state query use the rendered swing and Savant-whiff lists. The
     batted-ball query counts every ball in play.

@@ -1,9 +1,9 @@
 /**
- * ConsolePage.tsx — SIM-439
- * The read-only SQL console. A monospace editor (line-number gutter, Tab→2
- * spaces, Ctrl/Cmd+Enter run, Esc cancel) + starter-query menu + a schema
- * browser, over a result grid with CSV export and a localStorage query history.
- * All execution goes through the safe /api/sql/run path.
+ * ConsolePage.tsx — the Data Lab's read-only SQL console. It has a monospace
+ * editor (a line-number gutter, Tab → 2 spaces, Ctrl/Cmd+Enter to run, Esc to
+ * cancel), a starter-query menu and a schema browser. Below them sit a result
+ * grid with CSV export and a localStorage query history. Every query runs
+ * through the safe /api/sql/run path.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
@@ -44,7 +44,7 @@ export function ConsolePage(): React.ReactElement {
 
   const schema = useAsync(() => fetchSchema(), [])
 
-  // A card handed us SQL via router state — load it once.
+  // A summary card or an assistant turn passes SQL through the router state; load it once.
   useEffect(() => {
     if (prefill) setSql(prefill)
   }, [prefill])

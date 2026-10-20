@@ -1,21 +1,16 @@
-"""
-test_incomplete_lineup_api.py
-====================================
-SIM-559, the last part: a KNOWN game whose lineup rows do not make a playable
-game answers 503 with Retry-After, not 404.
+"""A known game whose lineup rows do not make a playable game answers 503, not 404.
 
-Before this, the resolver raised the base ``LineupResolutionError`` for a side
-with no pitcher or an empty batting order, and the API mapped every base-class
-error to 404 Not Found — the answer for a game that is not in ``raw.games``.
-A real game with a data gap is not missing; a later lineup publish or the box
-backfill fills the gap, so the API now answers it as it answers an unpublished
-lineup (SIM-409): 503 Service Unavailable with ``Retry-After: 900``.
+The resolver raises ``LineupIncompleteError`` at its three sites where rows exist
+but do not resolve. The error is a ``LineupResolutionError`` subclass and a sibling
+of ``LineupNotIngestedError``. The API catches both subclasses before the base class.
 
-The resolver raises ``LineupIncompleteError`` (a ``LineupResolutionError``
-subclass, a sibling of ``LineupNotIngestedError``) at its three "rows exist but
-do not resolve" sites; the API catches both subclasses before the base class.
-No live DB: the resolver tests use dict rows, the API tests monkeypatch the
-resolver as the SIM-409 tests do.
+A real game with a data gap is not missing: a later lineup publish or the box
+backfill fills the gap. So the API answers it as it answers an unpublished lineup:
+503 Service Unavailable with ``Retry-After: 900``. A game that is not in
+``raw.games`` still answers 404 Not Found.
+
+No live database runs. The resolver tests use dict rows, and the API tests
+monkeypatch the resolver.
 """
 
 from __future__ import annotations
@@ -89,7 +84,7 @@ def _complete_rows() -> list[dict]:
 def test_incomplete_is_a_resolution_error_but_not_the_unpublished_one():
     exc = LineupIncompleteError("x")
     assert isinstance(exc, LineupResolutionError)
-    assert isinstance(exc, ValueError)  # the SIM-326 invalid-state guard still catches it
+    assert isinstance(exc, ValueError)  # a caller that catches ValueError still catches it
     assert not isinstance(exc, LineupNotIngestedError)
     assert "LineupIncompleteError" in lr.__all__
 

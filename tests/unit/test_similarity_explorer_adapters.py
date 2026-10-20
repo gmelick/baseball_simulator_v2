@@ -1,11 +1,10 @@
-"""
-tests/unit/test_similarity_explorer_adapters.py
-===============================================
-SIM-439 — the generalized Similarity Explorer adapts 8 engines that each return
-a DIFFERENT ``SimilarityResult`` dataclass. A wrong field name in an adapter is a
-runtime 500 (``getattr`` on a missing attribute), so this test pins every
-adapter's ``id_field`` / ``sample_field`` / sub-score fields / extra fields to the
-REAL dataclass fields, and checks the position-/vs_hand-aware relabeling.
+"""The Similarity Explorer's engine adapters (``api/routes/similarity_explorer.py``).
+
+The explorer adapts eight engines, and each engine returns a different
+``SimilarityResult`` dataclass. A wrong field name in an adapter gives a runtime 500
+(``getattr`` on a missing attribute). These tests pin each adapter's ``id_field``,
+``sample_field``, sub-score fields and extra fields to the real dataclass fields.
+They also check the labels that change with the position and the ``vs_hand`` mode.
 """
 
 from __future__ import annotations

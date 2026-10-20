@@ -1,10 +1,9 @@
 /**
- * LoginPage.tsx — SIM-389
+ * LoginPage.tsx — the full-page login screen. App shows it when no valid
+ * session exists. On submit it calls AuthContext.login(); a failed login (a
+ * wrong password is a 401) shows an inline error.
  *
- * Full-page login screen shown when no valid session exists.
- * Calls AuthContext.login() on submit; shows an inline error on 401.
- *
- * Layout: centred card with the ⚾ logo, a password field, and a submit button.
+ * Layout: a centred card with the ⚾ logo, a password field and a submit button.
  * Keyboard: Enter submits; Escape clears the error.
  */
 
@@ -30,7 +29,7 @@ export function LoginPage() {
 
       try {
         await login(password)
-        // AuthContext sets authenticated=true → App unmounts this page.
+        // AuthContext sets authenticated=true, so App unmounts this page.
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Login failed.'
         setError(msg)

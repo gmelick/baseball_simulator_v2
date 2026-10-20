@@ -1,5 +1,6 @@
-"""SIM-563 — the workers read only the bundle, the app restarts on a new version,
-and a boot waits for a DuckDB writer instead of crashing.
+"""The workers read only the bundle, and the app restarts on a new bundle version.
+
+A boot waits for a DuckDB writer instead of crashing.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from simulation import sim_kwargs as sk
 duckdb = pytest.importorskip("duckdb")
 
 
-# --- Part B: the reference tables ride the bundle ---------------------------
+# --- The reference tables ride the bundle ------------------------------------
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def test_a_missing_table_writes_no_file(tmp_path):
     assert not (tmp_path / "b" / ea.IBB_RATES_FILE).exists()
 
 
-# --- Part B: the pinned version ----------------------------------------------
+# --- The pinned version -------------------------------------------------------
 
 
 class _Spec:
@@ -129,7 +130,7 @@ def test_a_failed_ibb_open_is_not_cached(monkeypatch):
     pf.reset_caches()
 
 
-# --- Part C: the restart watch ----------------------------------------------
+# --- The restart watch --------------------------------------------------------
 
 
 class _Clock:
@@ -231,7 +232,7 @@ def test_the_writer_check_reads_a_free_file_and_a_missing_one(tmp_path):
     assert bundle_watch.duckdb_writer_free(path) is True
 
 
-# --- Part D: the boot waits for a writer --------------------------------------
+# --- The boot waits for a writer ----------------------------------------------
 
 
 def _lock_error():
@@ -275,7 +276,7 @@ def test_the_wait_gives_up_at_its_limit():
     assert clock.t >= 60
 
 
-# --- Part D: a failed park-factor prime recovers -------------------------------
+# --- A failed park-factor prime recovers --------------------------------------
 
 
 def test_a_failed_prime_recovers_on_a_later_check(tmp_path, monkeypatch):

@@ -1,13 +1,10 @@
-"""
-test_api_plays_pagination.py
-===================================
-Unit tests for SIM-415 pagination on GET /api/games/{game_pk}/plays.
+"""The pagination of GET /api/games/{game_pk}/plays (``api/routes/games.py``).
 
-The endpoint reads ``app.state.replay_duckdb`` (SIM-561) through a cursor, finds
-the newest complete run (``sim_store.load_game_card``) and loads its stream
-(``sim_store.load_play_stream``); all three are stubbed (a connection whose
-cursor does nothing + a store returning run 1 and canned play rows) so no live
-DuckDB is needed.
+The route reads ``app.state.replay_duckdb`` through a cursor. The route finds the
+newest complete run (``sim_store.load_game_card``) and loads the run's play stream
+(``sim_store.load_play_stream``). The tests stub all three: a connection whose cursor
+does nothing, and a store that returns run 1 and canned play rows. So no live DuckDB
+runs.
 """
 
 from __future__ import annotations
@@ -95,7 +92,7 @@ def test_no_limit_returns_full_collection_unchanged(monkeypatch):
     assert len(body["entries"]) == 30
     assert body["n_pitches"] == 30
     assert body["n_plate_appearances"] == 10
-    # Pagination fields stay null on the full response (backward-compatible).
+    # The pagination fields stay null on the full response, so its shape does not change.
     assert body["total_entries"] is None
     assert body["page_offset"] is None
     assert body["page_limit"] is None
