@@ -1,9 +1,6 @@
-"""
-test_similarity_endpoint.py
-============================
-Unit tests for the Similarity Score Explorer endpoint.
+"""The pitcher similarity explorer endpoint (api/routes/similarity.py).
 
-Covers (per docs/similarity_visualization_spec.md §5 acceptance criteria):
+The tests cover the acceptance criteria of docs/similarity_visualization_spec.md §5:
   - Pure helpers: _BinSpec, compute_score_summary, build_bins,
     classify_diagnostic.
   - Route handler payload shape on the happy path.
@@ -12,11 +9,9 @@ Covers (per docs/similarity_visualization_spec.md §5 acceptance criteria):
   - Top-N highlight band cutoff is correct.
   - Diagnostic classification (HEALTHY / NO_SPREAD / COLLAPSED).
 
-Tests do NOT require a live PostgreSQL or DuckDB. They follow the
-project's "construct via __new__" pattern from
-tests/unit/test_pitcher_similarity.py: the engine is replaced with a
-lightweight stub object that exposes the two attributes the route uses
-(``query`` and ``_profiles``). This keeps the suite fast and CI-friendly.
+The tests need no live PostgreSQL or DuckDB. A light stub replaces the
+engine; it has the two attributes the route uses, ``query`` and
+``_profiles``.
 """
 
 from __future__ import annotations
@@ -26,9 +21,6 @@ from dataclasses import dataclass
 
 import pytest
 
-# pytest will collect this whole file under ``tests/unit``. The api
-# package is importable because the project root is on sys.path
-# (ruff/pytest src config in pyproject.toml).
 from api.routes.similarity import (
     COLLAPSED_MAX_BIN_FRACTION,
     DIAGNOSTIC_MEDIAN_TARGET,
