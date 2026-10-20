@@ -1,23 +1,22 @@
-"""tests/unit/test_recency_walk_forward.py — SIM-076
-============================================================
-Unit tests for the recency walk-forward validation harness in
-``similarity.backtesting.recency_walk_forward``.
+"""The recency walk-forward validation harness.
 
-The harness validates that the SIM-076 ``recency_weight`` column improves the
-*out-of-sample* fit of similarity-based outcome prediction. These tests build
-synthetic data two ways and assert the harness behaves correctly:
+The subject is ``similarity.backtesting.recency_walk_forward``. The harness
+tests whether the ``recency_weight`` column improves the *out-of-sample* fit
+of a similarity-based outcome prediction. These tests build synthetic data two
+ways and check that:
 
-  (a) ``walk_forward_folds`` yields expanding windows with NO leakage — every
+  (a) ``walk_forward_folds`` yields expanding windows with NO leakage: every
       train season is strictly less than its test season, and the window grows;
   (b) ``walk_forward_recency_eval`` returns well-formed per-fold and aggregate
       results;
-  (c) on **drift** data — where the outcome's dependence on the feature changes
-      each season so recent seasons resemble the test season more than old ones
-      — the recency-weighted error is <= the unweighted (baseline) error;
-  (d) on **stationary** data — same outcome rule every season — recency neither
-      meaningfully helps nor hurts, so the two errors are approximately equal.
+  (c) on **drift** data, the outcome's dependence on the feature changes each
+      season, so a recent season resembles the test season more than an early
+      one. There the recency-weighted error is <= the unweighted (baseline)
+      error;
+  (d) on **stationary** data, the outcome rule is the same every season. There
+      recency neither helps nor hurts much, so the two errors are about equal.
 
-A fixed RNG seed keeps the assertions deterministic; tolerances are kept loose.
+A fixed RNG seed keeps the assertions deterministic; the tolerances are loose.
 
 Run with:
     pytest tests/unit/test_recency_walk_forward.py -v
@@ -47,21 +46,21 @@ def _make_dataset(*, drift: bool) -> dict:
     """Build a synthetic pooled-row dataset.
 
     Each row has a ``feature`` vector, a scalar ``outcome``, the ``season`` it
-    came from, and the SIM-076 ``recency_weight`` for that season relative to
-    ``REF_SEASON`` (using the real reference implementation so the harness is
-    exercised against production weights).
+    came from, and the ``recency_weight`` of that season relative to
+    ``REF_SEASON``. The weight comes from the production function, so the
+    harness runs on the production weights.
 
     The outcome is a linear function of the feature: ``outcome = w . feature``.
 
-    * **drift=True** — the coefficient vector ``w`` rotates/grows monotonically
-      with season, so the input/output relationship in 2022 (the final test
-      season) is closest to 2021, then 2020, etc. Recent training seasons are
-      therefore better comparables than old ones, which is exactly the regime in
-      which up-weighting recent rows should reduce out-of-sample error.
+    * **drift=True**: the coefficient vector ``w`` grows with each season, so
+      the relationship in 2022 (the final test season) is closest to 2021,
+      then 2020, and so on. A recent training season is a better comparable
+      than an early one. In this regime, a higher weight on recent rows
+      should reduce the out-of-sample error.
 
-    * **drift=False** — ``w`` is identical every season (stationary). All
-      training seasons are equally good comparables, so recency weighting should
-      neither help nor hurt beyond noise.
+    * **drift=False**: ``w`` is the same every season (stationary). Every
+      training season is an equally good comparable, so recency weighting
+      should neither help nor hurt beyond noise.
     """
     rng = np.random.default_rng(SEED)
     base_w = np.array([1.0, -0.5, 0.25])

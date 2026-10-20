@@ -1,11 +1,11 @@
-"""tests/unit/test_batted_ball_engine.py — SIM-042
-==================================================
-Unit tests for the batted-ball FAISS engine.  Engines are constructed
-via __new__ + direct injection (no DuckDB).
+"""The batted-ball similarity engine (a FAISS nearest-neighbour index).
 
-Includes a SIM-051 readiness test: the engine must transparently fall
-back to raw `spray_angle` when `pull_relative_spray_angle` is missing,
-without crashing the build.
+FAISS is a library for fast nearest-neighbour search. The tests build the
+engine with ``__new__`` and inject the index directly (no DuckDB).
+
+The spray-column tests run on an in-memory DuckDB. The engine reads
+`pull_relative_spray_angle` when the outcome pool has it, and falls back to
+the raw `spray_angle`, with no error, when it does not.
 """
 
 from __future__ import annotations
@@ -195,8 +195,8 @@ class TestBattedBallEngineBasic(unittest.TestCase):
 
 
 class TestBattedBallSpray051Readiness(unittest.TestCase):
-    """SIM-042's loader must transparently swap in
-    `pull_relative_spray_angle` once SIM-051 ships."""
+    """The loader picks `pull_relative_spray_angle` when the outcome pool has
+    the column, else the raw `spray_angle`."""
 
     def _build_outcome_pool(self, conn, *, with_pull_relative: bool):
         conn.execute("CREATE SCHEMA IF NOT EXISTS sim")
@@ -236,9 +236,8 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
                 sa,
             )
             if with_pull_relative:
-                # Pull-relative is just `sa` flipped on R-handed batters in
-                # the real pipeline, but for this test we just plug in
-                # something distinguishable.
+                # The real pipeline flips the sign of `sa` for a left-handed
+                # batter. This test needs only a distinguishable value.
                 row = row + (sa * 0.95,)  # pull_relative_spray_angle
             row = row + ("line_drive" if la > 0 else "ground_ball", int(rng.integers(0, 5)))
             placeholders = ", ".join(["?"] * len(row))

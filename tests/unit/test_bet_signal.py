@@ -1,21 +1,20 @@
-"""
-test_bet_signal.py
-=========================
-Unit tests for SIM-369 -- the **bet-signal / +EV recommendation module**
-:mod:`betting.bet_signal` (Phase 5, Sprint 5).
+"""The bet-signal module: which edges become +EV bets, and how much to stake.
 
-These tests build SYNTHETIC :class:`~betting.clv_engine.EdgeReport` objects with the
-REAL constructor from the CLV engine (no live provider, no DB, no RNG, no actual
-simulation run) and assert the bet-signal contract:
+The subject is :mod:`betting.bet_signal`. EV is the expected value of a bet.
+The Kelly stake is the bankroll share that maximizes long-run growth; the
+module stakes a fraction of it. These tests build SYNTHETIC
+:class:`~betting.clv_engine.EdgeReport` objects with the REAL constructor (no
+live provider, no DB, no RNG, no simulation run) and check the contract:
 
-  * a clearly +EV report (sim_prob 0.60 at +100 -> positive edge, positive EV)
-    yields a :class:`BetSignal` whose ``stake_fraction`` matches the fractional-Kelly
-    HAND CALCULATION and is positive and capped;
-  * the stake cap is respected when raw quarter-Kelly would exceed it;
-  * a -EV / sub-threshold report yields NO signal (gated out);
-  * signals are returned sorted by EV descending (with a stable tie-break);
-  * empty input and all-negative input both return the empty list;
-  * :func:`stake_fraction` is pure and matches ``clamp(kf * max(0, (b*p - q)/b), 0, cap)``.
+  * a clearly +EV report (sim_prob 0.60 at +100: a positive edge, a positive
+    EV) yields a :class:`BetSignal`. Its ``stake_fraction`` matches the
+    fractional-Kelly HAND CALCULATION, and is positive and capped;
+  * the stake cap holds when the raw quarter-Kelly stake would exceed it;
+  * a -EV or sub-threshold report yields NO signal (gated out);
+  * the signals come back sorted by EV, highest first;
+  * an empty input and an all-negative input both return the empty list;
+  * :func:`stake_fraction` is pure and matches
+    ``clamp(kf * max(0, (b*p - q)/b), 0, cap)``.
 """
 
 from __future__ import annotations
@@ -58,9 +57,9 @@ def _edge_report(
 ) -> EdgeReport:
     """Build a real EdgeReport with consistent edge/EV derived from the inputs.
 
-    edge and ev are computed the SAME way the CLV engine computes them so the
-    synthetic report is internally consistent (edge = sim - fair; ev at the offered
-    price), but we never need a live simulation to produce one.
+    The factory computes edge and ev the SAME way the CLV engine does
+    (edge = sim - fair; ev at the offered price), so the synthetic report is
+    internally consistent without a live simulation.
     """
     return EdgeReport(
         label=label,
@@ -193,8 +192,8 @@ def test_positive_ev_report_yields_signal_with_capped_kelly_stake():
     assert sig.ev == pytest.approx(rep.ev, abs=1e-12)
     assert sig.rank == 0
     assert sig.report is rep
-    # Default quarter Kelly = 0.05, default cap = 0.05 -> stake == 0.05 (at the cap),
-    # which equals the hand calc 0.25 * 0.20 = 0.05.
+    # The default quarter Kelly gives the hand calc 0.25 * 0.20 = 0.05, which
+    # sits exactly at the default cap of 0.05.
     assert sig.stake_fraction == pytest.approx(0.05, abs=1e-12)
     assert 0.0 < sig.stake_fraction <= DEFAULT_MAX_STAKE_FRACTION
 

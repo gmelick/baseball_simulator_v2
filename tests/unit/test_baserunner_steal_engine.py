@@ -1,31 +1,23 @@
-"""tests/unit/test_baserunner_steal_engine.py — SIM-149
-=========================================================
-Dedicated unit tests for ``BaserunnerStealSimilarityEngine``
-(``similarity/engines/baserunner_steal_similarity.py``).
+"""The scoring contract of the steal-runner similarity engine.
 
-The baserunner-steal engine was the only similarity engine without its
-own dedicated test file (it was only exercised incidentally inside
-``test_secondary_engines.py``).  This module pins down invariants of
-the RBF engine's scoring contract.
+The subject is ``BaserunnerStealSimilarityEngine``
+(``similarity/engines/baserunner_steal_similarity.py``). The tests build the
+engine without DuckDB: ``__new__`` bypasses the constructor, and the profiles
+live in memory (the pattern in ``agent_team.md``).
 
-All engines are tested without DuckDB using in-memory profile
-construction (via ``__new__`` to bypass the DB-dependent constructor),
-following the established pattern documented in agent_team.md.
-
-Notes on the engine's real behaviour (learned from the source):
-  * Composite/sub-scores are RBF kernels in [0, 1]; this engine never
-    emits distance semantics.
-  * The composite is multiplied by ``sqrt(min(eb_alpha_a, eb_alpha_b))``
-    — an empirical-Bayes confidence shrinkage that pulls low-sample
-    candidates down.  A self/identical pair therefore only reaches the
-    documented maximum (1.0) when ``eb_alpha == 1.0``.
+What the engine does, as these tests read it:
+  * Every score and sub-score is an RBF kernel (a Gaussian kernel,
+    score = exp(-distance² / 2σ²)), so it lies in [0, 1] and is never a
+    distance.
+  * The engine blends three feature groups: tendency, lead and success. A
+    pair blends the lead only when both sides measured one. These fixtures
+    carry no lead, so every pair here blends tendency and success, with
+    their weights renormalized.
+  * The composite is multiplied by ``sqrt(min(eb_alpha_a, eb_alpha_b))``.
+    ``eb_alpha`` is the EB (empirical-Bayes) sample confidence, so this
+    factor pulls a low-sample candidate down. An identical pair reaches the
+    maximum of 1.0 only when ``eb_alpha == 1.0``.
   * The top-N limit is the keyword ``n`` (not ``k``).
-
-SIM-408: the engine's Jump / First-Step sub-score (reaction_time_ms /
-burst_distance_ft / break_angle_deg) was removed — those biomech features
-are not published by Statcast, so derived.baserunner_steal_metrics cannot
-supply them.  The engine now blends only Tendency + Success, and the
-tendency feature vector is 2-dim (steal_attempt_rate, steal_attempt_rate_2b).
 
 Run with:
     pytest tests/unit/test_baserunner_steal_engine.py -v
@@ -120,7 +112,7 @@ def _make_engine(
 
 
 # ===========================================================================
-# SIM-149 — scoring-contract invariants
+# The scoring-contract invariants
 # ===========================================================================
 
 

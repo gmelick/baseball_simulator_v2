@@ -1,26 +1,24 @@
-"""
-Smoke tests for similarity engine .build() methods.
+"""Smoke tests of each similarity engine's build().
 
-Each engine's build() pipeline executes the same shape of work:
+Each engine's build() runs the same shape of work:
     duckdb.connect → _load_positional_averages / _load_profiles → fit /
     apply_shrinkage → partition.build.
 
-For coverage purposes we just need to exercise that path. We mock
-``duckdb.connect`` so the SELECT calls return empty rows (or empty
-JSON profiles). With no rows the engines build empty partitions and
-return cleanly — the orchestration lines all get covered without
-requiring complex synthetic profile data.
+These tests run that path for coverage. They mock ``duckdb.connect`` so
+every SELECT returns empty rows (or empty JSON profiles). With no rows an
+engine builds empty partitions and returns, so the orchestration lines run
+without complex synthetic profile data.
 
-The CatalogException branch is also exercised for each engine that has
-one — guards the case where the derived tables haven't been created yet.
+One fielder test feeds the build a CatalogException on every query: the
+case where the derived tables do not exist yet. It skips when build() lets
+the error through.
 
 Skip semantics
 --------------
-Some engines pull in optional native deps that don't yet publish wheels
-for newer Pythons (POT/`ot` and `faiss-cpu` lag behind cp313).  Tests
-that exercise those engines skip cleanly rather than fail when the
-optional dep isn't installed — the engines themselves expose a
-`_POT_AVAILABLE` / `_FAISS_AVAILABLE` boolean we can introspect.
+Two engines use optional native libraries: POT (``ot``, the optimal-transport
+library) and ``faiss-cpu``. A test of those engines skips, rather than fails,
+when its library is missing. Each engine exposes a ``_POT_AVAILABLE`` /
+``_FAISS_AVAILABLE`` flag for the check.
 """
 
 from __future__ import annotations
@@ -44,7 +42,7 @@ def _patch_empty_duckdb(module_path: str):
 
 def _patch_catalog_error(module_path: str):
     """Replace duckdb.connect with one whose execute() raises CatalogException
-    on the first call (simulating the derived.* tables missing)."""
+    on every call (the derived.* tables are missing)."""
     conn = MagicMock()
     conn.execute.side_effect = duckdb.CatalogException("missing table")
     return patch(f"{module_path}.duckdb.connect", return_value=conn)
@@ -94,8 +92,7 @@ class TestFielderEngineBuild:
 class TestPitcherEngineBuild:
     @staticmethod
     def _import_or_skip():
-        """Lazy-import the pitcher engine; skip cleanly if POT is missing
-        (Python 3.13 has no published wheel for POT as of 2026-05)."""
+        """Lazy-import the pitcher engine; skip when POT is missing."""
         try:
             from similarity.engines import pitcher_similarity as mod
         except ImportError as e:

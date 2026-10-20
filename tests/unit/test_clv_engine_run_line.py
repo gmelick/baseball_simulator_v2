@@ -1,24 +1,22 @@
-"""
-test_clv_engine_run_line.py
-======================
-Unit tests for SIM-367 -- the **run line / spread EdgeReport** added to
-:mod:`betting.clv_engine` (Phase 5, Sprint 5).
+"""The run line (spread) EdgeReport of :mod:`betting.clv_engine`.
 
-These tests build a SYNTHETIC per-iteration score-margin signal (a raw
-``home - away`` array, and a SIM-327 :class:`GameSimSummary` carrying matching
-``home_scores`` / ``away_scores``) and INJECT American odds at a run line (no live
-provider, no DB, no RNG), then assert the spread pricing contract:
+These tests build a SYNTHETIC per-iteration score margin (a raw
+``home - away`` array, and a :class:`GameSimSummary` with matching
+``home_scores`` / ``away_scores``). They INJECT American odds at a run line
+(no live provider, no DB, no RNG) and check the spread pricing contract:
 
-  * the sim COVER probability matches a hand computation -- HOME at ``-1.5`` covers
-    iff ``margin > 1.5`` (win by 2+); AWAY (the ``+1.5`` complement) covers iff
-    ``margin < 1.5``;
-  * at the half-integer ``+/-1.5`` line HOME and AWAY cover probs are COMPLEMENTARY
-    (no push); at an INTEGER line (``-1`` / ``+1``) a margin exactly on the boundary
-    is a PUSH excluded from both sides (home + away + push == 1);
-  * the input accepts BOTH a raw margin array and a :class:`GameSimSummary`;
+  * the sim's COVER probability matches a hand count. HOME at ``-1.5`` covers
+    iff ``margin > 1.5`` (a win by 2+); AWAY (the ``+1.5`` complement) covers
+    iff ``margin < 1.5``;
+  * at the half-integer ``+/-1.5`` line the HOME and AWAY cover probabilities
+    are COMPLEMENTARY (no push). At an INTEGER line (``-1`` / ``+1``) a margin
+    exactly on the boundary is a PUSH, excluded from both sides
+    (home + away + push == 1);
+  * the input is either a raw margin array or a :class:`GameSimSummary`;
   * the :class:`EdgeReport` carries the right ``label`` / ``side`` / ``line`` /
     ``sim_prob`` / ``market_fair_prob`` / ``edge`` / ``ev``;
-  * CLV is computed when a closing quote is supplied;
+  * the report computes the CLV (closing line value: the entry price against
+    the closing price) when a closing quote is supplied;
   * ``market.entry.line`` overrides the ``line`` keyword default.
 """
 
@@ -46,13 +44,13 @@ from simulation.results import ConfidenceInterval, GameSimSummary
 
 
 def _summary_from_margins(margins) -> GameSimSummary:
-    """A synthetic SIM-327 GameSimSummary whose home/away scores realise ``margins``.
+    """A synthetic GameSimSummary whose home/away scores realise ``margins``.
 
-    We only need the per-iteration ``home_scores - away_scores`` margin for run-line
-    pricing, so we synthesise an away baseline of 0 and a home score equal to the
-    desired margin (margin = home - away).  Negative margins are realised by lifting
-    both scores by a constant offset so the stored arrays stay non-negative integers
-    while the DIFFERENCE is exactly the requested margin."""
+    Run-line pricing reads only the per-iteration ``home_scores - away_scores``
+    margin. So the away score is 0 and the home score is the margin
+    (margin = home - away). For a negative margin, both scores rise by one
+    constant offset: the arrays stay non-negative integers, and the DIFFERENCE
+    is exactly the requested margin."""
     margins = np.asarray(list(margins), dtype=np.int64)
     offset = int(max(0, -int(margins.min()))) if margins.size else 0
     away = np.full(margins.size, offset, dtype=np.int64)
@@ -230,9 +228,9 @@ def test_run_line_report_market_line_overrides_keyword():
         entry=OddsQuote(side=-110, other=-110, line=-1.0),
     )
     rep = run_line_edge_report(summary, market, side=MarketSide.HOME, line=-1.5)
-    # The market's -1.0 line is authoritative -> cover = P(margin > 1) = 0.50,
-    # and the push at margin==1 is excluded (distinct from the -1.5 result here only
-    # in that the away side would differ; sim_prob equals 0.50 either way for HOME).
+    # The market's -1.0 line wins: HOME covers on margin > 1 (0.50), and
+    # margin == 1 is a push. HOME also reads 0.50 at -1.5, so only the line
+    # assertion tells the two lines apart.
     assert rep.line == pytest.approx(-1.0, abs=1e-12)
     assert rep.sim_prob == pytest.approx(0.50, abs=1e-12)
 

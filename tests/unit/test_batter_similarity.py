@@ -1,10 +1,12 @@
-"""
-test_batter_similarity.py
-==========================
-Unit and integration tests for Step 2.2 — Batter-to-Batter Similarity Engine.
+"""The batter-to-batter similarity engine.
+
+The subject is ``similarity/engines/batter_similarity.py``: its weighted RBF
+kernel (a Gaussian kernel, score = exp(-distance² / 2σ²)), the bats penalty,
+the EB (empirical-Bayes) shrinkage, the normalizer, and the queries over a
+small synthetic population. No DuckDB is needed.
 
 Run with:
-    python test_batter_similarity.py
+    pytest tests/unit/test_batter_similarity.py -v
 """
 
 from __future__ import annotations
@@ -112,7 +114,7 @@ def _build_synthetic_engine():
         sigma=1.1,
         reliability_weights=np.array([w for _, w in POWER_FEATURES]),
     )
-    # SIM-529
+    # The physical swing and stance group.
     engine._physical_rbf = WeightedRBFSimilarity(
         sigma=1.0,
         reliability_weights=np.array([w for _, w in PHYSICAL_FEATURES]),
@@ -418,16 +420,13 @@ class TestPlatoonAwareQuery(unittest.TestCase):
         self.assertTrue(any(d > 0.001 for d in diffs), "vs_hand should change at least some scores")
 
     def test_platoon_divergent_batter_scored_differently_per_hand(self):
-        """Directly verify that the platoon RBF scorer produces different
-        scores when comparing different platoon splits.
+        """The platoon kernel scores a near platoon split above a far one.
 
-        This is a unit test of the routing logic — the integration test
-        above (test_vs_hand_changes_scores) confirms the end-to-end
-        weight-shifting works. This test isolates the platoon sub-score
-        comparison to ensure vs_L and vs_R compare the correct vectors.
+        The test calls the kernel directly on raw vectors. It does not run
+        the engine's vs_L / vs_R routing; test_vs_hand_changes_scores covers
+        the engine end to end.
         """
-        # Construct two profiles with identical overall stats but
-        # very different platoon splits
+        # Three platoon splits: a good one, a bad one and an average one.
         len(PLATOON_FEATURES)
         vec_good = np.array([0.25, 0.72, 0.15, 0.12, 0.14, 0.38, 0.10])  # elite approach
         vec_bad = np.array([0.38, 0.58, 0.32, 0.05, 0.30, 0.50, 0.02])  # bad approach
@@ -471,11 +470,13 @@ class TestSwitchHitters(unittest.TestCase):
         self.assertEqual(len(e), 1)
 
     def test_switch_hitter_mild_penalty(self):
-        """Switch hitter should get milder penalty than opposite-hand."""
+        """A switch hitter and an opposite-hand batter both score above 0.
+
+        The switch-hitter penalty is milder than the opposite-hand one, but
+        the two profiles differ, so their scores cannot isolate the penalty.
+        test_opposite_worse_than_switch checks the penalty constants."""
         r_switch = self.engine.query_pair((100, 2024), (500, 2024))
         r_lhb = self.engine.query_pair((100, 2024), (400, 2024))
-        # The switch hitter penalty is milder, but profiles differ
-        # so we just verify both return valid scores
         self.assertIsNotNone(r_switch)
         self.assertIsNotNone(r_lhb)
         self.assertGreater(r_switch.score, 0.0)

@@ -1,23 +1,26 @@
-"""tests/unit/test_probabilistic_backtester.py — SIM-220
-====================================================
-Unit tests for the probabilistic backtester in
-``similarity.backtesting.backtester``.
+"""The calibration and accuracy metrics of the probabilistic backtester.
 
-These tests pin the calibration / accuracy metrics on KNOWN synthetic inputs
-(no live DB, no engine, no FAISS):
+The subject is ``similarity.backtesting.backtester``. The tests read the
+metrics on KNOWN synthetic inputs (no live DB, no engine, no FAISS). ECE is
+the expected calibration error: the mean gap between confidence and accuracy
+over the confidence bins. The Brier score is the squared error of the
+predicted distribution against the one-hot outcome. The tests check that:
 
-  (a) a perfectly-calibrated predictor -> ~0 ECE, low Brier, low log-loss;
-  (b) a deliberately mis-calibrated (over-confident) predictor -> strictly
-      higher ECE / Brier / log-loss than the well-calibrated one;
-  (c) log-loss stays finite when a predictor puts ~0 mass on the true class
-      (eps clipping), and equals the analytic ``-log(eps)`` in the limit;
-  (d) the reliability curve places rows in the correct confidence bins with the
-      correct per-bin accuracy;
-  (e) the multi-class Brier matches its closed form on a hand-checked case;
+  (a) a perfectly calibrated predictor gives about 0 ECE, a low Brier score
+      and a low log-loss;
+  (b) an over-confident predictor gives a strictly higher ECE, Brier score
+      and log-loss than the well-calibrated one;
+  (c) the log-loss stays finite when a predictor puts about 0 mass on the
+      true class (the eps clip), and equals ``-log(eps)`` in the limit;
+  (d) the reliability curve puts each row in the right confidence bin, with
+      the right accuracy per bin;
+  (e) the multi-class Brier score matches its closed form on a hand-checked
+      case;
   (f) ``probs_from_dicts`` builds the right matrix from sampler-style dicts;
-  (g) ``walk_forward_ablation`` runs the SIM-076 expanding folds and shows a
-      signal-bearing model beating the league-average baseline (positive
-      deltas), while a no-signal model does NOT beat the floor.
+  (g) ``walk_forward_ablation`` runs the expanding-window folds (train on
+      every earlier season, test on the next). A model with signal beats the
+      league-average baseline (positive deltas); a model with no signal does
+      NOT.
 
 A fixed RNG seed keeps the stochastic assertions deterministic.
 
@@ -264,7 +267,7 @@ class TestWalkForwardAblation(unittest.TestCase):
             extra_predictors={"blind": _blind_predict},
         )
 
-        # Folds: SIM-076 expanding window -> n_distinct_seasons - 1 folds.
+        # The expanding window gives one fold per season after the first.
         self.assertEqual(len(res["folds"]), len(SEASONS) - 1)
         for fold in res["folds"]:
             self.assertEqual(fold["n_test"], ROWS_PER_SEASON)

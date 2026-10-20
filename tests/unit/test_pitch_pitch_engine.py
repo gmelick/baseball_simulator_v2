@@ -1,8 +1,8 @@
-"""tests/unit/test_pitch_pitch_engine.py — SIM-041
-==================================================
-Unit tests for the pitch-to-pitch FAISS engine.  Engines are constructed
-via __new__ + direct injection of the FAISS index + metadata so the tests
-do not require DuckDB.
+"""The pitch-to-pitch similarity engine (a FAISS nearest-neighbour index).
+
+FAISS is a library for fast nearest-neighbour search. The tests build the
+engine with ``__new__`` and inject the FAISS index and its metadata directly,
+so they need no DuckDB.
 """
 
 from __future__ import annotations
@@ -186,8 +186,8 @@ class TestPitchPitchEngineBasic(unittest.TestCase):
 
 
 class TestPitchPitchHNSWPath(unittest.TestCase):
-    """The HNSW path must produce sensible, sorted neighbors too — even
-    if approximate (tolerated drift vs Flat)."""
+    """The HNSW path (an approximate nearest-neighbour graph index) must also
+    return sorted neighbours. Its results may drift from the exact Flat index."""
 
     def test_hnsw_returns_sorted_results(self):
         m, meta = _synthetic_pool(n=2000)
@@ -202,8 +202,8 @@ class TestPitchPitchHNSWPath(unittest.TestCase):
 
 
 class TestPitchPitchFeatureContract(unittest.TestCase):
-    """Lock in the engine feature surface — changing any of these is a
-    calibration event that requires regenerating fixtures."""
+    """Pin the engine's feature surface. A change to any of these moves every
+    pitch distance, so it must be deliberate."""
 
     def test_feature_dim_is_10(self):
         from similarity.engines.pitch_pitch_similarity import (
