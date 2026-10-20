@@ -1,102 +1,56 @@
-"""
-fielder_similarity.py
-=====================
-Step 2.3 — Fielder-to-Fielder Similarity (Defensive Batted Ball Fielding)
-MLB Baseball Simulation Platform
+"""The fielder engine: how alike two fielders are at one position.
 
-Computes a composite similarity score [0, 1] between any two MLB
-fielder-position-season profiles by combining position-appropriate
-sub-score dimensions:
+The engine scores two fielder-position-season profiles from 0 to 1 (1 = the
+same). The score is a weighted sum of four sub-scores. Each sub-score is an
+RBF (a Gaussian kernel, score = exp(-distance² / 2σ²)) over z-scored features
+with a reliability weight per feature (``similarity/engines/rbf_kernel.py``).
+A z-score is the value minus the position's mean, over its standard deviation.
 
-  Infielders (1B, 2B, 3B, SS):
-    1. Range (45%)         — directional OAA breakdown: ability to make plays
-                             to glove side, arm side, charging, and deep. Plus
-                             overall catch percentage added. Plus Savant's
-                             outs above average at this position per 100 of
-                             our chances (SIM-532, decision 4): six features.
-    2. Double Play (30%)   — DP conversion above expected, attempt rate,
-                             success rate. For middle infielders (2B/SS), pivot
-                             skill is included as additional features.
-    3. Errors (15%)        — decomposed fielding and throwing error rates.
-                             These are distinct skills (hands vs arm accuracy).
-    4. Specialty (10%)     — position-specific: bunt defense (1B/3B) and
-                             1B scooping ability. Neutral for 2B/SS.
+Infielders (1B, 2B, 3B, SS):
+  1. Range (45%): our outs above average (OAA, the plays a fielder makes
+     beyond an average fielder) to the glove side, to the arm side, charging
+     and going deep; the catch percentage added; and Savant's OAA at the
+     position per 100 of our chances. Six features.
+  2. Double play (30%): the conversions above expected, the attempt rate and
+     the success rate. 2B and SS add the pivot above expected.
+  3. Errors (15%): the fielding error rate (hands) and the throwing error
+     rate (arm accuracy). These are two separate skills.
+  4. Specialty (10%): the bunt defense (1B, 3B) and the scoop rate (1B).
+     2B and SS read as neutral.
 
-  Outfielders (LF, CF, RF):
-    1. Range (40%)         — directional OAA: coming-in, going-back, left/right.
-                             Plus overall catch percentage added. Plus, since
-                             SIM-532, Savant's outs above average at this
-                             position per 100 of our chances and the three
-                             parts of Savant's outfield jump (reaction, burst,
-                             route): nine features. The six range measurements
-                             shrink on the batted balls; the three jump parts
-                             shrink on their OWN plays.
-    2. Arm (30%)           — the throw velocity (Savant's arm-strength board),
-                             the advancement prevention and the thrown-out rate
-                             (both from our own advancement opportunity pool,
-                             per fielder x position x season; SIM-550). The arm
-                             group shrinks on its OWN chances, not on the
-                             profile's batted balls.
-    3. Star Plays (15%)    — success rate on difficult opportunities (5-star,
-                             4-star) and routine play reliability. Separates
-                             elite range from sure-handedness.
-    4. Errors (15%)        — fielding and throwing error rate decomposition.
+Outfielders (LF, CF, RF):
+  1. Range (40%): the same six features, then the three parts of Savant's
+     outfield jump (reaction, burst, route). Nine features. The six shrink on
+     the batted balls; the three jump parts shrink on their own plays.
+  2. Arm (30%): the throw velocity (Savant's arm-strength board), the
+     advancement prevention and the thrown-out rate. The two rates come from
+     our advancement opportunity pool and shrink on the arm's own chances.
+  3. Star plays (15%): the catch rates on 5-star, 4-star and routine chances.
+     They separate elite range from sure hands.
+  4. Errors (15%): the fielding and the throwing error rates.
 
-Position Gating
----------------
-  Fielders are STRICTLY partitioned by position. A shortstop is never
-  compared to a center fielder. Within a position group, all seasons and
-  players are scored exhaustively.
+Each position is a partition of its own. The engine never compares two
+positions, not even 2B with SS: the skills differ (the range direction, the
+throw distance, the double-play role), so a cross-position score adds noise.
+A player's seasons at two positions are two independent profiles. A query
+scores the query profile against every profile at its position, every season
+included.
 
-  Positions are grouped into two tiers:
-    - IF: 1B, 2B, 3B, SS (each in their own partition)
-    - OF: LF, CF, RF (each in their own partition)
+The feature choice follows "The Book" (Tango, Lichtman, Dolphin), Statcast's
+OAA model and the defensive spectrum (each position weights different
+skills). Defensive metrics stabilize slowly, so the EB shrinkage (empirical
+Bayes: a pull toward the position's league mean, by sample size) uses a
+larger prior than the batter engine. Approximate stabilization points:
+  - OAA and the range metrics: 600 to 800 innings (one full season)
+  - the error rates: 1,000 innings or more (noisy)
+  - the double-play rates: about 200 double-play chances
+  - the outfield arm: about 100 advancement chances
 
-  This means a 2B is NOT compared to a SS, even though both are infielders.
-  The defensive skill profiles at these positions differ substantially
-  (e.g. range direction, throw distance, DP role). Cross-position comparisons
-  would inject noise rather than signal.
-
-  If a player plays multiple positions across seasons, each position-season
-  profile is independent. This is correct — a utility player's 2B defense
-  and 3B defense may differ significantly.
-
-Exhaustive Scoring
-------------------
-  Like pitcher and batter similarity, query() scores against ALL same-position
-  profiles and returns the full list. Cross-season comparisons are first-class.
-
-Research-Informed Design
-------------------------
-  Feature selection and weighting draw from:
-    - Tango/Lichtman/Dolphin "The Book" — positional adjustment framework
-    - Statcast OAA methodology — catch probability model decomposition
-    - Tango's defensive spectrum — different positions weight different skills
-    - FanGraphs WAR defensive component — run values per saved out
-
-  Key stabilization points (approximate):
-    - OAA / range metrics: ~600-800 innings (~1 full season)
-    - Error rates: ~1000+ innings (very noisy)
-    - DP rates: ~200+ DP opportunities
-    - OF arm: ~100+ advancement opportunities
-
-  Because defensive metrics stabilize slowly, the Empirical Bayes shrinkage
-  here uses a larger N_PRIOR than batter/pitcher engines.
-
-Dependencies
-------------
-  pip install duckdb numpy
-
-Usage
------
+Usage:
   engine = FielderSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
   engine.build(seasons=[2022, 2023, 2024, 2025])
-
-  # All similar fielders at SS
-  results = engine.query(player_id=660271, position="SS", season=2025)
-
-  # Top-20 only
-  results = engine.query(player_id=660271, position="SS", season=2025, n=20)
+  results = engine.query(player_id=660271, position="SS", season=2025)  # every SS
+  results = engine.query(player_id=660271, position="SS", season=2025, n=20)  # top 20
 """
 
 from __future__ import annotations
@@ -131,7 +85,7 @@ log = logging.getLogger("fielder_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Feature definitions and weights
 # ============================================================================
 
 # --- Position groups ---
@@ -140,151 +94,147 @@ OUTFIELD_POSITIONS = {"LF", "CF", "RF"}
 ALL_POSITIONS = INFIELD_POSITIONS | OUTFIELD_POSITIONS
 
 # --- Infield feature definitions ---
-# Range: directional OAA breakdown + overall catch pct added
-# Directional OAA captures WHERE a fielder excels (glove side range vs.
-# charging plays etc.), which is more diagnostic than aggregate OAA alone.
-# SIM-532 (2026-09-17): every weight is the year-to-year repeat `make calibrate`
-# fitted after the fielder recompute — consecutive seasons of one player at ONE
-# position, 2017 to 2026, 50 or more batted balls. The matrix builder reads
-# these defaults, not the report, so the run book copies the fitted values here.
+# Range: our directional OAA, the catch percentage added and Savant's OAA.
+# The directional parts show WHERE a fielder excels (the glove side, the
+# charge), which says more than one total OAA.
+# Each weight is the feature's year-to-year repeat as `make calibrate` fitted
+# it (the Savant fielding data, SIM-532): consecutive seasons of one player at
+# ONE position, 2017 to 2026, 50 or more batted balls. The actor score-matrix
+# build reads these defaults, not the calibration report, so the run book
+# copies the fitted values here.
 IF_RANGE_FEATURES = [
-    # feature_name,          reliability_weight (fitted 2026-09-17)
+    # feature_name,          reliability_weight
     ("oaa_glove_side", 0.620),
     ("oaa_arm_side", 0.548),
     ("oaa_charging", 0.452),
     ("oaa_deep", 0.535),
     ("catch_pct_added", 0.529),
-    # SIM-532, decision 4 (owner, 2026-09-17): Savant's outs above average at
-    # this position per 100 of our chances. Within a position it repeats
-    # year to year at 0.34 to 0.63 (the ban era; the plan started it at
-    # 0.45); the fit over all ten seasons reads 0.356. The shrinkage basis is
-    # the batted balls, the same as ours.
+    # Savant's OAA at this position per 100 of our chances (an owner
+    # decision, SIM-532). Within a position it repeats year to year at 0.34
+    # to 0.63 (the seasons since the shift ban); the fit over all ten seasons
+    # reads 0.356. It shrinks on the batted balls, as our five do.
     ("savant_oaa_per_100", 0.356),
 ]
 
-# Double Play: conversion skill separates great infielders
-# dp_above_expected is the core metric; attempt rate and success rate
-# add discrimination for aggressiveness vs reliability.
+# Double play: the conversion skill separates the great infielders. The
+# conversions above expected carry the skill; the attempt rate (aggression)
+# and the success rate (reliability) separate two styles.
 IF_DP_FEATURES = [
     ("dp_above_expected", 0.400),  # stabilizes ~150 DP opps
     ("dp_attempt_rate", 0.100),  # stabilizes ~100 DP opps
     ("dp_success_rate", 0.500),  # noisier — depends on runner speed
 ]
 
-# Pivot-specific features (2B/SS only — NULL for corner IF)
-# These are APPENDED to the DP vector for middle infielders.
+# The pivot (2B and SS only; a corner infielder has none). The engine
+# appends it to a middle infielder's double-play vector.
 IF_PIVOT_FEATURES = [
     ("dp_pivot_above_expected", 0.517),
 ]
 
-# Errors: decomposed into fielding (hands/footwork) vs throwing (arm accuracy)
+# Errors: the fielding error (hands, footwork) and the throwing error (arm
+# accuracy) are two separate skills.
 IF_ERROR_FEATURES = [
     ("fielding_error_rate", 0.100),  # stabilizes slowly (~1000 innings)
     ("throwing_error_rate", 0.100),  # slightly more stable — discrete throws
 ]
 
-# Specialty: position-specific niche skills
-# 1B/3B: bunt defense. 1B additionally: scooping throws.
-# 2B/SS: neutral (features filled with positional average).
+# Specialty: the niche skills of one position. 1B and 3B: the bunt defense.
+# 1B also: the scoop of a low throw. 2B and SS read as neutral: a missing
+# value takes the position's mean.
 IF_SPECIALTY_FEATURES = [
     ("bunt_fielding_rate", 0.100),  # stabilizes ~80 bunt opps
     ("scoop_success_rate", 0.713),  # 1B only; stabilizes ~100 scoop opps
 ]
 
 # --- Outfield feature definitions ---
-# Range (SIM-532, owner decisions 2026-09-17): our five components, then
-# Savant's outs above average at this position, then the three parts of
-# Savant's outfield jump. Each new feature's weight is its measured
-# year-to-year repeat within a position (the plan's section 2.2 and 2.2b);
-# `make calibrate` refits them and the run book copies the fitted values
-# back here. The first six shrink on the batted balls; the three jump parts
-# shrink on their own plays (JUMP_ALPHA_PRIOR_PLAYS). Reaction and route
-# pull against each other by Savant's construction (r -0.79: a fast first
-# step and a straight line trade off), so the pair carries about a third
-# less than two independent features would; the reliability fit sees that.
-OF_RANGE_FEATURES = [  # weight = the fitted year-to-year repeat (make calibrate, 2026-09-17)
+# Range: our five components, Savant's OAA at this position, then the three
+# parts of Savant's outfield jump (the Savant fielding data, SIM-532). Each
+# weight is the feature's fitted year-to-year repeat within a position;
+# `make calibrate` refits them and the run book copies the values here. The
+# first six shrink on the batted balls; the three jump parts shrink on their
+# own plays (JUMP_ALPHA_PRIOR_PLAYS). Reaction and route pull against each
+# other by Savant's construction (r -0.79: a fast first step and a straight
+# line trade off), so the pair carries about a third less than two
+# independent features would; the reliability fit sees that.
+OF_RANGE_FEATURES = [  # weight = the fitted year-to-year repeat (make calibrate)
     ("oaa_glove_side", 0.344),
     ("oaa_arm_side", 0.373),
     ("oaa_charging", 0.677),  # coming-in plays
     ("oaa_deep", 0.594),  # going-back
     ("catch_pct_added", 0.203),
-    # Savant's outs above average at this position per 100 of our chances;
-    # repeats 0.38 to 0.61 within a position (the plan started it at 0.50);
-    # fitted 0.472.
+    # Savant's OAA at this position per 100 of our chances. It repeats at
+    # 0.38 to 0.61 within a position; fitted 0.472.
     ("savant_oaa_per_100", 0.472),
-    # Feet gained against the league in the first 1.5 s after contact;
-    # repeats 0.80 to 0.92 on 25 or more plays (the plan's 0.81); fitted
-    # 0.775 over pairs with 25 or more plays in both seasons.
+    # Feet gained against the league in the first 1.5 s after contact. It
+    # repeats at 0.80 to 0.92 on 25 or more plays; fitted 0.775 over pairs
+    # with 25 or more plays in both seasons.
     ("jump_reaction_ft", 0.775),
-    # Feet gained in the next 1.5 s; repeats 0.64 to 0.82 (the plan's 0.69).
-    # Half sprint speed (r 0.53 with the speed the profile already stores).
+    # Feet gained in the next 1.5 s. It repeats at 0.64 to 0.82. It tracks
+    # sprint speed in part (r 0.53 with the speed the profile stores).
     ("jump_burst_ft", 0.658),
-    # Feet gained by the direction taken; repeats 0.71 to 0.90 (the plan's
-    # 0.77). Pulls against the reaction (r -0.79).
+    # Feet gained by the direction taken. It repeats at 0.71 to 0.90. It
+    # pulls against the reaction (r -0.79).
     ("jump_route_ft", 0.743),
 ]
 
-# SIM-532: the outfield range entries that shrink on the batted balls — our
-# five components and Savant's figure. The entries after them are the three
-# jump parts, which shrink on their own plays.
+# The outfield range entries that shrink on the batted balls: our five
+# components and Savant's OAA. The three jump parts after them shrink on their
+# own plays.
 OF_RANGE_BASE_COUNT = 6
 
-# SIM-532: the jump parts' own confidence. The play count at which the
-# reaction's year-to-year repeat passes 0.8 (about 80 outfielders a season
-# clear it; the median outfielder-season has 31 plays). The profile computor
-# carries the same constant. 10 plays -> alpha 0.29 (two thirds of the way
-# to the league mean); 31 plays -> 0.55; 64 plays -> 0.72.
+# The jump parts' shrinkage prior, in plays. At this count the reaction's
+# year-to-year repeat passes 0.8; about 80 outfielders a season clear it, and
+# the median outfielder-season has 31 plays. The profile computor carries the
+# same constant. Alpha (the share of his own reading) is 0.29 at 10 plays
+# (two thirds of the way to the league mean), 0.55 at 31 and 0.72 at 64.
 JUMP_ALPHA_PRIOR_PLAYS = 25
 
-# SIM-532: the range keys whose ABSENCE from a league row means "not
-# measured" (NaN), never 0.0. The five original components are centred on 0
-# by construction and their league rows have never carried a key, so 0.0 is
-# their mean; these four are real measurements that a league row written
-# before the SIM-532 recompute simply lacks, and the shrinkage then leaves the
-# raw value alone (the SIM-531 / SIM-550 rule).
+# The range keys whose absence from a league row means "not measured" (NaN),
+# never 0.0. Our five components are centred on 0 by construction, so 0.0 is
+# their mean, and their league rows carry no key. These four are real
+# measurements that an older league row lacks; the shrinkage then leaves the
+# raw value alone (see ``EmpiricalBayesShrinkage.shrink``).
 _RANGE_KEYS_NAN_WHEN_ABSENT = frozenset(
     {"savant_oaa_per_100", "jump_reaction_ft", "jump_burst_ft", "jump_route_ft"}
 )
 
-# Arm (SIM-550, owner decisions 2026-09-16): three features, each weighted by
-# its year-to-year repeat as `make calibrate` fitted it on 2026-09-17 over
-# the filled block — pairs of consecutive seasons of one player at ONE
-# position with 50 or more chances in both.
-#   * arm_strength — the throw velocity in mph from Savant's arm-strength
-#     board, per position. Repeats at 0.844 and is near-independent of the
-#     prevention.
-#   * arm_advancement_prevention — expected minus actual attempts per chance,
-#     from sim.advancement_opportunity_pool (the expectation is the pool's
-#     rate per season x decision x outs x position, so 0 is average at
-#     every position). Repeats at 0.137. The plan's section 2.2 read 0.60,
-#     but that figure pooled the three positions and a position-blind
-#     cell: runners challenge a left fielder less, so every left fielder
-#     sat high and every centre fielder low, and the position label
-#     repeated, not the arm. Within a position the repeat is 0.1 to 0.3
-#     (measured 2026-09-17), and the engine scores within a position.
-#   * arm_thrown_out_rate — runners thrown out per attempt against him.
-#     Thin (about five assists a season); repeats at 0.240.
-# The raw hold rate left the group: it is the prevention without the
-# situation adjustment (r = 0.90). The run value (of_arm_runs) left it: an
-# outcome summary that repeats at 0.38 to 0.49. Both stay stored, unread.
-# `make calibrate` refits these weights by season-to-season correlation for
-# the API; the run book copies the fitted values back here.
-OF_ARM_FEATURES = [  # weight = the fitted year-to-year repeat (make calibrate, 2026-09-17)
+# Arm (the outfield arm block, owner decisions, SIM-550): three features.
+# Each weight is the year-to-year repeat `make calibrate` fitted over pairs of
+# consecutive seasons of one player at ONE position, 50 or more chances in
+# both.
+#   * arm_strength: the throw velocity in mph from Savant's arm-strength
+#     board, per position. It repeats at 0.844 and is nearly independent of
+#     the prevention.
+#   * arm_advancement_prevention: expected minus actual attempts per chance,
+#     from sim.advancement_opportunity_pool. The expectation is the pool's
+#     rate per season x decision x outs x position, so 0 is average at every
+#     position. It repeats at 0.137; within a position the repeat is 0.1 to
+#     0.3. A repeat read across positions is inflated: runners challenge a
+#     left fielder less, so the position label repeats, not the arm. The
+#     engine scores within a position, so the within-position figure counts.
+#   * arm_thrown_out_rate: the runners thrown out per attempt against him.
+#     It is thin (about five assists a season) and repeats at 0.240.
+# Two columns stay out of the group. The raw hold rate is the prevention
+# without the situation adjustment (r = 0.90). The run value (of_arm_runs) is
+# an outcome summary that repeats at only 0.38 to 0.49.
+# `make calibrate` refits these weights for the API; the run book copies the
+# fitted values back here.
+OF_ARM_FEATURES = [  # weight = the fitted year-to-year repeat (make calibrate)
     ("arm_strength", 0.844),  # throw velocity, mph (Savant, per position)
     ("arm_advancement_prevention", 0.137),  # expected - actual attempts per chance, from our pool
     ("arm_thrown_out_rate", 0.240),  # thrown out / attempts against him
 ]
 
-# SIM-550: the arm group's own confidence. The chance count at which the
+# The arm rates' shrinkage prior, in chances: near this count the
 # prevention's year-to-year repeat reaches about 0.5. The profile computor
-# carries the same constant. 25 chances -> alpha 0.33 (two thirds of the way
-# to the league mean); 200 chances -> alpha 0.80. It applies to the two
-# pool-derived rates only; the velocity is Savant's, measured over 50 or
-# more throws, and a missing velocity takes the league mean.
+# carries the same constant. Alpha is 0.33 at 25 chances (two thirds of the
+# way to the league mean) and 0.80 at 200. It applies to the two pool rates
+# only. The velocity is Savant's, measured over 50 or more throws; a missing
+# velocity takes the league mean.
 ARM_ALPHA_PRIOR_CHANCES = 50
 
-# Star Plays: success rates on plays bucketed by difficulty
-# Separates "highlight reel range" from "fundamentally sound"
+# Star plays: the catch rates on chances bucketed by difficulty. They
+# separate highlight-reel range from sure hands.
 OF_STAR_FEATURES = [
     ("five_star_catch_rate", 0.100),  # very low sample — high noise
     ("four_star_catch_rate", 0.500),
@@ -296,7 +246,7 @@ OF_ERROR_FEATURES = [
     ("throwing_error_rate", 0.100),
 ]
 
-# --- Sub-score weights (sum to 1.0 within each position type) ---
+# --- Sub-score weights (each group sums to 1.0) ---
 # Infield
 WEIGHT_IF_RANGE = 0.45
 WEIGHT_IF_DP = 0.30
@@ -313,33 +263,32 @@ WEIGHT_OF_ERRORS = 0.15
 _OF_TOTAL = WEIGHT_OF_RANGE + WEIGHT_OF_ARM + WEIGHT_OF_STARS + WEIGHT_OF_ERRORS
 assert abs(_OF_TOTAL - 1.0) < 1e-9, "OF sub-score weights must sum to 1.0"
 
-# --- RBF bandwidth parameters ---
-# Defensive metrics are noisier than batting/pitching, so sigmas are
-# slightly wider to avoid over-discriminating on noise.
-# SIM-532: the two range sigmas as `make calibrate` fitted them on 2026-09-17
-# over the six (infield) and nine (outfield) range features, on the rows that
-# carry every feature; copied here because the matrix builder does not read
-# the calibration report. (They were 1.033 and 1.027 over the five components.)
+# --- RBF bandwidths (sigma), in z-score units ---
+# The two range sigmas and the arm sigma are the values `make calibrate`
+# fitted (the Savant fielding data, SIM-532; the outfield arm block, SIM-550)
+# on the rows that carry every feature of the group. The run book copies them
+# here because the actor score-matrix build does not read the calibration
+# report.
 RBF_SIGMA_IF_RANGE = 1.0549
 RBF_SIGMA_IF_DP = 0.372
 RBF_SIGMA_IF_ERRORS = 1.000
 RBF_SIGMA_IF_SPECIALTY = 1.000
 
 RBF_SIGMA_OF_RANGE = 1.0614
-# SIM-550: sigma_of_arm as `make calibrate` fitted it on 2026-09-17 over the
-# outfielder-seasons that carry all three arm features; copied here because
-# the matrix builder does not read the calibration report.
 RBF_SIGMA_OF_ARM = 0.9912
 RBF_SIGMA_OF_STARS = 0.449
 RBF_SIGMA_OF_ERRORS = 1.000
 
-# --- Empirical Bayes ---
-# Defensive metrics stabilize MUCH slower than batting/pitching metrics.
-# EB_N_PRIOR is larger here, meaning we lean on positional average longer
-# before trusting individual data.
+# --- EB shrinkage ---
+# Defensive metrics stabilize much more slowly than batting or pitching
+# metrics. The prior is larger here than in the batter engine (5), so a
+# fielder's vectors lean on the position's league mean longer. The prior
+# counts batted balls.
 EB_N_PRIOR = 15
 
-# Minimum sample for inclusion
+# The profile computor's minimum sample (MIN_FIELDER_PLAYS, 50). The computor
+# flags a smaller profile below_minimum_sample, and the load skips it. No
+# engine code reads this constant; the tests do.
 MIN_FIELDER_BATTED_BALLS = 50
 
 
@@ -350,7 +299,7 @@ MIN_FIELDER_BATTED_BALLS = 50
 
 @dataclass(slots=True)
 class FielderProfile:
-    """Complete fielder-position-season profile for similarity scoring."""
+    """One fielder-position-season profile, as the engine scores it."""
 
     player_id: int
     position: str  # 1B, 2B, 3B, SS, LF, CF, RF
@@ -358,11 +307,11 @@ class FielderProfile:
     innings_played: float
     sample_batted_balls: int
 
-    # Feature vectors (raw values — normalized at query time)
+    # The feature vectors: shrunk at build time, z-scored when scored.
     range_vec: NDArray[np.float64]
     error_vec: NDArray[np.float64]
 
-    # Position-type-specific vectors
+    # The vectors of one position group.
     # Infielders: dp_vec and specialty_vec
     # Outfielders: arm_vec and star_vec
     dp_vec: NDArray[np.float64] | None = None
@@ -370,27 +319,26 @@ class FielderProfile:
     arm_vec: NDArray[np.float64] | None = None
     star_vec: NDArray[np.float64] | None = None
 
-    # Empirical Bayes
+    # EB shrinkage: alpha is the share of his own reading on the batted balls.
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
-    # SIM-550: the arm group's own sample — chances to advance on a ball this
-    # fielder fielded at this position (arm_opportunities; 0 when NULL). The
-    # two pool-derived arm rates shrink on this count, never on the batted
-    # balls above. Outfielders only; 0 for an infielder.
+    # The arm group's own sample: the chances to advance on a ball he fielded
+    # at this position (arm_opportunities; 0 when NULL). The two pool rates of
+    # the arm shrink on this count, never on the batted balls. Outfielders
+    # only; 0 for an infielder.
     sample_arm_chances: int = 0
 
-    # SIM-532: the jump group's own sample — the plays Savant scored for this
-    # outfielder's jump in this season (jump_plays; 0 when NULL). The three
-    # jump parts of the range vector shrink on this count at
-    # JUMP_ALPHA_PRIOR_PLAYS, never on the batted balls. Outfielders only;
-    # 0 for an infielder.
+    # The jump group's own sample: the plays Savant scored for his jump this
+    # season (jump_plays; 0 when NULL). The three jump parts of the range
+    # vector shrink on this count at JUMP_ALPHA_PRIOR_PLAYS, never on the
+    # batted balls. Outfielders only; 0 for an infielder.
     sample_jump_plays: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
-    """One entry in the similarity query output."""
+    """One candidate's score against the query fielder."""
 
     player_id: int
     position: str
@@ -404,24 +352,21 @@ class SimilarityResult:
 
 
 # ============================================================================
-# Reliability-Weighted RBF Kernel (shared implementation)
-# ============================================================================
-
-
-# ============================================================================
-# Empirical Bayes Shrinkage
+# EB shrinkage
 # ============================================================================
 
 
 class EmpiricalBayesShrinkage:
-    """Shrinks raw feature vectors toward positional average based on sample size."""
+    """EB shrinkage: pull a raw vector toward the position's league mean by sample size."""
 
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
     def alpha(self, n_samples: int, n_prior: int | None = None) -> float:
         """The share of his own reading: ``n_samples / (n_samples + prior)``.
-        ``n_prior`` overrides the instance's prior for one call (SIM-550)."""
+
+        ``n_prior`` overrides the instance's prior for one call.
+        """
         prior = self.n_prior if n_prior is None else n_prior
         return n_samples / (n_samples + prior)
 
@@ -432,20 +377,19 @@ class EmpiricalBayesShrinkage:
         n_samples: int,
         n_prior: int | None = None,
     ) -> NDArray[np.float64]:
-        """Pull ``raw_vec`` toward ``avg_vec`` by ``n_samples / (n_samples + prior)``.
+        """Pull ``raw_vec`` toward ``avg_vec``; the raw value keeps the share ``alpha``.
 
-        ``n_prior`` overrides the instance's prior for one call (SIM-550: the
-        arm group shrinks on its own chances at ``ARM_ALPHA_PRIOR_CHANCES``);
-        ``None`` keeps the instance's, so every other group is unchanged.
+        ``n_prior`` overrides the instance's prior for one call: the outfield
+        arm rates and jump parts shrink on their own counts. ``None`` keeps the
+        instance's prior.
 
-        A NaN raw value becomes the league mean. A NaN LEAGUE value (a key the
-        league row lacks) leaves the raw value alone — the rule the steal
-        engine uses (SIM-531): a feature can shrink only toward a mean that
-        exists. The error, DP, specialty and star league vectors never carry
-        NaN (their loader maps an absent key to 0.0), so this rule moves
-        nothing for them. The arm vector and, since SIM-532, the range
-        vector's Savant and jump entries can carry NaN: a league row written
-        before their recompute lacks the key.
+        A NaN raw value becomes the league mean. A NaN league value (a key the
+        league row lacks) leaves the raw value alone: a feature can shrink only
+        toward a mean that exists. The steal engine uses the same rule
+        (SIM-531). When both are NaN, the result is NaN. The error, DP,
+        specialty and star league vectors never carry NaN: their loader maps an
+        absent key to 0.0. The arm vector and the range vector's Savant and
+        jump entries can, because an older league row lacks their keys.
         """
         a = self.alpha(n_samples, n_prior)
         avg = np.where(np.isnan(avg_vec), raw_vec, avg_vec)
@@ -454,18 +398,19 @@ class EmpiricalBayesShrinkage:
 
 
 # ============================================================================
-# Feature Normalization
+# Feature normalization
 # ============================================================================
 
 
 @dataclass(slots=True)
 class FeatureNormalizer:
-    """
-    Z-score normalizer fit per position group.
+    """The z-score of each feature group, fitted per position.
 
-    Each position has its own normalization parameters because the
-    distributions differ substantially (e.g. CF range distribution is
-    different from 1B range distribution).
+    Each position has its own means and standard deviations, because the
+    distributions differ (a centre fielder's range is not a first baseman's).
+    A NaN after z-scoring becomes 0, the position's mean. A position with no
+    fit passes its vectors through unchanged. A zero standard deviation reads
+    as 1.
     """
 
     # Keys: position string → (mean_array, std_array)
@@ -477,7 +422,7 @@ class FeatureNormalizer:
     star_params: dict[str, tuple[NDArray, NDArray]] = field(default_factory=dict)
 
     def fit(self, profiles_by_position: dict[str, list[FielderProfile]]) -> None:
-        """Fit normalization parameters per position from all profiles."""
+        """Fit each position's means and standard deviations from its profiles."""
         for pos, profiles in profiles_by_position.items():
             if not profiles:
                 continue
@@ -534,14 +479,15 @@ class FeatureNormalizer:
 
 
 # ============================================================================
-# Position Partition — Vectorized Batch Scoring
+# Position partition: batch scoring
 # ============================================================================
 
 
 class PositionPartition:
-    """
-    Stores all fielder profiles for one specific position with pre-built
-    normalized feature matrices for vectorized batch RBF scoring.
+    """Every profile at one position, with its z-scored feature matrices.
+
+    The matrices let one query score every profile at the position in one
+    vector step per sub-score.
     """
 
     def __init__(self, position: str) -> None:
@@ -550,7 +496,7 @@ class PositionPartition:
         self.profiles: list[FielderProfile] = []
         self.keys: list[tuple[int, str, int]] = []  # (player_id, position, season)
 
-        # Normalized feature matrices
+        # The z-scored feature matrices, one row per profile.
         self._range_matrix: NDArray | None = None
         self._error_matrix: NDArray | None = None
         self._secondary_matrix: NDArray | None = None  # DP (IF) or Arm (OF)
@@ -563,6 +509,10 @@ class PositionPartition:
         profiles: list[FielderProfile],
         normalizer: FeatureNormalizer,
     ) -> None:
+        """Z-score every profile's vectors into the partition's matrices.
+
+        A missing group vector reads as zeros before the z-score.
+        """
         self.profiles = profiles
         self.keys = [(p.player_id, p.position, p.season) for p in profiles]
 
@@ -627,7 +577,12 @@ class PositionPartition:
         tertiary_rbf: WeightedRBFSimilarity,
         error_rbf: WeightedRBFSimilarity,
     ) -> list[SimilarityResult]:
-        """Score the query against EVERY profile in this partition."""
+        """Score the query against every profile in this partition but its own.
+
+        The composite is the weighted sum of the four sub-scores, times the
+        square root of the lower EB alpha of the pair: a thin profile on
+        either side lowers the score.
+        """
         if not self.profiles:
             return []
 
@@ -635,7 +590,7 @@ class PositionPartition:
         pos = self.position
         query_key = (query.player_id, query.position, query.season)
 
-        # Vectorized RBF sub-scores
+        # The sub-scores, one vector step each.
         range_q = normalizer.normalize_range(query.range_vec, pos)
         range_scores = range_rbf.score_batch(range_q, self._range_matrix)
 
@@ -692,12 +647,12 @@ class PositionPartition:
                 + WEIGHT_OF_ERRORS * error_scores
             )
 
-        # Confidence discount
+        # Discount by the thinner profile's confidence.
         pair_confidence = np.minimum(query.eb_alpha, self._eb_alphas)
         composite *= np.sqrt(pair_confidence)
         composite = np.clip(composite, 0.0, 1.0)
 
-        # Build results (exclude exact self-match)
+        # The results, without the query's own profile.
         results = []
         for i in range(n):
             if self.keys[i] == query_key:
@@ -737,19 +692,18 @@ class PositionPartition:
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 def _range_league_vector(pj: dict, features: list[tuple[str, float]]) -> NDArray[np.float64]:
-    """SIM-532: one league row's range vector, in ``features``' order.
+    """One league row's range vector, in ``features``' order.
 
-    The five original components keep the 0.0 fallback: the league row has
-    never carried their keys, and they are centred on 0 by construction, so
-    0.0 is their mean. The Savant figure and the three jump parts
-    (``_RANGE_KEYS_NAN_WHEN_ABSENT``) are NaN when the row lacks them — a
-    league row written before the SIM-532 recompute — and ``shrink`` then
-    leaves the raw value alone.
+    Our five components fall back to 0.0: the league row never carries their
+    keys, and they are centred on 0 by construction, so 0.0 is their mean.
+    Savant's OAA and the three jump parts (``_RANGE_KEYS_NAN_WHEN_ABSENT``)
+    read NaN when an older row lacks them, and ``shrink`` then leaves the raw
+    value alone.
     """
     return np.array(
         [
@@ -763,13 +717,11 @@ def _range_league_vector(pj: dict, features: list[tuple[str, float]]) -> NDArray
 
 
 class FielderSimilarityEngine:
-    """
-    The Fielder-to-Fielder Similarity Engine.
+    """The fielder-to-fielder similarity engine.
 
-    Scores are computed EXHAUSTIVELY against all same-position fielder-season
-    profiles. Cross-season comparisons are included. Position-gated: each
-    position (1B, 2B, 3B, SS, LF, CF, RF) lives in its own partition and
-    is never compared cross-position.
+    A query scores the query profile against every profile at its position,
+    every season included. Each position (1B, 2B, 3B, SS, LF, CF, RF) is a
+    partition of its own; the engine never compares two positions.
 
     Usage:
         engine = FielderSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -786,8 +738,8 @@ class FielderSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, str, int], FielderProfile] = {}
 
-        # Per-position positional-average vectors for shrinkage
-        # Keys: (position, season) → NDArray
+        # The shrinkage targets: the league-mean vector per feature group,
+        # position and season. Keys: group → position → season → NDArray.
         self._pos_avg: dict[str, dict[str, dict[int, NDArray]]] = {
             "range": {},
             "error": {},
@@ -800,17 +752,18 @@ class FielderSimilarityEngine:
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0028 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff (asof_date) every loaded profile declared. None when the
+        # table has no asof_date column (a database before DuckDB migration
+        # 0028) or every row's value is NULL.
         self._asof_date = None
 
-        # Per-position partitions
+        # One partition per position.
         self._partitions: dict[str, PositionPartition] = {
             pos: PositionPartition(pos) for pos in ALL_POSITIONS
         }
 
-        # Build RBF scorers — separate for IF and OF sub-score types
+        # One kernel per sub-score, apart for the infield and the outfield. The
+        # corner infield's double-play kernel has no pivot weight.
         self._if_range_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_IF_RANGE,
             reliability_weights=np.array([w for _, w in IF_RANGE_FEATURES]),
@@ -852,18 +805,19 @@ class FielderSimilarityEngine:
         )
 
     # ------------------------------------------------------------------
-    # Calibration wiring (SIM-406)
+    # Calibration
     # ------------------------------------------------------------------
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the nine position-group RBF scorers from a fitted report.
+        """Rebuild the nine sub-score kernels from a fitted calibration report.
 
-        Each sub-score's sigma — and its reliability weights, when present —
-        replaces the module default. A field left at 0.0 / None keeps the engine's
-        current value, so a partial report degrades gracefully. The two DP scorers
-        share ``sigma_if_dp``; the full ``_if_dp_rbf`` concatenates the DP + pivot
-        reliability weights (matching ``__init__``), while ``_if_dp_rbf_corner``
-        uses the DP weights only. Only the query-time scorers are swapped.
+        Each sub-score's sigma, and its reliability weights when present,
+        replace the current values. A field left at 0.0 or None keeps the
+        current value, so a partial report still applies what it has. The two
+        double-play kernels share ``sigma_if_dp``. The middle-infield kernel
+        joins the double-play and pivot weights, as the constructor does; the
+        corner kernel takes the double-play weights alone. Only the kernels
+        change: the partitions' z-scored matrices stay as built.
         """
 
         def _sig(field: str, current: float) -> float:
@@ -875,14 +829,11 @@ class FielderSimilarityEngine:
             if w is None:
                 return np.array(default)
             arr = np.asarray(w, dtype=np.float64)
-            # SIM-550 / SIM-532: a report fitted before a group's feature list
-            # changed carries the wrong number of weights (the live report
-            # holds FIVE range weights for each range group; the infield
-            # group has six features and the outfield group nine since
-            # SIM-532). Applying it would broadcast against the feature
-            # vector and fail on the first query. Keep the module defaults
-            # until ``make calibrate`` refits the report — the SIM-531 rule
-            # from the baserunner engine.
+            # A report fitted on another feature list carries the wrong number
+            # of weights. Applying it would fail on the first query: the
+            # weights would not broadcast against the feature vector. Keep the
+            # module defaults until ``make calibrate`` refits the report. The
+            # baserunner engine follows the same rule.
             if arr.shape != (len(default),):
                 log.warning(
                     "SIM-550/532: %s holds %d weights but the engine has %d features; "
@@ -900,12 +851,10 @@ class FielderSimilarityEngine:
                 "reliability_weights_if_range", [w for _, w in IF_RANGE_FEATURES]
             ),
         )
-        # The full middle-infield DP scorer pairs DP + PIVOT features. Build the
-        # combo from INDEPENDENT per-array fallbacks (each part falls back to its
-        # own module default when the report omits it) so a partial report carrying
-        # only the DP weights still feeds the fitted DP portion to BOTH the middle
-        # (`_if_dp_rbf`) and corner (`_if_dp_rbf_corner`) scorers — consistent
-        # graceful degradation, not an all-or-nothing revert (SIM-406 review fix).
+        # The middle-infield kernel joins the double-play and pivot weights.
+        # Each part falls back to its own module default, so a report that
+        # carries only the double-play weights still feeds them to both the
+        # middle (`_if_dp_rbf`) and the corner (`_if_dp_rbf_corner`) kernels.
         dp_part = _wts("reliability_weights_if_dp", [w for _, w in IF_DP_FEATURES])
         pivot_part = _wts("reliability_weights_if_pivot", [w for _, w in IF_PIVOT_FEATURES])
         self._if_dp_rbf = WeightedRBFSimilarity(
@@ -968,7 +917,7 @@ class FielderSimilarityEngine:
     # ------------------------------------------------------------------
 
     def build(self, seasons: list[int] | None = None) -> None:
-        """Load all fielder profiles, apply shrinkage, build matrices."""
+        """Load the league means and the profiles, shrink them, and build the partitions."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
 
@@ -980,7 +929,7 @@ class FielderSimilarityEngine:
 
         self._apply_shrinkage()
 
-        # Group profiles by position for normalization and partition building
+        # Group the profiles by position for the z-score fit and the partitions.
         profiles_by_pos: dict[str, list[FielderProfile]] = {pos: [] for pos in ALL_POSITIONS}
         for _key, p in self._profiles.items():
             profiles_by_pos[p.position].append(p)
@@ -1005,7 +954,7 @@ class FielderSimilarityEngine:
                 log.info("  %s: %d profiles", pos, n)
 
     # ------------------------------------------------------------------
-    # Data Loading
+    # Data loading
     # ------------------------------------------------------------------
 
     def _load_positional_averages(
@@ -1013,9 +962,10 @@ class FielderSimilarityEngine:
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
     ) -> None:
-        """
-        Load per-position per-season average feature vectors from
-        derived.league_averages. Used as shrinkage targets.
+        """Load each position's league-mean vectors per season, the shrinkage targets.
+
+        The source is derived.league_averages. Without that table the engine
+        builds with no shrinkage targets.
         """
         try:
             season_filter = ""
@@ -1058,11 +1008,9 @@ class FielderSimilarityEngine:
                 )
             else:
                 self._pos_avg["range"][pos][season] = _range_league_vector(pj, OF_RANGE_FEATURES)
-                # SIM-550: an arm key the league row lacks (a row written
-                # before the arm block was rebuilt from the pool) is NaN —
-                # never 0.0 mph or a 0.0 thrown-out rate, which is the weakest
-                # arm in the league — and the shrinkage then leaves the raw
-                # value alone.
+                # An arm key the league row lacks (an older row) is NaN, never
+                # 0.0: 0.0 mph or a 0.0 thrown-out rate is the weakest arm in
+                # the league. The shrinkage then leaves the raw value alone.
                 self._pos_avg["arm"][pos][season] = np.array(
                     [np.nan if pj.get(f) is None else float(pj[f]) for f, _ in OF_ARM_FEATURES],
                     dtype=np.float64,
@@ -1081,20 +1029,23 @@ class FielderSimilarityEngine:
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
     ) -> None:
+        """Load every fielder-position-season profile that meets the minimum sample.
+
+        Raise when the profiles declare more than one cutoff (asof_date).
+        """
         season_filter = ""
         if seasons:
             sl = ", ".join(str(s) for s in seasons)
             season_filter = f"AND fsm.season IN ({sl})"
 
-        # SIM-537: graceful-optional column — a database that has not run
-        # migration 0028 yet still builds; asof_date comes back NULL.
+        # The asof_date column is optional: a database before DuckDB migration
+        # 0028 still builds, and asof_date reads NULL.
         _present = duck_columns(conn, "derived", "fielder_season_metrics")
         _asof_col = "fsm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
-        # SIM-550: the arm block's four columns, guarded the same way, so a
-        # table built before the block existed still loads (the arm reads
-        # NULL, which becomes NaN below). The order is OF_ARM_FEATURES' order,
-        # then the chance count the group shrinks on.
+        # The arm block's four columns, guarded the same way: an older table
+        # still loads, and the arm reads NULL (NaN below). The order is
+        # OF_ARM_FEATURES' order, then the chance count the arm shrinks on.
         _arm_cols = ", ".join(
             f"fsm.{col}" if col in _present else f"NULL AS {col}"
             for col in (
@@ -1105,12 +1056,12 @@ class FielderSimilarityEngine:
             )
         )
 
-        # SIM-532: the Savant figure, the three jump parts and the jump's play
-        # count, guarded the same way, so a table built before migration 0030
-        # still loads (they read NULL, which becomes NaN below). They sit
-        # right after catch_pct_added so the range block stays contiguous:
-        # the Savant figure completes the infield range vector (six) and the
-        # jump parts complete the outfield one (nine).
+        # Savant's OAA, the three jump parts and the jump's play count, guarded
+        # the same way: a table before DuckDB migration 0030 still loads, and
+        # they read NULL (NaN below). They sit right after catch_pct_added, so
+        # the range block stays contiguous: Savant's OAA completes the infield
+        # range vector (six), and the jump parts complete the outfield one
+        # (nine).
         _oaa_jump_cols = ", ".join(
             f"fsm.{col}" if col in _present else f"NULL AS {col}"
             for col in (
@@ -1157,7 +1108,7 @@ class FielderSimilarityEngine:
 
         log.info("Loading %d fielder profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff (asof_date).
         asof_values: set = set()
 
         for row in rows:
@@ -1173,7 +1124,7 @@ class FielderSimilarityEngine:
                 oaa_ch,
                 oaa_deep,
                 cpct_add,
-                # Range, continued (SIM-532: 4 features + the jump's play count)
+                # Range, continued: 4 features and the jump's play count
                 savant_per_100,
                 jump_reaction,
                 jump_burst,
@@ -1190,7 +1141,7 @@ class FielderSimilarityEngine:
                 # Specialty (2)
                 bunt_rate,
                 scoop_rate,
-                # Arm (3 features + the chance count; SIM-550)
+                # Arm: 3 features and the chance count
                 arm_strength,
                 arm_adv_prev,
                 arm_throw_out,
@@ -1211,7 +1162,7 @@ class FielderSimilarityEngine:
             def _v(vals):
                 return np.array([v if v is not None else np.nan for v in vals], dtype=np.float64)
 
-            # Compute star play rates from counts
+            # The star-play catch rates from the counts.
             five_star_rate = (five_catches / five_opps) if five_opps and five_opps > 0 else np.nan
             four_star_rate = (four_catches / four_opps) if four_opps and four_opps > 0 else np.nan
             routine_rate = (
@@ -1221,11 +1172,11 @@ class FielderSimilarityEngine:
             if position not in ALL_POSITIONS:
                 continue
 
-            # SIM-532: the range vector in the group's feature order. The
-            # infield reads our five plus Savant's figure (six); the outfield
-            # adds the three jump parts (nine). NULL loads as NaN (unmeasured),
-            # never 0.0 — a 0.0 reaction would be a league-average first step
-            # he never showed.
+            # The range vector in the group's feature order. The infield reads
+            # our five plus Savant's OAA (six); the outfield adds the three
+            # jump parts (nine). NULL loads as NaN (unmeasured), never 0.0: a
+            # 0.0 reaction would be a league-average first step he never
+            # showed.
             our_five = [oaa_gs, oaa_as, oaa_ch, oaa_deep, cpct_add]
             if position in INFIELD_POSITIONS:
                 range_vec = _v([*our_five, savant_per_100])
@@ -1245,9 +1196,9 @@ class FielderSimilarityEngine:
                 dp_vec = _v(dp_feats)
                 specialty_vec = _v([bunt_rate, scoop_rate])
             else:
-                # SIM-550: OF_ARM_FEATURES' order. NULL loads as NaN
-                # (unmeasured), never 0.0 — a 0.0 mph velocity or a 0.0
-                # thrown-out rate would be a measurement he never produced.
+                # OF_ARM_FEATURES' order. NULL loads as NaN (unmeasured), never
+                # 0.0: a 0.0 mph velocity or a 0.0 thrown-out rate would be a
+                # measurement he never produced.
                 arm_vec = _v([arm_strength, arm_adv_prev, arm_throw_out])
                 star_vec = _v([five_star_rate, four_star_rate, routine_rate])
 
@@ -1265,14 +1216,13 @@ class FielderSimilarityEngine:
                 star_vec=star_vec,
                 eb_alpha=self._shrinkage.alpha(sample_bb or 0),
                 below_minimum=bool(below_min),
-                # SIM-550: the arm group's own sample (0 for an infielder).
+                # The arm group's own sample (0 for an infielder).
                 sample_arm_chances=int(arm_opps or 0),
-                # SIM-532: the jump group's own sample (0 for an infielder,
-                # whose jump columns are NULL).
+                # The jump group's own sample (0 for an infielder).
                 sample_jump_plays=int(jump_plays or 0) if position in OUTFIELD_POSITIONS else 0,
             )
 
-        # SIM-537: refuse a mixed set.
+        # Refuse profiles built at two cutoffs.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "fielder profiles were built at different cutoffs "
@@ -1284,14 +1234,15 @@ class FielderSimilarityEngine:
             log.info("Fielder profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
-        """Apply EB shrinkage to all feature vectors using positional averages.
+        """Shrink every profile's vectors toward the position's league mean.
 
         Every group shrinks on the profile's batted balls at ``EB_N_PRIOR``,
-        with two exceptions. The outfield arm (SIM-550): its two pool-derived
-        rates shrink on the arm's own chances at ``ARM_ALPHA_PRIOR_CHANCES``,
-        and a missing velocity takes the league mean. The outfield jump
-        (SIM-532): the three jump parts of the range vector shrink on the
-        jump's own plays at ``JUMP_ALPHA_PRIOR_PLAYS``.
+        with two exceptions in the outfield. The arm's two pool rates shrink
+        on the arm's own chances at ``ARM_ALPHA_PRIOR_CHANCES``; the velocity
+        stays as read, and a missing one takes the league mean. The three jump
+        parts of the range vector shrink on the jump's own plays at
+        ``JUMP_ALPHA_PRIOR_PLAYS``. A profile whose season has no league row
+        keeps its raw vectors.
         """
         for _key, p in self._profiles.items():
             pos = p.position
@@ -1302,22 +1253,20 @@ class FielderSimilarityEngine:
             avg = self._pos_avg["range"].get(pos, {}).get(s)
             if avg is not None:
                 if pos in INFIELD_POSITIONS:
-                    # Our five components and Savant's figure, all on the
-                    # batted balls (SIM-532 decision 4 adds the sixth).
+                    # Our five components and Savant's OAA, all on the
+                    # batted balls.
                     p.range_vec = self._shrinkage.shrink(p.range_vec, avg, n)
                 else:
-                    # SIM-532: the first six entries (our five and Savant's
-                    # figure) shrink on the batted balls, as before. The
-                    # three jump parts shrink on the jump's OWN plays: a
-                    # ten-play outfielder's reaction is noise, and on 600
-                    # batted balls it was read at face value. 10 plays ->
-                    # alpha 0.29 (two thirds of the way to the league mean);
-                    # 31 -> 0.55; 64 -> 0.72. A NaN raw jump (no jump row)
-                    # becomes the league mean inside ``shrink``. When the
-                    # league mean is NaN too (a league row written before the
-                    # SIM-532 recompute), the NaN stays and the normalizer
-                    # maps it to the position mean in z-space (nan_to_num
-                    # after z-scoring).
+                    # The first six entries (our five and Savant's OAA)
+                    # shrink on the batted balls. The three jump parts shrink
+                    # on the jump's OWN plays: a ten-play outfielder's
+                    # reaction is noise, yet he may have 600 batted balls.
+                    # Alpha is 0.29 at 10 plays, 0.55 at 31 and 0.72 at 64.
+                    # A NaN raw jump (no jump row) becomes the league mean
+                    # inside ``shrink``. When the league mean is NaN too (an
+                    # older league row), the NaN stays, and the normalizer
+                    # reads it as the position mean (nan_to_num after the
+                    # z-score).
                     base = self._shrinkage.shrink(
                         p.range_vec[:OF_RANGE_BASE_COUNT], avg[:OF_RANGE_BASE_COUNT], n
                     )
@@ -1345,13 +1294,12 @@ class FielderSimilarityEngine:
             else:
                 avg = self._pos_avg["arm"].get(pos, {}).get(s)
                 if avg is not None and p.arm_vec is not None:
-                    # SIM-550: the two rates (prevention, thrown-out) shrink on
-                    # the arm's OWN chances. An everyday outfielder has 600
-                    # batted balls and 25 to 200 arm chances; on the batted
-                    # balls a 25-chance arm was read at face value. A NaN
-                    # league value leaves the raw rate alone (see ``shrink``).
-                    # 25 chances -> alpha 0.33: two thirds of the way to the
-                    # league mean; 200 chances -> 0.80.
+                    # The two rates (prevention, thrown-out) shrink on the
+                    # arm's OWN chances. An everyday outfielder has 600 batted
+                    # balls but only 25 to 200 arm chances; shrunk on the
+                    # batted balls, a 25-chance arm would read at face value.
+                    # A NaN league value leaves the raw rate alone (see
+                    # ``shrink``). Alpha is 0.33 at 25 chances and 0.80 at 200.
                     rates = self._shrinkage.shrink(
                         p.arm_vec[1:],
                         avg[1:],
@@ -1359,8 +1307,8 @@ class FielderSimilarityEngine:
                         n_prior=ARM_ALPHA_PRIOR_CHANCES,
                     )
                     # The velocity is Savant's, measured over 50 or more
-                    # throws: kept as read; a missing one takes the league
-                    # mean, never 0 mph.
+                    # throws, so it stays as read. A missing one takes the
+                    # league mean, never 0 mph.
                     velocity = np.where(np.isnan(p.arm_vec[:1]), avg[:1], p.arm_vec[:1])
                     p.arm_vec = np.concatenate([velocity, rates])
 
@@ -1369,7 +1317,7 @@ class FielderSimilarityEngine:
                     p.star_vec = self._shrinkage.shrink(p.star_vec, avg, n)
 
     # ------------------------------------------------------------------
-    # RBF Selector
+    # Kernel selector
     # ------------------------------------------------------------------
 
     def _get_rbfs_for_position(
@@ -1396,9 +1344,7 @@ class FielderSimilarityEngine:
         season: int,
         n: int | None = None,
     ) -> list[SimilarityResult]:
-        """
-        Score the query fielder against ALL same-position fielder-season
-        profiles in the engine.
+        """Score the query fielder against every profile at the same position.
 
         Parameters
         ----------
@@ -1413,9 +1359,9 @@ class FielderSimilarityEngine:
 
         Returns
         -------
-        Exhaustive list of SimilarityResult sorted by score descending.
-        The query fielder's exact (player_id, position, season) is excluded,
-        but other seasons of the same player ARE included.
+        Every SimilarityResult, sorted by score, highest first. The query's own
+        (player_id, position, season) is left out; his other seasons at the
+        position are in. An unknown position or profile returns an empty list.
         """
         if position not in ALL_POSITIONS:
             log.warning("Invalid position '%s'. Must be one of %s.", position, ALL_POSITIONS)
@@ -1451,8 +1397,7 @@ class FielderSimilarityEngine:
         fielder_a: tuple[int, str, int],
         fielder_b: tuple[int, str, int],
     ) -> SimilarityResult | None:
-        """
-        Compute similarity between two specific fielder-position-seasons.
+        """Score fielder B against fielder A at one position.
 
         Parameters
         ----------
@@ -1494,7 +1439,12 @@ class FielderSimilarityEngine:
         query: FielderProfile,
         candidate: FielderProfile,
     ) -> tuple[float, float, float, float, float]:
-        """Compute sub-scores and composite between two profiles."""
+        """Score two profiles at one position.
+
+        Returns (composite, range, secondary, tertiary, error). Secondary is
+        the double play (IF) or the arm (OF); tertiary is the specialty (IF)
+        or the star plays (OF).
+        """
         pos = query.position
         range_rbf, secondary_rbf, tertiary_rbf, error_rbf = self._get_rbfs_for_position(pos)
 
@@ -1579,6 +1529,7 @@ class FielderSimilarityEngine:
                 + WEIGHT_OF_ERRORS * error_s
             )
 
+        # Discount by the thinner profile's confidence.
         confidence = min(query.eb_alpha, candidate.eb_alpha)
         composite *= np.sqrt(confidence)
 
@@ -1603,15 +1554,15 @@ class FielderSimilarityEngine:
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff (asof_date) every loaded profile declared, or ``None``."""
         return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, str, int]]:
-        """List all (player_id, position, season) triples in the engine."""
+        """Every (player_id, position, season) key in the engine."""
         return list(self._profiles.keys())
 
     def profile_ids_for_position(self, position: str) -> list[tuple[int, str, int]]:
-        """List all profile keys for a specific position."""
+        """Every profile key at one position."""
         return [k for k in self._profiles if k[1] == position]
 
 

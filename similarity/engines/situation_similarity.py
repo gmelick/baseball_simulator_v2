@@ -1,80 +1,56 @@
-"""
-situation_similarity.py
-=======================
-Step 2.9 — Situation-to-Situation Similarity (KDTree)
-MLB Baseball Simulation Platform
+"""The situation engine: the historical plate appearances nearest a game state.
 
-Finds the K historically nearest game situations to a query situation
-and returns the play outcomes that occurred in those situations.  This
-is the foundational play-pool lookup mechanism for the Phase 4 simulation
-loop: rather than sampling from an unconditioned distribution, the
-simulation samples from outcomes observed in similar situations.
+The profile engines compare players; this one compares GAME STATES. A query
+returns the K plate appearances whose state before the first pitch is
+nearest the query's. The Similarity Explorer's Situation Finder calls it
+(``api/routes/similarity_explorer.py``). The simulator does not: it draws
+from the full-pool sampler.
 
-Unlike all other similarity engines (which compare players), this engine
-compares GAME STATES.  The "profile" is a game state vector:
+A state is an 11-feature vector:
 
     [inning, top_or_bottom, outs, runner_on_1b, runner_on_2b,
      runner_on_3b, score_differential, leverage_index,
      pitcher_pitch_count, batter_pa_count, park_factor_runs]
 
-KDTree Choice
+Why a KD-tree
 -------------
-  Unlike the RBF engines (which compute exhaustive pairwise scores),
-  the situation engine uses a scipy KDTree for approximate K-nearest-
-  neighbor lookup.  This is appropriate because:
+  A KD-tree (a tree that splits the space one feature at a time) finds the
+  exact K nearest rows without a score for every row. The profile engines
+  score every profile, because they hold thousands of player-seasons. This
+  index holds hundreds of thousands of plate appearances a season, and a
+  KD-tree query costs about O(K log N), not O(N). The engine builds the tree
+  once at startup and keeps it in memory.
 
-    1. The index size is MUCH larger — millions of historical situations
-       vs. thousands of player-seasons.
-    2. The query is approximate by nature — we don't need the globally
-       closest 50 situations, just a representative sample of near
-       neighbors.
-    3. KDTree query scales as O(K * log N) rather than O(N), which is
-       critical for the simulation loop running 100 iterations per game.
+Distance
+--------
+  The engine z-scores each feature (the value minus the index's mean, over
+  its standard deviation), then multiplies it by the square root of its
+  weight (``SITUATION_FEATURES``). The Euclidean distance in that space
+  weights each feature's squared difference by its weight. The categorical
+  features (outs, the runners, the inning) count as continuous: a 2-out state
+  is far from a 0-out state, and the distance shows that.
 
-  The KDTree is rebuilt from historical data during engine initialization
-  and stored in memory.  It is NOT rebuilt during a live game.
-
-Feature Normalization
----------------------
-  All features are z-score normalized before indexing.  The KDTree uses
-  Euclidean distance in normalized space, which is equivalent to a
-  distance function that weights all dimensions equally — which is the
-  correct behavior after z-score normalization.
-
-  Categorical features (outs, baserunner state, inning) are treated as
-  continuous after normalization.  A 2-out situation is meaningfully
-  different from a 0-out situation, and the normalized Euclidean distance
-  captures this correctly.
-
-Leverage Index
+Leverage index
 --------------
-  leverage_index (LI) is included as a dimension because it captures
-  something inning + outs + runners don't fully express.  An 8th-inning
-  runner-on-second situation is different in a 1-run game vs. a 7-run
-  game.  LI compresses this into a single float.  Higher LI → higher
-  variance in play outcomes, which should pull similar situations
-  together.
+  The leverage index (LI, how much the state can swing the game) is a
+  feature, because it carries what inning, outs and runners alone miss: a
+  runner on second in the 8th means more in a 1-run game than in a 7-run
+  game. LI puts that in one number.
 
-Columnar Metadata (SIM-334)
----------------------------
-  The per-row situation metadata is stored as parallel NumPy column
-  arrays (``ColumnarSituationMeta``) rather than a ``list[NearestSituation]``
-  of Python objects.  The list cost ~120 MB at 1 M rows and was
-  un-shareable across processes.  The columnar store is contiguous,
-  compact, and trivially share-able read-only via mmap / shared memory,
-  while reconstructing byte-for-byte identical ``NearestSituation`` results
-  on demand so the public query API is unchanged.
-
-Dependencies
-------------
-  pip install duckdb numpy scipy
+Columnar metadata
+-----------------
+  The engine keeps each row's metadata as parallel NumPy column arrays
+  (``ColumnarSituationMeta``), one array per field. The arrays are compact,
+  and a process can share them read-only. A Python object per row would cost
+  about 120 MB at a million rows. A query rebuilds each ``NearestSituation``
+  from the arrays.
 
 Usage
 -----
   engine = SituationSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
   engine.build(seasons=[2019, 2020, 2021, 2022, 2023, 2024])
 
-  # Query: find 50 most similar historical situations to the current state
+  # The 50 historical states nearest the current one
   query_state = SituationVector(
       inning=7, top_or_bottom=0, outs=1,
       runner_on_1b=1, runner_on_2b=0, runner_on_3b=0,
@@ -84,7 +60,7 @@ Usage
   )
   nearest = engine.query(query_state, k=50)
 
-  # Each result carries the play_id to look up outcomes in the play pool
+  # Each result carries the plate appearance's play_id
   play_ids = [r.play_id for r in nearest]
 """
 
@@ -112,16 +88,15 @@ log = logging.getLogger("situation_similarity")
 
 
 # ============================================================================
-# Config — Situation Feature Definitions & Weights
+# Feature definitions and weights
 # ============================================================================
 
-# Feature names and their relative importance weights for z-score normalization.
-# KDTree uses Euclidean distance after normalization.  These weights are applied
-# by multiplying the normalized feature values by sqrt(weight) before indexing,
-# which scales Euclidean distance proportionally to feature importance.
+# Each feature and its weight. The engine multiplies each z-scored feature by
+# sqrt(weight) before the KD-tree indexes it, so the squared Euclidean
+# distance weights each feature's squared difference by its weight.
 SITUATION_FEATURES = [
     # feature_name,             weight   description
-    ("inning", 0.80),  # 1-9 (or extra innings up to 12)
+    ("inning", 0.80),  # 1-9, more in extra innings
     ("top_or_bottom", 0.50),  # 0 = top, 1 = bottom
     ("outs", 1.00),  # 0, 1, or 2
     ("runner_on_1b", 0.80),  # 0 or 1
@@ -136,33 +111,31 @@ SITUATION_FEATURES = [
 
 FEATURE_NAMES = [f for f, _ in SITUATION_FEATURES]
 FEATURE_WEIGHTS = np.array([w for _, w in SITUATION_FEATURES], dtype=np.float64)
-# Scaling factors applied before KDTree insert: multiply each normalized feature
-# by sqrt(weight) so Euclidean distance reflects relative importance.
+# The factor on each z-scored feature: sqrt(weight).
 FEATURE_SCALE = np.sqrt(FEATURE_WEIGHTS)
 
-# Score differential is clipped to [-5, 5] to prevent blowout games from
-# distorting the distance metric.
+# The score differential is clipped to [-5, 5], so a blowout does not stretch
+# the distance.
 SCORE_DIFF_CLIP = 5
 
-# Default K for nearest-neighbor query
+# The default K for a query.
 DEFAULT_K = 50
 
-# Minimum historical situations for the engine to be usable
+# Below this many indexed situations, the build logs a warning.
 MIN_INDEX_SIZE = 1000
 
 
 # ============================================================================
-# Data Structures
+# Data structures
 # ============================================================================
 
 
 @dataclass(frozen=True, slots=True)
 class SituationVector:
-    """
-    A game state vector for KDTree query or indexing.
+    """One game state, as a query or an indexed row.
 
-    All fields should be set to the current values at the moment of the
-    pitch (i.e., BEFORE the play outcome is known).
+    Each field holds its value before the plate appearance's first pitch,
+    before the outcome is known.
     """
 
     inning: int  # 1-based inning number
@@ -171,10 +144,12 @@ class SituationVector:
     runner_on_1b: int  # 1 if occupied, 0 otherwise
     runner_on_2b: int
     runner_on_3b: int
-    score_differential: float  # home_score - away_score at moment of pitch
-    leverage_index: float  # pre-pitch LI (0.0 to ~10.0, typical range 0.1-4.0)
-    pitcher_pitch_count: int  # pitches thrown so far this appearance
-    batter_pa_count: int  # plate appearances by this batter this game
+    score_differential: float  # home_score - away_score; to_array clips it to ±5
+    # The leverage index. The index holds the profile computor's approximation,
+    # 0.18 to 3.59; the real index runs 0 to about 10.
+    leverage_index: float
+    pitcher_pitch_count: int  # the pitcher's pitches this game before the plate appearance
+    batter_pa_count: int  # this batter's plate appearance number in the game (1 = his first)
     park_factor_runs: float  # park run factor (1.0 = league average)
 
     def to_array(self) -> NDArray[np.float64]:
@@ -198,11 +173,11 @@ class SituationVector:
 
 @dataclass(frozen=True, slots=True)
 class NearestSituation:
-    """One entry in the K-nearest-neighbor query output."""
+    """One of the K nearest historical states a query returns."""
 
-    play_id: str  # foreign key into the play pool / play-by-play table
+    play_id: str  # the plate appearance's id, '<game_pk>-<at_bat_number>'
     game_pk: int  # game identifier
-    distance: float  # Euclidean distance in normalized+weighted space
+    distance: float  # Euclidean distance in the z-scored, weighted space
     inning: int
     outs: int
     runners: int  # bitmask: 0b001=1B, 0b010=2B, 0b100=3B
@@ -211,53 +186,41 @@ class NearestSituation:
 
 
 # ============================================================================
-# Columnar metadata store (SIM-334)
+# Columnar metadata store
 # ============================================================================
 #
-# The engine previously stored row metadata as a `list[NearestSituation]` —
-# one ~120-byte Python slots object per indexed PA (~120 MB at 1 M rows).  That
-# list is un-shareable across processes (it is a graph of Python objects) and is
-# *larger than the raw KDTree data itself* (SIM-280 §2.1).  This columnar store
-# replaces that list with parallel NumPy arrays — one dtype-appropriate array per
-# `NearestSituation` field — which are contiguous, compact, and trivially
-# share-able read-only via `multiprocessing.shared_memory` / mmap (SIM-281 D2).
+# The store keeps one NumPy array per `NearestSituation` field. The arrays are
+# contiguous and compact, and a process can share them read-only
+# (`multiprocessing.shared_memory` or mmap). A Python object per row would
+# cost about 120 bytes, more than the KD-tree's own data, and could not be
+# shared.
 #
-# Field → array mapping (the per-row `distance` is NOT stored: it is always 0.0
-# at index time and is filled in from the KDTree result at query time):
+# Field → array (the store keeps no `distance`: a query fills it in from the
+# KD-tree result):
 #
 #   play_id            -> str   : fixed-width unicode array (np.dtype('U<W>')),
-#                                 width auto-sized to the longest id; play_ids
-#                                 are near-unique foreign keys so an int-code +
-#                                 category table buys nothing — a fixed-width
-#                                 array is the compact, share-able encoding.
+#                                 as wide as the longest id. The ids are nearly
+#                                 unique, so an integer code with a lookup table
+#                                 saves nothing.
 #   game_pk            -> int   : np.int64
 #   inning             -> int   : np.int16
 #   outs               -> int   : np.int8
 #   runners (bitmask)  -> int   : np.int8   (values 0..7)
 #   leverage_index     -> float : np.float64
 #   score_differential -> float : np.float64
-#
-# The store reconstructs a byte-for-byte identical `NearestSituation` on demand,
-# so the public query API and result objects are unchanged.  It is also a drop-in
-# replacement for the old `list[NearestSituation]` everywhere it was iterated or
-# indexed (it supports `len()`, integer indexing, and iteration, each yielding a
-# reconstructed `NearestSituation`).
 
 
 @dataclass(slots=True)
 class ColumnarSituationMeta:
-    """
-    Column-parallel NumPy store of per-row situation metadata.
+    """The per-row situation metadata, as parallel NumPy column arrays.
 
-    Replaces ``list[NearestSituation]``.  One array per field; integer indexing,
-    iteration, and ``len()`` reconstruct a ``NearestSituation`` (with
-    ``distance=0.0``, matching the old index-time sentinel) so existing callers
-    that treat ``_index_meta`` as a sequence of ``NearestSituation`` keep working
-    unchanged.
+    ``len()``, integer indexing and iteration each give a ``NearestSituation``
+    rebuilt from the arrays, with ``distance=0.0``. A caller can treat the
+    store as a sequence of ``NearestSituation``.
 
     The arrays are write-protected (``flags.writeable = False``) after
-    construction so the store is read-only/lazy: callers cannot mutate the index
-    in place, which keeps it safe to share read-only across processes.
+    construction. No caller can change the index in place, so the store is
+    safe to share read-only across processes.
     """
 
     play_id: NDArray  # dtype '<U...' fixed-width unicode
@@ -269,9 +232,9 @@ class ColumnarSituationMeta:
     score_differential: NDArray[np.float64]
 
     def __post_init__(self) -> None:
-        # Make the columnar store read-only.  Shared read-only arrays must not be
-        # mutated by any consumer; freezing the write flag enforces that and is a
-        # prerequisite for zero-copy sharing across processes.
+        # Make the store read-only. No consumer may change a shared array; the
+        # cleared write flag enforces that, and sharing across processes
+        # without a copy needs it.
         for arr in (
             self.play_id,
             self.game_pk,
@@ -284,12 +247,12 @@ class ColumnarSituationMeta:
             try:
                 arr.flags.writeable = False
             except (ValueError, AttributeError):
-                # A non-owning view may refuse; that is acceptable for our use.
+                # A view that does not own its data may refuse; that is fine here.
                 pass
 
     @classmethod
     def empty(cls) -> ColumnarSituationMeta:
-        """An empty store (zero rows) — used for the empty/missing-catalog path."""
+        """An empty store (zero rows), for an engine with no loaded situations."""
         return cls(
             play_id=np.empty(0, dtype="<U1"),
             game_pk=np.empty(0, dtype=np.int64),
@@ -312,7 +275,7 @@ class ColumnarSituationMeta:
         leverage_index: list[float],
         score_differential: list[float],
     ) -> ColumnarSituationMeta:
-        """Build the store from per-field Python lists collected during load."""
+        """Build the store from the per-field Python lists the load collects."""
         n = len(game_pk)
         if n == 0:
             return cls.empty()
@@ -331,7 +294,7 @@ class ColumnarSituationMeta:
         return int(self.game_pk.shape[0])
 
     def row(self, idx: int, distance: float = 0.0) -> NearestSituation:
-        """Reconstruct the NearestSituation at ``idx`` (default index-time sentinel)."""
+        """Rebuild the NearestSituation at ``idx``; ``distance`` defaults to 0.0."""
         return NearestSituation(
             play_id=str(self.play_id[idx]),
             game_pk=int(self.game_pk[idx]),
@@ -352,32 +315,36 @@ class ColumnarSituationMeta:
 
 
 # ============================================================================
-# Feature Normalization (fit on indexed situations, apply to query)
+# Feature normalization (fitted on the index, applied to each query)
 # ============================================================================
 
 
 @dataclass(slots=True)
 class SituationNormalizer:
-    """Z-score normalizer for situation feature vectors."""
+    """The z-score and weight scaling of a situation vector.
+
+    Each feature becomes (value - mean) / std, times sqrt(weight). A NaN
+    becomes 0, the index mean. Before a fit, only the weight scaling applies.
+    """
 
     mean: NDArray | None = None
     std: NDArray | None = None
 
     def fit(self, matrix: NDArray[np.float64]) -> None:
-        """Fit on the full historical situation matrix (shape N × n_features)."""
+        """Fit the means and standard deviations on the index matrix (N × n_features)."""
         self.mean = np.nanmean(matrix, axis=0)
         self.std = np.nanstd(matrix, axis=0)
         self.std[self.std == 0] = 1.0
 
     def normalize(self, vec: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Normalize a single situation vector and apply importance weighting."""
+        """Z-score and weight one situation vector."""
         if self.mean is None:
             return vec * FEATURE_SCALE
         normed = (vec - self.mean) / self.std
         return np.nan_to_num(normed, nan=0.0) * FEATURE_SCALE
 
     def normalize_batch(self, matrix: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Normalize a batch of situation vectors."""
+        """Z-score and weight every row of a situation matrix."""
         if self.mean is None:
             return matrix * FEATURE_SCALE[np.newaxis, :]
         normed = (matrix - self.mean[np.newaxis, :]) / self.std[np.newaxis, :]
@@ -385,23 +352,19 @@ class SituationNormalizer:
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class SituationSimilarityEngine:
-    """
-    Situation-to-Situation KDTree Engine (Step 2.9).
+    """The situation-to-situation engine: a KD-tree over historical game states.
 
-    Indexes millions of historical at-bat situations and supports fast
-    K-nearest-neighbor lookup for play-pool sampling in the simulation loop.
+    It indexes one row per historical plate appearance and finds the K rows
+    nearest a query state.
 
     The engine stores:
-      - A KDTree of normalized situation vectors (for fast lookup)
-      - A ColumnarSituationMeta of per-row metadata (parallel NumPy column
-        arrays) for result construction.  This replaces the old
-        ``list[NearestSituation]`` (SIM-334) to cut memory ~10x and make the
-        index share-able read-only across processes.
+      - a KD-tree of the z-scored, weighted situation vectors, for the lookup;
+      - a ColumnarSituationMeta of each row's metadata, to build the results.
 
     Usage:
         engine = SituationSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -413,7 +376,7 @@ class SituationSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._normalizer = SituationNormalizer()
         self._kdtree: KDTree | None = None
-        # Columnar metadata store, parallel to the kdtree leaves (SIM-334).
+        # The row metadata, in the same row order as the KD-tree's data.
         self._index_meta: ColumnarSituationMeta = ColumnarSituationMeta.empty()
         self._index_size = 0
 
@@ -422,13 +385,12 @@ class SituationSimilarityEngine:
     # ------------------------------------------------------------------
 
     def build(self, seasons: list[int] | None = None) -> None:
-        """
-        Load historical at-bat situations from DuckDB and build the KDTree.
+        """Load the historical situations from DuckDB and build the KD-tree.
 
-        The KDTree is built from the derived.at_bat_situations view, which
-        is a pre-computed join of pitches, game states, and park factors.
-        Each row represents a PLATE APPEARANCE (not a pitch) — we index
-        by PA because the simulation loop operates at PA granularity.
+        The source is the table derived.at_bat_situations: one row per PLATE
+        APPEARANCE (not per pitch), with the state at its first pitch. The
+        load joins each row's run park factor from derived.park_factors.
+        Raise when no row loads.
         """
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
@@ -438,16 +400,12 @@ class SituationSimilarityEngine:
             conn.close()
 
         if len(raw_matrix) == 0:
-            # SIM-408 hardening: a zero-row index is degenerate. Normalizing an
-            # empty matrix yields a NaN normalization (numpy emits "Mean of
-            # empty slice" / "Degrees of freedom <= 0"), producing a hollow
-            # engine that would silently feed NaN situation similarities — which
-            # is strictly worse than being absent. Raise instead, so
-            # ``api.state.build_all_engines`` SKIPS this engine (marks it failed,
-            # exactly like the steal engines whose source tables are likewise
-            # missing) rather than registering a NaN-poisoned one. The live
-            # trigger is a missing/empty ``derived.at_bat_situations`` — see
-            # docs/audit/2026-05-29-sim408-engine-schema-divergence.md.
+            # A zero-row index is useless. The z-score of an empty matrix is
+            # NaN (numpy warns "Mean of empty slice"), so the engine would
+            # return NaN distances, which is worse than no engine. Raise, so
+            # ``api.state.build_all_engines`` skips this engine and marks it
+            # failed, as it does for any engine whose source table is missing.
+            # The trigger is a missing or empty ``derived.at_bat_situations``.
             raise RuntimeError(
                 "SituationSimilarityEngine: no situations loaded "
                 "(derived.at_bat_situations is missing or empty) — refusing to "
@@ -462,7 +420,7 @@ class SituationSimilarityEngine:
                 MIN_INDEX_SIZE,
             )
 
-        # Fit normalizer and build scaled matrix
+        # Fit the z-score on the index, then scale every row.
         self._normalizer.fit(raw_matrix)
         scaled = self._normalizer.normalize_batch(raw_matrix)
 
@@ -482,7 +440,11 @@ class SituationSimilarityEngine:
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
     ) -> tuple[NDArray[np.float64], ColumnarSituationMeta]:
-        """Load situations from DuckDB into a NumPy matrix and columnar metadata."""
+        """Load the situations into a feature matrix and the columnar metadata.
+
+        A missing table loads zero rows. A NULL field takes a neutral default,
+        such as LI 1.0 or park factor 1.0.
+        """
         sf = ""
         if seasons:
             sf = f"AND abs.season IN ({', '.join(str(s) for s in seasons)})"
@@ -526,9 +488,9 @@ class SituationSimilarityEngine:
 
         matrix = np.empty((n, len(SITUATION_FEATURES)), dtype=np.float64)
 
-        # Collect per-field columns (Python lists), then pack into NumPy arrays
-        # once at the end via ColumnarSituationMeta.from_columns().  This keeps
-        # the load loop allocation-light and avoids one Python object per row.
+        # Collect each field in a Python list, then pack the lists into NumPy
+        # arrays once, through ColumnarSituationMeta.from_columns(). The loop
+        # then builds no Python object per row.
         col_play_id: list[str] = []
         col_game_pk: list[int] = []
         col_inning: list[int] = []
@@ -602,19 +564,19 @@ class SituationSimilarityEngine:
         situation: SituationVector,
         k: int = DEFAULT_K,
     ) -> list[NearestSituation]:
-        """
-        Find the K most similar historical situations to the query vector.
+        """Find the K historical situations nearest the query state.
 
         Parameters
         ----------
         situation : SituationVector
-            Current game state (before the play).
+            The current game state, before the plate appearance.
         k : int
-            Number of nearest neighbors to return.
+            The number of nearest rows to return; at most the index size.
 
         Returns
         -------
-        List of NearestSituation, sorted by distance ascending (closest first).
+        A list of NearestSituation, nearest first. Raise when the engine is
+        not built.
         """
         if self._kdtree is None:
             raise RuntimeError("Engine not built. Call build() first.")
@@ -627,7 +589,7 @@ class SituationSimilarityEngine:
         query_vec = self._normalizer.normalize(situation.to_array())
         distances, indices = self._kdtree.query(query_vec, k=effective_k)
 
-        # KDTree returns scalars when k=1; normalize to arrays
+        # The KD-tree returns scalars when k=1; make them arrays.
         if effective_k == 1:
             distances = np.array([distances])
             indices = np.array([indices])
@@ -635,9 +597,8 @@ class SituationSimilarityEngine:
         meta = self._index_meta
         results = []
         for dist, idx in zip(distances, indices, strict=False):
-            # Reconstruct the NearestSituation at this index, filling in the
-            # query-time distance.  Field values are identical to the old
-            # list[NearestSituation] path.
+            # Rebuild the NearestSituation at this row with the query's
+            # distance.
             results.append(self._row_from_meta(meta, idx, dist))
 
         return results
@@ -647,10 +608,9 @@ class SituationSimilarityEngine:
         situations: list[SituationVector],
         k: int = DEFAULT_K,
     ) -> list[list[NearestSituation]]:
-        """
-        Batch query: find K nearest situations for each query in the list.
+        """Find the K nearest situations for each query state, in one KD-tree call.
 
-        More efficient than calling query() N times for simulation batches.
+        The results match one ``query`` call per state.
         """
         if self._kdtree is None:
             raise RuntimeError("Engine not built. Call build() first.")
@@ -665,7 +625,7 @@ class SituationSimilarityEngine:
 
         all_distances, all_indices = self._kdtree.query(query_matrix, k=effective_k)
 
-        # Normalize shape for k=1
+        # The KD-tree drops the K axis when k=1; restore it.
         if effective_k == 1:
             all_distances = all_distances[:, np.newaxis]
             all_indices = all_indices[:, np.newaxis]
@@ -682,12 +642,11 @@ class SituationSimilarityEngine:
 
     @staticmethod
     def _row_from_meta(meta, idx, distance) -> NearestSituation:
-        """Reconstruct a NearestSituation at ``idx`` with the query distance.
+        """Rebuild the NearestSituation at ``idx`` with the query's distance.
 
-        Handles BOTH the SIM-334 columnar store (``meta.row``) and a plain
-        ``list[NearestSituation]`` (the regression/test-injection path), so
-        query results are identical regardless of how ``_index_meta`` was
-        populated.
+        ``meta`` is the columnar store (``meta.row``) or a plain
+        ``list[NearestSituation]``, which the regression and unit tests
+        inject. Both give the same result.
         """
         if hasattr(meta, "row"):
             return meta.row(int(idx), distance=float(distance))
@@ -709,16 +668,16 @@ class SituationSimilarityEngine:
 
     @property
     def index_size(self) -> int:
-        """Number of historical situations in the index."""
+        """The number of historical situations in the index."""
         return self._index_size
 
     def is_built(self) -> bool:
         return self._kdtree is not None
 
     def situation_count_by_outs(self) -> dict[int, int]:
-        """Returns {outs_value: count} for the full index."""
+        """The index's row count per outs value: {outs: count}."""
         counts: dict[int, int] = {0: 0, 1: 0, 2: 0}
-        # Count directly off the columnar array (no per-row object reconstruction).
+        # Count on the column array, with no NearestSituation per row.
         outs_arr = self._index_meta.outs
         if len(outs_arr) > 0:
             vals, vcounts = np.unique(outs_arr, return_counts=True)
@@ -727,7 +686,7 @@ class SituationSimilarityEngine:
         return counts
 
     def situation_count_by_inning(self) -> dict[int, int]:
-        """Returns {inning: count} for the full index."""
+        """The index's row count per inning, in inning order: {inning: count}."""
         counts: dict[int, int] = {}
         inning_arr = self._index_meta.inning
         if len(inning_arr) > 0:
@@ -742,21 +701,21 @@ def sorted_dict(d: dict) -> dict:
 
 
 # ============================================================================
-# Convenience: Inning/Outs coverage summary
+# Coverage summary by inning and outs
 # ============================================================================
 
 
 def build_coverage_report(engine: SituationSimilarityEngine) -> str:
-    """
-    Human-readable coverage summary showing how many historical situations
-    exist per (inning, outs) combination.  Helps validate that the index
-    has good coverage for all game states the simulation will encounter.
+    """A text table of the index's row count per (inning, outs).
+
+    It shows innings 1 to 12 and skips an inning with no rows. Use it to check
+    that the index covers every common game state.
     """
     from collections import Counter
 
     counter: Counter = Counter()
     meta = engine._index_meta
-    # Pair (inning, outs) directly off the columnar arrays.
+    # Pair (inning, outs) straight from the column arrays.
     inning_arr = meta.inning
     outs_arr = meta.outs
     for inning_val, outs_val in zip(inning_arr.tolist(), outs_arr.tolist(), strict=False):
