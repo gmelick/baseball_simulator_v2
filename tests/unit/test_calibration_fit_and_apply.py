@@ -241,7 +241,7 @@ class TestBaserunnerApplyCalibration:
 # ===========================================================================
 
 
-class TestNewerEngineApplyCalibration:
+class TestCatcherStealManagerApplyCalibration:
     def test_catcher(self):
         eng = CatcherSimilarityEngine(duckdb_path=":memory:")
         report = CalibrationReport(
@@ -311,7 +311,7 @@ class TestNewerEngineApplyCalibration:
 
 
 class TestSeamPresence:
-    def test_eight_similarity_engines_expose_apply_calibration(self):
+    def test_seven_rbf_engines_expose_apply_calibration(self):
         # Eight engines score in [0, 1] and expose apply_calibration: the
         # pitcher engine and the seven RBF engines. This test builds the seven;
         # test_pitcher_engine_calibration.py covers the pitcher. The three
@@ -383,7 +383,7 @@ class TestApplyCalibrationToEngines:
 # ===========================================================================
 
 
-class TestNewFieldsPersistence:
+class TestSigmaFieldsRoundTrip:
     def test_round_trip_lossless(self):
         r = CalibrationReport(
             sigma_catcher_framing=0.91,

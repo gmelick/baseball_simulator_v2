@@ -901,7 +901,7 @@ class TestCalibrator:
         if_rows = _if_calibration_rows(120, seed=36, savant_every=8)
         thin_if = [r[:9] + (None,) + r[10:] for r in if_rows[:101]] + if_rows[101:]
         assert sum(r[9] is not None for r in thin_if) < 20
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn(thin_if, thin_of), [2023, 2024, 2025], 0.5, CalibrationReport()
             )
@@ -970,7 +970,7 @@ class TestCalibrator:
         from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _nullify_nan(_paired_cf_rows(self._range_with_a_nan_reaction(37)))
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn([], rows), [2023, 2024], 0.5, CalibrationReport()
             )
@@ -994,7 +994,7 @@ class TestCalibrator:
 
         of_rows = [r for r in _of_calibration_rows(120, seed=38) if r[2] == 2023]
         if_rows = [r for r in _if_calibration_rows(120, seed=39) if r[2] == 2023]
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn(if_rows, of_rows), [2023], 0.5, CalibrationReport()
             )

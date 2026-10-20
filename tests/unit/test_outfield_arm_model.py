@@ -69,7 +69,7 @@ LEAGUE_ARM = np.array([88.0, 0.0, 0.05])
 # computor's OAA_JUMP_COLUMN_ORDER (the Savant fielding data, SIM-532). The
 # calibrator's canonical-schema test adds them the way 0030 does (ADD COLUMN IF
 # NOT EXISTS), so it holds whether or not the schema file carries them.
-SIM532_FIELDER_COLUMNS = (
+OAA_JUMP_FIELDER_COLUMNS = (
     ("savant_oaa", "INTEGER"),
     ("savant_oaa_per_100", "FLOAT"),
     ("jump_reaction_ft", "FLOAT"),
@@ -813,7 +813,7 @@ class TestCalibrator:
         # The calibrator names the Savant and jump columns directly. Add them
         # the way DuckDB migration 0030 does, so the test holds whether or not
         # the schema file carries them.
-        for col, typ in SIM532_FIELDER_COLUMNS:
+        for col, typ in OAA_JUMP_FIELDER_COLUMNS:
             con.execute(
                 f"ALTER TABLE derived.fielder_season_metrics ADD COLUMN IF NOT EXISTS {col} {typ}"
             )
@@ -1036,7 +1036,7 @@ class TestReliabilityPairing:
             for season in (2023, 2024)
         }
         rows = _paired_of_rows(prevention, chances=10)
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn([], rows), [2023, 2024], 0.5, CalibrationReport()
             )

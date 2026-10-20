@@ -78,7 +78,7 @@ def _make_engine_with_profiles(profiles):
 # ---------------------------------------------------------------------------
 
 
-class TestCatcherV2DeterrenceSplit(unittest.TestCase):
+class TestCatcherDeterrenceSplit(unittest.TestCase):
     """The deterrence sub-score, the throwing split and the composite's weights."""
 
     def test_deterrence_field_present_on_results(self):
