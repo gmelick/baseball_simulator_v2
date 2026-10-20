@@ -1,3 +1,201 @@
+# B2 PIPELINE — the five big pipeline files split into packages by responsibility, the comments rewritten to the standard, the dead code deleted — SIM-493, 2026-10-20
+
+**Why.** This entry records area B2 (the pipeline) of the project-wide code clean-up
+(SIM-493, Phase B): `pipeline/`, `db/*.py` and the 68 B2 tests. The brief is §8 of
+`docs/audit/2026-10-19-sim493-code-cleanup-plan.md`. Every change is behaviour-neutral, and
+the neutral checks below prove it. The branch is `claude/sim493-pipeline-3d1430`, off
+`sim493-groundwork` (690375c). It is not merged; the integration pass merges it.
+
+**The five splits.** Each big file keeps its class, its entry point and every name a test
+patches in its globals. The class's methods move to mixins over a typed base class (the
+base declares the shared state for mypy); the module-level code moves to plain modules. A
+package sits beside each file:
+
+| File | Lines before | Lines after | The package beside it |
+|---|---|---|---|
+| `pipeline/batch/player_profile_computor.py` | 8,160 | 507 | `pipeline/batch/profiles/`, 17 modules, 7,963 lines |
+| `pipeline/batch/engine_artifacts.py` | 3,766 | 950 | `pipeline/batch/artifacts/`, 12 modules, 3,154 lines |
+| `pipeline/etl/etl_historical_loader.py` | 3,682 | 1,828 | `pipeline/etl/historical/`, 8 modules, 1,852 lines |
+| `pipeline/live/live_ingestion_pipeline.py` | 3,526 | 1,198 | `pipeline/live/ingestion/`, 10 modules, 2,592 lines |
+| `pipeline/bettingpros_odds_provider.py` | 2,173 | 489 | `pipeline/bettingpros/`, 8 modules, 1,907 lines |
+
+`docs/technical/pipeline-betting-db.md` maps every module; the CLAUDE.md §5 pipeline bullet
+names the five packages.
+
+- **The profile computor.** `run()` stays where the tests' `build_run_expectancy_matrix`
+  patch reaches it. Nine mixins (park, pitcher, batter, baserunner, manager, catcher,
+  per-play fielder, fielder, pools) sit over `ComputorBase`, which holds the one-cutoff
+  guard. `_fit_gmm_batch` (a process-pool target) is in `profiles/gmm.py` and keeps
+  `basicConfig` reachable in the workers.
+- **The artifact builder.** One module per artifact, each with its builder and its loader.
+  `EngineArtifacts.load` (655 lines) now calls one loader per artifact in the old order.
+  The actor-matrix cluster stays in the file (`_ENGINE_LOADER`, `concentration_report`,
+  `_matrix_from_queries`). The eight `np.load(allow_pickle=False)` calls stay countable.
+- **The historical loader.** `_connect`, `_http_get`, `_fetch_once`, `_fetch_game_pitches`,
+  `persist_sync`, `INSERT_SQL` and the single `urlopen(` stay in the file, with every method
+  that calls a patched name. Two mixins (the reference rows, the writes) sit over
+  `LoaderBase`, which holds the connection pool.
+- **The live pipeline.** `create_app`, `_sync_live_games` and the `connection_manager`
+  singleton stay. Two odds mixins (game odds, prop odds) sit over `PipelineBase`.
+  `MockOddsAPI` lives in `pipeline/live/ingestion/mock_odds.py`; `pipeline/odds_provider.py`
+  imports it lazily from there.
+- **The BettingPros provider.** `_choose_row` stays where the tests patch
+  `GRADED_BOOK_PREFERENCE`. Three mixins are layered by what each calls: the transport,
+  under the event match, under the rows. `__all__` is unchanged.
+- **The backup helpers.** The two `_env_float` copies (`data_stores.py`, `offsite.py`) are one
+  function, `pipeline.backup.common.env_float`.
+
+**One file stays over 1,500 lines: `etl_historical_loader.py`, 1,828.** The tests patch
+`_connect`, `_http_get`, `_fetch_once`, `_fetch_game_pitches` and `persist_sync` in this
+module's globals. A function reads a patched name only from its own module's globals, so
+every function that calls one stays here: `_fetch_game_pitches` alone is 589 lines, and the
+class's venue, player, prerequisite, load and refresh methods call the others. A further
+split needs the tests to patch the new homes; that is a test change, outside this pass.
+
+**What is not a pure move (each one checked by test and by a bytecode diff).**
+
+- `EngineArtifacts.load`: one loader per artifact. Each loader's body is the old block; the
+  view-or-disk helper takes the shared views as an argument (`take_view`) instead of
+  closing over them.
+- `_odds_hash` and `_prop_odds_hash` are module functions in `ingestion/odds_rows.py`. The
+  mixins bind both names as static methods, so `LiveIngestionPipeline._odds_hash` is the same
+  function; `closing_hash` and the insert-argument builders call the functions directly.
+- `_manager_from_coaches(game_pk, side, coaches)` folds the two copies of the coach scan in
+  `_fetch_game_pitches`.
+- `_make_mock_provider`'s lazy import names the new home of `MockOddsAPI`.
+- The backup's two callers of `env_float`.
+
+**The re-exports.** Each old module re-exports every moved name a caller outside B2 imports
+(`scripts/`, the API, other areas' tests): 79 statements, each marked
+`# re-export: removed in the integration pass`. The B2 tests and the pipeline's own callers
+import from the new homes. A patch of a re-exported name reaches only the code that reads it
+through the old module. Example: `ppc.POOL_BUILDER_VERSION` reaches the steal-pool rebuild
+script's `_builder()`, but not the computor's metadata write, which reads
+`profiles/pool_meta.py`. No test needs both; the notes for the integration pass say so.
+
+**Deletions.**
+
+- `RealOddsAPIProvider`, the stub template in `pipeline/odds_provider.py`. No provider name
+  resolves to it (`real` is an alias of `bettingpros`); every method raised. Its three stub
+  tests and its one-book conformance entry and raise test go with it. The factory test of
+  the `real` name stays.
+- `SavantBoard.hand_splits`, the old name of `splits`, read only by its own test. The test
+  now checks the splits.
+- Names nothing reads: five constants of the defense geometry (`OUTFIELD_EXCHANGE_TIME`,
+  `FRAMING_SHADOW_INNER`, `FRAMING_SHADOW_OUTER`, `MIN_CATCHER_PITCHES`,
+  `MIN_DP_OPPORTUNITIES`), `_EXTRA_FIELDS` (the venue dimensions), `_WORKLOAD_COLS` (the
+  bullpen availability) and the `Broadcaster` protocol (`pipeline/live/broadcast.py`).
+- The note in the mock odds module about a DDL string removed long ago.
+
+**Comments and docstrings.** Rewritten to the writing standard (CLAUDE.md §14, plan rule 3)
+across the area. A tag that only labels a line is gone; a ticket that explains a line stays
+in parentheses after a plain description. History ("used to", "before SIM-…", "Part C") is
+gone. A doc reference that named a moved file names its new home. Left as they are: comments
+inside SQL strings, log and error text, and the route docstrings (they feed the OpenAPI
+snapshot). The `get_game_odds` route docstring still says the handler predates the provider
+seam; changing it moves the snapshot, so the API pass owns it.
+
+**Runtime strings changed (two).** The `--asof` help of the profile computor named only the
+batter profiles; it now says the date cuts off every profile. The coach warning in
+`_manager_from_coaches` renders the same text from one format string.
+
+**The tests.**
+
+- The B2 tests import moved names from their new homes. The source pins that sliced a file
+  between `def` markers read the method instead (`inspect.getsource`, through
+  `_method_source`), or the whole package (`_computor_source`). `test_one_cutoff_per_table`
+  reads every class in the computor's method resolution order. `test_bundle_no_pickle` counts
+  the `np.load` calls across `engine_artifacts.py` and `artifacts/*.py`.
+  `test_odds_vocabulary` checks that the prop module's `PROP_STATS` IS the seam's.
+  `test_etl_hardening`'s comma check reads the whole loader package. No assertion was
+  dropped, except the deleted code's own tests.
+- Thirteen B2 test classes lose their ticket numbers (`TestSIM099RedisKeyMismatch` is
+  `TestRedisKeyMismatch`, `TestSim090Shutdown` is `TestShutdown`, and so on); the one
+  WORKFLOW.md command that named a class follows. The three grab-bag files that the scripts
+  session splits (`test_backend_assorted_guards.py`, `test_profile_indexes_and_etl_fallbacks.py`,
+  `test_odds_dedup_and_etl_errors.py`) keep their class names here, so the merge does not
+  conflict.
+- **The re-points in the grab-bag files, for the integration pass.** The scripts session
+  splits and deletes those three files; carry these import lines into its new files.
+  `test_backend_assorted_guards.py`: `GameStateBuilder` from
+  `pipeline.live.ingestion.game_state_builder` (five tests), `ConnectionManager` from
+  `pipeline.live.ingestion.mlb_websocket`, and `RESIM_COOLDOWN_S` from
+  `pipeline.live.ingestion.constants` (a module-level import; the test read
+  `lip.RESIM_COOLDOWN_S`). `test_profile_indexes_and_etl_fallbacks.py`: `_validate_row` from
+  `pipeline.etl.historical.rows` (seven tests). `test_odds_dedup_and_etl_errors.py`: no
+  change.
+- Four other areas' tests read the computor's or the builder's source; my move forces their
+  re-point, in their own commits (31c076f, 1f08f1a): `test_draw_conditioning` (B1),
+  `test_batter_physical_features` and `test_lead_distance` (B4), `test_arm_angle_decision`
+  (B5).
+
+**The neutral checks.**
+
+1. **Bytecode.** Every function in the area compiles to the same bytecode (docstrings
+   stripped), and every global name binds the same object, as on 690375c. The exceptions are
+   the changes listed under "not a pure move" and the deletions.
+2. **The loader's rows.** The feeds of 200 final games of 2025 were fetched once into
+   `results/sim493/b2_loader/`. Each tree replayed them through `load_game` against a fake
+   connection pool that records every statement and its parameters. Base (fe81d79) and new
+   code: all 200 games equal by hash, total `6156717187c2…`, on the final code too.
+3. **The profile build.** `--seasons 2025 2026 --asof 2026-10-01 --full-rebuild` ran on the
+   base code (a scratch worktree of fe81d79) and on the new code, each into its own copy of
+   the live DuckDB file, back to back. Both runs logged the same lines and counts. Every
+   table was compared by row count and by the sum and the XOR of a per-row hash over every
+   column but the build stamps (`updated_at`, `built_at`, `applied_at`). 22 of the 25 tables
+   are identical. The other three differ through one step, the pitcher arsenal fit, and
+   that step is not reproducible on the base code itself:
+   - `derived.pitcher_gmm_components` and the `gmm_model` column of
+     `derived.pitcher_season_metrics` (every other column equal) differ for 1,257 of the
+     1,274 pitcher-seasons fitted.
+   - `derived.catcher_season_metrics` differs in one value of one row: `blocks_aa_bounced`,
+     by 1.5e-8 (one float32 unit in the last place, a summation-order effect).
+   - The proof (`results/sim493/b2_profile/`): two reads of the computor's pitch-vector query
+     return the same rows for 40 of 40 pitchers, in a different order for 40 of 40. The base
+     code and the new code fit the same arrays identically (40 of 40, on three input
+     orders). The base code fits two reads of the same rows identically for 0 of 40
+     pitchers (8 with a different number of components). The difference is the input order,
+     not the code. The bug is filed below.
+4. **The bundle build.** `--what all` from one DuckDB copy, on the base code and on the new
+   code, back to back; the fingerprint's `bundle` mode compares the two. PENDING: the base bundle is built
+   (114 hashes, combined `22284cfd…`); the new code's build runs after the nightly rebuild.
+5. **Postgres.** Each run counted `raw.pitches`, `raw.games`, `raw.play_events`,
+   `raw.game_bullpen` and `raw.game_player_stats` before and after. Nothing moved across the
+   two profile builds. The nightly finals load (07:00 UTC) added one game of 2026-10-19
+   during the base bundle build (260 pitches, 7 play events, 25 bullpen rows, 36 box lines),
+   so the new bundle build read one game more. Only one bundle step reads Postgres: the
+   pitching-change pool's rest and manager lookup, keyed by the pool's own games (cut off
+   at 2026-10-01) and counted strictly before each game's date.
+
+**The gates.**
+
+- The B2 share of the unit lane in the container (the plan's §5 recipe, the worktree
+  mounted): 2,085 passed in 316 s.
+- The four other areas' tests that my move re-pointed, plus the steal-pool rebuild and the
+  flag registry tests, on the host: 214 passed.
+- `ruff check .`: clean. `ruff format --check .`: 532 files formatted.
+- `mypy similarity/ pipeline/ api/`: no issues in 132 files.
+
+**Bugs found (to file).**
+
+- **The pitcher arsenal fit is not reproducible.** The pitch-vector query in
+  `_compute_pitcher_profiles` (`pipeline/batch/profiles/pitcher.py`) has no `ORDER BY`.
+  DuckDB's parallel Postgres scan returns the rows in a different order on every read, and
+  the seeded mixture fit (`random_state=42`) depends on the row order. Every profile rebuild
+  therefore gives a different arsenal for nearly every pitcher (a different number of
+  components for about one pitcher in five), and with it a different pitcher similarity
+  matrix. The fix is an `ORDER BY` on a full row key (game, at-bat, pitch); it changes every
+  arsenal once.
+- **The live pipeline asks the schedule for game type `C`, which `raw.games` rejects.**
+  `GAME_TYPES` (`pipeline/live/ingestion/constants.py`) is `R F D L W C P`; the table's CHECK
+  allows `R P S A D F L W`. A game of type `C` on the slate fails its upsert.
+- **The pitching-change docstring in the sampler is stale (B1's area).**
+  `FullPoolSampler`'s pitching-change draw says "None when the bundle carries no pool — the
+  caller then keeps its formula"; the pull formula was deleted with the manager draw
+  (SIM-427), so no pool means no pitching change.
+- **The `get_game_odds` route docstring is stale (the API's snapshot).** It says the handler
+  predates the provider seam; it serves the mock lines by design.
+
 # GROUNDWORK — the code clean-up's shared steps: a behaviour fingerprint, scripts and tests named by purpose, run outputs out of `scripts/`, one flag registry and one existence probe — SIM-493, 2026-10-19
 
 **Why.** The owner widened the code-hygiene refactor (SIM-493) on 2026-10-19: review and clean
