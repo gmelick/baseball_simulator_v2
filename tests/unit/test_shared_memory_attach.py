@@ -1,9 +1,8 @@
 """
 test_shared_memory_attach.py
 =======================
-Unit tests for SIM-333 -- the **shared-memory zero-copy ATTACH** of the read-only
-payload (the SIM-403b engine-artifact arrays) into worker
-processes (Phase 4, Sprint 4).  Fills the SIM-332 seam:
+The **shared-memory zero-copy ATTACH** of the read-only payload (the
+engine-artifact arrays) into worker processes:
 :func:`simulation.batch_runner.publish_shared_arrays` (parent) +
 :func:`~simulation.batch_runner._worker_init` (worker attach).
 
@@ -11,12 +10,12 @@ These run with NO live DuckDB/FAISS-on-disk and NO Redis.  The always-on tests u
 an IN-PROCESS attach (deterministic, fast) plus ONE single spawned worker; heavy
 multi-process pools are ``@pytest.mark.slow``.
 
-Coverage (SIM-333 acceptance criteria):
+Coverage:
   * a segment created in the parent attaches + reads IDENTICALLY in a worker (same
     bytes) -- both in-process and across a spawned worker;
   * the attach is the SAME physical buffer, not a copy (write-through proof);
   * the ``{name: SharedArrayDescriptor}`` registry round-trips (picklable);
-  * the NO-segments fallback leaves the worker global empty (SIM-332 path intact);
+  * the NO-segments fallback leaves the worker global empty (the per-process path);
   * lifecycle: workers attach + close but NEVER unlink; the parent owns unlink and
     leaves no ``/dev/shm`` leak.
 """
@@ -45,7 +44,7 @@ from simulation.batch_runner import (
 
 
 def _payload():
-    """A small read-only payload standing in for the KDTree data + rowids."""
+    """A small read-only payload standing in for the engine-artifact arrays."""
     kd = np.arange(60, dtype=np.float64).reshape(5, 12) * 1.5
     rowids = np.array([10, 20, 30, 40, 50], dtype=np.int64)
     rbf = np.linspace(-1.0, 1.0, 24, dtype=np.float32).reshape(4, 6)
@@ -76,7 +75,7 @@ def _probe_fallback(_ignored):
 
 
 # ===========================================================================
-# Registry round-trip (picklable {name: SharedArrayDescriptor})  (AC #1/#4)
+# Registry round-trip (picklable {name: SharedArrayDescriptor})
 # ===========================================================================
 
 
@@ -106,7 +105,7 @@ class TestRegistryRoundTrip:
 
 
 # ===========================================================================
-# In-process attach: identical bytes + SAME buffer (not a copy)  (AC #1/#2)
+# In-process attach: identical bytes + SAME buffer (not a copy)
 # ===========================================================================
 
 
@@ -151,7 +150,7 @@ class TestInProcessAttach:
 
 
 # ===========================================================================
-# No-segments fallback (the SIM-332 per-process path stays intact)  (AC #3)
+# No-segments fallback (the per-process path)
 # ===========================================================================
 
 
@@ -182,7 +181,7 @@ class TestFallback:
 
 
 # ===========================================================================
-# Lifecycle: parent owns unlink; no /dev/shm leak                 (AC #2/#4)
+# Lifecycle: parent owns unlink; no /dev/shm leak
 # ===========================================================================
 
 
@@ -225,7 +224,7 @@ class TestLifecycle:
 
 
 # ===========================================================================
-# A single spawned worker attaches + reads identically            (AC #1/#4)
+# A single spawned worker attaches + reads identically
 # ===========================================================================
 # One real cross-process attach kept in the always-on suite (a single worker, one
 # task) -- fast + deterministic; the heavy pool runs are @slow below.

@@ -1,18 +1,16 @@
 """
 tests/unit/test_receiving_kernel_consumers.py
 =============================================
-SIM-517 parts C + D — the catcher RECEIVING kernel on the pitch draw and the
-got-away resolution in the loop.
+The got-away pitch: the sampler's read of the drawn row and its resolution in
+the loop. The catcher receiving ratio has its own tests
+(``test_receiving_ratio.py``).
 
-Part C (sampler) — the bell-curve receiving kernel — was DELETED by SIM-523
-part E (2026-09-09; the ratio factor replaces it, tests in
-test_receiving_ratio.py); only the got-away reads stay here.
-
-Part D (loop): the drawn pitch row's ``got_away`` fact IS the play — runners
-advance one base (scoring from third, no RBI, the run routed through
-``_commit_run_delta``), a got-away swinging strike-3 awards first when the
-official rule allows, and with the rule blocking the reach the runners still
-advance. ``SIM_GOT_AWAY`` off (the default) touches nothing.
+The sampler reports the drawn pitch row's ``got_away`` fact. In the loop that
+fact IS the play: runners advance one base (scoring from third, no RBI, the
+run routed through ``_commit_run_delta``), a got-away swinging strike-3 awards
+first when the official rule allows, and with the rule blocking the reach the
+runners still advance. ``SIM_GOT_AWAY`` off (the default) touches nothing.
+The pools are small in-memory bundles, so no test needs a database.
 """
 
 from __future__ import annotations
@@ -61,8 +59,7 @@ def _catcher_emb() -> dict:
 
 def _hand_pool(with_receiving: bool = True, all_got_away: bool = False) -> HandPool:
     """8 rows, all in the 0-0 count bucket: the first 4 caught by 700 (outcome
-    'ball'), the last 4 by 701 (outcome 'called_strike') — the drawn OUTCOME
-    reveals which catcher's rows the kernel favored."""
+    'ball'), the last 4 by 701 (outcome 'called_strike')."""
     n = 8
     sit = np.zeros((n, 6), dtype=np.float32)
     sit[:, 4] = 5.0
@@ -98,8 +95,8 @@ _BASE_OUT = np.array([0, 0, 5, 0], dtype=np.float32)
 
 
 class TestGotAwayReads:
-    # SIM-523 part E deleted the SIM-517 receiving kernel and its tests; the
-    # got-away reads below are the part that stays.
+    # The sampler reports the drawn row's got-away fact; a bundle without the
+    # column reads False.
     def test_last_pitch_got_away_reads_the_drawn_row(self):
         fp = _sampler(_hand_pool(all_got_away=True), _catcher_emb())
         fp.new_half_inning("R", _PITCHER)
@@ -186,7 +183,7 @@ class TestDroppedThirdStrikeSignal:
         assert sm._dropped_third_strike(state, result) is True
 
     def test_a_called_strike_three_never_reaches(self):
-        # The predicate keeps the swinging-strike gate (the sim's §5.4 scope).
+        # The predicate fires only on a swinging strike three.
         sm = StateMachine(rng=np.random.default_rng(0))
         sm._last_pitch_got_away = True
         state = _state()

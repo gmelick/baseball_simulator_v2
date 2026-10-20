@@ -1,11 +1,12 @@
-"""SIM-312 tests: the Statcast events vocabulary + RE24 run resolution.
+"""The Statcast events vocabulary and the RE24 run resolution.
 
-The linear-weight half of SIM-312 (``run_value_for_event`` over the
-``RUN_VALUES`` table) was removed 2026-08-19 (owner ruling, the SIM-511+512
-landing): production always resolved runs by RE24 over real states, and the
-ledger rejected everything else. What SIM-312 still owns — and these tests
-still pin — is the VOCABULARY (every Statcast terminal event resolves to a
-canonical outcome key) and the RE24 resolution itself.
+These tests pin the VOCABULARY (every Statcast terminal event resolves to a
+canonical outcome key) and the RE24 resolution: the run value of a play is
+``RE(post) - RE(pre) + runs_scored`` over its two real base-out states, where
+RE24 is the expected runs from a base-out state to the end of the inning.
+Runs resolve only from real states; no per-event constant stands in for them
+(the owner's ruling of 2026-08-19). The functions are pure, so no test needs a
+database.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ STATCAST_TERMINAL_EVENTS = [
 
 class TestBackCompat(unittest.TestCase):
     def test_thirteen_canonical_keys(self):
-        # The 12 standard PA outcomes + field_error (SIM-496/511).
+        # The 12 standard PA outcomes + field_error.
         self.assertEqual(len(CANONICAL_OUTCOME_KEYS), 13)
         self.assertIn("field_error", CANONICAL_OUTCOME_KEYS)
 
@@ -85,12 +86,12 @@ class TestVocab(unittest.TestCase):
                 self.assertEqual(resolve_event_to_canonical(raw), canon)
 
     def test_field_error_is_its_own_outcome(self):
-        """SIM-496/511: a reach-on-error is NOT a single.
+        """A reach on an error is NOT a single.
 
-        The old alias ``field_error -> single`` credited a drawn reach-on-
-        error as a HIT in the boxscore while the loop retired the batter on
-        the bases. The batter reaches on a ``field_error`` and the linescore
-        keys on this canonical spelling to keep it out of the H column.
+        An alias ``field_error -> single`` would credit a drawn reach on an
+        error as a HIT in the box score. The batter reaches on a
+        ``field_error``, and the linescore keys on this canonical spelling to
+        keep it out of the H column.
         """
         self.assertEqual(resolve_event_to_canonical("field_error"), "field_error")
 
@@ -195,28 +196,22 @@ class TestRE24Resolution(unittest.TestCase):
         self.assertEqual(r.method, "re24_delta")
         self.assertGreater(r.runs, 0.0)
 
-    # SIM-499 REMOVED two tests here: ``test_advance_conserves`` and
-    # ``test_inning_end_clears``. Both drove ``run_resolution.advance_state``,
-    # which SIM-499 deleted on purpose.
-    #
-    # That function DERIVED the after-state from a conservation identity,
-    # ``new_on_base = old_on_base + reached - runs_scored``. The identity has no
-    # notion of a runner RETIRED on the play, so a double play desynced it, and a
-    # reach-on-error — which carries ``result_hits=0`` — was invisible to it, which
-    # is why every reach-on-error recorded a run value of exactly 0.00.
-    #
-    # The ledger is now TOLD both states instead of deriving either. The identity
-    # survives as ``Bases.assert_transition``, where it is a CHECK rather than a
-    # derivation: wrong as a way to compute the after-state, right as a way to
-    # verify one. ``tests/unit/test_base_invariants.py`` covers it there.
+    # The ledger is TOLD both base-out states; it derives neither. The
+    # conservation identity ``new_on_base = old_on_base + reached - runs_scored``
+    # cannot compute the after-state: it has no notion of a runner RETIRED on
+    # the play, so a double play desyncs it, and a reach on an error (which
+    # carries ``result_hits=0``) is invisible to it. The identity serves as a
+    # CHECK in ``Bases.assert_transition``: wrong as a way to compute the
+    # after-state, right as a way to verify one.
+    # ``tests/unit/test_base_invariants.py`` covers it there.
 
 
 class TestStateRequired(unittest.TestCase):
-    """The context-free linear-weight fallback is GONE (2026-08-19).
+    """``resolve_runs`` requires the full base-out state.
 
-    ``resolve_runs`` accepts the full base-out state or nothing at all — and
-    nothing at all is now an error, not a constant. A hand-set per-event
-    number must never stand in for real states.
+    A partial state or no state at all is an error, not a constant. A hand-set
+    per-event number must never stand in for real states (the owner's ruling
+    of 2026-08-19).
     """
 
     def test_partial_state_raises(self):

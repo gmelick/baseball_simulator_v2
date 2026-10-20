@@ -1,4 +1,4 @@
-"""SIM-546: the inning grid on the per-game result and the cached summary.
+"""The inning grid on the per-game result and the cached summary.
 
 The loop writes each team's runs per inning onto the per-game result
 (``GameSimResult.home_by_inning`` / ``away_by_inning``). The summary keeps the
@@ -8,7 +8,8 @@ a team's runs). These tests pin four things:
 
 * the loop's grid equals the linescore that ``simulation.linescore`` derives
   from the recorded plays of the same game, cell for cell;
-* the grid reads the state only, so every game plays exactly as before;
+* the grid reads the state only and draws no random number, so it changes no
+  game's outcome;
 * the summary carries the grids, and a summary without them reads None;
 * the stored summary's lite projection drops the grids.
 
@@ -191,13 +192,12 @@ def test_summary_carries_grids_and_tolerates_their_absence(recorded_games):
 
 
 def test_a_summary_pickled_before_the_grid_reads_none():
-    """A summary cached by the old code restores with the grid slot unset.
+    """A summary pickled without the grid key restores with the slot unset.
 
-    The test builds the old pickle's state by hand. A slotted dataclass
-    pickles a ``(None, slot_state)`` pair; the old code's slot state has no
-    ``inning_grids`` key. Restoring that state leaves the slot unset, as a
-    real old cache entry does. The summary then reads None, and
-    ``to_jsonable`` (the stored summary) does not raise.
+    The test builds that pickle's state by hand. A slotted dataclass pickles
+    a ``(None, slot_state)`` pair; this slot state has no ``inning_grids``
+    key. Restoring it leaves the slot unset. The summary then reads None,
+    and ``to_jsonable`` (the stored summary) does not raise.
     """
     summary = GameSimSummary.from_results(
         [_result([1, 0], [0, 0])], simulated_at=datetime(2026, 10, 9, tzinfo=UTC)
@@ -208,7 +208,7 @@ def test_a_summary_pickled_before_the_grid_reads_none():
     old_state = (None, {k: v for k, v in slot_state.items() if k != "inning_grids"})
 
     class _OldCodePickler(pickle.Pickler):
-        """Writes the summary with the old code's state: no grid key."""
+        """Writes the summary with a slot state that has no grid key."""
 
         def reducer_override(self, obj):
             if obj is summary:
@@ -237,8 +237,8 @@ def test_the_stored_summary_serialises_the_grid():
     )
     stored = to_jsonable(summary)
     assert stored["inning_grids"] == [[[1, None], [0, 0]], [[0, 2], [1, 0]]]
-    # The Redis cache stores the summary as JSON (SIM-443f); the grid survives
-    # that round trip, and a pickle round trip too.
+    # The Redis cache stores the summary as JSON; the grid survives that round
+    # trip, and a pickle round trip too.
     assert GameSimSummary.from_json(summary.to_json()).inning_grids == summary.inning_grids
     assert pickle.loads(pickle.dumps(summary)).inning_grids == summary.inning_grids
 

@@ -1,4 +1,4 @@
-"""SIM-561: the game page's linescore and play-by-play show a simulated game.
+"""The game page's linescore and play-by-play show a simulated game.
 
 The replay store lives in a DuckDB file of its own (``REPLAY_DUCKDB_PATH``),
 which only the app writes, so the analytics file is never locked. A stored
@@ -6,6 +6,10 @@ game's play-by-play carries each pitch's inning, half, outs, batter, pitcher and
 the score after it (DuckDB 0032). ``POST /sample-game`` simulates and stores one
 game; ``/boxscore`` stores its run's first game; the replay reads serve the
 newest complete run, and the store keeps the newest few runs per game.
+
+The replay store is an in-memory DuckDB (or a file under ``tmp_path``), the
+games run on the no-DB synthetic factory, and a fake asyncpg pool stands in
+for Postgres.
 """
 
 from __future__ import annotations

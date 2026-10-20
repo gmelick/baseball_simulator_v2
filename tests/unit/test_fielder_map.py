@@ -1,19 +1,18 @@
 """
 test_fielder_map.py
 ==========================
-Unit tests for the SIM-363 per-position fielder map: the builder in
-``simulation/lineup_resolver.py`` that turns a resolved lineup into the
-``{defensive-slot name: player_id}`` map ``FieldSnapshot.from_game_state``
-consumes (Phase 5, Sprint 4).
+The per-position fielder map: the builder in ``simulation/lineup_resolver.py``
+that turns a resolved lineup into the ``{defensive-slot name: player_id}`` map
+``FieldSnapshot.from_game_state`` consumes.
 
 Background
 ----------
 ``simulation/snapshots.py`` ``FieldSnapshot.from_game_state(..., defense_positions=...)``
-already accepts an optional ``{position_name: player_id}`` map and leaves the 9
-defensive slots empty when it is omitted ("the loop does not yet track
-per-position fielders").  SIM-363 supplies the builder that produces that map for
+accepts an optional ``{position_name: player_id}`` map and leaves the 9
+defensive slots empty when it is omitted.  The builder produces that map for
 the fielding side, keyed by the canonical DEFENSE_POSITIONS slot names derived
-from each player's MLB ``position_code`` (1=P .. 9=RF).
+from each player's MLB ``position_code`` (1=P .. 9=RF).  The lineups are plain
+``raw.game_lineups``-shaped dicts, so no test needs a database.
 
 What is asserted
 ----------------
@@ -26,8 +25,6 @@ What is asserted
   * A DH / pinch role (non-fielding code) is skipped.
   * The correct fielding side is chosen for TOP vs BOTTOM (HOME fields in the
     top, AWAY fields in the bottom).
-
-Owned by Backend Developer (SIM-363).
 
 Run:
     pytest tests/unit/test_fielder_map.py -v
@@ -208,8 +205,8 @@ class TestBuildDefenseMapFullLineup:
 
 class TestFieldSnapshotRoundTrip:
     def _state_top_of_first(self) -> GameState:
-        # A minimal live state: top of the 1st, home fielding.  The defense map
-        # is supplied separately (the loop does not track fielders).
+        # A minimal live state: top of the 1st, home fielding.  The tests pass
+        # the defense map in explicitly.
         return GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON, half=Half.TOP)
 
     def test_map_populates_all_nine_field_snapshot_slots(self):
@@ -224,8 +221,8 @@ class TestFieldSnapshotRoundTrip:
             assert ref.player_id == EXPECTED_HOME_MAP[pos]
 
     def test_without_map_slots_stay_empty(self):
-        # Control: the documented "omit -> 9 empty slots" behaviour still holds,
-        # so the map is what fills them.
+        # Control: omitting the map leaves the 9 slots empty, so the map is
+        # what fills them.
         state = self._state_top_of_first()
         snap = FieldSnapshot.from_game_state(state)
         assert all(snap.positions[pos] is None for pos in DEFENSE_POSITIONS)

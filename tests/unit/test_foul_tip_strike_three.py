@@ -1,26 +1,26 @@
-"""SIM-553: a two-strike foul tip or foul bunt is strike three in the pitch pool.
+"""A two-strike foul tip or foul bunt is strike three in the pitch pool.
 
 WHY THIS FILE EXISTS
 ====================
 The pool build maps the MLB feed's one-letter pitch code to the class the
-simulator's count machine reads. It mapped a foul tip ('T') and a foul bunt
-('L') to ``foul`` at every count. With two strikes both are strike three by
-rule. The count machine keeps a two-strike foul alive, so every real strikeout
-of that kind became one more pitch, and the loop turned 63% of them into a
-walk, a hit-by-pitch or a ball in play.
+simulator's count machine reads. With two strikes, a foul tip ('T') and a foul
+bunt ('L') are strike three by rule; with fewer strikes they are fouls. The
+count machine keeps a two-strike foul alive, so a strikeout coded as a foul
+becomes one more pitch, and the loop turned 63% of them into a walk, a
+hit-by-pitch or a ball in play.
 
-The measured loss (2026-09-23, the pool window 2023-2026): 11,168 rows are a
+The measurement (2026-09-23, the pool window 2023-2026): 11,168 rows are a
 two-strike 'T', 'L' or 'O'; 11,165 of them end the plate appearance as a
-strikeout. The pool's count chain read 0.2163 strikeouts per plate appearance
-against 0.2255 in real plate appearances: the simulator made 4.4% too few
-strikeouts. The corrected coding reads 0.2262. Two rarer codes ('O', a foul
-tip on a bunt, and 'Q', a swing and a miss at a pitchout) fell through the old
-``ELSE 'ball'`` and played as balls.
+strikeout. Coded as fouls, the pool's count chain read 0.2163 strikeouts per
+plate appearance against 0.2255 in real plate appearances: the simulator made
+4.4% too few strikeouts. The two-strike coding reads 0.2262. Two rarer codes
+('O', a foul tip on a bunt, and 'Q', a swing and a miss at a pitchout) need
+their own branch; an ``ELSE 'ball'`` plays them as balls.
 
-The pool-totals grade could not see it, because its strikeout centre came from
-the same labels. The old tests read the pool build's source with a regular
-expression, which cannot see a conditional branch or a branch-order bug. So
-every test here EXECUTES ``SQL_OUTCOME_TYPE`` in DuckDB. The design:
+The pool-totals grade cannot see a labelling defect, because its strikeout
+centre comes from the same labels. A regular expression over the source cannot
+see a conditional branch or a branch-order bug. So every test here EXECUTES
+``SQL_OUTCOME_TYPE`` in an in-memory DuckDB. The design:
 ``docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md``.
 """
 
@@ -151,20 +151,20 @@ class TestTheBranchOrder:
 
 class TestTheHitByPitchBranch:
     def test_a_ball_coded_row_with_the_hbp_event_is_hit_by_pitch(self):
-        """SIM-509: an HBP pitch can carry a ball code. The events branch
-        comes first, or the pitch becomes ball four."""
+        """An HBP pitch can carry a ball code. The events branch comes first,
+        or the pitch becomes ball four."""
         assert _class_of("B ", 0, "hit_by_pitch") == _HBP
         assert _class_of("*B", 2, "hit_by_pitch") == _HBP
 
     def test_an_h_row_with_no_event_is_hit_by_pitch(self):
         """The 2022 row (game_pk 662280, at bat 69, pitch 5) has no event label;
-        only its 'H' code names it. The old expression made it a ball."""
+        only its 'H' code names it. Without the 'H' branch it reads as a ball."""
         assert _class_of("H ", 0, None) == _HBP
 
 
 class TestAnUnknownCodeFailsLoudly:
-    """Decision 3: no ELSE. The old ``ELSE 'ball'`` is how 'O', 'Q' and the
-    hit-by-pitch rows hid."""
+    """The design's decision 3: no ELSE. An ``ELSE 'ball'`` hides an unknown
+    code as a ball, the way 'O', 'Q' and the hit-by-pitch rows hid."""
 
     @pytest.mark.parametrize("code", ["Z ", "V", "", None])
     def test_an_unknown_code_yields_null(self, code):
@@ -192,8 +192,8 @@ class TestThePoolBuildUsesTheConstant:
         assert "WHEN TRIM(type)" not in src
 
     def test_the_builder_version_moved(self):
-        # sim523g.1 -> sim553.1 (SIM-553: a two-strike foul tip / foul bunt is strike three)
-        # sim553.1 -> sim554.1 (SIM-554: the steal pool's pitch class and pickoff rows)
+        # The current builder version. It carries the two-strike foul-tip coding
+        # (sim553.1 and later) and the steal pool's pitch class and pickoff rows.
         assert POOL_BUILDER_VERSION == "sim554.1"
 
 

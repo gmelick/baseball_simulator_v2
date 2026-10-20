@@ -1,8 +1,7 @@
-"""SIM-546 — the twelve segment and team markets on /edges and /signals.
+"""The twelve segment and team markets on /edges and /signals.
 
 The edge route prices every game market the book posts, not only the three
-full-game markets. These tests pin the route's side of that change (the
-design's tests 7 to 14 and 23):
+full-game markets. These tests pin the route's side:
 
   * the default request prices all fifteen markets from the mock, every side
     of each, each report labelled with its market type, and names them;
@@ -20,7 +19,8 @@ design's tests 7 to 14 and 23):
 
 Most route tests hand the route a synthetic summary (``_summary_and_winprob``
 is patched), so every simulated probability is known and none is 0 or 1. The
-legacy-market test runs the real no-DB simulation, as the older route tests do.
+full-game market test runs the real no-DB simulation. A stub pool stands in for
+Postgres.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def _imp(a: float) -> float:
 def _grid_summary(n: int = 400, *, seed: int = 546, grids: bool = True) -> GameSimSummary:
     """A summary of ``n`` made-up games, nine innings each, scored about five
     runs a team. A tie after nine gets a tenth inning the home team wins. With
-    ``grids`` False the results carry no inning grid (an old cache entry)."""
+    ``grids`` False the results carry no inning grid."""
     rng = np.random.default_rng(seed)
     results = []
     for _ in range(n):
@@ -233,7 +233,7 @@ class TestBuilders:
 
 
 # ===========================================================================
-# Test 7: the default request prices all fifteen from the mock
+# The default request prices all fifteen from the mock
 # ===========================================================================
 
 
@@ -319,7 +319,7 @@ def test_a_yes_no_market_is_priced_at_half_a_run(client_for):
 
 
 # ===========================================================================
-# Test 8: the three-way fair probabilities sum to one
+# The three-way fair probabilities sum to one
 # ===========================================================================
 
 
@@ -340,7 +340,7 @@ def test_three_way_fair_probabilities_sum_to_one(client_for):
 
 
 # ===========================================================================
-# Test 9 and 10: the stored rows price the segment markets
+# The stored rows price the segment markets
 # ===========================================================================
 
 F5_TOTAL_ROWS = [
@@ -415,7 +415,7 @@ def test_the_usability_rule_reads_the_kind():
 
 
 # ===========================================================================
-# Test 11: a segment run line listed as two bets
+# A segment run line listed as two bets
 # ===========================================================================
 
 
@@ -486,7 +486,7 @@ def test_a_segment_run_line_pair_de_vigs_its_two_prices(client_for):
 
 
 # ===========================================================================
-# Test 12: a summary without grids prices the full-game markets only
+# A summary without grids prices the full-game markets only
 # ===========================================================================
 
 
@@ -506,7 +506,7 @@ def test_summary_without_grids_skips_the_segment_markets(client_for, caplog):
 
 
 # ===========================================================================
-# Test 13: the signals can name a tie
+# The signals can name a tie
 # ===========================================================================
 
 
@@ -530,7 +530,7 @@ def test_signals_rank_a_draw_side(client_for):
 
 
 # ===========================================================================
-# Test 14: the three full-game markets do not change
+# The three full-game markets do not change
 # ===========================================================================
 
 
@@ -597,7 +597,7 @@ def test_a_bad_market_is_still_a_422(client_for):
 
 
 # ===========================================================================
-# Test 23: the prices document
+# The prices document
 # ===========================================================================
 
 

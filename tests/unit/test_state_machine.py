@@ -1,19 +1,18 @@
 """
 test_state_machine.py
 ======================
-Unit tests for SIM-316 -- the GameState-driven plate-appearance / half-inning
-**state machine** in ``simulation/sim_loop.py`` (Phase 4, the first loop-build
-ticket).
+The GameState-driven plate-appearance / half-inning **state machine**
+(:class:`simulation.sim_loop.StateMachine`).
 
 These tests exercise the count machine and half-inning logic in the
 *count-machine-only* mode (no sampler): :meth:`StateMachine.step_pitch` accepts
-an explicit ``pitch_outcome`` so the §5.1 count transitions and §6.1 half-inning
-roll can be driven deterministically with NO live DuckDB/FAISS, mirroring the
-"inject the outcome" pattern the SIM-302/303 sampler tests use.
+an explicit ``pitch_outcome``, so the count transitions and the half-inning
+roll run deterministically with NO DuckDB/FAISS.
 
-Coverage (the SIM-316 acceptance criteria):
-  * count machine: ball-4 walk, strike-3 strikeout, two-strike-foul stays alive
-    (the SIM-056 absorbing rule), and the pure ``advance_count`` classifier;
+Coverage:
+  * count machine: ball-4 walk, strike-3 strikeout, a two-strike foul keeps the
+    PA alive (the count does not change), and the pure ``advance_count``
+    classifier;
   * half-inning logic: 3 outs -> clear bases, reset count + outs, flip Half,
     advance inning on BOTTOM->TOP, carry the per-team lineup pointer forward;
   * invalid-state guards: bad transitions / corrupt state are rejected.
@@ -39,7 +38,7 @@ def _fresh_state(**kw) -> GameState:
 
 
 # ===========================================================================
-# Pure count machine (advance_count) — spec §5.1
+# Pure count machine (advance_count)
 # ===========================================================================
 
 
@@ -67,8 +66,8 @@ class TestAdvanceCount:
         assert advance_count(2, 1, "foul").strikes == 2
 
     def test_two_strike_foul_is_absorbed_and_stays_alive(self):
-        # SIM-056 absorbing rule: with two strikes a foul does NOT advance the
-        # count and does NOT terminate the PA.
+        # With two strikes a foul does NOT advance the count and does NOT
+        # terminate the PA.
         adv = advance_count(1, 2, "foul")
         assert adv.strikes == 2  # unchanged
         assert adv.balls == 1  # unchanged
@@ -93,7 +92,7 @@ class TestAdvanceCount:
 
 
 # ===========================================================================
-# StateMachine count machine driven through a PA — spec §5.1 / step 8 commit
+# StateMachine count machine driven through a PA
 # ===========================================================================
 
 
@@ -146,7 +145,7 @@ class TestStateMachineCount:
 
 
 # ===========================================================================
-# Half-inning logic — spec §6.1
+# Half-inning logic
 # ===========================================================================
 
 
@@ -191,21 +190,19 @@ class TestHalfInning:
             home_lineup_slot=0,
             batter_id=away[0],
         )
-        # Top of the 1st: AWAY bats. Two batters reach (walk), one strikes out
-        # ... drive 3 outs via strikeouts, but advance the order each PA.
-        # 3 strikeouts -> away pointer advanced 3 times -> slot 3.
+        # Top of the 1st: AWAY bats. Three strikeouts end the half and advance
+        # the away pointer three times -> slot 3.
         for _ in range(3):
             for _ in range(3):
                 sm.step_pitch(state, pitch_outcome="called_strike")
         assert state.away_lineup_slot == 3  # away resumes at slot 3 next time
-        # SIM-421: the half-inning roll now re-points batter_id at the NEW
-        # offense's due-up hitter (home's leadoff) rather than leaving it on the
-        # away team's next batter, so the matchup pre-filter follows the game.
+        # The half-inning roll re-points batter_id at the NEW offense's due-up
+        # hitter (home's leadoff), so the matchup draws follow the game.
         assert state.batter_id == home[0]
         assert state.home_lineup_slot == 0  # home untouched
         assert state.half == Half.BOTTOM
 
-        # Bottom of the 1st: HOME bats. Two strikeouts then end the half.
+        # Bottom of the 1st: HOME bats. Three strikeouts end the half.
         for _ in range(3):
             for _ in range(3):
                 sm.step_pitch(state, pitch_outcome="called_strike")
@@ -239,7 +236,7 @@ class TestHalfInning:
 
 
 # ===========================================================================
-# Invalid-state guards — spec acceptance #3
+# Invalid-state guards
 # ===========================================================================
 
 
@@ -291,7 +288,7 @@ class TestInvalidStateGuards:
 
 
 # ===========================================================================
-# Derived state reads + the SIM-320 driver stub
+# Derived state reads + the driver's guard
 # ===========================================================================
 
 
@@ -306,10 +303,8 @@ class TestMiscContract:
         assert state.score_diff == 3 - 1
 
     def test_simulate_game_is_implemented(self):
-        # SIM-320 replaced the SIM-316 guarded NotImplementedError stub with the
-        # real full-game driver.  Called bare, it fails fast with a clear
-        # ValueError rather than the old NotImplementedError.  The driver refuses
-        # a game with no batting order before the first pitch (SIM-552).  A
+        # Called bare, the full-game driver fails fast with a clear ValueError:
+        # it refuses a game with no batting order before the first pitch, and a
         # machine with no sampler cannot draw a pitch either.
         with pytest.raises(ValueError):
             simulate_game()

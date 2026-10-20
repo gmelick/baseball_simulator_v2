@@ -1,8 +1,9 @@
 """tests/unit/test_cache_codec.py -- the Redis cache stores JSON, never a pickle.
 
-SIM-443f. The Redis cache used to pickle its values, and a pickle load runs
-code. These tests pin the JSON codec (``simulation/cache_codec.py``) and the
-``RedisCache`` that uses it:
+A pickle load runs code, so the Redis cache stores typed JSON (the stack
+hardening, SIM-443f). These tests pin the JSON codec
+(``simulation/cache_codec.py``) and the ``RedisCache`` that uses it, over a
+dict-backed fake Redis client:
 
 * a summary and a prop set come back equal to what went in;
 * the stored text is a JSON envelope ``{"t": <tag>, "v": <payload>}``;

@@ -1,12 +1,13 @@
 """
 tests/unit/test_actor_matrices.py
 ========================================
-SIM-523 part A — the nightly ACTOR SCORE MATRICES (plan:
-docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part A).
+The nightly ACTOR SCORE MATRICES and the sampler factors that read them (the
+play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md).
 
-Each actor factor in the draw becomes its engine's composite 0-to-1 score,
-read from a dense matrix the nightly build writes, and raised to a fitted
-power. What these tests pin:
+Each actor factor in the draw is its engine's composite 0-to-1 score, read
+from a dense matrix the nightly build writes, and raised to a power. The
+builder runs on stub engines into ``tmp_path``, and the sampler tests build
+small in-memory bundles, so no test needs a database. What these tests pin:
 
   * the builder scores every profile against every other through the
     engine's own ``query`` and packs a dense matrix (diagonal 1.0, the
@@ -15,12 +16,11 @@ power. What these tests pin:
   * a strict build raises when a matrix's own-staff ratio is too high; a
     normal build only warns;
   * the loader reads the matrices back and the shared-view seam publishes
-    them (the SIM-403b zero-copy path);
+    them (the zero-copy shared-memory path);
   * the batter, runner, catcher-throwing and fielder factors are the live
     actor's matrix row gathered onto the pool rows; a missing live actor or
-    pool actor is neutral; a bundle without a matrix leaves the actor neutral
-    (the bell-curve kernels are retired, 2026-09-09); the power reshapes the
-    score;
+    pool actor is neutral; a bundle without a matrix leaves the actor
+    neutral; the power reshapes the score;
   * the factory reads the per-name powers from the env;
   * the concentration arithmetic on a toy pool.
 """
@@ -114,7 +114,7 @@ class _FielderStub(_StubEngine):
 
 
 class _ManagerStub(_StubEngine):
-    # SIM-427: the manager's usage sub-score is the matrix (``manager_usage``).
+    # The manager's usage sub-score is the matrix (``manager_usage``).
     key_attrs = ("manager_id", "season")
     score_attrs = ("score", "usage_score")
     profiles = [(4061, 2024), (4062, 2024), (4063, 2023)]
@@ -147,7 +147,7 @@ class TestTheBuilder:
         sizes = build_actor_sim_matrices("x.duckdb", str(tmp_path), [2024])
         sim_dir = tmp_path / "actor_sim"
         assert sizes == {
-            "manager_usage": 2,  # SIM-427: the two 2024 manager-seasons
+            "manager_usage": 2,  # the two 2024 manager-seasons
             "batter": 2,
             "catcher": 2,
             "catcher_throwing": 2,
@@ -572,7 +572,7 @@ class TestTheFactoryEnv:
         s = SimpleNamespace()
         apply_actor_matrix_env(s, env={})
         assert s.actor_power == {}
-        assert not hasattr(s, "actor_matrices")  # the switch is retired
+        assert not hasattr(s, "actor_matrices")  # the matrices have no on/off switch
 
     def test_the_powers(self):
         s = SimpleNamespace()

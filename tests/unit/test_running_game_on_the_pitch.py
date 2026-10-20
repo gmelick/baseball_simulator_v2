@@ -1,8 +1,8 @@
-"""SIM-554 — the running game on the pitch: the loop's order and its rules.
+"""The running game on the pitch: the loop's order and its rules.
 
-The steal draw used to run before the pitch and read only the count. So a
-third of its attempts landed on a foul, a ball in play or a hit by pitch,
-where real runners never earn one. The design
+A single steal draw before the pitch reads only the count, so 38.8% of its
+attempts land on a foul, a ball in play or a hit by pitch, against a real
+1.0% (the census of 2026-10-03, CHANGES.md). The design
 (``docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md``, §5 and
 §7) puts four draws on every pitch with a runner who could steal:
 
@@ -23,7 +23,8 @@ staged on it is void (decision 3). On a dropped-third-strike reach every
 runner moves up one base before the batter takes first (decision 4).
 
 The flag (``steal_pitch_class``) off, a pool without classes, or a sampler
-without the new methods keeps the single pre-pitch draw of SIM-474.
+without the class-aware methods (``has_steal_classes``, ``pickoff_draw``)
+keeps the single pre-pitch draw.
 
 The harness is the dropped-third-strike suite's: a synthetic bundle whose
 pitch model is one class, ``sm._got_away = True`` so the drawn row's got-away
@@ -452,8 +453,8 @@ class TestPickoffRowsBelongToThePickoffDraw:
         assert all(_steal_draw(fp, pitch_class="ball") == quiet for _ in range(300))
 
     def test_the_single_draw_leaves_the_pickoff_rows_out_on_a_classed_pool(self):
-        # The flag off: the pre-pitch draw reads the count group of PITCH
-        # rows, the rows it read before migration 0031.
+        # The flag off: the pre-pitch draw reads the count group's PITCH rows
+        # only; the pickoff rows stay out.
         fp = _cell_sampler(self._pool())
         quiet = (False, False, False, False, False)
         assert all(_steal_draw(fp) == quiet for _ in range(300))
@@ -490,7 +491,7 @@ class TestTheOldOrderTalliesItsPickoffs:
         tally = sm.running_game_tally
         assert (tally.pickoff_outs, tally.pickoff_errors) == (1, 0)
         assert tally.pickoffs_by_count == {(0, 0): 1}
-        assert tally.pickoff_draws == 0  # no pickoff draw ran: the old order
+        assert tally.pickoff_draws == 0  # no pickoff draw ran: the single-draw order
 
 
 class TestAPartlyClassedPoolKeepsTheSingleDraw:
@@ -536,7 +537,7 @@ class TestAPartlyClassedPoolKeepsTheSingleDraw:
 
 
 class _SinglePrePitchDrawSampler:
-    """A duck-typed sampler with the SIM-474 surface only: no
+    """A duck-typed sampler with the single-draw surface only: no
     ``steal_pitch_class``, no ``has_steal_classes``, no ``pickoff_draw``.
     Every other read goes to a real sampler."""
 
@@ -553,8 +554,8 @@ class _SinglePrePitchDrawSampler:
 
 class TestTheSinglePrePitchDrawStays:
     """Design test 8: with the flag off, a pool without classes or a sampler
-    without the new methods, the loop runs the SIM-474 order: one steal draw
-    in the pre-pitch hook, with no class, and no pickoff draw."""
+    without the class-aware methods, the loop runs the single pre-pitch draw:
+    one steal draw in the pre-pitch hook, with no class, and no pickoff draw."""
 
     def _one_pitch(self, sm: StateMachine) -> list[tuple[str, tuple, dict, Any]]:
         in_hook = [False]
@@ -785,8 +786,8 @@ class TestTheThirdOutComesFirst:
         assert sm.running_game_tally.voided == {}
 
     def test_a_two_out_got_away_strike_three_keeps_the_steal_first(self, steal):
-        # The SIM-484 order: the steal resolves on the pitch, then the
-        # dropped-third-strike reach reads the bases at the pitch.
+        # The steal resolves on the pitch, then the dropped-third-strike
+        # reach reads the bases at the pitch.
         sm = _machine("swinging_strike", got_away=True, steal=steal)
         state = _state()
         state.bases = Bases(second=202)
@@ -895,8 +896,8 @@ class TestTheRunnersMoveOnTheReach:
         assert sm.running_game_tally.d3k_runners_moved == 1
 
     def test_bases_loaded_two_outs_every_runner_moves_up_one(self, steal):
-        # The SIM-484 test's bases and score: the run now scores on the
-        # got-away advance, not on the reach's push.
+        # Bases loaded, two outs: the run scores on the got-away advance,
+        # not on the reach's push.
         sm, state, result = self._reach(steal, Bases(first=RUNNER, second=202, third=303), outs=2)
         assert result.canonical_event == "strikeout"
         assert result.runs_scored == 1 and state.away_score == 1
@@ -1075,7 +1076,7 @@ class TestTheSyntheticPool:
 
 
 # ---------------------------------------------------------------------------
-# A whole game in the new order
+# A whole game in the order on the pitch
 # ---------------------------------------------------------------------------
 
 

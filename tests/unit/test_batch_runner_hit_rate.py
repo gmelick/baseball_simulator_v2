@@ -1,32 +1,29 @@
 """
 test_batch_runner_hit_rate.py
 =======================
-Unit tests for SIM-377 -- the ``_hit_rate`` ``TypeError`` fix in the SIM-332 batch
-runner (Phase 5, Sprint 1).
+The batch runner's underscore-prefix convention for ``sim_kwargs``.
 
-THE BUG
--------
+THE CONVENTION
+--------------
 :func:`simulation.batch_runner.rng_driven_machine_factory` reads
-``spec.sim_kwargs["_hit_rate"]`` to tune its no-DB resolver, but
-:func:`simulation.batch_runner._run_one` then splatted the SAME ``sim_kwargs``
-dict into ``simulate_game(machine, seed=seed, **spec.sim_kwargs)``.
-:func:`simulation.sim_loop.simulate_game` has a FIXED signature (no ``**kwargs``),
-so any :class:`GameSpec` carrying ``_hit_rate`` raised ``TypeError:
-simulate_game() got an unexpected keyword argument '_hit_rate'``.
+``spec.sim_kwargs["_hit_rate"]`` to set the hit-on-contact share of its
+synthetic bundle.  :func:`simulation.batch_runner._run_one` splats the same
+``sim_kwargs`` into ``simulate_game(machine, seed=seed, **...)``, and
+:func:`simulation.sim_loop.simulate_game` has a FIXED signature (no
+``**kwargs``).  So ``_``-prefixed keys are FACTORY-ONLY: ``_run_one`` filters
+them out of the splat (the factory still sees them via the whole ``spec``).
+An unfiltered ``_hit_rate`` would raise ``TypeError: simulate_game() got an
+unexpected keyword argument '_hit_rate'``.
 
-THE FIX (the underscore-prefix convention)
------------------------------------------
-``_``-prefixed ``sim_kwargs`` keys are FACTORY-ONLY: ``_run_one`` filters them out
-of the ``simulate_game(**...)`` splat (the factory still sees them via the whole
-``spec``).  These tests run with NO live DuckDB/FAISS and NO Redis -- the picklable
-rng-driven no-DB factory + the in-memory cache fallback, exactly like SIM-332.
+These tests run with NO DuckDB/FAISS and NO Redis: the picklable rng-driven
+no-DB factory and the in-memory cache.
 
 Coverage:
   * a spec with ``_hit_rate`` runs end-to-end through ``BatchRunner.run`` with NO
     TypeError (the regression guard);
   * ``_run_one`` directly with ``_hit_rate`` set does not raise;
-  * a HIGH ``_hit_rate`` yields more hits/runs than a LOW one (the knob actually
-    reaches the factory -- statistical, seeded);
+  * a HIGH ``_hit_rate`` yields more batted-ball hits than a LOW one (the knob
+    actually reaches the factory -- statistical, seeded);
   * non-underscore keys still pass through to ``simulate_game`` unchanged.
 """
 
@@ -66,14 +63,14 @@ def _runner(**kw) -> BatchRunner:
 
 
 # ===========================================================================
-# The regression: _hit_rate no longer raises TypeError through the runner
+# The guard: _hit_rate raises no TypeError through the runner
 # ===========================================================================
 
 
 class TestHitRateNoTypeError:
     def test_run_with_hit_rate_does_not_raise(self):
-        # The exact shape the ticket calls out: a GameSpec whose sim_kwargs carries
-        # the factory-only _hit_rate knob.  Before SIM-377 this raised TypeError.
+        # A GameSpec whose sim_kwargs carries the factory-only _hit_rate knob.
+        # Unfiltered, it would raise TypeError in simulate_game.
         spec = _spec(_hit_rate=0.5)
         res = _runner().run(spec, n_iterations=6, base_seed=42)
         assert res.summary.n_iterations == 6
@@ -122,7 +119,7 @@ class TestHitRateActuallyTunes:
         )
 
     def test_hit_rate_default_when_absent(self):
-        # No _hit_rate key at all -> the factory's 0.30 default; still runs cleanly.
+        # No _hit_rate key at all -> the league in-play mix; still runs cleanly.
         res = _runner().run(_spec(), n_iterations=6, base_seed=7)
         assert res.summary.n_iterations == 6
 
@@ -143,8 +140,8 @@ class TestPassthroughPreserved:
         assert result.innings_played >= 1
 
     def test_determinism_holds_with_hit_rate(self):
-        # The fix must not perturb determinism: same base seed + _hit_rate -> same
-        # per-iteration scores.
+        # The filter must not perturb determinism: same base seed + _hit_rate ->
+        # same per-iteration scores.
         spec = _spec(_hit_rate=0.6)
         a = _runner(cache=NullCache()).run(spec, n_iterations=8, base_seed=321, use_cache=False)
         b = _runner(cache=NullCache()).run(spec, n_iterations=8, base_seed=321, use_cache=False)

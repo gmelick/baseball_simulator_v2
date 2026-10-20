@@ -1,48 +1,46 @@
 """
 test_baseball_sniff.py
 ===============================
-SIM-324 -- the **Phase-4 baseball sniff-test suite**.
+The **baseball sniff-test suite**: does the loop produce sane baseball?
 
 WHAT THIS IS (and is NOT)
 -------------------------
-This suite validates that the SIM-320 ``simulate_game()`` LOOP, when fed a
-*calibrated league-average outcome model*, produces **baseball-realistic emergent
-aggregate statistics**:
+This suite checks that the ``simulate_game()`` LOOP, fed a *calibrated
+league-average outcome model*, produces **baseball-realistic emergent aggregate
+statistics**:
 
   * a run environment of ~4.4 runs / team / game,
   * pitches-per-PA in the ~3.8-3.9 band,
-  * platoon splits that move in the expected direction when a L/R skew is wired
-    into the injected model,
-  * an RE24 base-out run-expectancy matrix that is monotonic in the sensible
+  * platoon splits that move in the expected direction when the model carries
+    a L/R skew,
+  * an RE24 base-out run-expectancy matrix (the expected runs for the rest of
+    the inning from each base-out state) that is monotonic in the sensible
     directions (more runners on / fewer outs => higher run expectancy).
 
-These are "does the loop produce sane baseball?" checks.  They test the LOOP's
-arithmetic / aggregation -- the count machine, the half-inning roll, the
-``resolve_runs`` RE24 wiring, baserunner advancement -- NOT the quality of the
-similarity engines (validated elsewhere).  So the loop is driven by an *injected*
-realistic outcome distribution, NOT live DB/FAISS, exactly as the
-SIM-316/317/318/319/320 unit tests inject their signals
-(see ``tests/unit/test_simulate_game_driver.py``).
+These checks test the LOOP's arithmetic and aggregation -- the count machine,
+the half-inning roll, the ``resolve_runs`` RE24 wiring, baserunner advancement
+-- NOT the quality of the similarity engines (tested elsewhere).  No test needs
+a database: the model is an in-memory bundle (``simulation/synthetic_bundle.py``).
 
-HOW THE MODEL IS INJECTED (the two seams)
------------------------------------------
-Two independent seams shape the emergent statistics, mirroring the spec's two
-sampling steps (§2 steps 3 and 5):
+HOW THE MODEL IS BUILT (two models, one bundle)
+-----------------------------------------------
+Two models shape the emergent statistics.  ``league_artifacts`` turns both
+into the ROWS of an in-memory engine-artifact bundle, and the production
+``StateMachine`` draws every pitch and every batted ball through the real
+full-pool sampler and the real in-play transition path.
 
   1. **The per-pitch outcome model** -- a calibrated distribution over
-     ``{ball, called_strike, swinging_strike, foul, in_play}``.  A
-     ``StateMachine`` subclass draws each pitch from it with the loop's seeded
-     rng (no sampler), driving the §5.1 count machine (and therefore the walk /
-     strikeout rates AND the pitches-per-PA).  The two-strike-foul absorbing rule
-     in the real loop lengthens PAs -- so P/PA is an *emergent* property of the
-     loop, not a number we set.
+     ``{ball, called_strike, swinging_strike, foul, in_play}``.  It drives the
+     count machine, and therefore the walk / strikeout rates AND the
+     pitches-per-PA.  In the real loop a foul with two strikes leaves the count
+     unchanged and lengthens the PA, so P/PA is an *emergent* property of the
+     loop, not a number the test sets.
   2. **The in-play PA-event model** -- a calibrated distribution over batted-ball
-     events ``{single, double, triple, home_run, field_out, ...}``.  An injected
-     :class:`PlayResolver` maps each ``in_play`` pitch to a sampled event; the
-     loop's own baserunning (``_advance_runners``) + ``resolve_runs`` then turn
-     that into runs given the live base-out state.  We deliberately do NOT inject
-     ``result_runs`` -- runs EMERGE from the loop's baserunning so the run
-     environment is a real test of the loop, not an echo of an injected number.
+     events ``{single, double, triple, home_run, field_out, ...}``.  The loop's
+     own baserunning and ``resolve_runs`` turn each drawn event into runs from
+     the live base-out state.  The rows carry no run count: runs EMERGE from
+     the loop's baserunning, so the run environment is a real test of the loop,
+     not an echo of an injected number.
 
 NOISE-ROBUSTNESS
 ----------------
@@ -77,13 +75,12 @@ HOME_LINEUP = list(range(201, 210))  # 9 batters
 #
 # (1) PER-PITCH OUTCOME MODEL (drives the count machine -> walk/K rate + P/PA).
 #
-# These per-pitch probabilities are tuned so that, run through the real §5.1
-# count machine (incl. the two-strike-foul absorbing rule), the EMERGENT PA
-# statistics land at league average: ~8-9% walks, ~22% strikeouts, ~3.85 P/PA.
-# A 2024-ish per-pitch mix is roughly: ~36% balls, ~26% called+swinging strikes,
-# ~16% fouls, ~22% balls-in-play; foul share is high because two-strike fouls are
-# absorbed (they prolong the PA), which is exactly the P/PA driver the spec calls
-# out (§5.1 / foul-ball doc §3.3).
+# These per-pitch probabilities are tuned so that, run through the real count
+# machine (two-strike fouls included), the EMERGENT PA statistics land at league
+# average: ~8-9% walks, ~22% strikeouts, ~3.85 P/PA.  A 2024-ish per-pitch mix
+# is roughly: ~36% balls, ~26% called+swinging strikes, ~16% fouls, ~22%
+# balls-in-play.  The foul share here is high because a two-strike foul leaves
+# the count unchanged and prolongs the PA: that is the main P/PA driver.
 LEAGUE_PITCH_MODEL: dict[str, float] = {
     "ball": 0.332,
     "called_strike": 0.138,
@@ -98,12 +95,10 @@ LEAGUE_PITCH_MODEL: dict[str, float] = {
 # of balls in play ~ 7% are home runs, BABIP ~ .300 on the non-HR balls, so the
 # non-HR hit split is single-heavy with a smaller double / rare triple share, the
 # remainder outs (incl. a slice of GIDP).  These are the frequencies the play
-# pool would emit; we inject them directly so the loop's baserunning + resolve_runs
-# convert them into the run environment.
-# SIM-421: re-tuned to the production outcome-pool proportions (hit-on-contact
-# ~33%, was an inflated ~40% that compensated for the old conservative baserunner
-# advancement).  With the corrected realistic advancement this restores the
-# ~4.4 R/team/G run environment.
+# pool emits; the bundle carries them as rows, so the loop's baserunning and
+# resolve_runs convert them into the run environment.  The mix matches the
+# production outcome pool's proportions (hit-on-contact ~33%); with the loop's
+# advancement draws it gives the ~4.4 R/team/G run environment.
 LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "home_run": 0.049,
     "single": 0.239,
@@ -130,11 +125,10 @@ _TALLY_EVENTS = (
 # Test doubles — the production machine over the synthetic league bundle
 # ===========================================================================
 #
-# SIM-486: the per-pitch and in-play models above become the ROWS of an
-# in-memory engine-artifact bundle, and the production StateMachine draws
-# every pitch and every batted ball from it through the real full-pool
-# sampler and the real SIM-511 transition path.  A platoon skew is a per-hand
-# pitch model (more contact, fewer whiffs for the advantaged hand).
+# The production StateMachine draws from the synthetic league bundle (see the
+# module docstring).  The subclasses below only set the batting hand or count
+# events.  A platoon skew is a per-hand pitch model (more contact, fewer whiffs
+# for the advantaged hand).
 
 
 def _skewed(model: dict[str, float], delta: float) -> dict[str, float]:
@@ -290,13 +284,13 @@ class TestRunEnvironment:
         # A few hundred seeded games gives a stable mean within the sandbox budget.
         agg = _aggregate(range(220))
         rpg = agg.runs_per_team_game
-        # The spec's Phase-4 sniff target is ~4.4 R/team/G.  The band 3.8-5.0 is
-        # justified: with ~220 games (440 team-games) and a per-team-game run SD
-        # of ~3, the standard error of the mean is ~3/sqrt(440) ~ 0.14, so a
-        # +/-0.6 band is > 4 standard errors -- it absorbs Monte-Carlo noise AND
-        # the modest calibration slack of an injected (not measured) model while
-        # still failing loudly if the loop mis-aggregates runs (e.g. the SIM-312
-        # silent-zero-out regression would push this far above 5.0).
+        # The sniff target is ~4.4 R/team/G.  The band 3.8-5.0 is justified:
+        # with ~220 games (440 team-games) and a per-team-game run SD of ~3,
+        # the standard error of the mean is ~3/sqrt(440) ~ 0.14, so a +/-0.6
+        # band is > 4 standard errors.  It absorbs Monte-Carlo noise AND the
+        # modest calibration slack of a synthetic (not measured) model, and it
+        # still fails loudly if the loop mis-aggregates runs (a play whose outs
+        # are silently dropped would push this far above 5.0).
         assert 3.8 <= rpg <= 5.0, (
             f"run environment {rpg:.2f} R/team/G outside the realistic 3.8-5.0 band"
         )
@@ -321,7 +315,7 @@ class TestRunEnvironment:
 
 
 # ===========================================================================
-# 2. Pitches per PA ~ 3.7-4.0 (spec says 3.8-3.9)
+# 2. Pitches per PA ~ 3.7-4.0 (target 3.8-3.9)
 # ===========================================================================
 
 
@@ -340,11 +334,11 @@ class TestPitchesPerPA:
 
     def test_pitches_per_pa_in_realistic_band(self):
         ppa, n_pa = self._pitches_per_pa(range(220))
-        # Spec target 3.8-3.9; we assert the slightly wider 3.7-4.0 to allow
-        # Monte-Carlo noise + injected-model slack.  With tens of thousands of PAs
+        # The target is 3.8-3.9; the test asserts the slightly wider 3.7-4.0 to
+        # allow Monte-Carlo noise and model slack.  With tens of thousands of PAs
         # across 220 games the SE of P/PA is < 0.01, so the band is many SEs wide
-        # -- it cannot flake, yet a broken count machine (e.g. the two-strike-foul
-        # absorbing rule regressing) would move P/PA outside it immediately.
+        # -- it cannot flake, yet a broken count machine (e.g. a broken
+        # two-strike-foul rule) would move P/PA outside it immediately.
         assert n_pa > 5000, f"too few PAs ({n_pa}) for a stable P/PA estimate"
         assert 3.7 <= ppa <= 4.0, f"pitches-per-PA {ppa:.3f} outside the realistic 3.7-4.0 band"
 
@@ -462,7 +456,7 @@ class TestRE24Monotonicity:
 
 
 class TestModelCalibrationSanity:
-    """A direct check that the injected per-pitch + in-play models yield
+    """A direct check that the bundle's per-pitch + in-play models yield
     league-average WALK / STRIKEOUT / hit rates, so the run-environment and P/PA
     bands above are anchored to a genuinely calibrated model (not an arbitrary
     one that happens to hit a number)."""

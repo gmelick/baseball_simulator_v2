@@ -1,11 +1,11 @@
 """
 test_prop_wrappers.py
 ============================
-Unit tests for the seven prop-bet types the market offers but the platform
-did not price (SIM-421) in :mod:`simulation.prop_distributions`.
+The seven prop markets beyond the eight core props in
+:mod:`simulation.prop_distributions` (the fifteen prop markets, SIM-421).
 
-The market prices these props and the platform now builds a PMF (a
-probability mass function: value -> probability, summing to 1) for each:
+The platform builds a PMF (a probability mass function: value -> probability,
+summing to 1) for each of these props:
 
   * batter: singles (``1B``), doubles (``2B``), triples (``3B``), runs
     (``R``), stolen bases (``SB``) and hits + runs + RBI (``HRR``);
@@ -14,17 +14,17 @@ probability mass function: value -> probability, summing to 1) for each:
 The tests build synthetic per-game :class:`BoxScore`s (no loop run, no DB)
 and assert:
 
-  * each new extractor reads the right :class:`PlayerStatLine` field;
+  * each of the seven extractors reads the right :class:`PlayerStatLine` field;
   * ``1B`` is the remainder ``h - b2 - b3 - hr`` over mixed hit types;
   * ``HRR`` is the PER-GAME sum, so its PMF keeps the within-game
     correlation that a sum of the three marginal PMFs throws away;
   * the keyspace: a batter owns all ten batter props, a pitcher all five
     pitcher props, a two-way player both; the first four of each tuple keep
     their order (the frontend renders chips in tuple order);
-  * ``p_over`` / ``p_under`` / ``p_push`` work on the new props;
+  * ``p_over`` / ``p_under`` / ``p_push`` work on these props;
   * a pinch-runner-only appearance (a run or a steal, no AB) gets batter
     props, and a pitcher who only allowed a hit gets pitcher props;
-  * a DNP game still contributes a zero to a new prop.
+  * a DNP game still contributes a zero to one of these props.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _pitcher_line(
 
 def test_prop_tuples_match_the_contract():
     # The first four of each tuple keep their order: the frontend renders
-    # chips in tuple order, so the existing chips stay where they are.
+    # chips in tuple order, so the four core chips keep their places.
     assert PITCHER_PROPS == ("K", "BB", "ER", "OUTS", "H_ALLOWED")
     assert BATTER_PROPS == ("H", "HR", "RBI", "TB", "1B", "2B", "3B", "R", "SB", "HRR")
     assert ALL_PROPS == PITCHER_PROPS + BATTER_PROPS
@@ -109,7 +109,7 @@ def test_every_prop_has_exactly_one_extractor():
 
 
 # ===========================================================================
-# The new extractors, one field each
+# The seven extractors, one field each
 # ===========================================================================
 
 
@@ -257,7 +257,7 @@ def test_two_way_player_owns_both_sets():
 
 
 # ===========================================================================
-# Over / under / push on the new props
+# Over / under / push on these props
 # ===========================================================================
 
 
@@ -363,7 +363,7 @@ def test_line_with_no_activity_is_still_skipped():
 
 
 # ===========================================================================
-# DNP zero-fill on a new prop
+# DNP zero-fill on one of these props
 # ===========================================================================
 
 
