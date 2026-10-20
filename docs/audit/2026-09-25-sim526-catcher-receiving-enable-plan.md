@@ -29,7 +29,7 @@
 `receiving.json` (built 2026-09-09, 422 catcher-seasons); the pitch pool's 1,440,733 taken
 pitches of 2023 to 2026 with a catcher and a zone (DuckDB, read-only); the profile's framing
 block (`derived.catcher_season_metrics`); the part-E probe of 2026-09-09 and a 150-iteration
-re-run of its OFF / ON pair (`scripts/sim523_receiving_probe.py`, this session).
+re-run of its OFF / ON pair (`scripts/probes/catcher_receiving_probe.py`, this session).
 **Builds on:** the play-picker redesign's part E (SIM-523, `CHANGES.md` 2026-09-09; the plan
 `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md` §Part E), which built the ratio
 OFF and named this ticket for its fit and enable; the powers-to-1 ruling of 2026-09-16 and the
@@ -400,7 +400,7 @@ docker compose run --rm app python -m pipeline.batch.engine_artifacts --what rec
 # 3. the flip: docker compose up -d app   (recreates the container with SIM_CATCHER_RECEIVING=1 and the power; the bundle reloads the new document)
 # 4. the probe (four games, six arms, 60 iterations):
 MSYS_NO_PATHCONV=1 docker compose run --rm -T -v "C:/Users/grego/Documents/baseball_simulator_v2/scripts:/app/scripts" app \
-    python scripts/sim523_receiving_probe.py --iters 60 --arms "OFF,ON real,OFF best framer,ON best framer,OFF worst framer,ON worst framer" 717809 744795 777557 825108
+    python scripts/probes/catcher_receiving_probe.py --iters 60 --arms "OFF,ON real,OFF best framer,ON best framer,OFF worst framer,ON worst framer" 717809 744795 777557 825108
 #    expected: the taken share and pitches per PA unchanged (the invariant); the best framer's ratio +0.008 on the called-strike share of taken pitches
 #    (was +0.012 at prior 200), the worst −0.006; the real catchers within 0.003; stolen bases OFF and ON real within two standard errors (§2.5)
 # 5. the lane (45 × 130, ~1.5 h; the ratio ON by the flag table's new default):

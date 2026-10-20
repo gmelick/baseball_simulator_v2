@@ -32,35 +32,22 @@ What these tests hold, on an in-memory DuckDB with the canonical schema:
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 duckdb = pytest.importorskip("duckdb")
 
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
-_SCRIPTS = REPO / "scripts"
 
 
-def _load(name: str):
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-recompute = _load("sim550_arm_recompute")
+recompute = load_script("outfield_arm_recompute")
 
 TODAY = date(2026, 9, 17)
 
@@ -789,7 +776,7 @@ class TestCrossCheck:
 # ---------------------------------------------------------------------------
 
 
-probe = _load("sim523_fit_probe")
+probe = load_script("conditional_rate_probe")
 
 
 class TestProbeFielderRead:

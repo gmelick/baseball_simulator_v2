@@ -1,8 +1,8 @@
 """SIM-554 — the run book's two scripts, on in-memory fixtures (no live DB, no bundle).
 
-``scripts/sim554_rebuild_steal_pool.py`` rebuilds the steal opportunity pool
+``scripts/rebuild_steal_pool.py`` rebuilds the steal opportunity pool
 with the pitch class and the pickoff rows, then exports the steal pool alone.
-``scripts/sim554_running_game_census.py`` reads where the simulator's steals
+``scripts/probes/running_game_census.py`` reads where the simulator's steals
 and pickoffs land, two arms side by side. These tests pin the scripts' own
 logic:
 
@@ -35,25 +35,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 duckdb = pytest.importorskip("duckdb")
 
 REPO = Path(__file__).resolve().parents[2]
-_SCRIPTS = REPO / "scripts"
 
 
-def _load(name: str):
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-rb = _load("sim554_rebuild_steal_pool")
+rb = load_script("rebuild_steal_pool")
 
 WINDOW = [2023, 2024, 2025, 2026]
 
@@ -1128,7 +1117,8 @@ class TestTheWholeRun:
 # The census
 # ===========================================================================
 
-census = _load("sim554_running_game_census")
+census = load_script("running_game_census")
+
 
 from simulation.game_state import NO_PITCH, PlayResult  # noqa: E402
 

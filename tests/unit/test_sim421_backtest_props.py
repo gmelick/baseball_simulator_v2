@@ -2,7 +2,7 @@
 tests/unit/test_sim421_backtest_props.py
 ========================================
 The backtest wiring for the new prop markets (SIM-421) and the official
-box-score ground truth (SIM-545), in ``scripts/clv_backtest.py`` and
+box-score ground truth (SIM-545), in ``scripts/accuracy_comparison.py`` and
 ``scripts/validate_props.py``.
 
 What changed, in plain words: the platform now prices fifteen player-prop
@@ -50,7 +50,7 @@ def _load_script(name: str):
     return mod
 
 
-clv_backtest = _load_script("clv_backtest")
+accuracy_comparison = _load_script("accuracy_comparison")
 validate_props = _load_script("validate_props")
 
 from pipeline.etl.boxscore_ingest import parse_boxscore  # noqa: E402
@@ -66,12 +66,12 @@ from simulation.prop_validation import (  # noqa: E402
     real_props_from_boxscore_rows,
 )
 
-PROP_VOCAB_MAP = clv_backtest.PROP_VOCAB_MAP
-BOXSCORE_SCORED_PROPS = clv_backtest.BOXSCORE_SCORED_PROPS
-EVENT_LABEL_SCORED_PROPS = clv_backtest.EVENT_LABEL_SCORED_PROPS
-GROUND_TRUTH_OFFICIAL = clv_backtest.GROUND_TRUTH_OFFICIAL
-GROUND_TRUTH_EVENT_LABEL = clv_backtest.GROUND_TRUTH_EVENT_LABEL
-score_prop_accuracy = clv_backtest.score_prop_accuracy
+PROP_VOCAB_MAP = accuracy_comparison.PROP_VOCAB_MAP
+BOXSCORE_SCORED_PROPS = accuracy_comparison.BOXSCORE_SCORED_PROPS
+EVENT_LABEL_SCORED_PROPS = accuracy_comparison.EVENT_LABEL_SCORED_PROPS
+GROUND_TRUTH_OFFICIAL = accuracy_comparison.GROUND_TRUTH_OFFICIAL
+GROUND_TRUTH_EVENT_LABEL = accuracy_comparison.GROUND_TRUTH_EVENT_LABEL
+score_prop_accuracy = accuracy_comparison.score_prop_accuracy
 
 _FIXTURE = os.path.join(_REPO_ROOT, "tests", "fixtures", "mlb", "boxscore_746437.json")
 GAME_PK = 746437
@@ -191,7 +191,7 @@ def test_fallback_set_is_the_five_event_label_props():
 async def test_fetch_official_boxscore_returns_every_row_as_a_dict():
     rows = _fixture_rows()
     pool = _FakePool(boxscore_rows=rows)
-    out = await clv_backtest._fetch_official_boxscore(pool, GAME_PK)
+    out = await accuracy_comparison._fetch_official_boxscore(pool, GAME_PK)
     assert len(out) == len(rows) == 27
     assert all(isinstance(r, dict) for r in out)
     assert pool.tables_read == ["raw.game_player_stats"]
@@ -200,7 +200,7 @@ async def test_fetch_official_boxscore_returns_every_row_as_a_dict():
 async def test_fetch_official_boxscore_selects_every_column():
     """The SELECT names every column of raw.game_player_stats, so the reader
     sees the whole row and a new prop never needs a second query."""
-    sql = clv_backtest._OFFICIAL_BOXSCORE_SQL
+    sql = accuracy_comparison._OFFICIAL_BOXSCORE_SQL
     for column in _fixture_rows()[0]:
         assert column in sql, f"{column} is not selected"
     assert "fetched_at" in sql
@@ -211,11 +211,11 @@ async def test_missing_table_reads_as_no_rows_and_warns_once(monkeypatch, caplog
     """A database without migration 0023 has no box-score table. The run must
     not fail on it: every game falls back to the event label, and the
     warning prints ONCE, not once per game."""
-    monkeypatch.setattr(clv_backtest, "_OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED", False)
+    monkeypatch.setattr(accuracy_comparison, "_OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED", False)
     pool = _FakePool(raise_missing_table=True)
-    with caplog.at_level(logging.WARNING, logger="clv_backtest"):
-        assert await clv_backtest._fetch_official_boxscore(pool, 1) == []
-        assert await clv_backtest._fetch_official_boxscore(pool, 2) == []
+    with caplog.at_level(logging.WARNING, logger="accuracy_comparison"):
+        assert await accuracy_comparison._fetch_official_boxscore(pool, 1) == []
+        assert await accuracy_comparison._fetch_official_boxscore(pool, 2) == []
     warnings = [r for r in caplog.records if "SIM-545" in r.getMessage()]
     assert len(warnings) == 1
     assert "migration 0023" in warnings[0].getMessage()
@@ -228,7 +228,7 @@ async def test_ground_truth_prefers_the_official_box_score():
         boxscore_rows=_fixture_rows(),
         pa_events=[{"batter": _SLUGGER, "pitcher": _STARTER, "events": "single"}],
     )
-    truth = await clv_backtest._fetch_prop_ground_truth(pool, GAME_PK)
+    truth = await accuracy_comparison._fetch_prop_ground_truth(pool, GAME_PK)
     assert truth.source == GROUND_TRUTH_OFFICIAL
     assert truth.scorable_props == BOXSCORE_SCORED_PROPS
     assert pool.tables_read == ["raw.game_player_stats"]
@@ -264,7 +264,7 @@ async def test_ground_truth_falls_back_to_the_event_label_when_no_rows():
             {"batter": _SLUGGER, "pitcher": _STARTER, "events": "strikeout"},
         ],
     )
-    truth = await clv_backtest._fetch_prop_ground_truth(pool, GAME_PK)
+    truth = await accuracy_comparison._fetch_prop_ground_truth(pool, GAME_PK)
     assert truth.source == GROUND_TRUTH_EVENT_LABEL
     assert truth.scorable_props == EVENT_LABEL_SCORED_PROPS
     assert pool.tables_read == ["raw.game_player_stats", "raw.pitches"]
@@ -425,13 +425,13 @@ def test_push_is_skipped_on_the_new_markets_too():
 
 
 def test_tally_counts_scored_games_per_source():
-    c = clv_backtest._Counters()
-    clv_backtest._tally(c, "scored", 1.0, GROUND_TRUTH_OFFICIAL)
-    clv_backtest._tally(c, "scored", 1.0, GROUND_TRUTH_OFFICIAL)
-    clv_backtest._tally(c, "scored", 1.0, GROUND_TRUTH_EVENT_LABEL)
-    clv_backtest._tally(c, "scored", 1.0, None)  # game markets only — no prop source
-    clv_backtest._tally(c, "no_odds", 1.0, None)
-    clv_backtest._tally(c, "unresolved", 1.0, GROUND_TRUTH_OFFICIAL)  # never scored
+    c = accuracy_comparison._Counters()
+    accuracy_comparison._tally(c, "scored", 1.0, GROUND_TRUTH_OFFICIAL)
+    accuracy_comparison._tally(c, "scored", 1.0, GROUND_TRUTH_OFFICIAL)
+    accuracy_comparison._tally(c, "scored", 1.0, GROUND_TRUTH_EVENT_LABEL)
+    accuracy_comparison._tally(c, "scored", 1.0, None)  # game markets only — no prop source
+    accuracy_comparison._tally(c, "no_odds", 1.0, None)
+    accuracy_comparison._tally(c, "unresolved", 1.0, GROUND_TRUTH_OFFICIAL)  # never scored
     assert c.games_official_boxscore == 2
     assert c.games_event_label == 1
     assert c.games_scored == 4
@@ -440,8 +440,8 @@ def test_tally_counts_scored_games_per_source():
 
 def test_tally_keeps_its_old_call_shape():
     """The existing callers pass no source; both counters stay at zero."""
-    c = clv_backtest._Counters()
-    clv_backtest._tally(c, "scored", 1.18)
+    c = accuracy_comparison._Counters()
+    accuracy_comparison._tally(c, "scored", 1.18)
     assert c.games_scored == 1
     assert c.games_park_nonneutral == 1
     assert c.games_official_boxscore == 0
@@ -451,14 +451,14 @@ def test_tally_keeps_its_old_call_shape():
 def test_worker_payload_carries_the_ground_truth_source(monkeypatch):
     """The parallel path folds the source into the SAME counters the serial
     path keeps, so it must cross the process boundary in the payload."""
-    monkeypatch.setattr(clv_backtest, "_worker_lazy_init", lambda *_a, **_k: None)
+    monkeypatch.setattr(accuracy_comparison, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _Loop:
         def run_until_complete(self, coro):
             coro.close()
             return [], "scored", 1.0, GROUND_TRUTH_OFFICIAL
 
-    monkeypatch.setattr(clv_backtest, "_WORKER_LOOP", _Loop())
+    monkeypatch.setattr(accuracy_comparison, "_WORKER_LOOP", _Loop())
     params = {
         "do_game": False,
         "do_props": True,
@@ -467,13 +467,13 @@ def test_worker_payload_carries_the_ground_truth_source(monkeypatch):
         "dsn": "postgresql://x/y",
         "duckdb": "/nope.duckdb",
     }
-    payload = clv_backtest._process_one_game(777, params)
+    payload = accuracy_comparison._process_one_game(777, params)
     assert payload["ground_truth_source"] == GROUND_TRUTH_OFFICIAL
     assert payload["status"] == "scored"
 
 
 def test_console_header_shows_the_per_source_counts():
-    comparison = clv_backtest.aggregate_accuracy_comparison([], n_bootstrap=50, seed=1)
+    comparison = accuracy_comparison.aggregate_accuracy_comparison([], n_bootstrap=50, seed=1)
     params = {
         "seasons": [2024],
         "iterations": 100,
@@ -481,7 +481,7 @@ def test_console_header_shows_the_per_source_counts():
         "base_seed": 0,
         "calibration_applied": True,
     }
-    with_counts = clv_backtest.format_accuracy_comparison(
+    with_counts = accuracy_comparison.format_accuracy_comparison(
         comparison,
         params=params,
         counters={"games_official_boxscore": 41, "games_event_label": 3},
@@ -489,7 +489,7 @@ def test_console_header_shows_the_per_source_counts():
     assert "official box score=41 games" in with_counts
     assert "event-label fallback=3 games" in with_counts
     # Without a run behind it (a synthetic table), no source line at all.
-    without = clv_backtest.format_accuracy_comparison(comparison, params=params)
+    without = accuracy_comparison.format_accuracy_comparison(comparison, params=params)
     assert "official box score=" not in without
 
 
@@ -511,9 +511,9 @@ async def test_report_counters_carry_the_per_source_game_counts(monkeypatch, tmp
     async def _no_games(*_a, **_k):
         return []
 
-    monkeypatch.setattr(clv_backtest, "_fetch_final_games", _no_games)
+    monkeypatch.setattr(accuracy_comparison, "_fetch_final_games", _no_games)
     out = tmp_path / "clv.json"
-    args = clv_backtest.parse_args(
+    args = accuracy_comparison.parse_args(
         [
             "--seasons",
             "2024",
@@ -525,8 +525,8 @@ async def test_report_counters_carry_the_per_source_game_counts(monkeypatch, tmp
             str(tmp_path / "no_calibration.json"),
         ]
     )
-    rc = await clv_backtest.run(args)
-    assert rc == clv_backtest.EXIT_NOTHING_SCORED
+    rc = await accuracy_comparison.run(args)
+    assert rc == accuracy_comparison.EXIT_NOTHING_SCORED
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["counters"]["games_official_boxscore"] == 0
     assert report["counters"]["games_event_label"] == 0
@@ -572,10 +572,10 @@ def _wire_score_one_game(monkeypatch, pset: PropDistributionSet, prop_odds: dict
 
     monkeypatch.setattr(sk, "resolve_park_factor_onto_state", _park)
     monkeypatch.setattr(sk, "resolve_asof_ymd", _asof)
-    monkeypatch.setattr(clv_backtest, "_fetch_prop_odds", _prop_odds)
+    monkeypatch.setattr(accuracy_comparison, "_fetch_prop_odds", _prop_odds)
     # SIM-421 (2026-09-12): the replay returns the results AND the per-iteration
     # inning grids; no grids here, so the segment-market scorer stays idle.
-    monkeypatch.setattr(clv_backtest, "_replay_game", lambda *_a, **_k: ([object()], []))
+    monkeypatch.setattr(accuracy_comparison, "_replay_game", lambda *_a, **_k: ([object()], []))
     monkeypatch.setattr(
         results_mod.GameSimSummary, "from_results", classmethod(lambda cls, r: object())
     )
@@ -589,7 +589,7 @@ async def test_score_one_game_grades_on_the_official_box_score(monkeypatch):
     pset, prop_odds, _ = _every_market_case()
     _wire_score_one_game(monkeypatch, pset, prop_odds)
     pool = _FakePool(boxscore_rows=_fixture_rows())
-    recs, status, park_factor, source = await clv_backtest._score_one_game(
+    recs, status, park_factor, source = await accuracy_comparison._score_one_game(
         pool, GAME_PK, duck=object(), do_game=False, do_props=True, iterations=1, base_seed=0
     )
     assert status == "scored"
@@ -610,7 +610,7 @@ async def test_score_one_game_falls_back_per_game(monkeypatch):
             {"batter": _SLUGGER, "pitcher": _STARTER, "events": "strikeout"},
         ],
     )
-    recs, status, _pf, source = await clv_backtest._score_one_game(
+    recs, status, _pf, source = await accuracy_comparison._score_one_game(
         pool, GAME_PK, duck=object(), do_game=False, do_props=True, iterations=1, base_seed=0
     )
     assert status == "scored"
@@ -630,10 +630,10 @@ async def test_score_one_game_has_no_source_when_props_are_off(monkeypatch):
     async def _final_score(pool, game_pk):
         return None  # no real score → no game records, but the game still scored
 
-    monkeypatch.setattr(clv_backtest, "_fetch_game_odds", _game_odds)
-    monkeypatch.setattr(clv_backtest, "_fetch_final_score", _final_score)
+    monkeypatch.setattr(accuracy_comparison, "_fetch_game_odds", _game_odds)
+    monkeypatch.setattr(accuracy_comparison, "_fetch_final_score", _final_score)
     pool = _FakePool(boxscore_rows=_fixture_rows())
-    recs, status, _pf, source = await clv_backtest._score_one_game(
+    recs, status, _pf, source = await accuracy_comparison._score_one_game(
         pool, GAME_PK, duck=object(), do_game=True, do_props=False, iterations=1, base_seed=0
     )
     assert status == "scored"

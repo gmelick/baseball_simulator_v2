@@ -7,13 +7,13 @@
 
 **Date:** 2026-09-30
 **Ticket:** SIM-556 (P3), filed 2026-10-01 in `BACKLOG.xlsx`.
-**Instrument:** `scripts/steal_weight_volume_probe.py` and its tests,
+**Instrument:** `scripts/probes/steal_weight_volume_probe.py` and its tests,
 `tests/unit/test_steal_weight_volume_probe.py` (10). The probe imports the running-game replay of
-the running game on the pitch (SIM-554, `scripts/sim554_running_game_replay.py`, on `master`) and reads the draw through the same
+the running game on the pitch (SIM-554, `scripts/running_game_replay.py`, on `master`) and reads the draw through the same
 seam, `FullPoolSampler.steal_weights`. It plays no games. Its copy of the production rule matches
 `steal_weights` to 1e-8 on 500 pitches a season, and it reproduces the replay's four reads
 (1.524, 1.225, 1.137, 1.338).
-**Records:** `scripts/steal_weight_volume_probe_2026.txt` / `.json` and `..._2025.txt` / `.json`.
+**Records:** `docs/audit/records/steal_weight_volume_probe_2026.txt` / `.json` and `..._2025.txt` / `.json`.
 
 ---
 
@@ -136,7 +136,7 @@ In a simulated game only ONE season's players are live. With only 2026's player-
 three weights and the margin curve together keep 0.860 of the pool's attempts at second base and
 0.755 at third (−14% and −25%). With only 2025's live they keep 0.882 and 0.781 (−12% and
 −22%). The acceptance lanes of 2026-09-21 and 2026-09-22 read −9.1% and −11.2% at second, −17.9%
-and −18.9% at third (`scripts/sim478_lane.txt`).
+and −18.9% at third (`docs/audit/records/sim478_lane.txt`).
 
 ### 1.5 What was ruled out
 

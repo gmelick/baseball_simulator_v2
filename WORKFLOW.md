@@ -249,7 +249,7 @@ make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
 ::   smoke run:  make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --provider bettingpros --book draftkings"
 ```
 
-**SIM-429 CLV backtest (`scripts/clv_backtest.py`).**  Scores the model's
+**SIM-429 CLV backtest (`scripts/accuracy_comparison.py`).**  Scores the model's
 entry prices against the closing line — the project's gold-standard edge
 metric.  The slate is fanned out **over games** (`--workers N`, default 6,
 each a `forkserver` worker holding its own ~373 MB sampler — ~2.2 GB at 6
@@ -265,14 +265,14 @@ reference.  A single game can't go below ~30 s (core-bound at ~6).
 ```bat
 :: Full 2024 season, 6 games at once (PowerShell/bash use $PWD; cmd uses %CD%):
 docker compose run --rm -v "%CD%\scripts:/app/scripts" app ^
-    python scripts/clv_backtest.py --seasons 2024 --workers 6 --iterations 100
+    python scripts/accuracy_comparison.py --seasons 2024 --workers 6 --iterations 100
 
 :: Smoke / byte-identical serial reference (no pool):
 docker compose run --rm -v "%CD%\scripts:/app/scripts" app ^
-    python scripts/clv_backtest.py --seasons 2024 --max-games 2 --workers 1
+    python scripts/accuracy_comparison.py --seasons 2024 --max-games 2 --workers 1
 ```
 
-> bash/PowerShell users: substitute `-v "$PWD/scripts:/app/scripts"` for
+> bash/PowerShell users: substitute `-v "$PWD:/app"` for
 > the `-v "%CD%\scripts:..."` mount above.
 
 **What good looks like.**  The backtest writes a CLV scoreboard JSON
@@ -596,7 +596,7 @@ echo %BASEBALL_DB_DSN%
 | Live pipeline misses pitches | Check `raw.etl_errors` — SIM-093 audits skipped rows. |
 | Vig flake | Fixed in SIM-159; check `_VIG_LOWER`/`_VIG_UPPER` in `test_live_pipeline_bugs.py`. |
 | Mock odds returns NULL hash | Run `python scripts\backfill_odds_hash.py`. |
-| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0032_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `32`). On the live DuckDB, apply 0031 only through `scripts/sim554_rebuild_steal_pool.py --apply-migration` (app stopped): it applies the migration inside the steal-pool rebuild's transaction, and the old pool builder fails on a migrated table. |
+| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0032_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `32`). On the live DuckDB, apply 0031 only through `scripts/rebuild_steal_pool.py --apply-migration` (app stopped): it applies the migration inside the steal-pool rebuild's transaction, and the old pool builder fails on a migrated table. |
 | `curl` truncates URL | Escape `&` as `^&` or wrap the URL in double quotes. |
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |

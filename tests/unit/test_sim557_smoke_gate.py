@@ -15,26 +15,14 @@ The tests drive two seams with hand-made game summaries and no live data:
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-sim_stats = _load("sim_stats")
+sim_stats = load_script("sim_stats")
 
 
 def _summary(p_outs: int, outs_played: int | None) -> dict:

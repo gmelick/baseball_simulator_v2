@@ -220,7 +220,7 @@ computes the two thresholds; do not copy the numbers::
     # FULL: certifies all thirteen channels. 12 x 2168 = 26,016 game-sims,
     # about 16.3 hours. A weekend job.
     MSYS_NO_PATHCONV=1 docker compose run --rm \
-        -v "$PWD/tests:/app/tests" -v "$PWD/scripts:/app/scripts" \
+        -v "$PWD:/app" \
         -e SIM_ACCEPTANCE=1 -e SIM_ACCEPTANCE_ITERS=2168 \
         -e SIM_ACCEPTANCE_TIMEOUT=64800 app pytest tests/acceptance -v -rxX
 

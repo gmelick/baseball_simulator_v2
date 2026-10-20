@@ -303,7 +303,7 @@ def market_probability(
 
     The reference side is HOME for a moneyline-kind, three-way or run-line
     market and OVER for a total-kind market — the convention
-    ``scripts/clv_backtest.py`` fixed once so the read never depends on which
+    ``scripts/accuracy_comparison.py`` fixed once so the read never depends on which
     side the model would have bet. ``line`` is the total line or the home
     spread; a side market ignores it. A run line's away bet is the one
     exception (below).

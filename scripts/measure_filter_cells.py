@@ -164,7 +164,7 @@ USAGE
     # From the host (scripts/ is NOT bind-mounted, docs/ must be mounted to keep
     # the JSON; do NOT `docker compose build`):
     MSYS_NO_PATHCONV=1 docker compose run --rm \
-      -v "$PWD/scripts:/app/scripts" -v "$PWD/docs:/app/docs" \
+      -v "$PWD:/app" -v "$PWD/docs:/app/docs" \
       app python scripts/measure_filter_cells.py
 
 EXIT CODES

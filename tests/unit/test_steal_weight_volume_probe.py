@@ -1,6 +1,6 @@
 """The steal-weight volume probe's arithmetic, on synthetic inputs (no DB, no bundle).
 
-``scripts/steal_weight_volume_probe.py`` asks why the steal draw's look-alike
+``scripts/probes/steal_weight_volume_probe.py`` asks why the steal draw's look-alike
 weights lower the number of steal attempts. These tests pin the mechanism it
 reports and the balance it proposes:
 
@@ -14,25 +14,11 @@ reports and the balance it proposes:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-pb = _load("steal_weight_volume_probe")
+pb = load_script("steal_weight_volume_probe")
 
 
 def _two_kinds(k_cross: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

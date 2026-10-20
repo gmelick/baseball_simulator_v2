@@ -184,7 +184,7 @@ GROUND_TRUTH_OFFICIAL = "official_boxscore"
 GROUND_TRUTH_EVENT_LABEL = "event_label"
 
 #: SIM-545: every column of ``raw.game_player_stats`` (migration 0023) — the
-#: SAME reader ``scripts/clv_backtest.py`` uses (``scripts/`` is not a package,
+#: SAME reader ``scripts/accuracy_comparison.py`` uses (``scripts/`` is not a package,
 #: so each script carries its own copy, as they already do for
 #: ``_fetch_pa_events``).
 _OFFICIAL_BOXSCORE_SQL = """

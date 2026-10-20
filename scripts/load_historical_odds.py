@@ -105,7 +105,7 @@ USAGE
     # SIM-555: from the host, with this checkout's scripts/ mounted over the
     # image's copy (scripts/ is not bind-mounted) and the provider named:
     MSYS_NO_PATHCONV=1 docker compose run -d --name sim555_load_2024 \
-        -v "$PWD/scripts:/app/scripts" app \
+        -v "$PWD:/app" app \
         python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
 
     # SIM-555: the crash-safe form the wrapper runs. --done-file skips the
@@ -113,7 +113,7 @@ USAGE
     # --retries / --retry-wait set the vendor-read retry policy (the values
     # shown are the defaults). Exit 1 = some game is incomplete (see above).
     python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
-        --done-file scripts/sim555_load_2024.done --retries 3 --retry-wait 5
+        --done-file results/sim555/sim555_load_2024.done --retries 3 --retry-wait 5
 
     # In the app container, with a real provider configured:
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=… \

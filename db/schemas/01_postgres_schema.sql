@@ -1001,7 +1001,7 @@ COMMENT ON TABLE raw.prop_odds IS
 -- SIM-555 (migration 0028): the retired 'consensus' odds rows. Copies of the
 -- two odds tables' columns and defaults; the id default is dropped so an
 -- archive never draws from the live table's sequence. Filled season by season
--- by scripts/sim555_retire_consensus_rows.py once the census passes.
+-- by scripts/probes/retire_consensus_odds.py once the census passes.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS raw.game_odds_archive (LIKE raw.game_odds INCLUDING DEFAULTS);

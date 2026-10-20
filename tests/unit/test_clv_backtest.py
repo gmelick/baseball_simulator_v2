@@ -1,7 +1,7 @@
 """
-tests/unit/test_clv_backtest.py
+tests/unit/test_accuracy_comparison.py
 ===============================
-Unit tests for the plain data ``scripts/clv_backtest.py`` exposes: the
+Unit tests for the plain data ``scripts/accuracy_comparison.py`` exposes: the
 15-market prop vocab map (the SIM-134 seven plus the eight SIM-421 added) and
 the market trust labels. Both are shared by every report
 this file produces, so they get their own test file instead of living inside
@@ -11,7 +11,7 @@ SIM-541 (2026-09-11): this file used to also test the SIM-429 CLV scoreboard
 (the per-bet CLV decision, ``evaluate_two_way_market``, and its aggregation,
 ``aggregate_scoreboard``). The owner retired that report — the platform no
 longer measures the entry-to-close line move at all — and its code was
-deleted from ``scripts/clv_backtest.py``. Those tests are deleted with it.
+deleted from ``scripts/accuracy_comparison.py``. Those tests are deleted with it.
 The surviving reports (the sim-vs-closing-line accuracy comparison, SIM-538,
 and the hypothetical dollar return, SIM-540) have their own test files:
 ``test_sim538_accuracy_comparison.py`` / ``test_sim540_hypothetical_return.py``.
@@ -32,16 +32,16 @@ import sys
 # resolve the module's namespace (dataclasses looks the module up by name).
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "clv_backtest.py")
-_spec = importlib.util.spec_from_file_location("clv_backtest", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
+_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
-clv_backtest = importlib.util.module_from_spec(_spec)
-sys.modules["clv_backtest"] = clv_backtest
-_spec.loader.exec_module(clv_backtest)
+accuracy_comparison = importlib.util.module_from_spec(_spec)
+sys.modules["accuracy_comparison"] = accuracy_comparison
+_spec.loader.exec_module(accuracy_comparison)
 
 from simulation.prop_distributions import ALL_PROPS  # noqa: E402
 
-PROP_VOCAB_MAP = clv_backtest.PROP_VOCAB_MAP
+PROP_VOCAB_MAP = accuracy_comparison.PROP_VOCAB_MAP
 
 #: The 15-market odds vocabulary the SIM-421 CHECK constraint enforces
 #: (migration 0022): the SIM-134 seven plus the eight the book already
@@ -99,11 +99,11 @@ def test_prop_vocab_map_keeps_batter_hits_apart_from_pitcher_hits_allowed():
 def test_trust_label_for_every_mapped_prop_and_game_market():
     """Every model prop + every game market_type has a (non-'unknown') trust tier."""
     for model_stat in PROP_VOCAB_MAP.values():
-        assert clv_backtest.trust_label(model_stat) != "unknown"
+        assert accuracy_comparison.trust_label(model_stat) != "unknown"
     for game_market in ("moneyline", "total", "runline"):
-        assert clv_backtest.trust_label(game_market) != "unknown"
+        assert accuracy_comparison.trust_label(game_market) != "unknown"
     # An unrecognized market degrades gracefully.
-    assert clv_backtest.trust_label("nonsense") == "unknown"
+    assert accuracy_comparison.trust_label("nonsense") == "unknown"
 
 
 def test_new_markets_carry_the_unvalidated_tier():
@@ -111,18 +111,18 @@ def test_new_markets_carry_the_unvalidated_tier():
     carry the ``unvalidated`` label until the accuracy comparison has read
     them. The legacy seven keep their carried-over labels."""
     for model_stat in ("1B", "2B", "3B", "R", "SB", "HRR", "OUTS", "H_ALLOWED"):
-        assert clv_backtest.trust_label(model_stat) == "unvalidated"
+        assert accuracy_comparison.trust_label(model_stat) == "unvalidated"
     for model_stat in ("H", "HR", "TB"):
-        assert clv_backtest.trust_label(model_stat) == "trustworthy"
+        assert accuracy_comparison.trust_label(model_stat) == "trustworthy"
     for model_stat in ("K", "BB", "ER", "RBI"):
-        assert clv_backtest.trust_label(model_stat) == "untrustworthy"
+        assert accuracy_comparison.trust_label(model_stat) == "untrustworthy"
 
 
 def test_every_trust_tier_has_a_sort_position():
     """The report groups rows by tier; a tier with no position would sort
     after ``unknown`` and hide a real market behind a placeholder."""
-    tiers = set(clv_backtest.MARKET_TRUST.values()) | {"unknown"}
-    assert tiers <= set(clv_backtest.TRUST_TIER_ORDER)
+    tiers = set(accuracy_comparison.MARKET_TRUST.values()) | {"unknown"}
+    assert tiers <= set(accuracy_comparison.TRUST_TIER_ORDER)
     # ``unvalidated`` sits between the labelled tiers and ``unknown``.
-    order = clv_backtest.TRUST_TIER_ORDER
+    order = accuracy_comparison.TRUST_TIER_ORDER
     assert order["untrustworthy"] < order["unvalidated"] < order["unknown"]

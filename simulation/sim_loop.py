@@ -311,7 +311,7 @@ class RunningGameTally:
     """SIM-554: what the running game's paths did in one machine's games.
 
     It counts and changes no play. The running-game census
-    (``scripts/sim554_running_game_census.py``) reads it. A pickoff counts
+    (``scripts/probes/running_game_census.py``) reads it. A pickoff counts
     where it is drawn: before the pitch in the new order, at the pre-pitch
     draw in the old one, with the count it was drawn at.
     """

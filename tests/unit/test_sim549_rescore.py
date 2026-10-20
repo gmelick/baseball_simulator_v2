@@ -1,4 +1,4 @@
-"""SIM-549 — the re-score of stored accuracy reports (``scripts/sim549_rescore_runlines.py``).
+"""SIM-549 — the re-score of stored accuracy reports (``scripts/probes/rescore_runlines.py``).
 
 The accuracy comparison used to price every closing run line as the two sides
 of one bet. The reports written before the fix are re-priced beside their
@@ -10,24 +10,12 @@ drive the pure re-score on a toy report and a toy store; no database.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-rescore = _load("sim549_rescore_runlines")
+rescore = load_script("rescore_runlines")
 bt = rescore.bt
 
 
@@ -188,7 +176,7 @@ def test_a_stamped_report_is_refused():
 
 def test_a_paired_read_is_refused():
     paired_read = {"report_a": "a.json", "report_b": "b.json", "summary": {}}
-    with pytest.raises(rescore.RescoreRefused, match="sim518_pair_accuracy"):
+    with pytest.raises(rescore.RescoreRefused, match="pair_accuracy"):
         rescore.rescore_report(paired_read, {}, source="pair.json", date="2026-09-25")
 
 
@@ -214,8 +202,8 @@ def test_a_row_without_an_away_spread_loses_its_record():
 
 
 def test_the_output_sits_beside_the_input():
-    assert rescore.output_path("scripts/sim548_accuracy_split.json") == str(
-        Path("scripts/sim548_accuracy_split.sim549.json")
+    assert rescore.output_path("results/sim548/sim548_accuracy_split.json") == str(
+        Path("results/sim548/sim548_accuracy_split.sim549.json")
     )
     assert rescore.run_line_games(_toy_report()) == {1, 2, 4, 5}
 

@@ -29,7 +29,7 @@ SIM-449 unified the BUILDER. It did not unify the park-factor RESOLUTION. Only
 three sites looked the venue factor up and put it on the GameState. The other
 five called the builder on a GameState whose ``park_run_factor`` still held the
 dataclass default 1.0, so ``SIM_PARK_FACTOR`` was inert for them. One of the five
-was ``scripts/clv_backtest.py`` -- the Closing Line Value backtest, the fund's
+was ``scripts/accuracy_comparison.py`` -- the Closing Line Value backtest, the fund's
 gold-standard metric.
 
 ``SIM_KWARG_KEYS`` could never catch this. The key ``park_run_factor`` is always
@@ -677,7 +677,7 @@ async def build_sim_kwargs(
 
     THE one entry point (SIM-452). Every production caller uses it: the four
     ``api/routes/games.py`` routes, ``api/routes/betting.py``,
-    ``scripts/clv_backtest.py`` and ``scripts/validate_props.py``.
+    ``scripts/accuracy_comparison.py`` and ``scripts/validate_props.py``.
 
     ``on_unavailable_park_factor`` picks what happens when the source cannot answer
     (SIM-453):

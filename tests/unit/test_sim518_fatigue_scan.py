@@ -1,4 +1,4 @@
-"""SIM-518 — the offline fatigue-kernel scan's arithmetic (scripts/sim518_fatigue_scan.py).
+"""SIM-518 — the offline fatigue-kernel scan's arithmetic (scripts/probes/fatigue_kernel_scan.py).
 
 Three properties pin the scan before its read is trusted:
 
@@ -23,11 +23,11 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "sim518_fatigue_scan.py")
-_spec = importlib.util.spec_from_file_location("sim518_fatigue_scan", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "probes", "fatigue_kernel_scan.py")
+_spec = importlib.util.spec_from_file_location("fatigue_kernel_scan", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
 scan = importlib.util.module_from_spec(_spec)
-sys.modules["sim518_fatigue_scan"] = scan
+sys.modules["fatigue_kernel_scan"] = scan
 _spec.loader.exec_module(scan)
 
 

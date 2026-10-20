@@ -12,10 +12,10 @@ confirmed as traffic/era effects with clean machinery.**
 
 | Script | What it measures |
 |---|---|
-| `scripts/sim429_count_diagnosis.py` | Per-count outcome rates (sim raw / sim final / pool unweighted / pool recency / MLB-2025), count visitation, walk-per-count-path. Wraps `_apply_framing` per machine. |
+| `results/sim429/sim429_count_diagnosis.py` | Per-count outcome rates (sim raw / sim final / pool unweighted / pool recency / MLB-2025), count visitation, walk-per-count-path. Wraps `_apply_framing` per machine. |
 | `scripts/sim429_chain_analysis.py` | Solves the count-machine Markov chain for each rate matrix → implied BB/PA, K/PA, pitches/PA. |
-| `scripts/sim429_ibb_probe.py` | Counts `_issue_intentional_walk` calls + box BB per iteration → sim IBB/team-game. |
-| `scripts/sim514_decomposition.py` | DP per opportunity vs the pool's per-cell rate; SB attempts per opportunity; drawn triple rate per cell. Wraps `_full_pool_fielding` + `steal_draw`. |
+| `results/sim429/sim429_ibb_probe.py` | Counts `_issue_intentional_walk` calls + box BB per iteration → sim IBB/team-game. |
+| `results/sim514/sim514_decomposition.py` | DP per opportunity vs the pool's per-cell rate; SB attempts per opportunity; drawn triple rate per cell. Wraps `_full_pool_fielding` + `steal_draw`. |
 
 Main run: 12 park-balanced games (`BALANCED_GAME_ORDER`) × 150 iters = 1,800
 sims, 539,350 pitches, 136,878 PAs. MLB-2025 reference: 2,430 regular-season
@@ -115,7 +115,7 @@ The lane's +0.3702/tg surplus decomposes: **IBB volume +0.201/tg (54%)**,
    the 2025 band centre.
 4. K-prop calibration and the CLV re-measure stay sequenced AFTER 1 (and 2 if
    taken); re-run `make calibrate` + `make validate-props` then
-   `scripts/clv_backtest.py`.
+   `scripts/accuracy_comparison.py`.
 
 ## SIM-514 — the four decompositions
 
@@ -150,7 +150,7 @@ resolutions** (every resolution used a transition row).
 
 ### 1. prev-pitch conditioning is REFUTED — do not build it
 
-`scripts/sim429_prev_chain_probe.py` solved the count machine over
+`results/sim429/sim429_prev_chain_probe.py` solved the count machine over
 (balls, strikes, PREVIOUS pitch class) on MLB-2025's own data:
 
     chain(count only)    BB/PA 0.0839   K/PA 0.2142   pitches/PA 3.931

@@ -763,7 +763,7 @@ def run_line_edge_report(
 # mis-prices each side, up or down. Each bet is then priced from its OWN price
 # over the book's margin on the same game's two-way markets. Here "margin" means a two-way market's two implied probabilities
 # added up: about 1.05, never below 1. The accuracy comparison
-# (scripts/clv_backtest.py), the /edges route and the line-movement / CLV
+# (scripts/accuracy_comparison.py), the /edges route and the line-movement / CLV
 # reads share these functions.
 
 #: The last-resort margin for a one-sided price: the league mean of the

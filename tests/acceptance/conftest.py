@@ -487,7 +487,7 @@ class AcceptanceRun:
     #: ``season``, ``iters``, the game's home runs / hits / runs summed over
     #: both teams and every iteration, and its balls in play / plate
     #: appearances (the ``pool_counts`` deltas). The certification script's
-    #: per-park read (``scripts/sim478_fence_check.py --lane``) joins it.
+    #: per-park read (``scripts/fence_check.py --lane``) joins it.
     per_game: list[dict[str, Any]] = field(default_factory=list)
     #: SIM-478: the fence stage's own counters (``FullPoolSampler.fence_counts``:
     #: over, short, band, passed, no matching rows, not an air ball), read once
@@ -795,7 +795,7 @@ def check_running_game_order(machine: Any, env: Mapping[str, str] | None = None)
             f"{src.get('SIM_STEAL_PITCH_CLASS', '1')!r} but the loop "
             f"{'does not run' if wanted else 'runs'} "
             "the running game on the pitch. Export the steal pool with its pitch "
-            "classes (scripts/sim554_rebuild_steal_pool.py), or set "
+            "classes (scripts/rebuild_steal_pool.py), or set "
             "SIM554_LANE_STEAL_PITCH_CLASS=0 to grade the single pre-pitch draw.",
             pytrace=False,
         )

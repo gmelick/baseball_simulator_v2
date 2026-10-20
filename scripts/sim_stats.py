@@ -435,7 +435,7 @@ def _fence_counter_summary(counts: Any) -> tuple[str, dict[str, Any]]:
     A five-entry array (an older sampler) has no sixth counter: the summary
     treats every short ball as an air ball and says so. Every share, the
     no-matching-rows share included, is over the air balls; the check
-    script's ``counters_read`` (``scripts/sim478_fence_check.py``) uses the
+    script's ``counters_read`` (``scripts/fence_check.py``) uses the
     same denominator, so one lane reads the same number in both.
     """
     c = [int(x) for x in (counts if counts is not None else [])]

@@ -41,7 +41,7 @@ The frontend presents live game dashboards, pre-game win probability estimates, 
 
 **Primary use case:** Player prop prediction and betting edge validation (pitcher strikeouts, batter hits/HRs, etc.) anchored to Closing Line Value as the gold-standard metric.
 
-**What works today (Phase 7, largely complete):** The simulation path is the full-pool similarity sampler (the only path since SIM-486), with calibration LIVE — the win-probability map is a fitted reliability curve, validated over 120 games (win-prob ECE 0.047; batter H/HR/TB ECE 0.02–0.05 are bet-grade; pitcher K/BB ECE ~0.22/0.21 are improved but not yet bet-grade). The manager pull/reliever decision model and the park-factor / batter-platoon / fielder-RBF realism nudges are enabled in production. The full Closing Line Value pipeline runs end-to-end: a full 2024 season of real BettingPros opening + closing odds (2,378 games, game line + 7 props) is backfilled, and the CLV scoreboard (`scripts/clv_backtest.py`) measures beat-close rate — the gold-standard harness works (first 120-game result ≈ 49% beat-close, i.e. no demonstrable edge yet; the model still needs further calibration / run-conversion work to develop one).
+**What works today (Phase 7, largely complete):** The simulation path is the full-pool similarity sampler (the only path since SIM-486), with calibration LIVE — the win-probability map is a fitted reliability curve, validated over 120 games (win-prob ECE 0.047; batter H/HR/TB ECE 0.02–0.05 are bet-grade; pitcher K/BB ECE ~0.22/0.21 are improved but not yet bet-grade). The manager pull/reliever decision model and the park-factor / batter-platoon / fielder-RBF realism nudges are enabled in production. The full Closing Line Value pipeline runs end-to-end: a full 2024 season of real BettingPros opening + closing odds (2,378 games, game line + 7 props) is backfilled, and the CLV scoreboard (`scripts/accuracy_comparison.py`) measures beat-close rate — the gold-standard harness works (first 120-game result ≈ 49% beat-close, i.e. no demonstrable edge yet; the model still needs further calibration / run-conversion work to develop one).
 
 ---
 
@@ -194,7 +194,7 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 
 **Simulation results include:** `home_win_pct`, `away_win_pct`, `avg_home_score`, `avg_away_score`, score distribution histogram, and per-player projected stats across all iterations.
 
-**Betting / CLV surface:** the `/api/betting/...` routes expose per-market edge reports and +EV signals; `betting/clv_engine.py` computes implied / de-vig / edge / EV / CLV, and `scripts/clv_backtest.py` runs the season-scale beat-close scoreboard against backfilled opening + closing odds.
+**Betting / CLV surface:** the `/api/betting/...` routes expose per-market edge reports and +EV signals; `betting/clv_engine.py` computes implied / de-vig / edge / EV / CLV, and `scripts/accuracy_comparison.py` runs the season-scale beat-close scoreboard against backfilled opening + closing odds.
 
 ---
 
@@ -262,7 +262,7 @@ The platform is organized into 7 sequential phases across ~24 weeks:
 | **6** | Frontend Build | Day Summary + Game pages, all UI components | 6 weeks | ✅ Complete |
 | **7** | Integration, Testing & Deployment | Production-ready deployed system | 3 weeks | 🔄 Largely complete |
 
-**Phase 7 status:** Live bring-up done on Python 3.13 / numpy 2.x. Calibration is LIVE (the win-prob map is a fitted reliability curve). The production sim path is the full-pool sampler with the manager-decision and park/platoon/fielder realism models enabled and validated. The CLV pipeline is complete and measured end-to-end (full 2024 odds backfilled; `scripts/clv_backtest.py` produces the beat-close scoreboard). Remaining: developing a demonstrable betting edge (granular run-conversion / prop calibration) and the `/simulate` per-game-cost target for the 30 s batch SLA.
+**Phase 7 status:** Live bring-up done on Python 3.13 / numpy 2.x. Calibration is LIVE (the win-prob map is a fitted reliability curve). The production sim path is the full-pool sampler with the manager-decision and park/platoon/fielder realism models enabled and validated. The CLV pipeline is complete and measured end-to-end (full 2024 odds backfilled; `scripts/accuracy_comparison.py` produces the beat-close scoreboard). Remaining: developing a demonstrable betting edge (granular run-conversion / prop calibration) and the `/simulate` per-game-cost target for the 30 s batch SLA.
 
 ### Validation Framework
 - Backtesting on held-out historical data: MAE on simulated prop distributions, calibration curves (ECE), Brier Score, log-loss
@@ -325,7 +325,7 @@ make validate-props        # add --write-calibration to fit the win-prob reliabi
 
 # Backfill historical odds, then run the Closing Line Value scoreboard
 python scripts/load_historical_odds.py --seasons 2024
-python scripts/clv_backtest.py --seasons 2024 --workers 6 --iterations 100
+python scripts/accuracy_comparison.py --seasons 2024 --workers 6 --iterations 100
 ```
 
 ### Running Simulations

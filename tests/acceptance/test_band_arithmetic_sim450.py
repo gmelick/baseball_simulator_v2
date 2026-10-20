@@ -214,7 +214,7 @@ def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
     elsewhere in the file cannot break it.
 
     ``scripts/`` is baked into the app image and is NOT bind-mounted, so a
-    container run without ``-v "$PWD/scripts:/app/scripts"`` reads whatever
+    container run without ``-v "$PWD:/app"`` reads whatever
     ``scripts/sim_stats.py`` looked like when the image was last built. A red here
     therefore has TWO possible causes, and ``_STALE_IMAGE_HINT`` names both.
     """

@@ -2,7 +2,7 @@
 tests/unit/test_sim539_minimum_sample_size.py
 ================================================
 Unit tests for SIM-539 — the stated MINIMUM SAMPLE SIZE for the reports in
-``scripts/clv_backtest.py`` that need one: the sim-vs-closing-line accuracy
+``scripts/accuracy_comparison.py`` that need one: the sim-vs-closing-line accuracy
 comparison (SIM-538) and the hypothetical dollar return (SIM-540).
 
 What SIM-539 adds, in plain words: a small sample can look like real skill
@@ -27,7 +27,7 @@ SIM-541 (2026-09-11): this file used to also test SIM-539's wiring into the
 SIM-429 CLV scoreboard (``_row_for`` / ``aggregate_scoreboard`` /
 ``format_scoreboard``). The owner retired that report — the platform no
 longer measures the entry-to-close line move at all — and its code was
-deleted from ``scripts/clv_backtest.py``; those tests are deleted with it.
+deleted from ``scripts/accuracy_comparison.py``; those tests are deleted with it.
 
 These tests run with NO DB and NO real sim: every function under test here
 is PURE. See ``tests/unit/test_sim538_accuracy_comparison.py`` for the
@@ -50,27 +50,27 @@ from scipy.stats import norm
 # resolve the module's namespace (dataclasses looks the module up by name).
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "clv_backtest.py")
-_spec = importlib.util.spec_from_file_location("clv_backtest", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
+_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
-clv_backtest = importlib.util.module_from_spec(_spec)
-sys.modules["clv_backtest"] = clv_backtest
-_spec.loader.exec_module(clv_backtest)
+accuracy_comparison = importlib.util.module_from_spec(_spec)
+sys.modules["accuracy_comparison"] = accuracy_comparison
+_spec.loader.exec_module(accuracy_comparison)
 
-AccuracyRecord = clv_backtest.AccuracyRecord
-_bonferroni_alpha = clv_backtest._bonferroni_alpha
-_z_two_sided = clv_backtest._z_two_sided
-_minimum_paired_observations = clv_backtest._minimum_paired_observations
-_minimum_observations_clustered = clv_backtest._minimum_observations_clustered
-_clustered_se = clv_backtest._clustered_se
-_json_safe = clv_backtest._json_safe
-_accuracy_row_for = clv_backtest._accuracy_row_for
-aggregate_accuracy_comparison = clv_backtest.aggregate_accuracy_comparison
-format_accuracy_comparison = clv_backtest.format_accuracy_comparison
-MIN_DETECTABLE_EDGE = clv_backtest.MIN_DETECTABLE_EDGE
-DETECTION_MARGIN = clv_backtest.DETECTION_MARGIN
-DEFAULT_ALPHA = clv_backtest.DEFAULT_ALPHA
-MIN_CLUSTERS_FOR_INFERENCE = clv_backtest.MIN_CLUSTERS_FOR_INFERENCE
+AccuracyRecord = accuracy_comparison.AccuracyRecord
+_bonferroni_alpha = accuracy_comparison._bonferroni_alpha
+_z_two_sided = accuracy_comparison._z_two_sided
+_minimum_paired_observations = accuracy_comparison._minimum_paired_observations
+_minimum_observations_clustered = accuracy_comparison._minimum_observations_clustered
+_clustered_se = accuracy_comparison._clustered_se
+_json_safe = accuracy_comparison._json_safe
+_accuracy_row_for = accuracy_comparison._accuracy_row_for
+aggregate_accuracy_comparison = accuracy_comparison.aggregate_accuracy_comparison
+format_accuracy_comparison = accuracy_comparison.format_accuracy_comparison
+MIN_DETECTABLE_EDGE = accuracy_comparison.MIN_DETECTABLE_EDGE
+DETECTION_MARGIN = accuracy_comparison.DETECTION_MARGIN
+DEFAULT_ALPHA = accuracy_comparison.DEFAULT_ALPHA
+MIN_CLUSTERS_FOR_INFERENCE = accuracy_comparison.MIN_CLUSTERS_FOR_INFERENCE
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +557,7 @@ def test_accuracy_row_for_to_jsonable_is_valid_json_even_when_underpowered():
 
 
 def test_detection_margin_matches_bands_py():
-    """clv_backtest.py re-declares DETECTION_MARGIN rather than importing it
+    """accuracy_comparison.py re-declares DETECTION_MARGIN rather than importing it
     (tests/ and scripts/ are separate deployables), so nothing else keeps
     the two in sync. An adversarial review of SIM-539 confirmed no test
     enforced this; this one does, so a future change to either constant

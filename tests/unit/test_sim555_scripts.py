@@ -1,13 +1,13 @@
 """SIM-555 — the five scripts of the one-row-per-book re-load (Partition E).
 
-* ``scripts/sim555_book_sharpness.py``: the odds-against-outcome read that ranks
+* ``scripts/probes/book_sharpness.py``: the odds-against-outcome read that ranks
   the books (plan test 17), on a synthetic season;
-* ``scripts/sim555_retire_consensus_rows.py``: the refusal, the dry run and the
+* ``scripts/probes/retire_consensus_odds.py``: the refusal, the dry run and the
   archive-then-delete, on a stub connection (never a real database);
-* ``scripts/sim555_rescore_reports.py``: the re-pricing of a tiny fake report;
-* ``scripts/sim555_book_probe.py``: the sample, the gate math on synthetic rows,
+* ``scripts/probes/rescore_graded_book.py``: the re-pricing of a tiny fake report;
+* ``scripts/probes/odds_book_census.py``: the sample, the gate math on synthetic rows,
   and one game read through the provider with a stubbed vendor;
-* ``scripts/sim555_odds_census.sql``: read-only, and its literals in step with
+* ``scripts/probes/odds_census.sql``: read-only, and its literals in step with
   the book vocabulary.
 
 No test touches the network or a database.
@@ -16,18 +16,16 @@ No test touches the network or a database.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import re
-import sys
 import urllib.parse
 from collections import Counter
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+from tests.script_loader import PROBES, load_script
 
 from betting.clv_engine import devig_multiway, devig_two_way, implied_prob_from_american
 from pipeline.bettingpros_odds_provider import (
@@ -51,21 +49,10 @@ from pipeline.odds_row_guard import (
     THREE_WAY_TEAM_SUM_MAX,
 )
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-sharp = _load("sim555_book_sharpness")
-retire = _load("sim555_retire_consensus_rows")
-rescore = _load("sim555_rescore_reports")
-probe = _load("sim555_book_probe")
+sharp = load_script("book_sharpness")
+retire = load_script("retire_consensus_odds")
+rescore = load_script("rescore_graded_book")
+probe = load_script("odds_book_census")
 
 
 def _american(q: float) -> int:
@@ -81,7 +68,7 @@ def _american(q: float) -> int:
 
 
 class TestCensusSql:
-    SQL = (_SCRIPTS / "sim555_odds_census.sql").read_text(encoding="utf-8")
+    SQL = (PROBES / "odds_census.sql").read_text(encoding="utf-8")
 
     def _statements(self) -> str:
         """The SQL without its comments and psql meta-commands."""

@@ -59,7 +59,7 @@ SIMILARITY_MD = REPO / "docs" / "technical" / "similarity.md"
 CHEAT_SHEET_MD = REPO / "docs" / "technical" / "sim-loop-cheat-sheet.md"
 DUCKDB_SCHEMA = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 POSTGRES_SCHEMA = REPO / "db" / "schemas" / "01_postgres_schema.sql"
-PROBE = REPO / "scripts" / "sim533_arm_angle_probe.py"
+PROBE = REPO / "scripts" / "probes" / "arm_angle_probe.py"
 PLAN_PATH = "docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md"
 
 #: The eight arsenal dimensions. The release point is the last three.
@@ -105,7 +105,7 @@ PITCHER_HEADING = "### `similarity/engines/pitcher_similarity.py`"
 @pytest.fixture(scope="module")
 def probe() -> ModuleType:
     """The probe script loaded as a module (``scripts/`` is not a package)."""
-    spec = importlib.util.spec_from_file_location("sim533_arm_angle_probe", PROBE)
+    spec = importlib.util.spec_from_file_location("arm_angle_probe", PROBE)
     assert spec is not None and spec.loader is not None, f"cannot load {PROBE}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

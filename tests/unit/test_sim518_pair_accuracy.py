@@ -1,4 +1,4 @@
-"""SIM-518 — pairing two accuracy-comparison reports (scripts/sim518_pair_accuracy.py).
+"""SIM-518 — pairing two accuracy-comparison reports (scripts/pair_accuracy.py).
 
 Pins three things: a report pair whose bundle, calibration file, seed or
 game list differs is refused; records pair on the full (game, market,
@@ -19,11 +19,11 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "sim518_pair_accuracy.py")
-_spec = importlib.util.spec_from_file_location("sim518_pair_accuracy", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "pair_accuracy.py")
+_spec = importlib.util.spec_from_file_location("pair_accuracy", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
 pair = importlib.util.module_from_spec(_spec)
-sys.modules["sim518_pair_accuracy"] = pair
+sys.modules["pair_accuracy"] = pair
 _spec.loader.exec_module(pair)
 
 

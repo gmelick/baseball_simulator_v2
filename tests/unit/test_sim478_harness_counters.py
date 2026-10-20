@@ -7,7 +7,7 @@ Three pure functions, no live data:
   the JSON record) on a six-entry and a five-entry counter array,
   ``_fence_d_read`` (the §7 D thresholds), and ``_margin_counter_summary``
   (the wall-margin band's line and record, the plan's §12.7).
-* ``scripts/sim478_wall_zone_probe.py`` ``wall_zone_shares`` / ``verdict_lines``
+* ``scripts/probes/wall_zone_probe.py`` ``wall_zone_shares`` / ``verdict_lines``
   (the shares, their standard errors and the PASS / FAIL rule) on hand-made
   tallies.
 * ``tests/acceptance/conftest.py`` ``_lane_json`` on a hand-made
@@ -16,27 +16,15 @@ Three pure functions, no live data:
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
-import sys
 from pathlib import Path
 
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-sim_stats = _load("sim_stats")
-probe = _load("sim478_wall_zone_probe")
+sim_stats = load_script("sim_stats")
+probe = load_script("wall_zone_probe")
 
 
 # ---------------------------------------------------------------------------

@@ -18,26 +18,12 @@ SIM-548 — the calibration layer's fit and the composite objective, after the
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-calib = _load("sim548_calibrate_markets")
-skill = _load("sim548_market_skill")
+calib = load_script("calibrate_markets")
+skill = load_script("market_skill")
 
 
 # ---------------------------------------------------------------------------

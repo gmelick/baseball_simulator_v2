@@ -23,7 +23,7 @@ def _load_harness():
         sys.path.insert(0, str(REPO_ROOT))
     spec = importlib.util.spec_from_file_location(
         "run_index_acceptance",
-        REPO_ROOT / "scripts" / "run_index_acceptance.py",
+        REPO_ROOT / "scripts" / "probes" / "run_index_acceptance.py",
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

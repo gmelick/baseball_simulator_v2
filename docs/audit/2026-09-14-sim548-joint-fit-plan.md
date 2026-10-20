@@ -52,7 +52,7 @@ the search).
   from a finished probability to a calibrated probability is not a play adjustment. The
   win-probability reliability curve already is one. This plan extends that layer to the prop and
   segment markets (§7). It never touches a simulated event.
-- **The grade for a weight is the accuracy comparison** (`scripts/clv_backtest.py`: the
+- **The grade for a weight is the accuracy comparison** (`scripts/accuracy_comparison.py`: the
   simulator's probability and the closing line's against what happened, per record; the Brier
   score, the squared gap between a probability and the 0/1 outcome, lower is better; paired
   between two arms on the same games and seeds, with a game-clustered bootstrap range). The
@@ -109,12 +109,12 @@ million prop rows); 2019–2020 the three full-game markets only (the book has n
 markets that far back). The 2025 season carries 2,440 games with a closing strikeout line — the
 hold-out set exists. The loads are finished; nothing writes to the odds tables now.
 
-**The instruments in hand.** `scripts/clv_backtest.py` (the comparison; stamps the bundle, the
+**The instruments in hand.** `scripts/accuracy_comparison.py` (the comparison; stamps the bundle, the
 calibration hash, the fatigue, manager and split settings into each report),
-`scripts/sim518_pair_accuracy.py` (pairs two reports; the per-market table with ranges; the
+`scripts/pair_accuracy.py` (pairs two reports; the per-market table with ranges; the
 pitch-depth strata), the runner scripts for the arms (`sim427_accuracy_pair.sh`,
-`sim518_accuracy_fatigue.sh`, `sim548_accuracy_split.sh`), the in-loop probes
-(`sim427_manager_probe.py`, `sim518_fatigue_probe.py`) and the offline scans of the redesign
+`sim518_accuracy_fatigue.sh`, `accuracy_split_arm.sh`), the in-loop probes
+(`manager_probe.py`, `fatigue_probe.py`) and the offline scans of the redesign
 (`sim523_power_scan.py`, `sim523_kernel_scan.py`), which already compute a draw's weights from
 the pool without running games.
 
@@ -235,7 +235,7 @@ shows interacting. The rest keep their values and are re-read only when their ne
 
 ## 5. The instruments
 
-### 5.1 The market skill table — `scripts/sim548_market_skill.py` (half a day)
+### 5.1 The market skill table — `scripts/market_skill.py` (half a day)
 
 Extends the pairing script's read. Per market, per arm: the Brier score, the market's, the coin
 flip's; the skill (coin flip minus arm); the bias (mean probability minus outcome rate); the
@@ -245,7 +245,7 @@ rate in six bins). Plus the composite Z of §3 with its bootstrap range, and the
 Reads two or more reports and prints one table; writes JSON. The reads above (§2) were computed
 by hand from the paired records; this script makes them a one-line command.
 
-### 5.2 The offline joint fit — `scripts/sim548_offline_fit.py` (the core; about a week for all five draws, the pitch draws in two days)
+### 5.2 The offline joint fit — `scripts/offline_draw_fit.py` (the core; about a week for all five draws, the pitch draws in two days)
 
 **The idea.** Replay real plays one at a time through the simulator's own draw machinery — the
 same code, the same cells, the same widening, the same weights — without playing games. For each
@@ -298,10 +298,10 @@ of the top three. Per draw, one JSON and one text report.
 manager's decisions in sequence, the runners' state, the iteration noise of a 100-game-sim
 probability. The offline score ranks candidates; the full simulator confirms them.
 
-### 5.3 The designed experiment runner — `scripts/sim548_design.py` (one day)
+### 5.3 The designed experiment runner — `scripts/designed_experiment.py` (one day)
 
 Takes a list of arms (each a dict of environment settings), a game set, the iteration count and
-the worker count; runs each arm through `scripts/clv_backtest.py` in sequence inside one
+the worker count; runs each arm through `scripts/accuracy_comparison.py` in sequence inside one
 container (the app down, or a larger VM); pairs every arm against the design's baseline arm;
 computes the per-market reads and the composite; fits a quadratic response surface (main
 effects, two-way interactions, curvature) per market and for the composite, with bootstrap
@@ -309,7 +309,7 @@ ranges on every coefficient; prints the interaction terms that clear their range
 (an arm whose report exists is skipped). Writes the design, the reports, the fitted surface and
 a one-page summary.
 
-### 5.4 The calibration-layer fitter — `scripts/sim548_calibrate_markets.py` (§7; one day)
+### 5.4 The calibration-layer fitter — `scripts/calibrate_markets.py` (§7; one day)
 
 Fits the per-market probability map on one season's paired records, validates it on another,
 writes it into `/data/calibration.json` beside the win-probability curve, and reports the
@@ -322,7 +322,7 @@ before/after Brier, bias and reliability per market.
 ### 6.1 Phase 1 — the screen (one day of probes, in parallel with the build)
 
 For each weight in §4, one probe arm at the extreme of its search range against production (45
-games × 40 iterations, 35 minutes; `sim427_manager_probe.py`'s prediction-shift read): does it
+games × 40 iterations, 35 minutes; `manager_probe.py`'s prediction-shift read): does it
 move any market probability at all? A weight that moves nothing (the fatigue weight's +0.000 ±
 0.012 was such a read) is recorded and dropped from the search. The screen also reads the
 effective-sample share at the extreme (the starvation guard; a share under 0.1 caps the range).
@@ -539,8 +539,8 @@ About three weeks elapsed, of which nine to twelve days are unattended compute.
   longer need the app down; decision 6 is moot. The 1,000-game baseline of production
   (`CHANGES.md` 2026-09-15) is the starting table for §3.
 - **§5.1 built 2026-09-14, §5.4 / §5.2 (the pitch draws) / §5.3 built 2026-09-15**
-  (`scripts/sim548_market_skill.py`, `sim548_calibrate_markets.py`, `sim548_offline_fit.py`,
-  `sim548_design.py`; `tests/unit/test_sim548_instruments.py`). `FullPoolSampler.result_weights`
+  (`scripts/market_skill.py`, `calibrate_markets.py`, `offline_draw_fit.py`,
+  `designed_experiment.py`; `tests/unit/test_sim548_instruments.py`). `FullPoolSampler.result_weights`
   factored out for the fidelity rule. The backtest records `sim_prob_raw` on the moneyline.
 - **The calibration layer, first read (§7; fitted on games 1–500 of 2024, read on 501–1000):**
   the strikeout map (a +0.08, b 0.15) takes the market from 0.0183 behind the line to level
@@ -572,7 +572,7 @@ About three weeks elapsed, of which nine to twelve days are unattended compute.
   against 0.862 at 16 / 8; fatigue off 0.797 against 0.819), the best batter value the same at
   every pitcher value, the costs compounding. The v2 run adds the levels that decide.
 - **2026-09-16 02:20 UTC — Phase 2 read (the offline fit v2, the pitch draws;
-  `scripts/sim548_offline_v2_20260915.{txt,json}`).** 120 starts of 2024 (10,578 pitches, 2,644
+  `results/sim548/sim548_offline_v2_20260915.{txt,json}`).** 120 starts of 2024 (10,578 pitches, 2,644
   plate appearances, 89 pitchers), 78 settings, every one replayed through the production
   sampler. Three levels, three answers:
   1. *Per pitch and per plate appearance, flatter wins everywhere.* The pitch draw's 6-outcome
@@ -612,21 +612,21 @@ About three weeks elapsed, of which nine to twelve days are unattended compute.
   (`--profile-season 2023`) follow the design, when the memory is free.
 - **2026-09-16 04:42 UTC — PAUSED by owner decision.** The owner runs this fit once the model
   is in its final state and works on other tickets first. The design container was stopped at
-  run 3 of 21 (runs 1 and 2 are complete and kept: `scripts/sim548_design_20260915/run01.json`,
+  run 3 of 21 (runs 1 and 2 are complete and kept: `results/sim548/sim548_design_20260915/run01.json`,
   `run02.json`; the partial run 3 is discarded). The app is back up (04:44 UTC, healthy;
   calibration applied, the reliability curve present). Everything committed (`5f6a0ef`).
   **State preserved for the resume:** the bundle is unchanged since the two finished runs
   (`bundle_provenance` in each report carries its file times — a resume must compare them);
   the offline fit's checkpoint (`sim548_offline_v2_20260915.npz`) and its read (§11 above);
   the calibration-layer read; the 1,000-game production baseline
-  (`scripts/sim548_baseline_1000_skill.txt`); the fresh design game set
-  (`scripts/sim548_games_2024_design.txt`, games 1001–1250 — unseen by every fit so far;
+  (`docs/audit/records/sim548_baseline_1000_skill.txt`); the fresh design game set
+  (`scripts/data/games_2024_design.txt`, games 1001–1250 — unseen by every fit so far;
   keep it unseen).
   **The resume order (decided 2026-09-16 with the owner's pool-window question):**
   1. The pool-window test first (about one day): export a second bundle with a ten-season
      window beside the current one (`last_n_seasons(n=10)` in `engine_artifacts.py`; the
      pool tables hold all ten seasons; the actor matrices must cover the added
-     pitcher-seasons); rerun `sim548_offline_fit.py` on the same 120 starts against both
+     pitcher-seasons); rerun `offline_draw_fit.py` on the same 120 starts against both
      bundles across the pitcher-power ladder; add the row-age read (at equal similarity, do
      the 2017–2019 rows predict 2024 pitches worse than the 2023 rows?). The recency decay
      (2.0 / ×0.75 per season / floor 0.25, `player_profile_computor.recency_weight`, set by
@@ -634,7 +634,7 @@ About three weeks elapsed, of which nine to twelve days are unattended compute.
      Reason: the accuracy comparison's leak guard leaves a 2024 game about 1.4 seasons of
      rows against live production's 3.7, so the starvation read is worse than live; a wider
      window also moves the best powers up, which changes what the design should run on.
-  2. Then the design on the chosen pool (`scripts/sim548_design_run.sh`; if the pool is
+  2. Then the design on the chosen pool (`scripts/designed_experiment_run.sh`; if the pool is
      unchanged, runs 1–2 stand and the script skips them; if it changed, delete the folder
      and start clean — never mix bundles in one design).
   3. Then the rest of §6 unchanged: the analysis, the split-OFF pair, the pool-totals lane,

@@ -3,7 +3,7 @@ tests/unit/test_sim540_hypothetical_return.py
 ================================================
 Unit tests for SIM-540 — the hypothetical dollar return, an OPT-IN
 companion report to the SIM-538 accuracy comparison in
-``scripts/clv_backtest.py``.
+``scripts/accuracy_comparison.py``.
 
 What SIM-540 does, in plain words: an accuracy score (Brier, log loss) is
 the right instrument for the team but a hard one for a non-technical reader
@@ -39,29 +39,29 @@ import pytest
 # resolve the module's namespace (dataclasses looks the module up by name).
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "clv_backtest.py")
-_spec = importlib.util.spec_from_file_location("clv_backtest", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
+_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
-clv_backtest = importlib.util.module_from_spec(_spec)
-sys.modules["clv_backtest"] = clv_backtest
-_spec.loader.exec_module(clv_backtest)
+accuracy_comparison = importlib.util.module_from_spec(_spec)
+sys.modules["accuracy_comparison"] = accuracy_comparison
+_spec.loader.exec_module(accuracy_comparison)
 
-AccuracyRecord = clv_backtest.AccuracyRecord
-ReturnRecord = clv_backtest.ReturnRecord
-_favored_side_prob_and_price = clv_backtest._favored_side_prob_and_price
-score_hypothetical_return = clv_backtest.score_hypothetical_return
-_bootstrap_mean_ci = clv_backtest._bootstrap_mean_ci
-_bootstrap_paired_diff_ci = clv_backtest._bootstrap_paired_diff_ci
-_minimum_observations_clustered = clv_backtest._minimum_observations_clustered
-_bonferroni_alpha = clv_backtest._bonferroni_alpha
-_return_row_for = clv_backtest._return_row_for
-aggregate_hypothetical_return = clv_backtest.aggregate_hypothetical_return
-format_hypothetical_return = clv_backtest.format_hypothetical_return
-DEFAULT_RETURN_EDGE_THRESHOLD = clv_backtest.DEFAULT_RETURN_EDGE_THRESHOLD
-MIN_DETECTABLE_EDGE = clv_backtest.MIN_DETECTABLE_EDGE
-DETECTION_MARGIN = clv_backtest.DETECTION_MARGIN
-DEFAULT_ALPHA = clv_backtest.DEFAULT_ALPHA
-parse_args = clv_backtest.parse_args
+AccuracyRecord = accuracy_comparison.AccuracyRecord
+ReturnRecord = accuracy_comparison.ReturnRecord
+_favored_side_prob_and_price = accuracy_comparison._favored_side_prob_and_price
+score_hypothetical_return = accuracy_comparison.score_hypothetical_return
+_bootstrap_mean_ci = accuracy_comparison._bootstrap_mean_ci
+_bootstrap_paired_diff_ci = accuracy_comparison._bootstrap_paired_diff_ci
+_minimum_observations_clustered = accuracy_comparison._minimum_observations_clustered
+_bonferroni_alpha = accuracy_comparison._bonferroni_alpha
+_return_row_for = accuracy_comparison._return_row_for
+aggregate_hypothetical_return = accuracy_comparison.aggregate_hypothetical_return
+format_hypothetical_return = accuracy_comparison.format_hypothetical_return
+DEFAULT_RETURN_EDGE_THRESHOLD = accuracy_comparison.DEFAULT_RETURN_EDGE_THRESHOLD
+MIN_DETECTABLE_EDGE = accuracy_comparison.MIN_DETECTABLE_EDGE
+DETECTION_MARGIN = accuracy_comparison.DETECTION_MARGIN
+DEFAULT_ALPHA = accuracy_comparison.DEFAULT_ALPHA
+parse_args = accuracy_comparison.parse_args
 
 
 def _rec(

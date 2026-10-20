@@ -96,7 +96,7 @@ WHO USES IT
 ===========
   * ``scripts/pool_window_census.py`` — the census that sets the band centres
     in ``tests/acceptance/bands.py`` prints the label check per window.
-  * ``scripts/sim553_rebuild_pitch_pool.py`` — the pool rebuild stops before
+  * ``scripts/rebuild_pitch_pool.py`` — the pool rebuild stops before
     the export when the check fails.
   * ``tests/acceptance/test_sim553_pool_label_check.py`` — the standing test.
 

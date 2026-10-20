@@ -3507,7 +3507,7 @@ class FullPoolSampler:
         ``(pool, rows, w)`` — or None when the pool or the cell is absent.
 
         The one code path :meth:`steal_draw` and :meth:`pickoff_draw` sample
-        from and the running-game replay (``scripts/sim554_running_game_replay.py``)
+        from and the running-game replay (``scripts/running_game_replay.py``)
         reads whole, so they cannot disagree. It consumes no random number.
         ``rows`` names the candidate rows (the pickoff draw's count group, the
         steal draw's class group); None = the (outs, balls, strikes) group of

@@ -30,7 +30,7 @@ def _load_script_module():
         sys.path.insert(0, str(REPO_ROOT))
     spec = importlib.util.spec_from_file_location(
         "backfill_odds_hash",
-        REPO_ROOT / "scripts" / "backfill_odds_hash.py",
+        REPO_ROOT / "scripts" / "probes" / "backfill_odds_hash.py",
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

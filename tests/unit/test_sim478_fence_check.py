@@ -1,5 +1,5 @@
 """SIM-478/479/480 — the fence certification script's metrics on fixtures
-with KNOWN answers (``scripts/sim478_fence_check.py``).
+with KNOWN answers (``scripts/fence_check.py``).
 
 No DuckDB, no Postgres, no network: the pure functions take numpy arrays
 and a geometry document. The 200-ball fixture (20 home runs, 180 kept
@@ -21,7 +21,7 @@ for _p in (str(_ROOT), str(_ROOT / "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import sim478_fence_check as fc  # noqa: E402
+import fence_check as fc  # noqa: E402
 
 from pipeline.batch.engine_artifacts import PARK_N_SECTORS, PARK_SPRAY_MIN  # noqa: E402
 
@@ -709,7 +709,7 @@ def test_run_check_and_verdicts_carry_a7(transfer_balls):
 
 
 class _Rates:
-    """A stand-in for ``sim523_game_set.PoolRates``: per (actor, season) the
+    """A stand-in for ``balanced_game_set.PoolRates``: per (actor, season) the
     rate and the balls-in-play count."""
 
     def __init__(self, batters: dict[int, tuple[float, float]], pitchers: dict):

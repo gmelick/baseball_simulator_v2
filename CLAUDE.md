@@ -67,7 +67,7 @@ standing owner rulings that govern all new work:
   on the small ones. Per change, the gates are cheap: the unit and regression lanes, and a
   short sim smoke of the affected channels (`scripts/sim_stats.py`, ten games) to catch a
   collapse. The weights are fitted TOGETHER, once, when the owner calls the model final:
-  one designed experiment over every factor (`scripts/sim548_design.py` — each arm flips
+  one designed experiment over every factor (`scripts/designed_experiment.py` — each arm flips
   several factors, so 16–20 arms read every factor's effect and the pairwise interactions;
   about three days of unattended compute). "OFF until its weight lands" now means OFF
   until its best-known default exists, not OFF until a paired read confirms it.
@@ -95,7 +95,7 @@ standing owner rulings that govern all new work:
 - **The balanced certifying set (owner ruling 2026-09-09):** the lane grades on 45 games
   from three full-day slates (every team three times), chosen so every graded channel's
   actor-matched expectation sits within 0.6% of the pool's totals
-  (`scripts/sim523_game_set.py`; the park factors and the prefix order in
+  (`scripts/balanced_game_set.py`; the park factors and the prefix order in
   `tests/acceptance/bands.py`); the default lane is 45 × 130 = 5,850 game-sims. It replaces
   the fixed 12-game set and absorbs the date-range lane (SIM-497a/b).
 - **One in-play path (SIM-486, 2026-09-06):** the per-tile FAISS fallback, the injected
@@ -119,7 +119,7 @@ standing owner rulings that govern all new work:
   third −17.9%**; the other twelve pass (home runs +1.2%). Those four are the state of
   production after the flips since 2026-09-09, unread until this lane. **The 2026-09-22
   lane (the fence amendments: the carry offset, the class ruler, the wall-margin band —
-  `scripts/sim478_lane.txt`) reads the same four red plus doubles per ball in play +5.8%**:
+  `docs/audit/records/sim478_lane.txt`) reads the same four red plus doubles per ball in play +5.8%**:
   the wall play is now right (near-wall balls draw doubles as the real ones do) and the
   fix unmasked an over-production of doubles on ordinary air balls that the born kernel's
   bandwidth owns (the sweep's); singles, hits, runs and home runs pass.
@@ -173,7 +173,7 @@ standing owner rulings that govern all new work:
   bundle) and `StealPool.is_pickoff_row` marks the pickoff rows. `RunningGameTally` (`machine.running_game_tally`) counts the pickoffs, the
   no-pitch third outs, the voided steals and the dropped-third-strike advances; it changes
   no play. **The run book RAN 2026-10-03** (the app stopped; the writer lock is SIM-524's):
-  `scripts/sim554_rebuild_steal_pool.py --apply-migration` applied 0031 inside its one
+  `scripts/rebuild_steal_pool.py --apply-migration` applied 0031 inside its one
   transaction, wrote the 394 pickoff rows (91 / 108 / 95 / 100 for 2023-2026) and passed
   every check; the export round-tripped row for row. The census (both arms, 45 × 20,
   `CHANGES.md` 2026-10-03) moved the steals' share on a foul, a ball in play or a
@@ -230,7 +230,7 @@ feature `SIM_BB_BORN_PER_FEATURE`), the batter matrix
 since 2026-09-22 the born ball's carry is read in the LIVE park's air through the
 document's per-park carry offsets, `SIM_CARRY_OFFSET` — Coors +21 ft — and a wall-zone air
 ball called short draws only rows within `SIM_BB_MARGIN_BAND` 15 ft of the same distance from
-THEIR park's fence; certified by `scripts/sim478_fence_check.py`, A1–A7, which runs in the
+THEIR park's fence; certified by `scripts/fence_check.py`, A1–A7, which runs in the
 run book of every geometry rebuild). The pitch draw runs one draw per pitch at pitcher
 power 1 through the cell index (`SIM_PITCH_CELL_INDEX`). The pitch /
 pitch-result split (`SIM_PITCH_RESULT_SPLIT`; fitted at pitcher 16 / 16, batter 8; it reds
@@ -246,7 +246,7 @@ batted-ball pool (builder sim523g.1; the chain FACTOR is a follow-on), the catch
 without its got-away columns, the SIM-469 rebuild. The grade: the balanced 45-game set at
 45 × 130 (two lanes 2026-09-09, `CHANGES.md` 2026-09-09) — the certified arm is green on
 every pool band, runs +0.1% (with the fence stage inert; the 2026-09-21 lane with the stage
-active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade bullet).
+active, `docs/audit/records/sim478_lane.txt`, reads four bands red — see the §2b grade bullet).
 
 - **The eight unpriced prop markets + the official box-score ground truth (SIM-421 + SIM-545,
   BOTH CLOSED 2026-09-12 — owner decision; the wrong-game odds match, SIM-536, closed with
@@ -319,8 +319,8 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   [−0.0255, −0.0066]; the moneyline −0.0062; the totals flat; every batter prop within
   ±0.0011). The fatigue composition read the fatigue plan flagged is repaired by the draw
   (the pitch share by band / times through sits on the pool's). Instruments:
-  `scripts/sim427_manager_probe.py`, `scripts/sim427_pen_check.py`,
-  `scripts/sim518_pair_accuracy.py` (the paired accuracy comparison). Two traps found on
+  `scripts/probes/manager_probe.py`, `scripts/probes/bullpen_check.py`,
+  `scripts/pair_accuracy.py` (the paired accuracy comparison). Two traps found on
   the way: `make calibrate` DROPS the win-probability reliability curve from
   `/data/calibration.json` (write it back from `/data/prop_validation.json` through
   `write_reliability_curve_to_calibration_report`, or the app boots uncalibrated); the
@@ -371,7 +371,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   catcher; the balanced set has 29 defective team-games in 90; the box-score table carries the
   same last-position value and keeps it (the official box shows it). The loader now stores
   `allPositions[0]` (a two-way starter who pitches and bats as the designated hitter is 'P');
-  `scripts/sim559_backfill_start_positions.py` repaired the loaded games (one UPDATE per game,
+  `scripts/probes/backfill_start_positions.py` repaired the loaded games (one UPDATE per game,
   1 h 44 min at `--sleep 0.1`, Postgres only, the app served throughout; the record and the
   census after are in `CHANGES.md` 2026-10-07). A game
   the nightly loaded between the merge and the backfill's pass keeps the old coding: `--seasons
@@ -382,7 +382,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   still answers 404).
   The ten-game smoke (`CHANGES.md` 2026-10-07): the fielder factor read a missing or wrong
   defender on 7.4% of balls in play, the steal and pickoff draws had no catcher on 4.9% of their
-  reads, no channel moved beyond noise (every power is 1). `scripts/sim523_game_set.py` reads the
+  reads, no channel moved beyond noise (every power is 1). `scripts/balanced_game_set.py` reads the
   starters from the box now (89 of 90 before). Plan and run book:
   `docs/audit/2026-10-06-sim559-starting-position-plan.md`.
 - **The game page reviews a simulated game (SIM-560 + SIM-561, CLOSED 2026-10-08).** "Load
@@ -714,16 +714,16 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 - `scripts/` — operational scripts (NOT bind-mounted; see §2a): `sim_stats.py` (v2 sim harness),
   `load_historical_odds.py` (SIM-435 opening+closing backfill → `raw.game_odds`/`raw.prop_odds`; SIM-421
   `--prop-stats` / `--line-types` / `--no-game-odds` for the eight-new-markets pass),
-  `clv_backtest.py` (the SIM-538 sim-vs-closing-line accuracy comparison — the SIM-429 CLV scoreboard was
+  `accuracy_comparison.py` (the SIM-538 sim-vs-closing-line accuracy comparison — the SIM-429 CLV scoreboard was
   deleted by SIM-544; `--workers` parallelizes across games — SIM-436; props graded on the official box
   score since SIM-545), `validate_props.py`, `load_official_boxscores.py` (SIM-545: backfill
-  `raw.game_player_stats` from the MLB box-score endpoint), `sim545_boxscore_audit.py` (SIM-545: the
+  `raw.game_player_stats` from the MLB box-score endpoint), `boxscore_audit.py` (SIM-545: the
   derived-vs-official per-player totals study), `check_file_integrity.py`, `gen_secrets.py`
   (SIM-443b: writes the eight `.env` secrets; `--append` never changes a key that has a
   value, `--check` lists the missing ones), `backup_drill.py` (SIM-525: the restore drill; it
   runs on the host, restores a Postgres set into a scratch cluster and verifies the data sets).
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
-  `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
+  `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0030** — 0030 = the what-if runs: `kind`, `start_at_bat` and `changes` on `sim.sim_runs` (SIM-562, 2026-10-09); 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
   (numbered SQL, schema **v32**; 0032 = the SIM-561 replay play stream's pitch
@@ -810,7 +810,7 @@ consolidates; QA cross-validates and never self-certifies its own work.
   per-player prop lines; they live in `simulation/prop_distributions.py`,
   `pipeline/odds_provider.py`, `pipeline/bettingpros_odds_provider.py`,
   `pipeline/live/live_ingestion_pipeline.py`, `pipeline/etl/opening_line_job.py`,
-  `scripts/load_historical_odds.py`, `scripts/clv_backtest.py`, `api/routes/games.py`,
+  `scripts/load_historical_odds.py`, `scripts/accuracy_comparison.py`, `api/routes/games.py`,
   `api/schemas.py`, migration 0022, and any `SIM-421 fix` on a box-line credit in
   `simulation/sim_loop.py`. Reconcile a realism tag if you touch it.
 - **Migrations (mandatory):** every Postgres schema change ships an Alembic migration in

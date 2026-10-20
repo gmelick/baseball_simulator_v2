@@ -80,7 +80,7 @@ To run it alone, from the repo root:
 Where either store is unreachable (the host, CI) the live tests SKIP. Under
 ``SIM_ACCEPTANCE=1`` they FAIL instead, the package's rule: an explicit request
 for the lane never turns into a silent skip. The same comparison is check d of
-the pool rebuild (``scripts/sim553_rebuild_pitch_pool.py``) and the ``--strict``
+the pool rebuild (``scripts/rebuild_pitch_pool.py``) and the ``--strict``
 exit of ``scripts/pool_window_census.py --windows W1 --strict``.
 
 A FAIL MEANS one of three things. Read which test failed:
@@ -89,7 +89,7 @@ A FAIL MEANS one of three things. Read which test failed:
     pool predates the fix. A strikeout shortfall with a walk and pitch surplus
     is the SIM-553 shape. The fix is in ``SQL_OUTCOME_TYPE``
     (``pipeline/batch/player_profile_computor.py``) and a pool rebuild
-    (``scripts/sim553_rebuild_pitch_pool.py``), never in this tolerance;
+    (``scripts/rebuild_pitch_pool.py``), never in this tolerance;
   * the plate-appearance counts: the pool and ``raw.pitches`` hold different
     games. Rebuild the pool for the window before you read the channels;
   * the window guard: the window rolled and the band centres did not.
@@ -213,7 +213,7 @@ def test_both_sides_read_the_same_plate_appearances(
     assert n_pool == n_real, (
         f"window {_season_pred(window)}:\n{line}\n"
         "The label check would compare different plate appearances. Rebuild the pool "
-        "for the window (scripts/sim553_rebuild_pitch_pool.py or the nightly "
+        "for the window (scripts/rebuild_pitch_pool.py or the nightly "
         "player_profile_computor run) before you read the channel gaps."
     )
 
@@ -254,5 +254,5 @@ def test_the_pool_chain_matches_real_plate_appearances(
         f"{report}\n"
         "The pool build codes a pitch into the wrong class (see SQL_OUTCOME_TYPE in "
         "pipeline/batch/player_profile_computor.py), or the pool predates the fix "
-        "(rebuild: scripts/sim553_rebuild_pitch_pool.py)."
+        "(rebuild: scripts/rebuild_pitch_pool.py)."
     )

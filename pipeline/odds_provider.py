@@ -425,7 +425,7 @@ STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
 #: SIM-555 (decision 1): the graded book, in order. A reader grades against the
 #: first book on the list with a valid closing row for the market, the same list
 #: on every game. Set 2026-09-29 from the sharpness read on 2024-2025
-#: (scripts/sim555_book_sharpness.txt) and its verification (the plan's §12):
+#: (docs/audit/records/sim555_book_sharpness.txt) and its verification (the plan's §12):
 #:   1. DraftKings: the sharpest closing line; no view ranks any book ahead of it.
 #:   2. BetMGM: a sharper benchmark than theScore on the player props DraftKings
 #:      lacks (home runs, doubles, runs, RBIs; gaps outside their 90% ranges).

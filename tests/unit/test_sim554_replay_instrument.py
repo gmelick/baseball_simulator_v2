@@ -1,6 +1,6 @@
 """SIM-554 — the running-game replay's arithmetic, on synthetic inputs (no DB, no bundle).
 
-``scripts/sim554_running_game_replay.py`` replays real pitches through the
+``scripts/running_game_replay.py`` replays real pitches through the
 sampler and scores eleven ways of sampling the steal. The sampler seams it reads
 are the production ones (``tests/unit/test_sim554_steal_weights_seam.py`` pins
 the new one). These tests pin the script's own arithmetic:
@@ -17,25 +17,13 @@ the new one). These tests pin the script's own arithmetic:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-rp = _load("sim554_running_game_replay")
+rp = load_script("running_game_replay")
 NC, NCELL = rp.NC, rp.NCELL
 BALL, CALLED, SWING, IN_PLAY = rp.BALL, rp.CALLED, rp.SWING, rp.IN_PLAY
 

@@ -22,7 +22,7 @@ WHAT SIM-449 LEFT OPEN — AND SIM-452 CLOSES
 SIM-449 unified the BUILDER. It did not unify the park-factor RESOLUTION. Three
 call sites looked the venue up and put the factor on the GameState; five did not,
 and shipped the dataclass default 1.0. ``SIM_PARK_FACTOR`` was therefore inert for
-those five, one of which was ``scripts/clv_backtest.py`` — the Closing Line Value
+those five, one of which was ``scripts/accuracy_comparison.py`` — the Closing Line Value
 backtest, the fund's gold-standard metric.
 
 ``SIM_KWARG_KEYS`` could not catch it. The key was always present, just always 1.0,
@@ -442,7 +442,7 @@ async def test_resolver_defaults_the_season_to_the_state():
 #
 # No park-factor lookup between them. The same two lines ran in
 # `get_player_prop_edge`, in `api/routes/betting.py::_summary_and_winprob`, and —
-# through `_collect_game_results` — in `scripts/clv_backtest.py` and
+# through `_collect_game_results` — in `scripts/accuracy_comparison.py` and
 # `scripts/validate_props.py`. Five park-blind callers, all reporting success.
 #
 # These tests run that pattern against the REAL `_resolve_state_or_error` and
@@ -544,7 +544,7 @@ _SIM_KWARGS_CALL_SITES: dict[str, dict[str, int]] = {
     # _summary_and_winprob -> _resolved_sim_kwargs.
     "api/routes/betting.py": {"bare": 0, "resolving": 1},
     # _score_one_game resolves; _collect_game_results builds in the worker thread.
-    "scripts/clv_backtest.py": {"bare": 1, "resolving": 1},
+    "scripts/accuracy_comparison.py": {"bare": 1, "resolving": 1},
     # run() resolves; _collect_game_results builds in the worker thread.
     "scripts/validate_props.py": {"bare": 1, "resolving": 1},
 }
@@ -680,7 +680,7 @@ def _fake_duckdb(monkeypatch):
 
 async def test_clv_backtest_EXITS_NONZERO_without_park_factors(monkeypatch, tmp_path):
     """CAN IT FAIL: the CLV backtest refuses a park-blind run."""
-    clv = _load_script("clv_backtest")
+    clv = _load_script("accuracy_comparison")
     _no_duckdb(monkeypatch)
 
     async def _no_games(*_a, **_k):
@@ -698,12 +698,12 @@ async def test_clv_backtest_runs_when_park_factors_are_available(monkeypatch, tm
     so the test above is measuring the precondition and not some unrelated breakage.
 
     It then stops at a different gate: SIM-454 (a concurrent ticket, owner
-    ``scripts/clv_backtest.py``) made a run that priced nothing exit
+    ``scripts/accuracy_comparison.py``) made a run that priced nothing exit
     ``EXIT_NOTHING_SCORED``, and ``_fetch_final_games`` is stubbed to return no
     games here. The two codes are what this test cares about: the run no longer
     stops for want of park factors.
     """
-    clv = _load_script("clv_backtest")
+    clv = _load_script("accuracy_comparison")
     _fake_duckdb(monkeypatch)
 
     async def _no_games(*_a, **_k):
@@ -719,7 +719,7 @@ async def test_clv_backtest_runs_when_park_factors_are_available(monkeypatch, tm
 
 
 async def test_clv_backtest_honours_the_explicit_opt_out(monkeypatch, tmp_path):
-    clv = _load_script("clv_backtest")
+    clv = _load_script("accuracy_comparison")
     _no_duckdb(monkeypatch)
 
     async def _no_games(*_a, **_k):
@@ -771,7 +771,7 @@ async def test_validate_props_runs_when_park_factors_are_available(monkeypatch, 
 # --- CAN IT FAIL: both scripts' replay paths refuse an unresolved state ------
 
 
-@pytest.mark.parametrize("script", ["clv_backtest", "validate_props"])
+@pytest.mark.parametrize("script", ["accuracy_comparison", "validate_props"])
 def test_script_replay_REFUSES_an_unresolved_state(script):
     """The exact function that ran park-blind, refusing to run park-blind.
 
@@ -796,7 +796,7 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
     that way would let a whole park-blind season finish looking healthy. It must
     propagate.
     """
-    clv = _load_script("clv_backtest")
+    clv = _load_script("accuracy_comparison")
     monkeypatch.setattr(clv, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _BoomLoop:
@@ -819,7 +819,7 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
 
 def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
     """The contrast case: an ordinary failure is still one skipped game, not a stop."""
-    clv = _load_script("clv_backtest")
+    clv = _load_script("accuracy_comparison")
     monkeypatch.setattr(clv, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _BoomLoop:
@@ -839,7 +839,7 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
     # SIM-541: the payload used to also carry a "bets" key (the SIM-429 CLV
     # scoreboard's per-bet records). The owner retired that report — the
     # platform no longer measures the entry-to-close line move at all — and
-    # its code was deleted from scripts/clv_backtest.py, so an ordinary
+    # its code was deleted from scripts/accuracy_comparison.py, so an ordinary
     # skipped game's payload no longer has anything to put there.
     assert clv._process_one_game(777, params) == {
         "status": "unresolved",

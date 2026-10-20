@@ -70,7 +70,7 @@ The original reproduction (the live steal engine over the live DuckDB; the
 three join shapes only)::
 
     MSYS_NO_PATHCONV=1 docker compose run --rm -T --no-deps \\
-        -v "$PWD/scripts:/app/scripts" app \\
+        -v "$PWD:/app" app \\
         python scripts/genexpr_crash_probe.py --engine /data/baseball_sim.duckdb
 
 The exit code is 0 when every shape ran to a verdict and no NEW shape crashed;

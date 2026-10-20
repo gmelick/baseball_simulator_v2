@@ -2,7 +2,7 @@
 
 ``simulation/game_market_distributions.py`` turns per-iteration inning grids
 into the probability each segment / team market needs, and
-``scripts/clv_backtest.py`` grades those markets against the official inning
+``scripts/accuracy_comparison.py`` grades those markets against the official inning
 grid. These tests pin the conventions (strict over, push, the three-way tie,
 the run-line cover, the first team to score) on hand-built grids, then drive a
 real simulated game's play stream through the same path.
@@ -186,12 +186,12 @@ class TestOutcomes:
 
 
 def _backtest():
-    path = Path(__file__).resolve().parent.parent.parent / "scripts" / "clv_backtest.py"
-    if "clv_backtest" in sys.modules:
-        return sys.modules["clv_backtest"]
-    spec = importlib.util.spec_from_file_location("clv_backtest", path)
+    path = Path(__file__).resolve().parent.parent.parent / "scripts" / "accuracy_comparison.py"
+    if "accuracy_comparison" in sys.modules:
+        return sys.modules["accuracy_comparison"]
+    spec = importlib.util.spec_from_file_location("accuracy_comparison", path)
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["clv_backtest"] = mod
+    sys.modules["accuracy_comparison"] = mod
     spec.loader.exec_module(mod)
     return mod
 

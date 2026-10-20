@@ -464,7 +464,7 @@ _BB_TRANSITION_SOURCE_COLS = frozenset(
 # fielding draw. The candidate rows keep their own distances.
 #
 # The pieces are pure functions over numpy arrays so the certification script
-# (``scripts/sim478_fence_check.py``) can rebuild a line from any subset of
+# (``scripts/fence_check.py``) can rebuild a line from any subset of
 # the balls: ``load_air_balls`` → ``sector_of`` → ``sector_line`` /
 # ``detect_moves`` / ``published_at`` / ``prior_lines`` / ``carry_offsets`` →
 # ``build_geometry_document``; ``build_park_geometry`` strings them together

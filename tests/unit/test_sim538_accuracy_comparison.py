@@ -2,7 +2,7 @@
 tests/unit/test_sim538_accuracy_comparison.py
 ===============================================
 Unit tests for the SIM-538 sim-vs-closing-line accuracy comparison
-(``scripts/clv_backtest.py``) — the platform's new headline market-accuracy
+(``scripts/accuracy_comparison.py``) — the platform's new headline market-accuracy
 metric, which replaces Closing Line Value (CLV) as the gold standard.
 
 What SIM-538 does, in plain words: for every game or player prop with a
@@ -39,30 +39,30 @@ import pytest
 # resolve the module's namespace (dataclasses looks the module up by name).
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "clv_backtest.py")
-_spec = importlib.util.spec_from_file_location("clv_backtest", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
+_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
-clv_backtest = importlib.util.module_from_spec(_spec)
-sys.modules["clv_backtest"] = clv_backtest
-_spec.loader.exec_module(clv_backtest)
+accuracy_comparison = importlib.util.module_from_spec(_spec)
+sys.modules["accuracy_comparison"] = accuracy_comparison
+_spec.loader.exec_module(accuracy_comparison)
 
 from simulation.prop_distributions import PropDistribution, PropDistributionSet  # noqa: E402
 from simulation.results import ConfidenceInterval, GameSimSummary  # noqa: E402
 from simulation.win_probability import TieHandling, WinProbability  # noqa: E402
 
-AccuracyRecord = clv_backtest.AccuracyRecord
-ClosingPrices = clv_backtest.ClosingPrices
-_closing_prices = clv_backtest._closing_prices
-score_game_accuracy = clv_backtest.score_game_accuracy
-score_prop_accuracy = clv_backtest.score_prop_accuracy
+AccuracyRecord = accuracy_comparison.AccuracyRecord
+ClosingPrices = accuracy_comparison.ClosingPrices
+_closing_prices = accuracy_comparison._closing_prices
+score_game_accuracy = accuracy_comparison.score_game_accuracy
+score_prop_accuracy = accuracy_comparison.score_prop_accuracy
 #: SIM-545: the per-game prop sets each ground-truth source can grade. The
 #: scorer takes the set for the game it scores; there is no module constant.
-BOXSCORE_SCORED_PROPS = clv_backtest.BOXSCORE_SCORED_PROPS
-EVENT_LABEL_SCORED_PROPS = clv_backtest.EVENT_LABEL_SCORED_PROPS
-_bootstrap_paired_diff_ci = clv_backtest._bootstrap_paired_diff_ci
-_accuracy_row_for = clv_backtest._accuracy_row_for
-aggregate_accuracy_comparison = clv_backtest.aggregate_accuracy_comparison
-format_accuracy_comparison = clv_backtest.format_accuracy_comparison
+BOXSCORE_SCORED_PROPS = accuracy_comparison.BOXSCORE_SCORED_PROPS
+EVENT_LABEL_SCORED_PROPS = accuracy_comparison.EVENT_LABEL_SCORED_PROPS
+_bootstrap_paired_diff_ci = accuracy_comparison._bootstrap_paired_diff_ci
+_accuracy_row_for = accuracy_comparison._accuracy_row_for
+aggregate_accuracy_comparison = accuracy_comparison.aggregate_accuracy_comparison
+format_accuracy_comparison = accuracy_comparison.format_accuracy_comparison
 
 
 # ---------------------------------------------------------------------------
@@ -294,11 +294,11 @@ def test_score_game_accuracy_moneyline_carries_the_raw_share_sim548():
     assert recs[0].sim_prob == pytest.approx(0.50)
     assert recs[0].sim_prob_raw == pytest.approx(0.62 / 0.98)
     # the round trip keeps it, and an older record without it still loads
-    again = clv_backtest.AccuracyRecord.from_jsonable(recs[0].to_jsonable())
+    again = accuracy_comparison.AccuracyRecord.from_jsonable(recs[0].to_jsonable())
     assert again.sim_prob_raw == pytest.approx(0.62 / 0.98)
     old = recs[0].to_jsonable()
     old.pop("sim_prob_raw")
-    assert clv_backtest.AccuracyRecord.from_jsonable(old).sim_prob_raw is None
+    assert accuracy_comparison.AccuracyRecord.from_jsonable(old).sim_prob_raw is None
 
 
 def test_score_game_accuracy_moneyline_home_loss():
@@ -490,7 +490,7 @@ def test_the_shape_warning_names_two_bets_and_an_unpaired_market(caplog):
         "margin_mean": {"f5_runline": 1.05, "total": 1.30},
     }
     with caplog.at_level(logging.WARNING):
-        clv_backtest.warn_market_shapes(tally)
+        accuracy_comparison.warn_market_shapes(tally)
     assert "f5_runline" in caplog.text and "two separate bets" in caplog.text
     assert "total" in caplog.text and "1.300" in caplog.text
 
@@ -514,9 +514,9 @@ async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp
     async def _no_games(*_a, **_k):
         return []
 
-    monkeypatch.setattr(clv_backtest, "_fetch_final_games", _no_games)
+    monkeypatch.setattr(accuracy_comparison, "_fetch_final_games", _no_games)
     out = tmp_path / "clv.json"
-    args = clv_backtest.parse_args(
+    args = accuracy_comparison.parse_args(
         [
             "--seasons",
             "2024",
@@ -528,9 +528,9 @@ async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp
             str(tmp_path / "no_calibration.json"),
         ]
     )
-    await clv_backtest.run(args)
+    await accuracy_comparison.run(args)
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["params"]["run_line_scoring"] == clv_backtest.RUN_LINE_SCORING_VERSION
+    assert report["params"]["run_line_scoring"] == accuracy_comparison.RUN_LINE_SCORING_VERSION
     assert report["counters"]["market_shapes"] == {"run_lines": {}, "margin_mean": {}}
 
 
@@ -595,11 +595,13 @@ def test_full_game_run_line_without_an_away_spread_gives_no_record():
 
 
 def test_the_away_keys_carry_their_market_s_trust_label():
-    assert clv_backtest.trust_label("runline_away") == clv_backtest.trust_label("runline")
-    assert clv_backtest.trust_label("f5_runline_away") == "unvalidated"
-    assert clv_backtest.trust_label("f1_runline_away") == "unvalidated"
-    assert clv_backtest.run_line_market_key("f5_runline", "away") == "f5_runline_away"
-    assert clv_backtest.run_line_market_key("f5_runline", "home") == "f5_runline"
+    assert accuracy_comparison.trust_label("runline_away") == accuracy_comparison.trust_label(
+        "runline"
+    )
+    assert accuracy_comparison.trust_label("f5_runline_away") == "unvalidated"
+    assert accuracy_comparison.trust_label("f1_runline_away") == "unvalidated"
+    assert accuracy_comparison.run_line_market_key("f5_runline", "away") == "f5_runline_away"
+    assert accuracy_comparison.run_line_market_key("f5_runline", "home") == "f5_runline"
 
 
 def test_the_console_table_names_each_run_line_s_shape():
@@ -1030,14 +1032,14 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     monkeypatch.setattr(games_mod, "_resolve_state_or_error", fake_resolve_state)
     monkeypatch.setattr(sim_kwargs_mod, "resolve_park_factor_onto_state", fake_park_factor)
     monkeypatch.setattr(sim_kwargs_mod, "resolve_asof_ymd", fake_asof)
-    monkeypatch.setattr(clv_backtest, "_fetch_game_odds", fake_fetch_game_odds)
+    monkeypatch.setattr(accuracy_comparison, "_fetch_game_odds", fake_fetch_game_odds)
     monkeypatch.setattr(
-        clv_backtest, "_replay_game", replay_must_not_run
+        accuracy_comparison, "_replay_game", replay_must_not_run
     )  # SIM-421: the seam moved
 
     # SIM-545: the fourth element is the prop ground-truth source; a skipped
     # game graded nothing, so it has none.
-    accuracy, status, park_factor, ground_truth_source = await clv_backtest._score_one_game(
+    accuracy, status, park_factor, ground_truth_source = await accuracy_comparison._score_one_game(
         pool=object(),
         game_pk=12345,
         duck=object(),
@@ -1089,7 +1091,7 @@ def _provenance(tmp_path, monkeypatch, flag: str | None = "1") -> dict:
         monkeypatch.delenv("SIM_STEAL_PITCH_CLASS", raising=False)
     else:
         monkeypatch.setenv("SIM_STEAL_PITCH_CLASS", flag)
-    return clv_backtest.bundle_provenance(str(tmp_path / "no_calibration.json"))
+    return accuracy_comparison.bundle_provenance(str(tmp_path / "no_calibration.json"))
 
 
 _CLASSED = [("ball", False), ("called_strike", False), ("", True)]

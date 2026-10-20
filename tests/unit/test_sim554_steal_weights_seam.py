@@ -2,7 +2,7 @@
 
 ``FullPoolSampler.steal_weights`` returns the steal draw's candidate rows and
 their weights. ``steal_draw`` samples from exactly that, so the running-game
-replay (``scripts/sim554_running_game_replay.py``) reads the odds the simulator
+replay (``scripts/running_game_replay.py``) reads the odds the simulator
 draws from, and the two cannot disagree. The seam consumes no random number.
 """
 

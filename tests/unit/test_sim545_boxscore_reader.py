@@ -35,11 +35,11 @@ from simulation.prop_validation import (
 # resolve the module's namespace (dataclasses looks the module up by name).
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "sim545_boxscore_audit.py")
-_spec = importlib.util.spec_from_file_location("sim545_boxscore_audit", _MODULE_PATH)
+_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "boxscore_audit.py")
+_spec = importlib.util.spec_from_file_location("boxscore_audit", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
 audit = importlib.util.module_from_spec(_spec)
-sys.modules["sim545_boxscore_audit"] = audit
+sys.modules["boxscore_audit"] = audit
 _spec.loader.exec_module(audit)
 
 _FIXTURE = os.path.join(_REPO_ROOT, "tests", "fixtures", "mlb", "boxscore_746437.json")

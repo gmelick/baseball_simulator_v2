@@ -1,43 +1,31 @@
 """
 SIM-548 — the joint-fit plan's instruments, on synthetic inputs (no DB, no bundle):
 
-  * the market skill table (scripts/sim548_market_skill.py): Brier, base rate,
+  * the market skill table (scripts/market_skill.py): Brier, base rate,
     AUC, bias and the overround exclusion on a toy market;
-  * the calibration layer (scripts/sim548_calibrate_markets.py): the logistic
+  * the calibration layer (scripts/calibrate_markets.py): the logistic
     map recovers a known shift and shrink, a wrong-way market collapses to the
     base rate, and a map is written only when the check set says it helped;
-  * the designed experiment (scripts/sim548_design.py): the fractional
+  * the designed experiment (scripts/designed_experiment.py): the fractional
     factorial is balanced, orthogonal and of resolution IV, and the read
     recovers a planted main effect from synthetic reports;
-  * the offline joint fit (scripts/sim548_offline_fit.py): the jar it reads is
+  * the offline joint fit (scripts/offline_draw_fit.py): the jar it reads is
     the sampler's own — the weights it takes off the count bucket's CDF equal
     the weights the split's result draw starts from, on the synthetic bundle.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-skill = _load("sim548_market_skill")
-calib = _load("sim548_calibrate_markets")
-design = _load("sim548_design")
+skill = load_script("market_skill")
+calib = load_script("calibrate_markets")
+design = load_script("designed_experiment")
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +137,7 @@ def test_away_record_is_its_own_market():
     assert c["records_paired"] == 300
     assert set(c["per_market"]) == {"f5_runline", "f5_runline_away"}
     # the paired read keeps them apart too
-    pair = _load("sim518_pair_accuracy")
+    pair = load_script("pair_accuracy")
     rows = pair.pair_records(base, arm)
     assert len(rows) == 300
     # the skill table prints the away row right after its market
@@ -217,7 +205,7 @@ def test_a_rescored_and_a_fresh_report_do_not_merge(tmp_path: Path):
     b.write_text(json.dumps(fresh), encoding="utf-8")
     with pytest.raises(SystemExit, match="run_line_rescored"):
         skill.load_reports([str(a), str(b)], force=False)
-    pair = _load("sim518_pair_accuracy")
+    pair = load_script("pair_accuracy")
     assert any("params.rescored" in p for p in pair.provenance_mismatches(rescored, fresh))
 
 
@@ -236,7 +224,7 @@ def test_a_stamped_and_an_unstamped_report_do_not_merge(tmp_path: Path):
     records, _ = skill.load_reports([str(b)], force=False)
     assert len(records) == 10
     # the paired read names the same mismatch
-    pair = _load("sim518_pair_accuracy")
+    pair = load_script("pair_accuracy")
     problems = pair.provenance_mismatches(old, new)
     assert any("run_line_scoring" in p for p in problems)
 
@@ -267,7 +255,7 @@ def test_chunks_run_in_two_running_game_orders_do_not_merge(tmp_path: Path):
         skill.load_reports([str(a), str(b)], force=False)
     records, _ = skill.load_reports([str(a), str(c)], force=False)
     assert len(records) == 20
-    pair = _load("sim518_pair_accuracy")
+    pair = load_script("pair_accuracy")
     assert not any("running_game" in p for p in pair.provenance_mismatches(on, off))
 
 

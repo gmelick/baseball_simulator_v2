@@ -6,7 +6,7 @@ SIM-555, the readers (plan tests 15 and 16;
 
 What changed, in plain words: the odds store now holds one row per book,
 labelled ``book = 'bp:<id>'``. The accuracy comparison
-(``scripts/clv_backtest.py``) grades each market against ONE book: the first
+(``scripts/accuracy_comparison.py``) grades each market against ONE book: the first
 book on the preference list that has a row for the market, the same list on
 every game. The vendor's blend, the daily-fantasy apps, the exchanges and the
 prediction markets are never graded. Beside the graded row the comparison
@@ -26,7 +26,6 @@ synthetic rows when this file was written.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import re
 import sys
@@ -35,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.script_loader import load_script
 
 from pipeline.odds_provider import (
     BOOK_KIND,
@@ -46,27 +46,13 @@ from pipeline.odds_provider import (
     graded_book_labels,
 )
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    """Import a script by path (scripts/ is not a package). Register it in
-    sys.modules first so its slots dataclasses resolve their module."""
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-bt = _load("clv_backtest")
-skill = _load("sim548_market_skill")
-calib = _load("sim548_calibrate_markets")
-pair = _load("sim518_pair_accuracy")
-rescore = _load("sim549_rescore_runlines")
-manager_probe = _load("sim427_manager_probe")
-fatigue_probe = _load("sim518_fatigue_probe")
+bt = load_script("accuracy_comparison")
+skill = load_script("market_skill")
+calib = load_script("calibrate_markets")
+pair = load_script("pair_accuracy")
+rescore = load_script("rescore_runlines")
+manager_probe = load_script("manager_probe")
+fatigue_probe = load_script("fatigue_probe")
 
 AccuracyRecord = bt.AccuracyRecord
 BETTABLE_CLOSING = bt.BETTABLE_CLOSING
@@ -1113,7 +1099,7 @@ def test_a_report_rescored_onto_the_graded_book_stays_apart_from_a_fresh_run(tmp
 
 
 # ---------------------------------------------------------------------------
-# The calibration layer's merge (scripts/sim548_calibrate_markets.py)
+# The calibration layer's merge (scripts/calibrate_markets.py)
 # ---------------------------------------------------------------------------
 
 

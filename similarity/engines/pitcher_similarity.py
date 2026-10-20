@@ -207,7 +207,7 @@ log = logging.getLogger("pitcher_similarity")
 #   * Savant's per-pitch arm angle already sits in raw.savant_pitch_tracking
 #     (Alembic 0020 carried it for this ticket); it stays stored and unread.
 # The guard is tests/unit/test_sim533_arm_angle_decision.py; the numbers
-# re-run from scripts/sim533_arm_angle_probe.py.
+# re-run from scripts/probes/arm_angle_probe.py.
 # Feature names inside GMM (must match GMM_FEATURE_NAMES in player_profile_computor)
 GMM_FEATURE_NAMES = [
     "velo",

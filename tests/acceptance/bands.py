@@ -286,7 +286,7 @@ the same file. The citation names the constant, not a line.
 fails when a value drifts.
 
 ⚠ ``scripts/`` is baked into the app image and is NOT bind-mounted (CLAUDE.md
-section 2a). Run the lane in a container with ``-v "$PWD/scripts:/app/scripts"``,
+section 2a). Run the lane in a container with ``-v "$PWD:/app"``,
 or the drift test reads whatever that file looked like when the image was last
 built. The REPO is the source of truth for a citation.
 
@@ -797,7 +797,7 @@ REFERENCES: dict[str, Reference] = {
 #: The regressed park run factor per acceptance game IN ITS OWN SEASON, read from
 #: ``derived.park_factors`` (``factor_type='R'``). SIM-523 (owner ruling 2026-09-09):
 #: the set is 45 games — three full-day slates (2024-09-04, 2025-09-28, 2026-06-10),
-#: every team three times — chosen by ``scripts/sim523_game_set.py`` so every graded
+#: every team three times — chosen by ``scripts/balanced_game_set.py`` so every graded
 #: channel's actor-matched expectation sits within 0.6% of the pool's totals (the
 #: mean factor 0.9939). Before it: twelve 2024 games; the note below is history:
 #: 2024 park run factor per acceptance game, read from ``derived.park_factors``
@@ -1385,7 +1385,7 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         # rebuild over pitch rows only; the export added the 2026 games of
         # 08-14 to 08-29. The two attempt centres held at the fourth decimal.
         0.7982,
-        "the W1 artifact steal pool [2B] safe share (sim554_rebuild_steal_pool)",
+        "the W1 artifact steal pool [2B] safe share (rebuild_steal_pool)",
         rel_floor=0.03,
         floor_rationale=(
             "The split was calibrated before SIM-476 (0.804 vs 0.795 measured); "

@@ -53,7 +53,7 @@ compute; the batter side another day; the game markets after that.
   is a weight or OFF. This plan changes no mechanism. It changes how a weight's VALUE is
   chosen: by the accuracy comparison instead of by the pool's own conditionals.
 - **The judge (owner, 2026-09-12):** the sim-vs-closing-line accuracy comparison
-  (`scripts/clv_backtest.py`, SIM-538) and its paired read (`scripts/sim518_pair_accuracy.py`).
+  (`scripts/accuracy_comparison.py`, SIM-538) and its paired read (`scripts/pair_accuracy.py`).
   The pool-totals bands stay as a *diagnostic* — they tell us what a weight did to the game's
   shape — but they no longer decide anything (the SIM-527 / SIM-429 closure of 2026-09-10).
 - **The target is reality, not the market.** The comparison scores the simulator's
@@ -77,7 +77,7 @@ reliever draw; the pitch draw at pitcher power 1 (`SIM_PITCH_PITCHER_POWER`) and
 calibration curve restored.
 
 **The accuracy comparison on the first 250 Final games of 2024, 100 iterations, production
-as it stands** (`scripts/sim427_accuracy_on.json`). Brier score, lower is better; "skill" =
+as it stands** (`results/sim427/sim427_accuracy_on.json`). Brier score, lower is better; "skill" =
 the coin flip's Brier (the outcome variance) minus the arm's, positive = better than a coin flip:
 
 | market | n | sim Brier | market Brier | coin flip | sim skill | market skill | sim bias (p − outcome) | sim spread | market spread |
@@ -95,7 +95,7 @@ bias; the moneyline is under-spread (the sim is less sure of the winner than the
 should not be); the total is over-spread and uninformative.
 
 **The pitcher-blindness, on the balanced 45 games** (89 starter-games, 40 iterations,
-`scripts/sim427_probe_on.json` against `raw.game_player_stats`): the simulator's projected
+`results/sim427/sim427_probe_on.json` against `raw.game_player_stats`): the simulator's projected
 strikeouts per start have a standard deviation of 0.52 across starters against 2.57 for the
 real counts; correlation with the real count +0.07, with the pitcher's own season strikeout
 rate +0.05; the closing line's correlation with the real count +0.45; the season rate's +0.54.
@@ -120,7 +120,7 @@ writing on 2026-09-13; the hold-out set needs it finished (Part C).
 For each candidate weight, in this order:
 
 1. **The screen (35 minutes).** The manager probe's prediction-shift read
-   (`scripts/sim427_manager_probe.py`, or the fatigue probe's) at the ladder's extreme value
+   (`scripts/probes/manager_probe.py`, or the fatigue probe's) at the ladder's extreme value
    against production: the change in the starter's strikeout mean and in the probability of
    clearing the closing line, per starter-game. A weight that moves no market probability
    cannot move the accuracy read (the fatigue weight: +0.000 ± 0.012) and is not laddered.
@@ -128,7 +128,7 @@ For each candidate weight, in this order:
    simulator's projected strikeouts with the real count over the 89 starter-games (today
    +0.07; the line's +0.45).
 2. **The ladder on 2024 (2.5 h per arm).** Each value of the weight runs as one paired arm
-   of `scripts/clv_backtest.py` on the fixed 250-game 2024 list (the first 250 Final games by
+   of `scripts/accuracy_comparison.py` on the fixed 250-game 2024 list (the first 250 Final games by
    game id, 150 dates, `--max-games 250`), 100 iterations, seed 0, the frozen bundle. The
    production report is the baseline for every arm. The pairing reads, per market, the
    paired Brier difference with its game-clustered range, plus the per-market skill table
@@ -157,7 +157,7 @@ the named market, the rest are guards.
 
 ### Part 0 — the instrument (half a day)
 
-`scripts/sim548_market_skill.py`: reads one or two accuracy reports and prints, per market,
+`scripts/market_skill.py`: reads one or two accuracy reports and prints, per market,
 the table of §2 (n, the sim's and the market's Brier, the coin-flip Brier, the two skills, the
 sim's bias, the two spreads, the correlation of the sim's probability with the market's, and
 the reliability table by sim-probability bin); with two reports it adds the paired columns
@@ -194,11 +194,11 @@ with it (the aim is a correlation with the real count in the region of the line'
 plan does not promise a number).
 
 > **A4 RAN 2026-09-14 (05:38–09:33 UTC, 3 h 55 — the split's second draw costs ~60% over
-> production's 2 h 30).** `scripts/sim548_accuracy_split.sh`: the split ON at 16 / 16 / 8
+> production's 2 h 30).** `scripts/accuracy_split_arm.sh`: the split ON at 16 / 16 / 8
 > (bandwidth 1.0, density 1.0) over production as the compose file set it that morning — the
 > owner landed the fatigue weight at 0.5 the same day, so the baseline is the fatigue-0.5
-> arm's own report (`scripts/sim518_accuracy_tto05.json`: the same 250 games, seeds, bundle,
-> fatigue). Pairing `scripts/sim548_accuracy_pair_split.{txt,json}` (39,709 records). Brier,
+> arm's own report (`results/sim518/sim518_accuracy_tto05.json`: the same 250 games, seeds, bundle,
+> fatigue). Pairing `results/sim548/sim548_accuracy_pair_split.{txt,json}` (39,709 records). Brier,
 > split minus baseline, negative = the split more accurate, the game-clustered range:
 >
 > | market | n | dBrier | range | baseline vs market | split vs market |
@@ -216,7 +216,7 @@ plan does not promise a number).
 > | first-five moneyline | 250 | −0.0056 | [−0.0160, +0.0053] | | |
 > | every record pooled | 39,709 | −0.0002 | [−0.0012, +0.0009] | | |
 >
-> *The skill read (the Part 0 table, computed inline; `scripts/sim548_market_skill.py` is
+> *The skill read (the Part 0 table, computed inline; `scripts/market_skill.py` is
 > still to write):* on strikeouts the baseline's probabilities carry no information (AUC
 > 0.510 — the chance a real over drew the higher probability; the coin flip is 0.500; the
 > closing line 0.584) and are over-spread (0.175; the line 0.053); the split's carry some

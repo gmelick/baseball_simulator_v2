@@ -1,5 +1,5 @@
 """
-SIM-548 — the designed-experiment runner (scripts/sim548_design.py), on
+SIM-548 — the designed-experiment runner (scripts/designed_experiment.py), on
 synthetic reports (no DB, no bundle). Four defects the first read found:
 
   * a sparse market must not shrink a dense market's common game set;
@@ -12,26 +12,14 @@ synthetic reports (no DB, no bundle). Four defects the first read found:
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-design = _load("sim548_design")
+design = load_script("designed_experiment")
 
 
 def _report(

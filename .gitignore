@@ -162,33 +162,6 @@ models/
 # MkDocs build output for docs/technical/ (see requirements-docs.txt) — generated, not committed.
 site/
 
-# Large run outputs (2026-09): the per-record accuracy reports, the manager and
-# fatigue probes, the offline fit's arrays and the in-progress design directory.
-# Each is 1-55 MB and regenerable from its runner script; the small skill tables,
-# pairings and text reads next to them ARE tracked.
-scripts/sim427_accuracy_on.json
-scripts/sim427_accuracy_off.json
-scripts/sim427_probe_*.json
-scripts/sim518_accuracy_tto0*.json
-scripts/sim548_accuracy_split.json
-scripts/sim548_baseline_2024_chunk*.json
-# SIM-549: the re-scored copies beside the reports above (each 11 MB, and each
-# carries the run's DSN). Named one by one, like the originals.
-scripts/sim427_accuracy_on.sim549.json
-scripts/sim427_accuracy_off.sim549.json
-scripts/sim518_accuracy_tto05.sim549.json
-scripts/sim518_accuracy_tto07.sim549.json
-scripts/sim548_accuracy_split.sim549.json
-scripts/sim548_baseline_2024_chunk2.sim549.json
-scripts/sim548_baseline_2024_chunk3.sim549.json
-scripts/sim548_baseline_2024_chunk4.sim549.json
-# SIM-555: the re-scored copy of the split report (11 MB; it carries the run's DSN) and the
-# 300-game book probe's outputs (6.6 MB each; regenerable with scripts/sim555_book_probe.py).
-scripts/sim548_accuracy_split.sim549.sim555.json
-scripts/sim555_probe_300.json
-scripts/sim555_probe_300_regated.json
-scripts/*.npz
-scripts/sim548_design_*/
 
 # ---------------------------------------------------------------------------
 # SIM-525: the default backup folder. The scheduled backups of the three data
@@ -200,6 +173,7 @@ scripts/sim548_design_*/
 /backups_offsite/
 
 # ---------------------------------------------------------------------------
-# Run outputs (SIM-493): every script writes its records under results/.
+# Run outputs (SIM-493): every script writes its records under results/, never
+# under scripts/. A small record a doc cites is committed to docs/audit/records/.
 # ---------------------------------------------------------------------------
 /results/

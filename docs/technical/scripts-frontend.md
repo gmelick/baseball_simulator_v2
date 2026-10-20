@@ -212,7 +212,7 @@ Offline job (SIM-407) that replays real completed games through the production s
 |---|---|---|---|
 | `_fetch_final_games(dsn, seasons, max_games)` | Reads completed (Final) games and their real scores from raw.games (home_score_final/away_score_final). | — | — |
 | `_fetch_pa_events(pool, game_pk)` | Reads one (batter, pitcher, events) row per completed plate appearance from raw.pitches -- the event-label prop ground truth, the FALLBACK since SIM-545. | `_pair_game_props` | — |
-| `_fetch_official_boxscore(pool, game_pk)` | SIM-545: every raw.game_player_stats row for one game as plain dicts (the same reader scripts/clv_backtest.py carries -- scripts/ is not a package). An empty list means no rows; a MISSING table (migration 0023 not applied) warns once and also reads as empty, so the run falls back honestly. | `_pair_game_props` | — |
+| `_fetch_official_boxscore(pool, game_pk)` | SIM-545: every raw.game_player_stats row for one game as plain dicts (the same reader scripts/accuracy_comparison.py carries -- scripts/ is not a package). An empty list means no rows; a MISSING table (migration 0023 not applied) warns once and also reads as empty, so the run falls back honestly. | `_pair_game_props` | — |
 | `_pair_game_props(pool, game_pk, pset, prop_pairs_by_line, *, official_boxscore)` | SIM-545: pairs one game's PMFs against the best ground truth held -- the box score (every market, via real_props_from_boxscore_rows and the BOXSCORE_* prop tuples) when `official_boxscore` is set and the game has rows, else the event label (five props). Returns `(pairs_added, source)` so run() counts games per source. | `run()` | `_fetch_official_boxscore`<br>`_fetch_pa_events`<br>`simulation.prop_validation.pair_props_for_validation` |
 | `_collect_game_results(state, n_iter, base_seed)` | Replays one resolved game N times via record_game_plays under the production factory, collecting one GameSimResult per iteration; run via asyncio.to_thread since it is sync/CPU-bound. | `run()` | `api.routes.games._sim_kwargs_from_state`<br>`simulation.batch_runner.derive_seed`<br>`simulation.play_recorder.record_game_plays` |
 | `run(args)` | Orchestrates the whole validation: checks the park-factor DuckDB source (refuses to run park-blind unless --allow-neutral-parks), resolves each game's state and park factor, replays it, builds win-prob and prop PMFs, pairs them against real outcomes, and writes the report. | `Makefile make validate-props target` | `api.routes.games._resolve_state_or_error`<br>`simulation.sim_kwargs.open_sim_duckdb/resolve_park_factor_onto_state`<br>`simulation.win_probability.win_probability`<br>`simulation.prop_distributions.PropDistributionSet.from_results`<br>`simulation.prop_validation.build_validation_report/pair_props_for_validation/real_props_from_boxscore_rows/real_props_from_pa_events/write_reliability_curve_to_calibration_report` |
@@ -257,7 +257,7 @@ Offline backfill (SIM-435) that fetches OPENING and CLOSING betting lines (game 
 
 **Depends on:** `pipeline/odds_provider.py (get_odds_provider, PROP_STATS, PITCHER_PROP_STATS, BATTER_PROP_STATS)`, `pipeline/bettingpros_odds_provider.py`, `pipeline/live/live_ingestion_pipeline.py`, `raw.games / raw.game_lineups / raw.game_odds / raw.prop_odds tables`
 
-**Used by:** `scripts/clv_backtest.py reads the raw.game_odds / raw.prop_odds rows this script writes`, `scripts/nightly_closing_lines.sh (SIM-546: the nightly closing pass)`
+**Used by:** `scripts/accuracy_comparison.py reads the raw.game_odds / raw.prop_odds rows this script writes`, `scripts/nightly_closing_lines.sh (SIM-546: the nightly closing pass)`
 
 **Environment flags read here:** `BASEBALL_DB_DSN`, `REDIS_URL (a placeholder value only -- start() is never called, so Redis is never touched)`, `ODDS_PROVIDER (read inside pipeline.odds_provider.get_odds_provider)`, `ODDS_API_KEY (read by the BettingPros provider)`, `ODDS_OFFERS_CACHE_TTL_S (SIM-421: set to 600 by this job when unset; an explicit value always wins)`, `BETTINGPROS_MAX_RETRIES / BETTINGPROS_RETRY_WAIT_S (read by the BettingPros provider; this job overrides both with --retries / --retry-wait through set_retry_policy)`
 
@@ -265,16 +265,16 @@ Offline backfill (SIM-435) that fetches OPENING and CLOSING betting lines (game 
 
 ---
 
-### `scripts/clv_backtest.py`
+### `scripts/accuracy_comparison.py`
 
 The SIM-538 sim-vs-closing-line accuracy comparison, the platform's gold-standard validation. For every completed game with a closing betting price, it compares the simulator's own probability against the market's (de-vigged) closing probability, scored against the real outcome with a proper scoring rule (Brier score, log loss). SIM-539 adds a stated minimum sample size per market row; SIM-540 adds an opt-in hypothetical dollar return, explicitly not a certified betting edge. Runs across-games in parallel via a forkserver ProcessPoolExecutor for season-scale throughput. SIM-541 (2026-09-11) deleted the file's original report, the SIM-429 CLV (Closing Line Value) scoreboard (entry price vs. closing price, no real outcome involved) -- the owner ruled the platform no longer measures the entry-to-close line move at all.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `fetch_graded_game_odds / fetch_graded_prop_odds / graded_game_odds_sql / graded_prop_odds_sql / fetch_bettable_game_closes / fetch_bettable_prop_closes / best_bettable_price / attach_best_prices / odds_row_provenance` | SIM-555 (2026-09-28): the GRADED ROW. Per (market, line type) — per (player, prop, line type) for props — the one-book row (`bp:` only; the listed sportsbooks only, `bettable_labels()` — the blend, the pick'em apps, the exchanges, the prediction markets and any unlisted id left out) of the first book on `GRADED_BOOK_PREFERENCE` that has one, the latest fetch of that book; on the first-inning and first-five moneylines a row with no tie price is graded only when no book lists the tie (`INCOMPLETE_THREE_WAY_LAST_SQL`). `--benchmark-book LABEL` (e.g. `bp:0`) grades against that one book instead, never the default. A second read takes every bettable closing row of the game, and `attach_best_prices` fills two record fields, `market_best_price` / `market_best_book`: the best sportsbook price for the record's reference side AT THE GRADED LINE. A run line listed as two bets is priced over its OWN book's two-way margin (that book's segment total, full-game total, moneyline, then the flat 1.05; never another book's). The report carries `params.odds_row_version = "sim555.2"`, `graded_book_preference` and `benchmark_book`; the skill table, the paired read and the calibration layer refuse to mix reports that differ on them. | `_score_one_game`<br>`scripts/sim549_rescore_runlines.py`<br>`scripts/sim555_rescore_reports.py` | `pipeline.odds_provider (graded_book_labels, non_bettable_labels, graded_row_order_sql, ODDS_ROW_VERSION)` |
+| `fetch_graded_game_odds / fetch_graded_prop_odds / graded_game_odds_sql / graded_prop_odds_sql / fetch_bettable_game_closes / fetch_bettable_prop_closes / best_bettable_price / attach_best_prices / odds_row_provenance` | SIM-555 (2026-09-28): the GRADED ROW. Per (market, line type) — per (player, prop, line type) for props — the one-book row (`bp:` only; the listed sportsbooks only, `bettable_labels()` — the blend, the pick'em apps, the exchanges, the prediction markets and any unlisted id left out) of the first book on `GRADED_BOOK_PREFERENCE` that has one, the latest fetch of that book; on the first-inning and first-five moneylines a row with no tie price is graded only when no book lists the tie (`INCOMPLETE_THREE_WAY_LAST_SQL`). `--benchmark-book LABEL` (e.g. `bp:0`) grades against that one book instead, never the default. A second read takes every bettable closing row of the game, and `attach_best_prices` fills two record fields, `market_best_price` / `market_best_book`: the best sportsbook price for the record's reference side AT THE GRADED LINE. A run line listed as two bets is priced over its OWN book's two-way margin (that book's segment total, full-game total, moneyline, then the flat 1.05; never another book's). The report carries `params.odds_row_version = "sim555.2"`, `graded_book_preference` and `benchmark_book`; the skill table, the paired read and the calibration layer refuse to mix reports that differ on them. | `_score_one_game`<br>`scripts/probes/rescore_runlines.py`<br>`scripts/probes/rescore_graded_book.py` | `pipeline.odds_provider (graded_book_labels, non_bettable_labels, graded_row_order_sql, ODDS_ROW_VERSION)` |
 | `score_game_accuracy(game_pk, win_prob, summary, odds, home_score, away_score)` | Scores moneyline/total/runline for one game on a FIXED reference side (home / over) against the closing line and the real final score -- never the side the model would bet, so the read never depends on the model's own pick. The run line goes through `score_run_line_market` (SIM-549). | `_score_one_game` | `betting.clv_engine.moneyline_edge_report/total_over_under_edge_report/run_line_bet_cover_prob`<br>`score_run_line_market` |
-| `score_run_line_market(game_pk, market_type, cp, odds, *, sim_cover, real_cover, open_sim_prob_only) / reference_margin / run_line_market_key` (the shape rule `run_line_is_pair` is imported from `betting.clv_engine`) | SIM-549 (2026-09-25): one scorer for the three run lines. A PAIR (the away spread is the negative of the home spread) gives one record, the home side, the two prices de-vigged against each other. TWO SEPARATE BETS (home −1.5 / away −1.5) give up to two records, keys `<market>` and `<market>_away` with the same market type, each priced from its own price over `reference_margin` (the segment's two-way total, the full-game total, the moneyline, a flat 1.05; never a three-way market; a margin outside 1.00-1.15 skipped), with no fade price. A push drops that side only; a row with no away spread gives no record. `open_sim_prob_only` keeps the full-game run line's old refusal of a simulator probability of exactly 0 or 1. | `score_game_accuracy`<br>`score_segment_market_accuracy`<br>`scripts/sim549_rescore_runlines.py` | `simulation.game_market_distributions.market_probability/market_outcome (side=)`<br>`betting.clv_engine.devig_two_way / devig_one_sided / reference_margin_from_prices / run_line_is_pair` |
-| `market_shape_tally(records) / one_sided_line_check(records) / warn_market_shapes(tally)` | SIM-549, PURE: per run line the pairs, the games listed as two separate bets and their records, the games left with one record, the pairs' mean margin, and each side's one-sided line against its own outcome rate (bias and z); per market the paired prices' mean margin. The warning names at load a run line listed as two bets, a one-sided line more than 4 standard errors off its outcome rate (a mis-stored row, such as the 2025 first-inning +1 / +1 rows), and a market whose paired prices sit outside 1.00-1.15. Written under `counters.market_shapes`; `params.run_line_scoring = "sim549.1"` stamps the report. | `run()`<br>`scripts/sim549_rescore_runlines.py` | — |
+| `score_run_line_market(game_pk, market_type, cp, odds, *, sim_cover, real_cover, open_sim_prob_only) / reference_margin / run_line_market_key` (the shape rule `run_line_is_pair` is imported from `betting.clv_engine`) | SIM-549 (2026-09-25): one scorer for the three run lines. A PAIR (the away spread is the negative of the home spread) gives one record, the home side, the two prices de-vigged against each other. TWO SEPARATE BETS (home −1.5 / away −1.5) give up to two records, keys `<market>` and `<market>_away` with the same market type, each priced from its own price over `reference_margin` (the segment's two-way total, the full-game total, the moneyline, a flat 1.05; never a three-way market; a margin outside 1.00-1.15 skipped), with no fade price. A push drops that side only; a row with no away spread gives no record. `open_sim_prob_only` keeps the full-game run line's old refusal of a simulator probability of exactly 0 or 1. | `score_game_accuracy`<br>`score_segment_market_accuracy`<br>`scripts/probes/rescore_runlines.py` | `simulation.game_market_distributions.market_probability/market_outcome (side=)`<br>`betting.clv_engine.devig_two_way / devig_one_sided / reference_margin_from_prices / run_line_is_pair` |
+| `market_shape_tally(records) / one_sided_line_check(records) / warn_market_shapes(tally)` | SIM-549, PURE: per run line the pairs, the games listed as two separate bets and their records, the games left with one record, the pairs' mean margin, and each side's one-sided line against its own outcome rate (bias and z); per market the paired prices' mean margin. The warning names at load a run line listed as two bets, a one-sided line more than 4 standard errors off its outcome rate (a mis-stored row, such as the 2025 first-inning +1 / +1 rows), and a market whose paired prices sit outside 1.00-1.15. Written under `counters.market_shapes`; `params.run_line_scoring = "sim549.1"` stamps the report. | `run()`<br>`scripts/probes/rescore_runlines.py` | — |
 | `score_prop_accuracy(game_pk, pset, prop_odds, batter_actuals, pitcher_actuals, *, scorable_props)` | Scores every player-prop market the game's ground truth can grade, on the OVER side against the closing line and the real per-player total. `scorable_props` is REQUIRED and per game (SIM-545): BOXSCORE_SCORED_PROPS (all 15 model props, RBI and ER included) on the official box score, EVENT_LABEL_SCORED_PROPS (K/BB/H/HR/TB) on the event-label fallback -- so a fallback game never grades a prop its source cannot see. A player with no actual (he did not play -- the book voids the bet) and a push are skipped. | `_score_one_game` | `PROP_VOCAB_MAP`<br>`betting.clv_engine.prop_edge_report` |
 | `PROP_VOCAB_MAP / MARKET_TRUST / TRUST_TIER_ORDER` | The 15-entry odds prop_stat -> model prop map (SIM-421; the batter `hits`->H and the pitcher `hits_allowed`->H_ALLOWED are kept apart), the per-market trust LABEL (a grouping carried over from the retired pool-totals view -- the market's own Brier row is the verdict; the eight new model props 1B/2B/3B/R/SB/HRR/OUTS/H_ALLOWED carry `unvalidated` until the comparison has scored them), and the one shared tier sort order. | `score_prop_accuracy`<br>`aggregate_accuracy_comparison`<br>`aggregate_hypothetical_return` | — |
 | `_fetch_official_boxscore(pool, game_pk) / _fetch_prop_ground_truth(pool, game_pk)` | SIM-545: read every raw.game_player_stats row for one game (a MISSING table warns once and reads as empty) and pick the ground truth per game -- the official box score when the game has rows, else the event label -- as a `PropGroundTruth` (actuals + `source` + `scorable_props`). | `_score_one_game` | `simulation.prop_validation.real_props_from_boxscore_rows`<br>`_fetch_pa_events`<br>`simulation.prop_validation.real_props_from_pa_events` |
@@ -284,11 +284,11 @@ The SIM-538 sim-vs-closing-line accuracy comparison, the platform's gold-standar
 | `_score_one_game(pool, game_pk, ...)` | The entire per-game pipeline shared by BOTH the serial and parallel execution paths: read the closing odds, resolve GameState, resolve the park factor and the point-in-time cutoff, replay iterations, build WinProbability and PropDistributionSet, score accuracy records. Returns `(records, status, park_factor, ground_truth_source)` -- the fourth element (SIM-545) is `official_boxscore` / `event_label` / None (no props graded) and feeds the per-source game counters. | `_run_serial`<br>`_process_one_game` | `api.routes.games._resolve_state_or_error`<br>`simulation.sim_kwargs.resolve_park_factor_onto_state/resolve_asof_ymd`<br>`simulation.win_probability.win_probability`<br>`simulation.results.GameSimSummary.from_results`<br>`_collect_game_results`<br>`score_game_accuracy`<br>`_fetch_prop_ground_truth`<br>`score_prop_accuracy` |
 | `_process_one_game(game_pk, params)` | Module-level, picklable across-process worker function mapped over the ProcessPoolExecutor; lazily inits one event loop, one asyncpg pool and one DuckDB connection per forkserver worker (amortized), then drives _score_one_game. | `_run_parallel via ProcessPoolExecutor.submit` | `_worker_lazy_init`<br>`_score_one_game` |
 | `run(args)` | Top-level orchestration: opens the parent's sim DuckDB (the SIM-452 park-factor precondition), fetches the game list, dispatches to _run_serial or _run_parallel, prints the accuracy comparison (and, opt-in, the hypothetical return), and writes the JSON report with a documented non-zero exit code for every abandoned-run class (SIM-454). | `main()` | — |
-| `_read_game_pks_file(path) / bundle_provenance(calibration_path)` | SIM-518: `--game-pks-file` restricts the run to a listed set of games (a JSON list or one per line) — the paired-arm subset run; `bundle_provenance` stamps `params.provenance` with the artifact bundle's manifest timestamps, the calibration file's SHA-256 and the fatigue bandwidths, so `scripts/sim518_pair_accuracy.py` can refuse to pair two reports that did not come from the same frozen inputs. | `run()` | — |
+| `_read_game_pks_file(path) / bundle_provenance(calibration_path)` | SIM-518: `--game-pks-file` restricts the run to a listed set of games (a JSON list or one per line) — the paired-arm subset run; `bundle_provenance` stamps `params.provenance` with the artifact bundle's manifest timestamps, the calibration file's SHA-256 and the fatigue bandwidths, so `scripts/pair_accuracy.py` can refuse to pair two reports that did not come from the same frozen inputs. | `run()` | — |
 
 **Depends on:** `betting/clv_engine.py (MarketSide, OddsQuote, TwoWayMarket, american_to_decimal, devig_two_way, devig_multiway, expected_value, moneyline_edge_report, prob_to_american, prop_edge_report, total_over_under_edge_report; the SIM-549 run-line set: DEFAULT_ONE_SIDED_MARGIN, REFERENCE_MARGIN_BAND, devig_one_sided, reference_margin_from_prices, run_line_bet_cover_prob, run_line_is_pair)`, `simulation/sim_kwargs.py (open_sim_duckdb, resolve_park_factor_onto_state, resolve_asof_ymd, UnresolvedParkFactorError)`, `simulation/win_probability.py`, `simulation/results.py (GameSimSummary)`, `simulation/prop_distributions.py`, `simulation/prop_validation.py (binary_brier, binary_log_loss, real_props_from_boxscore_rows, real_props_from_pa_events, the BOXSCORE_* / DERIVABLE_* prop tuples)`, `simulation/play_recorder.py (record_game_plays)`, `simulation/batch_runner.py (derive_seed)`, `simulation/production_factory.py (warm_worker_cache)`, `api/routes/games.py (_resolve_state_or_error, _sim_kwargs_from_state)`, `raw.games / raw.game_odds / raw.prop_odds / raw.game_player_stats / raw.pitches tables`
 
-**Used by:** `operator CLI; scripts/sim518_pair_accuracy.py and scripts/sim549_rescore_runlines.py load it by path for its pure functions. tests/unit/test_sim538_accuracy_comparison.py, test_sim539_minimum_sample_size.py, test_sim540_hypothetical_return.py, test_sim421_backtest_props.py and test_clv_backtest.py load the pure functions by file path via importlib since scripts/ is not a Python package`
+**Used by:** `operator CLI; scripts/pair_accuracy.py and scripts/probes/rescore_runlines.py load it by path for its pure functions. tests/unit/test_sim538_accuracy_comparison.py, test_sim539_minimum_sample_size.py, test_sim540_hypothetical_return.py, test_sim421_backtest_props.py and test_accuracy_comparison.py load the pure functions by file path via importlib since scripts/ is not a Python package`
 
 **Environment flags read here:** `BASEBALL_DB_DSN`, `BASEBALL_DUCKDB_PATH`, `CLV_BACKTEST_PATH`, `CALIBRATION_REPORT_PATH`, `SIM_MP_START_METHOD (default forkserver -- the multiprocessing start method for the across-games pool)`
 
@@ -296,50 +296,50 @@ The SIM-538 sim-vs-closing-line accuracy comparison, the platform's gold-standar
 
 ---
 
-### `scripts/sim555_book_probe.py`
+### `scripts/probes/odds_book_census.py`
 
 **Purpose:** SIM-555 run book step 3 — the gate before the re-load. A READ-ONLY census of N games (default 300, stratified by season 2019-2026 and month, from Final games with a stored closing moneyline) read from the vendor through the provider's by-book methods at `--rate` reads a second (default 1.0): the moneyline, run line, total, the first-inning and first-five moneyline / run line / total, and one strikeout prop per game. It reports, per market: the offers, the books quoting, the opener's coverage and the rows by book; the stamp's distance from the scheduled start by season; the guard's refusals by rule, market and book; the first-five exclusions (dated / twin) by book; and the GATE: (a) every two-way offer quoted by a book on `GRADED_BOOK_PREFERENCE`; (b) per (market, line type, book), the kept first-five rows that still look first-inning-shaped (a price more than 0.15 implied probability from the other books' median at the same line, a copy of the book's own first-inning row, or a shape the guard names) under 0.5%; (c) no book fails (b) — a failing book off the list, or a listed book flagged before its date, names the fix (add it to `F5_EXCLUDED_BOOKS`, or move its date). Gates (b) and (c) grade the bettable books only; the blend's, the pick'em apps', the exchanges' and the prediction markets' flags are printed beside the gate (`non_bettable_flags`), and the rows the load guard refuses are counted, not graded (they are never stored). A read that failed makes an item UNKNOWN; `--game-pks` re-reads the listed games. `--regate FILE` re-applies the CURRENT guard and dated exclusion to a saved census JSON without a vendor or database read (a rule change needs no second hour of vendor reads). Writes nothing to the database. `--out` writes every row, the summary and the gate as JSON.
 
 ---
 
-### `scripts/sim555_book_sharpness.py`
+### `scripts/probes/book_sharpness.py`
 
 **Purpose:** SIM-555 decision 1 — the no-simulator read that ranks the books. After the 2024-2025 re-load, per book and per fixed-line market (the moneyline, the first-inning and first-five moneylines, first team to score, a run in the first inning), the closing row's de-vigged probability of the home / yes side against the real outcome over every game the book quoted: Brier score, log score, n and a game-clustered bootstrap range; plus the shared-line subsets of the totals and the strikeout prop (games where the book's line equals the market's modal line; pushes out). It ranks the books within each market and on the pooled markets over the games every pooled book quoted; the blend `bp:0` is reported beside them and never ranked. The printout suggests a `GRADED_BOOK_PREFERENCE`, or says "no suggestion" and why; the owner sets the list.
 
 ---
 
-### `scripts/sim555_retire_consensus_rows.py`
+### `scripts/probes/retire_consensus_odds.py`
 
 **Purpose:** SIM-555 run book step 8 — retire the old `consensus` rows, season by season, each in ONE transaction: it refuses (exit 2) while any Final game of the season that has a `consensus` closing moneyline lacks a `bp:` one; else it copies every `consensus` row of the season into `raw.game_odds_archive` / `raw.prop_odds_archive` (migration 0028) and deletes them. `--dry-run` checks and counts only. `--allow-missing GAME_PK ...` lets named games through that check (a game with no pre-game close, or whose only old rows belong to another game); a named game that is not missing earns a WARNING. A second WARNING (it does not refuse) counts the Final games with old closing props and no `bp:` closing prop; their old props go to the archive all the same. Run it only after the census passes on every season, then `VACUUM (ANALYZE, PARALLEL 0)` the two live tables (the database container's 64 MB of shared memory is too small for parallel vacuum workers). Ran 2026-10-01 with `--allow-missing 567323 745659`: 359,524 game-odds rows and 4,035,864 prop rows archived and deleted.
 
 ---
 
-### `scripts/sim555_rescore_reports.py`
+### `scripts/probes/rescore_graded_book.py`
 
 **Purpose:** SIM-555 run book step 7 — re-price the stored accuracy reports against the graded book without the simulator: the fixed-line records (the moneylines, first team to score, a run in the first inning) get the graded book's closing prices; the records that carry a line (totals, run lines, props) are counted per market where the graded line differs from the old one (those need the simulator again). Writes `<name>.sim555.json` beside each report with `params.odds_row_version`, the preference list and `params.rescored_from`; refuses a report that already carries `odds_row_version`. The old line of a line-carrying record is read from the live table and its archive. `--drop-not-reloaded` (only for fully re-loaded seasons) drops every record of a game with no `bp:` row — a game the event matcher declines, whose old prices likely belong to another game — as a fresh run does.
 
 ---
 
-### `scripts/sim555_odds_census.sql`
+### `scripts/probes/odds_census.sql`
 
 **Purpose:** SIM-555 — the read-only census on the `bp:` rows, per book and market, after each re-loaded season (`\set season 2024`): the scope note's Appendix A plus every guard rule, the rows per book and market, and the duplicate check. Every query's healthy read is zero rows.
 
 ---
 
-### `scripts/sim518_pair_accuracy.py`
+### `scripts/pair_accuracy.py`
 
-**Purpose:** SIM-518 — pair two `clv_backtest.py` reports (an OFF arm and an ON arm run on the same games, seeds and frozen bundle) and read the PAIRED per-record difference of the simulator's own Brier and log-loss scores, per market, with the game-clustered bootstrap range and the SIM-539 minimum sample at a stated floor. The instrument that says whether a model change (here the pitcher-fatigue factor) made the served probabilities more or less accurate.
+**Purpose:** SIM-518 — pair two `accuracy_comparison.py` reports (an OFF arm and an ON arm run on the same games, seeds and frozen bundle) and read the PAIRED per-record difference of the simulator's own Brier and log-loss scores, per market, with the game-clustered bootstrap range and the SIM-539 minimum sample at a stated floor. The instrument that says whether a model change (here the pitcher-fatigue factor) made the served probabilities more or less accurate.
 
 | Function | What it does | Called by | Depends on |
 |---|---|---|---|
 | `provenance_mismatches(a, b)` | Every reason two reports must not be paired: a different base seed, iteration count, season list, market set, calibration flag, artifact bundle (manifest timestamps), calibration hash, or game set. `--force` pairs anyway and records the confound. | `main()` | — |
 | `pair_records(a, b)` | Joins the two reports' `accuracy_records` on (game_pk, market, player_id); raises when an outcome or a market price differs between the arms (the odds rows or the box changed between the runs); returns per-record Brier / log loss for each arm and the market, and the paired differences (B minus A). | `main()` | `simulation.prop_validation.OUTCOME_PROB_EPS` |
-| `summarize(rows, ...)` | One bucket's read: n, games, the mean paired Brier and log-loss difference, the game-clustered 95% bootstrap range, the clustered SE, the mean probability shift, each arm's mean Brier lead over the market, and the SIM-539 minimum sample at the floor. Reuses the backtest's own `_bootstrap_paired_diff_ci` / `_clustered_se` / `_minimum_observations_clustered`. | `main()` | `scripts/clv_backtest.py (loaded by path)` |
+| `summarize(rows, ...)` | One bucket's read: n, games, the mean paired Brier and log-loss difference, the game-clustered 95% bootstrap range, the clustered SE, the mean probability shift, each arm's mean Brier lead over the market, and the SIM-539 minimum sample at the floor. Reuses the backtest's own `_bootstrap_paired_diff_ci` / `_clustered_se` / `_minimum_observations_clustered`. | `main()` | `scripts/accuracy_comparison.py (loaded by path)` |
 | `_fetch_depth(dsn, game_pks)` | The pitcher's real pitch count and starter flag per (game, player) from `raw.game_player_stats`, for the prop buckets by pitch depth (<75 / 75-99 / 100+) and the deep-start game list (`--write-deep-start-list`, starts of 90+ pitches). | `main()` | `raw.game_player_stats` |
 
 > **Note (2026-09-13):** the backtest's `params.provenance` stamp now also carries the change pool's manifest time (`manifest_mtimes.manager_pool`, compared by `provenance_mismatches`) and a `manager` block — the arm's `SIM_MANAGER`, `SIM_MANAGER_DRAW`, `SIM_BULLPEN_SOURCE`, `SIM_ACTOR_POWER_MANAGER_USAGE` and the six `SIM_RELIEF_*` values — so a report says which arm of the SIM-427 switch it measured.
 
-**Used by:** `operator CLI only (the SIM-518 paired accuracy read). tests/unit/test_sim518_pair_accuracy.py loads it by path.`
+**Used by:** `operator CLI only (the SIM-518 paired accuracy read). tests/unit/test_pair_accuracy.py loads it by path.`
 
 ---
 
@@ -355,7 +355,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 **Depends on:** `pipeline/etl/boxscore_ingest.py`, `asyncpg`, `MLB Stats API (/api/v1/game/{game_pk}/boxscore)`, `raw.games / raw.game_player_stats tables`
 
-**Used by:** `operator CLI only (the SIM-545 data run). scripts/validate_props.py, scripts/clv_backtest.py and scripts/sim545_boxscore_audit.py read the rows it writes`
+**Used by:** `operator CLI only (the SIM-545 data run). scripts/validate_props.py, scripts/accuracy_comparison.py and scripts/boxscore_audit.py read the rows it writes`
 
 **Environment flags read here:** `BASEBALL_DB_DSN (the --dsn default)`
 
@@ -363,7 +363,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim427_manager_recompute.py`
+### `scripts/probes/manager_profile_recompute.py`
 
 **Purpose:** SIM-427 part 4a — recompute the manager profiles (`derived.manager_season_metrics`) and the manager league-average row (`derived.league_averages`, entity `manager`) on their own, instead of the five-hour full profile rebuild. The app must be STOPPED (a DuckDB write). Applies the DuckDB migration `0027_sim537_pitcher_manager_asof.sql` first (idempotent; the live manager table lacked the point-in-time column the SIM-537 INSERT names), runs the computor's own `_compute_manager_profiles`, then `LeagueAverageProfiles.compute`, then verifies (rows per season, the manager league rows, the league means the plan's §2 table cites). Ran 2026-09-13: ten seasons, 14 s for the profiles, 10 manager league rows.
 
@@ -376,7 +376,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim532_fielder_recompute.py`
+### `scripts/probes/fielder_profile_recompute.py`
 
 **Purpose:** SIM-532 — Savant's per-position outs above average and the outfield jump in the fielder profile (`derived.fielder_season_metrics`), rebuilt on their own after the two board loads: run-book step 4 of `docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md`. The app must be STOPPED (a DuckDB write; the forkserver's writer lock, SIM-524). Applies the DuckDB migration `0030_sim532_fielder_oaa_jump.sql` (idempotent; the six columns after `asof_date`), runs the FIELDER CHAIN through the computor's own methods with Postgres attached — the run-expectancy matrix, the six per-play builders, the aggregator with its two new Savant joins, then the outfield arm fill again (the aggregator writes the arm block NULL) — recomputes `derived.league_averages` for the seasons, then verifies. Not the pitcher GMM, not the pools: well under an hour. Seasons 2017 to 2026 by default (`raw.pitches` starts in 2017; the boards' 2016 rows stay in the raw tables). A partial season list must include the season in progress, or the script refuses it before the computor's one-cutoff guard would (`--allow-partial` hands the decision to the guard). Ran 2026-09-17 on the live data: the migration applied, the fielder chain recomputed in 80 s (10 seasons), the league rows written, every verify check passed (1,145–1,291 fielder rows a season with a Savant figure; 297–496 outfield rows with a jump — a jump row joins every outfield position a player has a row at; the named 2024 checks value for value).
 
@@ -391,7 +391,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim533_arm_angle_probe.py`
+### `scripts/probes/arm_angle_probe.py`
 
 **Purpose:** SIM-533 — the evidence behind the decision that Savant's pitcher arm angle, active spin and spin-axis deviation are NOT features (owner, 2026-09-19; the plan is `docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md`). The design session's two probes merged so the numbers re-run: the board pulls with their probes (the arm-angle board takes `season=` and ignores `year=` silently; the 1990 pull is the empty-body probe), the reconstructions of the three numbers from our own columns (part A the arm angle, part B the spin shape), the year-to-year repeats, and the pair test of what each number adds to the production pitcher score on 67,941 same-hand pairs of 2024 (part C, read from the production `pitcher_sim.npz`). The numbers it printed on 2026-09-18 sit in its docstring. `--offline` runs six checks on a bundled fixture of twenty real 2024 rows (Savant's formula r 1.000; the mirrored spin-axis convention 360 − ours; the inferred-axis formula 180 − atan2(hb, ivb)) so the conventions cannot rot; the guard `tests/unit/test_sim533_arm_angle_decision.py` runs it. It changes nothing in production.
 
@@ -406,7 +406,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim478_fence_check.py`
+### `scripts/fence_check.py`
 
 **Purpose:** SIM-478/479/480 (2026-09-21) — the outfield fence's certification, a read-only pass over every real air ball of the pool window against a geometry document (the live bundle's by default), in about two minutes with the app up. It grades the fence stage's decision the way production makes it (the document's grid, the ball's own season group, the ball's own distance as the carry) and prints one PASS / FAIL line per check with the plan's thresholds: A1 the whole window (P(home run ǀ over) ≥ 0.90, missed home runs ≤ 10%), A2 every venue with 200+ decided balls (≥ 0.80, ≤ 15%), A3 the held-out seasons (each within 3 points of the whole window; the lines rebuilt from the other seasons with the builder's own code), A4 the down-the-line balls (|spray| ≥ 45°, missed ≤ 12%), A5 the moved walls (the live line's late-season missed share within 5 points of a late-seasons-only line), A6 no last-season venue on the league line, and (2026-09-22) A7 the transfer check — every pool air ball born into each park, the share called over the park's fence with the ball's own distance and with the carry offset, against a fair target (the pool's mix at the park's own home-run rate per exit-velocity / launch-angle / spray cell); PASS when every park sits within 1.5 points with the offset (the plan's first 1.0-point line was the reviewers' fit's; the built fit misses it at four parks, so the gate was widened with the reason recorded); on a document without offsets A7 reports and does not grade. `--lane` reads a lane's JSON record (`SIM_ACCEPTANCE_JSON_OUT`) for the per-park read B2 (each venue's sim home runs per ball in play against the game set's actor-matched expectation; since 2026-09-22 only parks with `--min-games` games (3) enter, the SE combines the sim's and the expectation's own sampling error, and the grade is the extremes — no park beyond 3 combined SE — with r reported, not graded; the balanced set gives most parks one game, so the powered read needs a larger set) and the D counters (the fence stage's and the wall-margin band's). The exit code is 0 only when every graded check passes. Runs in the run book of every geometry rebuild (`--what park`).
 
@@ -414,14 +414,14 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 |---|---|---|---|
 | `decide(balls, doc)` / `decision_check(balls, doc)` | The production decision on every air ball (over / short / passed) and its reads: P(HR ǀ over), the missed share, the over-but-kept share; by distance-from-the-fence band, by sector, by venue; the down-the-line subset; the share of home runs by margin. Works on a version-2 document and on the old nine-sector one. | `run_check()` | `pipeline.batch.engine_artifacts.sector_of` |
 | `held_out(balls, seasons, doc)` / `moved_walls(...)` / `thin_parks(...)` | A3 (the lines rebuilt without a season, through `build_geometry_document`), A5 (the change detector's moves and the live-vs-late missed shares) and A6 (the last season's venues with a league-line sector). | `run_check()` | `pipeline.batch.engine_artifacts.build_geometry_document / detect_moves` |
-| `park_table(...)` / `lane_expectations(con, per_game)` / `counters_read(fence_counts)` | The `--lane` reads: the per-venue table with the actor-matched expectation from `scripts/sim523_game_set.py` (Postgres lineups, the pool's actor rates), the residual, its SE and the park factor; the D counters over air balls. | `main()` | `sim523_game_set.PoolRates / _game_expectation / _lineups`<br>`derived.park_factors`, `sim.outcome_pool` |
+| `park_table(...)` / `lane_expectations(con, per_game)` / `counters_read(fence_counts)` | The `--lane` reads: the per-venue table with the actor-matched expectation from `scripts/balanced_game_set.py` (Postgres lineups, the pool's actor rates), the residual, its SE and the park factor; the D counters over air balls. | `main()` | `balanced_game_set.PoolRates / _game_expectation / _lineups`<br>`derived.park_factors`, `sim.outcome_pool` |
 | `verdicts(summary, thresholds)` / `Thresholds` | The PASS / FAIL lines against the plan's §7 thresholds (a frozen dataclass the unit test imports). | `main()` | — |
 
-**Used by:** `operator CLI (the run book of every geometry rebuild); tests/unit/test_sim478_fence_check.py holds the thresholds and a 200-ball fixture with known answers.`
+**Used by:** `operator CLI (the run book of every geometry rebuild); tests/unit/test_fence_check.py holds the thresholds and a 200-ball fixture with known answers.`
 
 ---
 
-### `scripts/sim478_wall_zone_probe.py`
+### `scripts/probes/wall_zone_probe.py`
 
 **Purpose:** SIM-478/479/480 (2026-09-21) — the wall-play check (the plan's C). The split probe's tap, restricted to born air balls whose carry — read in the live park's air with the carry offset, as the stage reads it (2026-09-22) — sits within 30 feet of the LIVE fence (`fence_at` with the game's venue and season): per side of the fence (short by 0–30 ft, over by 0–30 ft) it compares the drawn plays with the born rows' own outcomes. The home-run share is graded against what the stage guarantees (1.0 over, 0.0 short, a 0.01 slack); the double / triple / out shares are graded among the plays that were not a home run, within 2 SE + 0.01 of the born rows' own. Runs on the balanced 45-game set at 30 iterations (about fifteen minutes) under the container's production flags; `--json-out` keeps the tallies.
 
@@ -434,7 +434,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim427_manager_probe.py`
+### `scripts/probes/manager_probe.py`
 
 **Purpose:** SIM-427 part 4f — the manager probe: real games on the balanced 45-game set with ONE configuration of the pitching-change draw (an "arm") per process, paired by `report`. The reads: THE USAGE READ (pitchers per team-game, the starters' pitches at the pull — mean and spread across starter-games — the starters' outs, the half-boundary share of changes, against the official box score's numbers for the set's seasons from `raw.game_player_stats` and the pool's own change rates); THE MANAGER READ (the change rate per boundary with a starter on the mound, by manager tier — terciles of the live managers' own `starter_avg_pitch_count` — against the pool's own rate on those managers' starter rows: the per-opportunity conditional the manager power is fitted on); THE RELIEVER READ (the entering arm's high-leverage role share by inning tier, its rest at entry, its hand mix, against the pool's own incoming arms); THE COMPOSITION READ (the sim's pitch share by pitch-count band and times through the order against the pool's row share — the fatigue read of the SIM-518 plan); THE PREDICTION SHIFT (per starter-game strikeout mean and probability of clearing the closing line, arm minus baseline).
 
@@ -443,29 +443,29 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 | `Arm.parse(text)` / `Arm.apply(machine)` | `off` = production today (the SIM-434 formula, the synthetic pen); otherwise `key=value` pairs: `draw` (0/1), `pen` (synthetic/box), `mgr` (the manager power), `role` (σ), `stuff` (power), `rest` (σ days), `p2d` (mismatch weight), `p3d` (σ pitches), `hand` (mismatch weight). `apply` sets the sampler weights on the process-cached sampler directly and `machine.manager_draw`; the pen source is the resolver's `SIM_BULLPEN_SOURCE`, set in this process's environment before the games are resolved. | `run()` | — |
 | `install(machine, rec, state)` | Wraps the per-game machine's `_maybe_pull_starter` (boundaries visited and changes per (manager, starter-on-the-mound), the change's side, the entering arm's hand, role share and recent usage) and `_full_pool_outcome` (pitches per pitcher and the band × TTO composition). | `run()` | — |
 | `_box_reference(seasons)` / `_pool_reference(fp, manager_ids)` / `_k_lines(game_pks)` | The three references: the box score's usage numbers for the seasons (the plan's 2024 constants stand in when the database is unreachable), the change pool's own rates (overall per role × boundary, per manager on starter rows, the incoming arms' role / rest / hand mix on changed rows), the closing strikeout lines. | `run()` | `raw.game_player_stats`<br>`raw.prop_odds`<br>`EngineArtifacts.change_pool / change_roles` |
-| `report(args)` | Pairs the arm JSONs (the first is the baseline) and prints the five reads; `--scan-json scripts/sim518_fatigue_scan.json` supplies the pool's row share for the composition read. | `main()` | — |
+| `report(args)` | Pairs the arm JSONs (the first is the baseline) and prints the five reads; `--scan-json docs/audit/records/sim518_fatigue_scan.json` supplies the pool's row share for the composition read. | `main()` | — |
 
 **Used by:** `operator CLI only (part 4f's fits: the manager power ladder 0 / 1 / 2 / 4 / 8, then the reliever weights; the usage read is the first of the two flip conditions in the plan's §5).`
 
 ---
 
-### `scripts/sim548_accuracy_split.sh`
+### `scripts/accuracy_split_arm.sh`
 
-**Purpose:** the accuracy-fit plan's Part A4 — the pitch / pitch-result split as one paired accuracy arm INSIDE the app container over production as the compose file sets it (fatigue 0.5 included): `SIM_PITCH_RESULT_SPLIT=1 SIM_PITCH_PITCHER_POWER=16 SIM_RESULT_PITCHER_POWER=16 SIM_RESULT_BATTER_POWER=8` (the 2026-09-09 fit; bandwidth 1.0 and the density correction at their defaults) on the same 250 games, seeds and bundle. Writes `scripts/sim548_accuracy_split.json`, `.run.log` and `sim548_accuracy_split.log` (start / exit). Pair against `scripts/sim518_accuracy_tto05.json` with `scripts/sim518_pair_accuracy.py` (baseline first). `scripts/clv_backtest.py` stamps the split's six settings into `params.provenance.split`.
+**Purpose:** the accuracy-fit plan's Part A4 — the pitch / pitch-result split as one paired accuracy arm INSIDE the app container over production as the compose file sets it (fatigue 0.5 included): `SIM_PITCH_RESULT_SPLIT=1 SIM_PITCH_PITCHER_POWER=16 SIM_RESULT_PITCHER_POWER=16 SIM_RESULT_BATTER_POWER=8` (the 2026-09-09 fit; bandwidth 1.0 and the density correction at their defaults) on the same 250 games, seeds and bundle. Writes `results/sim548/sim548_accuracy_split.json`, `.run.log` and `sim548_accuracy_split.log` (start / exit). Pair against `results/sim518/sim518_accuracy_tto05.json` with `scripts/pair_accuracy.py` (baseline first). `scripts/accuracy_comparison.py` stamps the split's six settings into `params.provenance.split`.
 
 **Used by:** `operator CLI only. LAUNCHED 2026-09-14 05:38 UTC (container sim548_split).`
 
 ---
 
-### `scripts/sim548_baseline_1000.sh`
+### `scripts/accuracy_baseline_1000.sh`
 
-**Purpose:** the 1,000-game accuracy baseline of production (the owner's request of 2026-09-14: which markets the simulator is best and worst at against the closing line). Runs INSIDE the app container on the compose environment (the split ON at 16 / 16 / 8, the fatigue weight 0.5) over games 251–1000 of 2024 (the first 1,000 Final games by game id; the first 250 are already on record under the identical configuration as `scripts/sim548_accuracy_split.json`) as three 250-game chunks, each its own report (`scripts/sim548_baseline_2024_chunk{2,3,4}.json`; the lists `scripts/sim548_games_2024_chunk{2,3,4}.txt`), about 3 h 55 each. The app is stopped for the run (five workers and the warm app do not fit the 9.7 GiB VM together).
+**Purpose:** the 1,000-game accuracy baseline of production (the owner's request of 2026-09-14: which markets the simulator is best and worst at against the closing line). Runs INSIDE the app container on the compose environment (the split ON at 16 / 16 / 8, the fatigue weight 0.5) over games 251–1000 of 2024 (the first 1,000 Final games by game id; the first 250 are already on record under the identical configuration as `results/sim548/sim548_accuracy_split.json`) as three 250-game chunks, each its own report (`results/sim548/sim548_baseline_2024_chunk{2,3,4}.json`; the lists `scripts/data/games_2024_chunk{2,3,4}.txt`), about 3 h 55 each. The app is stopped for the run (five workers and the warm app do not fit the 9.7 GiB VM together).
 
 **Used by:** `operator CLI only. LAUNCHED 2026-09-14 16:51 UTC (container sim548_baseline).`
 
 ---
 
-### `scripts/sim548_market_skill.py`
+### `scripts/market_skill.py`
 
 **Purpose:** the joint-fit plan's §5.1 — the per-market skill table of one production read, and the composite objective between two reads. Merges one or more backtest reports of ONE configuration on disjoint game sets (it refuses a provenance mismatch or an overlapping game set unless `--force`) and prints, per market: the records and games; the simulator's Brier, the closing line's and the base-rate forecast's; the skill (base minus Brier) for both; the gap (sim minus line) with a game-clustered bootstrap range and a plain verdict (beats / level with / behind the line); the bias, the spread and the AUC for both; the reliability by bin. With `--compare` (a second configuration on the same games) it prints the composite `Z = Σ w·(Δ/s)/√Σw²` over the markets that clear `--min-n`, with its range, and the markets worse or better beyond their ranges. `--weights` takes a JSON dict of market weights; `--json-out` writes everything.
 
@@ -479,15 +479,15 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim549_rescore_runlines.py`
+### `scripts/probes/rescore_runlines.py`
 
-**Purpose:** SIM-549 (2026-09-25) — re-price the run-line records of the accuracy reports written before the run lines were scored by their shape, beside the originals (`<name>.sim549.json`). A pair keeps its record; a row the book listed as two separate bets re-prices its home record from its own price over the same game's reference margin and drops its fade price; the away bet's record is NOT built (its simulator probability needs the per-iteration margins a report does not store) and joins from the next backtest run. It reads the closing rows from raw.game_odds (the latest `fetched_at` per game and market, the backtest's rule), checks every stored price against the store, uses the backtest's own `run_line_is_pair` / `reference_margin`, recomputes `accuracy_comparison` (and `hypothetical_return` when present) with the report's own bootstrap settings, and stamps `params.run_line_scoring` and `params.rescored`. It refuses a stamped report and a file with no `accuracy_records` (a paired read: regenerate it with `sim518_pair_accuracy.py` over the re-scored reports). A report with a missing closing row or a price the store does not hold is not written unless `--accept-problems` (then `params.rescored.problems` lists them); an existing output is kept unless `--overwrite`.
+**Purpose:** SIM-549 (2026-09-25) — re-price the run-line records of the accuracy reports written before the run lines were scored by their shape, beside the originals (`<name>.sim549.json`). A pair keeps its record; a row the book listed as two separate bets re-prices its home record from its own price over the same game's reference margin and drops its fade price; the away bet's record is NOT built (its simulator probability needs the per-iteration margins a report does not store) and joins from the next backtest run. It reads the closing rows from raw.game_odds (the latest `fetched_at` per game and market, the backtest's rule), checks every stored price against the store, uses the backtest's own `run_line_is_pair` / `reference_margin`, recomputes `accuracy_comparison` (and `hypothetical_return` when present) with the report's own bootstrap settings, and stamps `params.run_line_scoring` and `params.rescored`. It refuses a stamped report and a file with no `accuracy_records` (a paired read: regenerate it with `pair_accuracy.py` over the re-scored reports). A report with a missing closing row or a price the store does not hold is not written unless `--accept-problems` (then `params.rescored.problems` lists them); an existing output is kept unless `--overwrite`.
 
 **Used by:** `operator CLI only (the SIM-549 run book, run in the app container with scripts/ mounted). tests/unit/test_sim549_rescore.py loads it by path.`
 
 ---
 
-### `scripts/sim548_calibrate_markets.py`
+### `scripts/calibrate_markets.py`
 
 **Purpose:** the joint-fit plan's §5.4 / §7 — the per-market calibration layer. Fits, per market, a map from the simulator's probability to a calibrated one on the FIT reports' records and reads it on the CHECK reports' (never the same games): the two-parameter logistic map `logit(p') = a + b·logit(p)` (a shift and a shrink; `b < 1` = the simulator was over-spread) by maximum likelihood — Newton steps with step-halving, a convergence flag, and a fit that did not converge never passes — or `--method isotonic` (a monotone step map over the unique probabilities, so tied values cannot reorder it). A converged negative slope collapses to the fit set's base rate (a wrong-way market carries no information to keep). The moneyline is fitted on `sim_prob_raw` but every BEFORE figure is scored on the mapped `sim_prob` production shows; it is skipped when the records lack the raw value. Per market it prints a and b, the Brier / bias / spread before and after on the check set, the gap to the line before and after with ranges, the map's gain with its range, and PASS when the gain is clear of zero. `--write-calibration PATH` merges the passing maps into the calibration report under `market_calibration` (the app does not read that key yet). Reviewed and corrected 2026-09-15.
 
@@ -495,23 +495,23 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim548_offline_fit.py`
+### `scripts/offline_draw_fit.py`
 
 **Purpose:** the joint-fit plan's §5.2 — the offline joint fit of the pitch draws' weights (v2, 2026-09-15). Builds the production sampler through the factory and takes whole STARTS of one season as the test set (`--starts`, every pitch of each; `--start-min-pitches`), then for each pitch sets the point-in-time cutoff to the day before its game, calls `new_half_inning` / `new_plate_appearance` exactly as the loop does (the row's own count, base-out state, batting side, pitch count and times through), and reads the count bucket's whole jar (`_pa_rows` / `_bucket_cdf`; `FullPoolSampler.result_weights` for the result draw). Three levels of score per setting: per pitch the six-outcome Brier (the single-draw path; the split anchored on the real pitch; the split through the pitch draw's own mixture with `--chain-k` anchors drawn from it — unbiased at every power); per plate appearance the twelve count buckets run as an absorbing chain to strikeout / walk / in play / hit by pitch, a four-way Brier (`--pa-chain-k` anchors per bucket for the split path); per start the sum of P(strikeout) against the real strikeouts — correlation, slope of real on predicted, bias, spread ratio (the market's own quantity). Also the per-pitcher discrimination read against each pitcher's season share from rows outside the test set, the effective rows and share of the ADMISSIBLE rows (with the 10th percentile), a design of ladders and pair grids over the eight pitch-draw weights with the interaction read per pair, a checkpoint that resumes only for the same test set and chain settings (`--checkpoint`), `--profile-season` (key the actors to another season's profile — the leak check) and `--holdout-season` (production and the top settings by the per-start strikeout read on fresh starts of another season).
 
-**Used by:** `operator CLI only. v1 (per-pitch only) ran 2026-09-15 to 57 of 78 settings before a Docker restart (scripts/sim548_offline_pitch_v1_partial_20260915.txt); v2 launched 16:38 UTC on 120 starts of 2024, 78 settings (scripts/sim548_offline_v2_20260915.{txt,json,npz}).`
+**Used by:** `operator CLI only. v1 (per-pitch only) ran 2026-09-15 to 57 of 78 settings before a Docker restart (docs/audit/records/sim548_offline_pitch_v1_partial_20260915.txt); v2 launched 16:38 UTC on 120 starts of 2024, 78 settings (docs/audit/records/sim548_offline_v2_20260915.{txt,json}, results/sim548/sim548_offline_v2_20260915.npz).`
 
 ---
 
-### `scripts/sim548_design.py`
+### `scripts/designed_experiment.py`
 
-**Purpose:** the joint-fit plan's §5.3 — the designed experiment on the full simulator. `--factors` names up to six weights with two levels (`[production, candidate]`, or `[low, high, mid]` when true centre arms are wanted); the script builds a full factorial up to four factors, or a 16-run fraction for five (resolution V, E=ABCD) or six (resolution IV, E=ABC, F=BCD), plus `--baseline-repeats` runs of production with seeds strided by the iteration count (the backtest seeds iteration i as base seed + i, so neighbouring seeds would share almost every iteration) — the noise floor — and `--centre-arms` true centre points at the mid levels (curvature = corners − centres, with a range; None without them). Each arm is one `clv_backtest.py` run on one game list (resumable: an arm whose report exists is skipped). The read, per market on that market's OWN common games (a sparse market no longer shrinks the others' game sets) and for the composite Z: the main effect of each factor, one column per alias group of two-way products (named `A×B=C×E`; a group aliased with a main effect is dropped and reported), the curvature, each with a game-clustered bootstrap range, the noise floor from the baselines, and the best corner. A fractional design with a missing factorial report, or any rank-deficient design, is refused by name. `--analyze-only` reads an existing `out-dir`. Reviewed and corrected 2026-09-15 (`docs/audit/2026-09-15-sim548-instruments-review.md`).
+**Purpose:** the joint-fit plan's §5.3 — the designed experiment on the full simulator. `--factors` names up to six weights with two levels (`[production, candidate]`, or `[low, high, mid]` when true centre arms are wanted); the script builds a full factorial up to four factors, or a 16-run fraction for five (resolution V, E=ABCD) or six (resolution IV, E=ABC, F=BCD), plus `--baseline-repeats` runs of production with seeds strided by the iteration count (the backtest seeds iteration i as base seed + i, so neighbouring seeds would share almost every iteration) — the noise floor — and `--centre-arms` true centre points at the mid levels (curvature = corners − centres, with a range; None without them). Each arm is one `accuracy_comparison.py` run on one game list (resumable: an arm whose report exists is skipped). The read, per market on that market's OWN common games (a sparse market no longer shrinks the others' game sets) and for the composite Z: the main effect of each factor, one column per alias group of two-way products (named `A×B=C×E`; a group aliased with a main effect is dropped and reported), the curvature, each with a game-clustered bootstrap range, the noise floor from the baselines, and the best corner. A fractional design with a missing factorial report, or any rank-deficient design, is refused by name. `--analyze-only` reads an existing `out-dir`. Reviewed and corrected 2026-09-15 (`docs/audit/2026-09-15-sim548-instruments-review.md`).
 
 **Used by:** `operator CLI only. Built and corrected 2026-09-15; the first design (four factors, full 2^4, three baselines, two centre arms — the review's §4) waits on the v2 offline read.`
 
 ---
 
-### `scripts/sim427_pen_check.py`
+### `scripts/probes/bullpen_check.py`
 
 **Purpose:** SIM-427 part 4b's check — the real pen against reality, on hundreds of games (never dozens). Builds the pen the resolver builds (`pipeline.bullpen_usage.fetch_pen_for_game`) for a random sample of listed Final games and reads: the listing's coverage per season; the pen's size; the share of relievers who actually pitched (`raw.game_player_stats`, `played_pitch` and not `p_started`) that the pen contains, per side and overall, with every miss classified (not listed / removed by the rotation rule); the agreement with the older SIM-433 availability table both ways; the pen's rest mix. Ran 2026-09-13 on 400 games of 2023-2026: every Final game listed; 8.4 arms per pen; 99.1% of the relievers used are in the pen (96.9% of sides complete) after the opener refinement (`ROTATION_START_MIN_PITCHES`); the SIM-433 gap (71% / 70% raw) is by design — the pen keeps arms SIM-433 marks "rest", SIM-433 keeps rotation starters and today's starter.
 
@@ -523,7 +523,7 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
-### `scripts/sim545_boxscore_audit.py`
+### `scripts/boxscore_audit.py`
 
 The validation study for the official box-score ground truth (SIM-545): derives every prop total the platform can build from its own data (raw.pitches event labels, runner flags and steal columns, plus the pickoff outs and intentional walks in raw.play_events), compares each with the official raw.game_player_stats row for the same games, and prints per stat the rows compared, the exact-match rate, the mean absolute difference, the signed bias and the ten worst players. Read-only against the database. Run it over hundreds of games, never dozens (CLAUDE.md §2b).
 
@@ -639,9 +639,9 @@ Corrective reload tool for specific games or every discovered ETL gap. Distingui
 
 ---
 
-### `scripts/sim553_rebuild_pitch_pool.py`
+### `scripts/rebuild_pitch_pool.py`
 
-SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or foul bunt as strike three. It rebuilds `sim.pitch_pool` for all ten seasons in ONE transaction with the `sim553.1` builder, checks it, and exports the pitch pool only into the engine-artifact bundle. Run it with the app STOPPED (the app holds the DuckDB lock, SIM-524): `docker compose stop app`, then `MSYS_NO_PATHCONV=1 docker compose run -d --rm -v "$PWD/scripts:/app/scripts" app python scripts/sim553_rebuild_pitch_pool.py`, then `docker compose up -d app`. `--check-only` runs the pre-flight and check d read-only while the app runs.
+SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or foul bunt as strike three. It rebuilds `sim.pitch_pool` for all ten seasons in ONE transaction with the `sim553.1` builder, checks it, and exports the pitch pool only into the engine-artifact bundle. Run it with the app STOPPED (the app holds the DuckDB lock, SIM-524): `docker compose stop app`, then `MSYS_NO_PATHCONV=1 docker compose run -d --rm -v "$PWD:/app" app python scripts/rebuild_pitch_pool.py`, then `docker compose up -d app`. `--check-only` runs the pre-flight and check d read-only while the app runs.
 
 | Step | What it does |
 |---|---|
@@ -654,12 +654,12 @@ SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or 
 > **Notes for anyone changing this file:** The ROLLBACK does not last on its own: DuckDB keeps the new coding, so any later pool export (`make engine-artifacts`, the nightly chain) writes it back. Hold every export until the table is rebuilt on the coding you keep. Run on 2026-09-25: 3.5 minutes, every check passed.
 ---
 
-### `scripts/sim559_backfill_start_positions.py`
+### `scripts/probes/backfill_start_positions.py`
 
 Repairs the starters' positions in `raw.game_lineups` (SIM-559). The historical loader wrote each starter's `position_code` from the box feed's `position` field, the LAST position the player held in the game; `allPositions[0]` is where he started. A fielder who moved mid-game therefore held his final slot in the simulator's defense map, his starting slot was empty, and the player who really started at his final slot lost his glove — one team-game in four (10,802 + 1,091 of 45,484 team-games with a hole, 301 with no catcher; 29 defective team-games in the balanced set's 90). **RAN 2026-10-07:** 22,742 games, 17,279 rows repaired in 10,415 games, zero failures, 1 h 44 min at `--sleep 0.1`; the census after reads every team-game with eight gloves and a catcher (the record is in `CHANGES.md`, 2026-10-07). The script fetches each Final game's box (`/api/v1/game/{pk}/boxscore`, the same request the box-score backfill makes), compares the parsed starting positions with the stored lineup codes, and writes one UPDATE per game over the rows that differ. The box-score table keeps the last position (what the official box shows).
 
-    python scripts/sim559_backfill_start_positions.py --dry-run --max-games 200
-    python scripts/sim559_backfill_start_positions.py --done-file /data/sim559_done.txt
+    python scripts/probes/backfill_start_positions.py --dry-run --max-games 200
+    python scripts/probes/backfill_start_positions.py --done-file /data/sim559_done.txt
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
@@ -677,7 +677,7 @@ Repairs the starters' positions in `raw.game_lineups` (SIM-559). The historical 
 
 ---
 
-### `scripts/sim523_game_set.py`
+### `scripts/balanced_game_set.py`
 
 Generates the BALANCED certifying game set (owner ruling 2026-09-09) used by the acceptance test lane: picks whole-day slates from real MLB schedule dates (every team appears once per date) whose starting pitchers' and batters' own pool rates sit within 0.6 percent of the full pool's own totals across 8 outcome channels, so the certification lane grades on games that are statistically representative rather than hand-picked.
 
@@ -700,7 +700,7 @@ Generates the BALANCED certifying game set (owner ruling 2026-09-09) used by the
 
 ---
 
-### `scripts/sim523_concentration.py`
+### `scripts/probes/actor_concentration_check.py`
 
 Runs the SIM-523 part-F concentration check at given actor-factor powers: measures, per actor score matrix, how much of the draw weight a live player's own team disproportionately receives (the own-staff ratio), and passes or fails against a strict ratio ceiling. This is the gate that must pass before a strict artifact build ships fitted actor powers.
 
