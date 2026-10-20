@@ -351,12 +351,7 @@ class TestSim148PitcherSimilarityCleanup:
         need to confirm the function shape.  Richer behaviour is already
         exercised by tests/unit/test_pitcher_similarity.py."""
         src = _read(_ROOT / "similarity" / "engines" / "pitcher_similarity.py")
-        assert "SIM-148" in src or "SIM-067" in src, (
-            "SIM-148: pitcher_similarity.py must reference the SIM-148/SIM-067 "
-            "context comment so future readers see the why."
-        )
-        # 3-tuple guard: source must contain a 3-element return tuple
-        # immediately after the SIM-148 comment in _score_pair.
+        # 3-tuple guard: _score_pair's docstring advertises a 3-element return.
         assert "(composite, arsenal, command)" in src, (
             "SIM-148: _score_pair docstring must advertise a 3-tuple return."
         )

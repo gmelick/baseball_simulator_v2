@@ -905,8 +905,8 @@ Open defects are rows in `BACKLOG.xlsx`. The Phase-5-close defect list, the 2026
 bring-up record and the steal-volume history are in `docs/archive/CLAUDE-md-history.md`.
 
 `tests/acceptance/bands.py` sizes two band floors on the magnitudes below, and the acceptance
-tests cite them by line number. If you move either line, re-point those citations in the same
-commit.
+tests cite them as "CLAUDE.md §11". `tests/unit/test_sim449_sim_kwargs.py` fails when this
+section stops saying "Runs run ~7-8% low". Change that sentence only with a re-calibration.
 
 - **Runs run ~7-8% low (down from ~12% pre-fix).** This was the run-conversion gap after the
   DP-rate fix of 2026-05-28. The gap closed with the 2026-08 data rebuild. A band, floor or

@@ -42,13 +42,13 @@ WHAT THE 2026-08-10 ROUND-3 REVIEW CHANGED
 Round 2 repaired two floors. A third review found it had sized both against
 numbers that were not the ones on record, and that a third hole sat underneath.
 
-  * **R was sized on a stale line.** Round 2 used ``CLAUDE.md:465``'s "runs sit
+  * **R was sized on a stale line.** Round 2 used an older CLAUDE.md line's "runs sit
     ~10-12% low" and shipped a 7.5% floor. The owner ruled that line STALE on
-    2026-08-10: ``CLAUDE.md:911`` records the live gap as "Runs run ~7-8% low".
+    2026-08-10: ``CLAUDE.md §11`` records the live gap as "Runs run ~7-8% low".
     The 7.5% floor PASSED at 7.0%, 7.2%, 7.4% and 7.5% low — most of the live
     range. The floor is now **2.76%**.
   * **home_win_pct rejected only a coin flip.** The 0.030 floor failed at exactly
-    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:914`` records the
+    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md §11`` records the
     defect as "stuck at the structural-only ~.510-.515", and this lane's own
     first production run measured **0.5125**. So the band passed on the whole
     documented defect AND on the lane's own reading. The floor is now **0.0124**.
@@ -71,7 +71,7 @@ The old floors certified the box channels in 696 game-sims. The new ones need
 sim. ``home_win_pct`` needs **26,015 decisive games**, about 16.3 hours.
 
 That is the honest price. A floor loose enough to certify home-field advantage
-overnight cannot reject the 0.515 baseline ``CLAUDE.md:914`` documents, and a
+overnight cannot reject the 0.515 baseline ``CLAUDE.md §11`` documents, and a
 band that cannot reject the documented defect is the failure this round exists to
 end. So:
 
@@ -195,7 +195,7 @@ and neither channel says that alone.
 
 WHY home_win_pct HAS NO XFAIL
 =============================
-``CLAUDE.md:914`` documents the structural-only baseline at ~.510-.515, and the
+``CLAUDE.md §11`` documents the structural-only baseline at ~.510-.515, and the
 band is sized to reject it. The day-one run read 0.5125 — squarely in that range
 — which would suggest the SIM-412 home-field bias is not acting.
 
@@ -538,7 +538,7 @@ def test_runs_band_sim450(acceptance_run: AcceptanceRun) -> None:
 
     The floor was 15% on delivery and 7.5% after round 2. Both returned PASS on
     the platform's own documented run-conversion gap, on the channel the betting
-    product rests on. It is 2.76% since round 3, sized on ``CLAUDE.md:911``.
+    product rests on. It is 2.76% since round 3, sized on ``CLAUDE.md §11``.
     ``test_the_R_band_reds_at_exactly_seven_percent_sim450`` in
     ``test_band_arithmetic_sim450.py`` holds that property from now on.
 
@@ -683,7 +683,7 @@ def test_home_win_pct_band_sim450(acceptance_run: AcceptanceRun) -> None:
 
     THIS CHANNEL IS RED BELOW 26,015 DECISIVE GAMES, AND THAT IS THE FIX WORKING.
     It reports UNDERPOWERED because no shorter run can separate the
-    structural-only baseline ``CLAUDE.md:914`` documents (~.510-.515) from MLB's
+    structural-only baseline ``CLAUDE.md §11`` documents (~.510-.515) from MLB's
     0.535 at Z=4. Until round 3 this channel reported PASS at 0.5000, 0.5100,
     0.5125 and 0.5150 — the whole documented defect. The failure message carries
     the run length it needs.

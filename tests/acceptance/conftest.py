@@ -271,7 +271,7 @@ ACCEPTANCE_GAME_PKS: tuple[int, ...] = bands.BALANCED_GAME_ORDER
 #:
 #: ``home_win_pct`` is NOT covered by it. That channel takes one observation per
 #: decisive game rather than two per game-sim, and its floor is sized on the
-#: ``CLAUDE.md:914`` baseline, so it needs 26,015 decisive games — about 16.3
+#: ``CLAUDE.md §11`` baseline, so it needs 26,015 decisive games — about 16.3
 #: hours. Read ``bands.py`` "THE COST, STATED PLAINLY" before you shorten a run.
 DEFAULT_GAMES = 45
 DEFAULT_ITERS = 130

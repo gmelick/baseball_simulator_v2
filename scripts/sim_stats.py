@@ -259,9 +259,7 @@ def outs_credit_check(per_game: list[list[dict]]) -> dict[str, Any]:
 
     The two counts are an identity, so this check is the script's one gate:
     ``main`` exits 1 when the check is available and any game-simulation
-    differs.  The script's other reads stay reads.  (The module docstring does
-    not list this check: a line added there moves ``_MLB_2025``, which
-    ``tests/acceptance/bands.py`` cites by line number.)
+    differs.  The script's other reads stay reads.
 
     ``first_mismatches`` names up to ``MAX_NAMED_MISMATCHES`` game-simulations
     that differ, in run order: the game's index in ``per_game``, the

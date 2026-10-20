@@ -869,10 +869,10 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
 #   smallest deviation 0.0025 and the largest 0.1339 at venue 19.)
 #
 # MAGNITUDE 2 — the run-conversion gap this project is chasing.
-#   CLAUDE.md line 85: "Runs run ~7-8% low (down from ~12% pre-fix)".
-#   The owner ruled on 2026-08-10 that 7-8% is authoritative and that
-#   CLAUDE.md:465's "runs sit ~10-12% low" is stale. The repository wins over any
-#   number in a brief, so 7% is the figure used below.
+#   CLAUDE.md §11: "Runs run ~7-8% low (down from ~12% pre-fix)".
+#   The owner ruled on 2026-08-10 that 7-8% is authoritative and that an older
+#   "runs sit ~10-12% low" line is stale. The repository wins over any number in
+#   a brief, so 7% is the figure used below.
 #
 # HOW THE TWO CALIBRATE THE INSTRUMENT.
 #   A silent neutral 1.0 at the WORST 2024 venue is a 13.4% error in the run
@@ -926,16 +926,18 @@ _PARK_FACTORS_2024_R: tuple[tuple[int, float], ...] = (
     (5381, 1.0055797100),
 )
 
-#: The run-conversion gap on record. Source: CLAUDE.md line 85, "Runs run ~7-8%
+#: The run-conversion gap on record. Source: CLAUDE.md §11, "Runs run ~7-8%
 #: low". The LOW end of the documented band, so the instrument is calibrated to the
 #: least favourable reading of the repository's own number.
 _DOCUMENTED_RUN_GAP = 0.07
 
-#: The exact sentence that figure comes from. ``test_the_cited_line_still_says_it``
-#: reads CLAUDE.md and fails if it stops saying this, so the citation cannot rot
-#: into a number nobody can trace.
+#: The exact sentence that figure comes from, and the CLAUDE.md section that holds
+#: it. ``test_the_cited_section_still_says_it`` reads CLAUDE.md and fails if the
+#: section stops saying this, so the citation cannot rot into a number nobody can
+#: trace. The test reads the section, not a line, so an edit above it does not
+#: break the citation.
 _CLAUDE_MD_GAP_PHRASE = "Runs run ~7-8% low"
-_CLAUDE_MD_GAP_LINE = 911
+_CLAUDE_MD_GAP_SECTION = "## 11. "
 
 
 def _repo_file_or_skip(rel_path: str) -> Path:
@@ -957,18 +959,29 @@ def _repo_file_or_skip(rel_path: str) -> Path:
     return path
 
 
-def test_the_cited_line_still_says_it():
-    """The citation is checkable. If CLAUDE.md:911 changes, re-calibrate on purpose."""
-    lines = _repo_file_or_skip("CLAUDE.md").read_text(encoding="utf-8").splitlines()
-    hits = [i + 1 for i, line in enumerate(lines) if _CLAUDE_MD_GAP_PHRASE in line]
-    assert hits, (
-        f"SIM-453: CLAUDE.md no longer contains {_CLAUDE_MD_GAP_PHRASE!r}. "
+def _claude_md_section(text: str, heading: str) -> str:
+    """The body of the CLAUDE.md section whose heading starts with ``heading``."""
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith(heading)]
+    if not starts:
+        return ""
+    body: list[str] = []
+    for line in lines[starts[0] + 1 :]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def test_the_cited_section_still_says_it():
+    """The citation is checkable. If CLAUDE.md §11 changes, re-calibrate on purpose."""
+    text = _repo_file_or_skip("CLAUDE.md").read_text(encoding="utf-8")
+    section = _claude_md_section(text, _CLAUDE_MD_GAP_SECTION)
+    assert section, f"CLAUDE.md has no section headed {_CLAUDE_MD_GAP_SECTION!r}."
+    assert _CLAUDE_MD_GAP_PHRASE in section, (
+        f"CLAUDE.md §11 no longer contains {_CLAUDE_MD_GAP_PHRASE!r}. "
         f"_DOCUMENTED_RUN_GAP={_DOCUMENTED_RUN_GAP} was calibrated to it — find the "
         "new documented run-conversion gap and re-calibrate both."
-    )
-    assert _CLAUDE_MD_GAP_LINE in hits, (
-        f"SIM-453: {_CLAUDE_MD_GAP_PHRASE!r} moved from CLAUDE.md:{_CLAUDE_MD_GAP_LINE} "
-        f"to line(s) {hits}. Update _CLAUDE_MD_GAP_LINE so the citation stays exact."
     )
 
 
@@ -1013,7 +1026,7 @@ async def test_the_silent_neutral_error_exceeds_the_documented_run_gap():
 
     Venue 680 measures 0.8726 in 2024. A dark source sends 1.0 instead. That is a
     12.8% error in the run environment of every game played there — larger than the
-    ~7-8% run-conversion residual CLAUDE.md:911 records as the open modelling gap.
+    ~7-8% run-conversion residual CLAUDE.md §11 records as the open modelling gap.
     A dark park factor is therefore not a rounding concern. It is bigger than the
     thing the fund is currently trying to fix.
     """
@@ -1025,7 +1038,7 @@ async def test_the_silent_neutral_error_exceeds_the_documented_run_gap():
     error = abs(float(dark) - float(resolved))
     assert error > _DOCUMENTED_RUN_GAP, (
         f"expected the silent-neutral error at venue {venue_id} to exceed the "
-        f"documented {_DOCUMENTED_RUN_GAP:.0%} run gap (CLAUDE.md:{_CLAUDE_MD_GAP_LINE})"
+        f"documented {_DOCUMENTED_RUN_GAP:.0%} run gap (CLAUDE.md §11)"
     )
     assert park_factor_reason(dark) is not None
 

@@ -148,7 +148,7 @@ centres and spreads (the "round-3" 2023-era floors are in git history)::
 
   channel  documented magnitude          source             floor   first
                                                                     fails
-  R        runs ~7-8% low                CLAUDE.md:911      0.0275  2.7%
+  R        runs ~7-8% low                CLAUDE.md §11      0.0275  2.7%
   H        +0.2078/team-game: a drawn    BACKLOG.md:20      0.0157  1.6%
            field_error is aliased to a   (SIM-496) +
            single, so a retired batter   constants.py:177
@@ -167,18 +167,18 @@ centres and spreads (the "round-3" 2023-era floors are in git history)::
   ROE      none — see the warning below  Rule B             0.0822  8.2%
   ROE_     nothing reaches base on an    BACKLOG.md:20      0.0822  8.2%
   reached  error at all = -100%          (SIM-496)
-  home_    stuck at the structural-only  CLAUDE.md:914      0.0173  3.2%
+  home_    stuck at the structural-only  CLAUDE.md §11      0.0173  3.2%
   win_pct  ~.510-.515 baseline                              (abs)
 
 Two entries need their reasoning written out.
 
-**R.** ``CLAUDE.md:911`` reads "Runs run ~7-8% low (down from ~12% pre-fix)". The
+**R.** ``CLAUDE.md §11`` reads "Runs run ~7-8% low (down from ~12% pre-fix)". The
 owner ruled on 2026-08-10 that this line is authoritative and that
-``CLAUDE.md:465``'s "runs sit ~10-12% low" is STALE. The band is therefore sized
+an older CLAUDE.md line's "runs sit ~10-12% low" is STALE. The band is therefore sized
 on the HARDER end of the live range, 7%: ``d = 0.07 * 4.4473 = 0.3113``. A floor
 of 0.027478 x 4.4473 = 0.1222 clears the 1.6 margin with room (``d/floor = 2.55``).
 
-**home_win_pct.** ``CLAUDE.md:914`` records the defect as "stuck at the
+**home_win_pct.** ``CLAUDE.md §11`` records the defect as "stuck at the
 structural-only ~.510-.515". The band is sized on the HARDEST point of that
 range, 0.515, so ``d = 0.5428 - 0.515 = 0.0278`` and the floor is the margin
 bound 0.0278 / 1.6 rounded down to 0.0173 (``d/floor = 1.61``). It also reds
@@ -245,7 +245,7 @@ price of an instrument that can see a 7% run-conversion gap instead of a 15% one
 ``home_win_pct`` is worse. Certifying it at 26,015 decisive games takes about
 16.3 hours serial, which is a WEEKEND run, not a nightly. I am not proposing a
 looser floor to make it fit: a floor loose enough for a nightly cannot reject the
-0.515 baseline ``CLAUDE.md:914`` documents, and a band that cannot reject the
+0.515 baseline ``CLAUDE.md §11`` documents, and a band that cannot reject the
 documented defect is the exact failure this round exists to end. So the honest
 statement is:
 
@@ -279,20 +279,16 @@ the probe counts both canonical walk classes); CS includes every scored class �
 pitch-steal CS, K+CS double plays, and 149 advancing pickoffs (Rule 9.07(h),
 the SIM-507 channel).
 
-The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py:89``
+The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py``
 verbatim, and ``home_win_pct`` restates ``_MLB_HOME_WIN_PCT`` from
-``scripts/sim_stats.py:103``. (The citations were once wrong for months —
-:69/:83 as the file outgrew them —
-``test_restated_mlb_constants_match_sim_stats_sim450`` now parses that file and
-fails on BOTH value drift and line drift, so a stale citation cannot survive
-again.)
+the same file. The citation names the constant, not a line.
+``test_restated_mlb_constants_match_sim_stats_sim450`` parses that file and
+fails when a value drifts.
 
 ⚠ ``scripts/`` is baked into the app image and is NOT bind-mounted (CLAUDE.md
 section 2a). Run the lane in a container with ``-v "$PWD/scripts:/app/scripts"``,
 or the drift test reads whatever that file looked like when the image was last
-built. Measured 2026-08-10: the image held ``_MLB_2023`` at :69 while the repo
-held it at :80, so the test failed against the container and passed against the
-repo. The REPO is the source of truth for a citation.
+built. The REPO is the source of truth for a citation.
 
 They are RESTATED, not imported, for three reasons. ``scripts/`` has no
 ``__init__.py`` and is not bind-mounted into the app container, so a test that
@@ -410,16 +406,16 @@ defect they exist to catch.
 
 2026-08-10 (SIM-450 remediation round 3, same day) — **a third review found that
 round 2 sized both repaired floors against numbers that were not the ones on
-record.** Every floor is re-derived here from a magnitude with a file and a line
+record.** Every floor is re-derived here from a magnitude with a file and a place
 behind it. Reproduced before changing anything:
 
   * ``evaluate("R", ...)`` at rel_floor 0.075 PASSED at 7.0%, 7.2%, 7.4% and
-    7.5% low, and first failed at 7.6%. ``CLAUDE.md:911`` records the live gap as
+    7.5% low, and first failed at 7.6%. ``CLAUDE.md §11`` records the live gap as
     "Runs run ~7-8% low", so the band passed on most of the documented range.
-    Round 2 had sized it against ``CLAUDE.md:465``'s "10-12%", which the owner
+    Round 2 had sized it against an older CLAUDE.md line's "10-12%", which the owner
     ruled STALE on 2026-08-10.
   * ``evaluate("home_win_pct", ...)`` at floor 0.030 failed ONLY at exactly
-    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:914`` records the
+    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md §11`` records the
     defect as "stuck at the structural-only ~.510-.515", and this lane's own
     first production run measured 0.5125
     (``test_production_config_bands_sim450.py``). The band passed on the whole
@@ -429,7 +425,7 @@ behind it. Reproduced before changing anything:
 
 The changes:
 
-  * **R: rel_floor 0.075 -> 0.0276.** Sized on ``CLAUDE.md:911``, harder end:
+  * **R: rel_floor 0.075 -> 0.0276.** Sized on ``CLAUDE.md §11``, harder end:
     ``d = 0.07 * 4.62 = 0.3234``; floor = 0.1275; margin 2.54; power > 0.9999.
     Cost: 5,098 game-sims, up from 691.
   * **H: rel_floor 0.10 -> 0.0158.** Sized on ``BACKLOG.md:20`` (SIM-496) with
@@ -446,7 +442,7 @@ The changes:
     Rule B did, and it applies because these channels share the lane's run.
     Tightening them costs nothing (they resolve inside the 5,648-sim box run) and
     keeps the band meaningful after the defect is fixed.
-  * **home_win_pct: abs_floor 0.030 -> 0.0124.** Sized on ``CLAUDE.md:914``,
+  * **home_win_pct: abs_floor 0.030 -> 0.0124.** Sized on ``CLAUDE.md §11``,
     hardest point: ``d = 0.535 - 0.515 = 0.020``; margin 1.61; power 0.992. It
     reds 0.5125 at 1.81x the floor. Cost: **26,015 decisive games, about 16.3
     hours** — a weekend run. Stated, not hidden. No nightly-sized floor can
@@ -461,8 +457,8 @@ The changes:
     Round 2 shipped the balanced tuple here and a strict xfail there, because it
     did not own that file. Round 3 owns it, so the reorder landed and the xfail
     is deleted.
-  * **The ``scripts/sim_stats.py`` citations moved from :69 / :83 to :80 / :94**,
-    and a test now parses that file so both value drift and line drift fail.
+  * **The ``scripts/sim_stats.py`` citations name the constants**, and a test
+    parses that file so value drift fails.
 
   Nothing was widened. Z is unchanged at 4.0. No MLB centre moved.
 
@@ -518,15 +514,6 @@ BOX_CHANNELS: tuple[str, ...] = tuple(c for c in CHANNELS if c != "home_win_pct"
 # Provenance — the constants this file restates from scripts/sim_stats.py
 # ---------------------------------------------------------------------------
 
-#: The line ``_MLB_2025`` is assigned on in ``scripts/sim_stats.py``. Asserted by
-#: ``test_restated_mlb_constants_match_sim_stats_sim450``, which parses that file
-#: rather than importing it. A moved constant fails the test instead of rotting
-#: into a wrong citation, which is what :69 and :83 did before 2026-08-10.
-SIM_STATS_MLB_2025_LINE: int = 90
-
-#: The line ``_MLB_HOME_WIN_PCT`` is assigned on in ``scripts/sim_stats.py``.
-SIM_STATS_HOME_WIN_PCT_LINE: int = 104
-
 #: ``_MLB_2025`` restated verbatim (SIM-508, owner decision 2026-08-18: every
 #: reference is this project's OWN ingested 2025 season — 2,430 regular-season
 #: Final games, 4,860 team-games, measured 2026-08-18 — so the sim is graded
@@ -578,7 +565,7 @@ class Reference:
 
     ``must_detect`` is a deviation, in the channel's own units, that this band is
     REQUIRED to register. It is set only where a defect is documented with a
-    magnitude, ``detect_source`` carries the file and the line, and
+    magnitude, ``detect_source`` names the file and the section, and
     ``test_band_arithmetic_sim450.py`` fails if a floor ever rises above
     ``must_detect / DETECTION_MARGIN``. It is the machine-checked half of the
     "MOVING A BAND" policy.
@@ -638,21 +625,21 @@ class Reference:
 #: ``detect_source`` names where each defect magnitude comes from, so a reader
 #: never has to guess whether a number was measured, documented or invented.
 REFERENCES: dict[str, Reference] = {
-    # --- the nine channels restated from scripts/sim_stats.py:89 (_MLB_2025) ---
+    # --- the nine channels restated from scripts/sim_stats.py::_MLB_2025 ---
     # SIM-508: every sd_ref below re-measured on the same 2025 games
     # (2026-08-18); every Rule-B floor recomputed as the tightest deviation
     # team-games resolves (11,295) against the 2025 spread and centre.
     "R": Reference(
         RESTATED_MLB_2025["R"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=3.2468,
         rel_floor=0.027478,
         must_detect=0.311311,
-        detect_source="CLAUDE.md:911 'Runs run ~7-8% low' -> harder end 0.07 * 4.4473 = 0.311311",
+        detect_source="CLAUDE.md §11 'Runs run ~7-8% low' -> harder end 0.07 * 4.4473 = 0.311311",
     ),
     "H": Reference(
         RESTATED_MLB_2025["H"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=3.4505,
         rel_floor=0.015725,
         must_detect=0.2078,
@@ -666,7 +653,7 @@ REFERENCES: dict[str, Reference] = {
     ),
     "HR": Reference(
         RESTATED_MLB_2025["HR"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=1.1772,
         rel_floor=0.038110,
         floor_rationale=(
@@ -678,14 +665,14 @@ REFERENCES: dict[str, Reference] = {
     ),
     "2B": Reference(
         RESTATED_MLB_2025["2B"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=1.3455,
         rel_floor=0.031778,
         floor_rationale="Rule B. No magnitude on record. Tightest resolvable at the 11,295-obs box lane.",
     ),
     "3B": Reference(
         RESTATED_MLB_2025["3B"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=0.3677,
         rel_floor=0.107115,
         floor_rationale=(
@@ -696,7 +683,7 @@ REFERENCES: dict[str, Reference] = {
     ),
     "BB": Reference(
         RESTATED_MLB_2025["BB"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=1.9045,
         rel_floor=0.022644,
         floor_rationale=(
@@ -711,7 +698,7 @@ REFERENCES: dict[str, Reference] = {
     ),
     "K": Reference(
         RESTATED_MLB_2025["K"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=2.9352,
         rel_floor=0.013227,
         floor_rationale=(
@@ -722,7 +709,7 @@ REFERENCES: dict[str, Reference] = {
     ),
     "SB": Reference(
         RESTATED_MLB_2025["SB"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=0.8923,
         rel_floor=0.053726,
         must_detect=0.6251,
@@ -734,7 +721,7 @@ REFERENCES: dict[str, Reference] = {
     ),
     "CS": Reference(
         RESTATED_MLB_2025["CS"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        f"{_SIM_STATS}::_MLB_2025",
         sd_ref=0.3940,
         rel_floor=0.077155,
         must_detect=0.1922,
@@ -785,16 +772,16 @@ REFERENCES: dict[str, Reference] = {
             "SIM-484. Nothing reaches base on an error today: -100%."
         ),
     ),
-    # --- the home-field channel, restated from scripts/sim_stats.py:103 ---
+    # --- the home-field channel, restated from scripts/sim_stats.py::_MLB_HOME_WIN_PCT ---
     "home_win_pct": Reference(
         RESTATED_MLB_HOME_WIN_PCT,
-        f"{_SIM_STATS}:{SIM_STATS_HOME_WIN_PCT_LINE} _MLB_HOME_WIN_PCT",
+        f"{_SIM_STATS}::_MLB_HOME_WIN_PCT",
         sd_ref=0.5000,
         abs_floor=0.0173,
         obs_per_sim=1,
         must_detect=0.0278,
         detect_source=(
-            "CLAUDE.md:914: home_win_pct 'stuck at the structural-only ~.510-.515'. Sized "
+            "CLAUDE.md §11: home_win_pct 'stuck at the structural-only ~.510-.515'. Sized "
             "on the HARDEST point of that range against the measured 2025 centre: "
             "0.5428 - 0.515 = 0.0278; floor = 0.0278/1.6 rounded down. The band also reds "
             "0.5125, which this lane's own first production run measured."

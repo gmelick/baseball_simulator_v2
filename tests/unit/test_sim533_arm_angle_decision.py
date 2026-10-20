@@ -99,8 +99,6 @@ UNREADING_MODULES = (
     *sorted((REPO / "similarity" / "engines").glob("*.py")),
 )
 ALEMBIC_VERSIONS = REPO / "db" / "migrations" / "versions"
-#: How far above ``GMM_FEATURE_NAMES`` the decision block must start.
-BLOCK_MAX_LINES_ABOVE = 40
 PITCHER_HEADING = "### `similarity/engines/pitcher_similarity.py`"
 
 
@@ -147,8 +145,14 @@ def test_feature_lists_name_no_arm_angle_or_spin_shape() -> None:
 
 
 def test_engine_carries_the_decision_block() -> None:
-    """The engine's source carries the SIM-533 block, naming the plan, within
-    40 lines above the line that defines ``GMM_FEATURE_NAMES``."""
+    """The comment block right above ``GMM_FEATURE_NAMES`` records the decision.
+
+    The block is the run of comment lines that ends on the line before the
+    definition. It must say the two numbers "are NOT features" and name the
+    plan that holds the measurements. The test finds the block by position, not
+    by a ticket tag, so a reworded comment keeps passing while it keeps the
+    decision.
+    """
     lines = ENGINE.read_text(encoding="utf-8").splitlines()
 
     definition_lines = [
@@ -160,21 +164,12 @@ def test_engine_carries_the_decision_block() -> None:
     )
     definition = definition_lines[0]
 
-    block_starts = [
-        i
-        for i, line in enumerate(lines[:definition])
-        if line.lstrip().startswith("#") and "SIM-533" in line
-    ]
-    assert block_starts, (
-        f"{ENGINE.name} has no '# SIM-533' comment above GMM_FEATURE_NAMES "
+    block_start = definition
+    while block_start > 0 and lines[block_start - 1].lstrip().startswith("#"):
+        block_start -= 1
+    assert block_start < definition, (
+        f"{ENGINE.name} has no comment block right above GMM_FEATURE_NAMES "
         "(the decision block is gone)"
-    )
-    block_start = block_starts[-1]
-    distance = definition - block_start
-    assert 0 < distance <= BLOCK_MAX_LINES_ABOVE, (
-        f"the SIM-533 decision block starts {distance} lines above GMM_FEATURE_NAMES "
-        f"(line {block_start + 1} vs {definition + 1}); it must sit within "
-        f"{BLOCK_MAX_LINES_ABOVE} lines above the definition"
     )
 
     block = "\n".join(lines[block_start:definition])

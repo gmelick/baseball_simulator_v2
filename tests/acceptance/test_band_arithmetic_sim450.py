@@ -17,12 +17,12 @@ underneath.
 Reproduced against the round-2 tree before anything changed:
 
   * ``R`` at ``rel_floor=0.075`` PASSED at 7.0%, 7.2%, 7.4% and 7.5% low, and
-    first failed at 7.6%. ``CLAUDE.md:911`` records the live gap as "Runs run
+    first failed at 7.6%. ``CLAUDE.md §11`` records the live gap as "Runs run
     ~7-8% low", so the band passed on most of the documented range. Round 2 had
-    sized the floor on ``CLAUDE.md:465``'s "10-12%", which the owner ruled STALE
+    sized the floor on an older CLAUDE.md line's "10-12%", which the owner ruled STALE
     on 2026-08-10.
   * ``home_win_pct`` at ``abs_floor=0.030`` failed ONLY at exactly 0.5000 and
-    PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md:914`` records the defect as
+    PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md §11`` records the defect as
     "stuck at the structural-only ~.510-.515", and this lane's own first
     production run measured 0.5125.
   * ``evaluate("H", [8.0, 8.0])`` returned ``passed=True``: two observations, 7%
@@ -130,17 +130,19 @@ def test_every_floor_states_where_it_came_from_sim450() -> None:
 
     This is the round-3 rule that stops a floor being chosen to make a channel
     green. A channel either names the documented magnitude it must register, with
-    a file and a line, or it says in words why it carries the floor it carries.
+    a file and a section, or it says in words why it carries the floor it carries.
     """
     for name in bands.CHANNELS:
         ref = bands.REFERENCES[name]
         if ref.must_detect is not None:
             assert ref.detect_source.strip(), f"{name} declares must_detect with no source"
-            # A source has to point at a file, not wave at one.
+            # A source has to point at a file, not wave at one. It names a
+            # section or a name in that file, never a line number, so an edit
+            # elsewhere in the file cannot strand the citation.
             assert any(
                 token in ref.detect_source
-                for token in ("CLAUDE.md:", "BACKLOG.md:", "sim_loop.py:", "constants.py:")
-            ), f"{name} detect_source names no file and line: {ref.detect_source!r}"
+                for token in ("CLAUDE.md §", "BACKLOG.md", "sim_loop.py", "constants.py")
+            ), f"{name} detect_source names no file: {ref.detect_source!r}"
         else:
             assert ref.floor_rationale.strip(), (
                 f"{name} has no documented defect AND no stated rationale for its floor. "
@@ -166,8 +168,7 @@ def test_box_channels_and_home_win_pct_partition_the_lane_sim450() -> None:
 
 #: Printed on every drift failure. ``scripts/`` is baked into the app image and
 #: NOT bind-mounted (CLAUDE.md section 2a), so a container run can read a
-#: months-old copy and blame the wrong file. Measured 2026-08-10: the image held
-#: ``_MLB_2025`` at :69 while the repo held it at :80.
+#: months-old copy and blame the wrong file.
 _STALE_IMAGE_HINT = (
     "  If you are in the app container: scripts/ is baked into the image and is NOT\n"
     '  bind-mounted, so this may be a stale image copy. Re-run with -v "$PWD/scripts:\n'
@@ -180,15 +181,15 @@ def _sim_stats_path() -> Path:
     return Path(bands.__file__).resolve().parents[2] / "scripts" / "sim_stats.py"
 
 
-def _top_level_assignments(path: Path) -> dict[str, tuple[int, object]]:
-    """Every top-level ``NAME = <literal>`` in ``path``, as ``{name: (line, value)}``.
+def _top_level_assignments(path: Path) -> dict[str, object]:
+    """Every top-level ``NAME = <literal>`` in ``path``, as ``{name: value}``.
 
     Parses rather than imports. ``scripts/`` has no ``__init__.py``, and
     ``sim_stats.py`` pulls in asyncpg and the whole simulator at module level, so
     importing it here would drag the entire platform into a pure-arithmetic test.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    found: dict[str, tuple[int, object]] = {}
+    found: dict[str, object] = {}
     for node in tree.body:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
@@ -199,32 +200,23 @@ def _top_level_assignments(path: Path) -> dict[str, tuple[int, object]]:
             value = ast.literal_eval(node.value)
         except ValueError:
             continue
-        found[target.id] = (target.lineno, value)
+        found[target.id] = value
     return found
 
 
 def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
-    """The restated MLB rates equal ``scripts/sim_stats.py``, at the cited lines.
+    """The restated MLB rates equal the named constants of ``scripts/sim_stats.py``.
 
     ``bands.py`` restates ``_MLB_2025`` and ``_MLB_HOME_WIN_PCT`` instead of
     importing them, for the three reasons its docstring gives. A restatement rots
-    in two ways and this test fails on both:
+    when somebody edits one copy, and this test fails then. The citation names
+    the constant (``scripts/sim_stats.py::_MLB_2025``), not a line, so an edit
+    elsewhere in the file cannot break it.
 
-      * VALUE drift — somebody edits one copy;
-      * LINE drift — the citation still says :69 and :83 while the constants have
-        moved to :80 and :94, which is exactly what had happened by 2026-08-10.
-
-    A stale file:line citation is not cosmetic here. Every floor in this lane is
-    justified by a citation, so a citation nobody can follow is a floor nobody
-    can check.
-
-    MEASURED 2026-08-10 — THE CONTAINER AND THE REPO DISAGREE. ``scripts/`` is
-    baked into the app image and is NOT bind-mounted, so a container run without
-    ``-v "$PWD/scripts:/app/scripts"`` reads whatever ``scripts/sim_stats.py``
-    looked like when the image was last built. The image in use that day held the
-    constants at :69 and :83; the repo holds them at :80 and :94. This test found
-    that, which is the point — but it means a red here has TWO possible causes and
-    ``_STALE_IMAGE_HINT`` names both.
+    ``scripts/`` is baked into the app image and is NOT bind-mounted, so a
+    container run without ``-v "$PWD/scripts:/app/scripts"`` reads whatever
+    ``scripts/sim_stats.py`` looked like when the image was last built. A red here
+    therefore has TWO possible causes, and ``_STALE_IMAGE_HINT`` names both.
     """
     path = _sim_stats_path()
     assert path.is_file(), (
@@ -235,30 +227,19 @@ def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
     found = _top_level_assignments(path)
 
     assert "_MLB_2025" in found, f"_MLB_2025 is no longer a top-level assignment in {path}"
-    line, value = found["_MLB_2025"]
+    value = found["_MLB_2025"]
     assert value == bands.RESTATED_MLB_2025, (
         "bands.RESTATED_MLB_2025 has drifted from scripts/sim_stats.py::_MLB_2025.\n"
         f"  read from:  {path}\n"
         f"  sim_stats:  {value}\n  bands:      {bands.RESTATED_MLB_2025}\n"
         f"{_STALE_IMAGE_HINT}"
     )
-    assert line == bands.SIM_STATS_MLB_2025_LINE, (
-        f"_MLB_2025 sits at line {line} of {path}, but bands.py cites "
-        f":{bands.SIM_STATS_MLB_2025_LINE}.\n"
-        "  If the repo moved it: update SIM_STATS_MLB_2025_LINE and every citation in "
-        "the bands.py docstring.\n"
-        f"{_STALE_IMAGE_HINT}"
-    )
 
     assert "_MLB_HOME_WIN_PCT" in found, f"_MLB_HOME_WIN_PCT is no longer top-level in {path}"
-    line, value = found["_MLB_HOME_WIN_PCT"]
+    value = found["_MLB_HOME_WIN_PCT"]
     assert value == bands.RESTATED_MLB_HOME_WIN_PCT, (
         f"sim_stats says {value}, bands.py restates {bands.RESTATED_MLB_HOME_WIN_PCT}\n"
         f"{_STALE_IMAGE_HINT}"
-    )
-    assert line == bands.SIM_STATS_HOME_WIN_PCT_LINE, (
-        f"_MLB_HOME_WIN_PCT sits at line {line} of {path}, but bands.py cites "
-        f":{bands.SIM_STATS_HOME_WIN_PCT_LINE}.\n{_STALE_IMAGE_HINT}"
     )
 
 
@@ -269,9 +250,9 @@ def test_the_reference_table_uses_the_restated_constants_sim450() -> None:
     """
     for name, centre in bands.RESTATED_MLB_2025.items():
         assert bands.REFERENCES[name].centre == centre, name
-        assert f":{bands.SIM_STATS_MLB_2025_LINE}" in bands.REFERENCES[name].source, name
+        assert "sim_stats.py::_MLB_2025" in bands.REFERENCES[name].source, name
     assert bands.REFERENCES["home_win_pct"].centre == bands.RESTATED_MLB_HOME_WIN_PCT
-    assert f":{bands.SIM_STATS_HOME_WIN_PCT_LINE}" in bands.REFERENCES["home_win_pct"].source
+    assert "sim_stats.py::_MLB_HOME_WIN_PCT" in bands.REFERENCES["home_win_pct"].source
 
 
 # ---------------------------------------------------------------------------
@@ -362,9 +343,9 @@ def test_every_rule_b_floor_is_the_tightest_the_run_resolves_sim450() -> None:
 def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
     """R must go RED on a 7% run shortfall.
 
-    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md:911``: "Runs run ~7-8% low (down from
+    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md §11``: "Runs run ~7-8% low (down from
     ~12% pre-fix)". The owner ruled on 2026-08-10 that this line is authoritative
-    and that ``CLAUDE.md:465``'s "runs sit ~10-12% low" is stale.
+    and that an older CLAUDE.md line's "runs sit ~10-12% low" is stale.
 
     Round 2 sized the floor on the stale line and shipped ``rel_floor=0.075``,
     which passed at 7.0%, 7.2%, 7.4% and 7.5% low. The band was green across most
@@ -379,7 +360,7 @@ def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
             "R", _certifying_sample("R", bands.REFERENCES["R"].centre * (1.0 - shortfall))
         )
         assert result.verdict == "FAIL", (
-            f"a {shortfall:.1%} run shortfall must red the R band. CLAUDE.md:911 records "
+            f"a {shortfall:.1%} run shortfall must red the R band. CLAUDE.md §11 records "
             f"the live gap as 7-8% low." + result.explain()
         )
         assert result.failed and not result.passed
@@ -389,7 +370,7 @@ def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
 def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
     """The mandated boundary case, on its own so it cannot be lost in a loop.
 
-    ``CLAUDE.md:911`` — "Runs run ~7-8% low". 7% is the EASIEST end of that range
+    ``CLAUDE.md §11`` — "Runs run ~7-8% low". 7% is the EASIEST end of that range
     for the band to miss, so it is the one that decides whether the instrument
     works. Delta 0.3113 against a floor of 0.1222 is a margin of 2.55, which is
     a detection power above 0.9999 at this sample size.
@@ -397,10 +378,10 @@ def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
     ref = bands.REFERENCES["R"]
     documented = 0.07 * ref.centre
     assert ref.must_detect == pytest.approx(documented, abs=1e-6), (
-        "R.must_detect must be the CLAUDE.md:911 magnitude, 0.07 * 4.4473 = 0.3113"
+        "R.must_detect must be the CLAUDE.md §11 magnitude, 0.07 * 4.4473 = 0.3113"
     )
     assert ref.floor() < documented / bands.DETECTION_MARGIN, (
-        f"R floor {ref.floor():.5f} is not below the CLAUDE.md:911 gap {documented:.5f} "
+        f"R floor {ref.floor():.5f} is not below the CLAUDE.md §11 gap {documented:.5f} "
         f"divided by the {bands.DETECTION_MARGIN} detection margin. Detection power at "
         f"the resolving sample size would be "
         f"{bands.detection_power(documented / ref.floor()):.1%}."
@@ -408,7 +389,7 @@ def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
 
     result = bands.evaluate("R", _certifying_sample("R", ref.centre - documented))
     assert result.verdict == "FAIL", (
-        "the R band must red on the run-conversion gap CLAUDE.md:911 records" + result.explain()
+        "the R band must red on the run-conversion gap CLAUDE.md §11 records" + result.explain()
     )
     assert result.delta == pytest.approx(-documented, abs=1e-9)
     assert abs(result.delta) / result.floor > 2.5
@@ -444,7 +425,7 @@ def test_the_R_band_boundary_sits_where_the_floor_says_sim450() -> None:
 def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> None:
     """home_win_pct must go RED at 0.5125, and across the whole documented range.
 
-    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md:914``: home_win_pct "stuck at the
+    THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md §11``: home_win_pct "stuck at the
     structural-only ~.510-.515". That is the value the channel reads when the
     SIM-412 home-field bias does not act. This lane's own first production run
     measured 0.5125 — the middle of that range — at 400 game-sims.
@@ -462,7 +443,7 @@ def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> Non
     for rate in (0.5000, 0.5100, 0.5125, 0.5150):
         result = bands.evaluate("home_win_pct", _home_win_sample(rate, n))
         assert result.verdict == "FAIL", (
-            f"a home win rate of {rate:.4f} must red the band. CLAUDE.md:914 records the "
+            f"a home win rate of {rate:.4f} must red the band. CLAUDE.md §11 records the "
             f"structural-only baseline as ~.510-.515." + result.explain()
         )
         assert result.failed and not result.passed
@@ -471,17 +452,17 @@ def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> Non
 def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
     """The mandated boundary case, on its own.
 
-    ``CLAUDE.md:914`` — home_win_pct "stuck at the structural-only ~.510-.515".
+    ``CLAUDE.md §11`` — home_win_pct "stuck at the structural-only ~.510-.515".
     0.5125 is that baseline's midpoint and the value
     ``test_production_config_bands_sim450.py`` recorded from the first production
     run of this lane. Delta 0.0303 against a floor of 0.0173 is a margin of 1.75.
     """
     ref = bands.REFERENCES["home_win_pct"]
     assert ref.must_detect == pytest.approx(0.0278, abs=1e-9), (
-        "home_win_pct.must_detect must be the CLAUDE.md:914 magnitude, 0.5428 - 0.515"
+        "home_win_pct.must_detect must be the CLAUDE.md §11 magnitude, 0.5428 - 0.515"
     )
     assert ref.floor() <= ref.must_detect / bands.DETECTION_MARGIN, (
-        f"home_win_pct floor {ref.floor():.5f} is not below the CLAUDE.md:914 baseline gap "
+        f"home_win_pct floor {ref.floor():.5f} is not below the CLAUDE.md §11 baseline gap "
         f"{ref.must_detect:.5f} divided by the {bands.DETECTION_MARGIN} detection margin. "
         f"Detection power would be "
         f"{bands.detection_power(ref.must_detect / ref.floor()):.1%}."
@@ -489,7 +470,7 @@ def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
 
     result = bands.evaluate("home_win_pct", _home_win_sample(0.5125, ref.required_observations()))
     assert result.verdict == "FAIL", (
-        "the home_win_pct band must red on 0.5125 — the midpoint of the CLAUDE.md:914 "
+        "the home_win_pct band must red on 0.5125 — the midpoint of the CLAUDE.md §11 "
         "structural-only baseline, and this lane's own first production reading" + result.explain()
     )
     assert result.mean == pytest.approx(0.5125, abs=1e-4)
@@ -758,7 +739,7 @@ def test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450() -> None:
 
     This is a limit, not a defect, and it is asserted so nobody rediscovers it by
     accident or quietly widens the floor to make it fit. A floor loose enough for
-    a nightly cannot reject the 0.515 baseline ``CLAUDE.md:914`` documents.
+    a nightly cannot reject the 0.515 baseline ``CLAUDE.md §11`` documents.
     """
     ref = bands.REFERENCES["home_win_pct"]
     assert ref.required_sims() == CERTIFYING_DECISIVE_GAMES
