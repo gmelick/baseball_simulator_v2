@@ -44,6 +44,25 @@ REPO = Path(__file__).resolve().parents[2]
 
 rb = load_script("rebuild_steal_pool")
 
+from steal_pool_rebuild.bundle import (  # noqa: E402
+    _export_replaces,
+    backup_plan,
+    compare_hashes,
+    steal_pool_problem,
+)
+from steal_pool_rebuild.checks import matches_snapshot  # noqa: E402
+from steal_pool_rebuild.common import EXPECT, FALLBACK_CENTRES, POOL, STEAL_POOL_FILES  # noqa: E402
+from steal_pool_rebuild.export import (  # noqa: E402
+    band_centres,
+    class_codes,
+    roundtrip_target,
+    steal_centres,
+)
+from steal_pool_rebuild.migration import migration_statements  # noqa: E402
+from steal_pool_rebuild.preflight import bundle_problems  # noqa: E402
+
+from pipeline.batch.engine_artifacts import build_steal_pool_artifact  # noqa: E402
+
 WINDOW = [2023, 2024, 2025, 2026]
 
 _STEAL_DDL = """
@@ -246,13 +265,13 @@ class TestTheMigration:
             "-- a whole comment line\n"
             "ALTER TABLE sim.t ADD COLUMN IF NOT EXISTS b BOOLEAN DEFAULT FALSE;\n"
         )
-        assert rb.migration_statements(text) == [
+        assert migration_statements(text) == [
             "ALTER TABLE sim.t ADD COLUMN IF NOT EXISTS a VARCHAR(20)",
             "ALTER TABLE sim.t ADD COLUMN IF NOT EXISTS b BOOLEAN DEFAULT FALSE",
         ]
 
     def test_the_real_file_is_two_add_column_statements(self):
-        stmts = rb.migration_statements(rb.MIGRATION.read_text(encoding="utf-8"))
+        stmts = migration_statements(rb.MIGRATION.read_text(encoding="utf-8"))
         assert len(stmts) == 2
         assert all("ADD COLUMN IF NOT EXISTS" in s for s in stmts)
         assert "pitch_class" in stmts[0] and "is_pickoff_row" in stmts[1]
@@ -434,21 +453,21 @@ class TestThePreflight:
 class TestTheRollbackPoint:
     def test_no_copy_means_copy_the_bundle(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
-        plan = rb.backup_plan(art, backup, force=False)
+        plan = backup_plan(art, backup, force=False)
         assert plan.action == "copy" and not plan.problems
 
     def test_a_whole_copy_equal_to_the_bundle_is_kept(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
         assert rb.take_backup(art, backup, force=False) == backup
-        assert rb.backup_plan(art, backup, force=False).action == "keep"
+        assert backup_plan(art, backup, force=False).action == "keep"
 
     def test_a_copy_the_bundle_moved_on_from_stops_unless_forced(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
         rb.take_backup(art, backup, force=False)
         _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2})  # a later old-shape export
-        plan = rb.backup_plan(art, backup, force=False)
+        plan = backup_plan(art, backup, force=False)
         assert plan.problems and "changed after the copy" in plan.problems[0]
-        forced = rb.backup_plan(art, backup, force=True)
+        forced = backup_plan(art, backup, force=True)
         assert forced.action == "replace" and not forced.problems
 
     def test_a_started_export_keeps_the_copy_over_a_half_written_bundle(self, tmp_path):
@@ -456,9 +475,9 @@ class TestTheRollbackPoint:
         rb.take_backup(art, backup, force=False)
         Path(rb.export_marker(backup)).write_text("started")
         _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2}, sit_rows={"2": 1})
-        plan = rb.backup_plan(art, backup, force=False)
+        plan = backup_plan(art, backup, force=False)
         assert plan.action == "keep" and not plan.problems
-        problems = rb.bundle_problems(art, backup, WINDOW, force=False)
+        problems = bundle_problems(art, backup, WINDOW, force=False)
         assert problems == []  # the export rewrites the half-written pool
 
     @pytest.mark.parametrize(
@@ -483,9 +502,9 @@ class TestTheRollbackPoint:
         pool_dir = Path(art) / "steal_pool"
         for name in strays:
             (pool_dir / name).write_bytes(b"half-written")
-        assert all(rb._export_replaces(name) for name in strays)
-        assert rb.steal_pool_problem(str(pool_dir)) is None  # the old five files are whole
-        assert rb.backup_plan(art, backup, force=False).action == "keep"
+        assert all(_export_replaces(name) for name in strays)
+        assert steal_pool_problem(str(pool_dir)) is None  # the old five files are whole
+        assert backup_plan(art, backup, force=False).action == "keep"
         assert _preflight(c, art, backup) == []
 
     def test_every_staging_file_of_the_export_is_one_the_rerun_accepts(self, tmp_path, monkeypatch):
@@ -498,20 +517,20 @@ class TestTheRollbackPoint:
         left: list[str] = []
 
         def killed(tmp: str, _final: str) -> None:
-            left.extend(sorted(set(os.listdir(os.path.dirname(tmp))) - rb.STEAL_POOL_FILES))
+            left.extend(sorted(set(os.listdir(os.path.dirname(tmp))) - STEAL_POOL_FILES))
             raise RuntimeError("killed before the move")
 
         with monkeypatch.context() as m:
             m.setattr(os, "replace", killed)
             with pytest.raises(RuntimeError, match="killed before the move"):
-                rb.build_steal_pool_artifact(c, str(tmp_path), [2024])
+                build_steal_pool_artifact(c, str(tmp_path), [2024])
         assert left == [
             "tmp_2.meta.parquet",
             "tmp_2.sit.npy",
             "tmp_3.meta.parquet",
             "tmp_3.sit.npy",
         ]
-        assert all(rb._export_replaces(name) for name in left)
+        assert all(_export_replaces(name) for name in left)
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +573,7 @@ class TestThePickoffCount:
         assert (got.fit, got.with_pitch, got.tag_groups, got.folded, got.rows) == (5, 2, 1, 1, 2)
         assert [item[0] for item in got.no_id] == [7]
         rows = c.execute(
-            f"SELECT id, pair, is_out, is_adv, is_err FROM {rb.EXPECT} "
+            f"SELECT id, pair, is_out, is_adv, is_err FROM {EXPECT} "
             "WHERE NOT has_pitch AND has_ids ORDER BY id"
         ).fetchall()
         assert rows == [(2, 2, True, True, False), (3, 3, False, False, True)]
@@ -701,7 +720,7 @@ class TestTheChecks:
         c.execute("BEGIN TRANSACTION")
         c.execute("DELETE FROM sim.steal_opportunity_pool")
         _rebuilt(c)
-        assert not rb.matches_snapshot(c, [2024], before, versions)
+        assert not matches_snapshot(c, [2024], before, versions)
         assert rb.rollback(c, [2024], before, versions)
 
 
@@ -830,7 +849,7 @@ class TestTheCentres:
     def test_the_centres_read_pitch_rows_only(self):
         # Four pitch rows (two attempts, one safe; one tagged pickoff) and two
         # pickoff rows. Recency 2, 2, 1, 1 on the pitch rows.
-        got = rb.steal_centres(
+        got = steal_centres(
             attempted=np.array([1, 1, 0, 0, 0, 0]),
             success=np.array([1, 0, 0, 0, 0, 0]),
             recency=np.array([2.0, 2.0, 1.0, 1.0, 9.0, 9.0]),
@@ -845,13 +864,13 @@ class TestTheCentres:
         assert got["pickoff_per_pitch_row"] == pytest.approx(3 / 4)
 
     def test_a_pool_without_classes_is_all_pitch_rows(self):
-        got = rb.steal_centres(
+        got = steal_centres(
             np.array([1, 0]), np.array([1, 0]), np.ones(2), np.zeros(2), np.zeros(2), None
         )
         assert got["pitch_rows"] == 2 and got["pickoff_rows"] == 0 and got["att_rate"] == 0.5
 
     def test_the_class_strings_map_to_codes(self):
-        codes = rb.class_codes(["ball", "", "hit_by_pitch", "in_play", "nonsense", None])
+        codes = class_codes(["ball", "", "hit_by_pitch", "in_play", "nonsense", None])
         assert codes.tolist() == [1, 0, 6, 5, -1, 0]
 
     def test_the_band_centres_load(self):
@@ -859,15 +878,15 @@ class TestTheCentres:
         the script's fallback copy (which holds the same 2026-09 values, so
         only the source and a fresh read of the file tell the two apart)."""
         path = REPO / "tests" / "acceptance" / "bands.py"
-        centres, source = rb.band_centres()
+        centres, source = band_centres()
         assert Path(source) == path
         spec = importlib.util.spec_from_file_location("_sim554_test_bands", path)
         assert spec is not None and spec.loader is not None
         bands = importlib.util.module_from_spec(spec)
         sys.modules["_sim554_test_bands"] = bands  # the dataclasses resolve their module
         spec.loader.exec_module(bands)
-        assert set(centres) == set(rb.FALLBACK_CENTRES)
-        assert centres == {k: float(bands.POOL_REFERENCES[k].centre) for k in rb.FALLBACK_CENTRES}
+        assert set(centres) == set(FALLBACK_CENTRES)
+        assert centres == {k: float(bands.POOL_REFERENCES[k].centre) for k in FALLBACK_CENTRES}
 
 
 def _export_like(c, pool_dir: Path, target: str) -> None:
@@ -900,17 +919,17 @@ class TestTheRoundTrip:
 
     def test_a_faithful_export_passes(self, tmp_path):
         c, d = self._pool(tmp_path)
-        assert rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_a_label_unlike_duckdbs_fails(self, tmp_path):
         c, d = self._pool(tmp_path)
         c.execute("UPDATE sim.steal_opportunity_pool SET success = FALSE")
-        assert not rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert not roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_a_count_unlike_duckdbs_fails(self, tmp_path):
         c, d = self._pool(tmp_path)
         c.execute("UPDATE sim.steal_opportunity_pool SET count_strikes = 2 WHERE pitch_id > 0")
-        assert not rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert not roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_an_export_without_pitch_ids_fails(self, tmp_path):
         c, d = self._pool(tmp_path)
@@ -918,7 +937,7 @@ class TestTheRoundTrip:
             "COPY (SELECT runner_id, season, attempted FROM sim.steal_opportunity_pool) "
             f"TO '{(d / '2.meta.parquet').as_posix()}' (FORMAT parquet)"
         )
-        assert not rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert not roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_the_rest_of_the_bundle_is_hashed_and_compared(self, tmp_path):
         art = tmp_path / "bundle"
@@ -929,9 +948,9 @@ class TestTheRoundTrip:
         before = rb.bundle_hashes(str(art))
         assert list(before) == ["pitch_pool/L.sit.npy"]
         (art / "steal_pool" / "2.sit.npy").write_bytes(b"new")  # the export's own write
-        assert rb.compare_hashes(before, rb.bundle_hashes(str(art))) == []
+        assert compare_hashes(before, rb.bundle_hashes(str(art))) == []
         (art / "pitch_pool" / "L.sit.npy").write_bytes(b"abd")
-        assert rb.compare_hashes(before, rb.bundle_hashes(str(art))) == [
+        assert compare_hashes(before, rb.bundle_hashes(str(art))) == [
             "changed: pitch_pool/L.sit.npy"
         ]
 
