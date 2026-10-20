@@ -1,10 +1,11 @@
-"""simulation.lineup_resolver — runtime lineup / substitution resolver (SIM-353).
+"""simulation.lineup_resolver — the lineup and substitution resolver.
 
 WHAT THIS IS
 ============
-The SIM-310 simulation loop is built against the :class:`GameState` contract
-(``simulation.game_state``) whose lineup fields are *ordered batting orders plus
-a per-side slot pointer*::
+This module reads a game's lineups from Postgres and builds the
+:class:`GameState` (``simulation.game_state``) the loop starts from.  The
+state's lineup fields are *ordered batting orders plus a per-side slot
+pointer*::
 
     away_lineup: list[int]       # away batting order (slot 1..9 -> player ids)
     home_lineup: list[int]       # home batting order
@@ -12,22 +13,23 @@ a per-side slot pointer*::
     home_lineup_slot: int = 0    # 0-based pointer into home_lineup
     batter_id: Optional[int]     # the batter due up (lineup[slot] for the offense)
 
-Nothing in the loop READS the lineup stores to BUILD one of those (the SIM-338
-gap, confirmed by the Phase-5 audit).  This module closes that gap.
-
-The lineup data lives in **Postgres** (the rest of the loop reads DuckDB):
+The lineup data lives in **Postgres**:
 
   * ``raw.game_lineups`` — one row per (game_pk, team_id, player_id, sequence).
     ``sequence`` is 1 for the original entry and increments each time a batting
     slot changes occupant (a substitution); ``entered_inning`` /
     ``entered_at_bat`` record WHEN a sub entered; ``is_starter`` flags the
-    opening-day occupant; ``pinch_role`` is 'PH'/'PR'/'DEF' for replacements;
-    ``batting_order`` is the 1..9 slot (NULL for a pitcher in a DH lineup who
-    never bats, e.g. an AL pitcher).
+    player who started the game; ``pinch_role`` is 'PH'/'PR'/'DEF' for
+    replacements; ``position_code`` is the position the player STARTED at;
+    ``batting_order`` is the 1..9 slot (NULL for a pitcher who never bats in a
+    lineup with a designated hitter).
   * ``raw.games`` — maps ``team_id`` to the home/away side and carries
-    ``season`` (a sampler pre-filter key on ``GameState``).
-  * ``raw.players`` — ``bats`` / ``throws`` give the batter hand / pitcher
-    throwing hand the sampler pre-filter needs.
+    ``season`` (the pool season key on ``GameState``), the two managers and
+    the game date.
+  * ``raw.players`` — ``bats`` / ``throws`` give the batter hand and the
+    pitcher throwing hand the draws filter on.
+  * ``raw.game_player_stats`` — the official box score, which names each
+    side's starting pitcher (``p_started``).
 
 DESIGN — DB ACCESS IS SEPARATED FROM GAMESTATE BUILDING
 =======================================================
@@ -43,8 +45,9 @@ is layered into three pieces:
      :class:`ResolvedLineup` into a :class:`GameState` via GameState's existing
      public constructor / fields only.  Neither touches a DB.
   3. **DB access** — :func:`fetch_game_sides`, :func:`fetch_lineup_rows`,
-     :func:`fetch_player_hands` issue the asyncpg queries; the async orchestrator
-     :func:`resolve_lineup` wires (3) -> (2).
+     :func:`fetch_box_starters` and :func:`fetch_player_hands` issue the
+     asyncpg queries; the async orchestrator :func:`resolve_lineup` wires
+     (3) -> (2).
 
 A unit test drives layer (2) with a fake connection / canned rows; only an
 integration test needs a live Postgres.
@@ -70,33 +73,37 @@ a new row, so "highest applicable sequence wins" is the correct rule for the
 separately (the highest-sequence row whose ``position_code`` is the pitcher slot)
 so a mid-game pitching change is reflected in ``GameState.pitcher_id``.
 
-THE STARTING PITCHER (SIM-558)
-==============================
+THE STARTING PITCHER
+====================
 The official box (``raw.game_player_stats.p_started``) names each side's
 starter, and the resolver reads it first.  The lineup's pitcher row is the
-fallback for a game with no box yet.  The lineup row alone is wrong or missing
-in 397 of the 45,484 team-games of 2017-2026, for three reasons:
+fallback for a game with no box yet.  The lineup row alone was wrong or missing
+in 397 of the 45,484 team-games of 2017-2026 (the starter resolution, SIM-558),
+for three reasons:
 
   * **A two-way starter** (80 team-games).  A player holds one lineup row, and
-    the loader gives a batter his batting position.  A pitcher who also bats as
-    the designated hitter is coded 'DH', so his side has no pitcher row.
-  * **A position player who finished the game on the mound** (308).  The loader
-    stores the LAST position a player held.  A starting fielder who pitched the
-    ninth is coded 'P', and his batting row comes before the real starter's row.
+    a pitcher who also batted as the designated hitter was coded 'DH', so his
+    side had no pitcher row.
+  * **A position player who finished the game on the mound** (308).  The row
+    held the LAST position a player played, so a starting fielder who pitched
+    the ninth was coded 'P' ahead of the real starter's row.
   * **An announced starter who was scratched** (9).  The lineup names him; the
     box credits the start to the pitcher who threw the first pitch.
 
+The lineup table stores the position each starter STARTED at (the
+start-position repair, SIM-559), which fixes the first two cases in the table
+itself.  The box stays the first source.
+
 A recorded pitching change (a pitcher row with ``sequence`` above 1) still wins:
 the box names the starter, not the current pitcher.  :func:`build_game_state`
-refuses a game when EITHER side has no pitcher.  It used to check only the side
-that pitches first, and the loop then kept that side's pitcher on the mound for
-both halves.  The refusal is a :class:`LineupIncompleteError` (SIM-559): the
-game is known, so the API answers 503 with ``Retry-After``, not 404.
+refuses a game when EITHER side has no pitcher, because the loop swaps the
+pitcher at each half and would otherwise keep one side's pitcher on the mound
+for both halves.  The refusal is a :class:`LineupIncompleteError`: the game is
+known, so the API answers 503 with ``Retry-After``, not 404.
 
-This module is owned by the Data Engineer (SIM-353).  It does NOT mutate
-``GameState`` after construction (the SIM-316 state machine owns mutation) and it
-does NOT edit ``simulation.game_state`` — it only constructs a GameState through
-that module's public surface.
+This module does NOT mutate ``GameState`` after construction (the loop owns
+mutation) and it does NOT edit ``simulation.game_state``: it only constructs a
+GameState through that module's public surface.
 """
 
 from __future__ import annotations
@@ -121,14 +128,15 @@ log = logging.getLogger(__name__)
 #: abbreviation styles the live ingestion path may write.
 PITCHER_POSITION_CODES = frozenset({"1", "P", "SP", "RP"})
 
-#: MLB scoring position code (raw.game_lineups.position_code) -> the canonical
-#: defensive-slot name FieldSnapshot keys on (snapshots.DEFENSE_POSITIONS).  The
-#: nine fielding positions are numbered 1..9 in scorebook order; codes outside
-#: this set (e.g. '10'/'DH' for a designated hitter, or the pinch roles
-#: 'PH'/'PR'/'DEF') are NOT fielding positions and are skipped by the builder.
-#: Mirrors snapshots.POSITION_NUMBER (name -> number); this is its inverse keyed
-#: by the *string* code raw.game_lineups stores.  Kept here (not imported from
-#: snapshots) so the resolver has no dependency on the API/contract layer.
+#: MLB scorebook position number, as a string -> the canonical defensive-slot
+#: name FieldSnapshot keys on (snapshots.DEFENSE_POSITIONS).  The nine fielding
+#: positions are numbered 1..9 in scorebook order; codes outside this set (e.g.
+#: '10'/'DH' for a designated hitter, or the pinch roles 'PH'/'PR'/'DEF') are
+#: NOT fielding positions and the builder skips them.  ``raw.game_lineups``
+#: stores the slot NAME; this map serves a source that writes the number.  It
+#: is the inverse of snapshots.POSITION_NUMBER (name -> number), kept here (not
+#: imported from snapshots) so the resolver has no dependency on the API
+#: contract layer.
 POSITION_CODE_TO_NAME: dict[str, str] = {
     "1": "P",
     "2": "C",
@@ -146,9 +154,6 @@ POSITION_CODE_TO_NAME: dict[str, str] = {
 #: import from the contract layer.
 DEFENSE_POSITION_NAMES: tuple[str, ...] = tuple(POSITION_CODE_TO_NAME.values())
 
-#: The number of batting-order slots in a standard lineup.
-LINEUP_SLOTS = 9
-
 #: Default batter hand when raw.players has no hand for a player (defensive).
 #: 'R' is the league-modal hand; the sampler treats it as a pre-filter key only.
 DEFAULT_BAT_HAND = "R"
@@ -157,8 +162,8 @@ DEFAULT_BAT_HAND = "R"
 class LineupResolutionError(ValueError):
     """Raised when a lineup cannot be resolved into a usable GameState.
 
-    Subclasses :class:`ValueError` so callers that already guard the SIM-326
-    invalid-state path catch it without a new except clause.
+    Subclasses :class:`ValueError` so callers that already catch the loop's
+    invalid-state ``ValueError`` catch it without a new except clause.
     """
 
 
@@ -173,7 +178,7 @@ class LineupNotIngestedError(LineupResolutionError):
 
 
 class LineupIncompleteError(LineupResolutionError):
-    """Raised when a KNOWN game has lineup rows that do not make a playable game (SIM-559).
+    """Raised when a KNOWN game has lineup rows that do not make a playable game.
 
     Three cases: a side with no resolvable pitcher (no 'P' row and no official
     box starter), a side with an empty batting order, or rows that resolve to
@@ -248,12 +253,12 @@ class ResolvedLineup:
     bat_hands: dict[int, str] = field(default_factory=dict)
     #: player_id -> 'L'/'R'/'S' throwing hand (from raw.players.throws).
     throw_hands: dict[int, str] = field(default_factory=dict)
-    # SIM-427: each side's manager (raw.games) and the real pen — the arms the
-    # MLB box lists as available for the game (``raw.game_bullpen``, minus the
-    # rotation and today's starter), keyed by the Team int (0 = AWAY, 1 = HOME),
-    # with each arm's rest and recent usage. ``bullpen_source`` is 'box' when the
-    # listing supplied it and 'synthetic' when it did not (the caller then
-    # stages the no-DB seam's pen and the decision log says so).
+    # Each side's manager and the game date (raw.games), and the real pen: the
+    # arms the MLB box lists as available for the game (``raw.game_bullpen``,
+    # minus the rotation and today's starter), keyed by the Team int (0 = AWAY,
+    # 1 = HOME), with each arm's rest and recent usage. ``bullpen_source`` is
+    # 'box' when the listing supplied the pen and 'synthetic' when it did not
+    # (the caller then stages the synthetic pen and the decision log says so).
     home_manager_id: int | None = None
     away_manager_id: int | None = None
     game_date: Any = None
@@ -308,10 +313,10 @@ def _pick_team_slots(
     For each ``batting_order`` slot, the occupant is the row with the highest
     ``sequence`` whose substitution has taken effect by ``as_of_at_bat``.  The
     pitcher is resolved independently as the highest-sequence pitcher-position
-    row (so a mid-game pitching change wins) regardless of batting_order — an AL
-    pitcher has no batting slot.
+    row (so a mid-game pitching change wins) regardless of batting_order — a
+    pitcher in a lineup with a designated hitter has no batting slot.
 
-    ``box_starter`` (SIM-558) is the pitcher the official box credits with this
+    ``box_starter`` is the pitcher the official box credits with this
     team's start.  It replaces the lineup's pick unless that pick is a recorded
     pitching change (``sequence`` above 1).  See the module docstring for the
     three cases where the lineup's sequence-1 pitcher row is wrong or missing.
@@ -332,7 +337,7 @@ def _pick_team_slots(
             if best_pitcher is None or seq > int(_row_get(best_pitcher, "sequence", 1) or 1):
                 best_pitcher = row
 
-        # Batting-slot resolution (skip rows with no batting_order — e.g. an AL
+        # Batting-slot resolution (skip rows with no batting_order — e.g. a
         # pitcher who never bats, or a defensive replacement recorded w/o a slot).
         bo = _row_get(row, "batting_order")
         if bo is None:
@@ -356,8 +361,8 @@ def _pick_team_slots(
 
     pitcher_id = int(_row_get(best_pitcher, "player_id")) if best_pitcher is not None else None
     if box_starter is not None:
-        # SIM-558: the box names the starter.  Only a recorded pitching change
-        # (a later-sequence pitcher row) is more current than the starter.
+        # The box names the starter.  Only a recorded pitching change (a
+        # later-sequence pitcher row) is more current than the starter.
         best_seq = (
             int(_row_get(best_pitcher, "sequence", 1) or 1) if best_pitcher is not None else 0
         )
@@ -389,16 +394,17 @@ def resolve_lineup_from_rows(
     Rows whose ``team_id`` is neither side are ignored.  Substitution semantics
     are documented on :func:`_occupant_takes_effect` / :func:`_pick_team_slots`.
 
-    ``box_starters`` (SIM-558) maps ``team_id`` to the pitcher the official box
+    ``box_starters`` maps ``team_id`` to the pitcher the official box
     credits with the start (:func:`fetch_box_starters`).  A side the map names
     takes its starter from the box; a side it does not name keeps the lineup's
     pitcher row.
 
     Raises
     ------
-    LineupResolutionError
+    LineupIncompleteError
         If neither side has any batting-order slot after resolution (an empty /
-        missing lineup the loop cannot run against).
+        missing lineup the loop cannot run against).  A
+        :class:`LineupResolutionError` subclass.
     """
     home_rows: list[Mapping[str, Any]] = []
     away_rows: list[Mapping[str, Any]] = []
@@ -447,7 +453,7 @@ def resolve_lineup_from_rows(
 
 
 def _require_pitcher(resolved: ResolvedLineup, team: TeamLineup, side: str) -> int:
-    """Return ``team``'s pitcher id, or refuse the game when it has none (SIM-558).
+    """Return ``team``'s pitcher id, or refuse the game when it has none.
 
     ``side`` is 'home' or 'away'; the message names it so the caller sees which
     side is missing.
@@ -476,13 +482,15 @@ def build_game_state(
 
       * ``home_lineup`` / ``away_lineup`` — ordered batting orders (slot 1..9).
       * ``home_lineup_slot`` / ``away_lineup_slot`` — both 0 (top of the 1st;
-        the SIM-316 state machine advances the pointers from here).
+        the loop advances the pointers from here).
       * ``pitcher_id`` — the *defending* team's current pitcher for the opening
         half (home pitches in the top of the 1st).
       * ``batter_id`` — the leadoff hitter of the *offense* (away in the top).
-      * ``bat_hand`` / ``throw_hand`` — sampler pre-filter keys from the hand
-        maps (default 'R' when a hand is unknown).
-      * ``season`` — the sampler pre-filter season from the resolved lineup.
+      * ``bat_hand`` / ``throw_hand`` — the hand filter keys from the hand
+        maps (``bat_hand`` defaults to 'R' when a hand is unknown).
+      * ``season`` — the pool season key from the resolved lineup.
+      * both hand maps, both pitchers, both catchers and defenses, the
+        managers and the pen.
 
     The required GameState identity fields (``pitcher_id``, ``bat_hand``,
     ``season``) are passed to the constructor; everything else defaults to a
@@ -492,9 +500,9 @@ def build_game_state(
     ------
     LineupIncompleteError
         If the offense (the side batting in ``half``) has no batting order, or
-        EITHER side has no resolvable pitcher (SIM-558) — the loop swaps the
-        pitcher at each half, so it needs both. A ``LineupResolutionError``
-        subclass; the API answers it with 503 and ``Retry-After`` (SIM-559).
+        EITHER side has no resolvable pitcher — the loop swaps the pitcher at
+        each half, so it needs both. A ``LineupResolutionError`` subclass; the
+        API answers it with 503 and ``Retry-After``.
     """
     offense_team = Team.AWAY if half == Half.TOP else Team.HOME
 
@@ -508,9 +516,8 @@ def build_game_state(
             f"game_pk={resolved.game_pk}; cannot put a leadoff batter up."
         )
 
-    # SIM-558: check the side that pitches first, then the other side.  The old
-    # check stopped at the first; a game with no away starter then ran with the
-    # home pitcher on the mound in both halves.
+    # Check both sides, not only the side that pitches first: a game with no
+    # away starter would run with the home pitcher on the mound in both halves.
     home_pitcher = _require_pitcher(resolved, resolved.home, "home")
     away_pitcher = _require_pitcher(resolved, resolved.away, "away")
     pitcher_id = home_pitcher if offense_team == Team.AWAY else away_pitcher
@@ -533,23 +540,23 @@ def build_game_state(
     state.away_lineup_slot = 0
     state.batter_id = leadoff_batter
     state.throw_hand = throw_hand
-    # SIM-421: retain the per-batter hand map + both starters so the matchup
-    # pre-filter follows the lineup (batter hand per PA, pitcher per half).
+    # Keep the per-batter hand map and both starters, so the matchup follows
+    # the lineup (the batter's hand per PA, the pitcher per half).
     state.bat_hands = dict(resolved.bat_hands)
     state.throw_hands = dict(resolved.throw_hands)
     state.home_pitcher_id = home_pitcher
     state.away_pitcher_id = away_pitcher
-    # SIM-428/425b: each team's per-position defense map ('P','C','1B'..'RF' ->
-    # player_id). The catcher feeds the receiving ratio; the full map feeds the
-    # SIM-523 fielder score matrices. Computed once per side.
+    # Each team's per-position defense map ('P','C','1B'..'RF' -> player_id).
+    # The catcher keys the steal and pickoff draws and the receiving factor;
+    # the full map feeds the fielder score matrices. Computed once per side.
     home_def = build_team_defense_map(resolved.home)
     away_def = build_team_defense_map(resolved.away)
     state.home_catcher_id = home_def.get("C")
     state.away_catcher_id = away_def.get("C")
     state.home_defense = home_def
     state.away_defense = away_def
-    # SIM-427: the managers and the real pen (the pen rides the manager
-    # context the pull hook pops from; ``simulate_game`` copies it per game).
+    # The managers and the real pen (the pen rides the manager context the
+    # pitching change pops from; ``simulate_game`` copies it per game).
     state.home_manager_id = resolved.home_manager_id
     state.away_manager_id = resolved.away_manager_id
     if resolved.bullpen:
@@ -562,7 +569,7 @@ def build_game_state(
 
 
 # ---------------------------------------------------------------------------
-# Per-position fielder map — ResolvedLineup -> {position name: player_id} (SIM-363)
+# Per-position fielder map — ResolvedLineup -> {position name: player_id}
 # ---------------------------------------------------------------------------
 
 
@@ -579,13 +586,14 @@ def build_team_defense_map(team: TeamLineup) -> dict[str, int]:
       * Each batting-order slot's *current occupant* (the resolver already applied
         the highest-sequence-wins substitution rule) contributes one fielding
         slot, by its ``position_code``.
-      * The pitcher is added from ``team.pitcher_id`` (an AL pitcher has no batting
-        slot, so the pitcher would otherwise be missing); an explicit pitcher
-        ALWAYS wins the 'P' slot over any batting-slot row that also maps to 'P'.
+      * The pitcher is added from ``team.pitcher_id`` (a pitcher in a lineup
+        with a designated hitter has no batting slot, so he would otherwise be
+        missing); an explicit pitcher ALWAYS wins the 'P' slot over any
+        batting-slot row that also maps to 'P'.
       * Non-fielding occupants are skipped: a DH (code '10'/'DH'), or a pinch
-        role ('PH'/'PR'/'DEF') that is not yet in the field (a non-numeric /
-        unmapped ``position_code``).  Their batting slot stays in the order but
-        they hold no glove, so they get no FieldSnapshot slot.
+        role ('PH'/'PR'/'DEF') that is not yet in the field (an unmapped
+        ``position_code``).  Their batting slot stays in the order but they
+        hold no glove, so they get no FieldSnapshot slot.
       * If two batting slots map to the same fielding position (a defensive sub
         that the source recorded without retiring the prior occupant), the one
         with the higher ``sequence`` wins — consistent with the resolver's
@@ -601,11 +609,10 @@ def build_team_defense_map(team: TeamLineup) -> dict[str, int]:
         code = str(slot.position_code)
         # raw.game_lineups stores position_code as the canonical NAME ('SS','C',
         # '1B'..) — accept it directly. Also map a numeric scorebook code ('1'..'9')
-        # for any legacy/alternate source. 'DH' / pinch role / anything else has no
-        # fielding slot -> skipped. (Before this, the name-format real data fell
-        # through POSITION_CODE_TO_NAME — which is keyed by NUMBER — so only the
-        # explicitly-added pitcher survived: the catcher + the 7 other fielders were
-        # silently dropped, leaving SIM-428 framing + SIM-425b fielder-RBF inert.)
+        # for an alternate source. 'DH' / pinch role / anything else has no
+        # fielding slot -> skipped. Read through POSITION_CODE_TO_NAME alone
+        # (keyed by NUMBER), a name would drop the catcher and the seven other
+        # fielders, and only the explicitly-added pitcher would survive.
         name = code if code in DEFENSE_POSITION_NAMES else POSITION_CODE_TO_NAME.get(code)
         if name is None:
             continue
@@ -716,7 +723,7 @@ _PLAYER_HANDS_SQL = """
     WHERE  player_id = ANY($1::int[])
 """
 
-# SIM-558: the pitcher the official box credits with each side's start.
+# The pitcher the official box credits with each side's start.
 _BOX_STARTERS_SQL = """
     SELECT team_id, player_id
     FROM   raw.game_player_stats
@@ -727,8 +734,9 @@ _BOX_STARTERS_SQL = """
 async def fetch_game_sides(conn: Any, game_pk: int) -> Mapping[str, Any] | None:
     """Read the ``raw.games`` row that maps team ids to the home/away sides.
 
-    Returns the row (``game_pk, season, home_team_id, away_team_id``) or None
-    when the game is unknown.
+    Returns the row (``game_pk, season, home_team_id, away_team_id,
+    home_manager_id, away_manager_id, game_date``) or None when the game is
+    unknown.
     """
     return await conn.fetchrow(_GAME_SIDES_SQL, int(game_pk))
 
@@ -743,15 +751,15 @@ async def fetch_lineup_rows(conn: Any, game_pk: int) -> Sequence[Mapping[str, An
 
 
 async def fetch_box_starters(conn: Any, game_pk: int) -> dict[int, int]:
-    """Read each side's starter from the official box (SIM-558).
+    """Read each side's starter from the official box.
 
     Returns ``{team_id: player_id}`` from ``raw.game_player_stats`` (the rows
     with ``p_started``).  A game with no box yet returns an empty map, and the
     lineup's pitcher row then stands.  A side with two ``p_started`` rows is
     left out of the map: the box cannot name one starter for it.
 
-    A failed read (the table is absent before Alembic 0023, or the database
-    hiccups) logs a warning and returns an empty map.  The game is still
+    A failed read (a database before Alembic 0023 has no table, or the
+    database hiccups) logs a warning and returns an empty map.  The game is still
     refused later if a side has no pitcher at all.
     """
     try:
@@ -829,9 +837,11 @@ async def resolve_lineup(
     when it holds no row for the game: a game that started before the live
     service stored its lineup. They take the ``raw.game_lineups`` columns.
 
-    Thin orchestration only: it reads ``raw.games`` (to map sides + season),
-    ``raw.game_lineups`` (every sequence), and ``raw.players`` (hands), then
-    delegates ALL logic to the pure :func:`resolve_lineup_from_rows`.
+    Thin orchestration only: it reads ``raw.games`` (the sides, the season,
+    the managers and the date), ``raw.game_lineups`` (every sequence), the
+    official box's starters and ``raw.players`` (hands), then delegates the
+    lineup logic to the pure :func:`resolve_lineup_from_rows`.  Last it
+    attaches the real pens (:func:`_attach_bullpens`).
 
     Raises
     ------
@@ -857,7 +867,7 @@ async def resolve_lineup(
             "lineup not yet published — try again closer to game time."
         )
 
-    # SIM-558: the official box names each side's starter (empty before the box
+    # The official box names each side's starter (empty before the box
     # exists).  A starter the lineup does not list still needs his throwing hand.
     box_starters = await fetch_box_starters(conn, game_pk)
 
@@ -878,7 +888,7 @@ async def resolve_lineup(
         as_of_at_bat=as_of_at_bat,
         box_starters=box_starters,
     )
-    # SIM-427: the managers and the real pens.
+    # The managers and the real pens.
     hm = _row_get(game, "home_manager_id")
     am = _row_get(game, "away_manager_id")
     resolved.home_manager_id = int(hm) if hm is not None else None
@@ -889,20 +899,24 @@ async def resolve_lineup(
 
 
 def bullpen_source_enabled() -> bool:
-    """SIM-427: whether the resolver reads the REAL pen (``SIM_BULLPEN_SOURCE=box``,
-    the MLB box's per-game listing) or leaves the synthetic pen in place (the
-    default, ``synthetic`` — production today; the flip sets ``box``)."""
+    """Whether the resolver reads the REAL pen (``SIM_BULLPEN_SOURCE=box``, the
+    MLB box's per-game listing) or leaves the synthetic pen in place.
+
+    The code default is ``synthetic``; production sets ``box`` in the app
+    service of ``docker-compose.yml``."""
     return read_str("SIM_BULLPEN_SOURCE").strip().lower() == "box"
 
 
 async def _attach_bullpens(conn: Any, resolved: ResolvedLineup) -> None:
-    """SIM-427: fill ``resolved.bullpen`` / ``pitcher_rest_days`` /
-    ``pitcher_recent_usage`` from the MLB box's per-game listing
-    (``pipeline.bullpen_usage.fetch_pen_for_game``), both sides, and merge the
-    pen arms' throwing hands. Leaves ``bullpen_source = 'synthetic'`` (and the
-    maps empty) when the source switch is off (:func:`bullpen_source_enabled`),
-    when the listing is absent for either side or when the table does not
-    exist yet — the caller falls back to the no-DB seam's pen and says so."""
+    """Fill ``resolved.bullpen`` / ``pitcher_rest_days`` /
+    ``pitcher_recent_usage`` from the MLB box's per-game listing.
+
+    The listing comes from ``pipeline.bullpen_usage.fetch_pen_for_game``, for
+    both sides, and the pen arms' throwing hands merge into the hand map.
+    ``bullpen_source`` stays ``'synthetic'`` (and the maps empty) when the
+    source switch is off (:func:`bullpen_source_enabled`), when the listing is
+    absent for either side or when the table does not exist; the caller then
+    falls back to the synthetic pen and says so."""
     from pipeline.bullpen_usage import fetch_pen_for_game
 
     if not bullpen_source_enabled():
@@ -986,7 +1000,7 @@ __all__ = [
     # pure assembly + building
     "resolve_lineup_from_rows",
     "build_game_state",
-    # per-position fielder map (SIM-363)
+    # per-position fielder map
     "build_team_defense_map",
     "build_defense_map",
     "build_defense_map_for_state",
@@ -1003,6 +1017,5 @@ __all__ = [
     "PITCHER_POSITION_CODES",
     "POSITION_CODE_TO_NAME",
     "DEFENSE_POSITION_NAMES",
-    "LINEUP_SLOTS",
     "DEFAULT_BAT_HAND",
 ]

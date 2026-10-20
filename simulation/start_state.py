@@ -97,8 +97,10 @@ def apply_start_state(state: GameState, ss: Mapping[str, Any]) -> None:
 
 
 def apply_start_bullpen(state: GameState, ss: Mapping[str, Any]) -> None:
-    """Each side's available arms (the pen not yet used). Applied after the
-    game's own pen is seeded, so it wins."""
+    """Set each side's available arms (the pen not yet used) from the start state.
+
+    ``simulate_game`` calls this after it seeds the game's own pen, so the start
+    state's pen wins. A start state with no ``bullpen`` changes nothing."""
     pen = ss.get("bullpen")
     if pen is None:
         return
