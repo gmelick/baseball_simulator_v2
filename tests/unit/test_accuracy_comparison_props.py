@@ -1,24 +1,24 @@
 """
 tests/unit/test_accuracy_comparison_props.py
 ========================================
-The backtest wiring for the new prop markets (SIM-421) and the official
-box-score ground truth (SIM-545), in ``scripts/accuracy_comparison.py`` and
+The backtest wiring for the fifteen prop markets (the prop-market work,
+SIM-421) and the official box-score ground truth (the owner's ruling to grade
+props on the box, SIM-545), in ``scripts/accuracy_comparison.py`` and
 ``scripts/validate_props.py``.
 
-What changed, in plain words: the platform now prices fifteen player-prop
-markets, and a prop can only be graded against what the player really did.
-The official box score (``raw.game_player_stats``) grades every priced
-market — RBI and ER included, two props the platform priced but could not
-grade before — and a player who did not play is absent from it, so his bet
-is skipped the way the book voids it. A game with no box-score rows falls
+In plain words: the platform prices fifteen player-prop markets, and a prop
+can be graded only against what the player really did. The official box
+score (``raw.game_player_stats``) grades every priced market, RBI and ER
+included. A player who did not play is absent from it, so his bet is
+skipped the way the book voids it. A game with no box-score rows falls
 back to the event label (``raw.pitches.events``), which grades only five
 props. The scorer takes the per-game set of gradable props from whichever
 source the game used, and the report counts games per source.
 
 No DB, no network, no real sim. The ground-truth rows come from the real
 captured payload ``tests/fixtures/mlb/boxscore_746437.json`` through the
-SIM-545 parser and reader; the pool is a fake that routes each SELECT by the
-table it names.
+box-score parser and reader; the pool is a fake that routes each SELECT by
+the table it names.
 """
 
 from __future__ import annotations
@@ -163,7 +163,7 @@ class _FakePool:
 
 def test_official_set_grades_every_priced_market():
     """Every model prop the vocab maps to is gradable on the official box score
-    — including RBI and ER, and every SIM-421 market."""
+    — including RBI, ER and every market of the prop-market work (SIM-421)."""
     assert set(PROP_VOCAB_MAP.values()) == BOXSCORE_SCORED_PROPS
     assert set(ALL_PROPS) == BOXSCORE_SCORED_PROPS
     assert set(BOXSCORE_BATTER_PROPS) | set(BOXSCORE_PITCHER_PROPS) == BOXSCORE_SCORED_PROPS
@@ -268,7 +268,7 @@ async def test_ground_truth_falls_back_to_the_event_label_when_no_rows():
 
 
 # ---------------------------------------------------------------------------
-# (c) score_prop_accuracy on the official path: every new prop, RBI and ER
+# (c) score_prop_accuracy on the official path: every prop, RBI and ER included
 # ---------------------------------------------------------------------------
 
 
@@ -346,18 +346,18 @@ def test_official_path_scores_every_priced_market():
         assert rec.game_pk == GAME_PK
         assert 0.0 < rec.sim_prob < 1.0
         assert 0.0 < rec.market_prob < 1.0
-        # SIM-540 needs the raw closing prices on every record.
+        # The hypothetical-return read needs the raw closing prices on every record.
         assert rec.market_side_price == pytest.approx(-110.0)
         assert rec.market_other_price == pytest.approx(-110.0)
-    # The two props the platform priced but could not grade before SIM-545.
+    # The two priced props that only the box score can grade.
     assert by_market["RBI"].player_id == _SLUGGER
     assert by_market["ER"].player_id == _STARTER
 
 
 def test_fallback_path_grades_only_the_five_event_label_props():
     """The SAME odds, distributions and actuals, gated by the fallback set:
-    RBI, ER and every SIM-421 market drop out. The set is the gate, not the
-    presence of an actual."""
+    RBI, ER and the eight markets of the prop-market work (SIM-421) drop out.
+    The set is the gate, not the presence of an actual."""
     pset, prop_odds, _ = _every_market_case()
     batter, pitcher = real_props_from_boxscore_rows(_fixture_rows())
     recs = score_prop_accuracy(
@@ -433,7 +433,7 @@ def test_tally_counts_scored_games_per_source():
 
 
 def test_tally_keeps_its_old_call_shape():
-    """The existing callers pass no source; both counters stay at zero."""
+    """A caller that passes no source leaves both counters at zero."""
     c = _Counters()
     _tally(c, "scored", 1.18)
     assert c.games_scored == 1
@@ -561,14 +561,14 @@ def _wire_score_one_game(monkeypatch, pset: PropDistributionSet, prop_odds: dict
         return "2024-08-14"
 
     async def _prop_odds(pool, game_pk, **_kw):
-        # SIM-555: the reader also takes the benchmark book (a keyword).
+        # The reader also takes the benchmark book (a keyword).
         return prop_odds
 
     monkeypatch.setattr(sk, "resolve_park_factor_onto_state", _park)
     monkeypatch.setattr(sk, "resolve_asof_ymd", _asof)
     monkeypatch.setattr(replay_mod, "_fetch_prop_odds", _prop_odds)
-    # SIM-421 (2026-09-12): the replay returns the results AND the per-iteration
-    # inning grids; no grids here, so the segment-market scorer stays idle.
+    # The replay returns the results AND the per-iteration inning grids; no
+    # grids here, so the segment-market scorer stays idle.
     monkeypatch.setattr(replay_mod, "_replay_game", lambda *_a, **_k: ([object()], []))
     monkeypatch.setattr(
         results_mod.GameSimSummary, "from_results", classmethod(lambda cls, r: object())
@@ -709,5 +709,5 @@ def test_validate_props_summary_prints_the_per_source_counts():
     )
     assert "official box score=7 games" in text
     assert "event-label fallback=2 games" in text
-    # The old call shape still renders.
+    # A call with no counts renders no source line.
     assert "official box score=" not in validate_props._summary_text(PropValidationReport())

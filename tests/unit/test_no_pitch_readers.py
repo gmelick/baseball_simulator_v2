@@ -1,7 +1,8 @@
-"""SIM-554 — every reader of a per-pitch result handles the no-pitch result.
+"""Every reader of a per-pitch result handles the no-pitch result.
 
-The running game on the pitch (``docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md``,
-§5.6 and test 12) draws the pickoff BEFORE the pitch. A pickoff that makes the
+The running game on the pitch (SIM-554;
+``docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md``, §5.6 and
+test 12) draws the pickoff BEFORE the pitch. A pickoff that makes the
 third out ends the half-inning with no pitch thrown. The loop then returns a
 result whose ``pitch_outcome`` is ``NO_PITCH``: it carries the out, but no
 pitch, no event and no plate appearance.
@@ -375,8 +376,8 @@ class TestTheReplayBuilder:
         from simulation.play_recorder import RecordedGame
         from simulation.snapshots import PitchContext
 
-        # SIM-561: the builder reads record_game, which adds the state before
-        # each step; one context per result, no-pitch results included.
+        # The builder reads record_game, which adds the state before each
+        # step; one context per result, no-pitch results included.
         contexts = [PitchContext(inning=1, half="top", outs=0, batter_id=None) for _ in plays]
         monkeypatch.setattr(
             games_mod, "record_game", lambda **_kw: RecordedGame(game, plays, contexts)
@@ -531,7 +532,7 @@ class TestTheFlag:
     def test_the_unit_lane_does_not_pin_it(self):
         """``tests/conftest.py`` pins no value: the unit lane builds its
         samplers directly, so the environment never reaches them, and the
-        no-database tests run the new order on purpose (plan §4.5)."""
+        no-database tests run the four-draw order on purpose (plan §4.5)."""
         src = (_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
         assert 'os.environ["SIM_STEAL_PITCH_CLASS"]' not in src
 

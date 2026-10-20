@@ -1,37 +1,30 @@
 """
 tests/unit/test_accuracy_minimum_sample.py
 ================================================
-Unit tests for SIM-539 — the stated MINIMUM SAMPLE SIZE for the reports in
-``scripts/accuracy_comparison.py`` that need one: the sim-vs-closing-line accuracy
-comparison (SIM-538) and the hypothetical dollar return (SIM-540).
+Unit tests for the stated MINIMUM SAMPLE SIZE of the accuracy reports that
+need one (``scripts/accuracy/confidence.py``): the sim-vs-closing-line
+accuracy comparison and the hypothetical dollar return.
 
-What SIM-539 adds, in plain words: a small sample can look like real skill
-by pure chance. This ticket states, per market row, the smallest number of
-observations that market needs before its result should be trusted at all —
-using a standard power-analysis formula, the platform's own existing
-"is this edge big enough to act on" floor (``betting.bet_signal.
-DEFAULT_MIN_EDGE``), the SAME detection-margin CONSTANT ``tests/acceptance/
-bands.py`` already uses, and a Bonferroni correction for scanning several
-market rows at once. Every report ALSO gets an honest, GAME-CLUSTERED
-spread: several observations from one game (several props from one start;
-three game markets off one score) are correlated, not independent trials,
-and a cluster-robust standard error is mathematically degenerate (always
-exactly zero) with a single distinct game. An adversarial review of the
-first version of this ticket found that a bare "at least 2 games" guard was
-not enough — a small sample can still read as PERFECTLY resolved (zero
-uncertainty) purely by chance — so this file also proves the raised
-``MIN_CLUSTERS_FOR_INFERENCE`` floor and documents, rather than hides, the
-limitation that remains even above it.
-
-SIM-541 (2026-09-11): this file used to also test SIM-539's wiring into the
-SIM-429 CLV scoreboard (``_row_for`` / ``aggregate_scoreboard`` /
-``format_scoreboard``). The owner retired that report — the platform no
-longer measures the entry-to-close line move at all — and its code was
-deleted from ``scripts/accuracy_comparison.py``; those tests are deleted with it.
+In plain words: a small sample can look like real skill by pure chance. Each
+market row states the smallest number of observations the market needs
+before its result can be trusted at all. The estimate uses a standard
+power-analysis formula (the sample size that detects an effect of a given
+size), the platform's "is this edge big enough to act on" floor
+(``betting.bet_signal.DEFAULT_MIN_EDGE``), the SAME detection-margin constant
+as ``tests/acceptance/bands.py``, and a Bonferroni correction (alpha divided
+by the number of rows) for scanning several market rows at once. Every
+report ALSO gets an honest, GAME-CLUSTERED spread. Several observations from
+one game (several props from one start; three game markets off one score)
+are correlated, not independent trials, and a cluster-robust standard error
+is degenerate (always exactly zero) with a single distinct game. A bare "at
+least 2 games" guard is not enough either: a small sample can read as
+PERFECTLY resolved (zero uncertainty) purely by chance. So this file also
+proves the ``MIN_CLUSTERS_FOR_INFERENCE`` floor and documents the limitation
+that remains even above it.
 
 These tests run with NO DB and NO real sim: every function under test here
-is PURE. See ``tests/unit/test_accuracy_comparison.py`` for the
-surrounding scoring/aggregation tests this ticket builds on.
+is PURE. ``tests/unit/test_accuracy_comparison.py`` holds the scoring and
+aggregation tests.
 """
 
 from __future__ import annotations
@@ -90,9 +83,7 @@ def test_bonferroni_alpha_treats_zero_or_negative_as_one():
 
 
 def test_z_two_sided_matches_the_well_known_95_percent_value():
-    """The textbook value everyone recognizes: z_(alpha/2) at alpha=0.05 is
-    1.959963984540054 (tests/acceptance/bands.py's own _Z_95 in the
-    wave1-remediation branch this ticket picks up from)."""
+    """The textbook value: z_(alpha/2) at alpha=0.05 is 1.959963984540054."""
     assert _z_two_sided(0.05) == pytest.approx(1.959963984540054, abs=1e-9)
 
 
@@ -154,8 +145,8 @@ def test_minimum_paired_observations_stricter_alpha_needs_more_data():
 
 
 # ---------------------------------------------------------------------------
-# (d) _clustered_se -- the cluster-robust standard error (generalized to
-# arbitrary real values: 0/1 beat indicators, or Brier/log-loss differences)
+# (d) _clustered_se -- the cluster-robust standard error (it takes any real
+# values: 0/1 indicators, or Brier/log-loss differences)
 # ---------------------------------------------------------------------------
 
 
@@ -165,7 +156,8 @@ def test_clustered_se_empty_is_zero():
 
 def test_clustered_se_reduces_exactly_to_the_naive_se_for_singleton_clusters():
     """One observation per game (no clustering at all): the CR0 sandwich SE
-    must reduce EXACTLY to the ordinary i.i.d. proportion SE,
+    (the basic cluster-robust standard error) must reduce EXACTLY to the
+    ordinary i.i.d. proportion SE,
     sqrt(p(1-p)/n)."""
     values_by_game = {1: [1], 2: [0], 3: [1], 4: [1]}
     n = 4
@@ -232,10 +224,9 @@ def test_minimum_observations_clustered_none_with_a_single_cluster():
 def test_minimum_observations_clustered_none_below_the_cluster_floor():
     """Fewer than MIN_CLUSTERS_FOR_INFERENCE distinct games -- even well
     above 1 -- must still read as undetermined, not just barely-resolved.
-    An adversarial review of SIM-539 confirmed a bare '>= 2 games' guard
-    was not enough: a small sample can read as perfectly resolved (zero
-    uncertainty) purely by chance. This test sits one game short of the
-    floor."""
+    A bare '>= 2 games' guard is not enough: a small sample can read as
+    perfectly resolved (zero uncertainty) purely by chance. This test sits
+    one game short of the floor."""
     assert MIN_CLUSTERS_FOR_INFERENCE > 2, "the test below assumes a floor above 2"
     values_by_game = {i: [1 if i % 2 == 0 else 0] for i in range(MIN_CLUSTERS_FOR_INFERENCE - 1)}
     assert _minimum_observations_clustered(values_by_game, floor=0.02, alpha=0.05) is None
@@ -451,8 +442,8 @@ def test_aggregate_accuracy_comparison_bonferroni_corrects_by_market_rows_only()
 
 
 def test_aggregate_accuracy_comparison_bonferroni_denominator_is_markets_not_records():
-    """Same distinction as the scoreboard's version: 2 markets, each with
-    MANY records, must correct by 2, not by the total record count."""
+    """2 markets, each with MANY records, must correct by 2, not by the
+    total record count."""
     records = []
     for market in ("moneyline", "H"):
         market_type = "moneyline" if market == "moneyline" else "prop"
@@ -506,11 +497,11 @@ def test_format_accuracy_comparison_renders_the_zero_games_row_without_crashing(
     common outcome, e.g. an empty --max-games slate or an --seasons range
     with no Final games yet) makes every one of sim_brier / brier_diff_mean
     / the CI bounds nan for the 'overall' row, and _json_safe turns each
-    into None before this ever reaches the formatter. This exact path
-    crashed in an integration test (test_clv_backtest_runs_when_park_
-    factors_are_available / test_clv_backtest_honours_the_explicit_opt_out
-    in test_sim_kwargs.py) before _fmt_or_na existed — this is the
-    faster, unit-level regression lock for the same scenario."""
+    into None before it reaches the formatter; _fmt_or_na prints each None
+    as "n/a". Two run-level tests in test_sim_kwargs.py
+    (test_clv_backtest_runs_when_park_factors_are_available,
+    test_clv_backtest_honours_the_explicit_opt_out) reach the same path;
+    this test is the faster, unit-level lock on it."""
     comparison = aggregate_accuracy_comparison([], n_bootstrap=100, seed=1)
     text = format_accuracy_comparison(
         comparison,
@@ -547,11 +538,10 @@ def test_accuracy_row_for_to_jsonable_is_valid_json_even_when_underpowered():
 
 
 def test_detection_margin_matches_bands_py():
-    """accuracy_comparison.py re-declares DETECTION_MARGIN rather than importing it
-    (tests/ and scripts/ are separate deployables), so nothing else keeps
-    the two in sync. An adversarial review of SIM-539 confirmed no test
-    enforced this; this one does, so a future change to either constant
-    without the other fails loudly here rather than silently diverging."""
+    """scripts/accuracy/confidence.py re-declares DETECTION_MARGIN rather
+    than importing it (tests/ and scripts/ are separate deployables), so
+    nothing else keeps the two in sync. A change to one constant without the
+    other fails here."""
     from tests.acceptance import bands
 
     assert DETECTION_MARGIN == bands.DETECTION_MARGIN

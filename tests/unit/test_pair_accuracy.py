@@ -1,10 +1,10 @@
-"""SIM-518 — pairing two accuracy-comparison reports (scripts/pair_accuracy.py).
+"""Pairing two accuracy-comparison reports (scripts/pair_accuracy.py).
 
 Pins three things: a report pair whose bundle, calibration file, seed or
 game list differs is refused; records pair on the full (game, market,
 player) key with the outcome and market probability checked equal; and the
-game-clustered range widens when several records share one game (the
-SIM-538 precedent).
+game-clustered range widens when several records share one game, as the
+accuracy comparison's own cluster bootstrap does.
 """
 
 from __future__ import annotations

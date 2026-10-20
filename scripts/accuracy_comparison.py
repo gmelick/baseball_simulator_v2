@@ -206,8 +206,8 @@ def _open_parent_duckdb(args: argparse.Namespace) -> Any:
     """The sim DuckDB of the parent process, or ``None``.
 
     The park factor lives in ``derived.park_factors`` in this file. Without it
-    every game runs at a neutral 1.0 and ``SIM_PARK_FACTOR`` does nothing, so the
-    backtest measures a simulator other than the one production serves.
+    every game runs at a neutral 1.0, so the backtest measures a simulator other
+    than the one production serves.
     :func:`run` turns a ``None`` into a non-zero exit unless the operator passes
     ``--allow-neutral-parks``.
     """

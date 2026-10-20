@@ -1,11 +1,12 @@
-"""SIM-549 — the re-score of stored accuracy reports (``scripts/probes/rescore_runlines.py``).
+"""The re-score of stored accuracy reports (``scripts/probes/rescore_runlines.py``).
 
-The accuracy comparison used to price every closing run line as the two sides
-of one bet. The reports written before the fix are re-priced beside their
-originals: a pair keeps its record, a row the book listed as two separate bets
-re-prices its home record from its own price over the same game's reference
-margin, and the away bet's record joins from the next backtest run. These tests
-drive the pure re-score on a toy report and a toy store; no database.
+A report with no ``run_line_scoring`` stamp prices every closing run line as
+the two sides of one bet. The re-score writes a re-priced copy beside the
+original (the run-line shape rule, SIM-549). A pair keeps its record. A row the
+book listed as two separate bets re-prices its home record from its own price
+over the same game's reference margin. The away bet's record comes only from a
+fresh backtest run. These tests drive the pure re-score on a toy report and a
+toy store; no database.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def _toy_report() -> dict:
     from betting.clv_engine import devig_two_way
 
     pair_mkt = devig_two_way(105.0, -125.0)[0]
-    paired_two_bets = devig_two_way(350.0, 150.0)[0]  # the old, wrong number
+    paired_two_bets = devig_two_way(350.0, 150.0)[0]  # a pair's de-vig: wrong for two bets
     return {
         "params": {"base_seed": 0, "bootstrap_samples": 20, "bootstrap_seed": 1},
         "counters": {"games_scored": 3, "n_accuracy_records": 4},

@@ -7,10 +7,10 @@ The unit lane runs inside the app container. That container reads the stack's
 .env file. The file names the vendor: ODDS_PROVIDER=bettingpros. Twelve
 unit tests build the live pipeline with ``__new__`` (a build that skips the
 constructor) and set no provider. The pipeline's lazy fallback (the provider
-lookup on first use) then reads the environment. Before the pin, those tests
-built the vendor's provider, which read the MLB Stats API.
+lookup on first use) then reads the environment. Without the pin, those tests
+build the vendor's provider, which reads the MLB Stats API.
 
-``tests/conftest.py`` now pins ``ODDS_PROVIDER`` to "mock" and removes
+``tests/conftest.py`` pins ``ODDS_PROVIDER`` to "mock" and removes
 ``ODDS_API_KEY``. These tests prove four things:
 
   1. The pin reaches the test process, and the process holds no vendor key.
@@ -71,8 +71,7 @@ def _make_pipeline_via_new() -> LiveIngestionPipeline:
 def test_the_lane_pins_the_mock() -> None:
     """The conftest pin reaches this process: ``ODDS_PROVIDER`` reads "mock".
 
-    The test lane's odds provider pin (SIM-567) beats the vendor name in the
-    stack's .env file.
+    The pin beats the vendor name in the stack's .env file.
     """
     value = os.environ.get(ODDS_PROVIDER_ENV)
     assert value == "mock", (
@@ -83,8 +82,8 @@ def test_the_lane_pins_the_mock() -> None:
 def test_the_lane_holds_no_vendor_key() -> None:
     """The test process holds no ``ODDS_API_KEY``.
 
-    The test lane's odds provider pin (SIM-567) removes the key. A test that
-    builds the vendor's provider then has no key to send.
+    The pin removes the key. A test that builds the vendor's provider then
+    has no key to send.
     """
     assert _KEY_ENV not in os.environ, f"tests/conftest.py must remove {_KEY_ENV}"
 
@@ -98,8 +97,8 @@ def test_the_factory_answers_the_mock() -> None:
 def test_a_bare_pipeline_draws_the_mock() -> None:
     """A pipeline built with ``__new__`` draws the mock on its first lookup.
 
-    The twelve tests behind the test lane's odds provider pin (SIM-567) take
-    this path. The pipeline also keeps the provider for its next lookup.
+    The twelve tests that need the pin take this path. The pipeline also
+    keeps the provider for its next lookup.
     """
     p = _make_pipeline_via_new()
     assert getattr(p, "_odds", None) is None
@@ -134,8 +133,8 @@ def test_the_conftest_keeps_both_lines() -> None:
     """``tests/conftest.py`` holds both pinned lines as live code.
 
     The check compares whole lines with the indent removed. A commented-out
-    line does not count. The test lane's odds provider pin (SIM-567) needs
-    both lines. One pins the mock, and one removes the key.
+    line does not count. The pin needs both lines. One pins the mock, and
+    one removes the key.
     """
     lines = {ln.strip() for ln in _CONFTEST.read_text(encoding="utf-8").splitlines()}
     for expected in (_PIN_LINE, _POP_LINE):

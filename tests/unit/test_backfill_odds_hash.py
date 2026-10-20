@@ -1,16 +1,16 @@
-"""tests/unit/test_backfill_odds_hash.py — SIM-157
-====================================================
-Unit tests for the odds_hash backfill script.  These tests confirm:
+"""tests/unit/test_backfill_odds_hash.py
+======================================
+Unit tests for the odds_hash backfill script
+(``scripts/probes/backfill_odds_hash.py``).  These tests confirm:
 
   * The hashing logic in `LiveIngestionPipeline._odds_hash` is what the
     backfill script uses (byte-for-byte identical fingerprints).
-  * The dedup ranking SQL keeps the earliest row per
-    `(game_pk, source, odds_hash)` group (smallest received_at; falls back
-    to smallest id on ties).
   * The Alembic migration `0012` chains correctly off `0011`.
 
-Live Postgres tests for `_backfill_hashes` / `_dedup_rows` live in
-`tests/integration/` since they require a running database.
+No test here runs `_backfill_hashes` / `_dedup_rows`, because they need a
+running database. The dedup ranking SQL keeps the earliest row per
+`(game_pk, source, odds_hash)` group (smallest received_at; falls back to
+smallest id on ties).
 """
 
 from __future__ import annotations

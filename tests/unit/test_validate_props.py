@@ -1,16 +1,18 @@
 """
 test_validate_props.py
 =========================
-SIM-407 — validate prop PMFs + fit the win-probability reliability curve over
-(synthetic, deterministic) outcomes, and derive real prop actuals from per-PA
-``events``.
+Validate prop PMFs (a probability for each count) and fit the
+win-probability reliability curve over synthetic, deterministic outcomes;
+derive real prop actuals from per-PA ``events``.
 
 Covers ``simulation.prop_validation``:
 
   1. Binary calibration metrics (win prob / over-under are binary events):
-     calibrated → ~0 ECE + near-diagonal reliability; over-confident → high ECE;
-     Brier/log-loss reward accuracy; input validation + empty handling.
-  2. The win-prob reliability fit (the SIM-406 → 407 handoff): the fitted
+     calibrated → ~0 ECE (expected calibration error, the mean gap between the
+     predicted and the observed rate) + near-diagonal reliability;
+     over-confident → high ECE; Brier/log-loss reward accuracy; input
+     validation + empty handling.
+  2. The win-prob reliability fit: the fitted
      ``[[pred, obs], …]`` curve, written onto a ``CalibrationReport``, makes
      ``CalibrationMap.from_report`` a NON-identity monotone map that corrects an
      over-confident simulator toward the truth.
@@ -18,10 +20,10 @@ Covers ``simulation.prop_validation``:
      not; the integer-line push convention is respected.
   4. PMF goodness-of-fit: calibrated PMFs → mid-PIT mean ≈ 0.5 + nominal coverage.
   5. Report JSON round-trip + the aggregator/curve write-back.
-  6. Real prop actuals from ``raw.pitches.events`` (the box-score derivation that
-     replaced the over-cautious ``--no-props`` gate) + pairing with sim PMFs.
-  7. ``scripts/validate_props.py`` contract guards (locks the seam so the
-     BatchRunner/per-game-results mistakes can't regress without a live DB).
+  6. Real prop actuals from ``raw.pitches.events`` (the event-label fallback
+     for a game with no official box-score rows) + pairing with sim PMFs.
+  7. ``scripts/validate_props.py`` contract guards: they lock the script's
+     seams to the batch runner and the per-game results without a live DB.
 
 All synthetic — no DB, no engines, no FAISS. A fixed RNG seed pins the numbers.
 """
@@ -137,7 +139,7 @@ class TestBinaryMetrics:
 
 
 # ===========================================================================
-# 2. The win-prob reliability fit (SIM-406 -> 407 handoff)
+# 2. The win-prob reliability fit
 # ===========================================================================
 
 
@@ -380,9 +382,9 @@ class TestRealPropsFromEvents:
         assert batter[10] == {"H": 4, "HR": 1, "TB": 1 + 2 + 3 + 4}
 
     def test_pitcher_k_bb_counts_the_intentional_walk(self):
-        # SIM-421 / SIM-545: the sim's BB line counts an intentional walk
-        # (``_BB_CANONICAL``) and so does the official box score, so the
-        # event-label fallback counts ``intent_walk`` too.
+        # The sim's BB line counts an intentional walk (``_BB_CANONICAL``)
+        # and so does the official box score, so the event-label fallback
+        # counts ``intent_walk`` too.
         pa = [
             (1, 99, "strikeout"),
             (2, 99, "strikeout_double_play"),
@@ -480,16 +482,16 @@ class TestPairPropsForValidation:
 
 # ===========================================================================
 # 7. scripts/validate_props.py contract guards
-#    (locks the seam so the BatchRunner / per-game-results mistakes — both caught
-#    in review — can't regress without a live DB).
+#    (they lock the script's seams to the batch runner and the per-game
+#    results without a live DB).
 # ===========================================================================
 
 
 class TestValidateScriptContract:
     def test_batchrunner_not_constructed_with_machine_factory(self):
         # The machine factory is a per-GAME concern (carried on GameSpec / passed to
-        # record_game_plays), NOT a BatchRunner ctor arg. Lock the signature so the
-        # original machine_factory= mistake is caught in unit CI.
+        # record_game_plays), NOT a BatchRunner ctor arg. Lock the signature so a
+        # machine_factory= argument fails in unit CI.
         import inspect
 
         from simulation.batch_runner import BatchRunner
@@ -520,8 +522,8 @@ class TestValidateScriptContract:
         assert args.seasons == [2024]
         assert args.no_props is True
         assert args.max_games == 5
-        # The per-game collector returns a results LIST (no dead game_pk arg, no
-        # BatchRunner): lock its signature.
+        # The per-game collector returns a results LIST (no game_pk argument,
+        # no BatchRunner): lock its signature.
         sig = inspect.signature(mod._collect_game_results)
         assert "game_pk" not in sig.parameters
         assert list(sig.parameters) == ["state", "n_iter", "base_seed"]

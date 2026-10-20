@@ -655,7 +655,7 @@ class TestBackfillCli:
             rc = asyncio.run(cli.run(args))
         assert rc == 0
         assert calls == [1, 2, 3, 4]
-        # games 1 and 4 — the box rows (each game also writes its SIM-427 bullpen listing)
+        # games 1 and 4 — the box rows (each game also writes its bullpen listing)
         assert sum(1 for sql, _ in conn.writes if sql == UPSERT_SQL_ASYNCPG) == 2
         assert conn.closed
         final = [r.message for r in caplog.records if "backfill complete" in r.message]
@@ -725,7 +725,7 @@ class TestBackfillCli:
         assert rc == 0
         assert calls == list(range(1, 13))
         # games 3, 6, 9, 12 — the box rows; each game also writes its bullpen
-        # listing (SIM-427), so count the player-stats upserts only.
+        # listing, so count the player-stats upserts only.
         assert sum(1 for sql, _ in conn.writes if sql == UPSERT_SQL_ASYNCPG) == 4
 
     def test_nothing_written_and_one_failure_exits_one(self, monkeypatch, caplog):

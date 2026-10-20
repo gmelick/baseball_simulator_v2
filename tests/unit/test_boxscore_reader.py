@@ -194,7 +194,7 @@ class _FakePset:
 
 class TestPairPropsBoxscoreTuples:
     def test_default_pairs_only_the_event_label_props(self):
-        """The default keyword keeps scripts/validate_props.py unchanged."""
+        """With the default keywords, the pairing reads the event-label props only."""
         pset = _FakePset(
             {
                 (10, "H"): PropDistribution.from_samples(10, "H", [1, 2]),

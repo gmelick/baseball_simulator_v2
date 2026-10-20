@@ -1,7 +1,8 @@
 """
 test_odds_closing_rows.py
 ===========================
-SIM-546, part D: every live game's closing rows (the design's tests 15 to 22).
+Every live game's closing rows (the segment-market work, SIM-546). The section
+numbers 15 to 22 are the test numbers of that work's design.
 
 A closing row is the last price a book posted before first pitch. At first pitch
 the live pipeline promotes, per (market, book) for game odds and per (player,
@@ -432,8 +433,8 @@ def _delayed_pair() -> tuple[dict[str, Any], dict[str, Any]]:
 
 class TestLateStamp:
     def test_late_stamp_is_refused(self) -> None:
-        """The design's D4: a row stamped 20 minutes after the scheduled start is
-        not promoted; the book's last row stamped inside the grace is."""
+        """A row stamped 20 minutes after the scheduled start is not promoted;
+        the book's last row stamped inside the grace is."""
         early, late = _delayed_pair()
         # The guard alone refuses the late row.
         assert closing_candidates([late], scheduled_start=SCHEDULED_START) == []
@@ -742,7 +743,7 @@ class TestScheduleTrigger:
 
 
 # ===========================================================================
-# Test 21 — the pre-game cadence tightens near the start (decision 3)
+# Test 21 — the pre-game cadence tightens near the start
 # ===========================================================================
 
 
@@ -940,16 +941,17 @@ def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
     .env and so holds the vendor key; a fresh job-run container would not."""
     text = (_ROOT / "deploy" / "ofelia" / "config.ini").read_text(encoding="utf-8")
     assert '[job-run "nightly-closing-lines"]' not in text
-    # SIM-519 Part D: the finals load replaced the old ingest chain's job.
-    # SIM-443b: it execs into the jobs container now, so no job is a job-run
-    # and no DSN (with its password) sits in the file.
+    # The finals load runs before the closing pass. Every job execs into a
+    # running container, so no job is a job-run and no DSN (with its
+    # password) sits in the file (the stack hardening, SIM-443b).
     assert text.index('[job-exec "nightly-finals"]') < text.index(
         '[job-exec "nightly-closing-lines"]'
     )
     assert "job-run" not in text
     assert "postgresql://" not in text
     job = text.split('[job-exec "nightly-closing-lines"]', 1)[1]
-    # 10:30 UTC (SIM-563): after the nightly rebuild's self-restart of the app.
+    # 10:30 UTC: after the app restarts itself on the nightly rebuild's new
+    # bundle (SIM-563).
     assert "schedule = 0 30 10 * * *" in job
     assert "container = baseball_simulator_v2-app-1" in job
     assert "command = env ODDS_PROVIDER=bettingpros sh /app/scripts/nightly_closing_lines.sh" in job

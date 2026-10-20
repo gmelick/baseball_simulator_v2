@@ -1,23 +1,21 @@
 """
 tests/unit/test_accuracy_hypothetical_return.py
 ================================================
-Unit tests for SIM-540 — the hypothetical dollar return, an OPT-IN
-companion report to the SIM-538 accuracy comparison in
-``scripts/accuracy_comparison.py``.
+Unit tests for the hypothetical dollar return, an OPT-IN companion report to
+the accuracy comparison in ``scripts/accuracy_comparison.py``.
 
-What SIM-540 does, in plain words: an accuracy score (Brier, log loss) is
+What the report does, in plain words: an accuracy score (Brier, log loss) is
 the right instrument for the team but a hard one for a non-technical reader
 to judge. For every accuracy observation where the simulator's probability
-disagreed with the market's by at least a chosen amount, this prices a
-hypothetical 1-unit bet on the side the simulator favored, at the CLOSING
-price, and reports two numbers: ``model_ev`` (what the model itself claims
+differs from the market's by at least a chosen amount, the report prices a
+hypothetical 1-unit bet on the side the simulator favors, at the CLOSING
+price. It reports two numbers: ``model_ev`` (what the model itself claims
 that bet is worth, never touching the real outcome) and
-``realized_return`` (what that bet actually would have paid, graded
-against the real outcome). The module docstring's own "HYPOTHETICAL DOLLAR
-RETURN" section is explicit that this is a DIAGNOSTIC, not a certified
-betting-edge measurement — CLAUDE.md's own ruling gates any real betting-
-value claim on every pool-realism band being green, which this report does
-not check or claim to satisfy.
+``realized_return`` (what that bet pays, graded against the real outcome).
+The "HYPOTHETICAL DOLLAR RETURN" section of the script's module docstring
+says that the report is a DIAGNOSTIC, not a certified betting-edge
+measurement. The owner's ruling gates any real betting-value claim on every
+band the lanes grade being green; this report does not check that.
 
 These tests run with NO DB and NO real sim: every function under test here
 is PURE, built on the SAME synthetic-record pattern
@@ -289,9 +287,9 @@ def test_aggregate_hypothetical_return_reports_the_disagreement_filter_counts():
 
 
 def test_aggregate_hypothetical_return_default_edge_threshold_matches_the_platform_convention():
-    """DEFAULT_RETURN_EDGE_THRESHOLD reuses the SAME platform edge-floor
-    value SIM-539 reuses (MIN_DETECTABLE_EDGE) -- confirm they still agree
-    (a deliberate, documented choice, not an accidental one)."""
+    """DEFAULT_RETURN_EDGE_THRESHOLD uses the SAME platform edge floor as the
+    minimum-sample estimate (MIN_DETECTABLE_EDGE). The test confirms that the
+    two agree; the shared value is a deliberate choice."""
     assert pytest.approx(MIN_DETECTABLE_EDGE) == DEFAULT_RETURN_EDGE_THRESHOLD
 
 
@@ -351,7 +349,7 @@ def test_format_hypothetical_return_renders_an_underpowered_all_none_row_without
 
 
 # ---------------------------------------------------------------------------
-# (e) CLI wiring -- the new flags parse with the expected defaults
+# (e) CLI wiring -- the report's flags parse with the expected defaults
 # ---------------------------------------------------------------------------
 
 
@@ -375,26 +373,23 @@ def test_parse_args_hypothetical_return_flags_are_settable():
 
 
 def test_aggregate_hypothetical_return_is_never_certified():
-    """A MACHINE-readable marker, not just console text -- a script reading
-    the JSON report directly never sees format_hypothetical_return's
-    printed disclaimer (an adversarial review of SIM-540 confirmed this gap
-    and asked for exactly this field)."""
+    """A MACHINE-readable marker, not just console text: a script that reads
+    the JSON report directly never sees format_hypothetical_return's printed
+    disclaimer."""
     comparison = aggregate_hypothetical_return([], edge_threshold=0.02, n_bootstrap=100, seed=1)
     assert comparison["certified"] is False
 
 
 def test_return_comparison_row_to_jsonable_is_json_safe_on_a_degenerate_row():
     """A bucket with zero qualifying bets (nan means/CI) or too few distinct
-    games (inf min_n) must serialize to valid JSON -- None, never the raw
-    Python nan/inf a naive asdict() would produce. An adversarial review of
-    SIM-540 confirmed this exact regression: the platform already fixed the
-    same bug once for AccuracyComparisonRow (SIM-539) and it was not carried
-    forward to ReturnComparisonRow."""
+    games (inf min_n) must serialize to valid JSON: None, never the raw
+    Python nan/inf that a plain asdict() gives. ReturnComparisonRow and
+    AccuracyComparisonRow both pass through the shared _json_safe."""
     empty_row = _return_row_for("overall", "—", [], n_bootstrap=100, seed=1, alpha=0.05)
     d = empty_row.to_jsonable()
-    assert d["mean_model_ev"] is None  # was nan
-    assert d["mean_realized_return"] is None  # was nan
-    assert d["min_n_recommended"] is None  # was inf
+    assert d["mean_model_ev"] is None  # the raw value is nan
+    assert d["mean_realized_return"] is None  # the raw value is nan
+    assert d["min_n_recommended"] is None  # the raw value is inf
     # The whole dict must be JSON-serializable (no bare NaN/Infinity tokens).
     import json
 

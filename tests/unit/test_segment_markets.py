@@ -1,5 +1,7 @@
-"""SIM-421 (owner ruling 2026-09-12) — the simulator prices every game market.
+"""The simulator prices every game market the book posts.
 
+The owner ruled on 2026-09-12 that the platform prices every game market in
+the odds tables (the prop-market work, SIM-421).
 ``simulation/game_market_distributions.py`` turns per-iteration inning grids
 into the probability each segment / team market needs, and
 the accuracy comparison (``scripts/accuracy/grading.py``) grades those markets against the official inning
@@ -264,7 +266,7 @@ class TestSegmentMarketScorer:
                 "f5_runline",
                 home_spread=-0.5,
                 home_spread_ml=105.0,
-                away_spread=0.5,  # SIM-549: the mirror of the home spread — a pair
+                away_spread=0.5,  # the mirror of the home spread: a pair
                 away_spread_ml=-140.0,
             )
         )
@@ -282,7 +284,7 @@ class TestSegmentMarketScorer:
 
 
 # ===========================================================================
-# SIM-549: a run line listed as two separate bets
+# A run line listed as two separate bets (the run-line shape rule, SIM-549)
 # ===========================================================================
 
 # Five iterations whose first-five margins (home - away) are +2, +1, 0, -2, -3.
