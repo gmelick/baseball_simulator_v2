@@ -1,3 +1,188 @@
+# THE SIMULATION AREA'S CLEAN-UP — `StateMachine` and `FullPoolSampler` split into mixins, dead code deleted, every comment to the standard — SIM-493 (B1), 2026-10-20
+
+**Why.** The code clean-up (SIM-493; the plan is
+`docs/audit/2026-10-19-sim493-code-cleanup-plan.md`) runs one session per area. This entry
+records the simulation area (§7 of the plan): the two largest files of the simulator split by
+responsibility, every file of `simulation/` and every B1 test reviewed, the dead code deleted
+and the comments rewritten. Every change is behaviour-neutral; the gates below prove it.
+Branch `claude/sim493-simulation-b6d897`, off `sim493-groundwork` (`690375c`).
+
+**What changed.**
+
+- **`sim_loop.py` (3,740 lines) split into `simulation/loop/`.** `StateMachine` keeps its
+  name and its module. Its core stays in `sim_loop.py` (1,204 lines): `__init__`,
+  `step_pitch`, `_record_outs` right after it, the pitch draw, the run ledger, the end of a
+  plate appearance, the half-inning roll and the full-game driver. Its other methods live in
+  mixins, one per responsibility: `in_play` (475), `running_game` (510), `terminals` (297),
+  `manager` (282) and `credit` (225). The constants, value objects and count machine are in
+  `loop/values.py` (290); the box score and the game result in `loop/boxscore.py` (174).
+  `loop/base.py` declares the shared attributes and cross-mixin methods for the type
+  checker only. Every mixin shares the machine's `self.rng`, so the random-number order is
+  unchanged.
+- **`full_pool_sampler.py` (3,715 lines) split into `simulation/sampler/`.**
+  `FullPoolSampler` keeps its name and its module (73 lines: the class and its
+  constructor). Its methods live in one mixin per draw: `base` (483), `pitch` (563),
+  `pitch_result` (375), `fielding` (801), `fence` (372), `steal` (364), `advancement` (144)
+  and `manager` (440); the module-level helpers in `sampler/kernels.py` (72). The 400-line
+  constructor is one `_init_*()` call per mixin. A check built the old and the new sampler
+  over one bundle: all 108 instance attributes are equal in name, type and value, and no
+  class attribute was lost. The steal pool's warning keeps its logger name,
+  `simulation.full_pool_sampler`.
+- **One position table.** `simulation.constants.FIELD_POSITION_NAMES` replaces the loop's
+  `_POS_NUM_TO_STR` and the sampler's `_POS_NUM_TO_NAME` (the same nine entries).
+- **Imports from the new homes.** `simulation/` and the B1 tests import each moved name from
+  its new module. `sim_loop.py` re-exports `PlayerStatLine` and `_DOUBLE_PLAY_EVENTS` for the
+  callers outside the area, marked `# re-export: removed in the integration pass`. A caller
+  that imports `StateMachine`, `simulate_game`, `BoxScore`, `GameSimResult`,
+  `times_through_order` or `FullPoolSampler` from the old modules needs nothing.
+- **Comments, everywhere in the area.** Every file of `simulation/` and every B1 test says
+  what its code does now: the part labels, the spec section numbers and the dated history
+  are gone, and a ticket tag stays only beside a ruling or a measurement. The loop, the
+  sampler and `constants.py` were rewritten in this session; four helper agents reviewed the
+  other 23 files and the 78 B1 test files under one brief (comments only). For every file,
+  the module's AST with the docstrings stripped equals the original's. The rewrite fixed
+  comments that described code wrongly, among them: the leverage margin caps at 8, not 6;
+  the fence band defaults to 0 ft, not 10; a worker holds ~575 MB, not ~373 MB; production
+  runs `SIM_BULLPEN_SOURCE=box`; the linescore example showed an impossible "x"; a full game
+  ties only at the max-innings guard; several docstrings described the deleted
+  `PlayResolver`, per-tile path or framing nudge.
+- **Ten B1 test names lost their ticket number** (`TestSim414...`, `test_..._sim518_...`,
+  `_Sim474Sampler`, ...); no CI list names them.
+- **`docs/technical/simulation.md`** describes the loop and the sampler module by module, and
+  its other sections are current; **CLAUDE.md §5** points at `simulation/loop/` and
+  `simulation/sampler/`.
+
+**Deleted (no caller in the program, the scripts or the config).**
+
+| Name | Where | Note |
+|---|---|---|
+| `runner_rate`, `_br_feat_idx`, `_br_idx` | the sampler | |
+| `fielder_quality`, `_fld_idx` | the sampler | |
+| `_steal_feat_cols` and five feature-name tuples (`_RUNNER_STEAL_FEATURES`, `_CATCHER_STEAL_FEATURES`, `_PITCHER_STEAL_FEATURES`, `_RUNNER_ADV_FEATURES`, `_FIELDER_ADV_FEATURES`) | the sampler | the retired actor kernels read them; `_steal_actor_factor` took them and ignored them |
+| `_FIELDER_BB_FEATURES`, `has_change_pool`, `_f_situation` | the sampler | `test_situation_sigma_env.py` reads the base-out kernel the pitch draw uses |
+| `pitching_change_draw(manager_weight=...)` | the sampler | only its own test passed it (deleted); the loop passes `manager_key` |
+| `_OUTCOMES`, `_repower` | the sampler's kernels | the plain re-raise's test runs on `_repower_neutral` with no unscored rows: the same arithmetic |
+| `_OUT_EVENTS` | the loop | no line read it; `test_out_label.py`'s pin keeps its two facts about the play (commit `801f39d`, B2's test) |
+| the `CONTACT_PITCH_OUTCOME` alias | `sim_loop.py` | callers read `simulation.game_state`'s |
+| `_end_of_pa_hook` | the loop | `_start_of_pa_hook` holds its body |
+| `StateMachine.__init__(bench=...)` | the loop | accepted and ignored; `simulate_game` keeps its `bench` keyword (the sim-kwargs contract) |
+| `_should_issue_ibb`'s `li`, `_pick_reliever`'s `source` | the loop | never read |
+| two `if True:` blocks | `steal_weights` | |
+| `SegmentRuns.from_linescores`, `SegmentRuns.from_plays` | `game_market_distributions.py` | no caller, not even a test |
+| `TB_IS_LOWER_BOUND` | `prop_distributions.py` | always False, the marker of a retired caveat; its two assertions went with it |
+| `LINEUP_SLOTS` | `lineup_resolver.py` | |
+| `PITCH_OUTCOMES` | `synthetic_bundle.py` | every reader imports `game_state`'s |
+| two dead test lines | `test_manager_draw.py`, `test_run_ledger.py` | a variable built and deleted unread; an attribute the loop never reads |
+
+`_steal_actor_factor(actor, live_key, emb_rows, rows, feat_names, matrix)` became
+`_actor_factor(matrix, live_key, emb_rows, rows)`.
+
+**Kept on purpose (only tests call them, or a branch never runs); for the integration pass
+to weigh.** The query set and named options of public value types: `PropDistribution`'s
+`p_at_least` / `p_at_most` / `mean_ci`, `LAPLACE_ALPHA`, `TieHandling.DROP`,
+`PlayByPlay.pitches_for_at_bat` / `plate_appearances`, `OverrideDelta.home_win_pct_delta`,
+`GameState.sampler_prefilter` / `add_ball` / `add_strike`, `build_defense_map` (the
+fielder-map tests' oracle). The test seams: `batch_runner.get_shared_view`,
+`BatchRunner.shared_registry`, `NullCache`, `production_factory.set_bullpen_builder`. The
+write-only state fields (`GameState.batter_pa_count`, `seed`, `pitcher_rest_days`,
+`ManagerContext.leverage`): the state is a contract other modules copy, so a field's removal
+is its own change. `GameSimSummary.__getattr__` (old-pickle compatibility; the cache is JSON
+now), `run_resolution.re24_from_rows` and the `matrix` parameter (the live-matrix seam), the
+`simulation/validation/` package (only its test imports it), and three defensive branches
+that never run (`warm_worker_cache`'s `sampler is None`, `production_machine_factory`'s
+`full_pool is not None`, `pitcher_decisions`' `decisive_idx is None`).
+
+**Pins re-pointed (rule 6).**
+
+- `test_pool_cutoff.py` counts `self._apply_asof(` over the whole sampler source (the
+  constructor module and every `sampler/` module): still 5.
+- `test_pitcher_outs_credit.py` scans `sim_loop.py` AND every `simulation/loop/` module for
+  writes to `outs_recorded`: the one-writer check keeps its reach.
+- `test_run_ledger.py` (the snapshot above each mutator), `test_game_page_whatif.py` (the
+  ghost-runner patch) and the acceptance bands' `sim_loop.py` citations need no change: the
+  core methods stayed in `sim_loop.py`.
+
+**Files over 1,500 lines.** None in `simulation/`. The largest are `batch_runner.py` (1,261),
+`sim_loop.py` (1,204), `lineup_resolver.py` (1,021) and `sim_kwargs.py` (971).
+`batch_runner.py` stays whole: it is under the bar, and its cache classes read two module
+globals the tests patch (`_MP_START_METHOD`, `_PROP_SET_CACHE_EPOCH`).
+
+**Runtime text that changed.** None. Every log, error and report string is as it was,
+including the `SIM-486:` / `SIM-511:` error texts and both dotted factory strings.
+
+**Bugs found (to file).** Each is unfixed on this branch.
+
+1. **API runs read no manager profiles, so the steal draw's manager weight is flat (1.0) in
+   `/simulate`, the projections and the what-if.** `build_sim_kwargs` passes
+   `con=_get_sim_duckdb(request)`; nothing sets `app.state.sim_duckdb` since the replay store
+   moved to `app.state.replay_duckdb`, so `resolve_manager_profiles_onto_state(state, None)`
+   returns at once and the kwargs carry `manager_profiles == {0: {}, 1: {}}`.
+   `scripts/sim_stats.py` and the accuracy comparison do read the profiles. Done when an API
+   run's kwargs carry each side's profile and the league means (a test builds the kwargs
+   with no connection and finds them). Fix: read them through `open_sim_duckdb()` as the
+   park-factor snapshot does, or add them to the boot snapshot.
+2. **The win-probability calibration map can return exactly 1.0 or 0.0.**
+   `build_validation_report` fits the reliability curve with `min_bin_count=1`, so a bin of
+   two games can map 0.75 to 1.0 (curve `[[0,0],[0.45,0.44],[0.55,0.56],[0.73,1.0],[1,1]]`,
+   `home_win_pct` 0.75, n = 100: home 1.0, away 0.0, a zero-width interval). Fix: a
+   `min_bin_count` near 30, or clamp the mapped probability to [eps, 1 - eps].
+3. **`GameSimSummary.from_results(confidence_level=0.85)` computes the 95% z and labels the
+   intervals 0.85.** Fix: `NormalDist().inv_cdf((1 + level) / 2)`, or raise on a level
+   outside the table.
+4. **The two-sample path of `replay_chi_squared.chi_squared_gof` treats the reference sample
+   as exact.** Two independent samples of 1,000 Poisson(4.4) totals were rejected 52.5% of
+   the time at alpha 0.05 over 400 trials. `replay_and_test` uses it. Fix:
+   `scipy.stats.chi2_contingency` on the pooled 2 x k table.
+5. **`replay_historical_games` always compares the simulated HOME score.** A
+   `HistoricalGame` row does not say which side its `runs` belong to, so an away team's runs
+   meet the simulated home runs. Fix: a side field.
+6. **The losing pitcher is the one on the mound at the decisive play, not the one charged
+   with the go-ahead run.** In a tie, A walks a batter, B relieves him and allows a double
+   that scores the runner, and the lead holds: MLB charges A; `pitcher_decisions` charges B.
+   Fix: carry the responsible pitcher of each runner.
+7. **`_force_on_reach` with no batter id leaves first base's runner on first after pushing
+   him to second** (`b.first = state.batter_id if ... else b.first`), so the base check
+   raises; `_resolve_walk` assigns `b.first = state.batter_id` for the same case. Reachable
+   only with a sampler and no lineup. Fix: the walk's assignment.
+8. **The single pre-pitch steal draw (`SIM_STEAL_PITCH_CLASS=0`, not production) ends the
+   plate appearance after a pickoff or a caught stealing that makes the third out before the
+   pitch's result,** so the pitcher gets a batter faced and the batter an at-bat (the limit
+   `_accumulate_pa`'s comment names). Fix: a no-pitch-style void, as the running game on the
+   pitch has.
+9. **A called third strike that is not caught never lets the batter run** (Rule
+   5.05(a)(2)); the rule reads swinging strikes only. Two such rows in 2023-2026, both in
+   2026. Fix: let `_dropped_third_strike` read a called third strike that got away too.
+10. **`whatif.apply_changes`' message for an ineligible pinch hitter reads "is not an bench
+    hitter".** Fix: the article inside each label.
+11. **To confirm: a designated hitter moved to the field leaves the fielder he replaced in
+    the batting order with no position** (the rule that ends the designated hitter is not
+    modelled in `whatif`). The owner decides whether it is intended.
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| The full unit lane (container, the worktree mounted and proved, 2026-10-20 07:19 UTC) | `6543 passed, 2 skipped, 22 deselected in 308.12s`: the groundwork's 6,545 less the two tests deleted with their code |
+| The B1 tests and the outside tests that import the two modules (host, after every slice) | 1,855 passed |
+| `ruff check .` / `ruff format --check .` (ruff 0.16.7) | pass; 496 files formatted |
+| `mypy simulation/` | `Success: no issues found in 46 source files` |
+| `mypy similarity/ pipeline/ api/` (the CI scope) | `Success: no issues found in 77 source files` |
+| Fingerprint, no-database factory, 200 games, against `fe81d79` | `IDENTICAL: 200 hashes` (after every slice and at the end) |
+| Fingerprint, in-memory bundle, 2 flag sets x 200 games, against `fe81d79` | `IDENTICAL: 400 hashes` (after every slice and at the end) |
+| Fingerprint, the real bundle, 45 games x 4 seeds, against `fe81d79` (container, the mount proved) | `IDENTICAL: 180 hashes` (after the splits and at the end) |
+| The AST of every function against the original `sim_loop.py` / `full_pool_sampler.py` | equal except the edits listed above (the parameter and name deletions, `_move_runner`'s class, the position table, the constructor) |
+| The AST of every other module and B1 test, docstrings stripped, against the original | equal, file by file |
+| The old and the new sampler's instance attributes over one bundle | 108 of 108 equal in name, type and value |
+| Perf, `test_bench_phase4_simulation_loop` (the per-pitch step), six alternating pairs against `690375c` (container) | median 7.52 us base, 7.71 us new (+2.5%; the base alone spans 7.17-7.91 us across runs): noise. The budget is 1,233 us |
+| Perf, `test_bench_phase4_batch_runner` (one game), two pairs | mean 41.2 / 38.5 ms base, 40.4 / 39.3 ms new: no difference |
+| The regression lane | not run: no engine changed |
+
+**Notes for the integration pass.** `pipeline/statcast_events.py`'s docstring and
+`docs/technical/pipeline-betting-db.md` still describe `sim_loop._OUT_EVENTS`;
+`docs/technical/README.md` names `_steal_actor_factor`. `test_inning_grid.py` pins the exact
+scores and pitch counts of ten seeds (`OUTCOMES_AT_80E3F46`), which works like the golden
+snapshots the owner ruled out on 2026-09-10; it was kept.
+
 # GROUNDWORK — the code clean-up's shared steps: a behaviour fingerprint, scripts and tests named by purpose, run outputs out of `scripts/`, one flag registry and one existence probe — SIM-493, 2026-10-19
 
 **Why.** The owner widened the code-hygiene refactor (SIM-493) on 2026-10-19: review and clean
