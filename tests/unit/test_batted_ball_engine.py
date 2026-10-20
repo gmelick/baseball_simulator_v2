@@ -244,7 +244,7 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
             placeholders = ", ".join(["?"] * len(row))
             conn.execute(f"INSERT INTO sim.outcome_pool VALUES ({placeholders})", row)
 
-    def test_falls_back_to_raw_spray_angle_when_sim051_not_yet_shipped(self):
+    def test_falls_back_to_raw_spray_angle_without_the_pull_relative_column(self):
         from similarity.engines.batted_ball_similarity import (
             BattedBallSimilarityEngine,
         )
@@ -255,7 +255,7 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
         self.assertEqual(chosen, "spray_angle")
         conn.close()
 
-    def test_uses_pull_relative_when_sim051_has_shipped(self):
+    def test_uses_pull_relative_spray_angle_when_the_column_exists(self):
         from similarity.engines.batted_ball_similarity import (
             BattedBallSimilarityEngine,
         )

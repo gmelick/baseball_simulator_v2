@@ -361,7 +361,7 @@ def test_pop_time_prefers_the_measurement_over_the_old_proxy() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_with_no_physical_data_the_weights_revert_to_the_pre_sim529_split() -> None:
+def test_with_no_physical_data_the_weights_give_physical_no_share() -> None:
     """Shipping the code before the profile rebuild must not change any score.
 
     Without this, every physical sub-score is a perfect 1.0 and the composite
@@ -386,7 +386,7 @@ def test_with_no_physical_data_the_weights_revert_to_the_pre_sim529_split() -> N
     )
 
 
-def test_with_physical_data_the_weights_are_the_sim529_split() -> None:
+def test_with_physical_data_the_weights_give_physical_its_share() -> None:
     from similarity.engines.batter_similarity import sub_score_weights
 
     w = sub_score_weights(platoon_context=False, physical_available=True)
