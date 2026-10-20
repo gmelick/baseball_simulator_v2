@@ -91,14 +91,22 @@ ran on the host.
 | The acceptance arithmetic lane (`tests/acceptance/test_band_arithmetic.py`) with CI's roster step | `58 passed`; "PASS: all 27 required band-rule tests ran" |
 
 The comment pass after these runs changed comments and docstrings only; each file's AST,
-docstrings stripped, equals the code the neutral runs ran (`comment_check`). A final re-run on the branch tip follows the nightly rebuild (below).
+docstrings stripped, equals the code the neutral runs ran (`comment_check`).
+
+The re-runs on the branch tip (`41cfff3`, after the nightly rebuild of 2026-10-20 had changed
+the park factors the smoke reads):
+
+| Check | Result |
+|---|---|
+| The accuracy comparison, the same 20 games, serial | every record and aggregate equal to the base's; the only differences are the five `params.provenance.manifest_mtimes`, which read the live bundle link the nightly moved (bug 13 below), not the pinned bundle the run read |
+| `scripts/sim_stats.py`, the same ten games, against a fresh base run on the same data | 0 differences apart from `elapsed_s` |
 
 **The gates.**
 
 | Gate | Result |
 |---|---|
-| The B5 share of the unit lane, plus `tests/acceptance` and `tests/regression` (app image, the worktree mounted; 77 unit files) | `1 failed, 1576 passed, 2 skipped, 2 deselected in 457.54s`. The one failure is `test_pool_label_check.py::test_both_sides_read_the_same_plate_appearances`, a live-data read: the 07:00 UTC finals load had added 78 plate appearances to `raw.pitches` that the pool gains at the 08:00 rebuild (pool 740,424, real 740,502). No code of this branch reads into it. |
-| The full unit lane (app image, the worktree mounted) | not completed: a run at 07:19 UTC passed every test it reached but ran ten times slower than the groundwork's (42% in 25 minutes) and hit my timeout; the container was removed before the 08:00 rebuild. The full lane runs again after the nightly rebuild. |
+| The B5 share of the unit lane, plus `tests/acceptance` and `tests/regression` (app image, the worktree mounted; 77 unit files) | `1 failed, 1576 passed, 2 skipped, 2 deselected in 457.54s`. The one failure is `test_pool_label_check.py::test_both_sides_read_the_same_plate_appearances`, a live-data read: the 07:00 UTC finals load had added 78 plate appearances to `raw.pitches` that the pool gains at the 08:00 rebuild (pool 740,424, real 740,502). After the rebuild the label check passes: `4 passed` (11:58 UTC). |
+| The full unit lane (app image, the worktree mounted), in two halves by file name | half 1 (140 files): `3037 passed, 1 skipped, 9 deselected in 784.91s`. Half 2 (141 files): `3510 passed, 1 skipped, 13 deselected in 782.36s` on its second run; its first run stopped at collection on `'list' object is not callable` inside pytest's own assertion rewriter (interpreter corruption, the stochastic crash class) in a file this branch does not touch. Together: 6,547 passed, 2 skipped, 22 deselected (the groundwork's 6,545 plus the two flag-name tests). A whole-lane run at 07:19 UTC passed every test it reached but ran ten times slower than the groundwork's and hit my timeout before the 08:00 rebuild; a whole-lane run at 09:32 died at import (exit 139, the stochastic segfault class). |
 | `ruff check .` / `ruff format --check .` (ruff 0.16.7) | pass (521 files formatted) |
 | `mypy similarity/ pipeline/ api/` (host, mypy 1.13) | `Success: no issues found in 77 source files`; this branch changes no file in that scope |
 | Collection of `tests/integration`, `tests/performance`, `tests/regression` (host) | every file collects |
@@ -208,6 +216,15 @@ docstrings stripped, equals the code the neutral runs ran (`comment_check`). A f
     venue 680 in six places; the pinned 2024 table in the same file holds `0.8725842237`.
     The tests pass (the literal is only an input). Done: one value. Fix: read it from the
     table.
+13. **The accuracy report's provenance stamps the live bundle, not the bundle the run read.**
+    `scripts/accuracy/selection.py` `bundle_provenance` reads the manifest times under
+    `BASEBALL_PLAY_POOL_DIR/engine_artifacts` (the live link); the factory reads
+    `BASEBALL_ENGINE_ARTIFACT_DIR` when it is set (`simulation/production_factory.py`). Seen
+    on 2026-10-20: two runs on the same pinned bundle, before and after the nightly rebuild,
+    carry different `manifest_mtimes` and identical records, so `pair_accuracy.py` would
+    refuse to pair them; two runs on different pinned bundles on one day would pair. Done:
+    the stamp names the bundle the run read. Fix: read the pinned directory first, as the
+    factory does.
 
 **For Phase C.**
 
