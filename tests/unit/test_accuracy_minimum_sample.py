@@ -36,42 +36,32 @@ surrounding scoring/aggregation tests this ticket builds on.
 
 from __future__ import annotations
 
-import importlib.util
 import math
-import os
-import sys
 
 import numpy as np
 import pytest
 from scipy.stats import norm
+from tests.script_loader import scripts_on_path
 
-# Import the script module by path (scripts/ is not a package). It MUST be
-# registered in sys.modules before exec_module so that @dataclass(slots=True) can
-# resolve the module's namespace (dataclasses looks the module up by name).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
-_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-accuracy_comparison = importlib.util.module_from_spec(_spec)
-sys.modules["accuracy_comparison"] = accuracy_comparison
-_spec.loader.exec_module(accuracy_comparison)
+scripts_on_path()
 
-AccuracyRecord = accuracy_comparison.AccuracyRecord
-_bonferroni_alpha = accuracy_comparison._bonferroni_alpha
-_z_two_sided = accuracy_comparison._z_two_sided
-_minimum_paired_observations = accuracy_comparison._minimum_paired_observations
-_minimum_observations_clustered = accuracy_comparison._minimum_observations_clustered
-_clustered_se = accuracy_comparison._clustered_se
-_json_safe = accuracy_comparison._json_safe
-_accuracy_row_for = accuracy_comparison._accuracy_row_for
-aggregate_accuracy_comparison = accuracy_comparison.aggregate_accuracy_comparison
-format_accuracy_comparison = accuracy_comparison.format_accuracy_comparison
-MIN_DETECTABLE_EDGE = accuracy_comparison.MIN_DETECTABLE_EDGE
-DETECTION_MARGIN = accuracy_comparison.DETECTION_MARGIN
-DEFAULT_ALPHA = accuracy_comparison.DEFAULT_ALPHA
-MIN_CLUSTERS_FOR_INFERENCE = accuracy_comparison.MIN_CLUSTERS_FOR_INFERENCE
-
+from accuracy.confidence import (  # noqa: E402
+    DETECTION_MARGIN,
+    MIN_CLUSTERS_FOR_INFERENCE,
+    MIN_DETECTABLE_EDGE,
+    _bonferroni_alpha,
+    _clustered_se,
+    _json_safe,
+    _minimum_observations_clustered,
+    _minimum_paired_observations,
+    _z_two_sided,
+)
+from accuracy.records import AccuracyRecord  # noqa: E402
+from accuracy.report import (  # noqa: E402
+    _accuracy_row_for,
+    aggregate_accuracy_comparison,
+    format_accuracy_comparison,
+)
 
 # ---------------------------------------------------------------------------
 # (a) _bonferroni_alpha -- the multiple-comparisons correction

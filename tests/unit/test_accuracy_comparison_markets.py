@@ -23,25 +23,18 @@ module imports cleanly with only numpy + the betting engine available.
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
+from tests.script_loader import scripts_on_path
 
-# Import the script module by path (scripts/ is not a package). It MUST be
-# registered in sys.modules before exec_module so that @dataclass(slots=True) can
-# resolve the module's namespace (dataclasses looks the module up by name).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
-_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-accuracy_comparison = importlib.util.module_from_spec(_spec)
-sys.modules["accuracy_comparison"] = accuracy_comparison
-_spec.loader.exec_module(accuracy_comparison)
+scripts_on_path()
+
+from accuracy.records import (  # noqa: E402
+    MARKET_TRUST,
+    PROP_VOCAB_MAP,
+    TRUST_TIER_ORDER,
+    trust_label,
+)
 
 from simulation.prop_distributions import ALL_PROPS  # noqa: E402
-
-PROP_VOCAB_MAP = accuracy_comparison.PROP_VOCAB_MAP
 
 #: The 15-market odds vocabulary the SIM-421 CHECK constraint enforces
 #: (migration 0022): the SIM-134 seven plus the eight the book already
@@ -99,11 +92,11 @@ def test_prop_vocab_map_keeps_batter_hits_apart_from_pitcher_hits_allowed():
 def test_trust_label_for_every_mapped_prop_and_game_market():
     """Every model prop + every game market_type has a (non-'unknown') trust tier."""
     for model_stat in PROP_VOCAB_MAP.values():
-        assert accuracy_comparison.trust_label(model_stat) != "unknown"
+        assert trust_label(model_stat) != "unknown"
     for game_market in ("moneyline", "total", "runline"):
-        assert accuracy_comparison.trust_label(game_market) != "unknown"
+        assert trust_label(game_market) != "unknown"
     # An unrecognized market degrades gracefully.
-    assert accuracy_comparison.trust_label("nonsense") == "unknown"
+    assert trust_label("nonsense") == "unknown"
 
 
 def test_new_markets_carry_the_unvalidated_tier():
@@ -111,18 +104,18 @@ def test_new_markets_carry_the_unvalidated_tier():
     carry the ``unvalidated`` label until the accuracy comparison has read
     them. The legacy seven keep their carried-over labels."""
     for model_stat in ("1B", "2B", "3B", "R", "SB", "HRR", "OUTS", "H_ALLOWED"):
-        assert accuracy_comparison.trust_label(model_stat) == "unvalidated"
+        assert trust_label(model_stat) == "unvalidated"
     for model_stat in ("H", "HR", "TB"):
-        assert accuracy_comparison.trust_label(model_stat) == "trustworthy"
+        assert trust_label(model_stat) == "trustworthy"
     for model_stat in ("K", "BB", "ER", "RBI"):
-        assert accuracy_comparison.trust_label(model_stat) == "untrustworthy"
+        assert trust_label(model_stat) == "untrustworthy"
 
 
 def test_every_trust_tier_has_a_sort_position():
     """The report groups rows by tier; a tier with no position would sort
     after ``unknown`` and hide a real market behind a placeholder."""
-    tiers = set(accuracy_comparison.MARKET_TRUST.values()) | {"unknown"}
-    assert tiers <= set(accuracy_comparison.TRUST_TIER_ORDER)
+    tiers = set(MARKET_TRUST.values()) | {"unknown"}
+    assert tiers <= set(TRUST_TIER_ORDER)
     # ``unvalidated`` sits between the labelled tiers and ``unknown``.
-    order = accuracy_comparison.TRUST_TIER_ORDER
+    order = TRUST_TIER_ORDER
     assert order["untrustworthy"] < order["unvalidated"] < order["unknown"]

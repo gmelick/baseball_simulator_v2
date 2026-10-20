@@ -27,40 +27,28 @@ is PURE, built on the SAME synthetic-record pattern
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
-
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-# Import the script module by path (scripts/ is not a package). It MUST be
-# registered in sys.modules before exec_module so that @dataclass(slots=True) can
-# resolve the module's namespace (dataclasses looks the module up by name).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
-_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-accuracy_comparison = importlib.util.module_from_spec(_spec)
-sys.modules["accuracy_comparison"] = accuracy_comparison
-_spec.loader.exec_module(accuracy_comparison)
+accuracy_comparison = load_script("accuracy_comparison")
 
-AccuracyRecord = accuracy_comparison.AccuracyRecord
-ReturnRecord = accuracy_comparison.ReturnRecord
-_favored_side_prob_and_price = accuracy_comparison._favored_side_prob_and_price
-score_hypothetical_return = accuracy_comparison.score_hypothetical_return
-_bootstrap_mean_ci = accuracy_comparison._bootstrap_mean_ci
-_bootstrap_paired_diff_ci = accuracy_comparison._bootstrap_paired_diff_ci
-_minimum_observations_clustered = accuracy_comparison._minimum_observations_clustered
-_bonferroni_alpha = accuracy_comparison._bonferroni_alpha
-_return_row_for = accuracy_comparison._return_row_for
-aggregate_hypothetical_return = accuracy_comparison.aggregate_hypothetical_return
-format_hypothetical_return = accuracy_comparison.format_hypothetical_return
-DEFAULT_RETURN_EDGE_THRESHOLD = accuracy_comparison.DEFAULT_RETURN_EDGE_THRESHOLD
-MIN_DETECTABLE_EDGE = accuracy_comparison.MIN_DETECTABLE_EDGE
-DETECTION_MARGIN = accuracy_comparison.DETECTION_MARGIN
-DEFAULT_ALPHA = accuracy_comparison.DEFAULT_ALPHA
+from accuracy.confidence import (  # noqa: E402
+    MIN_DETECTABLE_EDGE,
+    _bootstrap_paired_diff_ci,
+)
+from accuracy.hypothetical_return import (  # noqa: E402
+    DEFAULT_RETURN_EDGE_THRESHOLD,
+    ReturnRecord,
+    _bootstrap_mean_ci,
+    _favored_side_prob_and_price,
+    _return_row_for,
+    aggregate_hypothetical_return,
+    format_hypothetical_return,
+    score_hypothetical_return,
+)
+from accuracy.records import AccuracyRecord  # noqa: E402
+
 parse_args = accuracy_comparison.parse_args
 
 

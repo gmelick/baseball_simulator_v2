@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.util
+import importlib
 import json
 import os
 import sys
@@ -49,19 +49,13 @@ if str(_ROOT) not in sys.path:
 from simulation.prop_validation import OUTCOME_PROB_EPS  # noqa: E402
 
 
-def _load_backtest_module() -> Any:
-    """The backtest's statistics helpers, imported by path (scripts/ is not
-    a package) so the pairing uses the SAME clustered machinery SIM-539 built."""
-    if "accuracy_comparison" in sys.modules:
-        return sys.modules["accuracy_comparison"]
-    spec = importlib.util.spec_from_file_location(
-        "accuracy_comparison", str(_ROOT / "scripts" / "accuracy_comparison.py")
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["accuracy_comparison"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+def _confidence_module() -> Any:
+    """The accuracy comparison's statistics (``scripts/accuracy/confidence.py``),
+    so the pairing uses the same game-clustered bootstrap and minimum sample."""
+    scripts_dir = str(_ROOT / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.append(scripts_dir)
+    return importlib.import_module("accuracy.confidence")
 
 
 DEPTH_EDGES: tuple[int, ...] = (75, 100)
@@ -204,7 +198,7 @@ def summarize(
     alpha: float,
 ) -> dict[str, Any]:
     """The paired read for one bucket of rows."""
-    bt = _load_backtest_module()
+    stats = _confidence_module()
     if not rows:
         return {"n": 0}
     d_brier = np.array([r["d_brier"] for r in rows], dtype=np.float64)
@@ -214,10 +208,10 @@ def summarize(
     by_game: dict[int, list[float]] = defaultdict(list)
     for r in rows:
         by_game[int(r["game_pk"])].append(float(r["d_brier"]))
-    lo, hi = bt._bootstrap_paired_diff_ci(d_brier, gp, n_bootstrap=n_bootstrap, seed=seed)
-    lo_ll, hi_ll = bt._bootstrap_paired_diff_ci(d_ll, gp, n_bootstrap=n_bootstrap, seed=seed + 1)
-    se = bt._clustered_se(by_game)
-    min_n = bt._minimum_observations_clustered(by_game, floor=floor, alpha=alpha)
+    lo, hi = stats._bootstrap_paired_diff_ci(d_brier, gp, n_bootstrap=n_bootstrap, seed=seed)
+    lo_ll, hi_ll = stats._bootstrap_paired_diff_ci(d_ll, gp, n_bootstrap=n_bootstrap, seed=seed + 1)
+    se = stats._clustered_se(by_game)
+    min_n = stats._minimum_observations_clustered(by_game, floor=floor, alpha=alpha)
     n = len(rows)
     lead_a = float(np.mean([r["brier_a"] - r["brier_market"] for r in rows]))
     lead_b = float(np.mean([r["brier_b"] - r["brier_market"] for r in rows]))

@@ -16,7 +16,10 @@ import pytest
 from tests.script_loader import load_script
 
 rescore = load_script("rescore_runlines")
-bt = rescore.bt
+
+from accuracy.grading import RUN_LINE_SCORING_VERSION  # noqa: E402
+from accuracy.records import AccuracyRecord  # noqa: E402
+from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
 
 def _implied(american: float) -> float:
@@ -132,7 +135,7 @@ def test_rescore_script_on_a_toy_report():
     assert recs[(2, "f5_total")] == report["accuracy_records"][2]
     assert recs[(3, "moneyline")] == report["accuracy_records"][3]
     # the stamp, the provenance of the re-score, the fresh tally and table
-    assert out["params"]["run_line_scoring"] == bt.RUN_LINE_SCORING_VERSION
+    assert out["params"]["run_line_scoring"] == RUN_LINE_SCORING_VERSION
     assert out["params"]["rescored"]["from"] == "toy.json"
     assert out["params"]["rescored"]["records"] == 3
     assert out["params"]["rescored"]["reference_margin_sources"] == {
@@ -224,11 +227,9 @@ def test_the_derived_blocks_are_recomputed():
     out, _ = rescore.rescore_report(report, store, source="t.json", date="2026-09-25")
     assert "stale" not in out["hypothetical_return"]
     assert out["counters"]["n_accuracy_records"] == len(out["accuracy_records"]) == 5
-    objs = [bt.AccuracyRecord.from_jsonable(r) for r in out["accuracy_records"]]
+    objs = [AccuracyRecord.from_jsonable(r) for r in out["accuracy_records"]]
     # the report's own bootstrap size and seed, not the defaults
-    assert out["accuracy_comparison"] == bt.aggregate_accuracy_comparison(
-        objs, n_bootstrap=20, seed=1
-    )
+    assert out["accuracy_comparison"] == aggregate_accuracy_comparison(objs, n_bootstrap=20, seed=1)
 
 
 def _write_report(tmp_path: Path) -> Path:
@@ -253,7 +254,7 @@ def test_main_keeps_an_existing_output_unless_told(tmp_path, monkeypatch):
     assert dest.read_text(encoding="utf-8") == "keep me"
     assert rescore.main([str(src), "--dsn", "postgresql://x/y", "--overwrite"]) == 0
     written = json.loads(dest.read_text(encoding="utf-8"))
-    assert written["params"]["run_line_scoring"] == bt.RUN_LINE_SCORING_VERSION
+    assert written["params"]["run_line_scoring"] == RUN_LINE_SCORING_VERSION
 
 
 def test_main_writes_a_report_with_problems_only_when_accepted(tmp_path, monkeypatch):

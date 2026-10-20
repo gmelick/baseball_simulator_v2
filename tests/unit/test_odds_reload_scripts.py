@@ -1076,16 +1076,17 @@ class TestRescore:
         so a three-way row with no tie price is graded only when no book lists
         the tie. The query runs on DuckDB here, as written."""
         duckdb = pytest.importorskip("duckdb")
-        bt = rescore.bt
-        assert rescore.INCOMPLETE_THREE_WAY_LAST_SQL == bt.INCOMPLETE_THREE_WAY_LAST_SQL
+        from accuracy.pricing import INCOMPLETE_THREE_WAY_LAST_SQL
+
+        assert rescore.INCOMPLETE_THREE_WAY_LAST_SQL == INCOMPLETE_THREE_WAY_LAST_SQL
         flat = " ".join(rescore.GRADED_GAME_SQL.split())
         assert (
             "ORDER BY game_pk, market_type, "
-            f"{bt.INCOMPLETE_THREE_WAY_LAST_SQL}, "
+            f"{INCOMPLETE_THREE_WAY_LAST_SQL}, "
             "array_position($3::varchar[], book) NULLS LAST, fetched_at DESC"
         ) in flat
         # A prop has no tie: its read keeps the plain order.
-        assert bt.INCOMPLETE_THREE_WAY_LAST_SQL not in rescore.GRADED_PROP_SQL
+        assert INCOMPLETE_THREE_WAY_LAST_SQL not in rescore.GRADED_PROP_SQL
 
         con = duckdb.connect()
         con.execute("CREATE SCHEMA raw")

@@ -38,12 +38,12 @@ The tests use the project's in-memory mock pattern.  No live DB runs.
 from __future__ import annotations
 
 import ast
-import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.script_loader import load_script
 
 from simulation.game_state import GameState
 from simulation.sim_kwargs import (
@@ -543,8 +543,8 @@ _SIM_KWARGS_CALL_SITES: dict[str, dict[str, int]] = {
     "api/routes/games.py": {"bare": 0, "resolving": 8},
     # _summary_and_winprob -> _resolved_sim_kwargs.
     "api/routes/betting.py": {"bare": 0, "resolving": 1},
-    # _score_one_game resolves; _collect_game_results builds in the worker thread.
-    "scripts/accuracy_comparison.py": {"bare": 1, "resolving": 1},
+    # _score_one_game resolves; _replay_game builds in the worker thread.
+    "scripts/accuracy/replay.py": {"bare": 1, "resolving": 1},
     # run() resolves; _collect_game_results builds in the worker thread.
     "scripts/validate_props.py": {"bare": 1, "resolving": 1},
 }
@@ -641,22 +641,18 @@ _SCRIPT_CACHE: dict = {}
 
 
 def _load_script(name: str):
-    """Import a ``scripts/`` module by path (``scripts/`` is not a package).
+    """A ``scripts/`` module, loaded once per name (``tests/script_loader.py``)."""
+    if name not in _SCRIPT_CACHE:
+        _SCRIPT_CACHE[name] = load_script(name)
+    return _SCRIPT_CACHE[name]
 
-    Cached, because both jobs are ~1200-line modules and every test in this section
-    wants one. The module MUST land in ``sys.modules`` before ``exec_module`` so
-    ``@dataclass(slots=True)`` can resolve its own namespace.
-    """
-    if name in _SCRIPT_CACHE:
-        return _SCRIPT_CACHE[name]
-    path = _REPO_ROOT / "scripts" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    _SCRIPT_CACHE[name] = mod
-    return mod
+
+def _replay_stage():
+    """The accuracy comparison's replay stage (``scripts/accuracy/replay.py``)."""
+    _load_script("accuracy_comparison")
+    from accuracy import replay
+
+    return replay
 
 
 class _ClosableCon(_FakeCon):
@@ -773,17 +769,22 @@ async def test_validate_props_runs_when_park_factors_are_available(monkeypatch, 
 
 @pytest.mark.parametrize("script", ["accuracy_comparison", "validate_props"])
 def test_script_replay_REFUSES_an_unresolved_state(script):
-    """The exact function that ran park-blind, refusing to run park-blind.
+    """Each script's replay refuses to run park-blind.
 
-    ``_collect_game_results`` builds the kwargs before it simulates anything, so an
-    unresolved state stops it on the first line — no sim, no report, no number.
+    The replay (``_replay_game`` in the accuracy comparison,
+    ``_collect_game_results`` in validate_props) builds the kwargs before it
+    simulates anything, so an unresolved state stops it on the first line: no
+    sim, no report, no number.
     """
-    mod = _load_script(script)
+    if script == "accuracy_comparison":
+        replay = _replay_stage()._replay_game
+    else:
+        replay = _load_script(script)._collect_game_results
     state = _bare_state()
     mark_park_factor_unresolved(state)
 
     with pytest.raises(UnresolvedParkFactorError):
-        mod._collect_game_results(state, 1, 0)
+        replay(state, 1, 0)
 
 
 # --- the CLV worker must not swallow the guard -------------------------------
@@ -796,15 +797,15 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
     that way would let a whole park-blind season finish looking healthy. It must
     propagate.
     """
-    clv = _load_script("accuracy_comparison")
-    monkeypatch.setattr(clv, "_worker_lazy_init", lambda *_a, **_k: None)
+    replay = _replay_stage()
+    monkeypatch.setattr(replay, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _BoomLoop:
         def run_until_complete(self, coro):
             coro.close()
             raise UnresolvedParkFactorError("simulated regression")
 
-    monkeypatch.setattr(clv, "_WORKER_LOOP", _BoomLoop())
+    monkeypatch.setattr(replay, "_WORKER_LOOP", _BoomLoop())
     params = {
         "do_game": True,
         "do_props": False,
@@ -814,20 +815,20 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
         "duckdb": "/nope.duckdb",
     }
     with pytest.raises(UnresolvedParkFactorError):
-        clv._process_one_game(777, params)
+        replay._process_one_game(777, params)
 
 
 def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
     """The contrast case: an ordinary failure is still one skipped game, not a stop."""
-    clv = _load_script("accuracy_comparison")
-    monkeypatch.setattr(clv, "_worker_lazy_init", lambda *_a, **_k: None)
+    replay = _replay_stage()
+    monkeypatch.setattr(replay, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _BoomLoop:
         def run_until_complete(self, coro):
             coro.close()
             raise RuntimeError("one bad game")
 
-    monkeypatch.setattr(clv, "_WORKER_LOOP", _BoomLoop())
+    monkeypatch.setattr(replay, "_WORKER_LOOP", _BoomLoop())
     params = {
         "do_game": True,
         "do_props": False,
@@ -841,7 +842,7 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
     # platform no longer measures the entry-to-close line move at all — and
     # its code was deleted from scripts/accuracy_comparison.py, so an ordinary
     # skipped game's payload no longer has anything to put there.
-    assert clv._process_one_game(777, params) == {
+    assert replay._process_one_game(777, params) == {
         "status": "unresolved",
         "accuracy_records": [],
         "park_run_factor": 1.0,

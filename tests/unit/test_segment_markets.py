@@ -2,7 +2,7 @@
 
 ``simulation/game_market_distributions.py`` turns per-iteration inning grids
 into the probability each segment / team market needs, and
-``scripts/accuracy_comparison.py`` grades those markets against the official inning
+the accuracy comparison (``scripts/accuracy/grading.py``) grades those markets against the official inning
 grid. These tests pin the conventions (strict over, push, the three-way tie,
 the run-line cover, the first team to score) on hand-built grids, then drive a
 real simulated game's play stream through the same path.
@@ -10,13 +10,11 @@ real simulated game's play stream through the same path.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
+from tests.script_loader import scripts_on_path
 
+from betting.clv_engine import DEFAULT_ONE_SIDED_MARGIN, run_line_is_pair
 from pipeline.odds_provider import GAME_MARKET_TYPES, LEGACY_GAME_MARKET_TYPES
 from simulation.game_market_distributions import (
     AWAY_FIRST,
@@ -29,6 +27,18 @@ from simulation.game_market_distributions import (
     side_probabilities,
     total_probabilities,
 )
+
+scripts_on_path()
+
+from accuracy.grading import (  # noqa: E402
+    ONE_SIDED_LINE_Z,
+    SEGMENT_MARKET_TYPES,
+    market_shape_tally,
+    score_segment_market_accuracy,
+    warn_market_shapes,
+)
+from accuracy.pricing import reference_margin  # noqa: E402
+from accuracy.records import AccuracyRecord, trust_label  # noqa: E402
 
 # Four hand-built games: (home_cells, away_cells), nine innings each.
 #   game A: away 1st-inning run, home wins 5-3; F1 away 1, home 0; F5 home 3, away 2
@@ -185,39 +195,25 @@ class TestOutcomes:
 # ===========================================================================
 
 
-def _backtest():
-    path = Path(__file__).resolve().parent.parent.parent / "scripts" / "accuracy_comparison.py"
-    if "accuracy_comparison" in sys.modules:
-        return sys.modules["accuracy_comparison"]
-    spec = importlib.util.spec_from_file_location("accuracy_comparison", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["accuracy_comparison"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def _closing(market_type: str, **cols):
     return {market_type: {"closing": cols}}
 
 
 class TestSegmentMarketScorer:
     def test_segment_list_is_every_non_legacy_market(self):
-        bt = _backtest()
         assert (
             tuple(m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES)
-            == bt.SEGMENT_MARKET_TYPES
+            == SEGMENT_MARKET_TYPES
         )
 
     def test_every_segment_market_has_a_trust_label(self):
-        bt = _backtest()
-        for m in bt.SEGMENT_MARKET_TYPES:
-            assert bt.trust_label(m) == "unvalidated"
+        for m in SEGMENT_MARKET_TYPES:
+            assert trust_label(m) == "unvalidated"
 
     def test_two_way_total_record(self, runs):
-        bt = _backtest()
         odds = _closing("f5_total", total_line=2.5, over_ml=-110.0, under_ml=-110.0)
         grid = {"home": [0, 0, 3, 0, 0, 0, 0, 0, None], "away": [1, 0, 0, 0, 0, 0, 0, 0, 0]}
-        recs = bt.score_segment_market_accuracy(1, runs, odds, grid)
+        recs = score_segment_market_accuracy(1, runs, odds, grid)
         assert len(recs) == 1
         r = recs[0]
         assert r.market == "f5_total" and r.market_type == "f5_total"
@@ -227,10 +223,9 @@ class TestSegmentMarketScorer:
         assert r.market_side_price == -110.0 and r.market_other_price == -110.0
 
     def test_three_way_record_uses_a_three_way_devig_and_no_other_price(self, runs):
-        bt = _backtest()
         odds = _closing("f1_moneyline", home_ml=255.0, away_ml=290.0, draw_ml=-130.0)
         grid = {"home": [1, 0, 0, 0, 0, 0, 0, 0, None], "away": [0, 0, 0, 0, 0, 0, 0, 0, 0]}
-        recs = bt.score_segment_market_accuracy(1, runs, odds, grid)
+        recs = score_segment_market_accuracy(1, runs, odds, grid)
         assert len(recs) == 1
         r = recs[0]
         assert r.sim_prob == 0.25  # F1 home led in one of four
@@ -250,20 +245,17 @@ class TestSegmentMarketScorer:
         assert r.market_other_price is None  # no single fade price on a three-way
 
     def test_three_way_without_a_draw_price_is_skipped(self, runs):
-        bt = _backtest()
         odds = _closing("f1_moneyline", home_ml=255.0, away_ml=290.0, draw_ml=None)
         grid = {"home": [1] + [0] * 8, "away": [0] * 9}
-        assert bt.score_segment_market_accuracy(1, runs, odds, grid) == []
+        assert score_segment_market_accuracy(1, runs, odds, grid) == []
 
     def test_push_and_missing_grid_are_skipped(self, runs):
-        bt = _backtest()
         odds = _closing("f5_total", total_line=4.0, over_ml=-110.0, under_ml=-110.0)
         grid = {"home": [0, 0, 3, 0, 0, 0, 0, 0, None], "away": [1, 0, 0, 0, 0, 0, 0, 0, 0]}
-        assert bt.score_segment_market_accuracy(1, runs, odds, grid) == []  # 4 == 4.0
-        assert bt.score_segment_market_accuracy(1, runs, odds, None) == []
+        assert score_segment_market_accuracy(1, runs, odds, grid) == []  # 4 == 4.0
+        assert score_segment_market_accuracy(1, runs, odds, None) == []
 
     def test_yes_no_and_first_to_score_and_run_line_records(self, runs):
-        bt = _backtest()
         odds = {}
         odds.update(_closing("first_inning_run", total_line=0.5, over_ml=-115.0, under_ml=-120.0))
         odds.update(_closing("first_to_score", home_ml=110.0, away_ml=-145.0))
@@ -277,17 +269,16 @@ class TestSegmentMarketScorer:
             )
         )
         grid = {"home": [0, 0, 3, 0, 0, 0, 0, 0, None], "away": [1, 0, 0, 0, 0, 0, 0, 0, 0]}
-        recs = {r.market: r for r in bt.score_segment_market_accuracy(1, runs, odds, grid)}
+        recs = {r.market: r for r in score_segment_market_accuracy(1, runs, odds, grid)}
         assert set(recs) == {"first_inning_run", "first_to_score", "f5_runline"}
         assert recs["first_inning_run"].outcome == 1 and recs["first_inning_run"].sim_prob == 0.75
         assert recs["first_to_score"].outcome == 0 and recs["first_to_score"].sim_prob == 0.25
         assert recs["f5_runline"].outcome == 1 and recs["f5_runline"].sim_prob == 0.25
 
     def test_full_game_markets_are_not_scored_here(self, runs):
-        bt = _backtest()
         odds = _closing("total", total_line=7.5, over_ml=-110.0, under_ml=-110.0)
         grid = {"home": [5] + [0] * 8, "away": [3] + [0] * 8}
-        assert bt.score_segment_market_accuracy(1, runs, odds, grid) == []
+        assert score_segment_market_accuracy(1, runs, odds, grid) == []
 
 
 # ===========================================================================
@@ -326,10 +317,10 @@ def _implied(american: float) -> float:
     return implied_prob_from_american(american)
 
 
-def _run_line_records(bt, odds, grid, runs):
+def _run_line_records(odds, grid, runs):
     return {
         r.market: r
-        for r in bt.score_segment_market_accuracy(744796, runs, odds, grid)
+        for r in score_segment_market_accuracy(744796, runs, odds, grid)
         if r.market_type == "f5_runline"
     }
 
@@ -362,9 +353,8 @@ class TestRunLineTwoBets:
             market_probability(f5, "f5_runline", line=-1.5, side="over")
 
     def test_first_five_run_line_two_bets_on_the_real_payload(self):
-        bt = _backtest()
         f5 = SegmentRuns.from_inning_grids(_F5_MARGIN_GRIDS)
-        recs = _run_line_records(bt, _G744796_ODDS, _G744796_GRID, f5)
+        recs = _run_line_records(_G744796_ODDS, _G744796_GRID, f5)
         assert set(recs) == {"f5_runline", "f5_runline_away"}
         home, away = recs["f5_runline"], recs["f5_runline_away"]
         assert home.market_type == away.market_type == "f5_runline"
@@ -387,7 +377,6 @@ class TestRunLineTwoBets:
     def test_run_line_pair_is_unchanged(self, runs):
         from betting.clv_engine import devig_two_way
 
-        bt = _backtest()
         odds = _closing(
             "f5_runline",
             home_spread=-0.5,
@@ -397,9 +386,7 @@ class TestRunLineTwoBets:
         )
         grid = {"home": [0, 0, 3, 0, 0, 0, 0, 0, None], "away": [1, 0, 0, 0, 0, 0, 0, 0, 0]}
         recs = [
-            r
-            for r in bt.score_segment_market_accuracy(1, runs, odds, grid)
-            if "runline" in r.market
+            r for r in score_segment_market_accuracy(1, runs, odds, grid) if "runline" in r.market
         ]
         assert len(recs) == 1
         r = recs[0]
@@ -410,15 +397,14 @@ class TestRunLineTwoBets:
         assert r.outcome == 1
 
     def test_run_line_mirror_rule(self, runs):
-        bt = _backtest()
         # the pick'em 0 / 0 IS a pair (the same sign, and the mirror of each other)
-        assert bt.run_line_is_pair(0.0, 0.0)
-        assert bt.run_line_is_pair(-1.5, 1.5) and bt.run_line_is_pair(1.5, -1.5)
+        assert run_line_is_pair(0.0, 0.0)
+        assert run_line_is_pair(-1.5, 1.5) and run_line_is_pair(1.5, -1.5)
         # two different lines are two bets, whatever their signs
-        assert not bt.run_line_is_pair(0.5, -1.5)
-        assert not bt.run_line_is_pair(-1.0, 1.5)
-        assert not bt.run_line_is_pair(-1.5, -1.5)
-        assert not bt.run_line_is_pair(-1.5, None)
+        assert not run_line_is_pair(0.5, -1.5)
+        assert not run_line_is_pair(-1.0, 1.5)
+        assert not run_line_is_pair(-1.5, -1.5)
+        assert not run_line_is_pair(-1.5, None)
         grid = {"home": [0, 0, 3, 0, 0, 0, 0, 0, None], "away": [1, 0, 0, 0, 0, 0, 0, 0, 0]}
         odds = {
             **_closing(
@@ -430,7 +416,7 @@ class TestRunLineTwoBets:
             ),
             **_closing("f5_total", total_line=4.5, over_ml=-110.0, under_ml=-110.0),
         }
-        recs = {r.market: r for r in bt.score_segment_market_accuracy(1, runs, odds, grid)}
+        recs = {r.market: r for r in score_segment_market_accuracy(1, runs, odds, grid)}
         # each bet at its OWN line: home +0.5 (covers on 3-1), away -1.5 (loses)
         assert recs["f5_runline"].sim_prob == market_probability(runs, "f5_runline", line=0.5)
         assert recs["f5_runline_away"].sim_prob == market_probability(
@@ -441,10 +427,9 @@ class TestRunLineTwoBets:
         no_away = _closing(
             "f5_runline", home_spread=-0.5, home_spread_ml=105.0, away_spread_ml=-140.0
         )
-        assert bt.score_segment_market_accuracy(1, runs, no_away, grid) == []
+        assert score_segment_market_accuracy(1, runs, no_away, grid) == []
 
     def test_one_sided_push_drops_that_side_only(self, runs):
-        bt = _backtest()
         odds = {
             **_closing(
                 "f5_runline",
@@ -459,7 +444,7 @@ class TestRunLineTwoBets:
         def run_line(grid):
             return [
                 (r.market, r.outcome)
-                for r in bt.score_segment_market_accuracy(1, runs, odds, grid)
+                for r in score_segment_market_accuracy(1, runs, odds, grid)
                 if "runline" in r.market
             ]
 
@@ -471,47 +456,45 @@ class TestRunLineTwoBets:
         assert run_line(tie) == [("f5_runline", 0)]
 
     def test_reference_margin_order(self):
-        bt = _backtest()
         f5_total = _closing("f5_total", over_ml=-109.0, under_ml=-121.0)
         total = _closing("total", over_ml=-108.0, under_ml=-112.0)
         moneyline = _closing("moneyline", home_ml=145.0, away_ml=-170.0)
         three_way = _closing("f5_moneyline", home_ml=175.0, away_ml=-127.0, draw_ml=475.0)
         everything = {**f5_total, **total, **moneyline, **three_way}
-        margin, source = bt.reference_margin(everything, "f5")
+        margin, source = reference_margin(everything, "f5")
         assert source == "f5_total"
         assert margin == pytest.approx(_implied(-109.0) + _implied(-121.0))
-        margin, source = bt.reference_margin({**total, **moneyline, **three_way}, "f5")
+        margin, source = reference_margin({**total, **moneyline, **three_way}, "f5")
         assert source == "total"
         assert margin == pytest.approx(_implied(-108.0) + _implied(-112.0))
-        margin, source = bt.reference_margin({**moneyline, **three_way}, "f5")
+        margin, source = reference_margin({**moneyline, **three_way}, "f5")
         assert source == "moneyline"
         assert margin == pytest.approx(_implied(145.0) + _implied(-170.0))
         # a three-way market never enters: with only it, the flat margin
-        assert bt.reference_margin(three_way, "f5") == (bt.DEFAULT_ONE_SIDED_MARGIN, "flat")
+        assert reference_margin(three_way, "f5") == (DEFAULT_ONE_SIDED_MARGIN, "flat")
         # ... even when its home and away prices alone sit inside the band, as
         # on more than half the stored first-five moneyline rows (1.023 here)
         in_band = _closing("f5_moneyline", home_ml=105.0, away_ml=-115.0, draw_ml=450.0)
         assert 1.0 <= _implied(105.0) + _implied(-115.0) <= 1.15
-        assert bt.reference_margin(in_band, "f5") == (bt.DEFAULT_ONE_SIDED_MARGIN, "flat")
-        assert bt.reference_margin({**in_band, **moneyline}, "f5")[1] == "moneyline"
+        assert reference_margin(in_band, "f5") == (DEFAULT_ONE_SIDED_MARGIN, "flat")
+        assert reference_margin({**in_band, **moneyline}, "f5")[1] == "moneyline"
         f1_in_band = _closing("f1_moneyline", home_ml=105.0, away_ml=-115.0, draw_ml=150.0)
-        assert bt.reference_margin(f1_in_band, "f1") == (bt.DEFAULT_ONE_SIDED_MARGIN, "flat")
-        assert bt.reference_margin({}, "game") == (1.05, "flat")
+        assert reference_margin(f1_in_band, "f1") == (DEFAULT_ONE_SIDED_MARGIN, "flat")
+        assert reference_margin({}, "game") == (1.05, "flat")
         # the full game starts from the full-game total; the first inning from its own
         f1_total = _closing("f1_total", over_ml=-120.0, under_ml=-105.0)
-        assert bt.reference_margin({**f1_total, **total}, "f1")[1] == "f1_total"
-        assert bt.reference_margin({**f5_total, **total}, "game")[1] == "total"
+        assert reference_margin({**f1_total, **total}, "f1")[1] == "f1_total"
+        assert reference_margin({**f5_total, **total}, "game")[1] == "total"
         # a stored total whose prices are not a pair (they add to under 1.00) is skipped
         broken = _closing("f5_total", over_ml=150.0, under_ml=150.0)
-        assert bt.reference_margin({**broken, **total}, "f5")[1] == "total"
+        assert reference_margin({**broken, **total}, "f5")[1] == "total"
         # ... and one whose prices add to more than 1.15 (0.6 + 0.6)
         wide = _closing("f5_total", over_ml=-150.0, under_ml=-150.0)
-        assert bt.reference_margin({**wide, **total}, "f5")[1] == "total"
+        assert reference_margin({**wide, **total}, "f5")[1] == "total"
 
     def test_the_tally_names_the_two_shapes(self, runs):
-        bt = _backtest()
         f5 = SegmentRuns.from_inning_grids(_F5_MARGIN_GRIDS)
-        recs = bt.score_segment_market_accuracy(744796, f5, _G744796_ODDS, _G744796_GRID)
+        recs = score_segment_market_accuracy(744796, f5, _G744796_ODDS, _G744796_GRID)
         pair_odds = _closing(
             "f5_runline",
             home_spread=-0.5,
@@ -519,8 +502,8 @@ class TestRunLineTwoBets:
             away_spread=0.5,
             away_spread_ml=-140.0,
         )
-        recs += bt.score_segment_market_accuracy(2, runs, pair_odds, _G744796_GRID)
-        tally = bt.market_shape_tally(recs)
+        recs += score_segment_market_accuracy(2, runs, pair_odds, _G744796_GRID)
+        tally = market_shape_tally(recs)
         shape = tally["run_lines"]["f5_runline"]
         assert shape["pairs"] == 1
         assert shape["one_sided_games"] == 1 and shape["one_sided_records"] == 2
@@ -536,7 +519,6 @@ class TestRunLineTwoBets:
         assert line["home"]["outcome_rate"] == 0.0
 
     def test_a_game_with_one_record_is_counted_whatever_dropped_the_other(self, runs):
-        bt = _backtest()
         odds = {
             **_closing(
                 "f5_runline",
@@ -548,18 +530,16 @@ class TestRunLineTwoBets:
             **_closing("f5_total", total_line=4.5, over_ml=-110.0, under_ml=-110.0),
         }
         lead = {"home": [2, 0, 0, 0, 0, 0, 0, 0, None], "away": [1] + [0] * 8}
-        recs = bt.score_segment_market_accuracy(1, runs, odds, lead)  # the home bet pushed
-        shape = bt.market_shape_tally(recs)["run_lines"]["f5_runline"]
+        recs = score_segment_market_accuracy(1, runs, odds, lead)  # the home bet pushed
+        shape = market_shape_tally(recs)["run_lines"]["f5_runline"]
         assert shape["one_sided_games"] == 1 and shape["one_record_games"] == 1
         assert shape["one_sided_line"]["home"] is None
 
     def test_a_mis_stored_one_sided_line_is_named(self, caplog):
         import logging
 
-        bt = _backtest()
-
         def rec(g, market, mkt, y):
-            return bt.AccuracyRecord(
+            return AccuracyRecord(
                 game_pk=g,
                 market=market,
                 market_type="f1_runline",
@@ -572,17 +552,17 @@ class TestRunLineTwoBets:
 
         # the 2025 first-inning +1 / +1 shape: the line says 0.465, the bet wins 88%
         bad = [rec(g, "f1_runline", 0.465, int(g % 8 != 0)) for g in range(80)]
-        tally = bt.market_shape_tally(bad)
+        tally = market_shape_tally(bad)
         check = tally["run_lines"]["f1_runline"]["one_sided_line"]["home"]
-        assert check["n"] == 80 and check["z"] < -bt.ONE_SIDED_LINE_Z
+        assert check["n"] == 80 and check["z"] < -ONE_SIDED_LINE_Z
         with caplog.at_level(logging.WARNING):
-            bt.warn_market_shapes(tally)
+            warn_market_shapes(tally)
         assert "f1_runline home bets" in caplog.text and "Mis-stored lines?" in caplog.text
         # a calibrated one-sided line raises no such warning
         caplog.clear()
         good = [rec(g, "f1_runline", 0.5, g % 2) for g in range(80)]
         with caplog.at_level(logging.WARNING):
-            bt.warn_market_shapes(bt.market_shape_tally(good))
+            warn_market_shapes(market_shape_tally(good))
         assert "Mis-stored" not in caplog.text
 
 
