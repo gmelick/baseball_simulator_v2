@@ -6,9 +6,10 @@ meaning. Code reads a flag only through the readers below, so one table says
 what each flag does and what an unset flag means. The production values live in
 the ``app`` service of ``docker-compose.yml``; the unit tests pin their own in
 ``tests/conftest.py``. ``tests/unit/test_flag_registry.py`` fails when the code
-reads a ``SIM_*`` name that is not registered, or when compose sets one.
+reads a ``SIM_*`` name that is not registered, or when compose sets an
+unregistered one.
 
-The readers keep the rules the scattered reads had:
+The readers follow three rules:
 
 * an unset flag reads as its default;
 * an on/off flag reads ``1``, ``true``, ``yes`` and ``on`` as on, and ``""``,

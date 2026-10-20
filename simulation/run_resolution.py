@@ -1,83 +1,63 @@
-"""simulation.run_resolution — context-aware run resolution for the sim loop (SIM-312).
+"""simulation.run_resolution — the run value of one play from its two base-out states.
 
-WHY THIS MODULE EXISTS
-======================
-The Phase-3 scaffold (``simulation/sim_loop.py``) scored a plate appearance with
-a context-free linear-weight lookup: ``RUN_VALUES.get(event, 0.0)``.  Two
-problems (the SIM-312 P0 live bug):
-
-  1. **Vocabulary mismatch** — the play pool stores Statcast's *raw* ``events``
-     strings (``field_out``, ``force_out``, ``sac_fly``,
-     ``grounded_into_double_play`` ...), which are NOT canonical ``RUN_VALUES``
-     keys, so the most common outs silently scored **0.0 runs** and inflated the
-     run environment.  (Fixed in ``simulation/constants.py`` via an alias map +
-     resolver.)
-  2. **Context-blindness** — even with the right key, a flat linear weight ignores
-     the base/out state.  A single with the bases loaded and two outs is worth
-     far more than a single with nobody on; a GIDP with a runner on first and no
-     outs costs far more than one in an empty-bases context.
-
-This module makes run resolution **context-aware** by using the data the play
-pool already samples — the per-play result deltas ``result_hits``,
-``result_outs``, ``result_runs`` (see ``sim.outcome_pool`` in
-``db/schemas/02_duckdb_schema.sql``) — together with an **RE24** (base-out
-run-expectancy) matrix.  The change in run expectancy over a play, plus runs
-that physically scored, is the textbook RE24 run value:
+WHAT THIS MODULE DOES
+=====================
+The run ledger values every committed play by run expectancy. Run expectancy
+(RE24) is the expected runs from a base-out state to the end of the inning,
+over the 24 states (8 base states × 3 out counts). The run value of a play is
+the textbook RE24 identity:
 
     run_value = RE_end - RE_start + runs_scored
 
-(See Tom Tango's "RE24" / "The Book"; the same identity is already used in this
-codebase's ``derived.dp_play_detail`` as ``re24_start - re24_end`` for the
-defense's sign, and the ``derived.run_expectancy_matrix`` table stores exactly
-this 24-state matrix.)
+(See Tom Tango's "RE24" / "The Book". ``derived.dp_play_detail`` uses the same
+identity as ``re24_start - re24_end`` for the defense's sign.)
 
-RESOLUTION POLICY — EXPLICIT STATES ONLY (SIM-499; the ONLY path since
-2026-08-19)
-==================================================
-``resolve_runs(...)`` is told **both** base-out states.  The caller measures the
-state before the play and the state after it, and hands over both: supply
-``pre_outs`` / ``pre_runners_state``, ``post_outs`` / ``post_runners_state``
-and ``result_runs``.  The run value is ``RE(post) - RE(pre) + result_runs``.
+A flat per-event weight ignores the base-out state. A single with the bases
+loaded and two outs is worth far more than a single with nobody on. A GIDP
+(a ground ball into a double play) with a runner on first and no outs costs far
+more than a GIDP with the bases empty. The RE24 delta reads the state.
 
-The old CONTEXT-FREE fallback (a per-event linear-weight constant from the
-``RUN_VALUES`` table) was REMOVED with the SIM-511+512 landing (owner ruling
-2026-08-19): the ledger always rejected it, and only tests consumed it. A
-call without the full state now raises — there is no path that guesses a
-missing state or substitutes a constant, so a wrong run value cannot be
-produced silently.
+THE CALLER SUPPLIES BOTH STATES
+===============================
+``resolve_runs(...)`` takes both base-out states. The caller measures the
+state before the play and the state after it, and supplies ``pre_outs`` /
+``pre_runners_state``, ``post_outs`` / ``post_runners_state`` and
+``result_runs``. The run value is ``RE(post) - RE(pre) + result_runs``.
 
-WHY THE OLD DERIVATION WAS DELETED (SIM-499)
-============================================
-This module used to *derive* the after-state from the before-state by
-conservation: ``new_on_base = old_on_base + reached - runs``, then place that
-many runners on the lead-most bags.  Two defects, both measured:
+A call without all five raises. No path guesses a missing state or substitutes
+a per-event constant (the owner's ruling of 2026-08-19), so a wrong run value
+cannot pass silently.
 
-  * **The formula has no term for a runner RETIRED on the play.**  A caught
-    stealing removed a body the formula could not account for, so it kept the
-    runner on base and undercharged the play: **-0.24 recorded against a true
-    -0.62**.  A double play desynced the same way.
-  * **The caller read the state at commit time, after it had already mutated
-    the bases.**  The "before" state was therefore the *after* state.  A walk
-    with a runner on first recorded **+0.50 against a true +0.60**; with the
-    bases loaded, **+0.69 against +1.00**.  A sac fly recorded **+0.76 against a
-    true -0.13**, and a steal of home **+1.00 against +0.11**.
+A derived after-state is wrong. The measurements (SIM-499):
 
-Both defects dissolve when the caller supplies the two states it already knows.
-The conservation identity survives as a **check** — ``Bases.assert_transition``
-(SIM-500), wired at the commit — because a caller can state the retired count
-that a derivation had to guess.
+  * **Conservation has no term for a runner RETIRED on the play.** The formula
+    ``new_on_base = old_on_base + reached - runs`` keeps a caught-stealing
+    runner on base: **-0.24 against a true -0.62**. A double play goes wrong
+    the same way.
+  * **A state read at commit time is already the after-state.** A walk with a
+    runner on first reads **+0.50 against a true +0.60**; with the bases
+    loaded, **+0.69 against +1.00**. A sac fly reads **+0.76 against a true
+    -0.13**, and a steal of home **+1.00 against +0.11**.
+
+The conservation identity runs as a **check** at the commit
+(``Bases.assert_transition``): the caller states the retired count, so the
+check needs no guess.
+
+``canonical_event`` maps the pool's raw Statcast event (``field_out``,
+``force_out``, ``sac_fly``, ``grounded_into_double_play`` ...) to its canonical
+key through ``simulation.constants.resolve_event_to_canonical``.
 
 RE24 MATRIX SOURCE
 ==================
 The bundled 24-state matrix (8 base states × 3 out states) is the standard
 base-out run-expectancy table for a recent (~2024) MLB run environment
-(~4.4 R/team/G).  Values are consistent with the public Tango / Baseball
-Prospectus / Retrosheet RE24 tables for the early-2020s run environment and are
-monotonic in the expected ways (more baserunners ⇒ higher RE; more outs ⇒ lower
-RE).  In production this can be swapped for the live
-``derived.run_expectancy_matrix`` table (same ``outs`` × ``runners_state``
-bitmask keying) via :func:`re24_from_rows`; the bundled table is the offline /
-unit-test default and the safety net when the DB table is empty.
+(~4.4 R/team/G). Its values agree with the public Tango / Baseball
+Prospectus / Retrosheet RE24 tables for the early 2020s. More baserunners raise
+RE; more outs lower it. The simulator uses this bundled matrix.
+:func:`re24_from_rows` builds a matrix of the same shape from the
+``derived.run_expectancy_matrix`` table (the same ``outs`` × ``runners_state``
+bitmask keying), and ``resolve_runs(matrix=...)`` accepts it; no caller
+passes one.
 
 Base-out state encoding (matches the rest of the codebase)
 ----------------------------------------------------------
@@ -171,13 +151,10 @@ class RunResolution:
     """Result of resolving a play's run value.
 
     ``runs``      — the RE24 run value of the play.
-    ``method``    — always ``"re24_delta"`` (the linear-weight method was
-                    removed 2026-08-19; the field stays so the ledger's
-                    method assertion keeps meaning).
+    ``method``    — always ``"re24_delta"``; the run ledger asserts it.
     ``re_start`` / ``re_end`` — base-out RE before/after.
     ``post_outs`` / ``post_runners_state`` — the after-state the CALLER supplied,
-                    echoed back for the record.  Nothing here derives it
-                    (SIM-499).
+                    echoed back for the record. Nothing here derives it.
     ``canonical_event`` — the resolved canonical key (None if unresolved).
     """
 
@@ -217,15 +194,13 @@ def resolve_runs(
 
         runs = RE(post_state) - RE(pre_state) + result_runs
 
-    The caller measures both states.  This function derives neither of them.
-    That is the whole point of SIM-499: the old code derived the after-state by
-    conservation, which has no term for a runner retired on the play, and the
-    caller read the before-state after it had already mutated the bases.
+    The caller measures both states, and this function derives neither of
+    them. A derivation by conservation has no term for a runner retired on
+    the play (see the module docstring).
 
     Raises ``ValueError`` when ANY of the five is missing, naming the ones
-    that are.  The context-free linear-weight fallback that once caught a
-    state-free call was removed 2026-08-19 (owner ruling): a hand-set
-    per-event constant must never stand in for real states.
+    that are. A hand-set per-event constant never stands in for real states
+    (the owner's ruling of 2026-08-19).
 
     Also raises ``ValueError`` on an impossible transition: a negative out count,
     a play that *removes* outs, or a negative ``result_runs``.

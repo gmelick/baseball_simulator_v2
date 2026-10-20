@@ -1,17 +1,16 @@
 """
 simulation.validation
 ======================
-SIM-325 -- the validation-spine **end-to-end** package.
+The end-to-end check of the simulator's run distribution.
 
-Houses the historical-replay + chi-squared goodness-of-fit harness
-(:mod:`simulation.validation.replay_chi_squared`): replay a set of games
-through the SIM-320 ``simulate_game()`` loop and assert the simulated
-per-team-game run distribution matches an actual / reference distribution via a
-chi-squared GOF test (the spec's "p > 0.05" validation gate).
+The package holds the historical-replay harness
+(:mod:`simulation.validation.replay_chi_squared`). The harness replays a set of
+games through ``simulate_game()``. A chi-squared goodness-of-fit test then
+compares the simulated runs per team-game with an actual or reference
+distribution; the gate is p > 0.05.
 
-This is a NEW harness module; it does NOT modify ``simulation/sim_loop.py`` --
-it only *drives* it (the SIM-316/320/324 dependency-injection pattern: an
-the synthetic league bundle, no live DuckDB).
+The harness drives the loop and changes nothing in it. With no database, it
+runs the production machine over the synthetic league bundle.
 """
 
 from __future__ import annotations

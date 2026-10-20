@@ -1,103 +1,90 @@
-"""simulation.pitcher_decisions — W/L/Save attribution (SIM-364).
+"""simulation.pitcher_decisions — the winning, losing and save pitchers of one game.
 
 WHAT THIS IS
 ============
-A **pure derivation** of the winning / losing / save pitcher decisions from an
-ordered stream of :class:`~simulation.game_state.PlayResult` objects for a single
-game.  It reads only the committed ``PlayResult.next_state`` (the post-play
-:class:`~simulation.game_state.GameState`) — it never mutates state, calls the
-DB, or re-runs the loop.  This is the Baseball-Analyst-owned codification of the
-standard MLB decision rules (Phase 5, Sprint 4).
+A **pure derivation** of the win, the loss and the save from one game's ordered
+stream of :class:`~simulation.game_state.PlayResult` objects. It reads the plays
+and their committed ``next_state`` (the post-play
+:class:`~simulation.game_state.GameState`). It never changes a state, calls the
+database or re-runs the loop. The rules are the standard MLB decision rules.
 
-HOW THE PITCHER OF RECORD IS READ FROM GameState
-================================================
-``GameState`` does **not** carry separate ``home_pitcher_id`` / ``away_pitcher_id``
-fields.  It carries a single ``pitcher_id`` (the *current* pitcher — the tile
-pre-filter key, ``game_state.py`` line ~219) which is always the **fielding /
-defending team's** pitcher, plus ``half``:
+HOW THE MODULE READS THE PITCHER OF RECORD
+==========================================
+Each play result names its own pitcher (``PlayResult.pitcher_id``) and his side
+(``PlayResult.fielding_team``). The module reads those two fields first, for the
+pitcher of record and for the out count of the starter rule below.
+
+A play without the two fields (a hand-built stream) reads the next state. Its
+``pitcher_id`` is the fielding team's current pitcher, and its ``half`` names
+the fielding team:
 
   * ``Half.TOP``    — the AWAY team bats, so the **HOME** pitcher is throwing.
   * ``Half.BOTTOM`` — the HOME team bats, so the **AWAY** pitcher is throwing.
 
-So for any committed play state ``s`` the defending side and its pitcher are::
+So for a committed play state ``s`` the fielding side and its pitcher are::
 
     defending_team = Team.HOME if s.half == Half.TOP else Team.AWAY
     defending_pitcher_id = s.pitcher_id
 
-We walk the stream and, every time we see a play whose ``next_state`` shows a
-given side fielding, we record that side's *current* pitcher of record.  A
-substitution shows up naturally as a changed ``pitcher_id`` on a later play for
-the same fielding side (``sim_loop`` sets ``state.pitcher_id = new_arm`` on a
-bullpen move, line ~2120).
-
 The next state has one flaw: on the play that ends a half-inning, it already
-shows the NEXT half. Its ``half`` names the other fielding side, and its
-``pitcher_id`` names the other side's pitcher. Read alone, it gives the last out
-of each half to the wrong pitcher. So since SIM-557 each play result names its
-own pitcher (``PlayResult.pitcher_id``) and his side
-(``PlayResult.fielding_team``). The module reads those two fields first, for the
-pitcher of record and for the out count of the starter rule below. A play
-without the two fields (a hand-built stream) reads the next state, as before.
+shows the NEXT half. Read alone, it gives the last out of each half to the
+other side's pitcher. That is why the play's own fields come first.
 
-ATTRIBUTION RULES IMPLEMENTED
-=============================
-We track, after each play, the running score (from ``next_state``), which team
-leads, and each side's current pitcher of record.  Let the game's final winner
-be the team ahead after the last play (no decision on a tie or an unfinished /
-empty stream).
+The module walks the stream. On each play it records the fielding side's
+current pitcher as that side's pitcher of record. A pitching change shows up as
+a new ``pitcher_id`` on a later play for the same side.
 
-* **Lead taken "for good".**  We find the *earliest* play after which the
-  eventual winner held a lead it **never relinquished** through the final play
-  (the winner's score strictly exceeds the loser's after that play and stays
-  ahead — never falling to a tie-or-behind again).  This is the decisive
-  lead-taking play.
+ATTRIBUTION RULES
+=================
+After each play the module tracks the running score (from ``next_state``) and
+each side's pitcher of record. The game's winner is the team ahead after the
+last play. A tie, or an empty or unfinished stream, has no decision.
 
-* **Winning pitcher.**  The winning team's pitcher of record *on the mound at
-  the moment the decisive lead-taking run scored*.  Because the lead-taking run
-  is scored by the offense against the losing team, the winning team's pitcher
-  of record at that instant is the one carried from its most recent fielding
-  play (its half-inning). A side that has fielded no play yet has its first
-  pitcher (its starter) on record: the away side can take the lead for good
-  in the top of the 1st, before its starter throws a pitch (SIM-557). The
-  module applies this rule only to a stream whose plays name their fielding
-  side. A stream without the two fields keeps the old answer: no winning
-  pitcher in that case.
+* **Lead taken "for good".** The decisive play is the *earliest* play after
+  which the eventual winner leads and never again falls to a tie or behind
+  through the final play.
 
-  **SIM-414 — MLB Rule 9.17(b) starter exception.**  If the candidate winner is
-  the winning team's **starter** and that starter did NOT record at least 15
-  outs (5.0 IP), the win is reassigned to the most-effective reliever.  We
-  approximate "most effective" by outs recorded (the simulator does not carry a
-  leverage / WPA signal); ties break by first-appearance order; if no reliever
-  has any outs we leave the starter (defensive fallback for under-instrumented
-  streams).  The reassigned winner correctly invalidates a save for the same
-  pitcher (the finisher-vs-winner check downstream sees the new id).
+* **Winning pitcher.** The winning team's pitcher of record *when the decisive
+  run scored*. The winner bats on the decisive play, so its pitcher of record
+  is the one from its most recent fielding play. A side that has fielded no
+  play yet has its first pitcher (its starter) on record: the away side can
+  take the lead for good in the top of the 1st, before its starter throws a
+  pitch. The module applies this rule only to a stream whose plays name their
+  fielding side. A stream without the two fields gives no winning pitcher in
+  that case.
 
-* **Losing pitcher.**  The losing team's pitcher who was on the mound when the
-  decisive lead-taking run scored — i.e. the pitcher who *allowed* the run that
-  gave the winner its permanent lead.  That is the defending pitcher of the
-  decisive play (which is by construction a play in the winner's half of the
-  inning, defended by the losing team).
+  **MLB Rule 9.17(b), the starter exception.** If the candidate winner is the
+  winning team's **starter** and he recorded fewer than 15 outs (5.0 innings),
+  the win goes to the most effective reliever. The module reads "most
+  effective" as the most outs recorded: the simulator carries no leverage or
+  win-probability signal. Ties break by the order of first appearance. If no
+  reliever has an out, the starter keeps the win (a guard for a thin stream).
+  The save check compares the finisher with the reassigned winner, so the new
+  winner cannot also get the save.
 
-* **Save.**  Awarded to the **final** pitcher of the **winning** team iff ALL of:
-    1. that pitcher did **not** earn the win (no save for the winning pitcher);
-    2. that pitcher **finished** the game (was the winning side's pitcher of
-       record on the last play);
-    3. the pitcher entered / protected a **save situation**, per the standard
-       three-clause MLB Rule 9.19 heuristic — we use the most common clause:
-       the lead was **3 runs or fewer** at some point while this finisher was
-       pitching (equivalently, they entered with the tying run on deck).  We do
-       NOT separately model the "pitched 3+ effective innings" third clause.
-       No save in a blowout (lead always > 3 while the finisher pitched).
+* **Losing pitcher.** The losing team's pitcher on the mound when the decisive
+  run scored. That is the fielding pitcher of the decisive play, which is
+  always in the winner's half of the inning.
 
-  The finisher must be a *different* pitcher than the winning pitcher; a complete
-  game / closer-also-won yields no save.
+* **Save.** The **final** pitcher of the **winning** team gets the save when
+  ALL of these hold:
+    1. he did **not** earn the win;
+    2. he **finished** the game (the winning side's pitcher of record on the
+       last play);
+    3. he pitched in a **save situation**. The module uses the most common
+       clause of MLB Rule 9.19: the lead was **3 runs or fewer** at some point
+       while he pitched. It does NOT model the "3+ effective innings" clause.
+       A blowout (a lead above 3 the whole time he pitched) gives no save.
+
+  The finisher must differ from the winning pitcher, so a complete game, or a
+  closer who also won, gives no save.
 
 TIES / UNFINISHED GAMES / WALK-OFFS
 ===================================
-* Empty stream, or a final state that is tied, yields a :class:`PitcherDecisions`
-  with all three ids ``None`` (no decision) but the final scores recorded.
-* Walk-offs are handled transparently: the home team taking the permanent lead
-  in its last at-bat is simply the decisive lead-taking play like any other.
+* An empty stream, or a tied final state, gives a :class:`PitcherDecisions`
+  with all three ids ``None`` and the final scores recorded.
+* A walk-off needs no special case: the home team's permanent lead in its last
+  at-bat is the decisive play like any other.
 """
 
 from __future__ import annotations
@@ -107,15 +94,15 @@ from dataclasses import dataclass
 
 from simulation.game_state import GameState, Half, PlayResult, Team
 
-#: Standard MLB save-situation lead ceiling (Rule 9.19 clause (a)): a lead of
-#: three runs or fewer with the finisher pitching at least one inning.
+#: The largest lead of a save situation (MLB Rule 9.19, clause (a)): three runs
+#: or fewer. The module does not check the clause's one-inning minimum.
 SAVE_LEAD_CEILING = 3
 
-#: SIM-414: MLB Rule 9.17(b) — a starting pitcher must pitch at least 5 INNINGS
-#: (15 outs) to be credited with the win.  When the starter does not reach 5
-#: IP, the official scorer awards the win to the most-effective reliever; we
-#: approximate "most effective" by outs recorded (with first-appearance order
-#: breaking ties), since the simulator doesn't carry a leverage / WPA signal.
+#: MLB Rule 9.17(b): a starter must pitch at least five innings (15 outs) to
+#: earn the win. Short of that, the scorer gives the win to the most effective
+#: reliever. The module reads that as the most outs recorded, with ties broken
+#: by first appearance: the simulator carries no leverage or win-probability
+#: signal.
 STARTER_WIN_MIN_OUTS = 15
 
 __all__ = [
@@ -128,7 +115,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class PitcherDecisions:
-    """The derived W/L/Save decision for a single game (SIM-364).
+    """The win, the loss and the save of one game.
 
     All three pitcher ids are ``None`` when no decision can be made (a tie, an
     empty/unfinished stream).  ``home_score`` / ``away_score`` are the final
@@ -150,10 +137,10 @@ def _defending_team(state: GameState) -> Team:
 def _play_side_and_pitcher(r: PlayResult, st: GameState) -> tuple[Team, int | None, bool]:
     """The fielding side and the pitcher of one play, and whether the play named them.
 
-    SIM-557: a play that names its own fielding side and pitcher is read
-    first. The next state names the NEXT half's pitcher on the play that ends
-    a half-inning, so it credits that play to the wrong pitcher. A play
-    without the two fields reads the next state, as before.
+    A play that names its own fielding side and pitcher is read first. The
+    next state names the NEXT half's pitcher on the play that ends a
+    half-inning, so it credits that play to the wrong pitcher. A play without
+    the two fields reads the next state.
     """
     play_side = getattr(r, "fielding_team", None)
     if play_side is not None:
@@ -166,8 +153,8 @@ def _side_pitcher_outs(
 ) -> tuple[dict[int, int], list[int]]:
     """Each pitcher's outs for one side, and the order the pitchers first appear.
 
-    The win module's five-inning starter rule (SIM-414) reads these counts for
-    the winning side. The first pitcher in the order is the side's starter.
+    The five-inning starter rule reads these counts for the winning side. The
+    first pitcher in the order is the side's starter.
     Plays without a next state are skipped, as in ``decisions_from_plays``.
     """
     outs: dict[int, int] = {}
@@ -195,8 +182,8 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     are skipped (they cannot move the score / pitcher of record).  Returns a
     :class:`PitcherDecisions`; see the module docstring for the exact rules.
     """
-    # Iterate results+states together: states gives the committed score / poR,
-    # results carries ``outs_recorded`` we need for SIM-414 (the starter-5-IP rule).
+    # Pair each result with its state. The state gives the committed score; the
+    # result names its pitcher and carries ``outs_recorded`` (the starter rule).
     paired: list[tuple[PlayResult, GameState]] = [
         (r, r.next_state) for r in results if r.next_state is not None
     ]
@@ -213,15 +200,13 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     winner: Team = Team.HOME if home_final > away_final else Team.AWAY
     loser: Team = Team.AWAY if winner == Team.HOME else Team.HOME
 
-    # Per-play snapshots we need: running score + each side's pitcher of record.
-    # The pitcher of record for a side is the defending pitcher_id from that
-    # side's most recent fielding play.  Seed from whoever fields first.
+    # Each side's pitcher of record is the pitcher of that side's most recent
+    # fielding play. Both start empty.
     home_poR: int | None = None  # pitcher of record (home)
     away_poR: int | None = None  # pitcher of record (away)
 
-    # SIM-414: per-pitcher outs recorded for the WINNING team's pitchers, plus
-    # the order in which they first appeared (for tie-breaking the most-effective
-    # reliever choice when the starter doesn't reach 5 IP).
+    # The outs of each of the WINNING team's pitchers, and the order of their
+    # first appearance (the starter first; the tie-break of the starter rule).
     winner_pitcher_outs, winner_pitcher_order = _side_pitcher_outs([r for r, _ in paired], winner)
     winner_starter_id: int | None = winner_pitcher_order[0] if winner_pitcher_order else None
 
@@ -231,18 +216,17 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     def _score_for(team: Team, st: GameState) -> int:
         return st.home_score if team == Team.HOME else st.away_score
 
-    # SIM-557: each side's first pitcher in the stream (its starter). A side
-    # has no pitcher of record until it fields a play. The away side bats
-    # first, so its lead can come before its starter fields. The decisive
-    # play then reads the side's first pitcher (see below). The module uses
-    # this fallback only when the stream names its own sides (any_own), so a
-    # stream without the two fields reads exactly as before SIM-557.
+    # Each side's first pitcher in the stream (its starter). A side has no
+    # pitcher of record until it fields a play. The away side bats first, so
+    # its lead can come before its starter fields. The decisive play then
+    # reads the side's first pitcher (see below). The module uses this
+    # fallback only when the stream names its own sides (``any_own``).
     first_pitcher: dict[Team, int] = {}
     any_own = False
 
     snapshots: list[tuple[int, int, int | None, int | None]] = []
     for r, st in paired:
-        # SIM-557: the play's own side and pitcher, when it names them.
+        # The play's own side and pitcher, when it names them.
         defending, pid, own = _play_side_and_pitcher(r, st)
         any_own = any_own or own
         if defending == Team.HOME:
@@ -276,17 +260,17 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
             break
 
     if decisive_idx is None:
-        # Winner is ahead at the end but never held a clean permanent lead in
-        # this stream (shouldn't happen for a finished game, but be safe).
+        # A guard only: the winner leads after the last play, so the last
+        # play always qualifies as the decisive one.
         return PitcherDecisions(home_score=home_final, away_score=away_final)
 
     _, _, win_poR_at_lead, lose_poR_at_lead = snapshots[decisive_idx]
-    # SIM-557: a side that has fielded no play by the decisive play has its
-    # starter on record. Example: the away side scores in the top of the 1st
-    # and never trails. Its starter has thrown no pitch yet, but he is its
-    # pitcher of record, so the win is his (or a reliever's, by the rule below).
-    # A stream whose plays carry no fielding side skips this fallback: it reads
-    # exactly as before SIM-557 (no winning pitcher in that case).
+    # A side that has fielded no play by the decisive play has its starter on
+    # record. Example: the away side scores in the top of the 1st and never
+    # trails. Its starter has thrown no pitch yet, but he is its pitcher of
+    # record, so the win is his (or a reliever's, by the rule below). A stream
+    # whose plays carry no fielding side skips this fallback (no winning
+    # pitcher in that case).
     if any_own and win_poR_at_lead is None:
         win_poR_at_lead = first_pitcher.get(winner)
     if any_own and lose_poR_at_lead is None:
@@ -294,13 +278,11 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     winning_pitcher_id = win_poR_at_lead
     losing_pitcher_id = lose_poR_at_lead
 
-    # SIM-414: MLB Rule 9.17(b) — if the winning team's STARTER is the pitcher
-    # of record at the decisive play but did not pitch 5 innings (15 outs), the
-    # official scorer awards the win to the most-effective reliever instead.
-    # We approximate "most effective" by outs recorded; the starter is excluded,
-    # ties break by first-appearance order.  If no reliever has any outs the
-    # starter keeps the decision (defensive fallback — shouldn't happen in a
-    # finished game with a sub-5-IP starter, but guard against an empty list).
+    # MLB Rule 9.17(b): when the winning team's STARTER is the pitcher of
+    # record at the decisive play but recorded fewer than 15 outs, the win goes
+    # to the most effective reliever. "Most effective" is the most outs; the
+    # starter is excluded, and ties break by first appearance. If no reliever
+    # has an out, the starter keeps the win (a guard for a thin stream).
     if (
         winning_pitcher_id is not None
         and winner_starter_id is not None
@@ -336,7 +318,7 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
                 continue
             finisher_pitched = True
             lead = w_s - l_s
-            # Protecting a lead of 3 or fewer (tying run on deck heuristic).
+            # A lead of 3 or fewer is a save situation.
             if 0 < lead <= SAVE_LEAD_CEILING:
                 in_save_situation = True
         if finisher_pitched and in_save_situation:

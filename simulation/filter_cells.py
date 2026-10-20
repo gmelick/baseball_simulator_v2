@@ -1,14 +1,13 @@
 """
-simulation/filter_cells.py — the hard-filter cell algebra (SIM-451 / SIM-467 / SIM-475).
+simulation/filter_cells.py — the hard-filter cell algebra of the pitch draw.
 
 ONE definition of the pitch-draw filter cell, shared by the measurement script
-(``scripts/measure_filter_cells.py``, SIM-451), the sampler's cell index
-(:class:`simulation.full_pool_sampler.FullPoolSampler`, SIM-467) and the
-thin-cell widening ladder (SIM-475). The script used to own these constants;
-``scripts/`` is not importable from the container's ``simulation`` package, so
-the algebra moved here and the script re-exports it. A cell id computed under
-different edges is not comparable with the SIM-451 report, so nothing here may
-change without re-running that measurement.
+(``scripts/measure_filter_cells.py``, the filter-cell census of SIM-451), the
+sampler's cell index (:mod:`simulation.sampler.pitch`) and the widening ladder
+for a thin cell. The script re-exports this algebra, because the container's
+``simulation`` package cannot import from ``scripts/``. A cell id computed
+under different edges is not comparable with the census report, so nothing
+here may change without re-running that measurement.
 
 The cell: base occupancy (8) × outs (3) × count (12) × score band (5) ×
 batting side (2) = 2,880 cells. The encode runs most-significant dimension
@@ -28,10 +27,10 @@ N_BAND = 5
 N_HOME = 2
 N_CELLS = N_BASE * N_OUTS * N_COUNT * N_BAND * N_HOME  # 2880
 
-#: SIM-451 ORIGINATES the score-band split. These are the symmetric 5-band split
-#: of the +/-5 clamp the sim already applies. SIM-467 and SIM-475 import this
-#: constant instead of redefining the edges. Read it as: band = the number of
-#: edges the clamped score difference exceeds.
+#: The score-band split: a symmetric 5-band split of the +/-5 clamp the sim
+#: applies (from the filter-cell census, SIM-451). The cell index and the
+#: widening ladder import this constant and never redefine the edges. Read it
+#: as: band = the number of edges the clamped score difference exceeds.
 SCORE_BAND_EDGES: tuple[int, ...] = (-3, -1, 0, 2)
 SCORE_BAND_LABELS: tuple[str, ...] = ("<=-3", "-2..-1", "0", "+1..+2", ">=+3")
 
@@ -53,14 +52,15 @@ _validate_score_band_edges(SCORE_BAND_EDGES)
 
 SCORE_CLAMP = 5  # the loop clamps score_diff to +/-5 before the sampler sees it
 
-#: The candidate minimum cell sizes SIM-475 chooses between.
+#: The candidate minimum cell sizes the census measures.
 DEFAULT_MIN_CELLS: tuple[int, ...] = (20, 50, 100, 200)
 
-#: SIM-467: the minimum sub-cell size below which the widening ladder steps
-#: (decision #19, 2026-08-10: score band first, then the batting side, then the
-#: count). 20 is the MEASURED minimum (SIM-451, closed 2026-10-03): on the W1
-#: window at 2,880 cells, 0.25% of left-handed and 0.17% of right-handed draws
-#: land in a cell under 20 rows, and the score-band step recovers 99% of them
+#: The minimum sub-cell size below which the widening ladder steps: the score
+#: band first, then the batting side, then the count (the owner's decision of
+#: 2026-08-10). 20 is the MEASURED minimum (the filter-cell census, SIM-451,
+#: 2026-10-03): on the W1 pool window (2023-2026) at 2,880 cells, 0.25% of
+#: left-handed and 0.17% of right-handed draws land in a cell under 20 rows,
+#: and the score-band step recovers 99% of them
 #: (docs/audit/2026-10-03-sim451-filter-cell-occupancy-w1.json; the census of
 #: 2026-09-13 reads the same). Re-run ``scripts/measure_filter_cells.py`` when
 #: the cell definition changes. ``SIM_PITCH_MIN_CELL`` overrides the value.
