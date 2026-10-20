@@ -23,7 +23,7 @@ for _p in (str(_ROOT), str(_ROOT / "scripts")):
 
 import fence_check as fc  # noqa: E402
 
-from pipeline.batch.engine_artifacts import PARK_N_SECTORS, PARK_SPRAY_MIN  # noqa: E402
+from pipeline.batch.artifacts.park_geometry import PARK_N_SECTORS, PARK_SPRAY_MIN  # noqa: E402
 
 CENTRE = 0.0  # spray 0: sector 5 on the eleven-sector grid, sector 4 on the nine
 LINE_LEFT = -50.0  # beyond the old grid; sector 0 on the eleven-sector grid

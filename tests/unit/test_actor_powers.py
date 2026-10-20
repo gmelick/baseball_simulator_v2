@@ -22,7 +22,8 @@ from collections import Counter
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool, concentration_share
+from pipeline.batch.artifacts.pools import HandPool
+from pipeline.batch.engine_artifacts import EngineArtifacts, concentration_share
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.production_factory import apply_result_split_env
 
@@ -340,7 +341,7 @@ class TestBatterMatrixOnBothPaths:
 # ---------------------------------------------------------------------------
 
 from pipeline.batch import engine_artifacts as _ea  # noqa: E402
-from pipeline.batch.engine_artifacts import BattedBallPool  # noqa: E402
+from pipeline.batch.artifacts.pools import BattedBallPool  # noqa: E402
 
 
 def _bb_pool_three_batters() -> BattedBallPool:

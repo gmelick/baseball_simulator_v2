@@ -25,11 +25,9 @@ from pathlib import Path
 import duckdb
 import numpy as np
 
-from pipeline.batch.engine_artifacts import (
-    EngineArtifacts,
-    build_advancement_pool_artifact,
-    build_battedball_pool_artifact,
-)
+from pipeline.batch.artifacts.advancement_pool import build_advancement_pool_artifact
+from pipeline.batch.artifacts.battedball_pool import build_battedball_pool_artifact
+from pipeline.batch.engine_artifacts import EngineArtifacts
 from pipeline.batch.player_profile_computor import PlayerProfileComputor
 from pipeline.statcast_events import sql_batter_dest, sql_runner_dest
 

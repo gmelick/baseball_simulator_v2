@@ -18,9 +18,14 @@ import numpy as np
 import pytest
 
 import pipeline.batch.engine_artifacts as ea
+from pipeline.batch.artifacts.common import _savez_plain
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LOADER = REPO_ROOT / "pipeline" / "batch" / "engine_artifacts.py"
+#: The bundle loader: ``EngineArtifacts.load`` and the per-artifact loaders it calls.
+LOADER_FILES = (
+    REPO_ROOT / "pipeline" / "batch" / "engine_artifacts.py",
+    *sorted((REPO_ROOT / "pipeline" / "batch" / "artifacts").glob("*.py")),
+)
 
 
 def _numpy_load_names(tree: ast.AST) -> set[str]:
@@ -67,10 +72,14 @@ def _np_load_calls_without_false(source: str) -> list[int]:
 
 
 def test_every_np_load_in_the_loader_refuses_pickle():
-    source = LOADER.read_text(encoding="utf-8")
-    assert len(_np_load_calls(source)) >= 8, "the loader lost its np.load calls"
-    bad = _np_load_calls_without_false(source)
-    assert bad == [], f"np.load without allow_pickle=False at lines {bad}"
+    calls = 0
+    bad: list[str] = []
+    for path in LOADER_FILES:
+        source = path.read_text(encoding="utf-8")
+        calls += len(_np_load_calls(source))
+        bad += [f"{path.name}:{line}" for line in _np_load_calls_without_false(source)]
+    assert calls >= 8, "the loader lost its np.load calls"
+    assert bad == [], f"np.load without allow_pickle=False at {bad}"
 
 
 def test_detector_can_fail():
@@ -87,13 +96,14 @@ def test_detector_can_fail():
 
 
 def test_loader_imports_no_pickle():
-    tree = ast.parse(LOADER.read_text(encoding="utf-8"))
     names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            names.add(node.module.split(".")[0])
+    for path in LOADER_FILES:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names.add(node.module.split(".")[0])
     assert "pickle" not in names
     assert "dill" not in names
     assert "cloudpickle" not in names
@@ -102,13 +112,13 @@ def test_loader_imports_no_pickle():
 def test_savez_plain_refuses_an_object_array(tmp_path):
     bad = tmp_path / "bad.npz"
     with pytest.raises(ValueError, match="'vecs'"):
-        ea._savez_plain(str(bad), vecs=np.array(["a", None], dtype=object))
+        _savez_plain(str(bad), vecs=np.array(["a", None], dtype=object))
     assert not bad.exists()
 
     good = tmp_path / "good.npz"
     vecs = np.arange(6, dtype=np.float32).reshape(2, 3)
     keys = json.dumps(["1:2024", "2:2024"])
-    ea._savez_plain(str(good), vecs=vecs, keys=keys)
+    _savez_plain(str(good), vecs=vecs, keys=keys)
     with np.load(good, allow_pickle=False) as z:
         np.testing.assert_array_equal(z["vecs"], vecs)
         assert z["vecs"].dtype == np.float32

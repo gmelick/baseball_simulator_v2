@@ -34,13 +34,11 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    BattedBallPool,
-    EngineArtifacts,
-    build_actor_embeddings,
-    build_battedball_pool_artifact,
-    build_pitch_pool_artifact,
-)
+from pipeline.batch.artifacts.actor_embeddings import build_actor_embeddings
+from pipeline.batch.artifacts.battedball_pool import build_battedball_pool_artifact
+from pipeline.batch.artifacts.pitch_pool import build_pitch_pool_artifact
+from pipeline.batch.artifacts.pools import BattedBallPool
+from pipeline.batch.engine_artifacts import EngineArtifacts
 
 # ===========================================================================
 # Synthetic DuckDB pools (in-memory; just enough columns for the builders)

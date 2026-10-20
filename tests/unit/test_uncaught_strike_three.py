@@ -177,7 +177,7 @@ class TestPitchPoolReceivingColumns:
         construct without them (None), the batted-ball realism precedent."""
         import numpy as np
 
-        from pipeline.batch.engine_artifacts import HandPool
+        from pipeline.batch.artifacts.pools import HandPool
 
         p = HandPool(
             geom=np.zeros((2, 10), dtype=np.float32),
@@ -191,7 +191,7 @@ class TestPitchPoolReceivingColumns:
         assert p.catcher_id is None and p.got_away is None
 
     def test_receiving_attrs_are_shareable(self):
-        from pipeline.batch.engine_artifacts import _HAND_POOL_SHAREABLE_ATTRS
+        from pipeline.batch.artifacts.pools import _HAND_POOL_SHAREABLE_ATTRS
 
         assert "catcher_id" in _HAND_POOL_SHAREABLE_ATTRS
         assert "got_away" in _HAND_POOL_SHAREABLE_ATTRS
