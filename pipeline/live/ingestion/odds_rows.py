@@ -31,7 +31,6 @@ from pipeline.odds_provider import GAME_ODDS_FIELDS
 #: the official date and, SIM-555, a made-up game's postponed original start.
 _GUARD_ONLY_KEYS = frozenset({"scheduled_start", "game_date", "postponed_start"})
 
-
 #: The odds fields of a prop row; a row with all three empty is not a quote.
 _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
 
@@ -163,7 +162,6 @@ _GAME_ODDS_INSERT_SQL = """
               DO NOTHING
             """
 
-
 #: The raw.prop_odds INSERT. SIM-555 adds ``book_line_at``; ``odds_hash`` stays last.
 _PROP_ODDS_INSERT_SQL = """
             INSERT INTO raw.prop_odds
@@ -183,8 +181,6 @@ _PROP_ODDS_INSERT_SQL = """
 _GAME_ODDS_RESTAMP_SQL = _GAME_ODDS_INSERT_SQL.replace(
     "DO NOTHING", "DO UPDATE SET last_seen_at = NOW()"
 )
-
-
 _PROP_ODDS_RESTAMP_SQL = _PROP_ODDS_INSERT_SQL.replace(
     "DO NOTHING", "DO UPDATE SET last_seen_at = NOW()"
 )

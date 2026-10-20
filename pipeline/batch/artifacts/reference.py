@@ -16,8 +16,6 @@ log = logging.getLogger("engine_artifacts")
 #: SIM-563: the reference tables a worker used to read from DuckDB. They ride
 #: the bundle so a worker never opens the database (a rebuild may hold its lock).
 IBB_RATES_FILE = "ibb_rates.json"
-
-
 VENUE_RUN_FACTORS_FILE = "venue_run_factors.json"
 
 

@@ -14,13 +14,12 @@ log = logging.getLogger("player_profile_computor")
 
 
 class LeagueAverageProfiles:
-    """
-    Computes and caches league-average profiles for each entity type.
-    Used by the similarity engines as the fallback profile for players
-    with below_minimum_sample=TRUE.
+    """Computes the league-average profile of each entity type and season.
 
-    Call compute(seasons) once after PlayerProfileComputor.run() completes.
-    Results are stored in derived.league_averages (created here if absent).
+    The similarity engines shrink a thin profile toward these rows and fall
+    back to them for a player with below_minimum_sample=TRUE. Call
+    ``compute(seasons)`` after ``PlayerProfileComputor.run()``; the rows go to
+    derived.league_averages, which ``compute`` creates when it is absent.
     """
 
     LEAGUE_AVG_DDL = """
@@ -41,10 +40,10 @@ class LeagueAverageProfiles:
 
     @staticmethod
     def _derived_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
-        """SIM-531: the columns ``derived.<table>`` carries (empty when the
-        table is absent) — the runtime probe the engines and the calibrator
-        use, so a database that has not run migration 0029, or a fixture that
-        builds only some tables, still gets its league averages."""
+        """The columns ``derived.<table>`` carries (empty when the table is
+        absent): the probe the engines and the calibrator use, so a database
+        before migration 0029, or a fixture that builds only some tables,
+        still gets its league averages."""
         return duck_columns(conn, "derived", table)
 
     def compute(self, seasons: list[int]) -> None:
@@ -52,8 +51,7 @@ class LeagueAverageProfiles:
         try:
             conn.execute(self.LEAGUE_AVG_DDL)
             season_list = ", ".join(str(s) for s in seasons)
-            # SIM-531: the columns and tables migration 0029 / SIM-408 added,
-            # probed rather than assumed.
+            # The newer columns and tables, probed rather than assumed.
             brm_cols = self._derived_columns(conn, "baserunner_season_metrics")
             bss_cols = self._derived_columns(conn, "baserunner_steal_metrics")
             psm_cols = self._derived_columns(conn, "pitcher_steal_metrics")
@@ -109,8 +107,8 @@ class LeagueAverageProfiles:
             # back to position-specific league averages (a 1B should not
             # be compared to an OF league average).
             #
-            # SIM-550: the three arm keys the fielder model shrinks toward
-            # join the row. Without them a thin arm is pulled toward 0.0,
+            # The three arm keys the fielder model shrinks toward join the
+            # row. Without them a thin arm is pulled toward 0.0,
             # and a 0 thrown-out rate is the weakest arm in the league. The
             # per-position WHERE below keeps the positions apart: an infield
             # row never enters an outfield row's AVG. AVG skipping NULL does
@@ -126,7 +124,7 @@ class LeagueAverageProfiles:
                 for col in ("arm_advancement_prevention", "arm_thrown_out_rate", "arm_strength")
                 if col in fsm_cols
             )
-            # SIM-532: the Savant keys the fielder model shrinks toward.
+            # The Savant keys the fielder model shrinks toward.
             # Every fielding position (not the catcher) gets Savant's outs
             # above average per 100 chances; the three outfield positions
             # also get the three jump parts. AVG skips NULL: an outfielder
@@ -167,7 +165,7 @@ class LeagueAverageProfiles:
                     GROUP BY season
                 """)
 
-            # Baserunner average. SIM-531: the extra-base attempt rate above
+            # Baserunner average. The extra-base attempt rate above
             # expectation joins so the advancement model can shrink a thin
             # runner's figure toward the league's (AVG skips NULLs, so a
             # runner with no Savant row does not pull the mean). The key is
@@ -194,14 +192,12 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
-            # SIM-531 (plan §3, Finding 3): the steal-runner and pitcher-hold
-            # rows. Both engines have always read these entity types
-            # (``_load_league_averages`` filters on them) but the rows never
-            # existed, so neither engine ever shrank a thin profile toward the
-            # league mean. With the n=1 Savant load a 20-initiation lead must
-            # not be read at face value; these rows are the shrinkage target.
-            # Each is written when its table exists; the lead keys when the
-            # 0029 columns do.
+            # The steal-runner and pitcher-hold rows: the shrinkage target the
+            # two steal engines read (``_load_league_averages`` filters on these
+            # entity types). Savant's lead boards load at a minimum of one
+            # initiation, so a 20-initiation lead must not be read at face
+            # value. Each row is written when its table exists; the lead keys
+            # when the migration 0029 columns do.
             if bss_cols:
                 lead_keys = (
                     ", 'lead_primary_ft', AVG(lead_primary_ft), 'lead_jump_ft', AVG(lead_jump_ft)"
@@ -264,8 +260,8 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
-            # Manager average (SIM-427, 2026-09-13): the GAME-weighted mean of the
-            # seventeen tendency columns per season — the manager engine's
+            # Manager average: the GAME-weighted mean of the seventeen
+            # tendency columns per season — the manager engine's
             # shrinkage target (``ManagerSimilarityEngine._load_league_averages``
             # reads the feature names as JSON keys) and the steal weight's
             # measured denominator (``steal_order_rate_per_1b_opp``). A column

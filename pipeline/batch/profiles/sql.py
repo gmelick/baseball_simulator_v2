@@ -20,49 +20,44 @@ from pipeline.statcast_events import (
     sql_outs_recorded,
 )
 
-#: SIM-532: the outfield test the aggregator's jump columns use. The jump is
-#: an outfield measurement, so an infield row gets NULL, never the player's
+#: The outfield test of the fielder aggregate's jump columns. The jump is an
+#: outfield measurement, so an infield row gets NULL, never the player's
 #: figure from an outfield season.
 _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 
 
 # ---------------------------------------------------------------------------
-# Statcast pitch-result codes (SIM-456 / SIM-501 / SIM-553)
+# The Statcast pitch-result codes
 #
-# One code set per pitch-pool class. The pool build's class expression
+# One code set per pitch-pool class, defined in pipeline/statcast_events.py
+# (the API reads them there too). The pool's class expression
 # (SQL_OUTCOME_TYPE, below) is rendered from these sets, and the profile SQL
-# reads WHIFF_TYPES / NON_SWING_TYPES, so a pitcher's whiff rate and the pool
+# reads WHIFF_TYPES and NON_SWING_TYPES, so a pitcher's whiff rate and the pool
 # the simulator draws from describe the same events.
 # `tests/unit/test_profile_code_sets.py` and
-# `tests/unit/test_foul_tip_strike_three.py` run the expression and fail
-# if the two ever diverge.
-#
-# The sets live in pipeline/statcast_events.py since the Data Lab vocabulary
-# fix (SIM-571). The API reads them there, without this module's duckdb and
-# sklearn imports. This module imports the sets and keeps their names, so
-# `from pipeline.batch.player_profile_computor import WHIFF_TYPES` still works.
+# `tests/unit/test_foul_tip_strike_three.py` run the expression and fail if the
+# two ever diverge.
 # ---------------------------------------------------------------------------
 
 
 def sql_in(types: tuple[str, ...]) -> str:
     """Render Statcast type codes as a SQL ``IN`` list: ``('S', 'W', 'M')``.
 
-    Delegates to the shared renderer so the two cannot drift (SIM-501a).
+    Delegates to the shared renderer, so the two cannot drift.
     """
     return sql_list(types)
 
 
 SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
 
-
-#: SIM-553: the pitch pool's class for one ``raw.pitches`` row — the class the
-#: simulator's count machine reads. The first matching branch wins, so the
-#: two-strike branch MUST precede the foul branch. ``strikes`` is the count
-#: BEFORE the pitch. The events branch comes first (SIM-509: an HBP pitch must
-#: never become ball four); the 'H' code covers the one 2022 hit-by-pitch row
-#: with no event label. There is no ELSE on purpose: an unknown code yields
-#: NULL, the NOT NULL ``outcome_type`` column refuses the insert, and a person
-#: looks. The old ``ELSE 'ball'`` is how 'O', 'Q' and the hit-by-pitch rows hid.
+#: The pitch pool's class for one ``raw.pitches`` row: the class the
+#: simulator's count machine reads (the foul-tip strike three, SIM-553). The
+#: first matching branch wins, so the two-strike branch MUST precede the foul
+#: branch. ``strikes`` is the count BEFORE the pitch. The events branch comes
+#: first, so a hit-by-pitch never becomes ball four; the 'H' code covers the
+#: one 2022 hit-by-pitch row with no event label. There is no ELSE on purpose:
+#: an unknown code yields NULL, the NOT NULL ``outcome_type`` column refuses
+#: the insert, and a person looks.
 SQL_OUTCOME_TYPE = f"""CASE
                         WHEN events = 'hit_by_pitch' OR TRIM(type) = 'H' THEN 'hit_by_pitch'
                         WHEN TRIM(type) IN {sql_in(BALL_TYPES)} THEN 'ball'
@@ -76,25 +71,20 @@ SQL_OUTCOME_TYPE = f"""CASE
 
 
 # ===========================================================================
-# SIM-529 — the physical swing and stance columns
+# The physical swing and stance columns of the batter profile
 # ===========================================================================
-# (profile column stem, source column on the Savant raw table)
-#
-# The swing features come from the bat-tracking and swing-path boards, which are
-# pulled three times: every swing, then filtered to left-handed and to
+# The swing features: (profile stem, column on the leaderboard table, column on
+# the per-pitch table). They come from the bat-tracking and swing-path boards,
+# pulled three times: every swing, then against left-handed and against
 # right-handed pitchers.
-# (profile stem, column on the leaderboard table, column on the per-pitch table)
 #
-# SIM-534: the per-pitch table is the preferred source, because it can be
-# aggregated to any cutoff date. The leaderboard column is the fallback, and it
-# is not dead weight — the per-pitch export carries no bat tracking before 2024,
-# so 2023 has no other source.
+# The per-pitch table is the preferred source, because it aggregates to any
+# cutoff date. The leaderboard column is the fallback: the per-pitch export
+# carries no bat tracking before 2024, so 2023 has no other source.
 #
-# ``contact_depth`` measures contact relative to the BATTER, not to the plate.
-# SIM-529 used the vs-plate figure; the per-pitch export publishes only the
-# vs-batter one, and vs-batter is the better feature anyway: it describes the
-# batter's own swing geometry, and where he stands in the box is already carried
-# separately as ``stance_depth``.
+# ``contact_depth`` measures contact relative to the BATTER, not to the plate:
+# the per-pitch export publishes only that figure, and it describes the
+# batter's own swing; where he stands in the box is ``stance_depth``.
 _SWING_FEATURES: tuple[tuple[str, str, str], ...] = (
     ("bat_speed", "avg_bat_speed", "bat_speed"),
     ("swing_length", "swing_length", "swing_length"),
@@ -103,8 +93,6 @@ _SWING_FEATURES: tuple[tuple[str, str, str], ...] = (
     ("attack_direction", "attack_direction", "attack_direction"),
     ("contact_depth", "intercept_y_vs_batter", "intercept_y"),
 )
-
-
 # The stance features come from the stance board, which Savant publishes with
 # one row per BATTING side.
 _STANCE_FEATURES: tuple[tuple[str, str], ...] = (
@@ -114,8 +102,7 @@ _STANCE_FEATURES: tuple[tuple[str, str], ...] = (
     ("stance_off_plate", "batter_x_position"),
 )
 
-
-#: The exact order the SIM-529 columns are appended to
+#: The exact order the physical columns are appended to
 #: ``derived.batter_season_metrics``.
 #:
 #: ⚠ POSITIONAL-INSERT TRAP. ``_compute_batter_profiles`` runs
@@ -131,15 +118,13 @@ PHYSICAL_COLUMN_ORDER: tuple[str, ...] = tuple(
     for suffix in ("", "_vs_l", "_vs_r")
 ) + ("physical_swings", "physical_swings_vs_l", "physical_swings_vs_r")
 
-
 #: Everything appended to ``derived.batter_season_metrics`` after ``updated_at``,
 #: in order. The physical block (migration 0025) then the cutoff stamp
 #: (migration 0026). Same positional-insert warning as above.
 PROFILE_TAIL_COLUMNS: tuple[str, ...] = (*PHYSICAL_COLUMN_ORDER, "asof_date")
 
-
-#: SIM-534: what counts as a competitive swing, FITTED against Savant's own
-#: published numbers rather than guessed.
+#: What counts as a competitive swing, FITTED against Savant's own published
+#: numbers rather than guessed.
 #:
 #: Savant's leaderboards average "competitive" swings — excluding bunts and
 #: checked swings — but do not publish the cut. The per-pitch export just leaves
@@ -197,15 +182,15 @@ def _sql_stance_pivot() -> str:
 def _sql_swing_select() -> str:
     """The swing columns, one line per (feature, split).
 
-    SIM-534: two sources, and the one that saw MORE swings wins.
+    Two sources: the per-pitch aggregate wins when it saw at least 80% of the
+    leaderboard's swings; otherwise the leaderboard does.
 
     The per-pitch aggregate is the point-in-time source and is normally the one
-    to use. But "normally" is not "always": while the per-pitch table is still
-    being backfilled it may hold a few April games against a leaderboard row
-    covering the whole season, and preferring it blindly would replace a
-    600-swing average with a 50-swing one. Comparing the swing counts picks the
-    better source in both directions and needs no flag to say which state we are
-    in.
+    to use. While the per-pitch table is still being backfilled it may hold a
+    few April games against a leaderboard row covering the whole season, and
+    preferring it blindly would replace a 600-swing average with a 50-swing
+    one. Comparing the swing counts picks the better source in both directions
+    and needs no flag to say which state the table is in.
 
     For a cutoff build the question does not arise: a leaderboard row for the
     cutoff's own season is dated after the cutoff and never reaches this join,
@@ -215,11 +200,10 @@ def _sql_swing_select() -> str:
     left-handed pitching" and needs no crossing over.
     """
     lines = []
-    # Prefer the per-pitch source once it holds most of the season's swings. An
-    # exact ">=" was tried first and split the population roughly in half —
-    # per-pitch runs a swing or two under the board for about half of batters —
-    # which left the profile drawing from two sources at once for no benefit.
-    # The point-in-time source should win whenever it is substantially complete.
+    # Prefer the per-pitch source once it holds most of the season's swings.
+    # An exact ">=" would split the batters roughly in half (the per-pitch
+    # count runs a swing or two under the board's for about half of them), and
+    # the profile would draw from two sources at once for no benefit.
     better = (
         "COALESCE(swp.competitive_swings_all, 0) >= 0.8 * COALESCE(sw.competitive_swings_all, 0)"
     )
@@ -292,25 +276,18 @@ SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
 
 
 # ---------------------------------------------------------------------------
-# Out labels (SIM-501a/c) — every out label derives from `events`, never from
-# `outs_on_pitch` (zero on 92.6% of batted-ball outs in the swept data).
-# The vocabulary and its measurements live in pipeline/statcast_events.py.
-# Each site below states WHICH question it asks — "how many outs did the play
-# record?" and "was the batter retired?" are different questions, and the
-# fielders-choice events answer them differently.
+# The out labels. Every out label derives from `events`, never from
+# `outs_on_pitch` (zero on 92.6% of batted-ball outs in the swept data). The
+# vocabulary and its measurements live in pipeline/statcast_events.py. Each
+# site states WHICH question it asks: "how many outs did the play record?" and
+# "was the batter retired?" are different questions, and the fielder's-choice
+# events answer them differently.
 # ---------------------------------------------------------------------------
 
 SQL_IN_PLAY = sql_in_play()
-
-
 SQL_OUTS_RECORDED = sql_outs_recorded()
-
-
 SQL_FIELDING_OUT = sql_fielding_out()
-
-
 SQL_BATTER_RETIRED = sql_batter_retired()
-
 
 #: Pull-side spray angle. The raw `spray_angle` sign is FIELD-side, not
 #: pull-side: negative = left field (measured 2024: hc_x<100 rows average
@@ -330,26 +307,12 @@ SQL_PULL_SPRAY = "(CASE WHEN stand = 'L' THEN -spray_angle ELSE spray_angle END)
 #   upper_la = LEAST   (BARREL_LA_CEILING, BARREL_MAX_LA + (EV - BARREL_MIN_VELO) * BARREL_UPPER_SLOPE)
 # Hard hit: exit_velo >= 95 mph
 BARREL_MIN_VELO = 98.0  # EV floor; below this never a barrel
-
-
 BARREL_MIN_LA = 26.0  # lower LA bound at the 98 mph floor
-
-
 BARREL_MAX_LA = 30.0  # upper LA bound at the 98 mph floor
-
-
 BARREL_LOWER_SLOPE = 1.0  # deg the lower bound drops per +1 mph above floor
-
-
 BARREL_UPPER_SLOPE = 2.0  # deg the upper bound rises per +1 mph above floor
-
-
 BARREL_LA_FLOOR = 8.0  # lower LA bound never goes below this (>= ~116 mph)
-
-
 BARREL_LA_CEILING = 50.0  # upper LA bound never goes above this (>= ~116 mph)
-
-
 HARD_HIT_MIN_VELO = 95.0
 
 
@@ -371,10 +334,8 @@ def _barrel_case_sql(prefix: str = "") -> str:
     )
 
 
-#: SIM-523 part G: the loader's fielding-credit slot columns on raw.pitches.
+#: The loader's fielding-credit slot columns on raw.pitches.
 _PUTOUT_SLOTS: tuple[str, ...] = ("field_putout_1", "field_putout_2", "field_putout_3")
-
-
 _ASSIST_SLOTS: tuple[str, ...] = (
     "field_assist_1",
     "field_assist_2",
@@ -385,14 +346,14 @@ _ASSIST_SLOTS: tuple[str, ...] = (
 
 
 def sql_credit_mask(prefix: str, slot_cols: tuple[str, ...], pitcher_expr: str) -> str:
-    """SIM-523 part G: the SQL for a POSITION bitmask of fielding credits.
+    """The SQL for a POSITION bitmask of fielding credits.
 
     Bit k (1 << k, k = 1..9) is set when the player at position k on the
     play (``fielder_2`` .. ``fielder_9`` on the row; ``pitcher_expr`` for
     position 1) appears in any of ``slot_cols`` (the loader's
     ``field_putout_1..3`` / ``field_assist_1..5``). 0 when no slot is filled
     (every hit) or no slot matches the alignment — the chain the fielding
-    draw reads (plan step 6: every fielder credited on the play)."""
+    draw reads: every fielder credited on the play."""
     terms = []
     for k in range(1, 10):
         who = pitcher_expr if k == 1 else f"{prefix}fielder_{k}"
@@ -401,7 +362,7 @@ def sql_credit_mask(prefix: str, slot_cols: tuple[str, ...], pitcher_expr: str) 
     return " + ".join(terms)
 
 
-#: SIM-518 (SIM-465): the two fatigue columns, as window expressions over
+#: The two fatigue columns, as window expressions over
 #: raw.pitches. Module-level so a unit test can run them on a synthetic table
 #: against the live helper ``simulation.sim_loop.times_through_order`` — ONE
 #: definition on both sides of the draw.
@@ -412,8 +373,6 @@ SQL_PITCHER_PITCH_COUNT = (
     "COUNT(*) OVER (PARTITION BY game_pk, pitcher ORDER BY at_bat_number "
     "RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)"
 )
-
-
 SQL_TIMES_THROUGH_ORDER = (
     "((DENSE_RANK() OVER (PARTITION BY game_pk, pitcher ORDER BY at_bat_number) - 1) // 9 + 1)"
 )

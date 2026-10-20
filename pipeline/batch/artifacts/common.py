@@ -24,16 +24,10 @@ _GEOM_COLS = [
     "plate_x",
     "plate_z",
 ]
-
-
 _SIT_COLS = ["count_balls", "count_strikes", "outs", "runners_state", "inning", "score_diff"]
 
-
 DEFAULT_POOL_DIR = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
-
-
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
-
 
 #: The artifact's season window. SIM-516 (owner ruling 2026-08-20): the last
 #: three COMPLETED seasons plus the current one — operationally the 4 newest

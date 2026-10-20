@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import (
-    date,
-    datetime,
-)
+from datetime import date, datetime
 
 import duckdb
 
@@ -27,29 +24,21 @@ class ComputorBase:
     _re_matrix: dict
 
     # ------------------------------------------------------------------
-    # Lifecycle
+    # The play-event common table expressions
     # ------------------------------------------------------------------
 
     def _play_events_outs_cte(self, asof_sql: str | None = None) -> str:
-        """SIM-504: the pickoff-out aggregate from ``raw.play_events``.
+        """The pickoff outs per (pitcher, season), from ``raw.play_events``.
 
-        Pickoff outs live in NO ``raw.pitches`` row (the documented ~0.5%
-        innings-pitched residual in ``pipeline/statcast_events.py``), so the
-        two ``outs_recorded`` consumers add them per (pitcher, season) from
-        the play-events table. ``pitcher_id`` there is the THROWER — the
-        third adversarial review fixed mid-PA attribution — so the credit
-        lands on the right arm. Falls back to an empty relation when the
-        table is absent (a pre-0018 database or a unit-test fixture), which
-        keeps the join a no-op.
+        A pickoff out lives in no ``raw.pitches`` row (the innings-pitched
+        residual documented in ``pipeline/statcast_events.py``), so the two
+        ``outs_recorded`` readers add these counts. ``pitcher_id`` there is
+        the pitcher who threw, so the out lands on the right arm. The relation
+        is empty when the table is absent (a database before Alembic 0018, or
+        a unit-test fixture), so the join adds nothing.
 
-        SIM-537: ``asof_sql`` (an ISO date string) restricts this to plays
-        recorded at or before a cutoff — the same point-in-time rule
-        SIM-534 applies to every batter source, extended to a pitcher's own
-        pickoff-out count. Left ``None`` (the default), this behaves exactly
-        as before: every play in ``season`` counts, which is what
-        :func:`_build_pitcher_steal_metrics` — the OTHER caller of this
-        helper — still wants, since that grouping has not had its own
-        point-in-time pass yet.
+        ``asof_sql`` (an ISO date) keeps only the plays at or before the
+        cutoff; ``None`` keeps every play of the season.
         """
         if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (
@@ -64,18 +53,16 @@ class ComputorBase:
         )
 
     def _play_events_disengagement_cte(self, asof_sql: str | None = None) -> str:
-        """SIM-504 item 3: pickoff throws + stepoffs per (thrower, season).
+        """The pickoff throws and stepoffs per (pitcher, season).
 
-        These are the hold-runner behaviours the SIM-474 steal draw kernels
-        on: how often does this pitcher throw over, and how often does he
-        step off. ``pitcher_id`` is the THROWER (the third adversarial
-        review's mid-PA attribution fix). A ``pickoff_error`` is still a
-        pickoff THROW, so it counts. Falls back to an empty relation when
-        the table is absent (a pre-0018 database or a unit-test fixture).
+        These are the pitcher's hold-runner habits: how often he throws over
+        and how often he steps off. ``pitcher_id`` is the pitcher who threw.
+        A ``pickoff_error`` is still a throw, so it counts. The relation is
+        empty when the table is absent (a database before Alembic 0018, or a
+        unit-test fixture).
 
-        SIM-537: ``asof_sql`` restricts this to plays recorded at or before
-        a cutoff, the same rule ``_play_events_outs_cte`` already applies.
-        Left ``None`` (the default), every play in ``season`` counts.
+        ``asof_sql`` keeps only the plays at or before the cutoff; ``None``
+        keeps every play of the season.
         """
         if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (
@@ -93,32 +80,31 @@ class ComputorBase:
         )
 
     def _pickoff_outcomes_cte(self, season_list: str) -> str:
-        """SIM-507: per-event pickoff outcomes mapped to the steal pool's pair.
+        """Each pickoff throw, mapped to the steal pool's pair of its held runner.
 
-        Maps each raw.play_events pickoff/pickoff_error row to the opportunity
-        pair its held runner belongs to, using the play-entering runner state:
+        The runner state entering the play picks the pair:
 
-          * runner on 1B, 2B open  -> the target-2 pair. An out at base 1 is a
-            plain pickoff; an out at base 2 is a picked-off CAUGHT STEALING
-            (the runner broke for the next base — MLB scores a CS).
-          * runner on 2B, 3B open  -> the target-3 pair; out at 2 plain, at 3
-            advancing.
+          * a runner on 1B with 2B open -> the target-2 pair. An out at base 1
+            is a plain pickoff; an out at base 2 is a picked-off caught
+            stealing (the runner broke for the next base, and MLB scores a CS).
+          * a runner on 2B with 3B open -> the target-3 pair: an out at 2 is
+            plain, an out at 3 advancing.
 
-        Out of the pair shapes and therefore dropped, measured 2023: a runner
-        held at 3B or thrown out at home (~26 outs/season) and a 1B pickoff
-        with 1B+2B both occupied (the pool's row for that pitch belongs to the
-        2B runner). Together ~0.006/team-game — documented residual, with
-        steals of home. Falls back to an empty relation when the table is
-        absent (a pre-0018 database or a unit-test fixture).
+        The throws that fit no pair are dropped: a runner held at 3B or thrown
+        out at home (about 26 outs a season, measured on 2023) and a 1B pickoff
+        with 1B and 2B both taken (the pool's row for that pitch belongs to the
+        2B runner). Together they come to about 0.006 a team-game, a residual
+        documented with the steals of home. The relation is empty when the
+        table is absent (a database before Alembic 0018, or a unit-test fixture).
 
-        SIM-554: the relation also carries each event's own facts (its id, the
-        runner, the thrower, the half-inning, the outs and the score before the
-        throw). The builder tags an outcome to one pitch of its pair in the
-        plate appearance; measured 2026-09-30, 22% of the outcomes that fit a
-        pair (394 of 1,788 in 2023-2026) had no such pitch, because the throw
-        came before the first pitch. The builder writes each of those as a
-        pickoff row of its own from these columns. Every row of this relation
-        is a throw; most have no outcome (``is_out_i`` and ``is_err_i`` both 0).
+        Each row also carries the throw's own facts (its id, the runner, the
+        pitcher, the half-inning, the outs and the score before the throw).
+        The pool builder tags an outcome to one pitch of its pair in the plate
+        appearance. An outcome with no such pitch (the throw came before the
+        first pitch: 394 of 1,788 in 2023-2026, measured 2026-09-30) becomes a
+        pickoff row of its own, built from these columns (the running game on
+        the pitch, SIM-554). Every row is a throw; most have no outcome
+        (``is_out_i`` and ``is_err_i`` both 0).
         """
         if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (
@@ -166,7 +152,7 @@ class ComputorBase:
     # ------------------------------------------------------------------
 
     #: The profile tables that carry a point-in-time stamp. ``asof_date`` is
-    #: the date a row's data runs through (SIM-534 / SIM-537). Every engine
+    #: the date a row's data runs through. Every engine
     #: that reads one of these tables refuses a set of rows stamped at two
     #: different dates, so a build that leaves two stamps behind takes that
     #: engine down at the next boot. A unit test keeps this list equal to the
@@ -187,12 +173,8 @@ class ComputorBase:
         cutoffs. The check runs BEFORE the delete and the insert, so a
         refusal leaves the table exactly as it found it.
 
-        SIM-551: the batter table reached two stamps on 2026-09-11. A rebuild
-        of the four pool seasons stamped them at its own date, and the six
-        seasons it did not touch kept the stamp of the day before. The old
-        stamping step filled only the rows with NO stamp, so nothing
-        reconciled the two, and the batter engine refused to build at every
-        boot for five days.
+        A table at two stamps takes its engine down at the next boot (the
+        one-cutoff rule, SIM-551).
 
         The rule: after the build, every row must hold data through the new
         cutoff and none after it. The rows the build rewrites hold that by
@@ -278,8 +260,8 @@ class ComputorBase:
         """Stamp every row of ``table`` at the build's cutoff — the whole
         table, not only the rows with no stamp yet.
 
-        SIM-551: ``_refuse_a_mixed_cutoff`` has already refused any survivor
-        this stamp would misdescribe. Every row here was either rewritten at
+        ``_refuse_a_mixed_cutoff`` has already refused any survivor this
+        stamp would misdescribe. Every row here was either rewritten at
         the cutoff or is a completed season, which is whole as of any later
         date. Stamping the survivors says that: as of the cutoff, this is
         what we know.
@@ -292,20 +274,18 @@ class ComputorBase:
         log.info("  %s stamped as of %s (one cutoff).", table, asof_sql)
 
     def _check_leakage(self, source: str, sql: str, asof: date) -> None:
-        """SIM-537: shared body for every ``*_have_no_leakage`` assertion
-        added for the baserunner/catcher/fielder groupings.
+        """The shared body of the baserunner, catcher and fielder
+        ``*_have_no_leakage`` checks: raise when ``sql``'s newest date passes
+        the cutoff.
 
-        Tolerates three conditions that are NOT evidence of a leak, logging
-        each rather than raising:
+        Three answers are not evidence of a leak; each is logged, not raised:
 
-          * the query cannot run at all — a narrow test fixture's
-            ``raw.pitches`` often has no ``game_date`` column (it predates
-            this cutoff work and was never meant to carry one), which is a
-            schema-availability question, the same reasoning
-            ``_play_events_outs_cte`` already applies to a missing table;
-          * no rows matched the season/cutoff filter;
+          * the query cannot run: a narrow test fixture's ``raw.pitches``
+            often has no ``game_date`` column, a question of the schema, not
+            of the data;
+          * no rows matched the season and cutoff filter;
           * a stubbed unit-test connection returned something that is not a
-            real date.
+            date.
         """
         try:
             newest = self._conn.execute(sql).fetchone()[0]

@@ -32,17 +32,9 @@ log = logging.getLogger("engine_artifacts")
 # the rows' zones and the catchers' rates share one definition.
 
 RECV_FRAME_PRIOR = 200.0
-
-
 RECV_BLOCK_PRIOR = 5.0
-
-
 RECV_FRAME_GROUPS = ("heart", "edge", "outside")
-
-
 RECV_PZ_EDGES = (0.5, 1.0, 1.5)
-
-
 RECV_N_BLOCK_CELLS = 8
 
 

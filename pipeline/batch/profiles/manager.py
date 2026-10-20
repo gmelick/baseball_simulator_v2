@@ -19,12 +19,12 @@ class ManagerProfilesMixin(ComputorBase):
 
     def _compute_bullpen_workload(self, seasons: list[int]) -> pd.DataFrame:
         """
-        SIM-433: derive the per-game rest / recent-workload signal that the
-        availability table (``raw.game_bullpen_availability``) needs, straight
-        from ``raw.pitches`` (no network).
+        Derive the per-game rest and recent workload the availability table
+        (``raw.game_bullpen_availability``) needs, straight from ``raw.pitches``
+        (no network).
 
-        ``raw.game_lineups`` records who *played*; the manager-profile USAGE
-        sub-score (SIM-427/434) also needs the available-but-unused signal, which
+        ``raw.game_lineups`` records who *played*; the manager profile's USAGE
+        sub-score also needs the available-but-unused signal, which
         starts with workload: an arm that threw 45 pitches yesterday is
         rest-unavailable today regardless of whether the manager "chose" not to
         use it. This method builds, per (game_pk, team_id, pitcher_id) where the
@@ -43,8 +43,9 @@ class ManagerProfilesMixin(ComputorBase):
         the away team. (A pitcher only ever fields for one team in a game, so the
         per-(game, pitcher) MIN over the half-inning derivation is unambiguous.)
 
-        This is the raw.pitches-derived HALF of SIM-433. It does NOT persist —
-        the computor attaches PostgreSQL READ_ONLY, so it returns the workload
+        This is the raw.pitches half of the bullpen availability. It does NOT
+        persist: the computor attaches PostgreSQL READ_ONLY, so it returns the
+        workload
         rows as a DataFrame for
         :class:`pipeline.live.bullpen_availability_ingest.BullpenAvailabilityIngest`
         to merge with the MLB-API active-roster / IL fetch and persist to
@@ -119,12 +120,12 @@ class ManagerProfilesMixin(ComputorBase):
 
     def _compute_manager_profiles(self, seasons: list[int], asof: date | None = None) -> None:
         """
-        SIM-408: compute manager tendency profiles in the manager engine's
-        vocabulary (usage / aggression / platoon).
+        Compute the manager tendency profiles in the manager engine's
+        vocabulary (usage, aggression, platoon).
 
-        SIM-537: ``asof`` is the date the profile's data runs through, same
-        rule as the batter (SIM-534) and pitcher (SIM-537) groupings. Every
-        source here — ``raw.pitches`` and, transitively through the ``staff``
+        ``asof`` is the date the profile's data runs through, the rule of the
+        batter and pitcher profiles. Every source here — ``raw.pitches`` and,
+        through the ``staff``
         join, ``raw.game_bullpen_availability`` — is our own data, so a plain
         ``game_date <= cutoff`` filter is enough; no Savant fallback applies
         (design doc: docs/audit/2026-09-10-savant-point-in-time-data.md §6).
@@ -135,17 +136,17 @@ class ManagerProfilesMixin(ComputorBase):
 
         Offensive decisions (pinch-hit, steal order, sac bunt, squeeze, platoon
         exploitation) are attributed to the BATTING manager; defensive ones
-        (defensive sub) to the FIELDING manager.  The USAGE sub-score (SIM-427:
-        starter pitch-count / quick-hook, opener + bulk usage, closer-entry
+        (defensive sub) to the FIELDING manager. The USAGE sub-score (the
+        starter's pitch count and quick hook, opener and bulk usage, closer-entry
         leverage, high-leverage bullpen reliance) is derived from raw.pitches
         pitcher-STINTS attributed to the fielding manager (see the ``staff`` /
         ``game_usage`` / ``mgr_usage`` / ``hi_lev`` CTEs); two further tendencies
         are not flagged in Statcast (hit-and-run, double-switch) and stay NULL.
         Idempotent via INSERT OR REPLACE on (manager_id, season).
 
-        SIM-427 capstone: ``available_reliever_usage_rate`` (the ``bullpen_opp`` CTE)
-        normalizes bullpen usage by OPPORTUNITY — relievers used / (used + available-
-        but-held) — by joining the SIM-433-v2 ``raw.game_bullpen_availability`` table
+        ``available_reliever_usage_rate`` (the ``bullpen_opp`` CTE) normalizes
+        bullpen usage by OPPORTUNITY — relievers used / (used + available but
+        held) — by joining ``raw.game_bullpen_availability``
         (the full per-game roster, including arms that were available but never
         appeared). It degrades to NULL (LEFT JOIN) for a manager-season with no
         availability rows; the engine's degenerate-sigma guard then keeps the default.
@@ -157,13 +158,13 @@ class ManagerProfilesMixin(ComputorBase):
         season_list = ", ".join(str(s) for s in seasons)
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
 
-        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.manager_season_metrics", seasons, asof_date)
 
         if asof is not None:
-            # SIM-537: same removal rule as the batter/pitcher groupings —
-            # INSERT OR REPLACE only overwrites rows this query produces, so a
+            # The removal rule of the batter and pitcher profiles: INSERT OR
+            # REPLACE only overwrites the rows this query produces, so a
             # season that had not started at the cutoff would otherwise
             # survive a backtest rebuild from an earlier, full-season run.
             self._conn.execute(
@@ -474,8 +475,7 @@ class ManagerProfilesMixin(ComputorBase):
             LEFT JOIN bullpen_opp bo ON bo.manager_id = g.manager_id AND bo.season = g.season
         """)
 
-        # SIM-537 / SIM-551: leave the whole table at ONE cutoff (see
-        # _compute_batter_profiles for the reasoning).
+        # Leave the whole table at ONE cutoff (_compute_batter_profiles says why).
         self._stamp_one_cutoff("derived.manager_season_metrics", asof_sql)
 
         self._assert_manager_profiles_have_no_leakage(seasons, asof_date)

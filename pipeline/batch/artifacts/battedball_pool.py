@@ -23,7 +23,6 @@ log = logging.getLogger("engine_artifacts")
 
 _BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
 
-
 #: SIM-523 part C: the batted-ball CLASS vocabulary (``BattedBallPool.bb_class``).
 #: 0 = unknown. The three bunt types share one class.
 BB_CLASS: dict[str, int] = {
@@ -35,8 +34,6 @@ BB_CLASS: dict[str, int] = {
     "bunt_popup": 5,
     "bunt_line_drive": 5,
 }
-
-
 _BB_CLASS_SELECT = (
     ", CASE bb_type "
     + " ".join(f"WHEN '{k}' THEN {v}" for k, v in BB_CLASS.items())

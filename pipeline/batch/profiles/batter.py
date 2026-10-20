@@ -46,12 +46,12 @@ class BatterProfilesMixin(ComputorBase):
         log.info("Computing batter profiles (as of %s) …", asof_sql)
         season_list = ", ".join(str(s) for s in seasons)
 
-        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.batter_season_metrics", seasons, asof_date)
 
         if asof is not None:
-            # SIM-534: a point-in-time build has to REMOVE as well as write.
+            # A point-in-time build has to REMOVE as well as write.
             # INSERT OR REPLACE only overwrites rows the query produces, so two
             # kinds of stale row would otherwise survive a backtest rebuild and
             # leak the future:
@@ -59,8 +59,8 @@ class BatterProfilesMixin(ComputorBase):
             #     batter on 15 April 2024), and
             #   * a batter inside the cutoff season with no plate appearances
             #     yet, whose full-season row from an earlier build would remain.
-            # Only the cutoff path deletes; the live nightly run keeps its
-            # existing insert-or-replace behaviour untouched.
+            # Only the cutoff path deletes; the live nightly run only inserts
+            # or replaces.
             self._conn.execute(f"""
                 DELETE FROM derived.batter_season_metrics
                 WHERE season IN ({season_list}) OR season > {asof_date.year}
@@ -436,7 +436,7 @@ class BatterProfilesMixin(ComputorBase):
             LEFT JOIN savant_stance st
                 ON st.st_batter_id = bp.batter_id AND st.st_season = bp.season
         """)
-        # SIM-534 / SIM-551: leave the whole table at ONE cutoff. The seasons
+        # Leave the whole table at ONE cutoff. The seasons
         # this run did not touch passed _refuse_a_mixed_cutoff above, so every
         # survivor is a whole season, and stamping it at this cutoff says the
         # true thing: this is what we know as of the cutoff.

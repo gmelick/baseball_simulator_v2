@@ -41,13 +41,12 @@ class PitcherProfilesMixin(ComputorBase):
           Pass 2 (Python): fit GMM for each pitcher/season, write model JSON
                            and component rows.
 
-        SIM-537: ``asof`` is the date the profile's data runs through, the
-        same rule SIM-534 established for batters. Every source here —
-        ``raw.pitches`` (both passes) and ``raw.play_events`` (the pickoff-out
-        CTE) — is data we compute ourselves, so unlike the batter grouping's
-        Savant-sourced swing/stance boards, no prior-season fallback is
-        needed: a plain ``game_date <= cutoff`` filter is enough (design doc:
-        docs/audit/2026-09-10-savant-point-in-time-data.md §6).
+        ``asof`` is the date the profile's data runs through, the same rule
+        as the batter profiles. Every source here (``raw.pitches`` in both
+        passes and ``raw.play_events`` in the pickoff-out CTE) is our own data,
+        so, unlike the batter profile's Savant boards, no prior-season fallback
+        is needed: a plain ``game_date <= cutoff`` filter is enough (design
+        doc: docs/audit/2026-09-10-savant-point-in-time-data.md §6).
         """
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
@@ -56,13 +55,13 @@ class PitcherProfilesMixin(ComputorBase):
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         pickoff_outs_cte = self._play_events_outs_cte(asof_sql if asof is not None else None)
 
-        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.pitcher_season_metrics", seasons, asof_date)
 
         if asof is not None:
-            # SIM-537: same removal rule as the batter grouping — INSERT OR
-            # REPLACE only overwrites rows the query below produces, so a
+            # The removal rule of the batter profiles: INSERT OR REPLACE
+            # only overwrites the rows the query below produces, so a
             # season that had not started at the cutoff (no 2025 pitcher on
             # 15 April 2024) would otherwise survive a backtest rebuild from
             # an earlier, full-season run. Delete the CHILD table first
@@ -288,7 +287,7 @@ class PitcherProfilesMixin(ComputorBase):
                 )
                 fit_tasks.append((pitcher_id, season, pitcher_df))
 
-        # Parallel GMM fitting — chunked across CPU cores (SIM-113).
+        # The mixtures are fitted in parallel, in chunks across the CPU cores.
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
         # Compact float32 feature arrays (not DataFrames) keep per-task IPC small.
@@ -326,8 +325,8 @@ class PitcherProfilesMixin(ComputorBase):
                     else:
                         fitted.append((pitcher_id, season, model_json, component_rows))
 
-        # Batched DuckDB writes (SIM-113): a few set-based statements instead
-        # of one UPDATE/INSERT per pitcher.
+        # Batched DuckDB writes: a few set-based statements instead of one
+        # UPDATE or INSERT per pitcher.
         _flush_gmm_results(self._conn, fitted, fallbacks)
 
         gmm_success = len(fitted)
@@ -339,8 +338,7 @@ class PitcherProfilesMixin(ComputorBase):
             gmm_fallback,
         )
 
-        # SIM-537 / SIM-551: leave the whole table at ONE cutoff — the same
-        # reasoning as _compute_batter_profiles.
+        # Leave the whole table at ONE cutoff, as _compute_batter_profiles does.
         self._stamp_one_cutoff("derived.pitcher_season_metrics", asof_sql)
 
         self._assert_pitcher_profiles_have_no_leakage(seasons, asof_date)

@@ -15,7 +15,6 @@ from datetime import (
 # lost, and leave headroom so a leap year cannot tip a slice over the limit.
 _MAX_SCHEDULE_WINDOW_DAYS = 364
 
-
 # SIM-441: how many games may fail back-to-back before a run aborts. One bad feed
 # must be survivable across a 21,600-game sweep; an API outage or a schema
 # mismatch must not be, because it would otherwise "succeed" having loaded almost

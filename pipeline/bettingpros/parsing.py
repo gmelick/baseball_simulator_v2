@@ -23,8 +23,6 @@ log = logging.getLogger("pipeline.bettingpros_odds_provider")
 
 
 _K = TypeVar("_K")
-
-
 _V = TypeVar("_V")
 
 
@@ -38,11 +36,8 @@ _REQUIRED_SIDES: dict[str, tuple[str, ...]] = {
     "yes_no": ("yes", "no"),
     "prop": ("over", "under"),
 }
-
-
 #: The sides a row prices when the book quotes them: the tie of a three-way market.
 _OPTIONAL_SIDES: dict[str, tuple[str, ...]] = {"three_way": ("draw",)}
-
 
 #: A side's price, line and vendor stamp, as read from one book's line.
 _Quote = tuple[float | None, float | None, Any]

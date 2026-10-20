@@ -20,7 +20,6 @@ log = logging.getLogger("engine_artifacts")
 #: {target_base}" (see the migration-0018 header for the scenario names).
 _ADV_KEYS = ("1_1_3", "2_2_4", "3_1_4", "4_1_2", "4_2_3", "4_3_4", "5_0_2", "5_0_3")
 
-
 #: The advancement draw's kernel features: the batted ball's geometry (the
 #: throw context) + the pre-pitch outs (a two-out contact play runs harder).
 _ADV_FEAT_COLS = ["exit_velo", "launch_angle", "spray_angle", "hit_distance", "outs"]

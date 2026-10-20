@@ -15,20 +15,11 @@ from sklearn.mixture import GaussianMixture
 
 log = logging.getLogger("player_profile_computor")
 
-
-# GMM
+# The mixture fit's settings.
 GMM_MIN_K = 2
-
-
 GMM_MAX_K = 7
-
-
 GMM_MIN_PITCHES_PER_K = 50  # minimum pitches per component to attempt K
-
-
 GMM_IVB_CAP_SD = 3.0  # cap IVB at ±N standard deviations before fitting
-
-
 GMM_FEATURE_NAMES = [
     "velo",
     "ivb",
@@ -42,7 +33,7 @@ GMM_FEATURE_NAMES = [
 
 
 # ---------------------------------------------------------------------------
-# Quick AUC helper
+# The area under the curve, for the component labels
 # ---------------------------------------------------------------------------
 
 
@@ -57,10 +48,7 @@ def _quick_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
-# GMM helpers
-# ---------------------------------------------------------------------------
-
-# GMM helpers
+# One pitcher-season's mixture
 # ---------------------------------------------------------------------------
 
 
@@ -235,16 +223,13 @@ def _fit_gmm_for_pitcher(
 
 
 # ---------------------------------------------------------------------------
-# SIM-113: GMM batch-fit scaling, chunked IPC, and bulk result writes
+# The batch fit: the worker count, the chunks and the bulk writes
 # ---------------------------------------------------------------------------
 
 
 def _resolve_gmm_workers(n_tasks: int) -> int:
-    """Size the GMM fit pool to the host (SIM-113).
-
-    Replaces the previously hardcoded ``n_workers = 8`` (which oversubscribed
-    small CI boxes and underused large hosts). One worker per CPU core minus
-    one for the parent, never more than the number of tasks, floored at 1.
+    """Size the mixture-fit pool to the host: one worker per CPU core less one
+    for the parent, never more than the number of tasks, and at least 1.
     """
     cpu = os.cpu_count() or 2
     return max(1, min(cpu - 1, n_tasks or 1))
@@ -267,12 +252,12 @@ def _chunk_tasks(tasks: list, n_chunks: int) -> list[list]:
 def _fit_gmm_batch(
     task_chunk: list[tuple[np.ndarray, int, int]],
 ) -> list[tuple[int, int, dict | None, list[dict]]]:
-    """Fit GMMs for a *chunk* of pitchers in one worker process (SIM-113).
+    """Fit the mixtures of a *chunk* of pitchers in one worker process.
 
-    Submitting one task per chunk instead of one per pitcher collapses the
-    per-pitcher submission/result IPC into a single round-trip per worker.
+    One task per chunk, not one per pitcher, makes one round trip per worker.
     Each task carries a compact float32 feature array rather than a pandas
-    DataFrame, roughly halving the bytes pickled across the process boundary.
+    DataFrame, which roughly halves the bytes pickled across the process
+    boundary.
     """
     results: list[tuple[int, int, dict | None, list[dict]]] = []
     for arr, pitcher_id, season in task_chunk:
@@ -287,10 +272,9 @@ def _flush_gmm_results(
     fitted: list[tuple[int, int, dict, list[dict]]],
     fallbacks: list[tuple[int, int]],
 ) -> None:
-    """Write all GMM results in a few set-based statements (SIM-113).
-
-    Replaces ~one UPDATE/INSERT per pitcher (5,000+ round-trips on a full
-    9-season build) with three bulk operations driven by registered frames.
+    """Write every mixture result in three set-based statements, driven by
+    registered frames, instead of one UPDATE or INSERT per pitcher (5,000 and
+    more round trips on a full nine-season build).
     """
     if fallbacks:
         fb_df = pd.DataFrame(fallbacks, columns=["pitcher_id", "season"])

@@ -43,8 +43,8 @@ class SimPoolsMixin(ComputorBase):
           - outcome_type classification
           - prev_pitch_velo / ivb / hb / outcome (LAG window)
           - pitch_id surrogate key (row_number over natural sort)
-          - recency_weight (SIM-076)
-        When ``incremental`` (SIM-095), only seasons whose source changed rebuild.
+          - recency_weight
+        When ``incremental``, only the seasons whose source changed rebuild.
         """
         ref_season = _canonical_ref_season(self._conn, seasons)
         if incremental:
@@ -177,15 +177,15 @@ class SimPoolsMixin(ComputorBase):
         _record_pool_build(self._conn, "pitch_pool", seasons, ref_season)
 
     # ------------------------------------------------------------------
-    # 9. sim.outcome_pool
+    # sim.outcome_pool
     # ------------------------------------------------------------------
 
     def _build_outcome_pool(self, seasons: list[int], incremental: bool = False) -> None:
         """
         Rebuilds sim.outcome_pool as the in-play subset of sim.pitch_pool
         with full batted ball detail and fielding outcome columns added.
-        Adds recency_weight (SIM-076). When ``incremental`` (SIM-095), only
-        seasons whose source changed rebuild.
+        Adds recency_weight. When ``incremental``, only the seasons whose
+        source changed rebuild.
 
         Fielder position is looked up from the fielder_N columns so the
         simulation engine knows which positional number fielded the ball.
@@ -395,16 +395,16 @@ class SimPoolsMixin(ComputorBase):
         _record_pool_build(self._conn, "outcome_pool", seasons, ref_season)
 
     # ------------------------------------------------------------------
-    # 9b. sim.ibb_rates (SIM-515)
+    # sim.ibb_rates, the measured intentional-walk rates
     # ------------------------------------------------------------------
 
     def _build_ibb_rates(self, seasons: list[int]) -> None:
-        """SIM-515: the measured intentional-walk rate per hard-filtered cell.
+        """The measured intentional-walk rate per hard-filtered cell (the IBB
+        rate table, SIM-515).
 
         The loop draws ONCE per plate appearance at ``issued / opportunities``
         for the PA's entering cell (runners_state, outs, inning>=7,
-        |bat_score-fld_score|<=1) — the data replaces the hand-tuned per-pitch
-        formula that issued 2.64x MLB's IBB volume.
+        |bat_score-fld_score|<=1).
 
         The numerator reads ``raw.play_events`` ``intent_walk`` rows (they
         carry the pre-play cell directly). The denominator is every PA that
@@ -480,7 +480,7 @@ class SimPoolsMixin(ComputorBase):
         log.info("  sim.ibb_rates done: %s cells, %s IBB events.", n, issued)
 
     # ------------------------------------------------------------------
-    # 10. sim.stolen_base_pool
+    # sim.stolen_base_pool
     # ------------------------------------------------------------------
 
     def _build_stolen_base_pool(self, seasons: list[int], incremental: bool = False) -> None:
@@ -488,8 +488,8 @@ class SimPoolsMixin(ComputorBase):
         Builds sim.stolen_base_pool from all SB attempts in raw.pitches.
         Denormalizes runner/catcher/pitcher metrics from the derived tables
         so the simulation engine can score similarity without joins at runtime.
-        Adds recency_weight (SIM-076). When ``incremental`` (SIM-095), only
-        seasons whose source changed rebuild.
+        Adds recency_weight. When ``incremental``, only the seasons whose
+        source changed rebuild.
         """
         ref_season = _canonical_ref_season(self._conn, seasons)
         if incremental:
@@ -603,26 +603,26 @@ class SimPoolsMixin(ComputorBase):
         _record_pool_build(self._conn, "stolen_base_pool", seasons, ref_season)
 
     def _build_steal_opportunity_pool(self, seasons: list[int], incremental: bool = False) -> None:
-        """SIM-468: rebuild sim.steal_opportunity_pool — one row per pitch where a
-        steal was POSSIBLE, attempted or not.
+        """Rebuild sim.steal_opportunity_pool: one row per pitch where a steal
+        was POSSIBLE, attempted or not.
 
         `sim.stolen_base_pool` holds only ATTEMPTS, so a draw over it attempts a
-        steal 100% of the time — it has no denominator. This pool keeps the
-        `attempted` flag beside `success`, so ONE draw (SIM-474) answers both
-        "does the runner go" and "safe or caught", and the catcher affects the
-        DECISION, not only the outcome.
+        steal every time: it has no denominator. This pool keeps the
+        `attempted` flag beside `success`, so ONE draw answers both "does the
+        runner go" and "safe or caught", and the catcher affects the DECISION,
+        not only the outcome.
 
         An opportunity is the LEAD open-base pair, matching the live decision:
           * a runner on 1B with 2B open  -> target_base 2 (the runner on 1B)
           * a runner on 2B with 3B open  -> target_base 3 (the runner on 2B),
             including 1B+2B (the lead runner drives a double steal)
-        Steals of home are out of scope (SIM-468 ticket text).
+        Steals of home are out of scope.
 
         The pre-pitch situation columns (`outs`, the count, the base state) are
-        trustworthy ONLY after the SIM-488 re-sweep — the pre-sweep `outs`
-        column was stale-by-one-play on 46% of plate appearances.
+        trustworthy only on data loaded by the fixed parser (the re-sweep of
+        2026-08-13, SIM-488).
 
-        SIM-554: each pitch row carries the class of its pitch (`pitch_class`,
+        Each pitch row carries the class of its pitch (`pitch_class`,
         the pitch pool's outcome_type); the steal draw after the pitch filters
         on it. A pickoff outcome whose plate appearance holds no pitch of its
         pair (the throw came before the first pitch) becomes a PICKOFF ROW of
@@ -648,11 +648,11 @@ class SimPoolsMixin(ComputorBase):
         log.info("Building sim.steal_opportunity_pool … (seasons=%s)", seasons)
         season_list = ", ".join(str(s) for s in seasons)
         recency_expr = _recency_weight_sql("f.season", ref_season)
-        pickoff_recency_expr = _recency_weight_sql("e.season", ref_season)  # SIM-554
-        pickoff_cte = self._pickoff_outcomes_cte(season_list)  # SIM-507
+        pickoff_recency_expr = _recency_weight_sql("e.season", ref_season)
+        pickoff_cte = self._pickoff_outcomes_cte(season_list)
 
-        # SIM-554: probe before the DELETE (a failed positional INSERT would
-        # leave the season with no steal rows).
+        # Probe before the DELETE (a failed positional INSERT would leave the
+        # season with no steal rows).
         _require_steal_pool_0031(self._conn)
 
         self._conn.execute(
@@ -867,16 +867,16 @@ class SimPoolsMixin(ComputorBase):
     def _build_advancement_opportunity_pool(
         self, seasons: list[int], incremental: bool = False
     ) -> None:
-        """SIM-510: rebuild sim.advancement_opportunity_pool — one row per
-        discretionary runner-advancement decision, attempted or not.
+        """Rebuild sim.advancement_opportunity_pool: one row per discretionary
+        runner-advancement decision, attempted or not.
 
-        The five scenarios are the ONLY discretionary movements the SIM-511
-        fielding draw normalizes away (the double-count guard); this pool is
-        where those movements become data. Non-attempt rows are the point:
-        one SIM-512 draw answers "does he go" and "safe or out" together —
-        the SIM-468 denominator lesson.
+        The five scenarios are the ONLY discretionary movements the fielding
+        draw normalizes away (the double-count guard); this pool is where those
+        movements become data. The non-attempt rows are the point: one draw
+        answers "does he go" and "safe or out" together, as the steal pool's
+        denominator does.
 
-        Reads the SIM-510 transition columns on sim.outcome_pool, so it must
+        Reads the transition columns on sim.outcome_pool, so it must
         run AFTER ``_build_outcome_pool`` in the same recompute. Rows whose
         transition failed the outs-accounting guard are excluded.
 
@@ -1034,12 +1034,9 @@ class SimPoolsMixin(ComputorBase):
 
     def _build_at_bat_situations(self, seasons: list[int]) -> None:
         """
-        SIM-408: materialize derived.at_bat_situations — one row per plate
-        appearance capturing the pre-PA game state the Step 2.9 Situation KDTree
-        engine indexes (similarity/engines/situation_similarity.py).  The engine
-        SELECTed this table but the computor never built it, so the situation
-        engine indexed 0 rows and normalized a degenerate empty matrix; this
-        closes that gap.
+        Materialize derived.at_bat_situations: one row per plate appearance,
+        the game state before it, which the situation engine
+        (similarity/engines/situation_similarity.py) indexes.
 
         One row per (game_pk, at_bat_number), taken at the FIRST pitch of the PA
         so outs / base-state / score reflect the situation the batter came up to.

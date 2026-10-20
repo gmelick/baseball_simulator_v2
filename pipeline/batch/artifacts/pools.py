@@ -211,8 +211,6 @@ STEAL_PITCH_CLASSES: tuple[str, ...] = (
     "in_play",
     "hit_by_pitch",
 )
-
-
 #: SIM-554: class name -> code (1-6). Code 0 means no class (a pickoff row).
 STEAL_PITCH_CLASS_CODE: dict[str, int] = {c: i + 1 for i, c in enumerate(STEAL_PITCH_CLASSES)}
 
@@ -336,8 +334,6 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     # SIM-523 part E: the zone (None on a pre-part-E bundle).
     "zone",
 )
-
-
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     # SIM-523 part C: the batted-ball class (None on a pre-part-C bundle).
     "bb_class",
@@ -379,11 +375,7 @@ _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "pgeom",
     "pitcher_id",
 )
-
-
 _ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
-
-
 #: SIM-474: every StealPool column is numeric, so the whole pool is shareable.
 _STEAL_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "sit",
@@ -400,8 +392,6 @@ _STEAL_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "pitch_class",  # SIM-554 (None on a pre-0031 bundle: skipped by the extract)
     "is_pickoff_row",  # SIM-554 (likewise)
 )
-
-
 #: SIM-523 part D: every ChangePool column is numeric, so the whole pool is shareable.
 _CHANGE_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "sit",
@@ -420,8 +410,6 @@ _CHANGE_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "in_throws",
     "game_ymd",
 )
-
-
 #: SIM-510: every AdvancementPool column is numeric, so the whole pool is shareable.
 _ADV_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "feat",

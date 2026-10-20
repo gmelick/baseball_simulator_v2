@@ -38,17 +38,11 @@ ALWAYS_REQUIRED: set[str] = {
     "away_score",
 }
 
-
 # SIM-441: how many fielding-credit slots raw.pitches actually has. A credit past
 # the last slot sets `field_assist_6_plus` instead of being silently dropped.
 _MAX_ASSIST_SLOTS = 5
-
-
 _MAX_PUTOUT_SLOTS = 3
-
-
 _MAX_THROWING_ERROR_SLOTS = 2
-
 
 # Columns that must be present on an in-play pitch. In-play is THREE Gameday
 # codes, not one: 'X' (out), 'D' (no out), 'E' (run). Gating on 'X' alone made
@@ -119,7 +113,6 @@ COLUMN_RENAME: dict[str, str] = {
     "extension": "release_extension",
     "top_bot": "_inning_topbot_raw",  # transformed separately below
 }
-
 
 # inning_topbot value normalisation  (API → schema)
 HALF_INNING_MAP = {

@@ -66,7 +66,7 @@ class FielderPlayMetricsMixin(ComputorBase):
           5. Fit sigmoid: P(catch) = f(speed_needed)
           6. OAA = sum of (1-P) for catches + (-P) for misses
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing outfield catch probability …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -160,7 +160,7 @@ class FielderPlayMetricsMixin(ComputorBase):
             if going_back:
                 speed_needed += OF_GOING_BACK_PENALTY_FPS
 
-            # Outcome (SIM-501a). Question: did the outfielder CATCH this air
+            # The outcome. Question: did the outfielder CATCH this air
             # ball? A catch retires the batter, so the label is the events-based
             # batter-retired set. force_out / fielders_choice_out mean the ball
             # hit the ground and a runner was forced — an out, but not a catch;
@@ -245,7 +245,7 @@ class FielderPlayMetricsMixin(ComputorBase):
           4. Batter-runner speed
           + Direction adjustments (lateral vs charging)
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         The sprint speed lookup below has no date of its own — it is made
         safe by a season-shift substitution instead. See
         ``_compute_baserunner_profiles`` for the same pattern in SQL; here
@@ -293,7 +293,7 @@ class FielderPlayMetricsMixin(ComputorBase):
 
         log.info("  Loaded %d infield plays", len(df))
 
-        # Look up batter sprint speeds. SIM-537: when asof is set, also pull
+        # Look up the batter sprint speeds. With asof set, also pull
         # the prior season so the per-row lookup below can substitute it for
         # the season containing the cutoff.
         lookup_seasons = set(seasons) | ({asof_date.year - 1} if asof is not None else set())
@@ -309,10 +309,9 @@ class FielderPlayMetricsMixin(ComputorBase):
             )
 
         def _speed_lookup_season(row_season: int) -> int:
-            """SIM-537: the season-shift substitute (see class docstring
-            notes on _compute_baserunner_profiles) — the season containing
-            the cutoff reads the PRIOR season's sprint speed instead of its
-            own still-accumulating row."""
+            """The season shift (as in _compute_baserunner_profiles): the
+            season containing the cutoff reads the PRIOR season's sprint speed,
+            not its own still-accumulating row."""
             if asof is not None and row_season == asof_date.year:
                 return asof_date.year - 1
             return row_season
@@ -390,7 +389,7 @@ class FielderPlayMetricsMixin(ComputorBase):
                 if cos_angle < -0.3:  # moving substantially away from 1B
                     time_margin -= 0.10
 
-            # Outcome (SIM-501a). Question: did the defense record at least one
+            # The outcome. Question: did the defense record at least one
             # out on this ground ball? force_out and fielders_choice_out count —
             # the defense converted a runner even though the batter reached. A
             # clean hit, an error, or an all-safe fielders_choice counts zero.
@@ -470,7 +469,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         Time-based model: time margin between defense completion and runner arrival.
         Split credit: initiator (fields ball) vs pivot (turns relay).
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         The sprint speed lookup uses the same season-shift substitution as
         ``_compute_infield_oaa`` (no date column on that source). RE24 run
         values read ``self._re_matrix``, which ``run()`` already builds
@@ -524,7 +523,7 @@ class FielderPlayMetricsMixin(ComputorBase):
 
         log.info("  Loaded %d DP opportunities", len(df))
 
-        # Batter sprint speed lookup. SIM-537: joined at the season-shift
+        # The batter sprint speed lookup, joined at the season-shift
         # substitution below (own season shifts to bsm.season - 1 only when
         # bsm.season is the one containing the cutoff), so `ss` already
         # answers the shifted question and no per-row Python shift is
@@ -625,7 +624,7 @@ class FielderPlayMetricsMixin(ComputorBase):
             if not toward_2b and initiator_pos in ("3B", "1B"):
                 time_margin -= 0.15
 
-            # Outcome (SIM-501a). Question: did the defense turn two?
+            # The outcome. Question: did the defense turn two?
             dp_turned = r["events"] in ("grounded_into_double_play", "double_play")
 
             # Question: how many outs did the play record, and which body was
@@ -649,7 +648,7 @@ class FielderPlayMetricsMixin(ComputorBase):
                 (pre_outs, pre_runners), RE24_APPROX.get((pre_outs, pre_runners), 0.5)
             )
 
-            # SIM-501a: the post state derives from `events`, per event kind.
+            # The post state derives from `events`, per event kind.
             # The scope is runner-on-1B-only ground balls with outs < 2, so:
             #   3+ total outs — the inning is over; run expectancy is 0.
             #   2 outs on the play (GIDP, lineout DP, bunt DP) — both bodies
@@ -743,7 +742,7 @@ class FielderPlayMetricsMixin(ComputorBase):
     def _compute_bunt_defense(self, seasons: list[int], asof: date | None = None) -> None:
         """Compute bunt fielding rates for corner infielders.
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing bunt defense metrics …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -806,7 +805,7 @@ class FielderPlayMetricsMixin(ComputorBase):
     def _compute_first_base_scooping(self, seasons: list[int], asof: date | None = None) -> None:
         """Compute 1B receiving metrics on difficult throws.
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing 1B scooping metrics …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -867,7 +866,7 @@ class FielderPlayMetricsMixin(ComputorBase):
     def _compute_error_decomposition(self, seasons: list[int], asof: date | None = None) -> None:
         """Compute fielding error vs throwing error rates by fielder.
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing error decomposition …")
         season_list = ", ".join(str(s) for s in seasons)

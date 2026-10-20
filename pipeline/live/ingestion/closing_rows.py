@@ -63,7 +63,6 @@ _CLOSING_GAME_READ_SQL = """
                      fetched_at DESC, id DESC
             """
 
-
 #: SIM-546: the prop analogue: one pre-pitch row per (player, prop stat, book),
 #: by the same order and the same stamp bound ``$3``.
 _CLOSING_PROP_READ_SQL = """
@@ -81,7 +80,6 @@ _CLOSING_PROP_READ_SQL = """
                      fetched_at DESC, id DESC
             """
 
-
 #: SIM-546: the new hashes already stored for one (game, source). The dedup
 #: index of raw.game_odds is (game_pk, source, odds_hash).
 _CLOSING_GAME_EXISTING_SQL = """
@@ -90,7 +88,6 @@ _CLOSING_GAME_EXISTING_SQL = """
             WHERE game_pk = $1 AND source = $2 AND odds_hash = ANY($3::text[])
             """
 
-
 #: SIM-546: the prop analogue. The dedup index of raw.prop_odds is
 #: (game_pk, player_id, source, odds_hash); the caller matches the player.
 _CLOSING_PROP_EXISTING_SQL = """
@@ -98,7 +95,6 @@ _CLOSING_PROP_EXISTING_SQL = """
             FROM raw.prop_odds
             WHERE game_pk = $1 AND source = $2 AND odds_hash = ANY($3::text[])
             """
-
 
 #: SIM-546: promote the picked rows in one statement. The line_type guard makes
 #: a concurrent second call harmless: it skips a row already promoted.
@@ -109,7 +105,6 @@ _CLOSING_GAME_UPDATE_SQL = """
             WHERE  g.id = v.id AND g.line_type = 'current'
             """
 
-
 #: SIM-546: the prop analogue of the update.
 _CLOSING_PROP_UPDATE_SQL = """
             UPDATE raw.prop_odds AS p
@@ -117,7 +112,6 @@ _CLOSING_PROP_UPDATE_SQL = """
             FROM   unnest($1::bigint[], $2::text[]) AS v(id, odds_hash)
             WHERE  p.id = v.id AND p.line_type = 'current'
             """
-
 
 #: SIM-546: the price columns of a game row and of a prop row. Postgres stores a
 #: price as INTEGER. A writer may have hashed it as a float: the BettingPros
@@ -131,16 +125,11 @@ _GAME_PRICE_KEYS: tuple[str, ...] = (
     "over_ml",
     "under_ml",
 )
-
-
 _PROP_PRICE_KEYS: tuple[str, ...] = ("over_ml", "under_ml")
-
 
 #: SIM-546: the line columns. Postgres stores a line as FLOAT. A writer may have
 #: hashed a whole line as an int (5, not 5.0).
 _GAME_LINE_KEYS: tuple[str, ...] = ("home_spread", "away_spread", "total_line")
-
-
 _PROP_LINE_KEYS: tuple[str, ...] = ("line",)
 
 

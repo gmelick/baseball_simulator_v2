@@ -21,7 +21,6 @@ from pipeline.bettingpros.parsing import _parse_utc
 #: match at all, rather than silently priced against the wrong game.
 _MAX_EVENT_TIME_DELTA = timedelta(hours=2)
 
-
 #: SIM-555: the largest gap the single-event rule accepts. The vendor sometimes
 #: keeps a game's first start time after MLB moves it (game 745169: MLB moved
 #: it to 18:15Z, the vendor's only event of the two teams that day kept

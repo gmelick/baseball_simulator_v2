@@ -46,9 +46,9 @@ class CatcherProfilesMixin(ComputorBase):
         where framing skill matters. Pitches well inside the zone are
         always strikes; pitches well outside are never strikes.
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
-        this source is entirely our own data, so a plain date filter is
-        the whole fix (docs/audit/2026-09-10-savant-point-in-time-data.md §6).
+        ``asof`` keeps raw.pitches to ``game_date <= asof``. The source is
+        our own data, so a plain date filter is enough
+        (docs/audit/2026-09-10-savant-point-in-time-data.md §6).
         """
         log.info("Computing catcher framing …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -113,7 +113,7 @@ class CatcherProfilesMixin(ComputorBase):
         df["zone_inside"] = (df["pitch_side"] > 0.4).astype(int)
         df["zone_outside"] = (df["pitch_side"] < -0.4).astype(int)
 
-        # SIM-408: heart (clearly in-zone) vs shadow (just off the edge, where
+        # The heart (clearly in the zone) and shadow (just off the edge, where
         # framing skill lives) buckets for the catcher engine's zone-framing
         # features (shadow_zone_strike_rate / heart_zone_strike_rate).
         df["zone_heart"] = df["in_zone"]
@@ -174,7 +174,7 @@ class CatcherProfilesMixin(ComputorBase):
                     "expected_strike",
                     lambda x: x[df.loc[x.index, "zone_outside"] == 1].sum(),
                 ),
-                # SIM-408: heart/shadow called-strike rates (counts here; rate below)
+                # The heart and shadow called-strike counts (the rates follow below).
                 strikes_heart=("is_strike", lambda x: x[df.loc[x.index, "zone_heart"] == 1].sum()),
                 pitches_heart=(
                     "is_strike",
@@ -206,8 +206,8 @@ class CatcherProfilesMixin(ComputorBase):
         framing_agg["framing_outside"] = (
             framing_agg["strikes_outside"] - framing_agg["expected_outside"]
         )
-        # SIM-408: zone-framing strike rates (NaN when the bucket is empty;
-        # the engine COALESCEs NULL → 0 / falls back to league average).
+        # The zone-framing strike rates (NaN when the bucket is empty; the
+        # engine reads NULL as 0 or falls back to the league average).
         framing_agg["heart_zone_strike_rate"] = framing_agg["strikes_heart"] / framing_agg[
             "pitches_heart"
         ].replace(0, np.nan)
@@ -244,7 +244,7 @@ class CatcherProfilesMixin(ComputorBase):
           - Pitch speed and movement
           - Pitcher/batter handedness
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing catcher blocking …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -386,12 +386,11 @@ class CatcherProfilesMixin(ComputorBase):
     def _compute_catcher_throwing(self, seasons: list[int], asof: date | None = None) -> None:
         """Compute SB prevention metrics broken down by base attempted.
 
-        Includes the SIM-073 PA-level deterrence rate
-        (steal_attempt_rate_against) used by the catcher similarity engine v2
-        as a Deterrence sub-score (SIM-072).
+        Includes the plate-appearance deterrence rate
+        (steal_attempt_rate_against), the catcher similarity engine's
+        Deterrence sub-score.
 
-        SIM-537: ``asof`` restricts both raw.pitches reads to
-        ``game_date <= asof``.
+        ``asof`` keeps both raw.pitches reads to ``game_date <= asof``.
         """
         log.info("Computing catcher throwing metrics …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -582,7 +581,7 @@ class CatcherProfilesMixin(ComputorBase):
     ) -> None:
         """Combine framing, blocking, and throwing into catcher season metrics.
 
-        SIM-537: the three upstream temp tables are already cutoff-filtered
+        The three upstream temp tables are already cutoff-filtered
         by the time this method reads them (they carry no date of their
         own). The two Savant joins below (pop time, arm strength) have no
         date column at all — see the season-shift note on those joins.
@@ -591,15 +590,14 @@ class CatcherProfilesMixin(ComputorBase):
         season_list = ", ".join(str(s) for s in seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
-        # SIM-537: the Savant pop-time / arm-strength boards have no date
+        # The Savant pop-time and arm-strength boards have no date
         # column (docs/audit/2026-09-10-savant-point-in-time-data.md §5) —
         # only a season number. A season that ENDED before the cutoff joins
         # its own row; the season CONTAINING the cutoff joins the PRIOR
         # season's row instead, since that season's own row is still
         # accumulating. Measured year-to-year correlation: arm strength
-        # 0.894, pop time 0.726 — the substitute costs little. Left
-        # unshifted (`COALESCE(f.season, b.season, t.season)`, no shift)
-        # when asof is None, so a live build is unchanged.
+        # 0.894, pop time 0.726, so the substitute costs little. A live
+        # build (asof None) joins its own season, unshifted.
         catcher_season_col = "COALESCE(f.season, b.season, t.season)"
         savant_season = (
             f"(CASE WHEN {catcher_season_col} = {asof_date.year} "
@@ -608,14 +606,14 @@ class CatcherProfilesMixin(ComputorBase):
             else catcher_season_col
         )
 
-        # SIM-2026-05 hardening: see _ensure_fielder_temp_tables_exist for
-        # the rationale.  When a per-season sample is too thin, the upstream
+        # See _ensure_fielder_temp_tables_exist for the rationale. When a
+        # per-season sample is too thin, the upstream
         # _compute_catcher_{framing,blocking,throwing} method returns early
         # without creating its _tmp_* table.  Guarantee the aggregator's
         # FULL OUTER JOIN inputs all exist (possibly empty) before running.
         self._ensure_catcher_temp_tables_exist()
 
-        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.catcher_season_metrics", seasons, asof_date)
 
@@ -758,14 +756,14 @@ class CatcherProfilesMixin(ComputorBase):
 
         log.info("  Catcher season metrics aggregated.")
 
-    #: SIM-517: the EB prior for the uncaught-strike-3 rate, in strike-3s.
+    #: The empirical-Bayes prior of the uncaught-strike-3 rate, in strike-3s.
     #: The event runs ~0.2% of K3s (~80 PAs league-wide per season), so a
     #: per-catcher-season raw rate is Poisson noise; a catcher needs ~2,000
     #: received strike-3s (~3 full seasons) to move halfway from league.
     _UNCAUGHT_K3_EB_PRIOR_N = 2000.0
 
     def _compute_catcher_uncaught_k3(self, seasons: list[int], asof: date | None = None) -> None:
-        """SIM-517 part A: the strike-3 slice of the receiving profile.
+        """The strike-3 slice of the catcher receiving profile.
 
         A strikeout PA whose final-pitch description names a wild pitch or a
         passed ball is an uncaught third strike. The label is exact for this
@@ -781,8 +779,8 @@ class CatcherProfilesMixin(ComputorBase):
         EB-shrunk rate toward the SEASON league rate
         (:data:`_UNCAUGHT_K3_EB_PRIOR_N`).
 
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
-        the same cutoff already applied to the row this UPDATE targets, so
+        ``asof`` keeps raw.pitches to ``game_date <= asof``, the cutoff of
+        the row this UPDATE targets, so
         the K3 sample and the framing/blocking/throwing sample it joins stay
         at one point in time. This is the last catcher step in the nightly
         chain, so the leakage check for the whole grouping runs here.

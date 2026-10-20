@@ -16,8 +16,6 @@ import psycopg2.pool
 # freshness upsert).  Re-connecting for every one of those is wasteful, so we
 # borrow from a pool instead.  Sized via env so ops can tune for the box.
 ETL_DB_POOL_MIN = int(os.environ.get("ETL_DB_POOL_MIN", "1"))
-
-
 ETL_DB_POOL_MAX = int(os.environ.get("ETL_DB_POOL_MAX", "8"))
 
 

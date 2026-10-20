@@ -15,10 +15,7 @@ from pipeline.bettingpros.base import ProviderBase
 
 log = logging.getLogger("pipeline.bettingpros_odds_provider")
 
-
 _BP_BASE = "https://api.bettingpros.com/v3"
-
-
 _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 
 
@@ -38,7 +35,6 @@ _MAX_OFFER_PAGES = 20
 #: an ``ssl.SSLError``, or an ``EHOSTUNREACH``, ``ENETUNREACH`` or ``ENETDOWN``.
 #: ``HTTPException`` covers ``RemoteDisconnected`` and ``IncompleteRead``.
 _RETRYABLE_ERRORS: tuple[type[Exception], ...] = (OSError, http.client.HTTPException)
-
 
 #: SIM-555: the statuses whose numeric ``Retry-After`` sets a floor on the wait.
 _RETRY_AFTER_STATUSES = frozenset({429, 503})

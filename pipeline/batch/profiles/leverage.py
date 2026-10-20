@@ -12,8 +12,6 @@ log = logging.getLogger("player_profile_computor")
 
 # Leverage index simplified bins (used for manager profiles)
 LI_LOW = 0.7
-
-
 LI_HIGH = 1.5
 
 
@@ -51,8 +49,7 @@ def compute_leverage_index(
       - Runners on base increase leverage
       - Two outs increase leverage slightly
 
-    Phase 5 can swap in a full win-probability table lookup if desired.
-    The approximation is sufficient for manager tendency profiling.
+    The approximation is enough for the manager profiles, its one use.
     """
     # Base inning weight: increases in later innings
     if inning <= 3:
@@ -92,17 +89,15 @@ def build_run_expectancy_matrix(
     Returns a dict mapping (outs, runners_state) -> expected_runs
     that can also be written to derived.run_expectancy_matrix.
 
-    SIM-537: ``asof`` restricts the underlying plays to ``game_date <=
-    asof`` — this matrix feeds ``dp_run_value`` inside
-    ``_compute_dp_metrics``, so an un-cut matrix would leak future
-    run-scoring context into an as-of build. The persisted table is keyed
-    by ``season_range`` (a string like "2023-2026"), not by an individual
-    season, so a cutoff build and the live production build of the SAME
-    seasons would share one key and silently overwrite each other. Rather
-    than widen that key, an as-of build (``asof is not None``) skips the
-    DELETE/INSERT into ``derived.run_expectancy_matrix`` entirely and
-    returns the in-memory dict only — nothing else reads that table
-    point-in-time-sensitively, so the live table stays untouched.
+    ``asof`` keeps only the plays with ``game_date <= asof``: the matrix
+    feeds ``dp_run_value`` in ``_compute_dp_metrics``, so an uncut matrix
+    would leak future run scoring into an as-of build. The stored table is
+    keyed by ``season_range`` (a string like "2023-2026"), not by season, so
+    a cutoff build and the live build of the same seasons would share one key
+    and overwrite each other. An as-of build (``asof is not None``) therefore
+    skips the DELETE and INSERT into ``derived.run_expectancy_matrix`` and
+    returns the dict only; no reader of that table needs a cutoff, so the
+    live table stays as it is.
     """
     season_list = ", ".join(str(s) for s in seasons)
     log.info("Building run expectancy matrix for seasons %s …", seasons)
@@ -195,7 +190,7 @@ def build_run_expectancy_matrix(
         re_matrix[key] = float(row["expected_runs"])
 
     if asof is not None:
-        # SIM-537: an as-of build never persists — see the docstring.
+        # An as-of build never stores its matrix (see the docstring).
         log.info(
             "  RE matrix built as of %s: %d states (not persisted — a cutoff "
             "build keeps its matrix in memory only).",

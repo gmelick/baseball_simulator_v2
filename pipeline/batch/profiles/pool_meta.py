@@ -7,45 +7,25 @@ from __future__ import annotations
 from db.introspect import duck_columns
 
 # ---------------------------------------------------------------------------
-# SIM-076 / SIM-095: sim-pool recency weighting + incremental rebuild helpers
+# The recency weights and the incremental-rebuild gate of the sim pools
 # ---------------------------------------------------------------------------
 
-# Bump on any formula change to the pool SELECTs — the incremental rebuild
-# gate (_seasons_needing_rebuild) treats a season built by another version as
-# stale. sim501.1 = events-derived result_outs (SIM-501a).
-# sim509.1 = hit_by_pitch is its own pitch outcome_type (SIM-509) + the SIM-506
-# steal labels and SIM-507 pickoff labels on the opportunity pool.
-# sim491.1 = bat_home (the batting side) on sim.outcome_pool (SIM-491 /
-# migration 0019 — the SIM-412 home-field rebuild as a draw weight).
-# sim515.1 = sim.ibb_rates (the measured IBB rate table — SIM-515 / migration
-# 0020) joins the pool-build chain.
-# sim517.1 = catcher_id + got_away on sim.pitch_pool (SIM-517 / migration 0022).
-# sim518.1 = bat_home + pitcher_pitch_count + times_through_order on
-# sim.pitch_pool (SIM-518 / migration 0023 — the draw-conditioning columns).
-# sim523g.1 = the fielding chain on sim.outcome_pool (SIM-523 part G).
-# sim553.1 = a two-strike foul tip / foul bunt is strike three in
-# sim.pitch_pool.outcome_type; 'O' / 'Q' / 'R' / 'P' coded explicitly; no ELSE
-# (SIM-553 — SQL_OUTCOME_TYPE).
-# sim554.1 = pitch_class + is_pickoff_row on sim.steal_opportunity_pool: the
-# class of the pitch each row rode, and a row of its own for each pickoff
-# outcome thrown before any pitch of its pair (SIM-554 / migration 0031).
+# Bump on any formula change to a pool SELECT: the incremental-rebuild gate
+# (_seasons_needing_rebuild) treats a season built by another version as stale.
+# sim554.1 adds the steal pool's pitch class and pickoff rows (the running game
+# on the pitch, SIM-554; migration 0031). CHANGES.md records every earlier
+# version.
 POOL_BUILDER_VERSION = "sim554.1"
 
 
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
-
-
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
-
-
 RECENCY_FLOOR = 0.25
-
-
 RECENCY_PEAK = 2.0
 
 
 def recency_weight(season: int, ref_season: int) -> float:
-    """Sampling recency weight for a row from ``season`` vs ``ref_season`` (SIM-076).
+    """The sampling recency weight of a row from ``season`` against ``ref_season``.
 
     2.0 for the most-recent two seasons, then x0.75 per additional season,
     floored at 0.25. This mirrors the SQL emitted into the pool builders so the
@@ -70,16 +50,13 @@ def _recency_weight_sql(season_expr: str, ref_season: int) -> str:
 
 
 def _canonical_ref_season(conn, seasons: list[int]) -> int:
-    """The single recency reference season shared by ALL three sim pools (SIM-345).
+    """The one recency reference season every sim pool shares.
 
-    Previously each pool computed ``ref_season = max(seasons)`` from its own
-    argument, so a partial/incremental call could give pools different
-    references — and a row's ``recency_weight`` would then disagree between the
-    pitch_pool and the outcome_pool built from it. This pins one canonical
-    reference: the newest of the seasons requested in THIS run and every
+    It is the newest of the seasons this run asks for and of every
     ``recency_ref_season`` already recorded in ``sim.pool_build_metadata``. Once
-    a pool advances the reference, the others adopt the same value, so the
-    weights stay consistent across pools and across incremental runs.
+    one pool advances the reference, the others adopt it, so a row's
+    ``recency_weight`` agrees between the pitch pool and the outcome pool built
+    from it, across pools and across incremental runs.
     """
     ref = max(seasons)
     try:
@@ -96,10 +73,10 @@ def _canonical_ref_season(conn, seasons: list[int]) -> int:
 def _source_state(conn, season: int):
     """``(MAX(game_date), COUNT(*))`` of usable source rows for ``season``.
 
-    Single scan over ``pg.raw.pitches`` (quality rows only). The count is the
-    SIM-345 row-count guard so a same-``game_date`` late/doubleheader row — which
-    does NOT advance ``MAX(game_date)`` — is still detected. Returns
-    ``(None, 0)`` when the source has no usable rows (or an empty result).
+    One scan over ``pg.raw.pitches`` (the quality rows only). The count
+    catches a late or double-header row on a ``game_date`` already seen, which
+    does NOT advance ``MAX(game_date)``. Returns ``(None, 0)`` when the source
+    has no usable rows.
     """
     row = conn.execute(
         "SELECT MAX(game_date), COUNT(*) FROM pg.raw.pitches "
@@ -112,27 +89,19 @@ def _source_state(conn, season: int):
 
 
 def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[int]:
-    """Subset of ``seasons`` whose source changed since the last build (SIM-095).
+    """The seasons whose source or builder changed since their last build.
 
-    SIM-345 freshness contract — a season is fresh (skipped) only when BOTH:
-      * the recorded watermark ``source_max_game_date`` is ``>=`` the current
-        ``MAX(game_date)`` in ``pg.raw.pitches`` (date has not advanced), AND
-      * the recorded ``source_row_count`` equals the current source row count.
+    A season is fresh (skipped) only when all three hold:
+      * the recorded ``source_max_game_date`` is ``>=`` the current
+        ``MAX(game_date)`` in ``pg.raw.pitches`` (the date has not advanced);
+      * the recorded ``source_row_count`` equals the current source row count
+        (which catches a late or double-header row on a date already seen);
+      * the season was built by the running ``POOL_BUILDER_VERSION`` (the
+        watermark sees only the source data, so a FORMULA change needs this
+        guard to land on the incremental path).
 
-    The previous strict ``>`` watermark silently skipped a season when a late or
-    doubleheader row landed on an ALREADY-SEEN ``game_date`` (the max did not
-    move). Switching the staleness test to ``src_max >= prev`` and adding the
-    row-count guard catches those same-date additions without rebuilding an
-    unchanged season every night. If the metadata table is absent or has no row
-    for a season (or a legacy row predates ``source_row_count``), the season is
-    (re)built.
-
-    SIM-501a adds the builder-version guard: a season built by a DIFFERENT
-    ``POOL_BUILDER_VERSION`` is stale even when its source is unchanged. The
-    watermark test sees only the source data, so without this guard a FORMULA
-    change (like the SIM-501a ``result_outs`` fix) never lands on the default
-    incremental path — the sibling ``play_pool_cache`` already gates on its
-    builder version for the same reason.
+    A season with no metadata row (or no metadata table, or a row with no
+    ``source_row_count``) is built.
     """
     try:
         meta = {
@@ -167,12 +136,12 @@ def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[i
 
 
 def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int) -> None:
-    """Upsert per-(pool, season) build watermark + recency reference (SIM-076/095).
+    """Upsert the build record of each (pool, season): the source watermark, the
+    source row count and the recency reference.
 
-    Records both the source watermark (``source_max_game_date``) and the source
-    row count (``source_row_count``, SIM-345 guard) so the next incremental run
-    can detect same-date late rows. ``row_count`` remains the materialized pool
-    row count for observability.
+    The source watermark (``source_max_game_date``) and row count
+    (``source_row_count``) let the next incremental run detect a late row on a
+    date already seen. ``row_count`` is the pool's own row count, for the logs.
     """
     for s in seasons:
         src_max, src_cnt = _source_state(conn, s)
@@ -188,16 +157,14 @@ def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int
         )
 
 
-#: SIM-554: the two columns migration 0031 appends to sim.steal_opportunity_pool,
-#: and the file that adds them.
+#: The two columns migration 0031 appends to sim.steal_opportunity_pool, and
+#: the file that adds them.
 STEAL_POOL_0031_COLUMNS: tuple[str, ...] = ("pitch_class", "is_pickoff_row")
-
-
 MIGRATION_0031 = "db/migrations/duckdb/0031_sim554_steal_pool_pitch_class.sql"
 
 
 def _require_steal_pool_0031(conn) -> None:
-    """SIM-554: raise unless sim.steal_opportunity_pool carries migration 0031.
+    """Raise unless sim.steal_opportunity_pool carries migration 0031.
 
     The nightly job applies no DuckDB migration. The steal-pool builder deletes
     a season's rows, then runs a positional INSERT. On an un-migrated table the
@@ -219,17 +186,18 @@ def _require_steal_pool_0031(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Index-recreate hardening (SIM-419)
+# The index recreate after a bulk delete
 # ---------------------------------------------------------------------------
 
 
 def _ensure_index_if_not_exists(create_index_sql: str) -> str:
     """Inject ``IF NOT EXISTS`` into a ``CREATE [UNIQUE] INDEX`` statement.
 
-    Makes an index recreate idempotent so re-running a profile rebuild (or a
-    partially-applied prior run) can't fail on an already-present index. Returns
-    the statement unchanged if it already has the clause or isn't a recognised
-    CREATE INDEX form (the caller still DROPs IF EXISTS first as a safety net).
+    It makes an index recreate idempotent, so a rerun of a profile build (or
+    of a half-applied earlier run) cannot fail on an index that is already
+    there. A statement that already has the clause, or is not a CREATE INDEX
+    form this recognises, comes back unchanged (the caller drops the index IF
+    EXISTS first anyway).
     """
     stmt = create_index_sql.strip()
     low = stmt.lower()

@@ -11,13 +11,11 @@ from datetime import date
 #: 279 moneyline → 278).
 F5_TWIN_MARKETS: dict[int, int] = {283: 282, 281: 280, 279: 278}
 
-
 #: SIM-555: a book whose first-five entries are first-inning bets from this
 #: date on. Applies to the F5_TWIN_MARKETS keys that F5_EXCLUDED_MARKETS lists
 #: for the book. The 300-game census before the re-load confirms the date and
 #: finds any other book.
 F5_EXCLUDED_BOOKS: dict[int, date] = {12: date(2025, 3, 1)}
-
 
 #: SIM-555 (census fix 2026-09-28): the first-five markets each dated
 #: exclusion applies to. A book on F5_EXCLUDED_BOOKS with no entry here is
@@ -57,7 +55,6 @@ def is_f5_dated_excluded(book_id: int, market_id: int, game_date: date | None) -
 #: the same book's first-inning line.
 TWIN_PRICE_TOLERANCE = 0.03
 
-
 #: SIM-555 (review fix 2026-09-28): the gap for the moneyline pair (279 → 278).
 #: Both moneylines carry the line 1 on every side, so the line test cannot
 #: tell them apart, and on a near-even game a book's real two-way first-five
@@ -65,7 +62,6 @@ TWIN_PRICE_TOLERANCE = 0.03
 #: against −110 / −110 on game 634368). The evidence for the twin is run
 #: lines only, so a moneyline counts as a copy only at IDENTICAL prices.
 TWIN_MONEYLINE_PRICE_TOLERANCE = 0.0
-
 
 #: The first-five markets whose twin test needs identical prices.
 _EXACT_TWIN_MARKETS: frozenset[int] = frozenset({279})

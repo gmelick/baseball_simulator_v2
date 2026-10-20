@@ -28,8 +28,6 @@ _ACTOR_TABLES = {
     # id column resolves to pitcher_id via the `endswith("_id")` rule below.
     "pitcher_steal": "pitcher_steal_metrics",
 }
-
-
 _NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
 
 

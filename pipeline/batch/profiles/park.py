@@ -22,26 +22,22 @@ class ParkFactorsMixin(ComputorBase):
         league-average rate.  Bayesian shrinkage toward 1.0 based on
         sample_pa (PARK_PRIOR_PA controls the shrinkage rate).
 
-        Handedness splits (SIM-336)
-        ---------------------------
+        Handedness splits
+        -----------------
         ``factor_vs_l`` / ``factor_vs_r`` are split on the **batter's**
-        handedness (``stand``), the standard sabermetric convention — short
+        handedness (``stand``), the standard sabermetric convention: short
         porches and outfield dimensions interact with the batter's pull side,
-        and ``stand`` is the same key the pitch/outcome read path pre-filters
-        on (SIM-337 indexes, SIM-345 contract).
+        and ``stand`` is the key the pitch and outcome reads filter on.
 
-        SIM-440 correction: this docstring previously said switch hitters land
-        in ``stand='S'`` and contribute only to ``factor_overall``. That is
-        backwards — ``stand`` is the per-PA resolved side and is 'S' on **zero**
-        rows; ``bat_hand`` is the roster-declared side and is 'S' for every
-        switch hitter (see db/schemas/01_postgres_schema.sql for the canonical
-        definition). So every PA, switch hitters included, already lands in a
-        real L or R bucket here and the 'S' carve-out never applied.
+        ``stand`` is the side the batter took in that plate appearance, so it
+        is never 'S' (``bat_hand``, the roster's side, is 'S' for every switch
+        hitter; db/schemas/01_postgres_schema.sql defines both). Every plate
+        appearance, switch hitters included, lands in a real L or R bucket.
         Each L/R split is the venue's vs-hand rate over its own vs-hand league
-        average, so it is independently centered on 1.0.
+        average, so it is centered on 1.0 on its own.
 
-        Pool-neutralization policy (SIM-336)
-        ------------------------------------
+        Pool-neutralization policy
+        --------------------------
         The sim pools (``sim.pitch_pool`` / ``sim.outcome_pool``) are drawn
         from *real* PAs that ALREADY occurred in some park, so their empirical
         rates are park-influenced. To apply a venue's park factor at sim time

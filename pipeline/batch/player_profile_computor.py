@@ -1,60 +1,31 @@
-"""
-player_profile_computor.py
-==========================
-Step 1.4 — Player Profile & Defensive Metrics Pre-computation
-MLB Baseball Simulation Platform
+"""The nightly profile build: the player profiles, the defensive metrics and the
+simulation pools.
 
-Reads from PostgreSQL raw.pitches (and raw.games / raw.managers for context)
-and writes all derived metrics + simulation pools to DuckDB.
+``PlayerProfileComputor`` reads Postgres ``raw.*`` through DuckDB's postgres
+extension (attached read-only) and writes the ``derived.*`` profile tables and
+the ``sim.*`` pools into the DuckDB file. The builders live in
+``pipeline/batch/profiles/``, one mixin per group. This module keeps the class,
+the run order, the season delete and the entry point.
 
-Architecture
-------------
-  PostgreSQL (raw.*)
-       │
-       │  DuckDB postgres extension attaches directly — no full data load into Python
-       ▼
-  DuckDB (in-memory aggregation engine)
-       │
-       ├── derived.pitcher_season_metrics   (GMM model fit in Python via sklearn)
-       ├── derived.pitcher_gmm_components   (one row per GMM component)
-       ├── derived.batter_season_metrics
-       ├── derived.fielder_season_metrics
-       ├── derived.baserunner_season_metrics
-       ├── derived.catcher_season_metrics
-       ├── derived.manager_season_metrics
-       ├── derived.park_factors
-       │
-       ├── sim.pitch_pool                   (full rebuild — quality-filtered raw.pitches)
-       ├── sim.outcome_pool                 (in-play subset with batted ball detail)
-       └── sim.stolen_base_pool             (SB attempts, denormalized from derived.*)
+The run order (``PlayerProfileComputor.run``):
 
-Run order matters:
-  1. Park factors           (no dependencies)
-  2. Pitcher profiles       (GMM — most expensive step)
-  3. Batter profiles
-  4. Fielder profiles
-  5. Baserunner profiles
-  6. Catcher profiles
-  7. Manager profiles
-  8. sim.pitch_pool         (sim pools go last)
-  9. sim.outcome_pool
-  10. sim.stolen_base_pool  (denormalizes from derived.* — must be after step 7)
+1. The park factors.
+2. The pitcher profiles (the arsenal mixture fit is the slowest step).
+3. The batter profiles.
+4. The baserunner profiles and the two steal-engine tables.
+5. The manager profiles.
+6. The run-expectancy matrix, the catcher and fielder metrics, and their
+   season aggregates.
+7. The simulation pools, then the outfield arm block (it reads the advancement
+   pool), the intentional-walk rates and the plate-appearance situations.
 
-Nightly usage
--------------
-  # Recompute current season only (fast — ~5 min)
-  computor = PlayerProfileComputor(
-      pg_dsn="postgresql://user:pass@localhost:5432/baseball",
-      duckdb_path="/data/baseball_sim.duckdb",
-  )
-  computor.run(seasons=[2025])
+The entry point then computes the league averages. Usage::
 
-  # Full historical rebuild (slow — ~60 min for 3 seasons)
-  computor.run(seasons=[2022, 2023, 2024, 2025], full_rebuild=True)
+    python -m pipeline.batch.player_profile_computor --seasons 2026
+    python -m pipeline.batch.player_profile_computor --seasons 2017 ... 2026 --full-rebuild
 
-Dependencies
-------------
-  pip install duckdb psycopg2-binary scikit-learn numpy pandas scipy
+A partial rebuild must include the season in progress: every engine refuses a
+profile table stamped at two dates (the one-cutoff rule, SIM-551).
 """
 
 from __future__ import annotations
@@ -162,11 +133,6 @@ logging.basicConfig(
 log = logging.getLogger("player_profile_computor")
 
 
-# ---------------------------------------------------------------------------
-# Main computor class
-# ---------------------------------------------------------------------------
-
-
 class PlayerProfileComputor(
     ParkFactorsMixin,
     PitcherProfilesMixin,
@@ -179,14 +145,11 @@ class PlayerProfileComputor(
     SimPoolsMixin,
     ComputorBase,
 ):
-    """
-    Orchestrates the full Step 1.4 nightly batch job.
+    """Runs the profile build: every builder mixin, in dependency order.
 
-    All heavy aggregation runs in DuckDB via the postgres extension.
-    GMM fitting for pitcher profiles runs in Python (sklearn).
-    Defensive metrics (framing, blocking, OAA, DP, arm) are computed
-    and aggregated into derived.fielder/catcher_season_metrics inline.
-    All results are written to the DuckDB file at duckdb_path.
+    The aggregation runs in DuckDB over the attached Postgres tables. The
+    pitcher arsenal mixtures are fitted in Python (scikit-learn). Every result
+    goes to the DuckDB file at ``duckdb_path``.
     """
 
     def __init__(self, pg_dsn: str, duckdb_path: str) -> None:
@@ -265,79 +228,77 @@ class PlayerProfileComputor(
             log.info("=== Player Profile & Defensive Metrics Pre-computation ===")
             log.info("  Seasons: %s | full_rebuild=%s", seasons, full_rebuild)
 
-            # SIM-551: check every stamped table up front, so a run that the
-            # batter section would refuse does not first spend an hour per
-            # season on the pitcher GMMs. Each builder repeats its own check
-            # (the scripts call the builders one at a time).
+            # Check every stamped table first, so a run that the batter step
+            # would refuse does not spend an hour per season on the pitcher
+            # fits before it stops. Each builder repeats its own check: the
+            # scripts call the builders one at a time.
             for table in self.STAMPED_TABLES:
                 self._refuse_a_mixed_cutoff(table, seasons, asof or date.today())
 
             if full_rebuild:
                 self._delete_seasons(seasons)
 
-            # ── Non-defensive profiles (ordered for dependency satisfaction) ──
-            self._compute_park_factors(seasons)  # 1. no dependencies
-            self._compute_pitcher_profiles(seasons, asof=asof)  # 2. GMM — most expensive
-            self._compute_batter_profiles(seasons, asof=asof)  # 3.
-            self._compute_baserunner_profiles(
-                seasons, asof=asof
-            )  # 4. infield/DP need sprint speeds
-            self._build_baserunner_steal_metrics(
-                seasons, asof=asof
-            )  # 4b. SIM-408 steal-engine table
-            self._build_pitcher_steal_metrics(seasons, asof=asof)  # 4c. SIM-408 pitcher-steal table
-            # SIM-433: per-game bullpen rest/workload (_compute_bullpen_workload) is
-            # NOT derived here — the bullpen-availability ingest builds its own computor
-            # and recomputes it against the live roster/IL, so running it in the nightly
-            # rebuild would only pay for a discarded query.
-            self._compute_manager_profiles(seasons, asof=asof)  # 5.
+            # ── The profiles ─────────────────────────────────────────────────
+            self._compute_park_factors(seasons)
+            self._compute_pitcher_profiles(seasons, asof=asof)  # the slowest step
+            self._compute_batter_profiles(seasons, asof=asof)
+            # The infield and double-play metrics below read the sprint speeds.
+            self._compute_baserunner_profiles(seasons, asof=asof)
+            self._build_baserunner_steal_metrics(seasons, asof=asof)
+            self._build_pitcher_steal_metrics(seasons, asof=asof)
+            # The per-game bullpen workload (_compute_bullpen_workload) is not
+            # built here: the bullpen-availability ingest computes it against
+            # the live roster, so a nightly copy would never be read.
+            self._compute_manager_profiles(seasons, asof=asof)
 
-            # ── Defensive metrics ────────────────────────────────────────────
-            # RE matrix first — the DP run value depends on it
+            # ── The defensive metrics ────────────────────────────────────────
+            # The run-expectancy matrix comes first: the double-play run value reads it.
             self._re_matrix = build_run_expectancy_matrix(self._conn, seasons, asof=asof)
 
-            # Catcher: framing → blocking → throwing (temp tables consumed in order)
+            # The catcher: framing, blocking, throwing (each fills a temp table
+            # the season aggregate reads).
             self._compute_catcher_framing(seasons, asof=asof)
             self._compute_catcher_blocking(seasons, asof=asof)
             self._compute_catcher_throwing(seasons, asof=asof)
 
-            # Outfield. The arm block is NOT built here: it reads the
-            # advancement pool, so `_fill_outfield_arm_block` runs after the
-            # pools below (step 6b).
+            # The outfield. The arm block reads the advancement pool, so
+            # _fill_outfield_arm_block runs after the pools below.
             self._compute_outfield_catch_probability(seasons, asof=asof)
 
-            # Infield
+            # The infield.
             self._compute_infield_oaa(seasons, asof=asof)
             self._compute_dp_metrics(seasons, asof=asof)
             self._compute_bunt_defense(seasons, asof=asof)
             self._compute_first_base_scooping(seasons, asof=asof)
             self._compute_error_decomposition(seasons, asof=asof)
 
-            # Season-level aggregation: temp tables → derived.fielder/catcher_season_metrics
+            # The season aggregates: the temp tables into
+            # derived.fielder_season_metrics and derived.catcher_season_metrics.
             self._aggregate_fielder_season_metrics(seasons, asof=asof)
             self._aggregate_catcher_season_metrics(seasons, asof=asof)
-            # SIM-517: the strike-3 slice of the receiving profile (an UPDATE
-            # over the freshly aggregated catcher rows).
+            # The uncaught-strike-three slice of the receiving profile (an
+            # UPDATE over the catcher rows aggregated above).
             self._compute_catcher_uncaught_k3(seasons, asof=asof)
 
-            # ── Simulation pools (last — denormalize from derived.*) ──────────
-            # SIM-095: incremental rebuild unless a full_rebuild was requested.
+            # ── The simulation pools ─────────────────────────────────────────
+            # A pool rebuilds only the seasons whose source changed, unless
+            # this is a full rebuild.
             incremental = not full_rebuild
             self._build_pitch_pool(seasons, incremental=incremental)
             self._build_outcome_pool(seasons, incremental=incremental)
             self._build_stolen_base_pool(seasons, incremental=incremental)
             self._build_steal_opportunity_pool(seasons, incremental=incremental)
-            # SIM-510: reads sim.outcome_pool, so it must follow that rebuild.
+            # Reads sim.outcome_pool, so it follows that rebuild.
             self._build_advancement_opportunity_pool(seasons, incremental=incremental)
-            # 6b. SIM-550: the outfield arm block, from the advancement pool
-            # (an UPDATE over the fielder rows aggregated above).
+            # The outfield arm block: an UPDATE over the fielder rows
+            # aggregated above, from the advancement pool.
             self._fill_outfield_arm_block(seasons, asof=asof)
-            # SIM-515: the measured IBB rate table (a full recompute — the
-            # table is tiny and window-scoped, so no incremental gating).
+            # The intentional-walk rates: a full recompute every run (the
+            # table is small and covers the pool window).
             self._build_ibb_rates(seasons)
 
-            # SIM-408: per-PA situation facts for the Step 2.9 situation KDTree
-            # engine (idempotent INSERT OR REPLACE, so no incremental gating).
+            # The plate-appearance situations the situation engine reads
+            # (INSERT OR REPLACE, so no incremental gating).
             self._build_at_bat_situations(seasons)
 
             elapsed = time.time() - t0
@@ -347,53 +308,51 @@ class PlayerProfileComputor(
             self._close()
 
     # ------------------------------------------------------------------
-    # Teardown helpers
+    # The season delete of a full rebuild
     # ------------------------------------------------------------------
 
     def _delete_seasons(self, seasons: list[int]) -> None:
-        """Remove existing rows for the given seasons from all derived + sim tables.
+        """Remove the rows of ``seasons`` from every season-keyed derived table.
 
-        SIM-091: Per-play detail tables (outfield/infield/dp) are explicitly
-        enumerated below.  When you add a new derived.* table with a `season`
-        column, also add it here OR add it to _EXCLUDED_FROM_DELETE_SEASONS in
-        tests/unit/test_profile_indexes_and_etl_fallbacks.py with a comment — the
-        SIM-091 regression test enforces this.
+        Every table is listed by name. A new ``derived.*`` table with a
+        ``season`` column goes on this list, or on
+        ``_EXCLUDED_FROM_DELETE_SEASONS`` in
+        ``tests/unit/test_profile_indexes_and_etl_fallbacks.py`` with its
+        reason; that test fails otherwise.
 
-        Intentionally omitted:
-          - derived.run_expectancy_matrix — keyed by season_range, not season.
-          - sim.* pools — each has its own DELETE in its own build method.
+        Left out on purpose:
+          - derived.run_expectancy_matrix, keyed by season range, not season.
+          - the sim.* pools: each pool's build deletes its own seasons.
         """
         season_list = ", ".join(str(s) for s in seasons)
         tables = [
-            # FK-ordered: children before parents
+            # Children before parents (the foreign keys).
             "derived.pitcher_gmm_components",
             "derived.pitcher_season_metrics",
             "derived.batter_season_metrics",
             "derived.fielder_season_metrics",
             "derived.baserunner_season_metrics",
-            "derived.baserunner_steal_metrics",  # SIM-408 steal-engine table
-            "derived.pitcher_steal_metrics",  # SIM-408 pitcher-steal-engine table
+            "derived.baserunner_steal_metrics",
+            "derived.pitcher_steal_metrics",
             "derived.catcher_season_metrics",
             "derived.manager_season_metrics",
             "derived.park_factors",
-            # SIM-408: per-PA situation facts (own INSERT OR REPLACE build, but
-            # season-keyed so full_rebuild must clear it — SIM-091 requires it here)
+            # Its build is INSERT OR REPLACE, but the table is season-keyed, so
+            # a full rebuild clears it.
             "derived.at_bat_situations",
-            # Per-play detail tables (SIM-091 explicit enumeration)
+            # The per-play detail tables.
             "derived.outfield_play_detail",
             "derived.infield_play_detail",
             "derived.dp_play_detail",
         ]
-        # SIM-419: drop secondary indexes before the bulk DELETE (a large DELETE
-        # against indexed tables is slow), then recreate them afterwards.
-        # Hardened so the tables are NEVER left de-indexed:
-        #   * the DELETE + recreate run in try/finally — a DELETE error still
-        #     triggers the recreate (previously an error skipped it entirely);
-        #   * recreate is idempotent (DROP IF EXISTS + injected IF NOT EXISTS in
-        #     _recreate_indexes), so a partially-applied prior run can't fail it;
-        #   * recreate failures are collected + verified against duckdb_indexes()
-        #     and escalated to ERROR (previously a silent WARNING), so a
-        #     now-missing index is surfaced rather than swallowed.
+        # Drop the secondary indexes before the bulk DELETE (a large DELETE on
+        # indexed tables is slow) and recreate them after. The tables are never
+        # left without their indexes:
+        #   * the recreate runs in ``finally``, so a DELETE error still reaches it;
+        #   * the recreate is idempotent (DROP IF EXISTS, then CREATE ... IF NOT
+        #     EXISTS), so a half-applied earlier run cannot fail it;
+        #   * each recreate is checked against duckdb_indexes(), and a missing
+        #     index is logged as an ERROR.
         saved_indexes: list[tuple[str, str]] = []
         for tbl in tables:
             schema_name, table_name = tbl.split(".")
@@ -437,12 +396,12 @@ class PlayerProfileComputor(
         log.info("Cleared existing rows for seasons %s.", seasons)
 
     def _recreate_indexes(self, saved_indexes: list[tuple[str, str]]) -> list[str]:
-        """Idempotently recreate dropped secondary indexes; return names that FAILED.
+        """Recreate the dropped secondary indexes; return the names that failed.
 
-        SIM-419: each recreate is ``DROP INDEX IF EXISTS`` + a ``CREATE INDEX IF
-        NOT EXISTS`` (injected via :func:`_ensure_index_if_not_exists`) so it is
-        safe even if a prior run left the index half-applied, then verified
-        against ``duckdb_indexes()`` so a silently-missing index is reported.
+        Each recreate is ``DROP INDEX IF EXISTS`` and then ``CREATE INDEX IF NOT
+        EXISTS`` (:func:`_ensure_index_if_not_exists`), so a half-applied
+        earlier run cannot fail it. Each is then checked against
+        ``duckdb_indexes()``, so an index that silently failed is reported.
         """
         failed: list[str] = []
         for idx_qualified_name, idx_sql in saved_indexes:
@@ -455,7 +414,7 @@ class PlayerProfileComputor(
                 log.warning("  Could not recreate index %s: %s", idx_qualified_name, exc)
                 failed.append(idx_qualified_name)
                 continue
-            # Verify the index is actually present now (don't trust a silent no-op).
+            # Check the index is present (a recreate can succeed without creating it).
             try:
                 present = self._conn.execute(
                     "SELECT 1 FROM duckdb_indexes() WHERE schema_name = ? AND index_name = ?",
@@ -516,9 +475,9 @@ if __name__ == "__main__":
         "--asof",
         type=date.fromisoformat,
         help=(
-            "SIM-534: build the batter profiles as of this date. Every source is "
-            "cut off there, so a backtest cannot use data recorded after the day "
-            "it simulates. Unset means everything known today."
+            "Build the profiles as of this date. Every source is cut off there, "
+            "so a backtest cannot use data recorded after the day it simulates. "
+            "Unset means everything known today."
         ),
     )
     args = parser.parse_args()

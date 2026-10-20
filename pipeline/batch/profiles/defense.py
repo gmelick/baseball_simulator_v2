@@ -17,23 +17,14 @@ log = logging.getLogger("player_profile_computor")
 
 
 # ---------------------------------------------------------------------------
-# Defensive Metrics Constants
+# The defensive constants
 # ---------------------------------------------------------------------------
 
 HC_SCALE = 2.48  # hc units per foot
-
-
 HOME_PLATE = (125.42, 199.27)
-
-
 SECOND_BASE = (125.42, 108.27)
-
-
 FIRST_BASE = (162.5, 153.5)
-
-
 THIRD_BASE = (88.3, 153.5)
-
 
 AVG_FIELDER_POS = {
     "SS": {"R": (112.0, 152.0), "L": (118.0, 149.0)},
@@ -45,7 +36,6 @@ AVG_FIELDER_POS = {
     "RF": {"R": (170.0, 115.0), "L": (175.0, 118.0)},
 }
 
-
 AVG_THROW_VELO = {
     "SS": 85.0,
     "2B": 75.0,
@@ -56,56 +46,27 @@ AVG_THROW_VELO = {
     "RF": 86.0,
 }
 
-
 INFIELD_EXCHANGE_TIME = 0.80
-
-
 OUTFIELD_EXCHANGE_TIME = 1.00
-
-
-# Defensive run-value constants — sourced from simulation.constants (SIM-202).
-# Values preserved exactly: infield 0.75, outfield 0.90, block 0.25, strike 0.125.
+# The defensive run values, from simulation.constants: infield 0.75,
+# outfield 0.90, block 0.25, strike 0.125.
 RUNS_PER_OAA_INFIELD = DEFENSIVE_RUN_VALUES["runs_per_oaa_infield"]
-
-
 RUNS_PER_OAA_OUTFIELD = DEFENSIVE_RUN_VALUES["runs_per_oaa_outfield"]
-
-
 RUNS_PER_BLOCK_SAVED = DEFENSIVE_RUN_VALUES["runs_per_block_saved"]
-
-
 RUNS_PER_STRIKE_ABOVE_AVG = DEFENSIVE_RUN_VALUES["runs_per_strike_above_avg"]
-
-
 FRAMING_SHADOW_INNER = 0.0
-
-
 FRAMING_SHADOW_OUTER = 0.5
-
-
 ZONE_HALF_WIDTH = 0.833
-
-
 OF_GOING_BACK_PENALTY_FPS = 1.0
-
-
 IF_AWAY_FROM_BAG_PENALTY_S = 0.20
-
-
 GRAVITY_FPS2 = 32.174
-
-
 DEFAULT_SPRINT_SPEED_FPS = 27.0
-
-
 MIN_CATCHER_PITCHES = 500
-
-
 MIN_DP_OPPORTUNITIES = 20
 
 
 # ---------------------------------------------------------------------------
-# Defensive utility functions
+# The field-geometry helpers
 # ---------------------------------------------------------------------------
 
 

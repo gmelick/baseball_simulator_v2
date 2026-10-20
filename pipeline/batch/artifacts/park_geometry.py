@@ -72,43 +72,21 @@ log = logging.getLogger("engine_artifacts")
 # with the carry model and the file write.
 
 PARK_GEOMETRY_VERSION = 2
-
-
 PARK_SECTOR_DEG = 10
-
-
 PARK_SPRAY_MIN = -55.0
-
-
 PARK_SPRAY_MAX = 55.0
-
-
 PARK_N_SECTORS = int(round((PARK_SPRAY_MAX - PARK_SPRAY_MIN) / PARK_SECTOR_DEG))
-
-
 #: Minimum support for a venue sector's own line (home runs / balls kept in).
 PARK_MIN_HR = 10
-
-
 PARK_MIN_KEPT = 10
-
-
 #: The change detector: a sector moved when its early and late lines, each on
 #: ``PARK_MOVE_MIN_HR`` home runs or more, differ by ``PARK_MOVE_FT`` or more.
 PARK_MOVE_FT = 10.0
-
-
 PARK_MOVE_MIN_HR = 10
-
-
 #: The published-distance prior's weight, in home runs, and the venues a
 #: sector's league offset needs before it exists.
 PARK_PRIOR_N = 10
-
-
 PARK_PRIOR_MIN_PARKS = 5
-
-
 #: The five published points and the field-side angle of each.
 PARK_PUBLISHED_POINTS: tuple[tuple[str, float], ...] = (
     ("leftLine", -45.0),
@@ -117,15 +95,9 @@ PARK_PUBLISHED_POINTS: tuple[tuple[str, float], ...] = (
     ("rightCenter", 22.5),
     ("rightLine", 45.0),
 )
-
-
 #: A kept ball counts toward a sector's support from this distance.
 PARK_KEPT_MIN_FT = 300.0
-
-
 CARRY_FEATURES = ("1", "ev", "la", "la^2", "ev*la", "ev^2")
-
-
 #: The carry offset's design (the plan's §11.1): the carry model plus the
 #: spray terms; one dummy per park follows these columns.
 CARRY_OFFSET_FEATURES = (
@@ -139,8 +111,6 @@ CARRY_OFFSET_FEATURES = (
     "spray^2",
     "ev*|spray|",
 )
-
-
 #: A park needs this many home runs with the three factors for its own offset.
 PARK_OFFSET_MIN_HR = 100
 

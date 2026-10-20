@@ -72,18 +72,13 @@ class FielderProfilesMixin(ComputorBase):
             # (SELECT * FROM _tmp_errors).  Keep the column set minimal but
             # include the foreign-key columns the outer SELECT joins on.
             #
-            # SIM-542: these five names (fielding_error_count, throwing_error_count,
-            # fielding_error_rate, throwing_error_rate — plus the unused
-            # total_plays_fielded) must match _compute_error_decomposition's REAL
-            # output columns exactly. This placeholder named them
-            # fielding_errors/throwing_errors/total_plays instead, and was missing
-            # fielding_error_rate/throwing_error_rate outright — silently correct
-            # in production only because that builder has no sample-size guard and
-            # always creates the real table first, so this placeholder's
-            # IF NOT EXISTS never actually fires there. A caller that runs the
-            # aggregator standalone hits `Binder Error: Values list "e" does not
-            # have a column named "fielding_error_count"` the moment this
-            # placeholder is the only table in play.
+            # These names (fielding_error_count, throwing_error_count,
+            # fielding_error_rate, throwing_error_rate, and the unused
+            # total_plays_fielded) must match _compute_error_decomposition's
+            # output columns exactly. In production that builder always
+            # creates the real table first; the placeholder serves a caller
+            # that runs the aggregator alone, which fails with a Binder Error
+            # on any column this placeholder misnames.
             "_tmp_errors": """
                 CREATE TABLE IF NOT EXISTS _tmp_errors (
                     fielder_id INTEGER, position VARCHAR, season SMALLINT,
@@ -93,10 +88,9 @@ class FielderProfilesMixin(ComputorBase):
                 )
             """,
             # Bunt defense — _compute_bunt_defense
-            # SIM-542: same class of bug as _tmp_errors above — bunt_outs and
-            # bunt_success_rate must be named bunt_outs_recorded and
-            # bunt_fielding_rate to match what _compute_bunt_defense really
-            # produces and what the aggregator's outer SELECT reads from `b`.
+            # The same rule as _tmp_errors above: bunt_outs_recorded and
+            # bunt_fielding_rate are the names _compute_bunt_defense produces
+            # and the aggregator's outer SELECT reads from `b`.
             "_tmp_bunt_defense": """
                 CREATE TABLE IF NOT EXISTS _tmp_bunt_defense (
                     fielder_id INTEGER, position VARCHAR, season SMALLINT,
@@ -126,7 +120,7 @@ class FielderProfilesMixin(ComputorBase):
         Combine all per-play detail tables into the final
         derived.fielder_season_metrics rows.
 
-        SIM-537: the six per-play temp tables are already cutoff-filtered
+        The six per-play temp tables are already cutoff-filtered
         by the time this method reads them (they carry no date of their
         own). Four Savant joins here have no date column at all — sprint
         speed, arm strength, outs above average and the outfield jump — so
@@ -136,25 +130,25 @@ class FielderProfilesMixin(ComputorBase):
         the PRIOR season's row. Measured year-to-year correlations: the
         arm strength 0.857, the jump 0.80 to 0.92, Savant's outs above
         average per 100 chances 0.38 to 0.61 within an outfield position
-        and 0.34 to 0.63 within an infield position (plan §2.2b), so the
-        substitute costs little.
+        and 0.34 to 0.63 within an infield position, so the substitute costs
+        little.
 
         The shifted numerator takes the shifted denominator. At a cutoff
         the per-100 figure divides the PRIOR season's outs by the PRIOR
         season's chances, never by this season's partial count. A cutoff
         build reads the prior season's chances from the build when that
         season is in ``seasons``, else from its surviving row in the table
-        (the delete above removes only the run's seasons, and the SIM-551
-        guard makes a survivor a completed season). With no prior-season
+        (the delete above removes only the run's seasons, and the
+        one-cutoff guard makes a survivor a completed season). With no prior-season
         chances anywhere the figure is NULL, and the model reads the league
         mean for it.
 
-        SIM-550: the six outfield arm columns and ``of_arm_runs`` are
+        The six outfield arm columns and ``of_arm_runs`` are
         written NULL here. ``_fill_outfield_arm_block`` fills the six from
         the advancement pool after the pools are built; ``of_arm_runs``
         stays NULL (the model does not read it).
 
-        SIM-532: the six Savant columns come LAST, after ``asof_date``, in
+        The six Savant columns come LAST, after ``asof_date``, in
         ``OAA_JUMP_COLUMN_ORDER``. The outs above average join is per
         position (the board is pulled once per position, so a player's
         figure differs between his LF and CF rows); the jump join is per
@@ -169,7 +163,7 @@ class FielderProfilesMixin(ComputorBase):
             if asof is not None
             else "c.season"
         )
-        # SIM-532: the per-100 denominator follows the numerator's season.
+        # The per-100 denominator follows the numerator's season.
         # For the season that contains the cutoff, the outs come from the
         # prior season, so the chances must too: from the build (`prev`)
         # when the prior season is in the run, else from its surviving row
@@ -194,12 +188,12 @@ class FielderProfilesMixin(ComputorBase):
         # ----------------------------------------------------------------
         self._ensure_fielder_temp_tables_exist()
 
-        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.fielder_season_metrics", seasons, asof_date)
 
         # Delete existing rows for these seasons (full rebuild pattern).
-        # SIM-537: a cutoff build also removes a season that had not
+        # A cutoff build also removes a season that had not
         # started yet — INSERT alone only overwrites rows the new query
         # produces, so a stale full-season row would otherwise survive.
         delete_cutoff = f"OR season > {asof_date.year}" if asof is not None else ""
@@ -518,11 +512,11 @@ class FielderProfilesMixin(ComputorBase):
         )
 
     # ------------------------------------------------------------------
-    # OUTFIELD ARM BLOCK (SIM-550) — from the advancement pool
+    # The outfield arm block, from the advancement pool
     # ------------------------------------------------------------------
 
     def _fill_outfield_arm_block(self, seasons: list[int], asof: date | None = None) -> None:
-        """SIM-550: fill the outfield arm block from
+        """Fill the outfield arm block (SIM-550) from
         ``sim.advancement_opportunity_pool``, per (fielder, position, season).
 
         The pool holds one row per real chance to take an extra base, with
@@ -537,8 +531,8 @@ class FielderProfilesMixin(ComputorBase):
 
         The step first resets the seven arm columns on every fielder row of
         the requested seasons, then writes the block where the pool holds a
-        chance. So the fill is self-contained: a row the pool no longer
-        supports (a stale block from an earlier source, or a position the
+        chance. So the fill is self-contained: a row the pool does not
+        support (a stale block from an earlier source, or a position the
         player did not field that season) is left NULL, not kept.
 
         Runs AFTER the pools. A cutoff filters the pool by ``game_date``, so
