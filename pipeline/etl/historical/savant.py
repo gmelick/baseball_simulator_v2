@@ -14,11 +14,10 @@ class SavantScrapeError(RuntimeError):
     """Baseball-Savant returned a page this loader cannot parse.
 
     The venue dimensions are scraped out of an inline ``var data = …`` literal in
-    an HTML page — there is no API for them. SIM-441 made that parse fail LOUDLY:
-    it was previously unguarded ``resp.text.find(...)`` slicing, so a page-shape
-    change would have sliced a wrong substring and either raised an opaque
-    JSONDecodeError deep in the call stack or, worse, parsed a *different*
-    object and written plausible-but-wrong stadium dimensions.
+    an HTML page: there is no API for them. The parse fails LOUDLY: an
+    unguarded slice would, after a page-shape change, raise an opaque
+    JSONDecodeError deep in the call stack or, worse, parse a *different*
+    object and write plausible-but-wrong stadium dimensions.
     """
 
 

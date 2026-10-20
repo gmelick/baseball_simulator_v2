@@ -306,7 +306,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         # messages arrive before the lock clears (e.g. a substitution event
         # immediately after the final pitch of a PA).
         self._last_resim_at_bat: dict[int, int] = {}
-        # Game_pks of games that have transitioned to Final.
+        # The game_pks of the games that have reached Final.
         # _sync_live_games() consults this set to short-circuit redundant
         # _upsert_game_record() calls for the rest of the day's polling.
         # Pre-populated on pipeline start from raw.games to survive restarts
@@ -1073,7 +1073,7 @@ ws_router = APIRouter(prefix="/ws", tags=["live"])
 
 @ws_router.websocket("/games/{game_pk}")
 async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
-    # Require_auth takes a Request, and FastAPI does not supply one
+    # require_auth takes a Request, and FastAPI does not supply one
     # in a WebSocket scope, so on ws_router it would fail every handshake with
     # a TypeError. ws_router therefore carries no router dependency, and the
     # handler checks the handshake's cookie or key first. A refused handshake

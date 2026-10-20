@@ -20,9 +20,8 @@ class MissingVenueError(RuntimeError):
 #
 # MLB's one-off neutral-site games can ship with no venue ANYWHERE in the feed:
 # ``gameData.venue`` is absent and the schedule endpoint returns
-# ``{"link": "/api/v1/venues/null"}``. Before this map, ``gd["venue"]["id"]``
-# raised a bare ``KeyError``, the sweep's per-game isolation swallowed it, and
-# the two affected games silently kept their pre-SIM-440 rows.
+# ``{"link": "/api/v1/venues/null"}``. Without this map ``gd["venue"]["id"]``
+# raises a bare ``KeyError``.
 #
 # The venue is not derivable from the game data, but MLB DOES publish it in the
 # unfiltered ``/api/v1/venues`` catalog — it is missing only from the
@@ -31,7 +30,7 @@ class MissingVenueError(RuntimeError):
 # ``teams.home.venue`` is deliberately NOT used as a fallback: for these games it
 # reports the home team's REGULAR park, so it would attribute a game played in a
 # cornfield in Dyersville, Iowa to Guaranteed Rate Field and quietly distort that
-# park's SIM-411 park factor. A wrong venue_id satisfies the NOT NULL and the FK,
+# park's park factor. A wrong venue_id satisfies the NOT NULL and the FK,
 # so nothing downstream would ever flag it.
 _VENUE_OVERRIDES: dict[int, tuple[int, str]] = {
     632924: (5445, "Field of Dreams"),  # 2021-08-12 NYY @ CWS — Dyersville, IA

@@ -114,18 +114,13 @@ class ReferenceRowsMixin(LoaderBase):
         """
         Upserts raw.managers for the home and away managers of this game.
 
-        The PK is ``(manager_id, season)`` — the old docstring said
-        ``(manager_id, team_id, season_start)``, which is not what the DDL
-        declares and not what the ``ON CONFLICT`` targets.
+        The PK is ``(manager_id, season)``, the target of the ``ON CONFLICT``.
 
         ``season_end`` semantics: NULL means "currently the manager for this
         team" (that is what ``idx_managers_active`` indexes). So on conflict we
         deliberately reset ``season_end = NULL`` — seeing a manager in the dugout
         again is exactly the evidence that he is active, which is how a return
-        from suspension or other missed time is recorded. The previous clause
-        assigned ``season_end = EXCLUDED.season_end`` where ``season_end`` was not
-        even in the INSERT column list, so it wrote NULL by accident while
-        silently failing to record ``season_start``, the value actually supplied.
+        from suspension or other missed time is recorded.
         """
         candidates = [
             (managers["home_manager_id"], managers["home_manager_name"], home_team_id),
@@ -164,14 +159,11 @@ class ReferenceRowsMixin(LoaderBase):
                 for mid, name, tid in missing:
                     # Find the CURRENTLY-ACTIVE incumbent to hand off from.
                     #
-                    # This probe used to have no ORDER BY, no LIMIT and no
-                    # `season_end IS NULL` predicate, with a bare fetchone() — so
-                    # with three managers in one season it closed an arbitrary
-                    # one, clobbering a correct handoff date and leaving the true
-                    # predecessor's stint open forever. `season_end IS NULL` is
-                    # the documented meaning of "currently active"
-                    # (idx_managers_active), so only such a row may be closed,
-                    # and the most recent stint is the one being replaced.
+                    # `season_end IS NULL` is the documented meaning of
+                    # "currently active" (idx_managers_active), so only such a
+                    # row may be closed, and the most recent stint is the one
+                    # being replaced; with three managers in one season, any
+                    # other choice closes the wrong stint.
                     cur.execute(
                         """
                         SELECT manager_id
@@ -234,18 +226,17 @@ class ReferenceRowsMixin(LoaderBase):
         Upserts raw.games.  Called after venues/teams/managers are guaranteed
         to exist so all FKs resolve cleanly.
 
-        For completed games, also populates final score, inning scores, and
-        pitcher W/L/S. SIM-409: reads the linescore + decisions from
-        ``liveData`` (previously read from ``gameData``, where they don't exist,
-        so final scores were always NULL). The INSERT ... ON CONFLICT DO UPDATE
-        always runs (no score-blind early return) so a re-fetch of an
-        already-loaded game backfills its final score.
+        For completed games, also populates the final score, the inning
+        scores and the pitcher W/L/S, from ``liveData`` (the linescore and the
+        decisions live there, not in ``gameData``). The INSERT ... ON CONFLICT
+        DO UPDATE always runs, so a re-fetch of a loaded game backfills its
+        final score.
         """
         gd = game_dict["gameData"]
         live = game_dict.get("liveData", {})
 
         game_date = gd["datetime"]["officialDate"]
-        venue_id = _resolve_venue_id(game_pk, gd)  # SIM-447
+        venue_id = _resolve_venue_id(game_pk, gd)
         home_team_id = gd["teams"]["home"]["id"]
         away_team_id = gd["teams"]["away"]["id"]
         game_type = gd.get("game", {}).get("type", "R")
@@ -272,7 +263,7 @@ class ReferenceRowsMixin(LoaderBase):
             else None
         )
 
-        # Winning / losing / save pitcher (under liveData.decisions, SIM-409).
+        # The winning, losing and save pitchers (under liveData.decisions).
         decisions = live.get("decisions", {})
         winning_pid = decisions.get("winner", {}).get("id")
         losing_pid = decisions.get("loser", {}).get("id")
@@ -397,7 +388,7 @@ class ReferenceRowsMixin(LoaderBase):
         if not rows:
             return
         with self._get_conn() as conn, conn.cursor() as cur:
-            # SIM-519 Part B: the live service writes a game's published (or
+            # The live service writes a game's published (or
             # projected) lineup before first pitch. The final box is the
             # authority: those rows go first, in this transaction, or a
             # pre-game row would win the unique slot below and a player

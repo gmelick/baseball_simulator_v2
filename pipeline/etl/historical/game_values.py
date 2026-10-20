@@ -1,5 +1,5 @@
 """The game, lineup and player values the loader reads from the feed: the
-height, the wind, the game status and the starting lineup rows.
+manager, the height, the wind, the game status and the starting lineup rows.
 """
 
 from __future__ import annotations
@@ -13,9 +13,39 @@ from pipeline.etl.boxscore_ingest import starting_position
 log = logging.getLogger("etl_historical_loader")
 
 
-# ---------------------------------------------------------------------------
-# Module-level helpers used by _ensure_prerequisites
-# ---------------------------------------------------------------------------
+def _manager_from_coaches(game_pk: int, side: str, coaches: list[dict]) -> tuple[Any, str]:
+    """A team's manager among its coaches: the acting manager (NTRM), else the
+    manager (MNGR), else the bench coach (COAB); ``("", "")`` when none is listed.
+
+    There is no fallback to ``coaches[0]``: the first coach listed is usually a
+    pitching coach, and a wrong id would reach every pitch row, raw.games and
+    raw.managers, where ``_ensure_managers`` would then mark the real manager
+    departed. An empty id is safe: ``_ensure_managers`` skips falsy ids and
+    ``_ensure_game`` binds ``or None``.
+    """
+    manager_id: Any = ""
+    manager_name = ""
+    for coach in coaches:
+        if coach["jobId"] == "NTRM":
+            manager_id = coach["person"]["id"]
+            manager_name = coach["person"]["fullName"]
+            break
+        if coach["jobId"] == "MNGR":
+            manager_id = coach["person"]["id"]
+            manager_name = coach["person"]["fullName"]
+        if coach["jobId"] == "COAB" and manager_name == "":
+            manager_id = coach["person"]["id"]
+            manager_name = coach["person"]["fullName"]
+    if manager_name == "":
+        log.warning(
+            "  game %s: no NTRM/MNGR/COAB coach for the %s team (%s roles "
+            "returned); leaving %s_manager unset rather than guessing",
+            game_pk,
+            side,
+            len(coaches),
+            side,
+        )
+    return manager_id, manager_name
 
 
 def _parse_height(height_str: str | None) -> int | None:
@@ -40,12 +70,9 @@ _WIND_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*mph\s*,\s*(.+?)\s*$", re.IGNORECAS
 def _parse_wind(raw: Any) -> tuple[int | None, str | None]:
     """Split the MLB feed's single wind string into (speed_mph, direction).
 
-    SIM-441. The feed exposes ONE formatted string under ``gameData.weather.wind``
-    — e.g. ``"8 mph, L To R"``, ``"12 mph, Out To CF"``, ``"Calm"`` — but this
-    loader read ``weather["speed"]`` and ``weather["direction"]``, keys the feed
-    has never provided. Both columns were therefore NULL on every game ever
-    loaded. (The two variables were also bound to the same dict, which is how the
-    mistake survived review.)
+    The feed exposes ONE formatted string under ``gameData.weather.wind``,
+    e.g. ``"8 mph, L To R"``, ``"12 mph, Out To CF"``, ``"Calm"``; it has no
+    separate speed and direction keys.
 
     Returns ``(None, None)`` for an absent value, and ``(0, "Calm")`` for the
     literal ``"Calm"`` the feed uses on a windless day — that is a real
@@ -100,11 +127,10 @@ def _build_starting_lineup_rows(game_pk: int, season: int, game_dict: dict) -> l
     scope — this ingests the opening lineup the sim resolves from.
 
     ``position_code`` is the position the starter held at first pitch:
-    the feed's ``allPositions[0]``. The feed's ``position`` is the LAST position
-    he held, and the rows loaded before SIM-559 carry that value, so a fielder
-    who moved mid-game left his starting slot empty in the defense map and a
-    second player at his final one. A two-way starter who pitches and bats as
-    the designated hitter is coded 'P'.
+    the feed's ``allPositions[0]`` (the starting-position fix, SIM-559). The
+    feed's ``position`` is the LAST position he held, which would leave a
+    fielder who moved mid-game out of his starting slot in the defense map. A
+    two-way starter who pitches and bats as the designated hitter is coded 'P'.
 
     Returns tuples in the raw.game_lineups insert column order:
     ``(game_pk, season, team_id, player_id, batting_order, position_code,

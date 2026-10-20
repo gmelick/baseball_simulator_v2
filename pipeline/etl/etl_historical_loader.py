@@ -1,24 +1,24 @@
-"""
-etl_historical_loader.py
-========================
-MLB Baseball Simulation Platform
+"""The historical loader: MLB Stats API games into Postgres ``raw.*``.
 
-Wraps the existing create_season_play_file.py fetch logic (write_rows /
-refresh_plays / get_plays) and routes every pitch row directly into
-PostgreSQL raw.pitches — no intermediate CSV required, though CSV output
-is preserved as an optional side-effect for audit purposes.
+``HistoricalDataLoader`` fetches each game's live feed, writes the reference
+rows the game needs, then its pitch rows into ``raw.pitches`` and its non-pitch
+events into ``raw.play_events``. The row building, the validation, the
+venues, the schedule helpers, the reference rows and the writes live in
+``pipeline/etl/historical/``. This module keeps the HTTP plumbing, the feed
+parser ``_fetch_game_pitches`` and the class, beside the names the tests patch
+(``_connect``, ``_http_get``, ``_fetch_once``, ``_fetch_game_pitches``).
 
-Architecture
-------------
+The flow
+--------
   MLB Stats API
        │
        ▼
   _fetch_game_pitches()  ← fetches feed/live + coaches; returns (pitch_rows, game_dict)
        │
        ▼
-  _ensure_prerequisites()  ← guarantees all FK parents exist before touching raw.pitches
-       │   Checks DB for missing IDs in one query per table, fetches only what's absent.
-       │   Load order respects FK chain:
+  _ensure_prerequisites()  ← every foreign-key parent exists before raw.pitches
+       │   One query per table finds the missing ids; only those are fetched.
+       │   The order follows the foreign keys:
        │     1. raw.venues    (no parents)
        │     2. raw.teams     (→ venues)
        │     3. raw.players   (no parents; all pitcher/batter/fielder IDs in this game)
@@ -35,7 +35,7 @@ Architecture
        └─ HARD ERROR  → row skipped, logged to etl_errors table
        │
        ▼
-  _batch_insert()       ← psycopg2 executemany, 500-row batches
+  _batch_insert()       ← psycopg2 execute_batch, 500-row batches
        │
        ▼
   raw.pitches           ← DB trigger raw.flag_pitch_quality() fires on insert
@@ -45,15 +45,15 @@ Architecture
 
 Usage
 -----
-  # Full historical backfill (2022–2024)
-  loader = HistoricalDataLoader(dsn="postgresql://user:pass@localhost/baseball")
+  # A historical backfill (the DSN defaults to BASEBALL_DB_DSN)
+  loader = HistoricalDataLoader()
   loader.refresh_seasons(start_year=2022, end_year=2024)
 
   # Current-season incremental update
   loader.load_date_range(start_date=date(2025, 3, 18), end_date=date.today())
 
-  # Single game (for testing)
-  loader.load_game(game_pk=745528)
+  # One game
+  loader.load_game(game_pk=745528, season=2024)
 
 Corrective re-ingest
 --------------------
@@ -100,7 +100,7 @@ from pipeline.etl.historical.base import LoaderBase
 from pipeline.etl.historical.game_values import (
     _build_starting_lineup_rows as _build_starting_lineup_rows,  # re-export: removed in the integration pass
 )
-from pipeline.etl.historical.game_values import _parse_height
+from pipeline.etl.historical.game_values import _manager_from_coaches, _parse_height
 from pipeline.etl.historical.reference_rows import ReferenceRowsMixin
 from pipeline.etl.historical.rows import (
     _MAX_ASSIST_SLOTS,
@@ -142,69 +142,44 @@ RETRY_BACKOFF_S = 2.0  # seconds between retries
 HTTP_TIMEOUT_S = 30.0
 _USER_AGENT = "baseball-sim-etl/1.0 (+historical loader)"
 
-# The ETL's HTTP transport is stdlib ``urllib.request`` BY DEFAULT.
+# The ETL's HTTP transport is stdlib ``urllib.request`` BY DEFAULT (the ETL
+# transport swap, SIM-446). On ``requests`` the reload sweep died at a random
+# game with a corrupted CPython inline cache (exit 139, about every 200 games);
+# on urllib the full 2017 season (2,468 games, 732,475 pitch rows) ran clean,
+# so the transport is treated as the cause. urllib keeps ``requests``, the
+# mypyc-compiled ``charset_normalizer``, ``_brotli`` and
+# ``simplejson._speedups`` out of the process.
 #
-# The corrective reload sweep used to die with::
+# Two costs, both measured and accepted:
 #
-#     Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
+#   1. No keep-alive pool: each of the ~65,000 requests of a full backfill pays
+#      its own TCP and TLS handshake.
+#   2. No compression. ``http.client.putrequest`` sends
+#      ``Accept-Encoding: identity``, which forbids the server to compress
+#      (RFC 9110). That is WHY :func:`_decode_body` has no gunzip branch: a
+#      compressed body cannot arrive. The guard
+#      ``test_compression_is_not_requested_without_decompression_support``
+#      holds the two together. A feed/live payload is 7.4 times larger
+#      uncompressed (865,506 against 116,619 bytes, game 492011), which costs
+#      about 70 ms a game.
 #
-# — CPython's evaluation loop dispatching into an inline-cache entry instead of a
-# real instruction, i.e. the bytecode / inline cache of ``_build_row_dict`` being
-# corrupted underneath it. It presented as SIGSEGV (exit 139) in the container and
-# as that fatal error natively on Windows, at a DIFFERENT game every run (observed
-# at 3, 5, 66, 191, 193, 318 and 405 games). Memory exhaustion, the Docker/WSL2
-# layer, psycopg2-binary's bundled OpenSSL, numpy/OpenBLAS and the host's BSOD
-# driver were each ruled out by direct measurement rather than inference.
-#
-# Running the identical workload on ``urllib.request`` completed the FULL 2017
-# season — 2,468 games, 732,475 pitch rows — with no crash. Against a fault that
-# had been firing roughly every 200 games, surviving 2,468 is about a 1-in-10^5
-# coincidence, so the transport is treated as the cause. What urllib takes out of
-# the loop: ``requests`` itself, plus the mypyc-compiled ``charset_normalizer``
-# (FOUR copies were resident — two standalone, two vendored inside requests),
-# ``_brotli`` and ``simplejson._speedups``.
-#
-# TRADE-OFFS, stated plainly and MEASURED rather than estimated:
-#
-#   1. No keep-alive pool — each of the ~65,000 requests in a full backfill pays
-#      its own TCP+TLS handshake.
-#   2. No transparent decompression. ``requests`` sent
-#      ``Accept-Encoding: gzip, deflate, br`` and decompressed for you. urllib does
-#      NOT merely omit the header — ``http.client.putrequest`` injects
-#      ``Accept-Encoding: identity``, which per RFC 9110 explicitly forbids the
-#      server from compressing (verified against a loopback server on 3.13).
-#      That is load-bearing: it is WHY :func:`_decode_body` has no gunzip branch.
-#      A compressed body cannot arrive, so there is nothing to decompress — the
-#      two facts are a matched pair, not an oversight. See the lock-step guard in
-#      ``test_compression_is_not_requested_without_decompression_support``.
-#      Cost, measured on a real feed/live payload (game 492011): 865,506 bytes
-#      identity vs 116,619 gzipped — 7.4x. Across a 9-season backfill (~21,600
-#      games) that is ~18.7 GB instead of ~2.5 GB.
-#
-# Both are accepted. The TIME cost of (2) is only ~70 ms/game (0.21 s vs 0.14 s per
-# fetch, i.e. ~25 min across a whole backfill that already runs for hours), and a
-# slower backfill that finishes beats a faster one that dies at game 200. Do NOT add
-# gzip here casually: it would put C-extension decompression back into the very loop
-# whose corruption is still unexplained, and would no longer be the configuration
-# that survived 2,468 consecutive games. Only revisit it on a metered connection,
-# and re-validate at season scale if you do.
-#
-# ``ETL_HTTP_TRANSPORT=requests`` restores the pooled Session for A/B comparison;
-# ``requests`` is imported LAZILY so the default path never loads those extensions
-# into the address space at all.
+# Do NOT add gzip casually: it would put C-extension decompression back into
+# the loop whose corruption is unexplained. ``ETL_HTTP_TRANSPORT=requests``
+# restores the pooled Session for an A/B comparison; ``requests`` is imported
+# LAZILY, so the default path never loads it.
 _HTTP_TRANSPORT = os.environ.get("ETL_HTTP_TRANSPORT", "urllib").strip().lower()
 
-# Statuses worth retrying. A 404/400/403 is a permanent answer — the old
-# code retried it 10 times over ~90 s, turning one missing game into a 90-second
-# stall. 429 and 5xx are transient and ARE retried (429 honours Retry-After).
+# The statuses worth retrying. A 404/400/403 is a permanent answer: ten
+# retries would turn one missing game into a 90-second stall. 429 and 5xx are
+# transient and ARE retried (429 honours Retry-After).
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _MAX_RETRY_AFTER_S = 60.0  # never sleep longer than this on a server's say-so
 
 
-# 'C' ("Championship") was removed — it is an obsolete MLB game type
-# predating our 2015+ window, and it is NOT in the raw.games CHECK constraint
-# (('R','P','S','A','D','F','L','W')), so a single such game would have raised a
-# CheckViolation and, before the per-game isolation below, killed the whole run.
+# The game types loaded. 'C' ("Championship") is left out: an obsolete MLB
+# game type from before the 2015+ window, and not in the raw.games CHECK
+# constraint (('R','P','S','A','D','F','L','W')), so such a game would raise a
+# CheckViolation.
 GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 
 
@@ -349,21 +324,12 @@ def _retry_after_seconds(resp: _Response, attempt: int) -> float:
 def _http_get(url: str, params: dict | None = None) -> _Response:
     """GET with bounded retry, returning the first SUCCESSFUL response.
 
-    SIM-441 fixed three things here:
-
-    * **Permanent errors are no longer retried.** A 404/400/403 is a final
-      answer; retrying it ``MAX_API_RETRIES`` times with backoff turned one
-      missing resource into a ~90-second stall. Only :data:`_RETRYABLE_STATUS`
-      (429 + 5xx + timeouts) is retried, and 429 honours ``Retry-After``.
-    * **A successful response is returned immediately.** The old venue loops had
-      no ``break``, so a fetch that succeeded on attempt 1 was overwritten by
-      attempt 10 — and if THAT one failed transiently, the caller raised despite
-      having held valid data.
-    * **One pooled Session** instead of a fresh TCP+TLS handshake per call.
-
-    SIM-446 moved the round-trip itself behind :func:`_fetch_once` so the retry
-    policy is shared by both transports. Note the pooling bullet above now only
-    applies to ``ETL_HTTP_TRANSPORT=requests``.
+    * A permanent error (404/400/403) is not retried: it is a final answer.
+      Only :data:`_RETRYABLE_STATUS` (429, 5xx and time-outs) is retried, and
+      429 honours ``Retry-After``.
+    * A successful response returns at once.
+    * The round trip itself is :func:`_fetch_once`, so both transports share
+      this retry policy (and ``ETL_HTTP_TRANSPORT=requests`` pools one Session).
     """
     last_exc: Exception | None = None
     for attempt in range(1, MAX_API_RETRIES + 1):
@@ -445,64 +411,12 @@ def _fetch_game_pitches(
     home_coaches = _connect(
         f"https://statsapi.mlb.com/api/v1/teams/{home_team_id}/coaches?date={game_date}"
     ).get("roster", [])
-    for coach in home_coaches:
-        if coach["jobId"] == "NTRM":
-            home_manager_id = coach["person"]["id"]
-            home_manager_name = coach["person"]["fullName"]
-            break
-        if coach["jobId"] == "MNGR":
-            home_manager_id = coach["person"]["id"]
-            home_manager_name = coach["person"]["fullName"]
-        if coach["jobId"] == "COAB" and home_manager_name == "":
-            home_manager_id = coach["person"]["id"]
-            home_manager_name = coach["person"]["fullName"]
-    if home_manager_name == "":
-        # Do NOT fall back to coaches[0].
-        # The old code installed whatever coach the roster happened to list
-        # first — typically a pitching coach — as the manager, with no log
-        # line. That fabricated id then propagated to every pitch row, to
-        # raw.games and to raw.managers; and because it was "missing",
-        # _ensure_managers' closeout branch fired and set the REAL manager's
-        # season_end, marking him departed (raw.managers treats a NULL
-        # season_end as "currently active"). Leaving it empty is safe:
-        # _ensure_managers filters falsy ids and _ensure_game binds `or None`.
-        log.warning(
-            "  game %s: no NTRM/MNGR/COAB coach for the home team (%s roles "
-            "returned); leaving home_manager unset rather than guessing",
-            game_pk,
-            len(home_coaches),
-        )
+    home_manager_id, home_manager_name = _manager_from_coaches(game_pk, "home", home_coaches)
 
     away_coaches = _connect(
         f"https://statsapi.mlb.com/api/v1/teams/{away_team_id}/coaches?date={game_date}"
     ).get("roster", [])
-    for coach in away_coaches:
-        if coach["jobId"] == "NTRM":
-            away_manager_id = coach["person"]["id"]
-            away_manager_name = coach["person"]["fullName"]
-            break
-        if coach["jobId"] == "MNGR":
-            away_manager_id = coach["person"]["id"]
-            away_manager_name = coach["person"]["fullName"]
-        if coach["jobId"] == "COAB" and away_manager_name == "":
-            away_manager_id = coach["person"]["id"]
-            away_manager_name = coach["person"]["fullName"]
-    if away_manager_name == "":
-        # Do NOT fall back to coaches[0].
-        # The old code installed whatever coach the roster happened to list
-        # first — typically a pitching coach — as the manager, with no log
-        # line. That fabricated id then propagated to every pitch row, to
-        # raw.games and to raw.managers; and because it was "missing",
-        # _ensure_managers' closeout branch fired and set the REAL manager's
-        # season_end, marking him departed (raw.managers treats a NULL
-        # season_end as "currently active"). Leaving it empty is safe:
-        # _ensure_managers filters falsy ids and _ensure_game binds `or None`.
-        log.warning(
-            "  game %s: no NTRM/MNGR/COAB coach for the away team (%s roles "
-            "returned); leaving away_manager unset rather than guessing",
-            game_pk,
-            len(away_coaches),
-        )
+    away_manager_id, away_manager_name = _manager_from_coaches(game_pk, "away", away_coaches)
 
     home_score_before, away_score_before = 0, 0
     outs = 0
@@ -525,18 +439,10 @@ def _fetch_game_pitches(
         if top_bot != prev_half:
             outs = 0
             runners_state_before = 0
-        # Advance the half-inning marker HERE, at the play level.
-        #
-        # It used to be advanced inside the pitch branch below, so a play with NO
-        # pitches never reached it. The next play then re-entered this check with
-        # `prev_half` still stale, the reset fired a SECOND time, and it destroyed
-        # the base state carried forward from the pitch-less play. Measured over
-        # 1,066 real games: 11 plays lost their base state that way, every one of
-        # them following a half-inning that opened with an intentional walk.
-        #
-        # None of the 11 happened to be an intentional walk itself, so no bad row
-        # reached the table — luck, not correctness. This is the same defect class
-        # already fixed once inside the extractor, re-introduced in the caller.
+        # Advance the half-inning marker HERE, at the play level, so a play
+        # with NO pitches (an intentional walk) reaches it too. Advanced only
+        # inside the pitch branch, the next play would reset the base state a
+        # second time and erase the state carried from the pitch-less play.
         prev_half = top_bot
         # An extra-innings half does NOT start with the bases empty —
         # the automatic runner is on second, and the reset above just erased
@@ -740,7 +646,7 @@ def _fetch_game_pitches(
                 coord_x = hd["coordinates"].get("coordX", "")
                 coord_y = hd["coordinates"].get("coordY", "")
                 if coord_x != "" and coord_y != "":
-                    # Coord_y > 198.27 is BEHIND home plate (a foul pop
+                    # A coord_y above 198.27 is BEHIND home plate (a foul pop
                     # into the screen/backstop). `arctan` of a negative
                     # denominator mirrors those into the fair-field quadrant, so
                     # a ball struck behind the plate reported a plausible pull or
@@ -753,13 +659,9 @@ def _fetch_game_pitches(
                     elif coord_y == 198.27:
                         spray_angle = 90 if coord_x > 125.42 else -90
                     else:
-                        # `math.atan`, not `np.arctan`. This was the ONLY
-                        # numpy call in this 2,900-line module, and importing numpy
-                        # for it drags OpenBLAS (DYNAMIC_ARCH, MAX_THREADS=64),
-                        # libgfortran and libquadmath into every ETL process. It is
-                        # also a scalar, so numpy bought nothing but returned a
-                        # numpy.float64 that then had to be coerced back on every
-                        # batted ball.
+                        # `math.atan`, not `np.arctan`: importing numpy for one
+                        # scalar would load OpenBLAS, libgfortran and libquadmath
+                        # into every ETL process.
                         spray_angle = math.atan((coord_x - 125.42) / (198.27 - coord_y)) * (
                             180 / math.pi
                         )
@@ -767,13 +669,10 @@ def _fetch_game_pitches(
                 hit_location = hd.get("location", "")
 
             # COUNT the outs this pitch caused; do not derive them.
-            # This read `play_event["count"]["outs"] - outs`, which cannot work:
             # `count.outs` is the out total entering the play and is CONSTANT
-            # across every pitch of it, so subtracting a running total that
-            # already includes it yields zero. Measured: 92.6% of balls in play
-            # that BECAME AN OUT recorded outs_on_pitch=0, and 100% of
-            # strikeouts did. The runner loop below now counts instead, which
-            # also picks up baserunning outs the subtraction never saw.
+            # across every pitch of it, so no subtraction of running totals can
+            # give the outs of one pitch. The runner loop below counts them,
+            # baserunning outs included.
             outs_on_pitch = 0
             runner_on_first_score = runner_on_second_score = runner_on_third_score = False
             home_score_after = home_score_before
@@ -784,12 +683,10 @@ def _fetch_game_pitches(
             putout_dict: dict[str, Any] = {}
             throwing_error_dict: dict[str, Any] = {}
             assist_tracker = putout_tracker = throwing_error_tracker = 1
-            # Raw.pitches has field_assist_1..5, field_putout_1..3 and
-            # throwing_error_1..2. Credits past those slots used to be written to
-            # keys _build_row_dict never reads, so they vanished with no warning
-            # and no ledger row. Multi-runner rundowns are rare enough that the
-            # 6th+ assist is not worth its own column, but the OVERFLOW must be
-            # visible so a consumer can exclude or measure those plays instead of
+            # raw.pitches has field_assist_1..5, field_putout_1..3 and
+            # throwing_error_1..2. Multi-runner rundowns are rare enough that a
+            # 6th assist is not worth its own column, but the OVERFLOW must be
+            # visible, so a reader can exclude or measure those plays instead of
             # silently under-counting assists.
             field_assist_6_plus = False
             post_runner_1b = pre_runner_1b
@@ -864,14 +761,11 @@ def _fetch_game_pitches(
                         #     row (the scan above), which the IP formula counts
                         #   * 7 batter strikeouts the feed anchors to a trailing
                         #     `no_pitch` event -> the PA's `events` column, the
-                        #     canonical out label since SIM-501a
+                        #     canonical out label
                         #   * ~8 runner outs on `other_out`/`wild_pitch` actions
                         #     reach NO table when they do not end the PA —
                         #     ~0.04% of all outs, accepted and documented in
                         #     pipeline/statcast_events.py.
-                        # An earlier version of this comment claimed ALL displaced
-                        # outs reach `raw.play_events`. That was false for 78 of
-                        # the 131.
                         if runner["details"].get("playIndex") == i:
                             outs_on_pitch += 1
                         # A retired runner is done: he cannot also score or reach
@@ -1243,11 +1137,9 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         / ``_validate_row`` that changes a column's VALUE.  The returned
         ``inserted`` count is measured against the table, so a no-op is visible.
 
-        Also re-runs ``_ensure_prerequisites``, which re-upserts venues, teams,
-        players, managers, the ``raw.games`` row and the starting lineups —
-        superseding the old ``backfill_lineups_and_scores`` helper (removed:
-        ``reload_game`` does everything it did, plus the pitch rows it could not
-        touch).
+        Also re-runs ``_ensure_prerequisites``, which re-upserts the venues,
+        teams, players, managers, the ``raw.games`` row and the starting
+        lineups.
 
         Refuses to shrink a game: if the re-parse yields fewer rows than are
         stored, the transaction is rolled back and :class:`ReloadShrinkError` is
@@ -1301,19 +1193,12 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         Use it to re-ingest a window after a parser fix; the default (False)
         keeps the cheap incremental behaviour.
 
-        SIM-441 fixed two defects here:
-
-        * **Silent truncation.** The MLB schedule endpoint clamps any window
-          wider than 365 days to ``startDate + 365`` and still returns HTTP 200,
-          so a multi-season call quietly loaded about one season and exited 0.
-          The module's own header recipe
-          (``load_date_range(date(2025,3,18), date.today())``) was broken by this.
-          The window is now chunked into <=365-day slices and each slice's
-          returned coverage is checked against what was asked for.
-        * **No Final gate.** Unlike :meth:`refresh_seasons`, this method ingested
-          in-progress games — and ``_game_already_loaded`` (a bare
-          ``SELECT 1 … LIMIT 1``) then skipped them forever, leaving a permanently
-          half-played game.
+        * The MLB schedule endpoint clamps any window wider than 365 days to
+          ``startDate + 365`` and still answers HTTP 200, so the window is cut
+          into slices of at most 365 days, and each slice's returned coverage
+          is checked against what was asked for.
+        * Only Final games load (as in :meth:`refresh_seasons`): a game loaded
+          in progress would read as loaded and never be completed.
         """
         if end_date < start_date:
             raise ValueError(f"end_date {end_date} precedes start_date {start_date}")
@@ -1453,16 +1338,11 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     ) -> None:
         """Route one scheduled game to load/reload and tally the outcome.
 
-        BOTH paths now contain per-game failures. The incremental path
-        previously called ``load_game`` bare, and the parser is full of hard
+        Both paths contain per-game failures. The parser is full of hard
         subscripts on third-party JSON (``pd_data["strikeZoneTop"]``,
-        ``hd["trajectory"]``, ``defense["catcher"]["id"]``), so one malformed feed
-        raised and unwound the whole run. Because ``scripts/nightly_ingest.sh``
-        runs under ``set -eu`` with this as step 1 of 3, the profile rebuild and
-        the FAISS tile build then never executed — and since the poison game
-        genuinely has no pitch rows, ``_game_already_loaded`` correctly reported
-        it as unloaded, so the chain re-wedged on the same game every night with
-        nothing alerting.
+        ``hd["trajectory"]``, ``defense["catcher"]["id"]``), so one malformed
+        feed would otherwise unwind the whole run, and the nightly chain (which
+        runs under ``set -eu``) would stop on the same game every night.
 
         Containment is bounded, not blanket: ``_CONSECUTIVE_FAILURE_LIMIT``
         successive failures re-raise. That is the distinction that matters — "one
@@ -1508,12 +1388,6 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         # reload path exists to make visible.
         summary["rows_written"] += int(result.get("inserted", 0))
 
-    # NOTE: ``backfill_lineups_and_scores`` was removed — it re-fetched
-    # each Final game and re-ran ``_ensure_prerequisites`` to fill in lineups and
-    # final scores on already-loaded games.  ``refresh_seasons(reload=True)``
-    # does everything it did (it calls the same ``_ensure_prerequisites``) and
-    # additionally rewrites the pitch rows, which the old helper could not touch.
-
     # ------------------------------------------------------------------
     # FK prerequisite checks — run before every raw.pitches insert
     # ------------------------------------------------------------------
@@ -1538,7 +1412,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         game_date = gd["datetime"]["officialDate"]
         season = int(game_date[:4])
 
-        venue_id = _resolve_venue_id(game_pk, gd)  # SIM-447
+        venue_id = _resolve_venue_id(game_pk, gd)
         home_team_id = gd["teams"]["home"]["id"]
         away_team_id = gd["teams"]["away"]["id"]
 
@@ -1565,13 +1439,11 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         Fetches full venue details (dimensions, surface, roof) from the
         MLB venues endpoint when the record is missing.
 
-        ``force=True`` skips the existence short-circuit and re-fetches, so an
-        already-present row can be CORRECTED. The INSERT below has always carried
-        ``ON CONFLICT … DO UPDATE``, so the only thing standing between a bad row
-        and a good one was the early return. Used by
-        ``scripts/reload_games.py --refresh-venues`` to repair the SIM-447 blank
-        venue_name; a plain FK-satisfying row cannot simply be deleted and reloaded
-        because raw.pitches references it.
+        ``force=True`` skips the existence check and re-fetches, so a row
+        already present can be CORRECTED (the INSERT carries ``ON CONFLICT … DO
+        UPDATE``). ``scripts/reload_games.py --refresh-venues`` uses it; a venue
+        row cannot simply be deleted and reloaded, because raw.pitches
+        references it.
         """
         if not force:
             with self._get_conn() as conn, conn.cursor() as cur:
@@ -1584,16 +1456,8 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 
         log.info("  Fetching missing venue %s, season %s", venue_id, season)
 
-        # Both scrapes used to loop the full MAX_API_RETRIES with NO
-        # `break` on success — ~10 redundant Savant requests per new
-        # (venue_id, season), roughly 3,000 across a 2017-2026 backfill where 300
-        # would do. Worse, `resp` was reassigned every iteration, so a fetch that
-        # succeeded on attempt 1 was DISCARDED if attempt 10 failed transiently,
-        # and the method then raised despite having held valid data. The trailing
-        # `if resp is None: raise` was a bare re-raise outside any except block
-        # (it would have thrown `RuntimeError: No active exception`) and was dead
-        # code besides. `_http_get` now returns the first successful response and
-        # does not retry permanent 4xx at all.
+        # Both scrapes go through `_http_get`, which returns the first
+        # successful response and never retries a permanent 4xx.
         resp = _http_get(
             "https://baseballsavant.mlb.com/leaderboard/statcast-park-factors"
             f"?type=dimensions&year={season}&parks=All&fenceStatType=distance"
@@ -1718,34 +1582,14 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         """
         Upserts raw.players for every player appearing in this game's boxscore.
 
-        SIM-441 rewrote this method. It previously had three linked defects:
-
-        * **It fabricated handedness.** Any exception from ``/people/{pid}`` fell
-          back to ``bats, throws = "R", "R"`` and stored the full name in BOTH
-          ``first_name`` and ``last_name``. The realistic trigger was not a
-          network blip (``_http_get`` already retries) but a 200 whose ``people``
-          list is empty, which raises ``IndexError`` with no retry. A quieter
-          path defaulted to ``'R'`` on a *successful* response merely missing
-          ``batSide``, with no warning at all.
-        * **It was write-once.** It returned early when the ``player_id`` already
-          existed, and ``raw.players`` has no season column — so a value captured
-          in the 2017 pass applied to all ten seasons.
-        * **Its upsert was unreachable.** Every id handed to the INSERT had been
-          proven absent moments earlier, so ``ON CONFLICT … DO UPDATE`` never
-          fired and ``full_name`` was never refreshed.
-
-        A wrong hand was therefore silent, permanent, and unrepairable: the repo
-        has no ``UPDATE raw.players`` anywhere. It matters because
-        ``simulation/lineup_resolver`` reads ``bats``/``throws`` straight into the
-        full-pool sampler's only hard pre-filter, while the engines derive
-        handedness from ``raw.pitches`` — so the two disagreed about the same
-        player in the same simulated game.
-
-        Now: prefer the FULL person record the feed already carries at
-        ``gameData.players.ID<pid>`` (no extra HTTP call at all), fall back to the
-        boxscore stub, then to ``/people/{pid}``; skip — never invent — a player
-        whose handedness cannot be established; and upsert every player in the
-        boxscore so a previously-wrong row is corrected on the next reload.
+        The person record comes from the feed's own ``gameData.players.ID<pid>``
+        (no extra HTTP call), then the boxscore stub, then ``/people/{pid}``. A
+        player whose handedness cannot be established is skipped, never
+        invented: ``simulation/lineup_resolver`` reads ``bats`` and ``throws``
+        straight into the full-pool sampler's only hard pre-filter, and there is
+        no other ``UPDATE raw.players`` to repair a wrong hand. Every player in
+        the boxscore is upserted, so a wrong row is corrected on the next
+        reload (``raw.players`` has no season column).
         """
         boxscore = game_dict.get("liveData", {}).get("boxscore", {}).get("teams", {})
         # The feed's own person dictionary: full records, already fetched.
@@ -1971,12 +1815,6 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 
 # ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
-# NOTE: FRESHNESS_TABLE_DDL was removed from this file.
-# The raw.etl_data_freshness CREATE TABLE DDL now lives in:
-#   db/schemas/01_postgres_schema.sql
-# Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
-# Connection pooling — see HistoricalDataLoader._ensure_pool / .close().
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

@@ -44,20 +44,13 @@ class ReloadShrinkError(RuntimeError):
 class WritesMixin(LoaderBase):
     """Writes a game's rows and the run's records."""
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _game_already_loaded(self, game_pk: int) -> bool:
         """True if this game has been ingested and should be skipped.
 
-        This used to be `SELECT 1 FROM raw.pitches … LIMIT 1` alone,
-        which cannot distinguish "never loaded" from "loaded and legitimately
-        produced zero pitch rows" — a game whose every row hard-errors, or one
-        the feed simply has no pitches for. Such a game was re-fetched and
-        re-processed on EVERY nightly run, forever, appending a duplicate error
-        set each time and never making progress. A terminal
-        ``raw.etl_game_ingest`` record now also counts as loaded.
+        A pitch row OR a terminal ``raw.etl_game_ingest`` record counts as
+        loaded. The ingest record covers a game that legitimately produced no
+        pitch rows (every row hard-errors, or the feed has no pitches); without
+        it such a game would be re-fetched every night, forever.
 
         Deliberately NOT consulted by the reload path: `reload=True` bypasses
         this method entirely, which is the escape hatch after a parser fix.
@@ -95,9 +88,9 @@ class WritesMixin(LoaderBase):
         corrected parser output actually overwrites the old values instead of
         being discarded by ``ON CONFLICT … DO NOTHING``.
 
-        Hard-error rows are now persisted to raw.etl_errors as well
-        as logged.  Without this, skipped rows had no audit trail and there
-        was no way to find which pitches a re-ingest would need to recover.
+        Hard-error rows are written to raw.etl_errors as well as logged, so
+        a skipped row has an audit trail and a re-ingest knows which pitches
+        to recover.
         """
         to_insert: list[dict[str, Any]] = []
         hard_errors: list[tuple[int, int, list[str]]] = []  # (at_bat, pitch, errors)
@@ -136,10 +129,8 @@ class WritesMixin(LoaderBase):
                 log.error("    ab=%s pitch_number=%s: %s", ab, pitch_num, "; ".join(errs))
 
         # The ledger is written INSIDE the pitch transaction (see
-        # _batch_insert). It used to commit first, on its own connection, which
-        # made it structurally blind to insert-path losses: if the pitch insert
-        # then failed and rolled back, the errors survived describing a game that
-        # had not been written, and a rolled-back reload left orphan rows behind.
+        # _batch_insert), so a pitch insert that rolls back takes its error rows
+        # with it: no ledger row describes a game that was not written.
         inserted = self._batch_insert(
             to_insert,
             replace_game_pk=game_pk if replace else None,
@@ -298,13 +289,9 @@ class WritesMixin(LoaderBase):
         """
         # SKIP ENTIRELY when the table is absent.
         #
-        # Alembic 0018 creates `raw.play_events`, and this code lands BEFORE that
-        # migration is applied anywhere. Without this guard the statements below
-        # raise `UndefinedTable`, which aborts the whole game transaction — so
-        # merely landing the code would break every nightly ETL run until someone
-        # ran the migration. All four SIM-502 defects (a..d) closed 2026-08-13;
-        # the guard stays until 0018 is APPLIED, and is harmless after (the
-        # probe then answers true once per run).
+        # Alembic 0018 creates `raw.play_events`. On a database without it the
+        # statements below would raise `UndefinedTable` and abort the whole game
+        # transaction, so the probe skips them (it answers once per run).
         if self._play_events_table_exists is None:
             self._play_events_table_exists = pg_relation_exists(cur, "raw.play_events")
             if not self._play_events_table_exists:
@@ -366,13 +353,10 @@ class WritesMixin(LoaderBase):
         # outright; inferring it from the rows is only a fallback for a caller
         # that does not pass one.
         #
-        # This used to infer ONLY from ``rows``. When every row of a
-        # game hard-errors, ``rows`` is empty, so the inference produced None and
-        # BOTH the error ledger and the ingest-outcome write below were silently
-        # skipped — for exactly the games that most need an audit trail. That was
-        # a regression (the old ``_log_etl_errors`` call passed game_pk
-        # explicitly) and it also made ``outcome='empty'`` unreachable on the
-        # non-reload path, defeating the whole point of raw.etl_game_ingest.
+        # When every row of a game hard-errors, ``rows`` is empty, so the
+        # inference alone would give None and skip both the error ledger and
+        # the ingest-outcome write below — for exactly the games that most need
+        # an audit trail.
         game_pks = {r.get("game_pk") for r in rows}
         count_pk: int | None = replace_game_pk or game_pk
         if count_pk is None and len(game_pks) == 1:
@@ -501,10 +485,8 @@ class WritesMixin(LoaderBase):
         Upserts raw.etl_data_freshness so the system knows the last loaded
         game_date per pitcher and per batter.
 
-        Table DDL lives in db/schemas/01_postgres_schema.sql and is applied via
-        Alembic migration 0003.  SIM-083 removed the dead FRESHNESS_TABLE_DDL
-        string constant that previously appeared at module level — it was never
-        executed and caused UndefinedTable errors in _process_and_insert().
+        The table's DDL lives in db/schemas/01_postgres_schema.sql (Alembic
+        migration 0003).
         """
         if not rows:
             return

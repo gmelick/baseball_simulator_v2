@@ -395,9 +395,8 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
     # Physics plausibility.  These thresholds MUST stay in lock-step with the
     # raw.flag_pitch_quality() DB trigger: the trigger only ever SETS
     # data_quality_flag TRUE and never clears it, so whichever layer is stricter
-    # wins.  A Python band that is narrower than the trigger's is therefore
-    # silently authoritative — that is how SIM-087's widened floor was reverted
-    # in practice for five years.
+    # wins. A Python band narrower than the trigger's is therefore silently
+    # authoritative.
     #
     # Current band: release_speed 50–110 mph, launch_speed ≤ 125 mph.
     # NOTE the launch_speed bound must stay strictly BELOW the column CHECK
@@ -406,12 +405,11 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
     # velocity is ~122.4 mph, so (125, 130] is sensor artifact and must keep
     # earning data_quality_flag rather than flowing into max_exit_velo and the
     # hard-hit / barrel rates as clean data.
-    # 102 was NOT a physical ceiling — Statcast records four-figure counts of
-    # 102–105 mph pitches every season, and flagging them removed the entire
-    # high-velocity tail from sim.pitch_pool and the arsenal GMMs.
-    # If you change any bound here, ship a matching Alembic migration for
-    # raw.flag_pitch_quality() AND update db/schemas/01_postgres_schema.sql.
-    # (Migration 0016 aligned the trigger to this band.)
+    # The release-speed ceiling is 110, not 102: Statcast records four-figure
+    # counts of 102–105 mph pitches every season, the high-velocity tail of
+    # sim.pitch_pool and the arsenal mixtures. If you change any bound here,
+    # ship a matching Alembic migration for raw.flag_pitch_quality() AND update
+    # db/schemas/01_postgres_schema.sql (migration 0016 holds the current band).
     rs = row.get("release_speed")
     if rs is not None and not (50 <= rs <= 110):
         result.warnings.append(f"release_speed={rs} outside 50–110 mph range")
