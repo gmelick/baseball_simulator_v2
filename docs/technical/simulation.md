@@ -2,7 +2,7 @@
 
 The pitch-by-pitch simulator: the state machine, the similarity-weighted sampler, the batch runner, and everything that turns one plate appearance into a play.
 
-*20 files documented — use the page outline (right sidebar) to jump to one.*
+*21 files documented — use the page outline (right sidebar) to jump to one.*
 
 ### `simulation/sim_loop.py`
 
@@ -427,5 +427,23 @@ SIM-325's end-to-end validation harness: replays a set of games (real or the SIM
 **Used by:** `tests/unit/test_replay_chi_squared.py`
 
 > **Notes for anyone changing this file:** The real-data seam is HistoricalGame + a production state_machine_factory: with the real Statcast DB available, a caller builds HistoricalGame rows from actual box scores and wires a production factory, and the SAME chi-squared machinery validates against real history with no code change here -- only the sandbox path defaults to the no-DB calibrated reference model for self-consistency testing.
+
+---
+
+### `simulation/flags.py`
+
+The registry of the `SIM_*` environment flags (SIM-493, 2026-10-19). One row per flag in `FLAGS`: its name, type, code default, the work that owns it and a one-line meaning. Code in `api/` and `simulation/` reads a flag only through the readers here, at the moment it read the flag before (the batch runner's two at import). The production values live in the `app` service of `docker-compose.yml`; the unit tests pin their own in `tests/conftest.py`.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `FLAGS` / `Flag` | Every registered flag, by name; a frozen row of name, kind (`bool`, `int`, `float`, `str`), default, owner and meaning. | `tests/unit/test_flag_registry.py`<br>`simulation/production_factory.py` (`DEFAULT_SIT_SIGMA`) | — |
+| `read_bool(name, env=None)` | An on/off flag: `1 true yes on` read on, `"" 0 false no off` read off (any case, trimmed); unset reads the default; any other value raises `FlagValueError`. | `simulation/production_factory.py`, `simulation/sim_loop.py`, `api/bundle_watch.py` | — |
+| `read_float` / `read_int` / `read_str` | A number (unset or unparsable keeps the default and logs a warning; an int written as a decimal reads its whole part) or text (as set, not trimmed). | `simulation/production_factory.py`, `simulation/batch_runner.py`, `simulation/lineup_resolver.py`, `api/main.py`, `api/routes/games.py`, `api/sim_jobs.py`, `api/state.py` | — |
+| `actor_power_overrides(env=None)` | The `SIM_ACTOR_POWER_<ACTOR>` family: `{actor: power}` for every power the environment sets; a per-position fielder power keeps its position in capitals. | `simulation/production_factory.apply_actor_matrix_env` | — |
+| `is_registered(name)` | Whether a name is a registered flag or an actor power. | `tests/unit/test_flag_registry.py` | — |
+
+**Used by:** every `SIM_*` read in `api/` and `simulation/`. `tests/unit/test_flag_registry.py` fails when code reads, or compose sets, an unregistered `SIM_*` name.
+
+> **Notes for anyone changing this file:** a new flag is a new row. Give it the work that owns it in words and the ticket in parentheses, and say what an unset flag means. The code defaults are not production's: compose sets production.
 
 ---

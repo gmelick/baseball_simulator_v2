@@ -522,6 +522,13 @@ active, `docs/audit/records/sim478_lane.txt`, reads four bands red — see the �
   never a pickle. The tests' conftest sets `AUTH_DISABLED=1`; two auth test files remove it.
   Follow-ups: the Data Lab read routes on the read-only pool (SIM-566) CLOSED 2026-10-18; the bundle loads with `allow_pickle=False` (SIM-565) CLOSED 2026-10-18; the rate limiter's bucket (SIM-564) and its proxy-address follow-on (SIM-569, `TRUSTED_PROXY_HOSTS`) both CLOSED 2026-10-17; nginx re-resolves the app after a recreate (SIM-570) CLOSED 2026-10-18; the Data Lab rates on the pitch-result code (SIM-571) CLOSED 2026-10-19; the Data Lab reads the regular season alone by default, `game_type=all` adds the postseason (SIM-572) CLOSED 2026-10-19. The design and the cutover run book:
   `docs/audit/2026-10-13-sim443-security-hardening.md`; the record: `CHANGES.md` 2026-10-13.
+- **The project-wide code clean-up (SIM-493) is IN FLIGHT (2026-10-19).** The groundwork is on
+  branch `sim493-groundwork`: the behaviour fingerprint, scripts and tests named by purpose,
+  run outputs in `results/`, the flag registry and the existence probe. Five sessions then
+  clean one area each (simulation, pipeline, API and frontend, similarity and betting,
+  scripts and the test harness), and an integration pass merges them. Every change is
+  behaviour-neutral, proved by the fingerprint; a bug found is ticketed, not fixed. The rules,
+  the briefs and the rename tables: `docs/audit/2026-10-19-sim493-code-cleanup-plan.md`.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.
@@ -721,9 +728,19 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   derived-vs-official per-player totals study), `check_file_integrity.py`, `gen_secrets.py`
   (SIM-443b: writes the eight `.env` secrets; `--append` never changes a key that has a
   value, `--check` lists the missing ones), `backup_drill.py` (SIM-525: the restore drill; it
-  runs on the host, restores a Postgres set into a scratch cluster and verifies the data sets).
+  runs on the host, restores a Postgres set into a scratch cluster and verifies the data sets),
+  `behaviour_fingerprint.py` (SIM-493: seeded games hashed pitch by pitch; proves a refactor
+  changes no output). One-off probes, rebuilds and backfills live in `scripts/probes/`;
+  inputs a script reads by a fixed path in `scripts/data/`. Every run output goes to
+  `results/` (ignored by git and Docker); a record a doc cites is committed to
+  `docs/audit/records/`. A test loads a script through `tests/script_loader.py`.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.)*
+- `simulation/flags.py` (SIM-493) — the registry of every `SIM_*` flag (type, code default,
+  owner, meaning); code reads a flag only through its readers, and
+  `tests/unit/test_flag_registry.py` fails on an unregistered name. `db/introspect.py`
+  (SIM-493) — the shared "does this table / column exist" probe for DuckDB, psycopg2 and
+  asyncpg.
 - `db/` — `migrations/` (Alembic, head **0030** — 0030 = the what-if runs: `kind`, `start_at_bat` and `changes` on `sim.sim_runs` (SIM-562, 2026-10-09); 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
   (numbered SQL, schema **v32**; 0032 = the SIM-561 replay play stream's pitch

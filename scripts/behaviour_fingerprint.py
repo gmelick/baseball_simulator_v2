@@ -420,12 +420,33 @@ def run_bundle(bundle_dir: str) -> dict[str, str]:
 
 
 def _git_head() -> str:
+    """The checked-out commit: from git, or read from ``.git`` where git is absent.
+
+    The app image has no git, but a run that mounts the checkout over ``/app``
+    carries its ``.git`` folder. A worktree's ``.git`` is a pointer file to a
+    host path, which a container cannot follow: then the answer is "unknown".
+    """
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=_ROOT, capture_output=True, text=True, check=True
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
-        return "unknown"
+        pass
+    git_dir = _ROOT / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head
+        ref = head[len("ref: ") :]
+        ref_file = git_dir / ref
+        if ref_file.is_file():
+            return ref_file.read_text(encoding="utf-8").strip()
+        for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if line.endswith(" " + ref):
+                return line.split(" ", 1)[0]
+    except OSError:
+        pass
+    return "unknown"
 
 
 def _environment() -> dict[str, str]:

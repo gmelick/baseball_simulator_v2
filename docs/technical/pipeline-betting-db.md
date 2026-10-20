@@ -508,6 +508,22 @@ SIM-356: the single, mockable persistence layer for sim-run results and pitch-le
 
 ---
 
+### `db/introspect.py`
+
+The existence probe (SIM-493, 2026-10-19): code that reads an optional table or column (one a migration adds, or one a narrow test fixture leaves out) asks the catalog first through these helpers. Each reads `information_schema` (or `to_regclass`), so a missing table answers "absent" instead of raising. Names go into the SQL as literals, each checked to be a plain identifier, so a test fake that matches on `information_schema` keeps working.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `duck_columns(conn, schema, table, *, this_file_only=False)` | The column names of a DuckDB table; empty when absent. `this_file_only` leaves out an attached catalog's table of the same name. | the eight similarity engines' `_load_profiles`, `similarity/similarity_calibration.py`, `similarity/engines/batted_ball_similarity.py`, `pipeline/batch/engine_artifacts.py`, `pipeline/batch/player_profile_computor.py` | — |
+| `duck_table_exists(conn, schema, table)` | Whether a DuckDB table exists. | `pipeline/batch/engine_artifacts.py`, `pipeline/batch/player_profile_computor.py`, two recompute probes | — |
+| `duck_relation_readable(conn, relation)` | Whether `SELECT 1 FROM <relation> LIMIT 0` runs, for a relation of an attached catalog (`pg.raw.play_events`); any error reads as unreadable. | `pipeline/batch/player_profile_computor.py` | — |
+| `pg_column_exists(cur, schema, table, column)` / `pg_relation_exists(cur, relation)` | The same questions on a psycopg2 cursor. | `pipeline/etl/etl_historical_loader.py` | — |
+| `pg_column_exists_async(conn, schema, table, column)` | The column question on an asyncpg connection or pool. | `pipeline/live/live_ingestion_pipeline.py` | — |
+
+**Used by:** see the table. `tests/unit/test_db_introspect.py` runs the DuckDB helpers on an in-memory database.
+
+---
+
 ### `db/migrations/`
 
 Two independent, parallel migration systems for the platform's two databases: Alembic (db/migrations/versions/*.py, env.py reads BASEBALL_DB_DSN) manages the PostgreSQL raw.*/sim.* schema; a flat numbered-SQL-file series (db/migrations/duckdb/000N_*.sql) manages the DuckDB analytical schema and is applied by hand or by an operational script rather than a migration tool.

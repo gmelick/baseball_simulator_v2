@@ -4,6 +4,9 @@ The scripts that are still run operationally (not one-off probes), plus a map of
 
 *Use the page outline (right sidebar) to jump to a file.*
 
+**Where scripts live (SIM-493, 2026-10-19).** A general tool lives in `scripts/` under a name that says what it does. A one-off probe, rebuild or backfill of a closed ticket lives in `scripts/probes/`. An input a script reads by a fixed path lives in `scripts/data/`. Every run output goes to `results/` (ignored by git and by Docker); a small record a doc cites is committed to `docs/audit/records/`. A test loads a script through `tests/script_loader.py` (`load_script(name)`), which looks in `scripts/` and `scripts/probes/`.
+
+
 ### `scripts/nightly_finals.sh`, `scripts/with_retry.sh`, `scripts/weekly_refresh.sh`, `scripts/nightly_rebuild.sh`
 
 SIM-519 Part D. `nightly_finals.sh` loads the final games of the last `DAYS` days (default 3; Eastern dates; Postgres only, safe while the app runs). `with_retry.sh <max> <command...>` reruns a command after exit 139 or a "Fatal Python error" (the SIM-445 crash class) and stops at once on any other failure; Ofelia runs the finals job nightly at 07:00 UTC and `weekly_refresh.sh` (the whole current season) on Sunday, both through it. `nightly_rebuild.sh` is the old chain's steps 2 and 3 (profiles, engine artifacts); Ofelia runs it nightly at 08:00 UTC beside the app (the app holds no handle on the DuckDB file since SIM-524), inside `with_mark.sh` and `with_retry.sh`, so it leaves the `nightly-rebuild.running` mark that the data job of the scheduled backups (SIM-525) waits for. `make ingest-catch-up DAYS=n` runs the finals window by hand.
@@ -541,6 +544,22 @@ The validation study for the official box-score ground truth (SIM-545): derives 
 **Environment flags read here:** `BASEBALL_DB_DSN (the --dsn default)`
 
 > **Notes for anyone changing this file:** The script ran against Postgres on 2026-09-12 over the full 2024 season (2,472 games; 51,679 batter lines, 21,144 pitcher lines): the derivation is exact on H/HR/TB/1B/2B/3B/RBI and H_ALLOWED and inexact on SB (99.08% of player-games match), R (99.97%), K (99.67%), BB (99.71%), OUTS (97.93%) and ER (87.57%) -- the full table, the known causes (K, OUTS, ER) and the open hypotheses (R, SB, BB) are in docs/audit/2026-09-12-sim545-boxscore-audit.md. That study is the evidence for grading props on the box, never the derivation. A non-zero bias on one stat is a finding about the DERIVATION (or the pitch sweep), not about the box score: the box is the reference. The two known semantic gaps to expect in the numbers: the derived BB includes the play_events intentional walks on purpose (so it can match the box), and OUTS credits pickoff outs from play_events -- both are places where raw.pitches alone under-counts.
+
+---
+
+### `scripts/behaviour_fingerprint.py`
+
+Proves that a refactor leaves the simulator's output unchanged (SIM-493, 2026-10-19). It runs seeded games, records every pitch through `simulation.play_recorder.record_game`, and writes one SHA-256 hash per game of the result, the plays and the state before each play, in a canonical form (floats bit-exact; dict keys and sets sorted; class names without their module). Run it on the code before a change and after it, then `compare` the two records; the record is a comparison between two commits, not a golden file.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `nodb` mode | 200 games (`--games`) of the no-database factory. | operator CLI | `simulation.batch_runner.rng_driven_machine_factory` |
+| `synthetic` mode | The production factory over the in-memory league bundle (`EngineArtifacts.load` patched), with every flag unset and with compose's app flags less `SIM_PITCH_CELL_INDEX`, which that bundle cannot serve. | operator CLI | `simulation.production_factory`, `simulation.synthetic_bundle` |
+| `production` mode | The 45 balanced games x 4 seeds (`--seeds`), the production factory, the compose flags, a pinned bundle (`--bundle-dir`). `--kwargs-cache` writes each game's resolved inputs on the first run and reads them after, so the nightly jobs cannot move the record. Runs in the app container. | operator CLI | `simulation.lineup_resolver`, `simulation.sim_kwargs.build_sim_kwargs`, `tests/acceptance/bands.BALANCED_GAME_ORDER` |
+| `bundle` mode | Hashes every array of a built bundle by content (`.npy`, `.npz` members, parsed JSON). | operator CLI | — |
+| `compare A B` | Lists the keys only in one record and the keys whose hashes differ; exits 1 on any. Warns when the two records come from two environments. | operator CLI | — |
+
+**Used by:** the code clean-up's neutral checks (`docs/audit/2026-10-19-sim493-code-cleanup-plan.md` §4).
 
 ---
 
