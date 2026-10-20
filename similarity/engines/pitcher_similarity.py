@@ -2130,44 +2130,6 @@ class PitcherSimilarityEngine:
 
 
 # ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: PitcherSimilarityEngine,
-    pitcher_ids: list[tuple[int, int]],
-) -> NDArray[np.float64]:
-    """
-    Build a symmetric N×N similarity matrix for the given pitcher/season
-    pairs. Useful for visualization and clustering analysis.
-
-    Parameters
-    ----------
-    engine : PitcherSimilarityEngine
-        A built engine (build() must have been called).
-    pitcher_ids : list of (pitcher_id, season)
-        The pitchers to include.
-
-    Returns
-    -------
-    N×N numpy array where entry [i, j] is the composite similarity
-    score between pitcher_ids[i] and pitcher_ids[j].
-    """
-    n = len(pitcher_ids)
-    matrix = np.eye(n, dtype=np.float64)
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(pitcher_ids[i], pitcher_ids[j])
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-
-    return matrix
-
-
-# ============================================================================
 # Entry Point — CLI for testing
 # ============================================================================
 # (SIM-075: arsenal W2 cache now matrix-backed; see ArsenalCache.build_matrix)

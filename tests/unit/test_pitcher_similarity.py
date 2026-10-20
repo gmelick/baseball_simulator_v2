@@ -45,7 +45,6 @@ from similarity.engines.pitcher_similarity import (
     PitcherSimilarityEngine,
     RBFSimilarity,
     SimilarityResult,
-    build_similarity_matrix,
     enforce_min_cluster_size,
     standardize_gmm,
 )
@@ -750,18 +749,6 @@ class TestScoreProperties(unittest.TestCase):
         r_ab = self.engine.query_pair((100, 2024), (200, 2024))
         r_ba = self.engine.query_pair((200, 2024), (100, 2024))
         self.assertAlmostEqual(r_ab.score, r_ba.score, places=6)
-
-    def test_similarity_matrix(self):
-        ids = [(100, 2024), (100, 2025), (200, 2024)]
-        matrix = build_similarity_matrix(self.engine, ids)
-
-        self.assertEqual(matrix.shape, (3, 3))
-        # Diagonal = 1.0
-        for i in range(3):
-            self.assertAlmostEqual(matrix[i, i], 1.0)
-        # Symmetric
-        self.assertAlmostEqual(matrix[0, 1], matrix[1, 0], places=6)
-        self.assertAlmostEqual(matrix[0, 2], matrix[2, 0], places=6)
 
     def test_profile_count(self):
         self.assertEqual(self.engine.profile_count, 6)

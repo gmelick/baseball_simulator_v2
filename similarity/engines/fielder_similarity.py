@@ -112,6 +112,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from db.introspect import duck_columns
+from similarity.engines.rbf_kernel import WeightedRBFSimilarity
 from similarity.similarity_diagnostics import run_fielder_diagnostics
 
 if TYPE_CHECKING:
@@ -405,53 +406,6 @@ class SimilarityResult:
 # ============================================================================
 # Reliability-Weighted RBF Kernel (shared implementation)
 # ============================================================================
-
-
-class WeightedRBFSimilarity:
-    """
-    Gaussian RBF kernel with per-feature reliability weights and
-    dimensionality-invariant scaling.
-
-    K(x, y) = exp(-γ * Σ_i w_i * (x_i - y_i)²)
-
-    Weights are normalized to sum to 1.0 so the kernel computes the
-    weighted average per-feature squared distance, making the score
-    independent of feature count.
-    """
-
-    def __init__(
-        self,
-        sigma: float,
-        reliability_weights: NDArray[np.float64],
-    ) -> None:
-        self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma**2)
-        total = reliability_weights.sum()
-        if total > 0:
-            self.weights = reliability_weights / total
-        else:
-            self.weights = np.ones_like(reliability_weights) / len(reliability_weights)
-
-    def score(self, x: NDArray, y: NDArray) -> float:
-        """Compute weighted RBF similarity between two vectors."""
-        diff = x - y
-        diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.dot(self.weights * diff, diff)
-        return float(np.exp(-self.gamma * dist_sq))
-
-    def score_batch(
-        self,
-        query: NDArray,
-        candidates: NDArray,
-    ) -> NDArray[np.float64]:
-        """
-        Compute weighted RBF between one query and an array of candidates.
-        Returns shape (n_candidates,).
-        """
-        diff = candidates - query[np.newaxis, :]
-        diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
-        return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
@@ -1659,30 +1613,6 @@ class FielderSimilarityEngine:
     def profile_ids_for_position(self, position: str) -> list[tuple[int, str, int]]:
         """List all profile keys for a specific position."""
         return [k for k in self._profiles if k[1] == position]
-
-
-# ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: FielderSimilarityEngine,
-    fielder_ids: list[tuple[int, str, int]],
-) -> NDArray[np.float64]:
-    """
-    Build a symmetric N×N similarity matrix for the given fielder/position/season
-    triples. All entries must be at the same position.
-    """
-    n = len(fielder_ids)
-    matrix = np.eye(n, dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(fielder_ids[i], fielder_ids[j])
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-    return matrix
 
 
 # ============================================================================

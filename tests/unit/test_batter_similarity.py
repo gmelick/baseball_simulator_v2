@@ -30,7 +30,6 @@ from similarity.engines.batter_similarity import (
     WeightedRBFSimilarity,
     bats_penalty,
     bats_penalty_vector,
-    build_similarity_matrix,
 )
 
 # ---------------------------------------------------------------------------
@@ -481,35 +480,6 @@ class TestSwitchHitters(unittest.TestCase):
         self.assertIsNotNone(r_lhb)
         self.assertGreater(r_switch.score, 0.0)
         self.assertGreater(r_lhb.score, 0.0)
-
-
-# ============================================================================
-# Tests: Similarity Matrix
-# ============================================================================
-
-
-class TestSimilarityMatrix(unittest.TestCase):
-    def setUp(self):
-        self.engine = _build_synthetic_engine()
-
-    def test_matrix_shape_and_diagonal(self):
-        ids = [(100, 2024), (200, 2024), (300, 2024)]
-        matrix = build_similarity_matrix(self.engine, ids)
-        self.assertEqual(matrix.shape, (3, 3))
-        for i in range(3):
-            self.assertAlmostEqual(matrix[i, i], 1.0)
-
-    def test_matrix_symmetry(self):
-        ids = [(100, 2024), (200, 2024), (300, 2024)]
-        matrix = build_similarity_matrix(self.engine, ids)
-        self.assertAlmostEqual(matrix[0, 1], matrix[1, 0], places=6)
-        self.assertAlmostEqual(matrix[0, 2], matrix[2, 0], places=6)
-
-    def test_matrix_with_vs_hand(self):
-        """Matrix should work with platoon context."""
-        ids = [(100, 2024), (200, 2024)]
-        matrix = build_similarity_matrix(self.engine, ids, vs_hand="R")
-        self.assertEqual(matrix.shape, (2, 2))
 
 
 # ============================================================================

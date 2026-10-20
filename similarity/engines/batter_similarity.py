@@ -105,6 +105,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from db.introspect import duck_columns
+from similarity.engines.rbf_kernel import WeightedRBFSimilarity
 from similarity.similarity_diagnostics import run_batter_diagnostics
 
 if TYPE_CHECKING:
@@ -399,66 +400,6 @@ class SimilarityResult:
 # ============================================================================
 # Reliability-Weighted RBF Kernel
 # ============================================================================
-
-
-class WeightedRBFSimilarity:
-    """
-    Gaussian RBF kernel with per-feature reliability weights and
-    dimensionality-invariant scaling.
-
-    K(x, y) = exp(-γ * Σ_i w_i * (x_i - y_i)²)
-
-    where w_i are reliability weights that give more influence to
-    features that stabilize faster (i.e. carry more true-talent signal).
-
-    CRITICAL: weights are normalized to sum to 1.0, not to n_features.
-    This means the exponent computes the weighted *average* per-feature
-    squared distance, making the score independent of how many features
-    each sub-score contains. Without this, sub-scores with more features
-    (e.g. 11 batted-ball features) would systematically collapse toward
-    zero while sub-scores with fewer features (e.g. 4 power features)
-    would remain inflated — the curse of dimensionality in RBF kernels.
-
-    Features are z-score normalized before computing the distance.
-    Missing (NaN) features are treated as neutral (0 distance).
-    """
-
-    def __init__(
-        self,
-        sigma: float,
-        reliability_weights: NDArray[np.float64],
-    ) -> None:
-        self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma**2)
-        # Normalize weights to sum to 1.0 so the kernel computes
-        # the weighted-average per-feature distance (dimensionality-invariant)
-        total = reliability_weights.sum()
-        if total > 0:
-            self.weights = reliability_weights / total
-        else:
-            self.weights = np.ones_like(reliability_weights) / len(reliability_weights)
-
-    def score(self, x: NDArray, y: NDArray) -> float:
-        """Compute weighted RBF similarity between two vectors."""
-        diff = x - y
-        diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.dot(self.weights * diff, diff)
-        return float(np.exp(-self.gamma * dist_sq))
-
-    def score_batch(
-        self,
-        query: NDArray,
-        candidates: NDArray,
-    ) -> NDArray[np.float64]:
-        """
-        Compute weighted RBF between one query and an array of candidates.
-        Returns shape (n_candidates,).
-        """
-        diff = candidates - query[np.newaxis, :]
-        diff = np.nan_to_num(diff, nan=0.0)
-        # weighted squared distances: sum_i w_i * (x_i - y_i)^2
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
-        return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
@@ -1400,28 +1341,6 @@ class BatterSimilarityEngine:
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())
-
-
-# ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: BatterSimilarityEngine,
-    batter_ids: list[tuple[int, int]],
-    vs_hand: str | None = None,
-) -> NDArray[np.float64]:
-    """Build a symmetric N×N similarity matrix."""
-    n = len(batter_ids)
-    matrix = np.eye(n, dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(batter_ids[i], batter_ids[j], vs_hand)
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-    return matrix
 
 
 # ============================================================================

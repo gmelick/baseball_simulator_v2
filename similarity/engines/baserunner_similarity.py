@@ -920,27 +920,6 @@ class BaserunnerSimilarityEngine:
 
 
 # ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: BaserunnerSimilarityEngine,
-    runner_ids: list[tuple[int, int]],
-) -> NDArray[np.float64]:
-    """Build a symmetric N×N similarity matrix."""
-    n = len(runner_ids)
-    matrix = np.eye(n, dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(runner_ids[i], runner_ids[j])
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-    return matrix
-
-
-# ============================================================================
 # CLI
 # ============================================================================
 if __name__ == "__main__":

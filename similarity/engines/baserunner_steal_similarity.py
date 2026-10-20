@@ -87,6 +87,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from db.introspect import duck_columns
+from similarity.engines.rbf_kernel import WeightedRBFSimilarity
 from similarity.similarity_diagnostics import run_generic_diagnostics
 
 if TYPE_CHECKING:
@@ -228,35 +229,6 @@ class SimilarityResult:
 # ============================================================================
 # Reliability-Weighted RBF Kernel
 # ============================================================================
-
-
-class WeightedRBFSimilarity:
-    """
-    Gaussian RBF kernel with per-feature reliability weights.
-
-    K(x, y) = exp(-γ * Σ_i w_i * (x_i - y_i)²)
-
-    Weights normalized to sum to 1.0 for dimensionality invariance.
-    """
-
-    def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
-        self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma**2)
-        total = reliability_weights.sum()
-        self.weights = (
-            reliability_weights / total
-            if total > 0
-            else (np.ones_like(reliability_weights) / len(reliability_weights))
-        )
-
-    def score(self, x: NDArray, y: NDArray) -> float:
-        diff = np.nan_to_num(x - y, nan=0.0)
-        return float(np.exp(-self.gamma * np.dot(self.weights * diff, diff)))
-
-    def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
-        diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
-        return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
@@ -848,27 +820,6 @@ class BaserunnerStealSimilarityEngine:
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())
-
-
-# ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: BaserunnerStealSimilarityEngine,
-    runner_ids: list[tuple[int, int]],
-) -> NDArray[np.float64]:
-    """Build a symmetric N×N similarity matrix for the given runner-seasons."""
-    n = len(runner_ids)
-    matrix = np.eye(n, dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(runner_ids[i], runner_ids[j])
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-    return matrix
 
 
 # ============================================================================

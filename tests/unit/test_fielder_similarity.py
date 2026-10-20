@@ -27,8 +27,7 @@ Test categories:
        m. Corner IF specialty features (bunt/scoop)
        n. Invalid position handling
        o. Missing profile handling
-  9. build_similarity_matrix        — symmetry, diagonal = 1.0
-  10. Regression / stability        — fixed-seed deterministic scores
+  9. Regression / stability         — fixed-seed deterministic scores
 """
 
 from __future__ import annotations
@@ -77,7 +76,6 @@ from similarity.engines.fielder_similarity import (
     PositionPartition,
     SimilarityResult,
     WeightedRBFSimilarity,
-    build_similarity_matrix,
 )
 
 # ============================================================================
@@ -1161,43 +1159,7 @@ class TestEngineUtilities:
 
 
 # ============================================================================
-# 9. build_similarity_matrix
-# ============================================================================
-
-
-class TestBuildSimilarityMatrix:
-    def test_diagonal_is_one(self):
-        profiles = _generate_ss_population(5, seed=1)
-        engine = _build_test_engine(if_profiles=profiles)
-        ids = [(p.player_id, p.position, p.season) for p in profiles[:5]]
-        matrix = build_similarity_matrix(engine, ids)
-        np.testing.assert_array_almost_equal(np.diag(matrix), np.ones(5))
-
-    def test_matrix_symmetric(self):
-        profiles = _generate_ss_population(5, seed=1)
-        engine = _build_test_engine(if_profiles=profiles)
-        ids = [(p.player_id, p.position, p.season) for p in profiles[:5]]
-        matrix = build_similarity_matrix(engine, ids)
-        np.testing.assert_array_almost_equal(matrix, matrix.T)
-
-    def test_matrix_shape(self):
-        profiles = _generate_ss_population(4, seed=1)
-        engine = _build_test_engine(if_profiles=profiles)
-        ids = [(p.player_id, p.position, p.season) for p in profiles[:3]]
-        matrix = build_similarity_matrix(engine, ids)
-        assert matrix.shape == (3, 3)
-
-    def test_matrix_values_bounded(self):
-        profiles = _generate_ss_population(5, seed=1)
-        engine = _build_test_engine(if_profiles=profiles)
-        ids = [(p.player_id, p.position, p.season) for p in profiles[:5]]
-        matrix = build_similarity_matrix(engine, ids)
-        assert np.all(matrix >= 0.0)
-        assert np.all(matrix <= 1.0)
-
-
-# ============================================================================
-# 10. Regression / Stability — deterministic under fixed seed
+# 9. Regression / Stability — deterministic under fixed seed
 # ============================================================================
 
 
