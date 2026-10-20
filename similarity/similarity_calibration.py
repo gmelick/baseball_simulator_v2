@@ -44,6 +44,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from db.introspect import duck_columns
 from similarity.engines.fielder_similarity import IF_PIVOT_FEATURES
 
 log = logging.getLogger("similarity_calibration")
@@ -1053,14 +1054,7 @@ class SimilarityCalibrator:
         # expected-stats columns. Positional parsing is preserved; the downstream
         # ``r[col + i] or 0.0`` coercion drops the None.
         try:
-            _present = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_schema = 'derived' "
-                    "AND table_name = 'batter_season_metrics'"
-                ).fetchall()
-            }
+            _present = duck_columns(conn, "derived", "batter_season_metrics")
         except Exception:
             _present = {"xba", "xslg"}
 
@@ -1249,14 +1243,7 @@ class SimilarityCalibrator:
         # placeholder (the ``r[...] or 0.0`` coercion drops the None) rather than
         # aborting the whole fit with a Binder Error.
         try:
-            _present = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_schema = 'derived' "
-                    "AND table_name = 'pitcher_season_metrics'"
-                ).fetchall()
-            }
+            _present = duck_columns(conn, "derived", "pitcher_season_metrics")
         except Exception:  # noqa: BLE001 - assume all present if introspection fails
             _present = set(COMMAND_FEATURES)
 
@@ -1855,13 +1842,7 @@ class SimilarityCalibrator:
         — the graceful-optional probe the engines use, so a database that has
         not run a migration still calibrates the groups it has."""
         try:
-            present = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    f"WHERE table_schema = 'derived' AND table_name = '{table}'"
-                ).fetchall()
-            }
+            present = duck_columns(conn, "derived", table)
         except Exception:  # noqa: BLE001
             return False
         return set(columns) <= present

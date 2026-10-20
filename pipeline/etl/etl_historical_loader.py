@@ -92,6 +92,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
+from db.introspect import pg_column_exists, pg_relation_exists
 from pipeline.etl.boxscore_ingest import (
     parse_boxscore,
     parse_bullpen_listing,
@@ -3002,12 +3003,9 @@ class HistoricalDataLoader:
             # pre-game row would win the unique slot below and a player
             # scratched after the last pre-game poll would stay in the lineup.
             if self._lineup_source_column_exists is None:
-                cur.execute(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_schema = 'raw' AND table_name = 'game_lineups' "
-                    "AND column_name = 'source'"
+                self._lineup_source_column_exists = pg_column_exists(
+                    cur, "raw", "game_lineups", "source"
                 )
-                self._lineup_source_column_exists = cur.fetchone() is not None
             if self._lineup_source_column_exists:
                 cur.execute(
                     "DELETE FROM raw.game_lineups WHERE game_pk = %s AND source <> 'box'",
@@ -3074,10 +3072,8 @@ class HistoricalDataLoader:
                 try:
                     with conn.cursor() as cur:
                         if self._game_player_stats_table_exists is None:
-                            cur.execute("SELECT to_regclass('raw.game_player_stats')")
-                            probe = cur.fetchone()
-                            self._game_player_stats_table_exists = bool(
-                                probe and probe[0] is not None
+                            self._game_player_stats_table_exists = pg_relation_exists(
+                                cur, "raw.game_player_stats"
                             )
                             if not self._game_player_stats_table_exists:
                                 log.warning(
@@ -3093,9 +3089,9 @@ class HistoricalDataLoader:
                         # payload, no extra call; absent table = not stored.
                         pen_written = 0
                         if self._game_bullpen_table_exists is None:
-                            cur.execute("SELECT to_regclass('raw.game_bullpen')")
-                            probe = cur.fetchone()
-                            self._game_bullpen_table_exists = bool(probe and probe[0] is not None)
+                            self._game_bullpen_table_exists = pg_relation_exists(
+                                cur, "raw.game_bullpen"
+                            )
                             if not self._game_bullpen_table_exists:
                                 log.warning(
                                     "raw.game_bullpen is absent (Alembic 0025 not applied) "
@@ -3398,9 +3394,7 @@ class HistoricalDataLoader:
         # the guard stays until 0018 is APPLIED, and is harmless after (the
         # probe then answers true once per run).
         if self._play_events_table_exists is None:
-            cur.execute("SELECT to_regclass('raw.play_events')")
-            probe = cur.fetchone()
-            self._play_events_table_exists = bool(probe and probe[0] is not None)
+            self._play_events_table_exists = pg_relation_exists(cur, "raw.play_events")
             if not self._play_events_table_exists:
                 log.info(
                     "raw.play_events is absent (Alembic 0018 not applied) — "

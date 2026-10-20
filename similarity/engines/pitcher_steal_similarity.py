@@ -79,6 +79,7 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
+from db.introspect import duck_columns
 from similarity.similarity_diagnostics import run_generic_diagnostics
 
 if TYPE_CHECKING:
@@ -460,13 +461,7 @@ class PitcherStealSimilarityEngine:
 
         # SIM-537: graceful-optional column — a database that has not run
         # migration 0028 yet still builds; asof_date comes back NULL.
-        _present = {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'derived' AND table_name = 'pitcher_steal_metrics'"
-            ).fetchall()
-        }
+        _present = duck_columns(conn, "derived", "pitcher_steal_metrics")
         _asof_col = "psm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
         # SIM-531: the hold columns exist only after migration 0029.
         _hold_cols = (

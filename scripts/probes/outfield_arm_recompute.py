@@ -77,10 +77,10 @@ if str(_ROOT) not in sys.path:
 
 import duckdb  # noqa: E402
 
+from db.introspect import duck_table_exists
 from pipeline.batch.player_profile_computor import (  # noqa: E402
     LeagueAverageProfiles,
     PlayerProfileComputor,
-    _table_exists,
 )
 
 log = logging.getLogger("outfield_arm_recompute")
@@ -499,7 +499,7 @@ def check_league_rows(con: Any, seasons: list[int]) -> list[str]:
     thrown-out rate must carry a value on every such season; the throw velocity
     only from the first arm-strength season."""
     problems: list[str] = []
-    if not _table_exists(con, "derived", "league_averages"):
+    if not duck_table_exists(con, "derived", "league_averages"):
         return ["derived.league_averages is absent — the league writer did not run"]
     for pos in OUTFIELD:
         with_data = {
@@ -718,7 +718,7 @@ def verify(
     con = duckdb.connect(duckdb_path, read_only=True)
     problems: list[str] = []
     try:
-        if not _table_exists(con, "sim", "advancement_opportunity_pool"):
+        if not duck_table_exists(con, "sim", "advancement_opportunity_pool"):
             problems.append("sim.advancement_opportunity_pool is absent — nothing to fill from")
         else:
             problems += check_block_coverage(con, seasons)

@@ -519,7 +519,7 @@ class TestComputorLifecycle:
         result_ok.fetchall.return_value = []
 
         def execute_side(sql, *_):
-            if "pitcher_season_metrics" in sql and "LIMIT 1" in sql:
+            if "pitcher_season_metrics" in sql and "LIMIT 0" in sql:
                 raise Exception("table not found")
             return result_ok
 
@@ -544,7 +544,7 @@ class TestComputorLifecycle:
         result_ok.fetchall.return_value = []
 
         def execute_side(sql, *_):
-            if "pitcher_season_metrics" in sql and "LIMIT 1" in sql:
+            if "pitcher_season_metrics" in sql and "LIMIT 0" in sql:
                 raise Exception("table not found")
             return result_ok
 

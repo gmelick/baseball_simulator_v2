@@ -111,6 +111,7 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
+from db.introspect import duck_columns
 from similarity.similarity_diagnostics import run_fielder_diagnostics
 
 if TYPE_CHECKING:
@@ -1133,13 +1134,7 @@ class FielderSimilarityEngine:
 
         # SIM-537: graceful-optional column — a database that has not run
         # migration 0028 yet still builds; asof_date comes back NULL.
-        _present = {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'derived' AND table_name = 'fielder_season_metrics'"
-            ).fetchall()
-        }
+        _present = duck_columns(conn, "derived", "fielder_season_metrics")
         _asof_col = "fsm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
         # SIM-550: the arm block's four columns, guarded the same way, so a

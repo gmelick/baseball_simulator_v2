@@ -133,6 +133,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.linalg import sqrtm
 
+from db.introspect import duck_columns
+
 if TYPE_CHECKING:
     # SIM-346/361: annotation-only import — avoids a runtime circular import with
     # similarity_calibration (which imports engine helpers).
@@ -1781,13 +1783,7 @@ class PitcherSimilarityEngine:
         # SIM-537: graceful-optional column, same pattern SIM-534 uses for the
         # batter engine — a database that has not run migration 0027 yet still
         # builds; asof_date just comes back NULL for every row.
-        _present = {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'derived' AND table_name = 'pitcher_season_metrics'"
-            ).fetchall()
-        }
+        _present = duck_columns(conn, "derived", "pitcher_season_metrics")
         _asof_col = "psm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
         rows = conn.execute(f"""

@@ -39,6 +39,7 @@ from typing import Any
 import duckdb
 import numpy as np
 
+from db.introspect import duck_columns, duck_table_exists
 from pipeline.batch.bundle_versions import (
     discard_bundle_version,
     prune_bundle_versions,
@@ -85,13 +86,7 @@ def ymd_select(con, table: str) -> str:
     loader already treats the column as optional on the way back in.
     """
     schema, _, name = table.partition(".")
-    have = {
-        r[0]
-        for r in con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            f"WHERE table_schema='{schema}' AND table_name='{name}'"
-        ).fetchall()
-    }
+    have = duck_columns(con, schema, name)
     return f", {GAME_YMD_SQL} " if "game_date" in have else " "
 
 
@@ -137,13 +132,7 @@ def build_pitch_pool_artifact(
         # 0023). Probed so a pre-migration sim DB still exports (the loader
         # treats them as optional exactly like the batted-ball realism
         # columns).
-        pp_cols = {
-            str(r[0])
-            for r in con.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='sim' AND table_name='pitch_pool'"
-            ).fetchall()
-        }
+        pp_cols = duck_columns(con, "sim", "pitch_pool")
         has_catcher = "catcher_id" in pp_cols
         has_conditioning = pp_cols >= _PP_CONDITIONING_COLS
         # SIM-523 part E: the zone, for the receiving ratio's zone groups.
@@ -1247,13 +1236,7 @@ def build_pitching_change_pool(
     # SIM-535: the row's game date (a YYYYMMDD integer) so the backtest's
     # point-in-time cutoff applies to this draw too; an older pitch pool
     # without the column leaves it NULL (the cutoff then refuses, loudly).
-    have_date = "game_date" in {
-        r[0]
-        for r in con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema='sim' AND table_name='pitch_pool'"
-        ).fetchall()
-    }
+    have_date = "game_date" in duck_columns(con, "sim", "pitch_pool")
     ymd_agg = (
         "CAST(strftime(max(game_date), '%Y%m%d') AS INTEGER)" if have_date else "NULL::INTEGER"
     )
@@ -1637,14 +1620,7 @@ def build_steal_pool_artifact(
 def _steal_pool_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
     """SIM-554: the columns of sim.steal_opportunity_pool in this DuckDB file
     (an attached Postgres catalog is left out)."""
-    return {
-        r[0]
-        for r in con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_catalog = current_database() AND table_schema = 'sim' "
-            "AND table_name = 'steal_opportunity_pool'"
-        ).fetchall()
-    }
+    return duck_columns(con, "sim", "steal_opportunity_pool", this_file_only=True)
 
 
 def _write_steal_pool_targets(
@@ -1739,11 +1715,7 @@ def build_advancement_pool_artifact(
     steal-pool pattern. Sub-pools split by (scenario, from_base, target_base)
     because each is a different decision with different rates.
     """
-    exists = con.execute(
-        "SELECT COUNT(*) FROM information_schema.tables "
-        "WHERE table_schema = 'sim' AND table_name = 'advancement_opportunity_pool'"
-    ).fetchone()[0]
-    if not exists:
+    if not duck_table_exists(con, "sim", "advancement_opportunity_pool"):
         log.warning(
             "advancement_pool: sim.advancement_opportunity_pool absent "
             "(pre-0018 DB) — skipping the export."

@@ -262,7 +262,7 @@ def test_the_pitcher_steal_leakage_assertion_covers_both_sources() -> None:
     body = src[start:end]
     assert '"raw.pitches"' in body
     assert '"raw.play_events"' in body
-    assert "except Exception" in body
+    assert "duck_relation_readable(" in body
 
 
 def test_pitcher_steal_asof_is_threaded_from_run() -> None:
@@ -590,7 +590,7 @@ def test_the_engine_optional_column_falls_back_gracefully(engine_file: Path) -> 
     start = src.index("def _load_profiles")
     end = src.index("\n    def ", start + 1)
     body = src[start:end]
-    assert "information_schema.columns" in body
+    assert "duck_columns(" in body  # the shared existence probe (db/introspect.py)
     assert "NULL AS asof_date" in body
 
 

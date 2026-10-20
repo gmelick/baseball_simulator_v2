@@ -74,6 +74,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
+from db.introspect import duck_columns, duck_relation_readable, duck_table_exists
 from pipeline.statcast_events import (
     BALL_TYPES,
     CALLED_STRIKE_TYPES,
@@ -1509,19 +1510,6 @@ def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int
         )
 
 
-def _table_exists(conn, schema: str, table: str) -> bool:
-    """SIM-550: TRUE when ``schema.table`` exists in the DuckDB catalog.
-
-    The probe reads ``information_schema`` (the SIM-531 pattern), so a fresh
-    database or a narrow test fixture answers FALSE instead of raising.
-    """
-    row = conn.execute(
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
-        [schema, table],
-    ).fetchone()
-    return bool(row and row[0])
-
-
 #: SIM-554: the two columns migration 0031 appends to sim.steal_opportunity_pool,
 #: and the file that adds them.
 STEAL_POOL_0031_COLUMNS: tuple[str, ...] = ("pitch_class", "is_pickoff_row")
@@ -1539,14 +1527,7 @@ def _require_steal_pool_0031(conn) -> None:
     A database with no such table has no rows to lose: the probe passes, and
     the DELETE then fails on the missing table by itself.
     """
-    have = {
-        r[0]
-        for r in conn.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_catalog = current_database() AND table_schema = 'sim' "
-            "AND table_name = 'steal_opportunity_pool'"
-        ).fetchall()
-    }
+    have = duck_columns(conn, "sim", "steal_opportunity_pool", this_file_only=True)
     if not have:
         return
     missing = [c for c in STEAL_POOL_0031_COLUMNS if c not in have]
@@ -1635,9 +1616,7 @@ class PlayerProfileComputor:
         helper — still wants, since that grouping has not had its own
         point-in-time pass yet.
         """
-        try:
-            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
-        except Exception:
+        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (
                 "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
                 "0 AS n_outs WHERE FALSE"
@@ -1663,9 +1642,7 @@ class PlayerProfileComputor:
         a cutoff, the same rule ``_play_events_outs_cte`` already applies.
         Left ``None`` (the default), every play in ``season`` counts.
         """
-        try:
-            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
-        except Exception:
+        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (
                 "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
                 "0 AS n_pickoffs, 0 AS n_stepoffs WHERE FALSE"
@@ -1708,9 +1685,7 @@ class PlayerProfileComputor:
         pickoff row of its own from these columns. Every row of this relation
         is a throw; most have no outcome (``is_out_i`` and ``is_err_i`` both 0).
         """
-        try:
-            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
-        except Exception:
+        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (
                 "SELECT NULL::BIGINT AS id, NULL::INTEGER AS game_pk, "
                 "NULL::INTEGER AS at_bat_number, NULL::DATE AS game_date, "
@@ -1770,12 +1745,9 @@ class PlayerProfileComputor:
         canonical schema that includes derived, sim, and per-play detail tables).
         Idempotent — uses CREATE TABLE IF NOT EXISTS throughout.
         """
-        try:
-            self._conn.execute("SELECT 1 FROM derived.pitcher_season_metrics LIMIT 1")
+        if duck_relation_readable(self._conn, "derived.pitcher_season_metrics"):
             log.info("DuckDB schema already present — skipping DDL.")
             return
-        except Exception:
-            pass
 
         schema_file = Path.cwd() / "db" / "schemas" / "02_duckdb_schema.sql"
         if schema_file.exists():
@@ -2729,9 +2701,7 @@ class PlayerProfileComputor:
                 f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
             ),
         ]
-        try:
-            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
-        except Exception:
+        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             log.info("    no leakage check for raw.play_events (table absent)")
         else:
             checks.append(
@@ -3920,9 +3890,7 @@ class PlayerProfileComputor:
                 f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
             ),
         ]
-        try:
-            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
-        except Exception:
+        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             log.info("    no leakage check for raw.play_events (table absent)")
         else:
             checks.append(
@@ -6322,7 +6290,7 @@ class PlayerProfileComputor:
         nightly fills it. ``of_arm_runs`` is written NULL: the model does not
         read it.
         """
-        if not _table_exists(self._conn, "sim", "advancement_opportunity_pool"):
+        if not duck_table_exists(self._conn, "sim", "advancement_opportunity_pool"):
             log.warning("  arm block skipped: sim.advancement_opportunity_pool absent")
             return
         log.info("Filling the outfield arm block from the advancement pool …")
@@ -7842,13 +7810,7 @@ class LeagueAverageProfiles:
         table is absent) — the runtime probe the engines and the calibrator
         use, so a database that has not run migration 0029, or a fixture that
         builds only some tables, still gets its league averages."""
-        return {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                f"WHERE table_schema = 'derived' AND table_name = '{table}'"
-            ).fetchall()
-        }
+        return duck_columns(conn, "derived", table)
 
     def compute(self, seasons: list[int]) -> None:
         conn = duckdb.connect(self._path)

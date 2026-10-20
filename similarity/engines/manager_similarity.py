@@ -76,6 +76,7 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
+from db.introspect import duck_columns
 from similarity.similarity_diagnostics import run_generic_diagnostics
 
 if TYPE_CHECKING:
@@ -458,13 +459,7 @@ class ManagerSimilarityEngine:
         # SIM-537: graceful-optional column, same pattern SIM-534 uses for the
         # batter engine — a database that has not run migration 0027 yet still
         # builds; asof_date just comes back NULL for every row.
-        _present = {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'derived' AND table_name = 'manager_season_metrics'"
-            ).fetchall()
-        }
+        _present = duck_columns(conn, "derived", "manager_season_metrics")
         _asof_col = "msm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
         rows = conn.execute(f"""

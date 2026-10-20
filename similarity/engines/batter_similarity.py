@@ -104,6 +104,7 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
+from db.introspect import duck_columns
 from similarity.similarity_diagnostics import run_batter_diagnostics
 
 if TYPE_CHECKING:
@@ -1028,13 +1029,7 @@ class BatterSimilarityEngine:
         # whole engine build on a missing column, select NULL for any absent
         # optional column (the _v() helper coerces NULL -> 0.0, so the feature is
         # effectively dropped). Re-enabled automatically once the computor adds it.
-        _present = {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'derived' AND table_name = 'batter_season_metrics'"
-            ).fetchall()
-        }
+        _present = duck_columns(conn, "derived", "batter_season_metrics")
 
         def _opt(name: str) -> str:
             return f"bsm.{name}" if name in _present else f"NULL AS {name}"

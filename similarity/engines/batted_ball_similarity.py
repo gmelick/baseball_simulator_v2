@@ -67,6 +67,8 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
+from db.introspect import duck_columns
+
 try:  # pragma: no cover
     import faiss
 
@@ -279,13 +281,7 @@ class BattedBallSimilarityEngine:
         """Pick `pull_relative_spray_angle` if SIM-051 has shipped, else
         fall back to raw `spray_angle` and warn."""
         try:
-            cols = {
-                r[0]
-                for r in conn.execute("""
-                    SELECT column_name FROM information_schema.columns
-                     WHERE table_schema = 'sim' AND table_name = 'outcome_pool'
-                """).fetchall()
-            }
+            cols = duck_columns(conn, "sim", "outcome_pool")
         except Exception:  # pragma: no cover — non-DuckDB connection
             cols = set()
 

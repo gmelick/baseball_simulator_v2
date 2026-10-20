@@ -574,11 +574,11 @@ class TestSourceShape:
         assert ARM_ALPHA_PRIOR_CHANCES == 50
 
     def test_the_table_probe_answers_without_raising(self) -> None:
-        from pipeline.batch.player_profile_computor import _table_exists
+        from db.introspect import duck_table_exists
 
         con = _db(with_pool=False)
-        assert _table_exists(con, "derived", "fielder_season_metrics") is True
-        assert _table_exists(con, "sim", "advancement_opportunity_pool") is False
+        assert duck_table_exists(con, "derived", "fielder_season_metrics") is True
+        assert duck_table_exists(con, "sim", "advancement_opportunity_pool") is False
 
 
 # ===========================================================================

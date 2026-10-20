@@ -81,6 +81,7 @@ from fastapi.routing import APIRouter
 # SIM-443c: the odds routes and the live WebSocket require a login. api.auth
 # imports only FastAPI and Starlette, so this import makes no cycle.
 from api.auth import authenticate_websocket, require_auth
+from db.introspect import pg_column_exists_async
 
 # SIM-370: odds/prop provider seam.  The pipeline obtains its odds source via
 # get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
@@ -2054,12 +2055,7 @@ class LiveIngestionPipeline:
         if known is not None:
             return bool(known)
         try:
-            known = bool(
-                await self._db.fetchval(
-                    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'raw' "
-                    "AND table_name = 'game_odds' AND column_name = 'last_seen_at'"
-                )
-            )
+            known = await pg_column_exists_async(self._db, "raw", "game_odds", "last_seen_at")
         except Exception:  # noqa: BLE001 -- unknown means the plain insert
             return False
         self._last_seen_column = known
@@ -2999,12 +2995,7 @@ class LiveIngestionPipeline:
         exists = getattr(self, "_schedule_columns_exist", None)
         try:
             if exists is None:
-                exists = bool(
-                    await self._db.fetchval(
-                        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'raw' "
-                        "AND table_name = 'games' AND column_name = 'schedule_seen_at'"
-                    )
-                )
+                exists = await pg_column_exists_async(self._db, "raw", "games", "schedule_seen_at")
                 self._schedule_columns_exist = exists
             if not exists:
                 return

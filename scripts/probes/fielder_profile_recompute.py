@@ -91,11 +91,11 @@ if str(_ROOT) not in sys.path:
 
 import duckdb  # noqa: E402
 
+from db.introspect import duck_table_exists
 from pipeline.batch.player_profile_computor import (  # noqa: E402
     FIELDER_TAIL_COLUMNS,
     LeagueAverageProfiles,
     PlayerProfileComputor,
-    _table_exists,
     build_run_expectancy_matrix,
 )
 
@@ -550,7 +550,7 @@ def check_league_rows(con: Any, seasons: list[int]) -> list[str]:
     three outfield rows also carry the three jump keys — finite values, for
     every requested season with data at that position."""
     problems: list[str] = []
-    if not _table_exists(con, "derived", "league_averages"):
+    if not duck_table_exists(con, "derived", "league_averages"):
         return ["derived.league_averages is absent — the league writer did not run"]
     for pos in FIELDING_POSITIONS:
         keys = (LEAGUE_OAA_KEY, *LEAGUE_JUMP_KEYS) if pos in OUTFIELD else (LEAGUE_OAA_KEY,)
@@ -616,7 +616,7 @@ def verify(
     con = duckdb.connect(duckdb_path, read_only=True)
     problems: list[str] = []
     try:
-        if not _table_exists(con, "derived", "fielder_season_metrics"):
+        if not duck_table_exists(con, "derived", "fielder_season_metrics"):
             problems.append("derived.fielder_season_metrics is absent — nothing to verify")
         else:
             problems += check_tail_order(con)
