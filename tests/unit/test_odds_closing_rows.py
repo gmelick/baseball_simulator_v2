@@ -35,6 +35,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.script_loader import load_script
 
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -787,15 +788,7 @@ class TestPregameCadence:
 
 
 def _load_loader() -> Any:
-    import importlib.util
-
-    path = _ROOT / "scripts" / "load_historical_odds.py"
-    spec = importlib.util.spec_from_file_location("load_historical_odds_sim546", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return load_script("load_historical_odds", module_name="load_historical_odds_closing_rows")
 
 
 class TestLoaderGameDates:

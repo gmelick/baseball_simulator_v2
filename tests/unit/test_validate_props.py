@@ -29,6 +29,7 @@ All synthetic — no DB, no engines, no FAISS. A fixed RNG seed pins the numbers
 from __future__ import annotations
 
 import numpy as np
+from tests.script_loader import load_script
 
 from simulation.prop_distributions import PropDistribution
 from simulation.prop_validation import (
@@ -511,16 +512,9 @@ class TestValidateScriptContract:
             assert kw in params
 
     def test_validate_props_script_imports_and_parses_args(self):
-        import importlib.util
         import inspect
-        import os
 
-        # tests/unit/test_*.py -> tests/unit -> tests -> repo root (three dirnames).
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        script_path = os.path.join(repo_root, "scripts", "validate_props.py")
-        spec = importlib.util.spec_from_file_location("validate_props", script_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = load_script("validate_props")
 
         args = mod.parse_args(["--seasons", "2024", "--no-props", "--max-games", "5"])
         assert args.seasons == [2024]

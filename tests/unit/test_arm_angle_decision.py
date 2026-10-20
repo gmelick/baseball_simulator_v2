@@ -38,7 +38,6 @@ No live database, no network.
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import re
 import subprocess
@@ -49,6 +48,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from tests.script_loader import load_script
 
 import similarity.engines.pitcher_similarity as pitcher_similarity
 from pipeline.etl.savant_boards import BOARDS
@@ -105,11 +105,7 @@ PITCHER_HEADING = "### `similarity/engines/pitcher_similarity.py`"
 @pytest.fixture(scope="module")
 def probe() -> ModuleType:
     """The probe script loaded as a module (``scripts/`` is not a package)."""
-    spec = importlib.util.spec_from_file_location("arm_angle_probe", PROBE)
-    assert spec is not None and spec.loader is not None, f"cannot load {PROBE}"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script("arm_angle_probe")
 
 
 def _failed(checks: list[tuple[str, bool, str]]) -> list[str]:

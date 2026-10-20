@@ -15,26 +15,17 @@ Live Postgres tests for `_backfill_hashes` / `_dedup_rows` live in
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
 from pathlib import Path
+
+from tests.script_loader import load_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_script_module():
-    """Import the backfill script as a module without requiring asyncpg
-    side-effects (we only exercise pure functions)."""
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    spec = importlib.util.spec_from_file_location(
-        "backfill_odds_hash",
-        REPO_ROOT / "scripts" / "probes" / "backfill_odds_hash.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The backfill probe as a module; the tests run only its pure functions."""
+    return load_script("backfill_odds_hash")
 
 
 class TestOddsHashConsistency(unittest.TestCase):

@@ -24,11 +24,11 @@ contiguous slice with its 12 count sub-cells inside it. What these tests pin:
 
 from __future__ import annotations
 
-import importlib.util
 import os
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
 from simulation import filter_cells as fc
@@ -358,10 +358,7 @@ class TestCellAlgebra:
         assert fc.score_band_array(sd).tolist() == [fc.score_band(int(x)) for x in sd]
 
     def test_the_script_re_exports_the_modules_objects(self):
-        spec = importlib.util.spec_from_file_location("measure_filter_cells_467", _SCRIPT)
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = load_script("measure_filter_cells", module_name="measure_filter_cells_cell_index")
         assert mod.cell_key is fc.cell_key
         assert mod.decode_cell is fc.decode_cell
         assert mod.score_band is fc.score_band

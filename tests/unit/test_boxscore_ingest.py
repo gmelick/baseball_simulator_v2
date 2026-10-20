@@ -558,17 +558,12 @@ class TestLoaderHook:
 # scripts/load_official_boxscores.py — the backfill CLI (no network, no DB)
 # ===========================================================================
 
-import importlib.util  # noqa: E402
 import sys  # noqa: E402
 import types  # noqa: E402
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_CLI_PATH = os.path.join(_REPO_ROOT, "scripts", "load_official_boxscores.py")
-_cli_spec = importlib.util.spec_from_file_location("load_official_boxscores", _CLI_PATH)
-assert _cli_spec is not None and _cli_spec.loader is not None
-cli = importlib.util.module_from_spec(_cli_spec)
-sys.modules["load_official_boxscores"] = cli
-_cli_spec.loader.exec_module(cli)
+from tests.script_loader import load_script  # noqa: E402
+
+cli = load_script("load_official_boxscores")
 
 
 class _FakePgConn:

@@ -13,28 +13,12 @@ observable behaviour rather than on source text.
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
-import sys
-from pathlib import Path
 
 import pytest
+from tests.script_loader import load_script
 
-REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "resumable_sweep.py"
-
-
-def _load_module():
-    """Load the operational script by path — scripts/ is not an importable package."""
-    spec = importlib.util.spec_from_file_location("resumable_sweep", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["resumable_sweep"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-sweep = _load_module()
+sweep = load_script("resumable_sweep")
 
 
 class _FakeStdout:

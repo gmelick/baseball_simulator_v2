@@ -9,12 +9,11 @@ query can select the games that lack listing rows. No network, no DB.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import os
-import sys
 
 import pytest
+from tests.script_loader import load_script
 
 from pipeline.etl.boxscore_ingest import (
     BULLPEN_COLUMNS,
@@ -130,13 +129,7 @@ class TestPersist:
 
 
 def _load_backfill_script():
-    path = os.path.join(_REPO_ROOT, "scripts", "load_official_boxscores.py")
-    spec = importlib.util.spec_from_file_location("load_official_boxscores", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["load_official_boxscores"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return load_script("load_official_boxscores")
 
 
 class TestBackfillQuery:

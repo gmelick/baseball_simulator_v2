@@ -46,7 +46,6 @@ success while measuring nothing. Four of its checks could not go red:
 
 from __future__ import annotations
 
-import importlib.util
 import itertools
 import json
 import os
@@ -56,18 +55,11 @@ import textwrap
 
 import numpy as np
 import pytest
+from tests.script_loader import REPO, load_script, script_path
 
-# Import the script module by path (scripts/ is not a package). It MUST be
-# registered in sys.modules before exec_module so that @dataclass can resolve the
-# module's namespace (dataclasses looks the module up by name).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "measure_filter_cells.py")
-_spec = importlib.util.spec_from_file_location("measure_filter_cells", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-measure_filter_cells = importlib.util.module_from_spec(_spec)
-sys.modules["measure_filter_cells"] = measure_filter_cells
-_spec.loader.exec_module(measure_filter_cells)
+measure_filter_cells = load_script("measure_filter_cells")
+_MODULE_PATH = str(script_path("measure_filter_cells"))
+_REPO_ROOT = str(REPO)
 
 mfc = measure_filter_cells
 score_band = mfc.score_band

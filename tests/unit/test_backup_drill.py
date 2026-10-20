@@ -8,31 +8,17 @@ seam, so they run on any OS and never touch Docker.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
+from tests.script_loader import load_script
 
-REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "backup_drill.py"
-
-
-def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("backup_drill_under_test", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-drill = _load()
+drill = load_script("backup_drill", module_name="backup_drill_under_test")
 
 
 @pytest.fixture(autouse=True)

@@ -32,11 +32,9 @@ no live DuckDB / Postgres is required.
 
 from __future__ import annotations
 
-import importlib.util
-import os
-
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 from similarity.similarity_calibration import (
     CalibrationReport,
@@ -205,14 +203,8 @@ class TestBaserunnerKeepsDefaultOnDegenerate:
 # 5. validate_props ↔ raw.games column reconciliation
 # ===========================================================================
 def _load_validate_props():
-    """Import scripts/validate_props.py by path (scripts/ is not a package)."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = os.path.join(repo_root, "scripts", "validate_props.py")
-    spec = importlib.util.spec_from_file_location("sim432_validate_props", path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """``scripts/validate_props.py`` as a fresh module."""
+    return load_script("validate_props", module_name="calibration_reconciliation_validate_props")
 
 
 class TestValidatePropsFinalGamesQuery:

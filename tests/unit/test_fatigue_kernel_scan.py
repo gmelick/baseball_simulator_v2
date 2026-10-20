@@ -14,21 +14,11 @@ Three properties pin the scan before its read is trusted:
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
-
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "probes", "fatigue_kernel_scan.py")
-_spec = importlib.util.spec_from_file_location("fatigue_kernel_scan", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-scan = importlib.util.module_from_spec(_spec)
-sys.modules["fatigue_kernel_scan"] = scan
-_spec.loader.exec_module(scan)
+scan = load_script("fatigue_kernel_scan")
 
 
 def _synthetic_pool(rng: np.random.Generator, n: int = 20_000) -> dict[str, np.ndarray]:

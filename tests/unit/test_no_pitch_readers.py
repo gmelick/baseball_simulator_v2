@@ -33,13 +33,12 @@ from __future__ import annotations
 
 import ast
 import copy
-import importlib.util
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult
 from simulation.linescore import InningLine, linescore_from_plays
@@ -193,17 +192,12 @@ def _half_before_each_thrown_pitch(plays: list[PlayResult]) -> list[tuple[int, H
 
 
 def _load_script(name: str):
-    """Load ``scripts/<name>.py`` as a module, or skip when ``scripts/`` is not
+    """``scripts/<name>.py`` as a fresh module, or a skip when ``scripts/`` is not
     reachable (it is not bind-mounted into the app container)."""
-    path = _ROOT / "scripts" / f"{name}.py"
-    if not path.is_file():
-        pytest.skip(f"{path} is not reachable (scripts/ is not bind-mounted)")
-    spec = importlib.util.spec_from_file_location(f"_sim554_{name}", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    try:
+        return load_script(name, module_name=f"no_pitch_readers_{name}")
+    except FileNotFoundError:
+        pytest.skip(f"scripts/{name}.py is not reachable (scripts/ is not bind-mounted)")
 
 
 # ---------------------------------------------------------------------------

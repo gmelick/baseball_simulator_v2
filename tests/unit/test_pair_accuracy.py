@@ -9,22 +9,13 @@ SIM-538 precedent).
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import os
-import sys
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "pair_accuracy.py")
-_spec = importlib.util.spec_from_file_location("pair_accuracy", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-pair = importlib.util.module_from_spec(_spec)
-sys.modules["pair_accuracy"] = pair
-_spec.loader.exec_module(pair)
+pair = load_script("pair_accuracy")
 
 
 def _prov(**over: object) -> dict:

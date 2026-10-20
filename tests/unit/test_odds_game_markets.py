@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.script_loader import load_script
 
 from pipeline.bettingpros_odds_provider import _GAME_MARKET_IDS, BettingProsOddsProvider
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline, MockOddsAPI
@@ -449,15 +450,7 @@ class TestLiveGameMarketCycle:
 
 class TestLoaderGameMarkets:
     def _loader(self):
-        import importlib.util
-        import sys
-
-        path = Path(__file__).resolve().parent.parent.parent / "scripts" / "load_historical_odds.py"
-        spec = importlib.util.spec_from_file_location("load_historical_odds_sim421_gm", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod
-        spec.loader.exec_module(mod)
-        return mod
+        return load_script("load_historical_odds", module_name="load_historical_odds_game_markets")
 
     def test_default_is_every_market(self):
         loader = self._loader()

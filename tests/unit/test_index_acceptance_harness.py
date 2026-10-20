@@ -10,24 +10,14 @@ database is wired into CI.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.script_loader import load_script
 
 
 def _load_harness():
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    spec = importlib.util.spec_from_file_location(
-        "run_index_acceptance",
-        REPO_ROOT / "scripts" / "probes" / "run_index_acceptance.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The index-acceptance probe as a fresh module."""
+    return load_script("run_index_acceptance")
 
 
 # ---------------------------------------------------------------------------
