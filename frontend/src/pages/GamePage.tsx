@@ -1,25 +1,26 @@
 /**
- * GamePage.tsx — SIM-393
+ * GamePage.tsx — the game page at /game/:gamePk.
  *
- * The game detail view at /game/:gamePk. Composes:
- *   - a header (matchup, 3-state status, score)
- *   - a live banner (WS connection + re-simulating indicator) when in progress
- *   - the linescore graphic (SIM-392) + the field graphic (SIM-392)
- *   - the play-by-play scroll (SIM-393)
- *   - live updates over the per-game WebSocket (SIM-385 schema)
+ * From the top:
+ *   - the header: the slate card's team blocks, the score, the state and the
+ *     probable starters;
+ *   - for a live game, a banner with the WebSocket's state and a re-simulating
+ *     badge;
+ *   - for a live or final game, the REAL game: the league feed's linescore,
+ *     field (live only) and box score, and its play-by-play. "What if from here"
+ *     on a play opens the what-if panel at that plate appearance; a preview
+ *     game opens it at first pitch;
+ *   - the simulation sections: the Simulation card (one run per game), one
+ *     stored simulated game (its linescore and play-by-play), and the
+ *     Projections and Betting panels, which are collapsible and start
+ *     collapsed.
  *
- * Data: /status (identity+status+score), /live (in-progress field state),
- * /linescore + /plays (need a persisted sim run — a 404 is treated as
- * "no data yet", not an error). Per-player projections (SIM-394) and the
- * betting card (SIM-395) mount into the marked slots in later tickets.
+ * The data: /status (identity, state, score), /feed and /feed/plays (the real
+ * game), /live (the in-progress state, the fallback while the socket is
+ * closed), /card and /plays (the stored simulated game). A 404 means "no data
+ * yet", not an error.
  *
- * The game page (2026-10-09): a live or final game opens with the REAL game (the
- * league feed's linescore and box score, and its play-by-play); "What if from
- * here" on a play opens the what-if panel at that plate appearance (a preview game
- * opens it at first pitch). The simulation sections follow; Projections and
- * Betting are collapsible and start collapsed.
- *
- * SIM-561: the linescore and the play-by-play show ONE simulated game. The
+ * The linescore and the play-by-play show ONE simulated game. The
  * "Simulate a game" button stores a new one (POST /sample-game), and loading
  * projections stores the projections' first game; either one reloads both. The
  * page reads the stored game's card (linescore, run id, seed) first and then
@@ -63,7 +64,7 @@ function teamLabel(name: string | null, abbrev: string | null, id: number | null
   return name ?? abbrev ?? (id != null ? `Team ${id}` : 'TBD')
 }
 
-/** SIM-519 Part C: the REST fallback's interval while the live socket is closed. */
+/** The REST fallback's interval while the live socket is closed. */
 const LIVE_POLL_MS = 15_000
 
 /** Fetch hook that tolerates a 404 as "no data yet" (returns null, not error). */
@@ -79,7 +80,7 @@ function useOptionalResource<T>(
       .then((d) => !cancelled && setData(d))
       .catch((err: unknown) => {
         if (cancelled) return
-        // A 404 means the resource doesn't exist yet (no sim / not live) — not an error.
+        // A 404 means the resource does not exist yet (no sim, not live): not an error.
         if (err instanceof GamesApiError && err.status === 404) {
           setData(null)
           return
@@ -118,7 +119,7 @@ export function GamePage(): React.ReactElement {
   )
   const isLive = card.data?.game_status === 'live'
 
-  // SIM-519 Part C: while the live socket is down, re-read /live every 15 s.
+  // While the live socket is down, re-read /live every 15 s.
   const [livePoll, setLivePoll] = useState(0)
   const live = useOptionalResource<LiveState>(
     () => (isLive ? fetchLiveState(gamePk) : Promise.resolve(null as unknown as LiveState)),
@@ -138,10 +139,10 @@ export function GamePage(): React.ReactElement {
   // The what-if's plate appearance: undefined = closed, null = first pitch.
   const [whatIfAt, setWhatIfAt] = useState<number | null | undefined>(undefined)
 
-  // SIM-561: a newly stored simulated game bumps the version, which reloads the
+  // A newly stored simulated game bumps the version, which reloads the
   // card; the card's run id then loads that run's plays.
   const [replayVersion, setReplayVersion] = useState(0)
-  // SIM-519 Part E: the game's newest done run; the projections read it.
+  // The game's newest done run; the projections read it.
   const [runId, setRunId] = useState<number | null>(null)
   const [simulating, setSimulating] = useState(false)
   const [simError, setSimError] = useState<string | null>(null)
@@ -173,7 +174,7 @@ export function GamePage(): React.ReactElement {
       .finally(() => setSimulating(false))
   }
 
-  // Live WS — only connect for an in-progress game.
+  // The live WebSocket connects only for a game in progress.
   const socket = useGameSocket(gamePk, isLive)
 
   useEffect(() => {
@@ -197,7 +198,7 @@ export function GamePage(): React.ReactElement {
   const away = c ? teamLabel(c.away_team_name, c.away_team_abbrev, c.away_team_id) : 'Away'
   const home = c ? teamLabel(c.home_team_name, c.home_team_abbrev, c.home_team_id) : 'Home'
 
-  // Score precedence: live WS > REST live > final scores from the card.
+  // The score: the live socket, else REST /live, else the card's score.
   const wsState = socket.liveState
   const awayScore =
     wsState?.away_score ?? live.data?.away_score ?? c?.away_score ?? c?.away_score_final ?? null
@@ -230,7 +231,7 @@ export function GamePage(): React.ReactElement {
       </Link>
 
       {/* Header */}
-      {/* SIM-519: the slate card's team block, so the two pages read as one. */}
+      {/* The slate card's team block, so the two pages read as one. */}
       <header className={styles.header}>
         <div className={styles.matchupDD}>
           <TeamBlock
