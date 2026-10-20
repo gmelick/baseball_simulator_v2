@@ -275,8 +275,6 @@ def _schedule_finals_refresh(app_state: Any) -> None:
     """
     now = time.time()
     try:
-        import asyncio
-
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return

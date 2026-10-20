@@ -18,13 +18,11 @@ sensitive, and it still needs a login. The sources:
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
-from api.routes._common import _get_ro_pool, _row_get
+from api.routes._common import _get_ro_pool, _iso, _row_get
 
 # Every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/data", tags=["data"], dependencies=[Depends(require_auth)])
@@ -70,12 +68,6 @@ _PER_SEASON_SQL = """
      GROUP BY season
      ORDER BY season
 """
-
-
-def _iso(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
 @router.get(
