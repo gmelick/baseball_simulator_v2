@@ -66,7 +66,7 @@ split needs the tests to patch the new homes; that is a test change, outside thi
 - The backup's two callers of `env_float`.
 
 **The re-exports.** Each old module re-exports every moved name a caller outside B2 imports
-(`scripts/`, the API, other areas' tests): 79 statements, each marked
+(`scripts/`, the API, other areas' tests): 80 statements, each marked
 `# re-export: removed in the integration pass`. The B2 tests and the pipeline's own callers
 import from the new homes. A patch of a re-exported name reaches only the code that reads it
 through the old module. Example: `ppc.POOL_BUILDER_VERSION` reaches the steal-pool rebuild
@@ -157,8 +157,13 @@ batter profiles; it now says the date cuts off every profile. The coach warning 
      pitchers (8 with a different number of components). The difference is the input order,
      not the code. The bug is filed below.
 4. **The bundle build.** `--what all` from one DuckDB copy, on the base code and on the new
-   code, back to back; the fingerprint's `bundle` mode compares the two. PENDING: the base bundle is built
-   (114 hashes, combined `22284cfd…`); the new code's build runs after the nightly rebuild.
+   code; the fingerprint's `bundle` mode compares the two (the new build ran after the
+   nightly rebuild, from the same copy). 113 of the 114 hashes are equal. The other is
+   `manager_pool/roles.parquet`: the same 2,857 rows with bit-equal values, in another row
+   order. Its writer groups without an `ORDER BY`, and the loader reads it into a
+   dictionary keyed by pitcher and season, so the order never reaches a worker (filed
+   below). Both build logs match line for line, apart from one warning's source location
+   and the output folder. The records are in `results/sim493/b2_bundle/`.
 5. **Postgres.** Each run counted `raw.pitches`, `raw.games`, `raw.play_events`,
    `raw.game_bullpen` and `raw.game_player_stats` before and after. Nothing moved across the
    two profile builds. The nightly finals load (07:00 UTC) added one game of 2026-10-19
@@ -173,6 +178,10 @@ batter profiles; it now says the date cuts off every profile. The coach warning 
   mounted): 2,085 passed in 316 s.
 - The four other areas' tests that my move re-pointed, plus the steal-pool rebuild and the
   flag registry tests, on the host: 214 passed.
+- The full unit lane in the container, after the nightly rebuild: 6,540 passed and one
+  failed. The failure was mine: `test_pitch_result_vocabulary.py` reads the six shared code
+  sets from the computor by name, and the computor re-exported five. `NON_SWING_TYPES` is
+  now re-exported too. VOCAB_PENDING
 - `ruff check .`: clean. `ruff format --check .`: 532 files formatted.
 - `mypy similarity/ pipeline/ api/`: no issues in 132 files.
 
@@ -186,6 +195,11 @@ batter profiles; it now says the date cuts off every profile. The coach warning 
   components for about one pitcher in five), and with it a different pitcher similarity
   matrix. The fix is an `ORDER BY` on a full row key (game, at-bat, pitch); it changes every
   arsenal once.
+- **The pitching-change pool's role file has no fixed row order.** `roles.parquet`
+  (`build_pitching_change_pool`, `pipeline/batch/artifacts/manager_pool.py`) is written from
+  a `GROUP BY` with no `ORDER BY`, so two builds from the same data write its rows in a
+  different order. The loader ignores the order, but the fingerprint's `bundle` mode reads a
+  difference on every build. The fix is `ORDER BY pitcher_id, season`.
 - **The live pipeline asks the schedule for game type `C`, which `raw.games` rejects.**
   `GAME_TYPES` (`pipeline/live/ingestion/constants.py`) is `R F D L W C P`; the table's CHECK
   allows `R P S A D F L W`. A game of type `C` on the slate fails its upsert.

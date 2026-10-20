@@ -119,6 +119,9 @@ from pipeline.statcast_events import (
     FOUL_TYPES as FOUL_TYPES,  # re-export: removed in the integration pass
 )
 from pipeline.statcast_events import (
+    NON_SWING_TYPES as NON_SWING_TYPES,  # re-export: removed in the integration pass
+)
+from pipeline.statcast_events import (
     STRIKE_THREE_FOUL_TYPES as STRIKE_THREE_FOUL_TYPES,  # re-export: removed in the integration pass
 )
 from pipeline.statcast_events import (

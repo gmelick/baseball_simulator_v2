@@ -1,8 +1,8 @@
 """
-SIM-074 — Statcast sliding-scale barrel definition
-==================================================
+The Statcast sliding-scale barrel definition (SIM-074)
+======================================================
 
-Validates :func:`pipeline.batch.player_profile_computor._barrel_case_sql`,
+Validates :func:`pipeline.batch.profiles.sql._barrel_case_sql`,
 the DuckDB boolean expression that classifies a batted ball as a *barrel*.
 
 Real Statcast definition (what we implement here):
