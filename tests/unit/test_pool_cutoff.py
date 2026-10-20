@@ -1,14 +1,16 @@
 """
-SIM-535 — the play pools must not offer plays that had not happened yet.
+The play pools must not offer plays that had not happened yet (the cutoff).
 
-SIM-534 made the batter PROFILES point-in-time. The pools were the larger half
-of the same defect: they hold four seasons and the sampler draws from all of
-them, so simulating a game played in April 2025 could return a play from that
-September. Nothing errors, and the simulation is quietly better informed than
-the day it is standing on.
+The pools hold four seasons and the sampler draws from all of them, so without
+a cutoff a game played in April 2025 could draw a play from that September.
+Nothing errors, and the simulation is quietly better informed than the day it
+is standing on. The batter profiles follow the same point-in-time rule.
 
 The cutoff is applied at draw time rather than at build time. A backtest walking
 a season would otherwise need one bundle rebuild per date; this needs none.
+
+The tests draw from the synthetic bundle and read the game date from a stub
+connection pool; nothing needs a database.
 """
 
 from __future__ import annotations
@@ -112,7 +114,7 @@ def test_moving_the_cutoff_invalidates_the_cache() -> None:
 
 
 def test_a_bundle_without_dates_refuses_a_cutoff() -> None:
-    """A pre-SIM-535 bundle carries no dates. Drawing from it under a cutoff
+    """A bundle without the date column carries no dates. Drawing from it under a cutoff
     would be exactly the silent leak this guards against, so it raises."""
     s = synthetic_sampler()
     pool = _pool(s)
@@ -206,8 +208,7 @@ async def test_the_cutoff_is_the_day_BEFORE_the_game() -> None:
 
 @pytest.mark.asyncio
 async def test_an_unknown_game_yields_no_cutoff() -> None:
-    """No cutoff means "draw from everything", which is right for a live game
-    and is what happened before any of this existed."""
+    """No cutoff means "draw from everything", which is right for a live game."""
     from simulation.sim_kwargs import resolve_asof_ymd
 
     assert await resolve_asof_ymd(_FakePool(None), 777001) is None
@@ -216,7 +217,7 @@ async def test_an_unknown_game_yields_no_cutoff() -> None:
 
 def test_the_factory_reads_the_cutoff_as_a_factory_only_key() -> None:
     """A leading underscore marks a key the machine factory consumes and
-    ``simulate_game`` never sees (the SIM-377 convention)."""
+    ``simulate_game`` never sees (the factory-only key convention)."""
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[2] / "simulation" / "production_factory.py").read_text(
@@ -227,18 +228,16 @@ def test_the_factory_reads_the_cutoff_as_a_factory_only_key() -> None:
 
 
 def test_a_cutoff_less_request_clears_a_prior_games_cutoff(monkeypatch) -> None:
-    """SIM-538 fix: ``production_machine_factory``'s sampler is a per-worker
-    SINGLETON, cached across every game a worker builds (see
-    ``_build_full_pool_sampler``). Before this fix, the factory only called
-    ``full_pool.set_asof(...)`` when a request carried ``"_asof_ymd"`` and
-    skipped the call otherwise -- so a game with no cutoff of its own (an
-    adversarial review of SIM-538 confirmed this happens for real: a
-    backtest game whose own point-in-time lookup fails) silently INHERITED
-    whichever cutoff the PREVIOUS game on this worker left behind, instead
-    of correctly drawing from the whole pool. This test reuses the SAME
-    sampler across two factory calls -- exactly like the real per-worker
-    cache -- and proves the second call's missing cutoff actually clears
-    the first call's cutoff rather than leaving it in place."""
+    """``production_machine_factory``'s sampler is a per-worker SINGLETON,
+    cached across every game a worker builds (see ``_build_full_pool_sampler``).
+    So the factory calls ``full_pool.set_asof(...)`` for EVERY game, with None
+    when the request carries no ``"_asof_ymd"``. A factory that skipped the
+    call would let a game with no cutoff of its own silently INHERIT the cutoff
+    the PREVIOUS game on this worker left behind (an adversarial review found
+    the case: a backtest game whose own point-in-time lookup fails). This test
+    reuses the SAME sampler across two factory calls -- exactly like the real
+    per-worker cache -- and proves the second call's missing cutoff clears the
+    first call's cutoff rather than leaving it in place."""
     import simulation.production_factory as pf
     from simulation.batch_runner import GameSpec
     from simulation.synthetic_bundle import synthetic_sampler

@@ -1,21 +1,20 @@
 """
 tests/unit/test_engine_artifacts_shared_memory.py
 ===================================================
-SIM-403b -- the EngineArtifacts shared-memory publish/attach contract.
+The EngineArtifacts shared-memory publish/attach contract.
 
 WHAT THIS COVERS
 ----------------
-The SIM-403 ticket lifted the artificial ``SIM_RUNNER_WORKERS=1`` cap so the
-lifespan BatchRunner runs a real multi-worker ProcessPool. SIM-403b is the
-follow-on that wires the big read-only numpy arrays in
-:class:`pipeline.batch.engine_artifacts.EngineArtifacts` through the SIM-333
-``multiprocessing.shared_memory`` plumbing already in
-:mod:`simulation.batch_runner` — so each worker ATTACHES the parent's bundle
-zero-copy instead of re-reading it from disk.
+The lifespan BatchRunner runs a multi-worker ProcessPool. The big read-only
+numpy arrays in :class:`pipeline.batch.engine_artifacts.EngineArtifacts` ride
+the ``multiprocessing.shared_memory`` plumbing in :mod:`simulation.batch_runner`
+— so each worker ATTACHES the parent's bundle zero-copy instead of re-reading
+it from disk.
 
-These tests exercise the EngineArtifacts side of that contract without
-spawning a real fork (the fork lifecycle itself is already covered by the
-SIM-360 + SIM-333 perf-engine tests). They cover:
+These tests exercise the EngineArtifacts side of that contract on a tiny
+synthetic bundle (no disk, no DuckDB) without spawning a real fork
+(``test_persistent_process_pool.py`` and ``test_batch_runner_concurrency.py``
+cover the fork lifecycle). They cover:
 
   * the flat-name -> ndarray map :meth:`extract_shared_arrays` returns
     (keys + dtypes + buffer identity);
@@ -163,7 +162,7 @@ class TestExtractSharedArrays:
 
     def test_arrays_are_the_same_buffer_no_copy(self):
         """The map carries the SAME underlying buffer as the source bundle —
-        the SIM-333 runner does the single copy into shared memory itself."""
+        the runner does the single copy into shared memory itself."""
         art = _synthetic_artifacts()
         out = art.extract_shared_arrays()
         # ``a is b`` would be too strict if numpy returns a new view; check the
@@ -205,7 +204,7 @@ class TestAttachSharedViews:
 
     def test_unknown_keys_silently_ignored(self):
         """A stale registry from a previous artifact build (e.g. a flat name
-        that no longer exists) must not crash the worker — the attach is a
+        the current bundle does not have) must not crash the worker — the attach is a
         defensive splice, not a strict mapping."""
         art = _synthetic_artifacts()
         original_geom = art.pools["L"].geom
@@ -270,7 +269,7 @@ class TestAttachSharedViews:
 class TestSharedMemoryRoundtrip:
     """The full publish -> _worker_init -> splice chain, exercised in-process.
 
-    This stops short of a real fork (the SIM-360 / SIM-333 perf tests cover the
+    This stops short of a real fork (the process-pool tests cover the
     multiprocessing lifecycle) and instead verifies the in-process contract:
     publish the registry, drive ``_worker_init`` synchronously, splice via
     ``attach_shared_views``, and assert the worker's bundle reads from the
@@ -316,7 +315,7 @@ class TestSharedMemoryRoundtrip:
             unlink_shared_segments(owned)
 
     def test_worker_init_with_no_registry_leaves_views_empty(self):
-        """A None registry (the SIM-332 per-process fallback) leaves
+        """A None registry (the per-process fallback) leaves
         ``_WORKER_SHARED["views"]`` empty; attach_shared_views is a no-op."""
         _worker_init(None)
         assert _WORKER_SHARED["views"] == {}

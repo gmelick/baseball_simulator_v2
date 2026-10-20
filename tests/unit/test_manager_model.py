@@ -1,17 +1,15 @@
 """
 test_manager_model.py
 ============================
-SIM-434 -- what is left of the manager decision model after the SIM-427 flip
-(2026-09-13) deleted its formulas: the **pitch-count fix** and the
-**SIM_MANAGER gate** (the manager wiring in the production factory and the
-``simulate_game`` passthrough).
+The manager plumbing around the pitching-change draw: the **pitch count**
+and the **SIM_MANAGER gate** (the manager wiring in the production factory and
+the ``simulate_game`` passthrough).
 
 WHAT THIS COVERS
 ----------------
-  1. **The pitch-count fix** -- ``GameState.pitcher_pitch_count`` advances by
-     exactly 1 per pitch in ``step_pitch`` (it was NEVER incremented before
-     SIM-434), an IBB throws no pitch (no increment), and a pitching change
-     resets it for the new arm.
+  1. **The pitch count** -- ``GameState.pitcher_pitch_count`` advances by
+     exactly 1 per pitch in ``step_pitch``, an IBB throws no pitch (no
+     increment), and a pitching change resets it for the new arm.
   2. **The SIM_MANAGER gate** -- with the flag OFF the production factory wires
      NO manager (the game is the manager-less default == byte-identical); with
      it ON the gate marker + a per-team bullpen are wired and ``SIM_MANAGER_DRAW``
@@ -21,19 +19,20 @@ WHAT THIS COVERS
      pool in the bundle the starter is pulled by the DRAW and the entering arm
      comes from the fielding side's pen; with no manager nothing fires.
 
-WHAT LEFT AT THE FLIP (do not re-add)
-------------------------------------
-The pull formula (``_PULL_PITCH_FLOOR`` / ``_CEILING``), ``pitcher_fatigue``,
-``tto_effectiveness``, ``platoon_factor``, ``score_reliever`` and the by-name
-tendency reader: the pitching change is a draw from the change opportunity
-pool (``tests/unit/test_manager_draw.py``) and the entering arm a draw
-from the live pen (``tests/unit/test_relief_draw.py``). With the draw
-switch off no pitcher is ever changed.
-
-HOW THIS STAYS NO-DB (the existing SIM-316/323 pattern)
+THE PITCHING CHANGE IS A DRAW (do not re-add a formula)
 -------------------------------------------------------
+No formula decides the pull: no pitch-count floor or ceiling, no
+``pitcher_fatigue``, ``tto_effectiveness``, ``platoon_factor``,
+``score_reliever`` or by-name tendency reader (the owner's architecture rule).
+The pitching change is a draw from the change opportunity pool
+(``tests/unit/test_manager_draw.py``) and the entering arm a draw from the live
+pen (``tests/unit/test_relief_draw.py``). With the draw switch off no pitcher
+is ever changed.
+
+HOW THIS STAYS NO-DB
+--------------------
 Every machine is rng-driven with a fixed seed; the full games draw from the
-in-memory synthetic bundle (SIM-486), whose change pool carries the pool's own
+in-memory synthetic bundle, whose change pool carries the pool's own
 change rates per cell (the rates are set to 1.0 where a test needs a certain
 pull).  The factory tests inject a mock sampler builder + a stub bullpen
 builder via the production-factory seams.
@@ -56,12 +55,12 @@ AWAY_LINEUP = list(range(101, 110))
 HOME_LINEUP = list(range(201, 210))
 
 #: The gate marker: any non-None manager turns the hooks on (the profiles
-#: themselves ride on the game state since SIM-427).
+#: themselves ride on the game state).
 _GATE: dict[str, float] = {}
 
 
 # ===========================================================================
-# Helpers (mirror the SIM-323 test fixtures)
+# Helpers (mirror the fixtures of test_manager_decisions.py)
 # ===========================================================================
 
 
@@ -146,7 +145,7 @@ class TestPitchCountIncrement:
         assert s.pitcher_pitch_count == 3
 
     def test_the_count_keeps_climbing_across_plate_appearances(self):
-        # Before the fix the count was stuck at 0.  Drive 80 pitches: the PA
+        # Drive 80 pitches: the PA
         # rolls over but the SAME pitcher keeps accruing pitches (no manager ->
         # no change), so the count reads the whole outing.
         m = _machine(seed=1)
@@ -157,14 +156,14 @@ class TestPitchCountIncrement:
 
     def test_ibb_throws_no_pitch_so_no_increment(self):
         # An IBB short-circuits step_pitch BEFORE the pitch is counted.
-        # SIM-515: the decision draws at the injected cell rate (1.0 = certain).
+        # The decision draws at the injected cell rate (1.0 = certain).
         m = _machine(_GATE, seed=1, ibb_rates={(2, 0, True, True): 1.0})
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55, batter_id=201)
         s.home_lineup = HOME_LINEUP
         s.home_lineup_slot = 0
         before = s.pitcher_pitch_count
         result = m.step_pitch(s)
-        assert result.event == "intentional_walk"  # SIM-515/516: its own class
+        assert result.event == "intentional_walk"  # its own event class
         assert s.pitcher_pitch_count == before  # no pitch thrown on an IBB
 
     def test_a_change_resets_the_new_arms_pitch_count(self):
@@ -328,7 +327,7 @@ class TestSimulateGamePassthrough:
             assert d["in_pitcher_id"] not in (-1, -2)
 
     def test_the_new_identity_fields_land_on_the_state(self):
-        # SIM-427: the managers, the pen's recent usage and source, and the
+        # The managers, the pen's recent usage and source, and the
         # per-side profiles ride through simulate_game onto the state.
         sm = StateMachine(synthetic_sampler(seed=3), rng=np.random.default_rng(3))
         r = simulate_game(

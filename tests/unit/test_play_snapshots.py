@@ -1,11 +1,11 @@
 """
 test_play_snapshots.py
 ======================
-Unit tests for SIM-331 -- the field/baserunner state + pitch-level play-by-play
-snapshot contracts in simulation.snapshots (Phase 4, Sprint 3).
+The field/baserunner state and pitch-level play-by-play snapshot contracts in
+``simulation.snapshots``.
 
 These build the four contracts from plainly-constructed GameState / PlayResult /
-summary objects (no loop run, no DB, no FAISS, no API) and assert:
+summary objects (no loop run, no DB, no API) and assert:
   * FieldSnapshot captures the 9 defensive positions, batter, baserunners
     (ids/labels), and count/outs/inning/half/score chrome;
   * a /plays PlayByPlay is pitch-level, ordered, groups pitches into PAs, and

@@ -1,22 +1,22 @@
 """
 test_simulate_game_driver.py
 ======================
-Unit tests for SIM-320 -- the **full-game driver** ``simulate_game()`` + the
-step-8 game-level loop control (regulation / walk-off / extra innings / ghost
-runner / deterministic seeding) in ``simulation/sim_loop.py`` (Sprint 2 capstone
-of the Phase-4 loop build).
+The **full-game driver** ``simulate_game()`` and its game-level loop control
+(regulation / walk-off / extra innings / ghost runner / deterministic seeding)
+in ``simulation/sim_loop.py``.
 
-These tests run with NO live DuckDB/FAISS: the driver is fed an injected
-:class:`StateMachine` whose per-pitch outcomes come from a fixed ``numpy`` rng (no
-sampler), and fielding is resolved by an injected :class:`PlayResolver`, mirroring
-the SIM-316/317/318/319 "inject the signal" pattern.
+These tests run with NO live DuckDB: the driver is fed the production
+:class:`StateMachine` over the in-memory synthetic bundle, so every pitch and
+every batted ball is a real full-pool draw from a fixed seed.  A few tests
+override ``step_pitch`` to force a game shape (an out-only half, a walk-only
+offense).
 
-Coverage (the SIM-320 acceptance criteria):
+Coverage:
   * a full game completes with a VALID final state (guards held across the game);
-  * a fixed seed reproduces the same final score (determinism, §6.3);
-  * a home lead after the top of the 9th ends the game WITHOUT the bottom (§6.2);
+  * a fixed seed reproduces the same final score (determinism);
+  * a home lead after the top of the 9th ends the game WITHOUT the bottom;
   * a walk-off (home takes the lead in the bottom of the 9th) ends mid-inning;
-  * a tie after 9 goes to extra innings with the ghost runner on 2B (§6.2);
+  * a tie after 9 goes to extra innings with the ghost runner on 2B;
   * invalid-state guards hold across a simulated game (outs <=2, scores >=0).
 """
 
@@ -44,7 +44,7 @@ HOME_LINEUP = list(range(201, 210))  # 9 batters
 
 
 def _make_machine(seed: int, hit_rate: float = 0.30) -> StateMachine:
-    """The production machine over an in-memory bundle (SIM-486): every pitch
+    """The production machine over an in-memory bundle: every pitch
     and every batted ball is a real full-pool draw, so a whole game runs with
     no DB.  ``hit_rate`` is the hit-on-contact share of the batted-ball pool."""
     art = league_artifacts(inplay_model=_inplay_model_for(hit_rate))
@@ -97,7 +97,7 @@ class TestFullGameCompletes:
 
 
 # ===========================================================================
-# Determinism (§6.3): a fixed seed reproduces the same game
+# Determinism: a fixed seed reproduces the same game
 # ===========================================================================
 
 
@@ -120,7 +120,7 @@ class TestDeterminism:
 
     def test_seed_threads_through_the_sampler_rng(self):
         # The driver re-seeds the full-pool sampler's rng from the per-game seed
-        # (the §6.3 thread-through), so a cached sampler still replays per seed.
+        # (the seed thread-through), so a cached sampler still replays per seed.
         sm = _make_machine(3)
         before = sm.full_pool_sampler.rng
         simulate_game(sm, seed=123, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP)
@@ -137,7 +137,7 @@ class TestRegulationNoBottomNinth:
     def test_home_lead_after_top_9_ends_without_the_bottom(self):
         # Start in the top of the 9th with the home team already ahead and bases
         # empty / 2 outs; one more out completes the top of the 9th -> game over,
-        # the bottom of the 9th is NOT played (spec §6.2).
+        # the bottom of the 9th is NOT played.
         state = GameState(
             pitcher_id=PITCHER,
             bat_hand="R",
@@ -217,7 +217,7 @@ class TestWalkOff:
 
 
 # ===========================================================================
-# Extra innings + ghost runner (§6.2)
+# Extra innings + ghost runner
 # ===========================================================================
 
 

@@ -1,12 +1,11 @@
 """
 tests/unit/test_fielding_draw.py
 ========================================
-SIM-523 part C1 — the FIELDING draw's filters and weights (plan:
-docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part C; the loop's
-step 6).
+The FIELDING draw's filters and weights (plan:
+docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part C).
 
-The fielding draw filters on the base-out cell, the batter hand and — new —
-the born ball's batted-ball CLASS, and weights by the born ball's similarity,
+The fielding draw filters on the base-out cell, the batter hand and the born
+ball's batted-ball CLASS, and weights by the born ball's similarity,
 the fielder at the ball's position, the park (only for a ball in the wall
 zone), the batter's profile (sprint speed included) and recency. What these
 tests pin:
@@ -19,6 +18,9 @@ tests pin:
   * every switch off is byte-identical;
   * the loop passes the born ball whenever any consumer is on;
   * the factory env reads.
+
+Synthetic pools stand in for the bundle; the export tests seed an in-memory
+DuckDB. Nothing needs a live database.
 """
 
 from __future__ import annotations
@@ -347,14 +349,14 @@ class TestTheWallZoneRule:
     def test_the_park_kernel_applies_only_to_a_wall_zone_ball_under_the_rule(self):
         fp = self._park_sampler()
         kw = {"park_run_factor": 1.2}
-        # Rule off: the park kernel applies to every ball (as today).
+        # Rule off (the default): the park kernel applies to every ball.
         assert _draws(fp, born_bb={"cls": _GROUND, "dist": 100.0}, **kw) == {"single"}
         fp.park_wall_zone_only = True
         # A ground ball: no park weight, both parks' plays draw.
         assert _draws(fp, born_bb={"cls": _GROUND, "dist": 100.0}, **kw) == {"single", "field_out"}
         # A deep fly ball: the park weight bites.
         assert _draws(fp, born_bb={"cls": _FLY, "dist": 360.0}, **kw) == {"single"}
-        # No born ball at all (the split off): as today.
+        # No born ball at all (the split off): the park weight applies, as with the rule off.
         assert _draws(fp, **kw) == {"single"}
 
 

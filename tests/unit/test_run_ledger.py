@@ -1,28 +1,28 @@
 """
 test_run_ledger.py
 =========================
-SIM-499 — the run-value ledger is TOLD its two base-out states.
+The run-value ledger is TOLD its two base-out states.
 
-WHAT WAS WRONG
---------------
-``StateMachine._commit_run_delta`` read ``state.outs`` and ``state.runners_state``
-at commit time and called that the state BEFORE the play.  Four resolvers mutate
-the bases first, so "before" was the after-state.  It then DERIVED the
-after-state with a conservation formula::
+THE TWO DEFECTS THIS FILE GUARDS AGAINST
+----------------------------------------
+``StateMachine._commit_run_delta`` takes the state before the play and the
+state after it from its caller.  A ledger that read ``state.outs`` and
+``state.runners_state`` at commit time would take the after-state for the
+before-state, because four resolvers mutate the bases first (read-after-mutate).
+A ledger that DERIVED the after-state with the conservation formula::
 
     new_on_base = old_on_base + batter_reached - runs_scored
 
-which has no term for a runner RETIRED on the play, and which placed the
-survivors on the lead-most bags rather than where they stood.
-
-Both defects are deleted.  The caller measures both states and hands them over.
+has no term for a runner RETIRED on the play, and places the survivors on the
+lead-most bags rather than where they stand (the derivation).
 
 WHAT EACH TEST HERE IS FOR
 --------------------------
-Every value in this file was measured against the pre-fix code in this
-repository before the fix landed, not taken from a ticket.  The tests below
-assert the TRUE value and record the pre-fix value in the docstring, so each one
-goes RED against the old ledger through the same public path:
+Every value in this file was measured in this repository, against the
+defective ledger before the fix landed (SIM-499), not taken from a ticket.  The
+tests below assert the TRUE value and record the defective ledger's value
+("PRE-FIX") in the docstring, so each one goes RED against that ledger through
+the same public path:
 
 ===================================  ==========  ==========  ================
 play                                 pre-fix     true        which defect
@@ -37,8 +37,9 @@ steal of home, runner on 3B             +1.00      +0.11      read-after-mutate
 ===================================  ==========  ==========  ================
 
 The RE24 table these numbers come from is ``run_resolution.RE24_MATRIX``.  The
-tests read it rather than hard-coding 0.89, so a future re-fit of the matrix
-moves the expectations with it and does not silently break the file.
+tests read it rather than hard-coding 0.89, so a re-fit of the matrix moves
+the expectations with it and does not silently break the file.  Every test
+runs on a fixed-play bundle or a bare machine; nothing needs a database.
 """
 
 from __future__ import annotations
@@ -72,8 +73,8 @@ def _fresh_state(**kw) -> GameState:
 
 
 def _play_machine(event: str, *, got_away: bool = False, **overrides: int) -> StateMachine:
-    """A machine whose every batted ball is ``event`` (SIM-486: the production
-    in-play path over a fixed-play bundle).  With ``got_away`` every drawn pitch
+    """A machine whose every batted ball is ``event`` (the production in-play
+    path over a fixed-play bundle).  With ``got_away`` every drawn pitch
     is a swinging strike that got away from the catcher."""
     art = fixed_play_artifacts(
         event,
@@ -101,8 +102,9 @@ def _walk(state: GameState, sm: StateMachine) -> PlayResult:
 
 
 class TestTheBeforeStateIsMeasuredBeforeThePlay:
-    """DEFECT (a): four resolvers mutate the bases, then commit.  The ledger read
-    the mutated bases and called them the pre-play state."""
+    """DEFECT (a): four resolvers mutate the bases, then commit.  A ledger that
+    reads the bases at commit time takes the mutated bases for the pre-play
+    state."""
 
     def test_a_walk_records_the_pre_walk_base_state(self):
         """Runner on 1B, 0 outs.
@@ -128,8 +130,8 @@ class TestTheBeforeStateIsMeasuredBeforeThePlay:
         """Bases loaded, 0 outs.  PRE-FIX +0.69.  TRUE +1.00.
 
         The base state is unchanged (loaded before, loaded after) and one run is
-        forced home, so the play is worth exactly the run.  The old ledger
-        derived an after-state of 2B+3B and lost 0.31 of it.
+        forced home, so the play is worth exactly the run.  The defective
+        ledger derived an after-state of 2B+3B and lost 0.31 of it.
         """
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _fresh_state()
@@ -145,13 +147,11 @@ class TestTheBeforeStateIsMeasuredBeforeThePlay:
     def test_a_sac_fly_is_valued_from_before_the_runner_left_third(self):
         """Runner on 3B, 0 outs.  PRE-FIX +0.76.  TRUE -0.13.
 
-        This is the PLACEMENT TRAP, retargeted 2026-08-19: the SIM-349 bias
-        that first caught it is retired, and the SIM-512 tag draw now clears
-        3B before the commit.  A snapshot taken below the transition
-        application reads empty bases and values a productive out as if it
-        had created a run from nothing.  The sac fly is a good out, not a
-        good play: it trades a runner on third and no outs for nobody on and
-        one out.
+        This is the PLACEMENT TRAP: the tag draw clears 3B before the commit.
+        A snapshot taken below the transition application reads empty bases
+        and values a productive out as if it had created a run from nothing.
+        The sac fly is a good out, not a good play: it trades a runner on third
+        and no outs for nobody on and one out.
         """
         from types import SimpleNamespace
 
@@ -209,8 +209,8 @@ class TestTheBeforeStateIsMeasuredBeforeThePlay:
     def test_a_steal_of_home_is_valued_from_before_the_runner_left(self):
         """Runner on 3B, 0 outs.  PRE-FIX +1.00.  TRUE +0.11.
 
-        ``_move_runner`` empties 3B before the commit.  The old ledger read empty
-        bases as the pre-state and credited the whole run with no cost.
+        ``_move_runner`` empties 3B before the commit.  The defective ledger read
+        empty bases as the pre-state and credited the whole run with no cost.
         """
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _fresh_state()
@@ -232,12 +232,12 @@ class TestTheBeforeStateIsMeasuredBeforeThePlay:
 
 class TestAPlayThatRetiresARunner:
     """DEFECT (b): the conservation formula has no term for a runner the fielders
-    remove, so it kept his body on the field and put it on the lead-most bag."""
+    remove, so it keeps his body on the field and puts it on the lead-most bag."""
 
     def test_a_caught_stealing_charges_the_runner_it_removed(self):
         """Runner on 1B, 0 outs.  PRE-FIX -0.24.  TRUE -0.62.
 
-        A caught stealing costs the runner AND the out.  The old ledger charged
+        A caught stealing costs the runner AND the out.  The defective ledger charged
         the out only: it read the already-cleared bases as the pre-state (0.51)
         and then derived an after-state that also had nobody on, so the runner
         never appeared on either side of the subtraction.
@@ -259,12 +259,12 @@ class TestAPlayThatRetiresARunner:
         """Runner on 1B, 0 outs, ground-ball double play.  PRE-FIX -0.52.
 
         This is the derivation defect on its own — the pre-state was read
-        correctly here, because an in-play out does not move the bases.  The old
-        formula kept one body on the field (1 on base + 0 reached - 0 scored)
+        correctly here, because an in-play out does not move the bases.  The
+        defective formula kept one body on the field (1 on base + 0 reached - 0 scored)
         and placed it on THIRD, so it valued the after-state at RE(2 outs, 3B) =
         0.37 instead of the real RE(2 outs, 1B) = 0.23.
 
-        The drawn transition row (SIM-511) retires the runner from first, so
+        The drawn transition row retires the runner from first, so
         the after-state is empty bases with two outs and the play is worth
         -0.78.
         """
@@ -279,8 +279,8 @@ class TestAPlayThatRetiresARunner:
         assert result.re_start == pytest.approx(_re(0, ON_1B))
         assert result.re_end == pytest.approx(_re(2, EMPTY))
         assert result.runs == pytest.approx(-0.78)
-        # The old formula's after-state, for the record: it invented a runner on
-        # third.  That is a strictly different, and better, number than the truth.
+        # The defective formula's after-state, for the record: it invents a runner
+        # on third.  That is a strictly different, and better, number than the truth.
         assert _re(2, ON_3B) > _re(2, EMPTY)
 
     def test_the_deleted_conservation_formula_cannot_express_a_retirement(self):
@@ -289,15 +289,15 @@ class TestAPlayThatRetiresARunner:
         A ground-ball double play with a runner on first ends with the bases
         empty and two outs.  The formula is handed the same play and returns a
         runner still standing on third.  No argument to it can say "the fielders
-        took him off the base", which is why SIM-499 deletes it as a derivation
-        and SIM-500 keeps the identity only as a check, where the caller states
-        the retired count.
+        took him off the base", which is why the identity serves only as a
+        check (``Bases.assert_transition``), where the caller states the
+        retired count.
         """
 
         def deleted_conservation_after_state(
             outs: int, runners_state: int, *, result_hits: int, result_outs: int, result_runs: int
         ) -> tuple[int, int]:
-            """Verbatim reconstruction of the deleted ``advance_state``."""
+            """Verbatim reconstruction of the original ``advance_state`` derivation."""
             new_outs = outs + result_outs
             if new_outs >= 3:
                 return 3, 0
@@ -341,29 +341,21 @@ class TestAPlayThatRetiresARunner:
 
 
 class TestReachOnError:
-    """DEFECT (c): the ledger valued a reach on error wrongly.
+    """DEFECT (c): a reach on error must be worth the base the batter takes.
 
-    ⚠ A CORRECTION TO THE FILED DESCRIPTION, measured in this repository.
-    The ticket says every reach on error records exactly 0.00 against a true
-    +0.38.  Both halves are half right, and the difference matters:
-
-      * The 0.00 is real and exact, and so is the 0.00 it should record —
-        because on that path the batter never reaches base at all.  The play is
-        resolved with ``result_hits=0`` and nobody is placed on first, so no run
-        expectancy changed.  Making the batter reach is **SIM-496**, a separate
-        open ticket, in a different method.  ``BACKLOG.md:89`` states the split
-        exactly: "SIM-453 [now SIM-499] fixes what the ledger records, SIM-496
-        fixes what the play is."
-      * The +0.38 is the correct value the moment a batter DOES reach first on
-        an error.  One path in the loop does that today — the dropped third
-        strike — and it recorded **+1.10**, not 0.00.
+    A batter who reaches first on an error moves empty bases (0.51) to a runner
+    on first (0.89): +0.38.  Two paths reach the batter that way: the dropped
+    third strike (the catcher's error), for which the defective ledger recorded
+    **+1.10**, and a drawn ``field_error`` row.  What the ledger records and
+    what the play is are separate questions: a play that places nobody on first
+    is honestly worth 0.00.
     """
 
     def test_a_reach_on_error_that_puts_the_batter_on_first_is_worth_plus_038(self):
         """Bases empty, 0 outs, dropped third strike.  PRE-FIX +1.10.  TRUE +0.38.
 
         The batter reaches first on the catcher's error.  Empty bases (0.51) to
-        a runner on first (0.89) is +0.38.  The old ledger read the post-reach
+        a runner on first (0.89) is +0.38.  The defective ledger read the post-reach
         bases as the pre-state and then derived a SECOND runner on top, valuing
         an empty-bases single at more than a bases-clearing double.
         """
@@ -382,12 +374,11 @@ class TestReachOnError:
         assert result.runs == pytest.approx(0.38)
 
     def test_a_reach_on_error_puts_the_batter_on_first_and_is_worth_plus_038(self):
-        """The SIM-511 shape: a drawn ``field_error`` row reaches the batter.
+        """The transition-draw shape: a drawn ``field_error`` row reaches the batter.
 
         ``result_hits`` is 0 (a reach is not a hit) and ``batter_reached`` is
         True, so the ledger reads empty bases (0.51) to a runner on first
-        (0.89): +0.38.  Before SIM-511 nobody was placed on first and the play
-        read an honest 0.00 (the SIM-496 defect).
+        (0.89): +0.38.
         """
         sm = _play_machine("field_error")
         state = _fresh_state()
@@ -409,10 +400,10 @@ class TestReachOnError:
 
 class TestResolveRunsRefusesToGuess:
     def test_a_partial_state_raises_and_names_what_is_missing(self):
-        """A partial call used to fall through to the context-free weight.
+        """A partial call raises; it never falls through to a context-free weight.
 
-        That is the silent failure SIM-499 removes: the caller believed it had
-        asked for a context-aware value and got a context-free one.
+        A fall-through would be a silent failure: the caller believes it asked
+        for a context-aware value and gets a context-free one.
         """
         with pytest.raises(ValueError) as excinfo:
             resolve_runs(event="single", pre_outs=0, pre_runners_state=ON_1B)
@@ -422,9 +413,9 @@ class TestResolveRunsRefusesToGuess:
         assert "result_runs" in message
 
     def test_no_state_at_all_raises(self):
-        # The context-free linear-weight fallback was REMOVED 2026-08-19
-        # (owner ruling, the SIM-511+512 landing): a hand-set per-event
-        # constant never stands in for real states. No state = an error.
+        # No context-free linear-weight fallback exists (the owner's ruling of
+        # 2026-08-19): a hand-set per-event constant never stands in for real
+        # states. No state = an error.
         with pytest.raises(ValueError, match="linear-weight fallback was removed"):
             resolve_runs(event="walk")
 
@@ -451,7 +442,7 @@ class TestResolveRunsRefusesToGuess:
             )
 
     def test_the_post_state_is_echoed_not_derived(self):
-        """Give an after-state the old formula would never have produced."""
+        """Give an after-state the defective formula would never produce."""
         r = resolve_runs(
             event="single",
             pre_outs=0,
@@ -483,7 +474,7 @@ class TestResolveRunsRefusesToGuess:
 
 
 class TestTheLedgerChecksTheTransition:
-    """SIM-500's ``Bases.assert_transition``, wired at the commit.
+    """``Bases.assert_transition``, wired at the commit.
 
     Wrong as a way to DERIVE the after-state, right as a way to CHECK one: the
     caller supplies the retired count that a derivation had to guess.
@@ -492,11 +483,6 @@ class TestTheLedgerChecksTheTransition:
     @staticmethod
     def _machine_and_state():
         sm = StateMachine(rng=np.random.default_rng(0))
-        # SIM-500: these tests verify the GUARD, so they opt into it. The flag is
-        # off by default on a machine with no full-pool sampler, because the
-        # per-tile scaffold strands runners and reaches states real baseball
-        # cannot. A test that asserts the guard raises must turn it on.
-        sm._enforce_base_invariants = True
         state = _fresh_state()
         return sm, state
 
@@ -618,7 +604,7 @@ class TestTheSnapshotIsACopy:
     def test_snapshot_bases_does_not_alias_the_live_bases(self):
         """``_resolve_walk`` mutates ``state.bases`` in place.  A snapshot that
         returned the same object would leave the ledger reading the after-state
-        again, which is the whole defect."""
+        again: the read-after-mutate defect."""
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _fresh_state()
         state.bases = Bases(first=101)
@@ -635,10 +621,10 @@ class TestTheSnapshotIsACopy:
         """A structural guard on the placement trap.
 
         Each of the four resolvers that commit must take its snapshot before the
-        first line that can touch the bases.  The retired SIM-349 sac-fly bias
-        was the one that caught someone out first; the SIM-511 transition
-        resolver inherits its pin — it consumes ``pre_bases``, so the snapshot
-        must sit above its call.
+        first line that can touch the bases.  The transition resolver consumes
+        ``pre_bases``, so the snapshot must sit above its call.  The methods
+        live in the ``simulation/loop/`` mixins and resolve through
+        ``StateMachine``.
         """
         import inspect
 
@@ -697,11 +683,11 @@ class TestTheOrdinaryPlaysAreUnchanged:
         assert result.runs == pytest.approx(_re(0, EMPTY) - _re(0, ON_1B) + 2.0)
 
     def test_the_score_still_commits_the_pool_supplied_runs(self):
-        """SIM-499 changes the run VALUE, not the score.
+        """The ledger records the run VALUE; it never changes the score.
 
         The runs the drawn row scores are what the score commits; the body
-        count goes to the transition check.  This test pins that the fix did
-        not quietly re-route the score through the body count.
+        count goes to the transition check.  This test pins that the score
+        never routes through the body count.
         """
         sm = _play_machine("double")
         state = _fresh_state()

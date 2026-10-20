@@ -4,6 +4,10 @@ managerial changes, and simulating the rest of the game from that point.
 The feed fixture is game 824381 (TEX at CLE, 2026-09-20), read with
 ``hydrate=alignment`` and trimmed by ``record_fixtures.py --plays``. It has a
 mid-game pitching change, a pinch hitter, a pinch runner and an intentional walk.
+
+The simulations draw from the synthetic bundle. The route tests mount the games
+router on a bare FastAPI app with a stub feed, a stub Postgres pool and an
+in-memory run table, so nothing needs a database or the network.
 """
 
 from __future__ import annotations
@@ -484,8 +488,8 @@ def test_before_first_pitch_either_side_changes_its_lineup_and_starter() -> None
 
 
 # ---------------------------------------------------------------------------
-# A started game with no stored lineup (the 2026-10-12 live check): the what-if
-# builds its base state from the league feed's starting lineup.
+# A started game with no stored lineup: the what-if builds its base state from
+# the league feed's starting lineup (the case the live check of 2026-10-12 found).
 # ---------------------------------------------------------------------------
 
 

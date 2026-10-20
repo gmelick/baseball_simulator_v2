@@ -1,34 +1,32 @@
 """
 test_persistent_process_pool.py
 =======================
-Unit tests for SIM-360 -- the **persistent (warm) ProcessPool + shared-memory
-lifecycle** for the long-lived API (Phase 5, Sprint 3).
+The **persistent (warm) ProcessPool + shared-memory lifecycle** of
+:class:`simulation.batch_runner.BatchRunner` for the long-lived API.
 
-WHAT SIM-360 CHANGES
+WHAT THE RUNNER DOES
 --------------------
-SIM-332's :class:`simulation.batch_runner.BatchRunner._execute` forked a FRESH
-``ProcessPoolExecutor`` (``with ProcessPoolExecutor(...) as pool:``) on EVERY
-``run()`` call and tore it down at the end -- a one-shot-script lifecycle.  A
-long-lived API would then pay the fork + worker-startup + SIM-333 shared-mem
-publish/unlink cost per request.  SIM-360 makes the runner create ONE warm pool
-lazily on the first pooled ``_execute`` and REUSE it across ``run()`` calls
-(publishing the shared-mem segments ONCE), recreating it only on a worker-count
-change, and shutting it down in :meth:`close`.
+A runner that forked a FRESH ``ProcessPoolExecutor`` on EVERY ``run()`` call
+would make a long-lived API pay the fork + worker-startup + shared-memory
+publish/unlink cost per request.  So the runner creates ONE warm pool lazily
+on the first pooled ``_execute`` and REUSES it across ``run()`` calls
+(publishing the shared-memory segments ONCE), recreates it only on a
+worker-count change, and shuts it down in :meth:`close`.
 
 These tests use REAL multiprocessing (a 2-worker pool) driven by the picklable,
-no-DB rng factory (the always-on path) so games run with NO live DuckDB/FAISS
-and NO Redis.  Iteration counts are tiny (n=4) so the cross-process run is fast.
+no-DB rng factory (the always-on path) so games run with NO live DuckDB and NO
+Redis.  Iteration counts are tiny (n=4) so the cross-process run is fast.
 
-Coverage (SIM-360 acceptance criteria):
+Coverage:
   * a reused runner reuses the SAME underlying ``ProcessPoolExecutor`` across two
     ``run()`` calls (identity assertion -- no new pool on the 2nd call);
-  * both runs produce correct SIM-327 summaries;
-  * the SIM-333 shared-mem segments are published exactly ONCE for the warm pool;
+  * both runs produce correct game summaries;
+  * the shared-memory segments are published exactly ONCE for the warm pool;
   * ``close()`` shuts the pool down AND unlinks the segments, and is idempotent;
   * a worker-count change between runs recreates the pool (documented policy);
-  * ``reuse_pool=False`` restores the SIM-332 fresh-pool-per-call behaviour;
+  * ``reuse_pool=False`` builds a fresh pool per call;
   * the synchronous ``max_workers <= 1`` in-process path never builds a pool
-    (the always-on determinism path is untouched).
+    (the always-on determinism path).
 """
 
 from __future__ import annotations
@@ -75,7 +73,7 @@ def _pool_workers() -> int:
 
 
 # ===========================================================================
-# The warm pool is created ONCE and REUSED across run() calls   (the core AC)
+# The warm pool is created ONCE and REUSED across run() calls
 # ===========================================================================
 
 
@@ -98,7 +96,7 @@ class TestWarmPoolReuse:
             # SAME executor instance -> the pool was REUSED, not re-forked.
             assert pool_after_2 is pool_after_1
 
-            # Both runs produced correct SIM-327 summaries.
+            # Both runs produced correct game summaries.
             for res in (res1, res2):
                 assert isinstance(res.summary, GameSimSummary)
                 assert res.summary.n_iterations == 4
@@ -221,7 +219,7 @@ class TestWorkerCountChangeRecreates:
 
 
 # ===========================================================================
-# reuse_pool=False restores the SIM-332 fresh-pool-per-call behaviour
+# reuse_pool=False builds a fresh pool per call
 # ===========================================================================
 
 
@@ -271,7 +269,7 @@ class TestInProcessPathNeverPools:
 
 
 # ===========================================================================
-# Context-manager / transient runner cleans up exactly as before (backward-compat)
+# A context-manager / transient runner cleans up on exit
 # ===========================================================================
 
 

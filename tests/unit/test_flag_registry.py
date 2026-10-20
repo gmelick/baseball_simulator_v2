@@ -2,9 +2,9 @@
 
 Two guards keep the registry whole: every ``SIM_*`` name the API or the
 simulator reads is registered, and every ``SIM_*`` key the app service sets in
-``docker-compose.yml`` is registered. The readers are checked on the rules the
-scattered reads had before the registry: the on and off spellings, the default
-for an unset flag, and the default for a number that does not parse.
+``docker-compose.yml`` is registered. The tests check the readers on three
+rules: the on and off spellings, the default for an unset flag, and the default
+for a number that does not parse.
 """
 
 from __future__ import annotations

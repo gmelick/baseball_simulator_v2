@@ -1,13 +1,10 @@
-"""SIM-500 — real base-state invariants + the runner-conservation assertion.
+"""The base-state invariants and the runner-conservation check on ``Bases``.
 
 WHAT THIS FILE PROVES
 =====================
-``Bases.assert_consistent()`` used to reject exactly one thing: a negative
-runner id.  Call sites in ``simulation/sim_loop.py`` (``:1558``, ``:1786``,
-``:1882``, ``:1936``, ``:2041``, ``:2251``, ``:3596``) treat it as a correctness
-guard, so every one of them read as protection and gave none.
-
-Two guards now carry the load:
+The loop treats the base guards as correctness checks, so each guard must
+reject every illegal state, not only a negative runner id.  Two guards carry
+the load:
 
   * :meth:`Bases.assert_consistent` answers **"is this base state possible?"** —
     non-negative ids, no duplicate id, at most three runners, and (when the
@@ -18,13 +15,14 @@ Two guards now carry the load:
         runners_before + batter_reached
             == runners_after + runners_scored + runners_retired
 
-    which SIM-499 deletes from ``run_resolution.advance_state``.  Wrong as a
-    derivation (it has no term for a runner retired on the play), right as a
-    check (the caller supplies that term).
+    Wrong as a derivation (it has no term for a runner retired on the play),
+    right as a check (the caller supplies that term).
 
-Every test below that asserts a raise is a test the OLD single-check guard
-FAILS.  The two ``test_old_guard_*`` tests pin that claim in code: they
-reconstruct the old body and show it accepting each illegal state.
+``_old_assert_consistent`` rebuilds a guard that checks only the sign of each
+runner id.  Every test below that asserts a raise is a test that sign-only
+guard FAILS.  The two ``test_old_guard_*`` tests pin that claim in code: they
+show the sign-only guard accepting each illegal state.  The tests build
+``Bases`` and ``GameState`` directly; nothing touches a database.
 """
 
 from __future__ import annotations
@@ -39,14 +37,14 @@ from simulation.game_state import (
 )
 
 # ---------------------------------------------------------------------------
-# The old guard, reconstructed verbatim from master @ e4be4c1 game_state.py:148.
-# The tests below use it to show WHAT the new invariants buy: every illegal
-# state in this file walks straight past it.
+# The sign-only guard: the body of ``Bases.assert_consistent`` at commit e4be4c1,
+# verbatim.  The tests below use it to show WHAT the full invariants buy: every
+# illegal state in this file walks straight past it.
 # ---------------------------------------------------------------------------
 
 
 def _old_assert_consistent(bases: Bases) -> None:
-    """``Bases.assert_consistent`` as it stood before SIM-500 — id sign only."""
+    """A base guard that checks only the sign of each runner id."""
     for base, rid in (("1B", bases.first), ("2B", bases.second), ("3B", bases.third)):
         if rid is not None and int(rid) < 0:
             raise ValueError(f"Bases.{base} has a negative runner id: {rid!r}")
@@ -89,10 +87,10 @@ def test_duplicate_runner_id_rejected(bases: Bases, bags: str) -> None:
     """One player cannot stand on two bases.
 
     This is the shape the audit named: a runner doubled off is re-placed by one
-    code path while another places the batter on the same bag.  The old guard
-    accepts every one of these.
+    code path while another places the batter on the same bag.  The sign-only
+    guard accepts every one of these.
     """
-    _old_assert_consistent(bases)  # the old guard sees nothing wrong
+    _old_assert_consistent(bases)  # the sign-only guard sees nothing wrong
     with pytest.raises(ValueError, match="cannot occupy two bases"):
         bases.assert_consistent()
 
@@ -102,9 +100,9 @@ def test_four_runners_rejected() -> None:
 
     ``Bases`` has exactly three slots, so it cannot physically hold a fourth
     runner.  The rule is therefore asserted where it IS reachable — on the
-    shared checker, which SIM-499's transition mapping calls with a list of
-    runner ids **before** it builds the ``Bases``.  ``assert_consistent`` runs
-    the same checker over its three bags.
+    shared checker, which a caller holding a list of runner ids can run
+    **before** it builds the ``Bases``.  ``assert_consistent`` runs the same
+    checker over its three bags.
     """
     with pytest.raises(ValueError, match="holds 4 runners"):
         Bases.assert_runner_set_legal([11, 22, 33, 44])
@@ -114,7 +112,7 @@ def test_four_runners_rejected() -> None:
 
 
 def test_negative_runner_id_still_rejected() -> None:
-    """The one rule the old guard did enforce still holds, and still names the bag."""
+    """The one rule the sign-only guard enforces holds too, and names the bag."""
     with pytest.raises(ValueError, match=r"Bases\.2B has a negative runner id"):
         Bases(second=-5).assert_consistent()
     with pytest.raises(ValueError, match="negative runner id"):
@@ -124,11 +122,11 @@ def test_negative_runner_id_still_rejected() -> None:
 def test_batter_already_on_base_rejected() -> None:
     """The batter is not a runner during his own plate appearance."""
     bases = Bases(first=101, second=202)
-    _old_assert_consistent(bases)  # the old guard sees nothing wrong
+    _old_assert_consistent(bases)  # the sign-only guard sees nothing wrong
     bases.assert_consistent()  # legal as a STATE ...
     with pytest.raises(ValueError, match="who is also the batter"):
         bases.assert_consistent(batter_id=202)  # ... illegal with 202 at the plate
-    # Opt-in: a caller that passes no batter id keeps the old behaviour.
+    # Opt-in: a caller that passes no batter id gets no batter check.
     bases.assert_consistent(batter_id=None)
 
 
@@ -139,8 +137,8 @@ def test_runner_ids_reports_occupants_in_base_order() -> None:
 
 
 def test_gamestate_aggregate_guard_inherits_the_new_rules() -> None:
-    """``GameState.assert_invariants`` delegates to the base guard, so the new
-    rules reach every one of its call sites for free."""
+    """``GameState.assert_invariants`` delegates to the base guard, so the base
+    rules reach every one of its call sites."""
     gs = _state(Bases(first=7, second=7))
     with pytest.raises(ValueError, match="cannot occupy two bases"):
         gs.assert_invariants(in_play=True)
@@ -154,7 +152,7 @@ def test_gamestate_aggregate_guard_inherits_the_new_rules() -> None:
 
 
 def test_transition_accepts_the_real_plays() -> None:
-    """Every legal shape balances, including the two the derivation got wrong."""
+    """Every legal shape balances, including the two a derivation gets wrong."""
     # Strikeout, runner on 1B: nothing moves, the batter never reaches.
     Bases(first=11).assert_transition(
         Bases(first=11), batter_reached=0, runners_scored=0, runners_retired=0
@@ -181,7 +179,7 @@ def test_transition_accepts_the_real_plays() -> None:
         Bases(), batter_reached=1, runners_scored=2, runners_retired=0, batter_id=99
     )
     # Ground-ball double play: the runner is retired, the batter never reached.
-    # This is the case the deleted derivation desynced on.
+    # A derivation from the identity desyncs here: it has no retired term.
     Bases(first=11).assert_transition(
         Bases(), batter_reached=0, runners_scored=0, runners_retired=1, batter_id=99
     )
@@ -189,8 +187,8 @@ def test_transition_accepts_the_real_plays() -> None:
     Bases(first=11).assert_transition(
         Bases(first=99), batter_reached=1, runners_scored=0, runners_retired=1, batter_id=99
     )
-    # Reach on error: the batter reaches, nobody leaves.  The deleted
-    # derivation passed result_hits=0 here and recorded a run value of 0.00.
+    # Reach on error: the batter reaches, nobody leaves.  A derivation that
+    # reads the hits sees result_hits=0 here and records a run value of 0.00.
     Bases(second=22).assert_transition(
         Bases(first=99, second=22),
         batter_reached=1,
@@ -211,7 +209,7 @@ def test_transition_accepts_the_real_plays() -> None:
 def test_transition_rejects_a_lost_runner() -> None:
     """A runner who vanishes without scoring or being retired breaks the identity."""
     pre, post = Bases(first=11, second=22), Bases(first=11)
-    _old_assert_consistent(post)  # the old guard sees nothing wrong
+    _old_assert_consistent(post)  # the sign-only guard sees nothing wrong
     post.assert_consistent()  # and the state itself IS legal
     with pytest.raises(ValueError, match="does not conserve runners"):
         pre.assert_transition(
@@ -222,7 +220,7 @@ def test_transition_rejects_a_lost_runner() -> None:
 def test_transition_rejects_an_invented_runner() -> None:
     """A runner who appears from nowhere breaks the identity."""
     pre, post = Bases(first=11), Bases(first=11, second=22)
-    _old_assert_consistent(post)  # the old guard sees nothing wrong
+    _old_assert_consistent(post)  # the sign-only guard sees nothing wrong
     post.assert_consistent()
     with pytest.raises(ValueError, match="does not conserve runners"):
         pre.assert_transition(
@@ -240,8 +238,8 @@ def test_transition_rejects_the_phantom_runner_left_on_a_double_play() -> None:
     """
     pre = Bases(first=11)
     phantom = Bases(first=11)  # 11 was doubled off at 2B and never left
-    _old_assert_consistent(phantom)  # the old guard sees nothing wrong
-    phantom.assert_consistent()  # and neither can the new STATE guard
+    _old_assert_consistent(phantom)  # the sign-only guard sees nothing wrong
+    phantom.assert_consistent()  # and neither can the full STATE guard
     with pytest.raises(ValueError, match="does not conserve runners"):
         pre.assert_transition(
             phantom, batter_reached=0, runners_scored=0, runners_retired=1, batter_id=99
@@ -274,7 +272,7 @@ def test_transition_rejects_the_batter_on_base_when_he_did_not_reach() -> None:
         pre.assert_transition(
             post, batter_reached=0, runners_scored=0, runners_retired=0, batter_id=99
         )
-    # The count identity catches that one.  Now a claim where the count DOES
+    # The count identity catches that one.  Next, a claim where the count DOES
     # balance — two runners on, one retired, one left on base — but the runner
     # standing on 1B is the batter, who is said never to have reached:
     #   before=2 + reached=0 == after=1 + scored=0 + retired=1.
@@ -330,16 +328,15 @@ def test_transition_accepts_bool_and_int_for_batter_reached() -> None:
 
 
 # ===========================================================================
-# The old guard could not fail — pinned, so nobody re-weakens it
+# The sign-only guard cannot fail — pinned, so nobody weakens the guard
 # ===========================================================================
 
 
 def test_old_guard_accepts_every_illegal_state_the_new_one_rejects() -> None:
-    """RULE 1 evidence, in code.
+    """The sign-only guard accepts every illegal state; the full guard rejects each.
 
-    Each state below is illegal.  The pre-SIM-500 guard accepts all of them.
-    If a future edit weakens ``assert_consistent`` back toward the old body,
-    the paired assertions in this file go red.
+    Each state below is illegal.  If an edit weakens ``assert_consistent``
+    toward the sign-only body, the paired assertions in this file go red.
     """
     illegal = [
         Bases(first=7, second=7),  # one player on two bases
@@ -349,7 +346,7 @@ def test_old_guard_accepts_every_illegal_state_the_new_one_rejects() -> None:
     for bases in illegal:
         _old_assert_consistent(bases)  # never raises
 
-    # ... and the new guard rejects each of them.
+    # ... and the full guard rejects each of them.
     with pytest.raises(ValueError):
         illegal[0].assert_consistent()
     with pytest.raises(ValueError):
@@ -359,13 +356,13 @@ def test_old_guard_accepts_every_illegal_state_the_new_one_rejects() -> None:
 
 
 def test_old_guard_has_no_transition_check_at_all() -> None:
-    """The conservation identity is new.  The old guard took one argument and
-    could not see two states, so no version of it could detect a lost, invented
-    or phantom runner."""
+    """The sign-only guard takes one argument and cannot see two states, so no
+    version of it can detect a lost, invented or phantom runner.  The
+    conservation check can."""
     assert not hasattr(_old_assert_consistent, "assert_transition")
     pre, phantom = Bases(first=11), Bases(first=11)
     _old_assert_consistent(pre)
-    _old_assert_consistent(phantom)  # both "pass" the old guard
+    _old_assert_consistent(phantom)  # both "pass" the sign-only guard
     with pytest.raises(ValueError):
         pre.assert_transition(
             phantom, batter_reached=0, runners_scored=0, runners_retired=1, batter_id=99

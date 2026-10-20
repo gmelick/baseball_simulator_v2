@@ -1,31 +1,27 @@
 """
 test_manager_decisions.py
 ===============================
-SIM-323 -- the **manager-decision module** behind the §3 (pre-pitch) and §5.3
-(end-of-PA) hooks of the Phase-4 simulation loop (``simulation/sim_loop.py``).
+The manager decisions of the simulation loop's pre-pitch hook
+(``simulation/loop/manager.py``): the leverage index and the intentional walk.
 
-WHAT THIS COVERS (the SIM-323 acceptance criteria)
---------------------------------------------------
-  * the **Leverage Index** is monotone in the obvious directions (later inning =>
-    higher; bigger lead/deficit => lower; more runners on / fewer outs => higher);
-  * **IBB** fires in the canonical spot (first base open + RISP + close & late +
-    high LI + an aggressive matchup manager) and NOT otherwise (first base taken,
-    or early / blowout);
+WHAT THIS COVERS
+----------------
+  * the **Leverage Index** (LI: how much a spot can swing the win probability)
+    is monotone in the obvious directions (later inning => higher; bigger
+    lead/deficit => lower; more runners on / fewer outs => higher);
+  * the **intentional walk** (IBB) draws once per plate appearance at the
+    measured rate of its cell: it fires in the canonical spot (first base open
+    + a runner in scoring position + close & late) and NOT otherwise (first
+    base taken, or early / blowout);
   * a game with **no manager profile** still completes (every hook is no-op-safe).
 
-  The steal green-light, the pinch hit and the sac-bunt setup were deleted on
-  2026-09-13 (SIM-427, owner decision: the four dead hooks go — the steal is a
-  draw with the manager's rate as a weight, no bench was ever wired, the bunt
-  changed no play), and the starter-pull formula at the SIM-427 flip the same
-  day (the pitching change is a draw: ``test_manager_draw.py``); their
-  tests went with them.
+The pitching change is a draw; ``test_manager_draw.py`` tests it.
 
 HOW THE TENDENCIES ARE INJECTED (no live DB)
 --------------------------------------------
 The decisions read from an injected ``manager`` tendency source (a plain dict of
-the SIM-2.8 manager-similarity rate names) and from a fixed-seed ``numpy`` rng, so
-every decision is deterministic.  This mirrors the SIM-316/319/320 "inject the
-signal" pattern -- no DuckDB / FAISS is touched.
+the manager-similarity rate names), an injected IBB rate table and a fixed-seed
+``numpy`` rng, so every decision is deterministic.  No DuckDB is touched.
 """
 
 from __future__ import annotations
@@ -127,7 +123,7 @@ class TestLeverageIndex:
 # ===========================================================================
 
 
-#: SIM-515: the injected rate table — the textbook cell (runner on 2B, 0 outs,
+#: The injected rate table — the textbook cell (runner on 2B, 0 outs,
 #: late, close) at certainty, everything else absent (measured rate ~0).
 _IBB_CERTAIN = {(2, 0, True, True): 1.0}
 
@@ -137,9 +133,9 @@ def _ibb_machine(manager=_AGGRESSIVE, *, rates=None, seed: int = 1) -> StateMach
 
 
 class TestIntentionalWalk:
-    """SIM-515: the IBB decision draws at the REAL rate of the PA's cell
-    (sim.ibb_rates) — the hand-tuned tendency x leverage formula is retired.
-    The tests inject a rate table; a cell at 1.0 fires deterministically."""
+    """The IBB decision draws at the REAL rate of the PA's cell (sim.ibb_rates),
+    never a tendency x leverage formula.  The tests inject a rate table; a
+    cell at 1.0 fires deterministically."""
 
     def test_ibb_fires_at_the_cell_rate(self):
         # Runner on 2B, 1B open, tie game, bottom of the 9th, first pitch —
@@ -166,8 +162,8 @@ class TestIntentionalWalk:
         assert s.manager.intentional_walk_signalled is False
 
     def test_the_draw_fires_once_per_pa_not_per_pitch(self):
-        # Mid-count (0-1) the PA's decision is already made — no re-roll (the
-        # old per-pitch re-roll compounded to 2.64x MLB's IBB volume).
+        # Mid-count (0-1) the PA's decision is already made — no re-roll (a
+        # per-pitch re-roll compounds to 2.64x MLB's IBB volume, SIM-515).
         m = _ibb_machine(rates=_IBB_CERTAIN)
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
         s.strikes = 1
@@ -202,7 +198,7 @@ class TestIntentionalWalk:
         s.home_lineup = HOME_LINEUP
         s.home_lineup_slot = 0
         result = m.step_pitch(s)
-        # SIM-515/516: the IBB carries its OWN canonical event so the lane's
+        # The IBB carries its OWN canonical event so the lane's
         # IBB_PA pool band can tell it from a ball-4 walk (the box still
         # credits a BB/non-AB — _BB_CANONICAL holds both classes).
         assert result.event == "intentional_walk"
@@ -217,11 +213,10 @@ class TestIntentionalWalk:
 
 class TestNoManagerProfile:
     def test_a_game_with_no_manager_profile_completes(self):
-        # SIM-498 reseeded the loop and full-pool generators from independent
-        # SeedSequence children, which legitimately changes the draw stream. Seed 0
-        # now yields a 0-0 tie that runs to the extra-inning cap; seed 2 decides in
-        # regulation. The seed is incidental — this test asserts the game reaches a
-        # decision rather than stalling, and it still does.
+        # The loop and full-pool generators seed from independent SeedSequence
+        # children. Seed 0 yields a 0-0 tie that runs to the extra-inning cap;
+        # seed 2 decides in regulation. The seed is incidental — this test asserts
+        # the game reaches a decision rather than stalling.
         rng = np.random.default_rng(2)
         machine = StateMachine(synthetic_sampler(league_artifacts(), 2), rng=rng)  # manager=None
         result = simulate_game(

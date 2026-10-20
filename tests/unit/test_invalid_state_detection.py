@@ -1,29 +1,27 @@
 """
 test_invalid_state_detection.py
 =================
-SIM-326 -- the **invalid-state detection harness** for the Phase-4 simulation
-loop (Sprint 2, QA/DevOps deliverable).
+The **invalid-state detection harness** for the simulation loop.
 
 WHAT THIS IS
 ------------
 A test-only harness that drives **N complete games** through
-``simulation.sim_loop.simulate_game()`` (the SIM-320 driver) with VARIED per-game
-seeds and asserts that NO invalid state is ever reached -- not just at the final
-state but at every *committed* state transition the loop produces. The default is
-1,000 games (the acceptance criterion); the count is overridable via the
-``SIM326_GAMES`` env var or the ``n`` parameter so future tickets can crank it up.
+``simulation.sim_loop.simulate_game()`` with VARIED per-game seeds and asserts
+that NO invalid state is ever reached -- not just at the final state but at
+every *committed* state transition the loop produces. The default is 1,000
+games (the acceptance criterion); the ``SIM326_GAMES`` env var or the ``n``
+parameter overrides the count.
 
-HOW IT RUNS 1,000 GAMES FAST (no live DB / FAISS)
--------------------------------------------------
-It reuses the exact SIM-320 dependency-injection idiom from
-``tests/unit/test_simulate_game_driver.py``: an rng-driven ``StateMachine`` that draws
-each pitch outcome from its own loop ``numpy`` Generator (no sampler -> no FAISS),
-and an injected ``PlayResolver`` that resolves an in-play ball to a (league-
-plausible) single or out from the same rng (no DuckDB). Each game gets its own
-seed, so it is NOT the same game 1,000x. 1,000 games run in ~1.3s locally.
+HOW IT RUNS 1,000 GAMES FAST (no live DB)
+-----------------------------------------
+It reuses the idiom of ``tests/unit/test_simulate_game_driver.py``: an
+rng-driven ``StateMachine`` that draws each pitch outcome from its own loop
+``numpy`` Generator, over the in-memory synthetic bundle, so every ball in play
+resolves through the production transition draw. Each game gets its own seed,
+so it is NOT the same game 1,000x. 1,000 games run in ~7 s locally.
 
-WHAT "INVALID STATE" MEANS HERE (spec §5.1 / §6.1 / §6.2 + the SIM-311 contract)
--------------------------------------------------------------------------------
+WHAT "INVALID STATE" MEANS HERE (the ``GameState`` contract)
+------------------------------------------------------------
 At every committed transition the checker asserts:
   * **scores** never negative (home & away);
   * **outs** in [0, 3] and never recorded > 3 in a half-inning (the committed,
@@ -31,7 +29,7 @@ At every committed transition the checker asserts:
   * **base occupancy** consistent: no two runners on one bag, no negative /
     duplicate runner ids, runner count <= 3;
   * **count** in [0, 3] balls / [0, 2] strikes on a committed mid-PA state
-    (terminal 4-balls / 3-strikes only ever exist transiently inside step 4);
+    (terminal 4-balls / 3-strikes exist only transiently, before the PA rolls);
   * **lineup pointers** stay in range of their lineup;
   * **inning** monotonic non-decreasing across the game.
 And per finished game:
@@ -67,8 +65,8 @@ PITCHER = 477132
 AWAY_LINEUP = list(range(101, 110))  # 9 batters
 HOME_LINEUP = list(range(201, 210))  # 9 batters
 
-#: The acceptance-criterion game count. Overridable via env (so a future ticket
-#: can crank it without editing the file) -- the always-on test uses this default.
+#: The acceptance-criterion game count. The env var overrides it without an
+#: edit -- the always-on test uses this default.
 DEFAULT_GAMES = int(os.environ.get("SIM326_GAMES", "1000"))
 
 #: How big the slow-marked exhaustive run is (lets QA stress far past 1,000).
@@ -95,8 +93,8 @@ def assert_state_valid(
     pitch_index: int,
     in_play: bool = True,
 ) -> None:
-    """Assert a single committed ``GameState`` is invalid-state-free (spec §5.1 /
-    §6.1 + the SIM-311 contract).
+    """Assert a single committed ``GameState`` is invalid-state-free (the
+    ``GameState`` contract).
 
     ``in_play=True`` checks the live, ready-for-next-pitch invariants (count
     mid-PA, outs <= 2); ``in_play=False`` tolerates a transient terminal snapshot
@@ -183,21 +181,21 @@ def assert_state_valid(
 
 # ===========================================================================
 # Test doubles -- an rng-driven, self-checking StateMachine over the synthetic
-# bundle (SIM-486: contact resolves through the production transition draw)
+# bundle (contact resolves through the production transition draw)
 # ===========================================================================
 
 
 class _CheckingRngStateMachine(StateMachine):
-    """A StateMachine that draws its own pitch-outcome mix (the SIM-320 driver
+    """A StateMachine that draws its own pitch-outcome mix (the driver test's
     profile), resolves contact through the synthetic bundle, and ALSO validates
     the committed GameState after every pitch -- so the harness checks invalid
     states at every committed transition, not just the final state.
 
-    The pitch-outcome mix matches the SIM-320 driver test (so games look like
+    The pitch-outcome mix matches the driver test (so games look like
     plausible baseball: ~55% in-play, ~20% ball, ~17% called strike, ~8% foul).
     The post-pitch check uses ``in_play=False`` because the snapshot the loop
     hands back can be a transient terminal boundary (e.g. the just-rolled half),
-    exactly the tolerance the SIM-320 driver itself applies; the FINAL-state and
+    exactly the tolerance the driver test applies; the FINAL-state and
     per-game assertions below pin the stricter live invariants.
     """
 
@@ -236,7 +234,7 @@ def _make_machine(seed: int, hit_rate: float = 0.30) -> _CheckingRngStateMachine
 
 
 def _run_one(seed: int, hit_rate: float = 0.30) -> GameSimResult:
-    """Run ONE full game deterministically from ``seed`` (no live DB/FAISS)."""
+    """Run ONE full game deterministically from ``seed`` (no live DB)."""
     return simulate_game(
         _make_machine(seed, hit_rate=hit_rate),
         seed=seed,
@@ -268,8 +266,7 @@ def run_invalid_state_harness(
     games, home/away wins) so callers can sanity-check the population looks like
     real baseball (varied, terminating, both teams winning sometimes).
 
-    Designed to be reused by future tickets: bump ``n`` (or set ``SIM326_GAMES``)
-    to stress far past 1,000.
+    To stress far past 1,000, bump ``n`` or set ``SIM326_GAMES``.
     """
     games = 0
     total_pitches = 0
@@ -383,7 +380,7 @@ class TestPerStateChecker:
 
     def test_terminal_count_mid_pa_is_flagged(self):
         st = self._good()
-        st.balls = 4  # ball-4 should have ended the PA at step 4
+        st.balls = 4  # ball four should have ended the PA
         with pytest.raises(InvalidStateError, match="balls=4"):
             assert_state_valid(st, seed=0, pitch_index=0, in_play=True)
 

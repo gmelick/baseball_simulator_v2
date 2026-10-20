@@ -1,12 +1,11 @@
 """
 tests/unit/test_synthetic_bundle.py
 ==========================================
-SIM-486 -- the in-memory bundle every no-DB path draws from.
+The in-memory bundle every no-DB path draws from (``simulation/synthetic_bundle.py``).
 
-The per-tile fallback and the injected ``PlayResolver`` are deleted. A test
-that needs a play now hands the production sampler a synthetic bundle and
-drives the production in-play path (the SIM-511 transition draw). These
-tests pin the bundle's contract:
+A test that needs a play hands the production sampler a synthetic bundle and
+drives the production in-play path (the transition draw); the loop has no
+other in-play path. These tests pin the bundle's contract:
 
   * every count bucket and every base-out cell has rows (the sampler's hard
     filters never hit an empty cell);
