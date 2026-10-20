@@ -24,8 +24,8 @@ check. Both paths give the same records for the same (game set, base seed,
 iterations): each game is independent and seeded per iteration, so only the
 completion order differs, and it changes no record.
 
-A BAD GAME AGAINST A BROKEN PROCESS (SIM-454)
----------------------------------------------
+A BAD GAME AGAINST A BROKEN PROCESS
+-----------------------------------
 A game with bad data (no ingested lineup, a degenerate box score) is skipped and
 counted. A broken process (no event loop, no Postgres pool, no park-factor source,
 a dead Postgres) stops the run with a named cause (:func:`_is_process_broken`,
@@ -62,9 +62,8 @@ from .records import GROUND_TRUTH_EVENT_LABEL, GROUND_TRUTH_OFFICIAL, AccuracyRe
 
 log = logging.getLogger("accuracy_comparison")
 
-#: No default password (SIM-443b): a blank value is resolved in the command
-#: line's ``main`` through ``pipeline.db_dsn.require_dsn``, which names the missing
-#: variable.
+#: No default password. The command line's ``main`` resolves a blank value
+#: through ``pipeline.db_dsn.require_dsn``, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 #: The fitted reliability curve the live API applies at boot (the default of
@@ -123,7 +122,7 @@ def _replay_game(state, n_iter: int, base_seed: int | None) -> tuple[list, list]
     :func:`_score_one_game` resolves it, because the lookup is async and this body
     runs in a thread with no event loop. A state that skipped the lookup still
     carries ``UNRESOLVED_PARK_FACTOR``, and ``sim_kwargs_from_state`` raises on it
-    instead of replaying park-blind (SIM-452).
+    instead of replaying park-blind.
     """
     from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
@@ -184,8 +183,8 @@ async def _score_one_game(
     ``status`` is ``"scored"``, ``"no_odds"``, ``"unresolved"`` or ``"empty"``, for
     the run counters. A game with bad data gives no records and a status other
     than ``"scored"``; it never raises out of here, EXCEPT an
-    :class:`UnresolvedParkFactorError` (the code itself regressed and must not be
-    tallied as one skipped game) or a process-level failure
+    :class:`UnresolvedParkFactorError` (a defect in the code, never tallied as one
+    skipped game) or a process-level failure
     (:func:`_is_process_broken`).
 
     ``park_factor`` is the factor the game ran with; the caller counts the games
@@ -405,8 +404,8 @@ def _worker_lazy_init(
 
       * ``(a)`` the worker's full-pool sampler cache, warmed once through
         :func:`simulation.production_factory.warm_worker_cache`, so the first game
-        is a warm-cache hit (best-effort: without artifacts the cache warms
-        lazily);
+        is a warm-cache hit (best-effort: after a failed warm the first game
+        builds the cache, and a missing bundle fails that game loudly);
       * ``(b)`` one asyncio loop and one asyncpg pool (each worker reads odds and
         resolves states on its own connection);
       * ``(c)`` one read-only sim-DuckDB connection, which the park-factor lookup
@@ -442,7 +441,7 @@ def _worker_lazy_init(
             from simulation.production_factory import warm_worker_cache
 
             warm_worker_cache(None)
-        except Exception:  # noqa: BLE001 — full-pool off / no artifacts → lazy warm
+        except Exception:  # noqa: BLE001 — a failed warm → the first game builds it
             pass
 
         # (b) one event loop + one asyncpg pool, owned by this worker for its lifetime.

@@ -60,15 +60,16 @@ def _confidence_module() -> Any:
 
 DEPTH_EDGES: tuple[int, ...] = (75, 100)
 DEPTH_LABELS: tuple[str, ...] = ("<75", "75-99", "100+")
-#: The Brier-difference floor the SIM-539 minimum sample is sized on — the
-#: plan's estimate of a fatigue-sized improvement (§6).
+#: The Brier-difference floor the minimum sample is sized on: the fatigue fit
+#: plan's estimate of a fatigue-sized improvement
+#: (``docs/audit/2026-09-12-sim518-fit-plan.md`` §6).
 DEFAULT_FLOOR = 0.0005
 DEFAULT_ALPHA = 0.05
 DEFAULT_BOOTSTRAP = 2000
 #: A start of at least this many real pitches is a DEEP start (the subset run).
 DEEP_START_PITCHES = 90
-#: SIM-555: the report stamps that say which odds rows a report was graded
-#: against (``scripts/accuracy_comparison.py`` writes them into ``params``).
+#: The report stamps that say which odds rows a report was graded against
+#: (``scripts/accuracy_comparison.py`` writes them into ``params``).
 ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")
 
 
@@ -81,11 +82,11 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     """Every reason the two reports must not be paired; [] when they may."""
     pa, pb = a.get("params", {}), b.get("params", {})
     out: list[str] = []
-    # SIM-549: "run_line_scoring" too — a run line scored as two bets and one
-    # scored as a pair carry different market probabilities.
-    # SIM-555: the three odds-row stamps too — a report graded against another
-    # book, another preference list or the old mixed rows (no stamp: before
-    # SIM-555) scores other lines on the same game.
+    # "run_line_scoring" too: a run line scored as two bets and one scored as a
+    # pair carry different market probabilities.
+    # The three odds-row stamps too: a report graded against another book or
+    # another preference list scores other lines on the same game. So does a
+    # report with no stamp: it graded the consensus rows, which mix books.
     for key in (
         "base_seed",
         "iterations",
@@ -97,16 +98,17 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     ):
         if pa.get(key) != pb.get(key):
             out.append(f"params.{key}: {pa.get(key)!r} vs {pb.get(key)!r}")
-    # SIM-549: a re-scored report holds the run lines' home bets only; a fresh
-    # run holds the away bets too, which would pair with nothing.
+    # A re-scored report holds the run lines' home bets only; a fresh run holds
+    # the away bets too, which would pair with nothing.
     if bool(pa.get("rescored")) != bool(pb.get("rescored")):
         out.append(
             f"params.rescored: {bool(pa.get('rescored'))} vs {bool(pb.get('rescored'))} "
             "(a re-scored report has no run-line away bets)"
         )
-    # SIM-555: a report re-scored onto the graded book
+    # A report re-scored onto the graded book
     # (scripts/probes/rescore_graded_book.py writes ``rescored_from``) keeps its
-    # totals, run lines and props on the old rows' prices; a fresh run does not.
+    # totals, run lines and props at the consensus rows' prices; a fresh run
+    # prices them from the graded book.
     if bool(pa.get("rescored_from")) != bool(pb.get("rescored_from")):
         out.append(
             f"params.rescored_from: {pa.get('rescored_from')!r} vs {pb.get('rescored_from')!r} "

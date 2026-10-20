@@ -2,8 +2,8 @@
 """
 scripts/accuracy_comparison.py
 ==============================
-The sim-vs-closing-line accuracy comparison (SIM-538): the platform's validation
-of the simulator against the market.
+The sim-vs-closing-line accuracy comparison: the platform's validation of the
+simulator against the market.
 
 For every completed game with a closing betting price, the comparison takes the
 simulator's own probability of an outcome and the closing line's probability of
@@ -73,8 +73,7 @@ HOW IT REUSES THE PLATFORM'S SEAMS
   market's, over the same outcomes.
 * The park factor: ``resolve_park_factor_onto_state`` resolves the venue's run
   factor before the replay. The run REFUSES to start when the sim DuckDB will not
-  open (exit 2): a neutral 1.0 cannot be told apart from a real neutral park
-  (SIM-452).
+  open (exit 2): a neutral 1.0 cannot be told apart from a real neutral park.
 * The point-in-time cutoff: ``resolve_asof_ymd`` sets ``state.asof_ymd``, which the
   sim kwargs carry as ``_asof_ymd``, so a replay never draws a pool row or a profile
   dated after its own game.
@@ -182,9 +181,9 @@ log = logging.getLogger("accuracy_comparison")
 DEFAULT_OUTPUT = os.environ.get("CLV_BACKTEST_PATH", "/data/accuracy_comparison.json")
 
 # ---------------------------------------------------------------------------
-# The exit codes (SIM-454). Every ABANDONED run leaves its own code. A backtest
-# that measured nothing never exits 0: a silent no-op reads exactly like a
-# healthy run.
+# The exit codes. Every ABANDONED run leaves its own code. A backtest that
+# measured nothing never exits 0: a silent no-op reads exactly like a healthy
+# run.
 # ---------------------------------------------------------------------------
 #: Everything ran and at least one game was priced.
 EXIT_OK = 0
@@ -254,8 +253,8 @@ async def run(args: argparse.Namespace) -> int:
         else "IDENTITY_CALIBRATION (no report found)",
     )
 
-    # The park-factor source is checked BEFORE any sim runs (SIM-452). A backtest
-    # that cannot read it measures a simulator nobody ships, so it refuses to start.
+    # The run checks the park-factor source BEFORE any sim runs. A backtest that
+    # cannot read it measures a simulator nobody ships, so it refuses to start.
     duck = _open_parent_duckdb(args)
     if duck is None:
         if not args.allow_neutral_parks:
@@ -594,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
-    args.dsn = args.dsn or require_dsn()  # fail loudly with no DSN (SIM-443b)
+    args.dsn = args.dsn or require_dsn()  # fail loudly with no DSN: no password has a default
     return asyncio.run(run(args))
 
 

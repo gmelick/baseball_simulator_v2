@@ -139,7 +139,7 @@ GROUND_TRUTH_OFFICIAL = "official_boxscore"
 GROUND_TRUTH_EVENT_LABEL = "event_label"
 
 #: The props each source can grade. The official box score
-#: (``raw.game_player_stats``, SIM-545) grades every batter and pitcher market the
+#: (``raw.game_player_stats``) grades every batter and pitcher market the
 #: platform prices, RBI and ER included. The event-label fallback
 #: (``raw.pitches.events``) grades only the five props an event label carries
 #: (H/HR/TB, K/BB). The grading stage takes the set of the game it scores, so a
@@ -240,8 +240,8 @@ class AccuracyRecord:
     #: The simulator's probability before the calibration map, where a map
     #: applies (the moneyline, through the win-probability reliability curve):
     #: the decisive home-win share of the iterations. The per-market calibration
-    #: layer (SIM-548) is fitted on this value, never on the mapped one. ``None``
-    #: where no map applies.
+    #: layer (``scripts/calibrate_markets.py``) fits on this value, never on the
+    #: mapped one. ``None`` where no map applies.
     sim_prob_raw: float | None = None
     #: The best price a bettor could take on the reference side at the closing
     #: line: the highest payout over every sportsbook's closing row at the same

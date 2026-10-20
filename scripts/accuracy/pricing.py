@@ -170,8 +170,8 @@ def odds_row_provenance(benchmark_book: str | None = None) -> dict[str, Any]:
     """The report's stamp of the odds rows a run graded against.
 
     The skill table and the paired read refuse to merge or pair two reports whose
-    stamps differ: a report graded against another book, or against the old
-    mixed rows (no stamp at all), prices other lines.
+    stamps differ. A report graded against another book prices other lines. So
+    does a report with no stamp: it graded the consensus rows, which mix books.
     """
     return {
         "odds_row_version": ODDS_ROW_VERSION,

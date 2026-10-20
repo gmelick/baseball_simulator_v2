@@ -130,8 +130,8 @@ def bundle_provenance(calibration_path: str) -> dict[str, Any]:
         "fatigue_pc_sigma": _flag_as_set("SIM_FATIGUE_PC_SIGMA"),
         "fatigue_tto_sigma": _flag_as_set("SIM_FATIGUE_TTO_SIGMA"),
         "sit_sigma": _flag_as_set("SIM_SIT_SIGMA"),
-        # Which arm of the manager switch the report measured (SIM-427): the
-        # draw, the pen source, the manager power and the reliever weights.
+        # Which arm of the manager switch the report measured: the draw, the
+        # pen source, the manager power and the reliever weights.
         "manager": {
             key: _flag_as_set(key)
             for key in (
@@ -147,8 +147,8 @@ def bundle_provenance(calibration_path: str) -> dict[str, Any]:
                 "SIM_RELIEF_HAND_OFF_WEIGHT",
             )
         },
-        # Which order of the running game the report measured (SIM-554). The
-        # pickoff draw before the pitch and the steal draw after it run only when
+        # Which order of the running game the report measured. The pickoff
+        # draw before the pitch and the steal draw after it run only when
         # both entries are True: the flag SIM_STEAL_PITCH_CLASS as the factory
         # reads it (unset = on), and a steal pool whose every pitch row carries
         # its class. Otherwise the single pre-pitch draw runs. The market-skill
@@ -158,9 +158,9 @@ def bundle_provenance(calibration_path: str) -> dict[str, Any]:
             "flag": bool(flag.steal_pitch_class),
             "classed_bundle": _steal_pool_classed(),
         },
-        # Which arm of the pitch / pitch-result split the report measured
-        # (SIM-548): the switch, the pitch draw's pitcher power, and the result
-        # draw's pitcher and batter powers, bandwidth and density correction.
+        # Which arm of the pitch / pitch-result split the report measured: the
+        # switch, the pitch draw's pitcher power, and the result draw's pitcher
+        # and batter powers, bandwidth and density correction.
         "split": {
             key: _flag_as_set(key)
             for key in (

@@ -10,11 +10,12 @@ cover probability, so a push has no 0/1 label.
 THE PROP GROUND TRUTH
 ---------------------
 A prop is scored against what the player really did. The official box score
-(``raw.game_player_stats``, SIM-545; one row per player who appeared) grades every
-priced market, RBI and ER included, and a player who did not play is absent, so
-his bet is skipped the way the book voids it. A game with no box-score rows falls
-back to the event labels of ``raw.pitches.events``, which carry only H/HR/TB and
-K/BB, so a fallback game grades those five props. The run counts games per source
+(``raw.game_player_stats``; one row per player who appeared) grades every priced
+market, RBI and ER included, and a player who did not play is absent, so his bet
+is skipped the way the book voids it. The box comes first by the owner's ruling
+on the box-score audit (SIM-545). A game with no box-score rows falls back to the
+event labels of ``raw.pitches.events``, which carry only H/HR/TB and K/BB, so a
+fallback game grades those five props. The run counts games per source
 (``counters.games_official_boxscore`` and ``games_event_label``), so a report
 graded mostly on the fallback says it is a five-prop report.
 
