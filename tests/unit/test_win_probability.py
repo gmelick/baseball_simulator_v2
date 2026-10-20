@@ -1,11 +1,8 @@
-"""
-test_win_probability.py
-======================
-Unit tests for SIM-330 -- the **calibrated game win-probability** output
-:func:`simulation.win_probability.win_probability` (Phase 4, Sprint 3).
+"""Tests of the calibrated game win probability,
+:func:`simulation.win_probability.win_probability`.
 
-These tests build synthetic :class:`GameSimResult`s / :class:`GameSimSummary`s
-(no loop run, no DB/FAISS) and assert the calibration contract:
+The tests build synthetic :class:`GameSimResult`s / :class:`GameSimSummary`s
+(no loop run, no database) and assert the calibration contract:
 
   * a lopsided run yields a high home win probability;
   * 0 home wins out of N yields a small-BUT-NONZERO probability (smoothing
@@ -35,7 +32,7 @@ from simulation.win_probability import (
 )
 
 # ===========================================================================
-# Synthetic-input builders (mirror the SIM-327 test idiom)
+# Synthetic-input builders
 # ===========================================================================
 
 

@@ -1,22 +1,21 @@
 """
 tests/unit/test_realism_consumers.py
 ====================================================
-SIM-411 / SIM-413 / SIM-425b — the realism CONSUMERS (flag-on mechanism tests).
+The realism CONSUMERS of the batted-ball draw (flag-on mechanism tests).
 
 The artifact-column plumbing is covered by
 ``test_engine_artifacts_realism``; this module pins the consumer
 behaviour that reads those columns, each behind its own env gate:
 
-  * **SIM-413** — ``FullPoolSampler.battedball_new_pa(pitcher_throws=...)`` softly
-    reweights the batted-ball draw toward the live pitcher-hand matchup.
-  * **SIM-491/476** — the home / park / fielder DRAW-WEIGHT kernels
-    (``bat_home`` match, run-factor Gaussian, live-defender OAA Gaussian) plus
-    the ``last_battedball_fielder`` accessor.
+  * **the platoon weight** — ``FullPoolSampler.battedball_new_pa(pitcher_throws=...)``
+    softly reweights the batted-ball draw toward the live pitcher-hand matchup.
+  * **the home and park kernels** — DRAW WEIGHTS (the ``bat_home`` match, the
+    run-factor Gaussian) — plus the ``last_battedball_fielder`` accessor.
 
 All are graceful-optional: with the knob at its off value / the data absent
-they are a no-op. The SIM-425b post-draw fielder nudge and the SIM-411 park
-flip were DELETED by SIM-476 (2026-08-30) — the fitted kernels replace them,
-so their flip tests are gone with the code.
+they are a no-op. Each factor is a draw weight; nothing adjusts the drawn play
+after the draw (the owner's architecture rule). The tests build small
+synthetic pools in memory; nothing needs a database.
 """
 
 from __future__ import annotations
@@ -31,8 +30,8 @@ _SEASON = 2024
 
 
 def _with_transition(pool: BattedBallPool) -> BattedBallPool:
-    """SIM-486: every batted-ball draw is the SIM-511 transition draw, so a test
-    pool needs the transition columns. These rows all sit in the empty-bases /
+    """Every batted-ball draw is the transition draw, so a test pool needs the
+    transition columns. These rows all sit in the empty-bases /
     no-outs cell: a hit seats the batter at the hit value, an out retires him."""
     n = pool.n
     pool.r1_dest = np.full(n, -1, dtype=np.int8)
@@ -50,7 +49,7 @@ def _with_transition(pool: BattedBallPool) -> BattedBallPool:
 
 
 # ===========================================================================
-# SIM-413 — platoon reweight in the batted-ball draw (sampler level)
+# The platoon reweight in the batted-ball draw (sampler level)
 # ===========================================================================
 
 
@@ -102,7 +101,7 @@ class TestPlatoonReweight:
         assert events == {"single", "double"}
 
     def test_neutral_when_pool_has_no_p_throws(self):
-        # A legacy pool (p_throws None) ignores the reweight even with a hand given.
+        # A pool without the hand column (p_throws None) ignores the reweight.
         fp = _sampler(_platoon_bb_pool(with_throws=False), platoon_off_weight=0.0)
         events = set()
         for _ in range(60):
@@ -112,7 +111,7 @@ class TestPlatoonReweight:
 
 
 # ===========================================================================
-# SIM-491 — home-field reweight in the batted-ball draw (the SIM-412 rebuild)
+# The home-field reweight in the batted-ball draw
 # ===========================================================================
 
 
@@ -164,7 +163,7 @@ class TestHomeFieldReweight:
         assert events == {"single", "double"}
 
     def test_neutral_when_pool_has_no_bat_home(self):
-        # A pre-0019 pool (bat_home None) ignores the reweight even when asked.
+        # A pool without the column (bat_home None) ignores the reweight even when asked.
         fp = _sampler(_home_bb_pool(with_bat_home=False), home_off_weight=0.0)
         events = set()
         for _ in range(60):
@@ -184,7 +183,7 @@ class TestHomeFieldReweight:
 
 
 # ===========================================================================
-# SIM-491 part 2 — the park KERNEL in the batted-ball draw (the SIM-411 rebuild)
+# The park KERNEL in the batted-ball draw
 # ===========================================================================
 
 
@@ -268,7 +267,7 @@ class TestParkKernel:
 
 
 # ===========================================================================
-# SIM-425b — fielder accessors + the OAA nudge
+# The fielder accessor
 # ===========================================================================
 
 

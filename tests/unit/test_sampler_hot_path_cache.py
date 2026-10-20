@@ -1,21 +1,17 @@
-"""tests/unit/test_sampler_hot_path_cache.py — SIM-430 hot-path caching.
+"""tests/unit/test_sampler_hot_path_cache.py — the sampler's per-PA hot-path cache.
 
-The full-pool per-PA path was the `/simulate` throughput cost. An in-container
-cProfile of `FullPoolSampler` on the real all-seasons bundle showed
-`new_plate_appearance` recomputing CONSTANTS on every plate appearance:
-  * the z-scored batter-embedding matrix (`vecs_z`) — rebuilt in both `_f_batter`
-    and `_batter_aff` every PA though it never changes,
-  * the per-batter RBF affinity — computed twice per PA (pitch pool + batted ball),
-  * the base-out situation columns — a non-contiguous `pool.sit[:, 2:6]` slice+copy
-    over the whole pool every PA.
+The full-pool per-PA path is the `/simulate` throughput cost. The sampler keeps
+the per-hand constants it reads on every plate appearance in its per-hand
+precompute (``_pool_meta``). The base-out situation columns are one contiguous
+copy (``sit_baseout``): slicing ``pool.sit[:, 2:6]`` over the whole pool on
+every PA cost ~0.67 s a game (the profile of the real bundle, SIM-430).
 
-SIM-430 hoists all three into caches. These tests pin the invariants that make the
-optimization SAFE + REAL:
-  1. **Behavioral equivalence** — the cached path is pure memoization, so the
-     drawn outcome sequence is byte-identical across two independent samplers at
-     the same seed.
-  2. **The caches actually populate + are reused**, and the pitch-pool /
-     batted-ball affinity is shared (so the win is real, not bypassed).
+These tests pin the invariants that make the cache SAFE + REAL:
+  1. **Behavioral equivalence** — the cache is pure memoization, so the drawn
+     outcome sequence is byte-identical across two independent samplers at the
+     same seed, and a repeated plate appearance draws the same.
+  2. **The cache populates**: the base-out copy is contiguous and equals the
+     slice.
 
 Synthetic bundle only (no DuckDB / disk); HandPool / BattedBallPool / EngineArtifacts
 constructed exactly as in test_engine_artifacts_shared_memory.
@@ -34,7 +30,8 @@ _PITCHER = "100:2024"
 
 def _hand_pool(n: int, seed: int) -> HandPool:
     """A HandPool whose sit columns carry real count/base-out structure so the
-    count-bucketing + base-out RBF have something to discriminate on."""
+    count-bucketing + the base-out situation kernel have something to
+    discriminate on."""
     rng = np.random.default_rng(seed)
     sit = np.zeros((n, 6), dtype=np.float32)
     sit[:, 0] = np.arange(n) % 4  # balls 0..3
@@ -63,7 +60,7 @@ def _hand_pool(n: int, seed: int) -> HandPool:
 def _bb_pool(n: int, seed: int) -> BattedBallPool:
     rng = np.random.default_rng(seed)
     sit = rng.standard_normal((n, 6)).astype(np.float32)
-    # SIM-486: the batted-ball draw hard-filters the live base-out cell, so
+    # The batted-ball draw hard-filters the live base-out cell, so
     # every row sits in the cell ``_draw_sequence`` plays in (one out, a
     # runner on first) and carries its transition: a single that pushes that
     # runner to second.
@@ -93,8 +90,8 @@ def _bb_pool(n: int, seed: int) -> BattedBallPool:
 
 
 def _toy_artifacts() -> EngineArtifacts:
-    """A 2-hand bundle with a NON-trivial batter-embedding mean/std (so the cached
-    z-score is a real transform) + a pitcher-sim entry for the pool's pitcher."""
+    """A 2-hand bundle with a NON-trivial batter embedding (mean/std) + a
+    pitcher-sim entry for the pool's pitcher."""
     rng = np.random.default_rng(7)
     actor_emb = {
         "batter": {
@@ -142,7 +139,7 @@ class TestCachingEquivalence:
 
     def test_repeated_pa_same_batter_is_stable(self):
         # Re-drawing the same (pitcher,batter,state) PA twice at the same rng gives
-        # the same draw — the memoized affinity must not corrupt across calls.
+        # the same draw — the memoized constants must not corrupt across calls.
         art = _toy_artifacts()
         s = FullPoolSampler(art, np.random.default_rng(0))
         s.new_half_inning("R", _PITCHER)

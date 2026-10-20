@@ -1,61 +1,31 @@
-"""simulation.game_state — the GameState / PlayResult contract (SIM-311).
+"""The game state and the play result: the data the simulation loop reads and writes.
 
-WHAT THIS IS
-============
-This module owns the **dataclass contract** that the Phase-4 simulation loop is
-built against.  It is the artifact the SIM-310 spec
-(``docs/architecture/2026-06-17-phase4-sim-loop-spec.md`` §9) explicitly defers
-to SIM-311:
+:class:`GameState` is the mutable state of one simulated game: the count, the
+outs, the runners on base, the inning and half, the score, both batting orders
+and their slot pointers, the live matchup, both defenses, the managers and
+pens, and the per-pitcher counters. :class:`PlayResult` is the result of one
+pitch: the pitch outcome, the plate-appearance event when the pitch ends one,
+the run value, the batted ball, the fielding, the runners' movements and the
+running-game outcomes.
 
-    "SIM-311 owns the ``GameState`` (mutable count/out/base/score/inning/half/
-     lineup/manager context) and ``PlayResult`` (pitch details, outcome type,
-     batted-ball stats, fielding resolution, baserunner movements, runs, outs,
-     next state) contract.  Every step's I/O in §2 is expressed against those
-     types."
+This module holds the data shapes, their invariant guards and a few small
+mutators. The loop that drives them lives in ``simulation.sim_loop`` and
+``simulation.loop``; the run value comes from ``simulation.run_resolution``.
+``docs/technical/sim-loop-cheat-sheet.md`` describes the loop on one page.
 
-This module is the **contract only** — the mutable data shapes, their invariants,
-and a handful of ergonomic mutators the SIM-316 state machine will lean on.  It
-deliberately does NOT implement:
+The count, outs and score guards are light. The base-state guards are not:
+:meth:`Bases.assert_consistent` and :meth:`Bases.assert_transition` check real
+invariants, because the loop relies on them as correctness checks.
 
-  * the count/out/base/inning **state machine** (SIM-316 — §5/§6 of the spec);
-  * the **outcome determination** (SIM-318 — §5.1);
-  * **fielding / baserunning** resolution (SIM-319 — steps 6/7);
-  * **run resolution** (SIM-312 — already landed in
-    ``simulation.run_resolution``; ``PlayResult`` carries its provenance);
-  * the **manager** substitution/steal/IBB module (SIM-323 — the §3/§5.3 hooks);
-  * the **invalid-state harness** (SIM-326 enforces invalid-state detection).
-    The count / outs / score guards here stay lightweight.  The **base-state**
-    guards do not: SIM-500 gave ``Bases.assert_consistent`` real invariants and
-    added ``Bases.assert_transition``, because the call sites in
-    ``simulation.sim_loop`` were already treating the base guard as a
-    correctness check while it only rejected a negative id.
-
-ALIGNMENT WITH THE SIM-310 SPEC (§2 step I/O)
-=============================================
-The 8 canonical steps read a ``GameState`` and emit a ``PlayResult``.  The field
-sets below are chosen so each step's listed input/output has a home:
-
-  * Step 1 (game-state read) — ``GameState`` exposes count, outs, inning/half,
-    base state, ``score_diff`` (offense − defense), ``leverage`` (manager
-    context), ``pitcher_pitch_count``, ``batter_pa_count``, ``park`` (venue).
-  * Step 2/3 (pitch selection + sampling) — the matchup keys
-    ``(pitcher_id, bat_hand, season)`` are first-class on ``GameState`` via
-    :meth:`GameState.sampler_prefilter`.
-  * Step 4 (outcome determination) — ``balls`` / ``strikes`` are the live count
-    the §5.1 machine advances.
-  * Step 7/8 (baserunning + state update) — base occupancy + runner identities,
-    home/away score, lineup pointers + per-team batting order, current batter /
-    pitcher ids; the resolved run value + run-resolution provenance live on
-    ``PlayResult`` (so the loop never re-derives runs inline — spec §8).
-
-The bitmask base encoding (``Bases.runners_state``) is byte-compatible with
-``simulation.run_resolution`` / ``derived.run_expectancy_matrix``::
+The base bitmask (``Bases.runners_state``) uses the encoding of
+``simulation.run_resolution`` and ``derived.run_expectancy_matrix``::
 
     bit0 = 1B, bit1 = 2B, bit2 = 3B   (0=empty 1=1B 2=2B 3=1B+2B 4=3B 5=1B+3B
                                         6=2B+3B 7=loaded)
 
-so a ``GameState`` can feed ``run_resolution.re24_value(outs, runners_state)``
-directly.
+so a ``GameState`` feeds ``run_resolution.re24_value(outs, runners_state)``
+directly. RE24 is the run expectancy of each of the 24 base-out states: the
+average runs scored from that state to the end of the half-inning.
 """
 
 from __future__ import annotations
@@ -68,27 +38,27 @@ from enum import IntEnum
 # Value types / enums
 # ---------------------------------------------------------------------------
 
-#: Outs that end a half-inning (mirrors run_resolution.OUTS_PER_INNING).
+#: Outs that end a half-inning (equal to run_resolution.OUTS_PER_INNING).
 OUTS_PER_INNING = 3
 #: Bases a runner can stand on.  A legal base state holds at most this many
-#: runners, and each of them is a different player (SIM-500).
+#: runners, and each of them is a different player.
 MAX_RUNNERS_ON_BASE = 3
-#: Balls that terminate a PA as a walk (spec §5.1).
+#: Balls that end a plate appearance as a walk.
 BALLS_FOR_WALK = 4
-#: Strikes that terminate a PA as a strikeout (spec §5.1).
+#: Strikes that end a plate appearance as a strikeout.
 STRIKES_FOR_STRIKEOUT = 3
 
-#: The closed pitch-outcome vocabulary the sampler emits (mirrors the SIM-301
-#: ``outcome_type`` set and ``sim_loop.CONTACT_PITCH_OUTCOME``). SIM-509 added
-#: ``hit_by_pitch``: the pool builder used to collapse an HBP pitch into
-#: ``ball``, so every simulated HBP became ball four and a WALK — worth the
-#: whole 0.397/team-game 2025 HBP rate, ~82% of the measured BB surplus.
+#: The closed set of pitch outcomes the sampler emits: the pool's
+#: ``outcome_type`` classes. ``hit_by_pitch`` is a class of its own. Folded into
+#: ``ball``, every hit by pitch became ball four and a walk: the whole 2025 rate
+#: of 0.397 a team-game, about 82% of the measured walk surplus (the
+#: hit-by-pitch class, SIM-509).
 PITCH_OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
-#: The single pitch outcome that means the ball was put in play (spec §5.1).
+#: The one pitch outcome that means the ball was put in play.
 CONTACT_PITCH_OUTCOME = "in_play"
-#: SIM-554: the ``pitch_outcome`` of a result on which no pitch was thrown — a
-#: pickoff before the pitch made the third out and ended the half-inning. It is
-#: NOT one of :data:`PITCH_OUTCOMES`: every reader that counts pitches, plate
+#: The ``pitch_outcome`` of a result on which no pitch was thrown: a pickoff
+#: before the pitch made the third out and ended the half-inning. It is NOT one
+#: of :data:`PITCH_OUTCOMES`: every reader that counts pitches, plate
 #: appearances or count transitions must skip it. Read :attr:`PlayResult.no_pitch`.
 NO_PITCH = "no_pitch"
 
@@ -99,7 +69,7 @@ _BIT_3B = 0b100
 
 
 class Half(IntEnum):
-    """Which half of the inning is being played (spec §2 'inning/half')."""
+    """Which half of the inning is in play."""
 
     TOP = 0  # away team bats
     BOTTOM = 1  # home team bats
@@ -114,17 +84,15 @@ class Team(IntEnum):
 
 @dataclass
 class Bases:
-    """Base-occupancy state with optional runner identities (SIM-311).
+    """The runners on base, by player id.
 
-    The three slots carry the **runner's player id** (an int) or ``None`` when
-    the base is empty.  This is the richer representation the spec §7 baserunner
-    step needs (per-runner advancement); the cheap bitmask summary used by RE24
-    (``simulation.run_resolution``) is derived on demand via
-    :attr:`runners_state` so a ``GameState`` plugs straight into the SIM-312
-    run-resolution policy.
+    Each slot holds the **runner's player id** (an int), or ``None`` when the
+    base is empty, so the advancement draws can move each runner by name.
+    :attr:`runners_state` derives the 3-bit occupancy mask that the run
+    expectancy lookup (``simulation.run_resolution``) reads.
 
-    Encoding of :attr:`runners_state` matches run_resolution / the DB:
-    ``bit0=1B, bit1=2B, bit2=3B``.
+    The encoding of :attr:`runners_state` matches run_resolution and the
+    database: ``bit0=1B, bit1=2B, bit2=3B``.
     """
 
     first: int | None = None  # runner id on 1B, or None
@@ -145,8 +113,7 @@ class Bases:
 
     @property
     def occupancy(self) -> tuple[bool, bool, bool]:
-        """``(on_1B, on_2B, on_3B)`` bools — the scaffold ``PitchState.bases``
-        shape, generalized.  Convenience for callers that only need occupancy."""
+        """``(on_1B, on_2B, on_3B)``: whether each base holds a runner."""
         return (self.first is not None, self.second is not None, self.third is not None)
 
     @property
@@ -155,14 +122,14 @@ class Bases:
         return sum(self.occupancy)
 
     def clear(self) -> None:
-        """Empty all bases (half-inning transition, spec §6.1)."""
+        """Empty all bases (at the end of a half-inning)."""
         self.first = self.second = self.third = None
 
     def runner_ids(self) -> tuple[int, ...]:
         """The ids of the runners on base, in base order.  Empty bags drop out."""
         return tuple(int(r) for r in (self.first, self.second, self.third) if r is not None)
 
-    # ---- the invariant guards (SIM-500) -------------------------------------
+    # ---- the invariant guards ------------------------------------------------
 
     @staticmethod
     def assert_runner_set_legal(
@@ -173,10 +140,9 @@ class Bases:
     ) -> None:
         """Assert that ``runner_ids`` is a legal set of runners on base.
 
-        This is the shared checker :meth:`assert_consistent` runs over the three
-        base slots.  A caller that holds a *list* of runner ids — the SIM-499
-        transition mapping builds one before it constructs a :class:`Bases` —
-        calls it directly.
+        :meth:`assert_consistent` runs this check over the three base slots.  A
+        caller that holds a *list* of runner ids can call it directly, before it
+        builds a :class:`Bases`.
 
         Three rules, all of them real:
 
@@ -196,12 +162,10 @@ class Bases:
         """
         ids = list(runner_ids)
         names = list(labels) if labels is not None else []
-        # SIM-500: PAD, never truncate. The first version zipped ``names`` against
-        # ``ids`` with ``strict=False``, so a caller passing fewer labels than
-        # runners silently dropped every id past the end of ``labels`` BEFORE any
-        # rule ran — the guard then enforced nothing on exactly the runners it was
-        # not told the name of. Labels are for the error message only; they must
-        # never decide which runners get checked.
+        # PAD the labels, never truncate the ids. A zip that stopped at the
+        # shorter list would drop every id past the last label before any rule
+        # ran, so the guard would check nothing on those runners. Labels serve
+        # the error message only; they never decide which runners get checked.
         if len(names) < len(ids):
             names += [f"[{i}]" for i in range(len(names), len(ids))]
         occupied = [(name, rid) for name, rid in zip(names, ids, strict=True) if rid is not None]
@@ -225,7 +189,7 @@ class Bases:
             seen[rid] = name
 
     def assert_consistent(self, *, batter_id: int | None = None) -> None:
-        """Assert the base state itself is legal (SIM-500).
+        """Assert the base state itself is legal.
 
         The guard checks three invariants over the three bags — non-negative
         ids, no duplicate id, at most :data:`MAX_RUNNERS_ON_BASE` runners — and
@@ -240,9 +204,9 @@ class Bases:
 
         Raises ``ValueError`` naming the base and the runner.
 
-        (Per-runner advancement legality is SIM-319.  This guard answers "is
-        this base state possible", not "did the runners get there legally" —
-        for the second question use :meth:`assert_transition`.)
+        This guard answers "is this base state possible", not "did the runners
+        get there legally".  :meth:`assert_transition` answers the second
+        question.
         """
         self.assert_runner_set_legal(
             (self.first, self.second, self.third),
@@ -267,7 +231,7 @@ class Bases:
         runners_retired: int,
         batter_id: int | None = None,
     ) -> None:
-        """Assert one play conserves the bodies on the field (SIM-500).
+        """Assert one play conserves the bodies on the field.
 
         ``self`` is the base state **before** the play.  ``post`` is the base
         state **after** it.  The identity::
@@ -275,13 +239,9 @@ class Bases:
             runners_before + batter_reached
                 == runners_after + runners_scored + runners_retired
 
-        is the conservation rule SIM-499 deletes from
-        ``run_resolution.advance_state``.  It is wrong as a way to *derive* the
-        after-state, because a derivation has no term for a runner retired on
-        the play, so a double play desyncs it.  It is right as a way to *check*
-        one, because the caller supplies the retired count instead of guessing
-        it.  The transition-application code is new, which is what wants a
-        check.
+        cannot *derive* the after-state: a derivation has no term for a runner
+        retired on the play, so a double play breaks it.  It can *check* one,
+        because the caller supplies the retired count instead of guessing it.
 
         **How the batter enters the identity.**  The batter is not on base
         before the play, so he never counts in ``runners_before``.  He enters on
@@ -305,8 +265,8 @@ class Bases:
         So ``runners_retired`` and ``runners_scored`` both count bodies that
         left the bases, and ``batter_reached`` counts the one body that can join
         them.  Outs recorded on the play are deliberately not an argument: the
-        out ledger and the body ledger are different books, and mixing them is
-        what broke the derivation.
+        out ledger and the body ledger are different books, and mixing them
+        breaks the identity.
 
         Pass ``batter_id`` to switch on two further checks: the batter is not on
         base in the pre-state, and every runner in the post-state is either a
@@ -360,153 +320,145 @@ class Bases:
 
 @dataclass
 class ManagerContext:
-    """Manager / leverage context hook (spec §3 pre-pitch + §5.3 end-of-PA hooks).
+    """The manager's context on the state: the leverage, the pens and the walk signal.
 
-    This is the typed home for the manager-decision inputs the SIM-310 spec
-    references but does NOT design — steal green-light, bullpen-by-leverage,
-    pinch decisions.  The substitution/steal/IBB *logic* is **SIM-323**; this
-    struct only fixes WHERE that context lives on the state so downstream
-    tickets compile against stable field names.
-
-    # TODO (SIM-323): the manager RBF engine populates green_light_rate,
-    # bullpen availability, and the sub triggers; the fields here are the
-    # contract surface those decisions read/write.
+    The manager hooks of the loop (``simulation.loop.manager``) write these
+    fields; the pitching change and the intentional walk read them.
     """
 
-    #: High-leverage index (spec step 1 reads 'leverage'); 1.0 == average LI.
+    #: The leverage index (LI) of the current spot: how much the spot can swing
+    #: the win probability, 1.0 = average. The pre-pitch hook writes it.
     leverage: float = 1.0
-    #: Available bullpen pitcher ids per defending team (spec §3 item 1). SIM-323.
-    #: SIM-427: the arms the MLB box lists for the game, minus the rotation.
+    #: The available relievers per side, ``{Team int: [pitcher ids]}``. The
+    #: pitching change pops the entering arm. The real pen is the arms the MLB
+    #: box lists for the game, minus the rotation.
     bullpen_available: dict[int, list[int]] = field(default_factory=dict)
-    #: Whether an intentional walk is signalled for THIS PA (spec §3 item 2).
+    #: True when the pre-pitch hook issues an intentional walk on this pitch.
     intentional_walk_signalled: bool = False
-    # (The steal green-light rate, the pitch-out signal and the hit-and-run
-    # signal lived here until 2026-09-13 — deleted by SIM-427 with their hooks;
-    # SIM-349's ``sac_fly_intent`` until 2026-08-19 — retired by SIM-513.)
 
 
 # ---------------------------------------------------------------------------
-# GameState — the mutable per-game state (spec §9 / step 1 read · step 8 write)
+# GameState — the mutable per-game state
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class GameState:
-    """The mutable game state the simulation loop reads (step 1) and commits to
-    (step 8).  Owned by SIM-311; built against the SIM-310 spec §2 step I/O.
+    """The mutable state of one simulated game; the loop reads it and commits each play.
 
-    Required identity fields (the matchup keys, spec §4.3):
-      * ``pitcher_id`` — current pitcher.
-      * ``bat_hand``   — the batter's hand *for this PA* (switch-hitter's hand vs
-        the current pitcher — spec §4.3 / HANDOFF §4 — NOT the roster ``bats``).
+    Three fields are required, the matchup keys of the pitch draw:
+      * ``pitcher_id`` — the current pitcher.
+      * ``bat_hand``   — the batter's hand *for this plate appearance* (a switch
+        hitter's hand against the current pitcher, NOT the roster ``bats``).
       * ``season``     — the pool season key.
 
-    Everything else defaults so the SIM-316 state machine can construct a fresh
-    "top of the 1st, nobody on, 0-0 count, 0 outs" state and mutate from there.
+    Every other field has a default, so a caller can build a fresh "top of the
+    1st, nobody on, 0-0 count, 0 outs" state and mutate it from there.
     """
 
-    # ---- the matchup keys (spec §4.3) ----------------------------------------
+    # ---- the matchup keys ----------------------------------------------------
     pitcher_id: int
     bat_hand: str  # 'L' / 'R' — batter's hand vs the current pitcher
     season: int
 
-    # ---- count (spec step 4 / §5.1 count machine) ----------------------------
+    # ---- the count -----------------------------------------------------------
     balls: int = 0
     strikes: int = 0
 
-    # ---- outs (spec §6.1 half-inning) ---------------------------------------
+    # ---- outs ----------------------------------------------------------------
     outs: int = 0
 
-    # ---- base state + runner identities (spec step 7) -----------------------
+    # ---- the bases and their runners -----------------------------------------
     bases: Bases = field(default_factory=Bases)
 
-    # ---- inning + half (spec step 1 'inning/half') --------------------------
+    # ---- inning and half -----------------------------------------------------
     inning: int = 1
     half: Half = Half.TOP
 
-    # ---- score (spec step 1 'score diff' / step 8 commit) -------------------
+    # ---- score ---------------------------------------------------------------
     home_score: int = 0
     away_score: int = 0
 
-    # ---- lineup / batting order (spec §6.1 'batting-order pointer per side') -
+    # ---- the batting orders --------------------------------------------------
     # Per-team batting orders (lists of batter ids) and the current slot pointer
-    # for each team; the pointer carries across half-innings (spec §6.1).
+    # for each team; the pointer carries across half-innings.
     away_lineup: list[int] = field(default_factory=list)
     home_lineup: list[int] = field(default_factory=list)
     away_lineup_slot: int = 0
     home_lineup_slot: int = 0
 
-    # SIM-421: per-batter handedness + per-team starters so the matchup
-    # pre-filter follows the lineup.  ``bat_hands`` maps batter_id -> 'L'/'R'/'S'
-    # ('S' resolves vs the pitcher's throwing hand); the two pitcher ids let the
-    # half-inning roll swap the pitcher to the fielding team's starter.  Empty by
-    # default -> the count-machine test path keeps its fixed ``bat_hand`` (no-op).
+    # Each player's hands and each side's current pitcher, so the matchup
+    # follows the lineup.  ``bat_hands`` maps a batter id to 'L', 'R' or 'S' (a
+    # switch hitter, resolved against the pitcher's throwing hand).  At each
+    # half-inning the loop puts the fielding side's pitcher on the mound from
+    # ``home_pitcher_id`` / ``away_pitcher_id``; a pitching change overwrites
+    # them.  Empty by default: the count-machine tests keep their fixed
+    # ``bat_hand``.
     bat_hands: dict[int, str] = field(default_factory=dict)
     throw_hands: dict[int, str] = field(default_factory=dict)
     home_pitcher_id: int | None = None
     away_pitcher_id: int | None = None
-    # SIM-428: each team's catcher (defense slot 'C') so the half-inning matchup
-    # can apply the fielding catcher's framing to the ball/called-strike draw.
+    # Each team's catcher (defense slot 'C'). The steal and pickoff draws read
+    # the fielding side's catcher, and the pitch draw keys the receiving factor
+    # on him.
     home_catcher_id: int | None = None
     away_catcher_id: int | None = None
-    # SIM-425b: each team's per-position defense map, ``{position-name: player_id}``,
-    # keyed by the canonical slot name ('P','C','1B'..'RF' — the build_team_defense_map
-    # / DEFENSE_POSITIONS / fielder-embedding vocabulary), so the batted-ball resolver
-    # can nudge out/hit by the CURRENT defender's quality at the position the drawn
-    # pool ball was fielded at. Empty by default -> the fielder-RBF consumer falls back
-    # to neutral, so the count-machine / no-defense path is unchanged.
+    # Each team's defense, ``{position name: player_id}``, keyed by the
+    # canonical slot name ('P', 'C', '1B' .. 'RF'; the vocabulary of
+    # ``build_team_defense_map`` and ``snapshots.DEFENSE_POSITIONS``). The
+    # fielding draw's fielder factor reads the CURRENT defender at each
+    # position. Empty by default: the fielder factor is then neutral.
     home_defense: dict[str, int] = field(default_factory=dict)
     away_defense: dict[str, int] = field(default_factory=dict)
 
-    # ---- current matchup ids (spec step 2 matchup) --------------------------
+    # ---- the current matchup -------------------------------------------------
     batter_id: int | None = None  # current batter; None until lineup set
     throw_hand: str | None = None  # current pitcher's throwing hand 'L'/'R'
 
-    # ---- per-game counters the spec step-1 read surfaces --------------------
-    pitcher_pitch_count: int = 0  # current pitcher's pitch count (fatigue/sub)
-    batter_pa_count: int = 0  # PAs the current batter has had (3rd-time-thru)
-    park: str | None = None  # venue id for park/venue context (spec step 1/6)
-    # SIM-411: the venue's run park-factor (factor_type='R', regressed) for this
-    # game, ~centred at 1.0 (>1 a hitter's park, <1 a pitcher's park). Resolved
-    # once per game (the API/factory looks it up from derived.park_factors by
-    # ``park``+season) and threaded here; the worker has no DB, so it is carried
-    # as a scalar. 1.0 == neutral -> the park consumer is a no-op (the default).
+    # ---- per-game counters and context ---------------------------------------
+    pitcher_pitch_count: int = 0  # the current pitcher's pitch count
+    batter_pa_count: int = 0  # reset to 0 at each new plate appearance; never incremented
+    park: str | None = None  # the venue id as a digit string; the fence stage reads it
+    # The venue's regressed run park factor for this game (``derived.park_factors``,
+    # ``factor_type='R'``), centred near 1.0: above 1 a hitter's park, below 1 a
+    # pitcher's park. ``simulation.sim_kwargs`` resolves it once per game and
+    # writes it here; the worker has no database, so the state carries it as a
+    # number. The fielding draw's park kernel reads it (``SIM_PARK_KERNEL_SIGMA``;
+    # 0 = off). 1.0 is neutral. The API's state factory stamps
+    # ``sim_kwargs.UNRESOLVED_PARK_FACTOR`` here until the lookup runs.
     park_run_factor: float = 1.0
-    # SIM-538: the point-in-time cutoff for a BACKTEST replay of this game (a date
-    # as YYYYMMDD, or None for a live game — the default, unchanged behaviour).
-    # SIM-535's resolve_asof_ymd() computes it (the day BEFORE this game, so the
-    # simulator can never copy the very plays it is predicting) and the caller
-    # writes it here, the same way resolve_park_factor_onto_state() writes
-    # park_run_factor above — the worker has no DB, so it is carried as a scalar.
-    # sim_kwargs_from_state() reads it and, when set, adds it to the built kwargs
-    # as "_asof_ymd" (a factory-only key, not a simulate_game parameter).
+    # The point-in-time cutoff for a backtest replay of this game, as YYYYMMDD,
+    # or None for a live game. ``sim_kwargs.resolve_asof_ymd`` computes it: the
+    # day BEFORE the game, so the simulator never copies the plays it predicts.
+    # ``sim_kwargs_from_state`` passes it on as ``"_asof_ymd"``, a key only the
+    # factory reads (not a ``simulate_game`` parameter).
     asof_ymd: int | None = None
-    # SIM-523 part D: the two STARTING pitchers (never overwritten by a
-    # pull, unlike ``home_pitcher_id`` / ``away_pitcher_id``) and the number
-    # of plate appearances completed in the current half inning — the
-    # pitching-change draw's ``is_starter`` and ``new_half`` inputs.
+    # The two STARTING pitchers (a pitching change never overwrites them,
+    # unlike ``home_pitcher_id`` / ``away_pitcher_id``) and the plate
+    # appearances completed in the current half-inning: the pitching-change
+    # draw's ``is_starter`` and ``new_half`` inputs.
     home_starter_id: int | None = None
     away_starter_id: int | None = None
     half_pa_count: int = 0
 
-    # SIM-434: per-pitcher fatigue / rest state for the manager pull + reliever-
-    # selection model.  ``pitcher_bf`` counts batters-faced PER pitcher id
-    # (incremented at each terminal PA in the loop) so the times-through-the-order
-    # effectiveness decay has an input; ``pitcher_rest_days`` is an OPTIONAL map of
-    # pitcher_id -> days of rest (wired only when SIM-433 per-team rest data is
-    # ingested; absent -> the model falls back to in-game pitch-count fatigue).
-    # Both default empty -> on the no-manager / count-machine path they are inert.
+    # ``pitcher_bf`` counts the batters faced per pitcher id; the loop adds one
+    # at each completed plate appearance. The pitching-change draw and the pitch
+    # draw's times-through-the-order input read it. ``pitcher_rest_days`` maps a
+    # pitcher id to his days of rest. The kwargs builder carries it, but no draw
+    # reads it: the reliever draw reads the rest from ``pitcher_recent_usage``.
     pitcher_bf: dict[int, int] = field(default_factory=dict)
     pitcher_rest_days: dict[int, float] = field(default_factory=dict)
-    # SIM-427: the real pen's facts. Each side's MANAGER (raw.games; the
-    # pitching-change draw weights its pool rows by the live manager's usage
-    # similarity), the pen arms' RECENT USAGE (pitcher_id -> (days of rest
-    # capped at five, pitched on either of the two preceding days, pitches over
-    # the three preceding days) — the reliever draw's usage weights), where the
-    # pen came from ('box' = the MLB API's per-game listing; 'synthetic' = the
-    # no-DB seam), and each side's manager TENDENCY profile plus the season's
-    # league means (the steal weight reads the batting side's rate over the
-    # league's). All empty by default -> every consumer is neutral.
+    # The managers and the real pen:
+    #   * each side's manager (``raw.games``): the pitching-change draw weights
+    #     its pool rows by the live manager's usage similarity;
+    #   * the pen arms' recent usage, ``pitcher_id -> (days of rest capped at
+    #     five, pitched on either of the two days before, pitches over the three
+    #     days before)``: the reliever draw's usage weights;
+    #   * the pen's source: 'box' (the MLB API's per-game listing) or
+    #     'synthetic' (the no-DB pen);
+    #   * each side's manager tendency profile and the season's league means:
+    #     the steal weight reads the batting side's rate over the league's.
+    # All empty by default, so every consumer is neutral.
     home_manager_id: int | None = None
     away_manager_id: int | None = None
     pitcher_recent_usage: dict[int, tuple[int, int, int]] = field(default_factory=dict)
@@ -514,23 +466,22 @@ class GameState:
     home_manager_profile: dict[str, float] = field(default_factory=dict)
     away_manager_profile: dict[str, float] = field(default_factory=dict)
     manager_league_profile: dict[str, float] = field(default_factory=dict)
-    # SIM-434: per-pitcher pitch-count ledger so the half-inning pitcher swap
-    # (``_set_half_matchup``) restores the incoming pitcher's OWN accrued count
-    # instead of carrying the other starter's.  ``pitcher_pitch_count`` remains the
-    # CURRENT pitcher's live count (the field the manager pull gate reads); this
-    # map is the per-pitcher save/restore store the swap uses.  Empty by default
-    # and read only on the manager path -> inert (byte-identical) with the flag off.
+    # The pitch count per pitcher id. At each half-inning the loop
+    # (``_set_half_matchup``) saves the outgoing pitcher's count here and
+    # restores the incoming pitcher's own, so the two starters never share one
+    # count. ``pitcher_pitch_count`` stays the current pitcher's live count.
+    # The loop uses this map only with a manager wired.
     pitcher_pc: dict[int, int] = field(default_factory=dict)
 
-    # ---- manager / leverage context hook (spec §3 / §5.3; SIM-323) ----------
+    # ---- the manager's context -----------------------------------------------
     manager: ManagerContext = field(default_factory=ManagerContext)
 
-    # ---- determinism (spec §6.3) --------------------------------------------
-    #: Per-game RNG seed threaded through sampler + loop draws (spec §6.3).
+    # ---- determinism ---------------------------------------------------------
+    #: The per-game seed, recorded on the state by ``simulate_game``.
     seed: int | None = None
 
     # ====================================================================
-    # Derived reads (spec step 1 'situation context')
+    # Derived reads
     # ====================================================================
 
     @property
@@ -545,7 +496,7 @@ class GameState:
 
     @property
     def score_diff(self) -> int:
-        """Offense score minus defense score (spec step 1 'score diff').
+        """Offense score minus defense score.
 
         Positive == the batting team leads.
         """
@@ -559,11 +510,11 @@ class GameState:
         return self.bases.runners_state
 
     def sampler_prefilter(self) -> tuple[int, str, int]:
-        """The ``(pitcher_id, bat_hand, season)`` matchup tuple (spec §4.3)."""
+        """The ``(pitcher_id, bat_hand, season)`` matchup tuple."""
         return (self.pitcher_id, self.bat_hand, self.season)
 
     def bat_hand_for(self, batter_id: int | None) -> str:
-        """The batter's hand for the sampler pre-filter (SIM-421).
+        """The batter's hand for this plate appearance: the draws' hand filter.
 
         Resolves a switch hitter ('S') against the current pitcher's throwing
         hand (the platoon side: a switch hitter bats opposite the pitcher).  When
@@ -577,38 +528,38 @@ class GameState:
         return hand
 
     # ====================================================================
-    # Ergonomic mutators for the SIM-316 state machine.
-    # (Validation is intentionally lightweight; SIM-326 owns the harness.)
+    # Small mutators the loop uses. Their validation is light.
     # ====================================================================
 
     def reset_count(self) -> None:
-        """Zero the ball/strike count (new PA, spec §5.3 / §6.1)."""
+        """Zero the ball/strike count (a new plate appearance)."""
         self.balls = 0
         self.strikes = 0
 
     def reset_outs(self) -> None:
-        """Zero outs (half-inning transition, spec §6.1)."""
+        """Zero outs (a new half-inning)."""
         self.outs = 0
 
     def add_ball(self) -> None:
-        """Increment the ball count (spec §5.1)."""
+        """Increment the ball count."""
         self.balls += 1
 
     def add_strike(self) -> None:
-        """Increment the strike count (spec §5.1)."""
+        """Increment the strike count."""
         self.strikes += 1
 
     def record_out(self, n: int = 1) -> None:
-        """Record ``n`` outs (spec step 7/8)."""
+        """Record ``n`` outs."""
         if n < 0:
             raise ValueError("record_out(n) requires n >= 0.")
         self.outs += int(n)
 
     def add_runs(self, runs: int, *, to: Team | None = None) -> None:
-        """Credit ``runs`` to a team (defaults to the current offense, spec
-        step 8).  Run *value* (RE24/linear weight) is computed by SIM-312's
-        ``run_resolution`` and lives on ``PlayResult.runs``; this commits the
-        integer runs that physically scored."""
+        """Credit ``runs`` to a team (the current offense by default).
+
+        This commits the whole runs that scored.  The run *value* (the change
+        in run expectancy) comes from ``simulation.run_resolution`` and lives
+        on ``PlayResult.runs``."""
         if runs < 0:
             raise ValueError("add_runs(runs) requires runs >= 0.")
         team = to if to is not None else self.offense
@@ -618,19 +569,19 @@ class GameState:
             self.away_score += int(runs)
 
     def is_half_inning_over(self) -> bool:
-        """True once ``outs`` reaches 3 (spec §6.1)."""
+        """True once ``outs`` reaches 3."""
         return self.outs >= OUTS_PER_INNING
 
-    # ---- invariant guards.  The count / outs / score checks below stay
-    # ---- lightweight; the base-state guard they aggregate does not (SIM-500).
+    # ---- invariant guards.  The count / outs / score checks below are
+    # ---- light; the base-state guard they aggregate is not.
 
     def assert_count_valid(self, *, mid_count: bool = True) -> None:
         """Lightweight count invariants.
 
         ``mid_count=True`` (default) asserts the *live* count is mid-PA, i.e.
         ``0 <= balls <= 3`` and ``0 <= strikes <= 2`` — the count never sits at
-        a terminal value because step 4 ends the PA the instant ball 4 / strike
-        3 lands (spec §5.1).  ``mid_count=False`` allows the transient terminal
+        a terminal value, because the loop ends the PA the instant ball 4 or
+        strike 3 lands.  ``mid_count=False`` allows the transient terminal
         value a caller may inspect *before* the PA is rolled over.
         """
         if self.balls < 0 or self.strikes < 0:
@@ -651,8 +602,8 @@ class GameState:
         """Lightweight outs invariant.
 
         ``in_play=True`` (default) asserts ``0 <= outs <= 2`` — during live play
-        the third out ends the half-inning immediately (spec §6.1), so a
-        committed in-play state never sits at 3.  ``in_play=False`` allows the
+        the third out ends the half-inning immediately, so a committed in-play
+        state never sits at 3.  ``in_play=False`` allows the
         transient ``outs == 3`` a caller inspects before the half-inning rolls.
         """
         if self.outs < 0:
@@ -665,7 +616,7 @@ class GameState:
             )
 
     def assert_score_valid(self) -> None:
-        """Scores are non-negative (spec step 8 commit invariant)."""
+        """Assert both scores are non-negative."""
         if self.home_score < 0 or self.away_score < 0:
             raise ValueError(
                 f"scores must be non-negative: home={self.home_score} away={self.away_score}"
@@ -680,7 +631,7 @@ class GameState:
 
         The base guard runs without a ``batter_id``.  It therefore checks that
         the base state is possible, and it does not check that the batter is off
-        the bases.  The reason is a real ordering constraint: ``sim_loop``
+        the bases.  The reason is a real ordering constraint: the loop
         advances the batting order **before** it re-validates the state, so the
         due-up batter is already the next player.  A caller that holds the
         batter for THIS plate appearance calls ``bases.assert_consistent(
@@ -693,118 +644,118 @@ class GameState:
 
 
 # ---------------------------------------------------------------------------
-# PlayResult — the structured result of one pitch / one PA event (spec §9)
+# PlayResult — the result of one pitch
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class PlayResult:
-    """The structured result of one pitch (and, on contact, the resolved PA
-    event).  Owned by SIM-311: the pitch outcome + count classification, the
-    spec §2 step-5/6/7 deltas (batted-ball stats, fielding resolution,
-    baserunner movements, runs/outs deltas, next-state pointer) and the
-    SIM-312 run-resolution provenance so the loop never re-derives run values
-    inline (spec §8).
+    """The result of one pitch, with the plate-appearance event when the pitch ends one.
+
+    It carries the pitch outcome, the event, the run value and its provenance,
+    the batted ball, the fielding, the runners' movements, the running-game
+    outcomes and the committed next state.  The run value comes from
+    ``simulation.run_resolution``, so no reader re-derives it.
     """
 
-    # ---- step 3/4: the pitch outcome + count classification -----------------
-    pitch_outcome: str  # ball/called_strike/.../in_play
-    is_contact: bool = False  # True == ball put in play (step 5)
-    #: True once step 4 declares the PA terminal (walk/K/in-play resolution).
+    # ---- the pitch outcome ---------------------------------------------------
+    pitch_outcome: str  # one of PITCH_OUTCOMES, or NO_PITCH
+    is_contact: bool = False  # True == ball put in play
+    #: True when this pitch ends the plate appearance (a walk, a strikeout, a
+    #: ball in play ...).
     pa_terminal: bool = False
 
-    # ---- the resolved PA event (step 4 terminal classification / step 5-7) --
+    # ---- the plate-appearance event ------------------------------------------
     #: e.g. None (non-terminal pitch), "walk", "strikeout", "single",
-    #: "field_out", "home_run", "ground_into_double_play" ... (spec §5.1).
+    #: "field_out", "home_run", "ground_into_double_play" ...
     event: str | None = None
 
-    # ---- step 8: run value + SIM-312 run-resolution provenance --------------
-    #: The resolved run *value* of the play (RE24 over real states). Computed by
-    #: ``simulation.run_resolution.resolve_runs`` (SIM-312) — the loop must NOT
-    #: re-derive this inline (spec §8).
+    # ---- the run value and its provenance ------------------------------------
+    #: The run *value* of the play: the run expectancy (RE24) after, minus the
+    #: run expectancy before, plus the runs that scored. Computed by
+    #: ``simulation.run_resolution.resolve_runs``; the loop never re-derives it.
     runs: float = 0.0
-    #: How ``runs`` was resolved: always "re24_delta" (the linear-weight
-    #: fallback was removed 2026-08-19) — mirrors
-    #: ``run_resolution.RunResolution.method``.
+    #: How ``runs`` was resolved: always "re24_delta"
+    #: (``run_resolution.RunResolution.method``).
     run_resolution_method: str | None = None
-    #: The canonical outcome key the event resolved to (SIM-312), if any.
+    #: The canonical outcome key the event resolved to, if any.
     canonical_event: str | None = None
-    #: Base-out run expectancy before/after the play (SIM-312 RE24 provenance).
+    #: Base-out run expectancy before/after the play (the RE24 provenance).
     re_start: float | None = None
     re_end: float | None = None
     #: Integer runs that physically scored on the play (committed to the score).
     runs_scored: int = 0
 
-    # ---- step 5: batted-ball stats (placeholders, typed; SIM-319 fills) ------
+    # ---- the batted ball -----------------------------------------------------
     exit_velo: float | None = None
     launch_angle: float | None = None
     spray_angle: float | None = None
 
-    # ---- step 6: fielding resolution (placeholders, typed; SIM-319) ---------
+    # ---- the fielding --------------------------------------------------------
     fielder_id: int | None = None  # the fielder who handled the ball
-    is_error: bool = False  # error flag (fielder/catcher RBF)
-    #: Outs recorded by this play (the step-7 baserunning/fielding delta).
+    is_error: bool = False  # True when the drawn play is a fielding error
+    #: Outs recorded by this play.
     outs_recorded: int = 0
 
-    # ---- step 7: baserunner movement (placeholders, typed; SIM-319) ---------
+    # ---- the runners and the running game ------------------------------------
     #: Per-runner advancement as ``{runner_id: end_base}`` where end_base is
-    #: 0 = scored, 1/2/3 = the base reached.  A retired runner has NO entry
-    #: (SIM-421: the box-score accumulator credits a run to every runner whose
-    #: entry reads 0).  Empty until SIM-319 resolves advancement.
+    #: 0 = scored, 1/2/3 = the base reached.  A retired runner has NO entry,
+    #: because the box-score accumulator credits a run to every runner whose
+    #: entry reads 0.
     baserunner_advances: dict[int, int] = field(default_factory=dict)
-    #: SIM-421: the runner ids whose box-score run (``PlayerStatLine.r``) a
-    #: mid-pitch path already credited on THIS pitch.  The steal of home
-    #: credits its runner in ``_resolve_steal_outcome`` on every pitch, so
+    #: The runner ids whose box-score run (``PlayerStatLine.r``) a mid-pitch
+    #: path already credited on THIS pitch.  The steal of home credits its
+    #: runner in ``_resolve_steal_outcome`` on every pitch, so
     #: ``_accumulate_pa`` skips these ids on a terminal pitch and credits
     #: every other runner who scored.
     box_run_credited: set[int] = field(default_factory=set)
-    #: Whether a steal was attempted on this pitch (spec §3 item 4 / step 7).
+    #: Whether a steal was attempted on this pitch.
     steal_attempted: bool = False
-    #: Steal outcome: None / "safe" / "caught" / "pickoff" (SIM-319).
+    #: Steal outcome: None / "safe" / "caught". A pickoff sets ``pickoff_out``.
     steal_outcome: str | None = None
-    #: SIM-483: runs that scored ON THE STEAL itself (a steal of home). MLB
-    #: Rule 9.04(a) pays NO run batted in on a stolen base, so the box-score
-    #: accumulator subtracts this from the batter's RBI credit when the steal
-    #: lands on a terminal pitch (its run is folded into the play's ``runs``).
-    #: The loop's "no RBI on this run" marker in general: the got-away advance
-    #: (SIM-517) and the run a dropped-third-strike reach forces home
-    #: (SIM-484) use it too — the name is narrower than its use.
+    #: Runs on this pitch that pay no run batted in. The first case is a run
+    #: that scored ON THE STEAL itself (a steal of home): MLB Rule 9.04(a) pays
+    #: NO run batted in on a stolen base. The got-away advance and the run a
+    #: dropped-third-strike reach forces home use it too, so the name is
+    #: narrower than its use. The box-score accumulator subtracts it from the
+    #: batter's RBI credit on a terminal pitch (the run is folded into the
+    #: play's ``runs``).
     steal_runs_scored: int = 0
-    #: SIM-507: a pickoff retired a runner on this pitch. NOT a steal attempt
+    #: A pickoff retired a runner on this pitch. NOT a steal attempt
     #: (``steal_attempted`` stays False); the runner is charged a CS only when
     #: he was tagged advancing (Rule 9.07(h)).
     pickoff_out: bool = False
-    #: SIM-507: an errant pickoff throw advanced a runner on this pitch.
+    #: An errant pickoff throw advanced a runner on this pitch.
     pickoff_error: bool = False
-    #: SIM-554: why this result holds no plate appearance, or None. Today the
-    #: one reason is ``"pickoff_third_out"``: a pickoff before the pitch made
-    #: the third out, so no pitch was thrown, no event is credited and the
-    #: same batter leads off the next inning (``pitch_outcome`` is NO_PITCH).
+    #: Why this result holds no plate appearance, or None. The one reason is
+    #: ``"pickoff_third_out"``: a pickoff before the pitch made the third out,
+    #: so no pitch was thrown, no event is credited and the same batter leads
+    #: off the next inning (``pitch_outcome`` is NO_PITCH).
     pa_voided: str | None = None
-    #: SIM-554: why a steal staged for this pitch did not happen, or None. The
-    #: one reason is ``"third_out_first"``: with two outs a third strike the
+    #: Why a steal staged for this pitch did not happen, or None. The one
+    #: reason is ``"third_out_first"``: with two outs a third strike the
     #: catcher held is the third out before any throw, so the steal is void.
     steal_voided: str | None = None
 
-    # ---- SIM-557: who was on the mound for this result ----------------------
+    # ---- who was on the mound for this result --------------------------------
     #: The pitcher on the mound for this result, or None. ``step_pitch`` sets
     #: it after the manager's hooks, so a reliever who enters on this pitch is
     #: the one named. A reader of the play stream reads it here. The next
     #: state names the NEXT half's pitcher on the play that ends a half-inning.
     pitcher_id: int | None = None
     #: The pitcher's side (the fielding team) for this result, or None. A
-    #: result built by hand without it reads as before: the reader falls back
+    #: result built by hand without it leaves None, and the reader falls back
     #: to the next state.
     fielding_team: Team | None = None
 
-    # ---- step 8: next-state pointer (the committed GameState) ----------------
-    #: The ``GameState`` after this play is committed (spec step 8 'next state').
+    # ---- the committed next state --------------------------------------------
+    #: The ``GameState`` after this play is committed.
     #: Optional so a PlayResult can be constructed before the commit.
     next_state: GameState | None = None
 
     @property
     def no_pitch(self) -> bool:
-        """SIM-554: True when no pitch was thrown on this result (see NO_PITCH)."""
+        """True when no pitch was thrown on this result (see NO_PITCH)."""
         return self.pitch_outcome == NO_PITCH
 
 

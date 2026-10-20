@@ -1,21 +1,21 @@
-"""SIM-557 — every out on a pitcher's line (the plan's tests 1 to 18).
+"""Every out on a pitcher's line (the plan's tests 1 to 18).
 
 The plan is ``docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md``.
 
 Every out the defense records passes once through the run ledger's recorder,
-``StateMachine._record_outs``. Since SIM-557 that recorder is the one writer of
-a pitcher's outs on his box line. Before the change, two other writers credited
-the outs: the end of a plate appearance (``_accumulate_pa``) and the no-pitch
-pickoff return. A caught stealing or a pickoff out on a pitch that did not end
-the plate appearance reached neither, so the box lost about 0.32 outs a game.
+``StateMachine._record_outs``. That recorder is the one writer of a pitcher's
+outs on his box line. A credit at the end of a plate appearance
+(``_accumulate_pa``) or in the no-pitch pickoff return misses a caught
+stealing or a pickoff out on a pitch that does not end the plate appearance:
+about 0.32 outs a game.
 
 The tests here cover two groups:
 
 * the paths (tests 1 to 14): each way a step of the loop records an out puts
   that out on the line of the pitcher on the mound, exactly once;
 * the list (tests 15 to 18): a pitcher who faced a batter or recorded an out is
-  in ``BoxScore.pitchers`` and owns the pitcher props. The batters-faced count
-  (``PlayerStatLine.bf``) is new.
+  in ``BoxScore.pitchers`` and owns the pitcher props. The list reads the
+  batters-faced count (``PlayerStatLine.bf``).
 
 The harness is the running-game suite's: a synthetic bundle whose pitch model
 is one class, an injected pitch, and a steal or a pickoff staged on the
@@ -35,8 +35,10 @@ from pipeline.batch.engine_artifacts import EngineArtifacts, StealPool
 from simulation import sim_loop
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult, Team
+from simulation.loop.boxscore import BoxScore
+from simulation.loop.values import STEAL_CAUGHT, StealResolution
 from simulation.prop_distributions import PITCHER_PROPS, PropDistributionSet
-from simulation.sim_loop import STEAL_CAUGHT, StateMachine, StealResolution
+from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
@@ -123,8 +125,8 @@ def _drive_strikeout(sm: StateMachine, state: GameState) -> None:
 
 
 def _unclassed_pickoff_pool() -> StealPool:
-    """A steal pool with no pitch class (the single pre-pitch draw of the old
-    order): two rows in the (0 outs, 0-0) group, both a pickoff out."""
+    """A steal pool with no pitch class (read by the single pre-pitch draw):
+    two rows in the (0 outs, 0-0) group, both a pickoff out."""
     n = 2
     return StealPool(
         sit=np.zeros((n, 4), dtype=np.float32),
@@ -176,7 +178,7 @@ class TestEveryOutLandsOnThePitchersLine:
         assert result.outs_recorded == 1 and state.outs == 1
         assert (state.balls, state.strikes) == (1, 0)
         pit = sm.boxscore.line(PITCHER)
-        # The out is his although no plate appearance ended (was 0 before).
+        # The out is his although no plate appearance ended.
         assert pit.outs_recorded == 1
         assert pit.bf == 0
         assert sm.boxscore.line(RUNNER).cs == 1
@@ -256,7 +258,7 @@ class TestEveryOutLandsOnThePitchersLine:
         assert result.pa_voided == "pickoff_third_out"
         assert result.outs_recorded == 1
         pit = sm.boxscore.line(PITCHER)
-        # Once: the recorder credits it, and the no-pitch return no longer does.
+        # Once: the recorder credits it, and the no-pitch return writes no line.
         assert pit.outs_recorded == 1
         assert pit.bf == 0
 
@@ -266,7 +268,7 @@ class TestEveryOutLandsOnThePitchersLine:
             np.random.default_rng(7),
         )
         sm = StateMachine(fp, rng=np.random.default_rng(1))
-        assert not sm._steal_order_active()  # the old order: one pre-pitch draw
+        assert not sm._steal_order_active()  # the single pre-pitch draw
         state = _state()
         state.bases = Bases(first=RUNNER)
         result = sm.step_pitch(state, pitch_outcome="ball")
@@ -352,33 +354,38 @@ class TestEveryOutLandsOnThePitchersLine:
         assert body.count(".outs_recorded +=") == 1
         assert "_box_line(" in body
         # Structure check: every write to an ``outs_recorded`` attribute in the
-        # module. The play result's counter (``result.outs_recorded``) is the
-        # play stream's, written beside the recorder's call in the run ledger.
-        # Every other write is a box line's, and there must be one, in
-        # ``_record_outs``.
-        tree = ast.parse(source)
+        # state machine's source, its core module and every mixin module of
+        # ``simulation/loop/``. The play result's counter
+        # (``result.outs_recorded``) is the play stream's, written beside the
+        # recorder's call in the run ledger. Every other write is a box line's,
+        # and there must be one, in ``_record_outs``.
+        loop_dir = Path(inspect.getfile(sim_loop)).parent / "loop"
+        sources = [source] + [p.read_text(encoding="utf-8") for p in sorted(loop_dir.glob("*.py"))]
         box_writes: list[str] = []
         result_writes: list[str] = []
-        for func in ast.walk(tree):
-            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            for node in ast.walk(func):
-                if isinstance(node, ast.AugAssign):
-                    targets = [node.target]
-                elif isinstance(node, ast.Assign):
-                    targets = list(node.targets)
-                else:
+        for tree in map(ast.parse, sources):
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
                     continue
-                for target in targets:
-                    if not (isinstance(target, ast.Attribute) and target.attr == "outs_recorded"):
-                        continue
-                    if isinstance(target.value, ast.Name) and target.value.id == "result":
-                        result_writes.append(func.name)
+                for node in ast.walk(func):
+                    if isinstance(node, ast.AugAssign):
+                        targets = [node.target]
+                    elif isinstance(node, ast.Assign):
+                        targets = list(node.targets)
                     else:
-                        box_writes.append(func.name)
+                        continue
+                    for target in targets:
+                        if not (
+                            isinstance(target, ast.Attribute) and target.attr == "outs_recorded"
+                        ):
+                            continue
+                        if isinstance(target.value, ast.Name) and target.value.id == "result":
+                            result_writes.append(func.name)
+                        else:
+                            box_writes.append(func.name)
         assert box_writes == ["_record_outs"]
         assert set(result_writes) <= {"_commit_run_delta"}
-        # The no-pitch return of ``step_pitch`` no longer writes a box line.
+        # The no-pitch return of ``step_pitch`` writes no box line.
         assert (
             ".outs_recorded +=" not in head.split("def step_pitch", 1)[1].split("\n    def ", 1)[0]
         )
@@ -436,7 +443,7 @@ class TestThePitcherList:
         # error) has a batter faced and nothing else: no out, strikeout,
         # walk, earned run or hit. The batter faced alone must list him and
         # give him the pitcher props, or the box and the props disagree.
-        box = sim_loop.BoxScore()
+        box = BoxScore()
         line = box.line(RELIEVER)
         line.bf = 1
         assert (line.outs_recorded, line.k, line.bb, line.er, line.h_allowed) == (0, 0, 0, 0, 0)

@@ -1,20 +1,22 @@
-"""SIM-511/512 — the transition fielding draw + the five-scenario advancement
-draws (the combined landing; owner rulings 2026-08-19).
+"""The transition fielding draw + the five-scenario advancement draws (the
+owner's rulings of 2026-08-19).
 
 Three layers, mirroring the seams:
 
   * the sampler (``FullPoolSampler``): the HARD base-out cell filter over
     consistent transition rows (24 cells, never widened — an empty cell
     raises), ``last_transition``, and the ``advancement_draw`` over the
-    SIM-510 opportunity pools;
+    advancement opportunity pools;
   * the normalization (``StateMachine._normalized_dests``): the five
     discretionary movements clamp to station-to-station (the double-count
     guard); everything else is row truth;
   * the loop wiring (``StateMachine._resolve_in_play_transition``) with a
     duck-typed sampler: the drawn row IS the play — outs and WHO is out come
-    from the row (SIM-494/496 structural fix), the advancement draws are the
-    sole authority on the five scenarios, Rule 5.08 tag timing, and the
-    post-hoc ``sacrifice_fly`` relabel.
+    from the row, the advancement draws are the sole authority on the five
+    scenarios, Rule 5.08 tag timing, and the post-hoc ``sacrifice_fly``
+    relabel.
+
+The pools are built in memory, so no test needs a database.
 """
 
 from __future__ import annotations
@@ -31,7 +33,8 @@ from pipeline.batch.engine_artifacts import (
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, PlayResult
-from simulation.sim_loop import FieldingSignal, StateMachine
+from simulation.loop.values import FieldingSignal
+from simulation.sim_loop import StateMachine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,8 +178,8 @@ class TestTheHardCellFilter:
         )
         fp = _fp({"R": pool})
         assert not fp.has_transition("R")
-        # SIM-486 deleted the legacy whole-pool soft draw: a pool without the
-        # transition columns is a data defect, and the draw says so.
+        # There is no whole-pool soft draw: a pool without the transition
+        # columns is a data defect, and the draw says so.
         with pytest.raises(RuntimeError, match="SIM-486"):
             fp.battedball_new_pa("R", "9:2024", _sit(rs=7, outs=2))
 
@@ -184,7 +187,8 @@ class TestTheHardCellFilter:
 class TestTheAdvancementDraw:
     def test_the_attempt_rate_is_the_pools_own(self):
         # 30% of opportunity rows are attempts; a neutral draw must track it —
-        # the non-attempt denominator working (the SIM-468 lesson).
+        # the non-attempt denominator working (an attempts-only pool would
+        # always go).
         fp = _fp(adv_pools={"2_2_4": _adv_pool(1000, [1] * 300 + [0] * 700)})
         hits = 0
         for _ in range(2000):
@@ -300,7 +304,7 @@ class TestNormalizedDests:
 
 
 class _FakeTransitionFP:
-    """Duck-typed sampler exposing the SIM-512 seam. Records calls."""
+    """Duck-typed sampler exposing the advancement-draw seam. Records calls."""
 
     def __init__(self, adv: dict | None = None):
         self.adv = adv or {}
@@ -360,8 +364,8 @@ class TestTheTransitionIsThePlay:
         assert r.runs_scored == 1
 
     def test_a_double_play_retires_the_named_runner(self):
-        # SIM-494 structurally fixed: two outs, two bodies gone — the runner
-        # from 1B is REMOVED, not left standing.
+        # Two outs, two bodies gone — the runner from 1B is REMOVED, not left
+        # standing.
         m = _machine()
         s = _state(first=11)
         r = _resolve(m, s, event="grounded_into_double_play", rh=0, tr=_tr(r1=0, batter=0))
@@ -370,7 +374,7 @@ class TestTheTransitionIsThePlay:
         assert s.away_score == 0
 
     def test_a_reach_on_error_puts_the_batter_on_base(self):
-        # SIM-496 structurally fixed: the batter REACHES and it is not a hit.
+        # The batter REACHES and it is not a hit.
         m = _machine()
         s = _state()
         r = _resolve(m, s, event="field_error", rh=0, tr=_tr(batter=1))
@@ -466,13 +470,13 @@ class TestTheAdvancementWiring:
         assert s.outs == 1 and s.bases.first is None
 
     def test_a_colliding_normalized_row_never_loses_a_body(self):
-        """The first certification lane crashed the SIM-500 conservation
-        guard 1h47m in: a rare row's normalized destinations collide (the
-        runner from 2B held at 2B while the runner from 1B's discretionary
-        out clamps back to 2B), the cascade fell the trailing runner to
-        first, and the batter's seating OVERWROTE him — one body vanished.
-        The seat ladder now degrades to a forced-advance chain: every body
-        keeps a bag or scores, and the conservation identity balances.
+        """A rare row's normalized destinations can collide (the runner from
+        2B held at 2B while the runner from 1B's discretionary out clamps
+        back to 2B). Seating the batter over the trailing runner would lose a
+        body and trip the base-conservation guard (a certification lane once
+        crashed on it, 1 h 47 min in). The seat ladder degrades to a
+        forced-advance chain: every body keeps a bag or scores, and the
+        conservation identity balances.
         """
         m = _machine()
         s = _state(first=11, second=22)

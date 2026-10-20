@@ -1,51 +1,44 @@
 """
 replay_chi_squared.py
 =====================
-SIM-325 -- the **E2E historical-replay + chi-squared goodness-of-fit** harness
-(the validation spine's end-to-end check).
+The historical-replay harness: a chi-squared goodness-of-fit (GOF) test of the
+simulator's runs per team-game.
 
-WHAT THIS IS
-------------
-A reusable harness that:
+WHAT THE HARNESS DOES
+---------------------
+  (a) It takes a set of historical games with KNOWN runs per team-game (the
+      :class:`HistoricalGame` rows, one per team-game).
+  (b) It replays each matchup through ``simulate_game()`` to get a SIMULATED
+      distribution of runs per team-game.
+  (c) It compares the two distributions with a chi-squared GOF test. The bins
+      are 0, 1, 2, ..., N+ runs. The harness pools the sparse high-run tail
+      until every expected count is large enough for the test. The result
+      carries the statistic, the degrees of freedom and the p-value. The gate
+      is ``p > 0.05``.
 
-  (a) takes a set of *historical* games with KNOWN actual per-team-game run
-      totals (the :class:`HistoricalGame` seam -- one row per team-game),
-  (b) **replays** the matching games through the SIM-320
-      ``simulate_game()`` loop to produce a SIMULATED per-team-game run
-      distribution, and
-  (c) runs a **chi-squared goodness-of-fit** test comparing the simulated vs
-      actual run-total distributions -- binned 0,1,2,...,N+ runs/team/game with
-      low-expected-count **tail pooling** so the chi-squared assumptions hold --
-      reporting the chi-squared statistic, degrees of freedom, and p-value, and
-      asserting ``p > 0.05`` (the spec's validation gate).
-
-THE NO-DB REALITY + THE REAL-DATA SEAM
---------------------------------------
-The full historical Statcast DB is NOT loadable in the sandbox, so the harness
-is validated on a **reference run distribution** the same way SIM-324 validates
-the loop's emergent statistics: drive ``simulate_game()`` with a *calibrated
-league-average outcome model* (the SIM-324 idiom, re-exported here) and compare
-the simulated distribution against a reference distribution drawn from the SAME
-calibrated model (self-consistency) OR a published league run-per-game
-distribution.  Either way the test is meaningful and passes (p > 0.05) without
-the real DB.
-
-The REAL-DATA SEAM is :class:`HistoricalGame` + :func:`run_total_distribution`
-+ :func:`chi_squared_gof`: when the real Statcast DB is available, build a list
-of :class:`HistoricalGame` from the actual box scores (each carries the matchup
-keys + the actual run total), pass it to :func:`replay_and_test`, and the SAME
-chi-squared machinery validates the loop against real history -- no code change,
-only a different ``historical_games`` argument and a production resolver/sampler.
-
-NOISE-ROBUSTNESS
+WITH NO DATABASE
 ----------------
-The simulated distribution is built from MANY seeded games (fixed seeds), the
-binning pools low-expected tail bins (so no expected count is tiny), and the
-gate is a p-value (not a brittle point tolerance).  A NEGATIVE CONTROL
-(:func:`chi_squared_gof` against a deliberately WRONG reference) is rejected
-(p < 0.05), proving the test has power.
+The tests run with no Statcast database. The default machine is the production
+:class:`StateMachine` over the synthetic league bundle
+(:func:`simulation.synthetic_bundle.league_artifacts`). The tests compare its
+distribution with a reference drawn from the same league model (a
+self-consistency check) or with a published league distribution.
 
-This module does NOT modify ``simulation/sim_loop.py``; it only drives it.
+WITH REAL DATA
+--------------
+Build :class:`HistoricalGame` rows from the real box scores: each row carries
+the matchup keys and the actual runs. Pass them to :func:`replay_and_test` with
+a production ``state_machine_factory``. The same chi-squared code then tests
+the loop against real history.
+
+NOISE
+-----
+Each replayed game has a fixed seed, so the distribution is reproducible. Tail
+pooling keeps every expected count away from zero. The gate is a p-value, not
+a point tolerance. A negative control (a deliberately WRONG reference) reads
+p < 0.05, so the test has power.
+
+The harness drives the loop and changes nothing in it.
 """
 
 from __future__ import annotations
@@ -56,19 +49,19 @@ import numpy as np
 from scipy.stats import chisquare
 
 from simulation.game_state import GameState
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.loop.boxscore import GameSimResult
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 # ---------------------------------------------------------------------------
-# The calibrated league-average outcome model (the SIM-324 idiom, re-used)
+# The league-average outcome model
 # ---------------------------------------------------------------------------
 #
-# These are the SIM-324 per-pitch + in-play models: run through the real §5.1
-# count machine they produce league-average emergent PA statistics (~8-9% BB,
-# ~22% K, ~3.85 P/PA) and a ~4.4 R/team/G run environment.  We re-use them here
-# (rather than importing the test module) so the harness is a self-contained,
-# importable library: production callers can build a reference distribution from
-# the SAME calibrated model the SIM-324 sniff suite is anchored to.
+# The per-pitch and in-play mixes of the baseball sniff tests (SIM-324).
+# Through the count machine they give about 8-9% walks, 22% strikeouts and
+# 3.85 pitches per plate appearance, and about 4.4 runs a team-game. The
+# harness keeps its own copy, so a caller can build a reference from the same
+# model without importing a test module.
 
 LEAGUE_PITCH_MODEL: dict[str, float] = {
     "ball": 0.332,
@@ -78,10 +71,9 @@ LEAGUE_PITCH_MODEL: dict[str, float] = {
     "in_play": 0.170,
 }
 
-# SIM-421: re-tuned to the production outcome-pool proportions (hit-on-contact
-# ~33%, was an inflated ~40% that had compensated for the old conservative
-# baserunner advancement).  With the corrected realistic advancement this lands
-# the harness run environment back at the ~4.4 R/team/G calibration target.
+# The in-play mix follows the production outcome pool's proportions: hits on
+# about 33% of the balls in play that stay in the park. With the advancement
+# draws it lands the run environment near the 4.4 runs a team-game target.
 LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "home_run": 0.049,
     "single": 0.239,
@@ -91,35 +83,32 @@ LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "grounded_into_double_play": 0.026,
 }
 
-#: Default matchup keys for the no-DB reference replay (mirror SIM-324).
+#: The default matchup keys of the no-DB reference replay (the sniff tests' matchup).
 _DEFAULT_SEASON = 2024
 _DEFAULT_PITCHER = 477132
 _DEFAULT_AWAY_LINEUP = list(range(101, 110))
 _DEFAULT_HOME_LINEUP = list(range(201, 210))
 
 # ---------------------------------------------------------------------------
-# The real-data seam: one row per team-game with a KNOWN actual run total
+# The real-data input: one row per team-game with a KNOWN actual run total
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class HistoricalGame:
-    """One historical TEAM-game with its KNOWN actual run total -- the real-data
-    seam (SIM-325 acceptance #2).
+    """One historical team-game with its KNOWN run total: the real-data input.
 
-    A team-game (not a game) is the unit because the chi-squared compares the
-    per-team-game run distribution.  ``runs`` is the actual runs that team
-    scored.  The remaining fields are the matchup keys the loop needs to *replay*
-    the game (the pitcher faced, season, batting-side hand, and the lineups);
-    when the real Statcast DB is available these are filled from the box score
-    and a production sampler/resolver is wired so the replay draws from real
-    play pools.  In the no-DB sandbox the keys default to the SIM-324 reference
-    matchup and the loop is driven by the calibrated league model.
+    The unit is a team-game, not a game, because the test compares runs per
+    team-game. ``runs`` is the runs that team scored. The other fields are the
+    matchup keys the loop needs to replay the game: the pitcher faced, the
+    season, the batting hand and the lineups. With real data they come from
+    the box score, and a production factory replays the game over the real
+    play pools. With no database they default to the sniff tests' matchup,
+    and the synthetic league bundle drives the loop.
 
-    To plug REAL data: build ``[HistoricalGame(runs=actual, pitcher_id=..., ...),
-    ...]`` from the box scores and pass it to :func:`replay_and_test` with a
-    production ``state_machine_factory`` -- the SAME chi-squared machinery then
-    validates the loop against real history.
+    To test real data, build ``[HistoricalGame(runs=actual, pitcher_id=...,
+    ...), ...]`` from the box scores. Pass the list to :func:`replay_and_test`
+    with a production ``state_machine_factory``.
     """
 
     runs: int
@@ -138,14 +127,14 @@ class HistoricalGame:
 
 @dataclass(frozen=True, slots=True)
 class ChiSquaredResult:
-    """The reported chi-squared goodness-of-fit outcome (SIM-325 acceptance #1).
+    """The result of one chi-squared goodness-of-fit test.
 
-    ``statistic`` is the chi-squared test statistic, ``dof`` the degrees of
-    freedom (``#bins - 1`` after pooling), ``p_value`` the GOF p-value, and
-    ``bins`` the human-readable bin labels (e.g. ``["0", "1", "2", "3+"]``) the
-    observed/expected counts correspond to.  ``observed`` / ``expected`` are the
-    post-pooling count vectors actually fed to the chi-squared test, so a caller
-    can inspect exactly what was compared.  ``passed`` is ``p_value > alpha``.
+    ``statistic`` is the chi-squared statistic, ``dof`` the degrees of freedom
+    (``#bins - 1`` after pooling), ``p_value`` the GOF p-value, and ``bins``
+    the bin labels (e.g. ``["0", "1", "2", "3+"]``) of the counts.
+    ``observed`` / ``expected`` are the pooled count vectors the test read, so
+    a caller can inspect exactly what it compared. ``passed`` is
+    ``p_value > alpha``.
     """
 
     statistic: float
@@ -162,16 +151,15 @@ class ChiSquaredResult:
 
 
 # ---------------------------------------------------------------------------
-# The calibrated no-DB league machine: the production StateMachine over the
-# synthetic league bundle (SIM-486; the SIM-324 idiom, re-used so the
-# reference replay is realistic)
+# The no-DB league machine: the production StateMachine over the synthetic
+# league bundle
 # ---------------------------------------------------------------------------
 
 _LEAGUE_ARTIFACTS = None
 
 
 def _league_artifacts():
-    """The calibrated league bundle, built once; every replay draws from it."""
+    """The league bundle, built once; every replay draws from it."""
     global _LEAGUE_ARTIFACTS
     if _LEAGUE_ARTIFACTS is None:
         _LEAGUE_ARTIFACTS = league_artifacts(
@@ -181,9 +169,10 @@ def _league_artifacts():
 
 
 def _default_state_machine(seed: int) -> StateMachine:
-    """Build the calibrated no-DB league machine for one seeded replay game: the
-    production machine over the synthetic league bundle, so every pitch and
-    every batted ball is a real full-pool draw."""
+    """The no-DB league machine for one seeded replay game.
+
+    It is the production machine over the synthetic league bundle, so every
+    pitch and every batted ball is a full-pool draw."""
     return StateMachine(
         synthetic_sampler(_league_artifacts(), seed + 1_000_003),
         rng=np.random.default_rng(seed),
@@ -210,15 +199,15 @@ def simulate_run_distribution(
     per-TEAM-game run totals (a flat list of ``2 * n_games`` integers -- home +
     away of each game).
 
-    Each game uses a distinct fixed seed (``base_seed + i``) so the whole
-    distribution is reproducible.  ``state_machine_factory`` is the injection
-    seam: ``factory(seed) -> StateMachine``; it defaults to the calibrated no-DB
-    league machine (the SIM-324 idiom).  A production caller passes a factory that
-    wires a real sampler/resolver to replay against real play pools.
+    Each game uses its own fixed seed (``base_seed + i``), so the whole
+    distribution is reproducible. ``state_machine_factory`` is
+    ``factory(seed) -> StateMachine``; it defaults to the no-DB league machine.
+    A production caller passes a factory that builds the machine over the real
+    bundle.
 
-    The matchup keys (pitcher / season / hand / lineups) are passed straight to
-    :func:`simulate_game`; in the no-DB path they are bookkeeping only (the
-    outcome comes from the injected model).
+    The matchup keys (pitcher, season, hand, lineups) go straight to
+    :func:`simulate_game`. With the synthetic league bundle they are
+    bookkeeping only: the league mix decides the outcome.
     """
     if n_games <= 0:
         raise ValueError(f"n_games must be positive, got {n_games}.")
@@ -253,12 +242,12 @@ def replay_historical_games(
     """Replay each :class:`HistoricalGame`'s matchup through ``simulate_game()`` and
     return the SIMULATED per-team-game run totals (the real-data replay path).
 
-    One simulated team-game is produced per :class:`HistoricalGame` (so the
-    simulated and actual sample sizes match for a fair chi-squared).  Each game's
-    seed is its ``seed`` field when set, else ``base_seed + i`` (reproducible).
-    The matchup keys come from the :class:`HistoricalGame`; with a production
-    ``state_machine_factory`` (wiring a real sampler/resolver) this is the real
-    historical replay -- otherwise the calibrated no-DB model drives it.
+    The replay gives one simulated team-game per :class:`HistoricalGame`, so
+    the simulated and actual samples have the same size. Each game's seed is
+    its ``seed`` field when set, else ``base_seed + i``. The matchup keys come
+    from the :class:`HistoricalGame`. With a production
+    ``state_machine_factory`` this is the real historical replay; otherwise the
+    synthetic league bundle drives it.
     """
     factory = state_machine_factory or _default_state_machine
     totals: list[int] = []
@@ -275,8 +264,8 @@ def replay_historical_games(
             seed=seed,
         )
         result: GameSimResult = simulate_game(sm, initial_state=state, seed=seed)
-        # One team-game per historical row: take the home half (arbitrary but
-        # consistent) so |simulated| == |actual| for the GOF.
+        # One team-game per historical row: the home side's runs (an arbitrary,
+        # consistent choice), so |simulated| == |actual| for the GOF.
         totals.append(int(result.home_score))
     return totals
 
@@ -377,8 +366,7 @@ def pool_low_expected_bins(
 
 
 def run_total_distribution(run_totals, max_bin: int = 10) -> np.ndarray:
-    """The per-team-game run-total histogram (a thin alias for
-    :func:`bin_run_totals` named for the spec's "run distribution" vocabulary)."""
+    """The histogram of runs per team-game: an alias of :func:`bin_run_totals`."""
     return bin_run_totals(run_totals, max_bin=max_bin)
 
 
@@ -391,21 +379,21 @@ def chi_squared_gof(
     min_expected: float = 5.0,
     alpha: float = 0.05,
 ) -> ChiSquaredResult:
-    """Run a chi-squared GOF comparing the SIMULATED run distribution to a
-    reference (SIM-325 acceptance #1).
+    """Test the SIMULATED run distribution against a reference with a
+    chi-squared GOF test.
 
-    Supply the reference EITHER as ``reference_totals`` (a sequence of actual /
-    reference per-team-game run totals -- the real-data path) OR as
-    ``reference_distribution`` (a normalized probability vector over the
-    ``0,1,...,max_bin+`` bins -- e.g. a published league run-per-game
-    distribution).  Exactly one must be given.
+    Supply the reference EITHER as ``reference_totals`` (a sequence of actual
+    or reference runs per team-game -- the real-data path) OR as
+    ``reference_distribution`` (a probability vector over the
+    ``0,1,...,max_bin+`` bins -- e.g. a published league distribution of runs
+    per game). Give exactly one.
 
-    Both observed and expected are binned with :func:`bin_run_totals`, the
-    expected counts are scaled to the SAME total as the observed, low-expected
-    tail bins are pooled (:func:`pool_low_expected_bins`), and
-    ``scipy.stats.chisquare`` produces the statistic + p-value.  The degrees of
-    freedom is ``#pooled_bins - 1`` (no fitted parameters -- the expected
-    distribution is supplied, not estimated from the data).
+    The function bins both sides with :func:`bin_run_totals` and scales the
+    expected counts to the observed total. It pools the low-expected tail bins
+    (:func:`pool_low_expected_bins`), and ``scipy.stats.chisquare`` gives the
+    statistic and the p-value. The degrees of freedom are
+    ``#pooled_bins - 1``: the caller supplies the expected distribution, so
+    the test fits no parameter.
 
     Returns a :class:`ChiSquaredResult` (statistic, dof, p_value, bin labels, and
     the post-pooling observed/expected vectors).  ``passed`` is ``p > alpha``.
@@ -464,7 +452,7 @@ def chi_squared_gof(
 
 
 # ---------------------------------------------------------------------------
-# Top-level convenience: replay + test in one call (the acceptance entry point)
+# Replay and test in one call
 # ---------------------------------------------------------------------------
 
 
@@ -477,15 +465,14 @@ def replay_and_test(
     min_expected: float = 5.0,
     alpha: float = 0.05,
 ) -> ChiSquaredResult:
-    """Replay ``historical_games`` through the loop and chi-squared-test the
-    simulated run distribution against the games' ACTUAL run totals (the SIM-325
-    end-to-end acceptance entry point, acceptance #1+#2).
+    """Replay ``historical_games`` through the loop and test the simulated run
+    distribution against the games' ACTUAL run totals.
 
-    With the real Statcast DB this is the genuine historical validation: build the
-    :class:`HistoricalGame` list from real box scores, wire a production
-    ``state_machine_factory``, and the simulated distribution is compared to real
-    actual run totals.  In the no-DB sandbox a self-consistency / reference run is
-    used instead (see the SIM-325 tests).
+    With real data this is the historical validation: build the
+    :class:`HistoricalGame` list from the real box scores and pass a production
+    ``state_machine_factory``. With no database the tests run a
+    self-consistency or reference check instead
+    (``tests/unit/test_replay_chi_squared.py``).
     """
     actual = [int(hg.runs) for hg in historical_games]
     simulated = replay_historical_games(

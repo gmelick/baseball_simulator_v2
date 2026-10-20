@@ -1,4 +1,4 @@
-"""SIM-515 — the measured IBB rate table.
+"""The measured intentional-walk (IBB) rate table.
 
 Three layers under test, mirroring the seams:
 

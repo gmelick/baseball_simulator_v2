@@ -1,14 +1,13 @@
 """
 test_lineup_resolver.py
 =======================
-Unit tests for ``simulation/lineup_resolver.py`` (SIM-353) — the runtime
-lineup / substitution resolver that closes the SIM-338 gap (nothing read the
-lineup stores to BUILD a ``GameState``).
+The runtime lineup / substitution resolver (``simulation/lineup_resolver.py``):
+it reads the lineup store to BUILD a ``GameState``.
 
-These tests use the established tests/unit idiom: a fake asyncpg connection
-(``_StubConn``, mirroring ``_StubPool`` in test_api_state.py) returning canned
-dict rows (the same shape asyncpg ``Record`` exposes), plus direct in-memory
-assembly so the pure GameState-building path is exercised with NO live DB.
+These tests use a fake asyncpg connection (``_StubConn``, mirroring
+``_StubPool`` in test_api_state.py) returning canned dict rows (the same shape
+asyncpg ``Record`` exposes), plus direct in-memory assembly, so the pure
+GameState-building path runs with NO live DB.
 
 What is asserted
 ----------------
@@ -22,8 +21,6 @@ What is asserted
     the batting order but still resolves as the pitcher.
   * The async orchestrator wires DB access -> pure assembly correctly and issues
     the expected queries.
-
-Owned by Data Engineer (SIM-353).
 
 Run:
     pytest tests/unit/test_lineup_resolver.py -v
@@ -399,9 +396,9 @@ class TestBuildGameState:
         assert state.seed == 42
 
     def test_defense_maps_populated_by_position_name(self):
-        # SIM-425b: build_game_state fills the per-team defense map (canonical
-        # position name -> player_id) from the same resolution that yields the
-        # catcher, so the fielder-RBF nudge has the live defenders.
+        # build_game_state fills the per-team defense map (canonical position
+        # name -> player_id) from the same resolution that yields the catcher,
+        # so the fielder factor has the live defenders.
         state = build_game_state(self._resolved(), half=Half.TOP)
         assert state.home_defense and state.away_defense
         # The catcher field mirrors the map's 'C' slot (consistency).
@@ -411,12 +408,11 @@ class TestBuildGameState:
         assert state.home_defense.get("P") == state.pitcher_id
 
     def test_defense_map_handles_name_format_position_codes(self):
-        # SIM-425b/428 regression: raw.game_lineups stores position_code as canonical
-        # NAMES ('SS','C',..), NOT numeric scorebook codes. build_team_defense_map
-        # must map these directly; before the fix it routed names through the
-        # number-keyed POSITION_CODE_TO_NAME, dropped everything but the explicitly-
-        # added pitcher, and left the catcher (SIM-428) + the 8 fielders (SIM-425b)
-        # silently absent on real data.
+        # raw.game_lineups stores position_code as canonical NAMES ('SS','C',..),
+        # NOT numeric scorebook codes. build_team_defense_map must map these
+        # directly: routed through the number-keyed POSITION_CODE_TO_NAME, every
+        # name but the explicitly added pitcher would drop, leaving the catcher
+        # and the 8 fielders silently absent on real data.
         names = ["CF", "2B", "RF", "1B", "LF", "3B", "SS", "C", "P"]
         rows: list[dict] = []
         for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, names, strict=False), start=1):
@@ -556,7 +552,7 @@ class TestAsyncOrchestrator:
 
     @pytest.mark.asyncio
     async def test_no_lineup_rows_raises_not_ingested(self):
-        # SIM-409: empty lineup_rows → LineupNotIngestedError (subclass of
+        # Empty lineup_rows → LineupNotIngestedError (subclass of
         # LineupResolutionError), not the plain base error.
         conn = _StubConn(game_row=_game_row(), lineup_rows=[])
         with pytest.raises(LineupNotIngestedError, match="not yet published"):
@@ -564,8 +560,8 @@ class TestAsyncOrchestrator:
 
     @pytest.mark.asyncio
     async def test_lineup_not_ingested_is_resolution_error(self):
-        # LineupNotIngestedError must remain catchable as LineupResolutionError
-        # so existing broad except clauses are not broken.
+        # LineupNotIngestedError must stay catchable as LineupResolutionError,
+        # so a broad except clause still catches it.
         conn = _StubConn(game_row=_game_row(), lineup_rows=[])
         with pytest.raises(LineupResolutionError):
             await resolve_lineup(conn, GAME_PK)
@@ -607,8 +603,8 @@ def test_build_from_directly_constructed_resolved_lineup():
         slots=(),
         pitcher_id=AWAY_PITCHER,
     )
-    # Give away a batting order by re-creating slots via the rows path is simpler,
-    # but to prove pure construction we build TeamLineup with explicit slots:
+    # The rows path would be simpler; to prove pure construction, the test
+    # builds the away TeamLineup with explicit slots:
     from simulation.lineup_resolver import LineupSlot
 
     away_slots = tuple(

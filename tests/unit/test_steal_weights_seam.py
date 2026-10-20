@@ -1,9 +1,10 @@
-"""SIM-554 — the steal draw's weights as a seam.
+"""The steal draw's weights as a seam.
 
 ``FullPoolSampler.steal_weights`` returns the steal draw's candidate rows and
 their weights. ``steal_draw`` samples from exactly that, so the running-game
 replay (``scripts/running_game_replay.py``) reads the odds the simulator
 draws from, and the two cannot disagree. The seam consumes no random number.
+The steal pools are built in memory, so no test needs a database.
 """
 
 from __future__ import annotations

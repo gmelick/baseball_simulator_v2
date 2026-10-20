@@ -1,9 +1,9 @@
-"""
-tests/unit/test_receiving_ratio.py
-=========================================
-SIM-523 part E — the catcher RECEIVING ratio on taken pitches, built OFF
-(plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part E; the
-loop's step 4, last factor; fitting and enabling is SIM-526).
+"""Tests of the catcher RECEIVING ratio on taken pitches, which ships OFF.
+
+The ratio is the last weight on the pitch's result (the single draw, or the
+result draw of the split); its fit and enable is the catcher receiving enable
+(SIM-526). The tests build toy pools in memory;
+the builder and loader tests write to a temporary directory.
 
 On taken pitches (called strikes and balls) a called-strike row is weighted by
 the live catcher's framing multiplier at its zone group, a ball row by the
@@ -15,13 +15,13 @@ total weight is unchanged. What these tests pin:
     from the pool (with the priors and the clamps) and the loader reads them;
   * the zone groups and the blocking cells;
   * the factor's values: multiplier, mirror, blocking ratio, neutral rows;
-  * the invariant the plan asks for: the taken group's total weight and every
+  * the invariant: the taken group's total weight and every
     swung-at weight are unchanged for any catcher — on the single draw's
     whole-pool path, its cell path, and the result draw of the split;
   * a good framer draws more called strikes among taken pitches, never more
     taken pitches; the pitch draw of the split never sees the factor;
   * OFF is byte-identical; an unknown catcher, a bundle without the document
-    or without zones is neutral; the old kernel's names are gone;
+    or without zones is neutral; the bell-curve kernel's names do not exist;
   * the factory env reads.
 """
 

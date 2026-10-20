@@ -1,21 +1,17 @@
-"""
-test_batch_runner.py
-======================
-Unit tests for SIM-332 -- the **parallel 100-iteration batch runner**
-:mod:`simulation.batch_runner` (Phase 4, Sprint 3).
+"""Tests of the parallel batch runner, :mod:`simulation.batch_runner`.
 
-These run with NO live DuckDB/FAISS and NO Redis server: the runner is driven by
-the picklable, rng-driven no-DB machine factory (the always-on path) and the
-in-memory cache fallback.  Heavy / real-parallel runs are marked ``slow``.
+The tests run with NO DuckDB and NO Redis server: the picklable no-DB machine
+factory (over the synthetic bundle) drives the runner, and the cache is the
+in-memory one. The real multi-process runs are marked ``slow``.
 
-Coverage (the SIM-332 acceptance criteria):
-  * a small batch returns a valid SIM-327 :class:`GameSimSummary`;
-  * a fixed base seed REPRODUCES the summary exactly (determinism, §6.3);
+What the tests cover:
+  * a small batch returns a valid :class:`GameSimSummary`;
+  * a fixed base seed REPRODUCES the summary exactly (determinism);
   * distinct per-iteration seeds produce VARIATION across games;
   * ``derive_seed`` derives a distinct deterministic seed per iteration;
-  * ``default_max_workers`` == ``min(cpu - 1, 10)`` (the SIM-281 ceiling);
-  * the cache returns the MEMOIZED summary on the second call (in-memory
-    fallback), and ``make_cache(prefer_redis=False)`` never needs a server.
+  * ``default_max_workers`` == ``min(cpu - 1, 10)``;
+  * the cache returns the MEMOIZED summary on the second call (the in-memory
+    cache), and ``make_cache(prefer_redis=False)`` never needs a server.
 """
 
 from __future__ import annotations
@@ -37,7 +33,7 @@ from simulation.batch_runner import (
 )
 from simulation.results import GameSimSummary
 
-# The picklable no-DB factory + a lineup so games progress and end.
+# The picklable no-DB factory, and a lineup on each side so games progress and end.
 FACTORY = "simulation.batch_runner:rng_driven_machine_factory"
 AWAY_LINEUP = list(range(101, 110))
 HOME_LINEUP = list(range(201, 210))
@@ -57,14 +53,14 @@ def _spec() -> GameSpec:
 
 
 def _runner(**kw) -> BatchRunner:
-    # workers=1 -> synchronous in-process (fast + deterministic) by default.
+    # workers=1 -> in this process (fast and deterministic) by default.
     kw.setdefault("max_workers", 1)
     kw.setdefault("cache", InMemoryCache())
     return BatchRunner(**kw)
 
 
 # ===========================================================================
-# derive_seed -- per-game seed isolation (AC #2)
+# derive_seed -- one seed per game
 # ===========================================================================
 
 
@@ -84,7 +80,7 @@ class TestDeriveSeed:
 
 
 # ===========================================================================
-# default_max_workers -- the SIM-281 ceiling min(cpu-1, 10)  (AC #5)
+# default_max_workers -- the ceiling min(cpu-1, 10)
 # ===========================================================================
 
 
@@ -92,7 +88,7 @@ class TestMaxWorkers:
     def test_formula_is_min_cpu_minus_one_and_ten(self):
         assert default_max_workers(cpu_count=4) == 3
         assert default_max_workers(cpu_count=8) == 7
-        # The 10-worker ceiling holds on big hosts (SIM-281 D1 / SIM-280 §4).
+        # The 10-worker ceiling holds on big hosts.
         assert default_max_workers(cpu_count=16) == MAX_WORKER_CEILING == 10
         assert default_max_workers(cpu_count=64) == 10
 
@@ -108,7 +104,7 @@ class TestMaxWorkers:
 
 
 # ===========================================================================
-# A small batch returns a valid SIM-327 summary  (AC #1/#5)
+# A small batch returns a valid summary
 # ===========================================================================
 
 
@@ -121,7 +117,7 @@ class TestSmallBatch:
         assert res.n_iterations == 8
         # Win rates partition into [0, 1] and sum to 1.0.
         assert abs(s.home_win_pct + s.away_win_pct + s.tie_pct - 1.0) < 1e-9
-        # RAW per-iteration arrays preserved at length N.
+        # The RAW per-iteration arrays keep length N.
         assert s.home_scores.shape == (8,)
         assert s.away_scores.shape == (8,)
         assert s.total_scores.shape == (8,)
@@ -129,14 +125,14 @@ class TestSmallBatch:
         assert (s.home_scores >= 0).all() and (s.away_scores >= 0).all()
 
     def test_workers_one_is_in_process_fallback(self):
-        # max_workers=1 must work with no pool / no pickling (the test path).
+        # max_workers=1 must work with no pool and no pickling (the test path).
         res = _runner(max_workers=1).run(_spec(), n_iterations=6, base_seed=1)
         assert res.max_workers == 1
         assert res.summary.n_iterations == 6
 
 
 # ===========================================================================
-# Determinism -- a fixed base seed reproduces the summary  (AC #2)
+# Determinism -- a fixed base seed reproduces the summary
 # ===========================================================================
 
 
@@ -160,7 +156,7 @@ class TestDeterminism:
 
 
 # ===========================================================================
-# Variation -- distinct per-iteration seeds produce different games  (AC #2)
+# Variation -- distinct per-iteration seeds produce different games
 # ===========================================================================
 
 
@@ -175,7 +171,7 @@ class TestVariation:
 
 
 # ===========================================================================
-# Redis-optional TTL cache -- memoized summary on the 2nd call  (AC #4)
+# The Redis-optional TTL cache -- the memoized summary on the 2nd call
 # ===========================================================================
 
 
@@ -221,12 +217,12 @@ class TestCache:
         assert cache.get("k") is None
 
     def test_make_cache_no_redis_falls_back_in_memory(self):
-        # prefer_redis=False MUST never need a server (the sandbox has none).
+        # prefer_redis=False MUST never need a server.
         c = make_cache(prefer_redis=False)
         assert isinstance(c, InMemoryCache)
 
     def test_make_cache_redis_unreachable_falls_back(self):
-        # A client whose ping() raises -> graceful in-memory fallback, no raise.
+        # A client whose ping() raises -> the in-memory cache, no raise.
         class _DeadClient:
             def ping(self):
                 raise ConnectionError("no server")
@@ -265,14 +261,14 @@ class TestGameSpecPicklable:
 
 
 # ===========================================================================
-# Heavy / real-parallel runs (NOT in the always-on suite)
+# Heavy, real multi-process runs (NOT in the unit lane: marked slow)
 # ===========================================================================
 
 
 @pytest.mark.slow
 class TestSlowParallel:
     def test_full_100_game_batch_across_processes(self):
-        # The real SIM-281 path: 100 games across a process pool. Slow + forks.
+        # The real pooled path: 100 games across a process pool. Slow; it forks.
         runner = BatchRunner(max_workers=4, cache=NullCache())
         res = runner.run(_spec(), n_iterations=100, base_seed=2024)
         assert res.summary.n_iterations == 100

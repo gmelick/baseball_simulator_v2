@@ -1,15 +1,19 @@
-"""SIM-560: the game page's projections run on the worker pool and name each player.
+"""The game page's projections run on the worker pool and name each player.
 
 The projections panel reads ``GET /api/games/{pk}/boxscore``, and each clicked
-prop reads ``GET /api/games/{pk}/props/{player}/{prop}``. Both routes built their
-prop set by replaying N games one after another inside the API process
-(``record_game_plays`` in a loop): about 2.5 minutes for the panel's 100 games,
-and the same again for every click. They now ask the batch runner for the set
-(:meth:`BatchRunner.run_prop_set`). The runner fans the games out to its worker
-pool and caches a seeded set, so a click reads the run the panel shows.
+prop reads ``GET /api/games/{pk}/props/{player}/{prop}``. Both routes ask the
+batch runner for the prop set (:meth:`BatchRunner.run_prop_set`). The runner
+fans the games out to its worker pool and caches a seeded set, so a click
+reads the run the panel shows. Replaying the games one after another inside
+the API process (``record_game_plays`` in a loop) takes about 2.5 minutes for
+the panel's 100 games, and the same again for every click (the game-page
+review, SIM-560).
 
 The card also names each player and tags the player's side, batting-order slot
 and starting-pitcher role, so the panel can group the players by team.
+
+The games run on the no-DB synthetic factory, and a fake asyncpg pool stands
+in for the database.
 """
 
 from __future__ import annotations
@@ -66,7 +70,7 @@ def _spec() -> GameSpec:
 
 
 def _serial_recorded_set(n: int, base_seed: int) -> PropDistributionSet:
-    """The pre-SIM-560 route path: record N games one after another."""
+    """The serial reference path: record N games one after another."""
     boxscores = []
     for i in range(n):
         result, _plays = record_game_plays(
@@ -108,7 +112,7 @@ class _CountingRunner(BatchRunner):
 
 class TestRunPropSet:
     def test_matches_the_recorded_serial_path(self):
-        """The runner's set equals the one the old route built, number for number."""
+        """The runner's set equals the serial recorded set, number for number."""
         runner = BatchRunner(cache=NullCache(), max_workers=1)
         pooled = runner.run_prop_set(_spec(), n_iterations=6, base_seed=77)
         assert pooled.n_iterations == 6

@@ -1,10 +1,8 @@
-"""
-tests/unit/test_relief_draw.py
-=====================================
-SIM-427 — each team's real manager for the pitching change (plan:
-docs/audit/2026-09-13-sim427-build-plan.md, parts 4c-4e).
+"""Tests of each team's real manager for the pitching change.
 
-What these tests pin:
+The work is the real manager and pen (SIM-427); its plan is
+docs/audit/2026-09-13-sim427-build-plan.md. The tests build toy change pools
+in memory and stand in for the database with small fakes. What they pin:
 
   * the manager weight on the change draw (``_change_manager_factor``): power
     0 leaves the draw byte-identical; a quick-hook manager's usage row moves
@@ -21,11 +19,12 @@ What these tests pin:
     rate over the league mean, clamped, neutral without a profile or a league
     row or a manager;
   * the no-DB change pool (``synthetic_bundle.change_pool``): the rates per
-    cell, the SIM-427 columns, and the league bundle's manager switch;
-  * the resolver's pen attachment (``_attach_bullpens``): off by default
-    (``SIM_BULLPEN_SOURCE=synthetic``, production today); with ``box`` both
-    sides come from the listing with rest, usage and the pen arms' hands; a
-    missing listing or a failed read leaves the synthetic marker;
+    cell, the manager and pen columns, and the league bundle's manager switch;
+  * the resolver's pen attachment (``_attach_bullpens``): off at the code
+    default (``SIM_BULLPEN_SOURCE=synthetic``; production sets ``box``); with
+    ``box`` both sides come from the listing with rest, usage and the pen
+    arms' hands; a missing listing or a failed read leaves the synthetic
+    marker;
   * the profile resolver (``resolve_manager_profiles_onto_state``): the
     season, the season-before fallback, the league row, and an empty dict on
     every failure.
@@ -197,7 +196,7 @@ class TestManagerFactor:
     def test_no_matrix_no_column_or_an_unknown_manager_leaves_the_factor_off(self):
         fp = _sampler(manager_power=1.0, matrix=False)
         assert fp._change_manager_factor(fp._change_meta(), np.arange(10), "10:2024") is None
-        # a pool built before the manager column
+        # a pool without the manager column
         old = _pool(_ROWS)
         old.manager_id = None
         fp2 = _sampler(old, manager_power=1.0)
@@ -220,7 +219,7 @@ class TestManagerFactor:
         share = fp8.change_ess_stats[0] / fp8.change_ess_stats[1]
         assert 0.4 < share < 0.6
 
-    def test_the_last_row_carries_the_sim427_facts(self):
+    def test_the_last_row_carries_the_manager_and_the_arms_facts(self):
         fp = _sampler(manager_power=1.0, seed=2)
         assert _draw_share(fp, "10:2024", n=1) == 1.0  # the quick hook's rows: changed
         row = fp.last_change_row()
@@ -380,9 +379,9 @@ class TestTheLoopPopsTheDrawnArm:
 
     def test_a_change_with_the_weights_off_is_the_positional_pick(self):
         # The real pen carries hands and rest. With every reliever weight off
-        # the pick is POSITIONAL — never a platoon ranking (before the flip the
-        # SIM-434 ranking picked a same-hand arm 93% of the time; the pool's
-        # own entering arms are 29% left). The ranking is deleted.
+        # the pick is POSITIONAL — never a platoon ranking (a platoon ranking
+        # picked a same-hand arm 93% of the time, while the pool's own
+        # entering arms are 29% left-handed; the real manager and pen, SIM-427).
         class _FP:
             def pitching_change_draw(self, key, **kw):
                 return True
@@ -461,7 +460,7 @@ class TestStealAggression:
 
 
 class TestSyntheticChangePool:
-    def test_every_hard_cell_has_three_rows_and_the_sim427_columns(self):
+    def test_every_hard_cell_has_three_rows_and_the_relief_columns(self):
         pool = change_pool()
         assert pool.n == 2 * 2 * 16 * 4 * 3
         assert pool.manager_id.shape == (pool.n,) and int(pool.manager_id[0]) == 1
@@ -556,7 +555,7 @@ class TestAttachBullpens:
         monkeypatch.setenv("SIM_BULLPEN_SOURCE", "box")
 
     def test_the_switch_off_asks_nothing_and_keeps_the_synthetic_pen(self, monkeypatch):
-        # Production today: the unit suite pins 'synthetic'; the flip sets 'box'.
+        # The unit suite pins 'synthetic' (the code default); production sets 'box'.
         monkeypatch.setenv("SIM_BULLPEN_SOURCE", "synthetic")
         assert bullpen_source_enabled() is False
         conn = _Conn({10: [(601, "bullpen")], 20: [(701, "bullpen")]})
@@ -609,7 +608,7 @@ class TestAttachBullpens:
 
 
 # ===========================================================================
-# The kwargs contract carries the new facts
+# The kwargs contract carries the pen's facts
 # ===========================================================================
 
 

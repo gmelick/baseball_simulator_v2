@@ -1,11 +1,12 @@
-"""tests/unit/test_worker_forkserver.py — SIM-430 worker start-method fix.
+"""tests/unit/test_worker_forkserver.py — the worker pool's start method.
 
-The ProcessPool workers used the platform-default **fork** start method, which
-COW-forks each worker FROM the ~6 GB engine-loaded parent. CPython's refcounting +
-cyclic GC write to every inherited object header, defeating copy-on-write, so each
-worker's RSS ballooned toward the full ~6 GB it inherited but does NOT need (a
-full-pool worker needs only the ~470 MB bundle). The pool now uses **forkserver**
-(`mp_context`), so workers fork from a lean server process (~370 MB each, measured).
+The **fork** start method makes each worker a copy-on-write fork of the ~6 GB
+engine-loaded parent. CPython's refcounting + cyclic GC write to every inherited
+object header, defeating copy-on-write, so each worker's RSS grows toward the
+full ~6 GB it inherits but does NOT need (a full-pool worker needs only the
+~470 MB bundle). The pool uses **forkserver** (`mp_context`), so workers fork
+from a lean server process (~370 MB each, measured; the worker fan-out,
+SIM-430).
 
 These tests pin the contract: the pool context defaults to forkserver, `_pool_kwargs`
 wires it, it's overridable via `SIM_MP_START_METHOD`, and an unavailable method

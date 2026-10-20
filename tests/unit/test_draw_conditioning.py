@@ -1,32 +1,34 @@
 """
 tests/unit/test_draw_conditioning.py
 ======================================
-SIM-518 — the draw-conditioning enrichment epic, the CODE half (no live DB,
-no rebuild). Plan: docs/audit/2026-09-04-sim467-518-plan.md §6 + §8.
+The draw-conditioning inputs: the pool columns that carry them and the draw
+weights that read them. Plan: docs/audit/2026-09-04-sim467-518-plan.md §6 + §8.
 
-Data parts (SIM-464 pitch half, SIM-465, SIM-463):
+The data:
   * migration 0023 adds ``bat_home`` / ``pitcher_pitch_count`` /
     ``times_through_order`` to ``sim.pitch_pool``, appended LAST (the pool
     INSERT is positional);
   * the builder's two fatigue window expressions agree with the live helper
-    ``simulation.sim_loop.times_through_order`` — one definition, both sides;
+    ``simulation.loop.values.times_through_order`` — one definition, both sides;
   * the artifact exports the three pitch-pool columns and the batted-ball
     pool's producing-pitch geometry (``pgeom``, NaN preserved) + ``pitcher_id``;
-    the loader reads them, a pre-sim518 bundle still loads (fields None), and
-    the numeric columns ride the SIM-403b shared-memory seam.
+    the loader reads them, a bundle without them still loads (fields None), and
+    the numeric columns ride the shared-memory seam.
 
-Consumers (each an env-gated draw WEIGHT, byte-identical off — the owner's
+The consumers (each an env-gated draw WEIGHT, byte-identical off — the owner's
 architecture rule):
-  * the fatigue kernel on the pitch draw (SIM-465), normalized to a mean of 1
-    within each count bucket; unknown rows exactly neutral;
-  * the batting-side weight on the pitch draw (SIM-464): 0.0 is a hard match,
+  * the fatigue kernel on the pitch draw, normalized to a mean of 1 within each
+    count bucket; unknown rows exactly neutral;
+  * the batting-side weight on the pitch draw: 0.0 is a hard match,
     unknown-side rows neutral;
-  * the pitch-similarity kernel on the batted-ball draw (SIM-472): the drawn
-    pitch's geometry pulls the draw toward batted balls hit off similar
-    pitches; rows with missing geometry exactly neutral;
-  * the loop passes each input ONLY when its weight is on (the SIM-455
-    two-argument call is unchanged otherwise) and snapshots fatigue once per
-    plate appearance.
+  * the pitch-similarity kernel on the batted-ball draw: the drawn pitch's
+    geometry pulls the draw toward batted balls hit off similar pitches; rows
+    with missing geometry exactly neutral;
+  * the loop passes each input ONLY when its weight is on (otherwise the call
+    keeps its two arguments) and snapshots fatigue once per plate appearance.
+
+Synthetic pools stand in for the bundle, and the export tests seed an
+in-memory DuckDB; nothing needs a live database or a rebuild.
 """
 
 from __future__ import annotations
@@ -48,7 +50,8 @@ from pipeline.batch.engine_artifacts import (
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, Team
-from simulation.sim_loop import StateMachine, times_through_order
+from simulation.loop.values import times_through_order
+from simulation.sim_loop import StateMachine
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATION = REPO_ROOT / "db" / "migrations" / "duckdb" / "0023_sim518_pitch_pool_conditioning.sql"
@@ -172,7 +175,7 @@ def _sequence(fp: FullPoolSampler, n: int = 30, **kw) -> list[str]:
 
 
 # ===========================================================================
-# The fatigue kernel (SIM-465) on the pitch draw
+# The fatigue kernel on the pitch draw
 # ===========================================================================
 
 
@@ -235,7 +238,7 @@ class TestFatigueKernel:
 
 
 # ===========================================================================
-# The batting-side weight (SIM-464's pitch half) on the pitch draw
+# The batting-side weight on the pitch draw
 # ===========================================================================
 
 
@@ -268,7 +271,7 @@ class TestPitchHomeWeight:
 
 
 # ===========================================================================
-# The pitch-similarity kernel (SIM-472) on the batted-ball draw
+# The pitch-similarity kernel on the batted-ball draw
 # ===========================================================================
 
 
@@ -507,9 +510,9 @@ class TestBuilderWindowExpressions:
         assert by_ab[(1, 9)] == 1 and by_ab[(1, 10)] == 2 and by_ab[(2, 13)] == 1
 
     def test_the_builder_version_moved_and_the_select_appends_the_columns(self):
-        # sim518.1 -> sim523g.1 (SIM-523 part G: the fielding chain on the outcome pool)
-        # sim523g.1 -> sim553.1 (SIM-553: a two-strike foul tip / foul bunt is strike three)
-        # sim553.1 -> sim554.1 (SIM-554: the steal pool's pitch class and pickoff rows)
+        # The builder version names the newest pool change: sim554.1 adds the steal
+        # pool's pitch class and pickoff rows. The fatigue columns (sim518.1) stay
+        # in the SELECT, in order.
         assert ppc.POOL_BUILDER_VERSION == "sim554.1"
         src = Path(ppc.__file__).read_text(encoding="utf-8")
         i_got = src.index("AS got_away,")
@@ -616,7 +619,7 @@ def _export(tmp_path: Path, *, sim518: bool) -> str:
 
 
 class TestArtifactRoundTrip:
-    def test_a_sim518_export_loads_the_new_columns(self, tmp_path):
+    def test_an_export_with_the_conditioning_columns_loads_them(self, tmp_path):
         art = EngineArtifacts.load(_export(tmp_path, sim518=True))
         for hand in ("L", "R"):
             p = art.pools[hand]
@@ -635,7 +638,7 @@ class TestArtifactRoundTrip:
             assert all(600000 < v < 600010 for v in bb.pitcher_id.tolist())
         assert os.path.exists(os.path.join(str(tmp_path), "battedball_pool", "L.pgeom.npy"))
 
-    def test_a_pre_sim518_export_still_loads_with_the_fields_none(self, tmp_path):
+    def test_an_export_without_the_conditioning_columns_loads_them_as_none(self, tmp_path):
         art = EngineArtifacts.load(_export(tmp_path, sim518=False))
         for hand in ("L", "R"):
             p = art.pools[hand]

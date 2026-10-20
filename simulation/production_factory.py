@@ -1,22 +1,16 @@
-"""
-production_factory.py
-=====================
-The production, DB-backed machine factory for the batch runner (SIM-352 /
-SIM-424 / SIM-486).
+"""The production machine factory for the batch runner.
 
-WHAT THIS IS
-------------
-:mod:`simulation.batch_runner` fans :func:`simulation.sim_loop.simulate_game` out
-across a ``ProcessPoolExecutor``; each worker rebuilds its own live
-:class:`~simulation.sim_loop.StateMachine` IN-PROCESS from a small, picklable
-:class:`~simulation.batch_runner.GameSpec` via a *dotted-ref* ``machine_factory``
-(never a live sampler across the fork -- SIM-281 D1).  This module's
-:func:`production_machine_factory` builds the REAL machine: a
+:mod:`simulation.batch_runner` fans :func:`simulation.sim_loop.simulate_game`
+out across a ``ProcessPoolExecutor``. Each worker builds its own
+:class:`~simulation.sim_loop.StateMachine` in its own process from a small,
+picklable :class:`~simulation.batch_runner.GameSpec`, through a *dotted-ref*
+``machine_factory``; a live sampler never crosses the process boundary. This
+module's :func:`production_machine_factory` builds the REAL machine: a
 :class:`~simulation.full_pool_sampler.FullPoolSampler` over the on-disk
-engine-artifact bundle (:class:`~pipeline.batch.engine_artifacts.EngineArtifacts`),
-cached once per worker process (SIM-402), with the SIM-403b shared-memory views
-spliced in when the parent published them.  Reference it on a :class:`GameSpec`
-by dotted path::
+engine-artifact bundle (:class:`~pipeline.batch.engine_artifacts.EngineArtifacts`).
+Each worker process caches the sampler once, with the parent's shared-memory
+arrays spliced in when the parent published them. Reference the factory on a
+:class:`GameSpec` by dotted path::
 
     GameSpec(
         machine_factory="simulation.production_factory:production_machine_factory",
@@ -24,19 +18,22 @@ by dotted path::
                     "away_lineup": [...], "home_lineup": [...]},
     )
 
-THERE IS NO FALLBACK (SIM-486)
-------------------------------
-Until SIM-486 a missing or corrupt bundle silently degraded to a second,
-per-tile simulator.  Now a missing bundle raises here, at machine build, so a
-worker that cannot serve the production path fails loudly instead of serving a
-different one.  The no-DB seam for tests is
-:func:`simulation.batch_runner.rng_driven_machine_factory`, which builds the SAME
-machine over an in-memory :mod:`simulation.synthetic_bundle` bundle.
+THERE IS NO FALLBACK
+--------------------
+A missing or corrupt bundle raises here, at machine build, so a worker that
+cannot serve the production path fails loudly instead of serving a different
+one. The no-DB seam for tests is
+:func:`simulation.batch_runner.rng_driven_machine_factory`, which builds the
+SAME machine over an in-memory :mod:`simulation.synthetic_bundle` bundle.
 
-FACTORY-ONLY SIM-KWARGS (the ``_``-prefixed keys, SIM-377)
-----------------------------------------------------------
-  * ``_pool_dir`` -- the play-pool root (default ``$BASEBALL_PLAY_POOL_DIR`` /
-    ``/data/play_pool``); the bundle lives in its ``engine_artifacts/`` subdir.
+FACTORY-ONLY SIM-KWARGS (the ``_``-prefixed keys)
+-------------------------------------------------
+  * ``_pool_dir`` -- the play-pool root; the bundle lives in its
+    ``engine_artifacts/`` subdirectory. Without it the factory reads
+    ``$BASEBALL_ENGINE_ARTIFACT_DIR`` (the bundle version the app pinned), else
+    ``$BASEBALL_PLAY_POOL_DIR`` (default ``/data/play_pool``).
+  * ``_asof_ymd`` -- the point-in-time cutoff (a YYYYMMDD integer): the sampler
+    draws no pool row from after that date.
 
 The non-underscore keys (``pitcher_id`` / ``bat_hand`` / ``season`` / the two
 lineups / ``max_innings`` / ...) flow through to ``simulate_game``.
@@ -57,18 +54,19 @@ from simulation.sim_loop import StateMachine
 
 logger = logging.getLogger(__name__)
 
-#: SIM-548: the pitch draw's situation bandwidth, the sampler's code default.
+#: The pitch draw's situation bandwidth: the registry's code default, equal to
+#: the sampler's own default.
 DEFAULT_SIT_SIGMA = float(FLAGS["SIM_SIT_SIGMA"].default)  # type: ignore[arg-type]
 
 
 def apply_sit_sigma_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-548: read ``SIM_SIT_SIGMA``, the pitch draw's situation bandwidth.
+    """Read ``SIM_SIT_SIGMA``, the pitch draw's situation bandwidth.
 
-    The bandwidth is the Gaussian on the base-out situation
+    The bandwidth is the width of the Gaussian on the base-out situation
     (``FullPoolSampler.sit_sigma``). The default is 2.0, the sampler's own
-    default, so an unset variable keeps production byte for byte. A value
-    that does not parse keeps the default and logs a warning. The offline
-    fit ladders this value; an arm sets it here.
+    default. A value that does not parse keeps the default and logs a warning.
+    The offline fit (the joint weight fit, SIM-548) tries a series of values
+    and sets each arm's value here.
     """
     sampler.sit_sigma = read_float("SIM_SIT_SIGMA", env)
 
@@ -81,25 +79,24 @@ def _kwarg(spec: GameSpec, name: str, default: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# The per-worker full-pool sampler cache (SIM-402)
+# The per-worker full-pool sampler cache
 # ---------------------------------------------------------------------------
 
-#: SIM-402: per-worker cache for the EngineArtifacts + FullPoolSampler the
-#: full-pool path needs.  WITHOUT this cache, :func:`_run_one` calls this
-#: factory PER SEED and the worker re-disk-loads the ~290 MB artifact bundle
-#: AND re-precomputes the FullPoolSampler's per-hand `_pool_cache` on every
-#: iteration — turning a ~1.5 s/game pool draw into a ~9 s/game stall that
-#: blows the SIM-372 2 s/30 s SLA.  WITH the cache, the first seed pays the
-#: load+precompute and every subsequent seed reuses the warm sampler (only
-#: the per-game rng is re-seeded; per-game state — half-inning / PA caches —
-#: is reset at the loop's natural boundaries inside `simulate_game`).  Lives
-#: per-process (not module-level across the fork), so each ProcessPool worker
-#: gets its own copy at first use; the parent never holds this object.
+#: The per-worker cache of the EngineArtifacts and the FullPoolSampler.
+#: Without it, :func:`_run_one` calls this factory once per seed, and the
+#: worker reloads the ~290 MB bundle from disk and rebuilds the sampler's
+#: per-hand caches for every game: a ~1.5 s game becomes a ~9 s stall that
+#: breaks the 2 s game / 30 s batch budget (the worker warm-up, SIM-402). With
+#: the cache, the first seed pays the load and every later seed reuses the
+#: warm sampler. Only the per-game rng is re-seeded; the loop resets the
+#: per-game state (the half-inning and plate-appearance caches) at its own
+#: boundaries inside ``simulate_game``. The cache lives per process, so each
+#: pool worker builds its own at first use; the parent never holds it.
 _CACHED_FULL_POOL_SAMPLER = None
 _CACHED_FULL_POOL_ART_DIR: str | None = None
 
 
-#: SIM-563: the environment variable that pins the bundle VERSION a worker reads.
+#: The environment variable that pins the bundle VERSION a worker reads.
 #: The app resolves the published link at boot and sets it before the pool
 #: starts, so a worker that respawns after a rebuild reads the same version as
 #: the parent's shared arrays, never the newly published one.
@@ -118,13 +115,14 @@ def _artifact_dir(spec: GameSpec) -> str:
 
 
 def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-523: read the actor score-matrix powers.
+    """Read the powers of the actor score matrices.
 
     Every actor factor is its engine's composite score from the nightly matrix,
-    raised to the power ``SIM_ACTOR_POWER_<NAME>`` (1.0 when unset; 0 turns the
-    factor off; names: batter, catcher_throwing, runner_steal, runner_adv,
-    pitcher_steal, fielder — the last applies to every per-position fielder
-    matrix). The bell-curve kernels are retired (2026-09-09).
+    raised to the power ``SIM_ACTOR_POWER_<NAME>``. The names: batter,
+    catcher_throwing, runner_steal, runner_adv, pitcher_steal, manager_usage
+    and fielder. The fielder power applies to every per-position fielder
+    matrix that has no power of its own. An unset power is 1.0, except
+    manager_usage, which is off (0.0); a power of 0 turns its factor off.
     """
     powers = actor_power_overrides(env)
     if "fielder" in powers:
@@ -134,22 +132,24 @@ def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -
 
 
 def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-523 part B: read the pitch / pitch-result split switch and its
-    bandwidth and powers, and the born-batted-ball kernel bandwidth.
+    """Read the pitch / pitch-result split, its bandwidth and powers, the
+    catcher receiving switch and the born-ball kernel.
 
-    OFF (the default) keeps one draw per pitch, byte for byte. ON splits it:
-    the pitch draw, then the result draw conditioned on the pitch through the
-    pitch engine's metric (``SIM_RESULT_PITCH_SIGMA``, 1.0; the density
-    correction's power ``SIM_RESULT_DENSITY_POWER``, 1.0, 0 = off), with the pitcher
-    and batter factors re-raised (``SIM_RESULT_PITCHER_POWER`` /
-    ``SIM_RESULT_BATTER_POWER``, 1.0) and the pitch draw's batter factor
-    re-raised (``SIM_PITCH_BATTER_POWER``, 1.0, on both paths) and the pitch
-    draw's pitcher factor raised to ``SIM_PITCH_PITCHER_POWER`` (1.0; the
-    result power is absolute) — part F fits them.
-    ``SIM_BB_BORN_SIGMA`` (0 = off) weights the fielding draw by similarity
-    to the batted ball the result row was born with.
+    OFF (the code default) keeps one draw per pitch. ON splits it: the pitch
+    draw, then the result draw conditioned on the pitch through the pitch
+    engine's metric (``SIM_RESULT_PITCH_SIGMA``, 1.0). The result draw's
+    density correction has the power ``SIM_RESULT_DENSITY_POWER`` (1.0; 0 =
+    off). The result draw raises the pitcher and batter factors again
+    (``SIM_RESULT_PITCHER_POWER`` / ``SIM_RESULT_BATTER_POWER``, 1.0); the
+    result pitcher power is absolute. On both paths the pitch draw raises its
+    pitcher factor to ``SIM_PITCH_PITCHER_POWER`` and its batter factor to
+    ``SIM_PITCH_BATTER_POWER`` (1.0 each).
+
+    ``SIM_BB_BORN_SIGMA`` (0 = off) weights the fielding draw by similarity to
+    the batted ball the result row was born with; ``SIM_BB_BORN_DENSITY_POWER``
+    (1.0) is the power of that kernel's density correction.
     """
-    # SIM-523 part E: the catcher receiving ratio (OFF; enabling is SIM-526).
+    # The catcher receiving ratio (OFF until the receiving enable, SIM-526).
     sampler.catcher_receiving = read_bool("SIM_CATCHER_RECEIVING", env)
     sampler.pitch_result_split = read_bool("SIM_PITCH_RESULT_SPLIT", env)
     for key, attr in (
@@ -166,48 +166,50 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
 
 
 def apply_running_game_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-554: read ``SIM_STEAL_PITCH_CLASS`` — the running game on the pitch.
+    """Read ``SIM_STEAL_PITCH_CLASS``: the running game on the pitch (SIM-554).
 
-    Default ON ("1"), unlike the other sampler flags: the change landed on at
-    its best-known default (the owner's ruling of 2026-09-16). On, and on a
+    The default is ON, unlike the other sampler flags: the change landed on at
+    its best-known default (the owner's ruling of 2026-09-16). On, with a
     bundle whose steal pool carries the pitch class, the loop draws the
     pickoff before the pitch and the steal after it, among real pitches of the
-    pitch's class. "0", "false", "no", "off" or "" turn it off: the single
-    pre-pitch draw of SIM-474, row for row.
+    pitch's class. "0", "false", "no", "off" or "" turn it off: the loop then
+    makes the single pre-pitch steal draw.
     """
     sampler.steal_pitch_class = read_bool("SIM_STEAL_PITCH_CLASS", env)
 
 
 def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-523 part C: read the fielding draw's class filter, the batter power
-    and the park wall-zone rule.
+    """Read the fielding draw's class filter, its batter power, the park
+    wall-zone rule, the fence stage and the fence amendments.
 
-    Every one is OFF by default (byte-identical): ``SIM_BB_CLASS_FILTER``
-    (0/1), ``SIM_BB_BATTER_POWER`` (1.0), ``SIM_PARK_WALL_ZONE_ONLY`` (0/1)
-    with ``SIM_WALL_ZONE_DISTANCE`` (feet, 300), and the fence stage
-    ``SIM_FENCE_STAGE`` (0/1) with ``SIM_FENCE_MARGIN`` (feet, 0 = decisive).
+    The code defaults: ``SIM_BB_CLASS_FILTER`` (0/1, off),
+    ``SIM_BB_BATTER_POWER`` (1.0), ``SIM_PARK_WALL_ZONE_ONLY`` (0/1, off) with
+    ``SIM_WALL_ZONE_DISTANCE`` (feet, 300), and the fence stage
+    ``SIM_FENCE_STAGE`` (0/1, off) with ``SIM_FENCE_MARGIN`` (feet, 0 =
+    decisive).
 
-    SIM-478 (the fence certification's amendments), all OFF by default:
-    ``SIM_CARRY_OFFSET`` (0/1) — the born ball's carry re-expressed in the
-    live park's air from the document's per-park offsets; ``SIM_BB_BORN_PER_FEATURE``
-    (0/1) — the born kernel's exponent per feature (its divisor 2 sigma^2
-    instead of 2 sigma^2 x the feature count); ``SIM_BB_MARGIN_BAND`` (feet,
-    0 = off) — an air ball the fence did not call over draws only rows within
-    this band of its margin to the wall, with ``SIM_BB_MARGIN_MIN_ROWS`` (20)
-    the fewest rows the band may leave before the rows stay as they were.
+    The fence certification's amendments (SIM-478), all off at their code
+    defaults. ``SIM_CARRY_OFFSET`` (0/1) reads the born ball's carry in the
+    live park's air, from the document's per-park offsets.
+    ``SIM_BB_BORN_PER_FEATURE`` (0/1) takes the born kernel's exponent per
+    feature: its divisor is 2 sigma^2, not 2 sigma^2 x the feature count.
+    ``SIM_BB_MARGIN_BAND`` (feet, 0 = off) lets an air ball the fence did not
+    call over draw only rows within this band of its margin to the wall.
+    ``SIM_BB_MARGIN_MIN_ROWS`` (20) is the fewest rows the band may leave;
+    with fewer, the rows stay as they were.
     """
     sampler.bb_class_filter = read_bool("SIM_BB_CLASS_FILTER", env)
     sampler.park_wall_zone_only = read_bool("SIM_PARK_WALL_ZONE_ONLY", env)
-    # SIM-523 part C4: the fence stage (0/1) and its band (feet, 10).
+    # The fence stage (0/1); its band, SIM_FENCE_MARGIN, is read below.
     sampler.fence_stage = read_bool("SIM_FENCE_STAGE", env)
-    # SIM-478 §11 / §12: the carry offset and the born kernel's exponent per feature.
+    # The fence amendments: the carry offset and the born kernel's exponent per feature.
     sampler.carry_offset = read_bool("SIM_CARRY_OFFSET", env)
     sampler.bb_born_per_feature = read_bool("SIM_BB_BORN_PER_FEATURE", env)
     for key, attr in (
         ("SIM_BB_BATTER_POWER", "bb_batter_power"),
         ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance"),
         ("SIM_FENCE_MARGIN", "fence_margin"),
-        # SIM-478 §12.7: the wall-margin band (feet; 0 = off).
+        # The wall-margin band (feet; 0 = off).
         ("SIM_BB_MARGIN_BAND", "bb_margin_band"),
     ):
         setattr(sampler, attr, read_float(key, env))
@@ -216,33 +218,31 @@ def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> No
 
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     """Build (or reuse) the worker's full-pool sampler from the on-disk
-    engine-artifact bundle.  Raises when the bundle cannot be loaded: SIM-486
-    removed the per-tile fallback, so there is nothing to degrade to.
+    engine-artifact bundle. Raises when the bundle cannot be loaded: there is
+    no other simulator to fall back to.
 
-    SIM-403b: when the parent has published the artifact arrays into shared memory
-    via ``BatchRunner(shared_arrays=...)``, the worker's :func:`_worker_init` has
+    When the parent published the bundle's arrays into shared memory
+    (``BatchRunner(shared_arrays=...)``), the worker's :func:`_worker_init` has
     already attached them and put zero-copy views in
-    :data:`simulation.batch_runner._WORKER_SHARED` ``["views"]``. We disk-load the
-    bundle (small picklable members like the pitcher-sim dict + the object-dtype
-    outcome_type / event arrays only — the loader does the same I/O either way)
-    and then SPLICE the shared views over the big numerical arrays. Net effect:
-    per-worker resident-set drops by the size of the shared subset (~hundreds of
-    MB at production scale).
+    :data:`simulation.batch_runner._WORKER_SHARED` ``["views"]``. The loader
+    then skips those big arrays on disk, reads the other members (e.g. the
+    pitcher-sim dict and the object-dtype ``outcome_type`` / ``event`` arrays)
+    and splices the shared views in. Each worker's resident memory drops by the
+    size of the shared arrays (hundreds of MB at production scale).
 
-    SIM-402: the loaded artifacts AND the FullPoolSampler itself are cached
-    at module scope.  First call per worker pays the disk load + shared-view
-    splice + per-hand `_pool_meta` precompute; every later call reuses the
-    warm sampler (only the per-game rng is re-assigned).  This is the cache
-    the SLA verification revealed was missing — without it, a 100-iteration
-    /simulate request paid the ~6-9 s warm-up cost N times.
+    The loaded artifacts and the FullPoolSampler are cached at module scope.
+    The first call in a worker pays the disk load, the splice and the
+    per-hand precomputes; every later call reuses the warm sampler and
+    re-seeds only its rng. Without the cache, a 100-game ``/simulate`` request
+    paid the ~6-9 s warm-up 100 times (the worker warm-up, SIM-402).
     """
     art_dir = _artifact_dir(spec)
     global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR, _CACHED_IBB_RATES
-    # Reuse the cached sampler when the artifact dir matches.  Re-seed its
-    # rng so the per-game seed still governs the weighted draws (the per-game
-    # half-inning / PA state caches inside the sampler are reset at the loop's
-    # natural boundaries — `new_half_inning` / `battedball_new_pa` — so
-    # cross-game leakage is impossible).
+    # Reuse the cached sampler when the artifact directory matches. Re-seed its
+    # rng, so the per-game seed still governs the weighted draws. The loop
+    # resets the sampler's per-game half-inning and plate-appearance state at
+    # its own boundaries (`new_half_inning` / `battedball_new_pa`), so no state
+    # leaks from one game to the next.
     if _CACHED_FULL_POOL_SAMPLER is not None and art_dir == _CACHED_FULL_POOL_ART_DIR:
         _CACHED_FULL_POOL_SAMPLER.rng = np.random.default_rng(seed)
         return _CACHED_FULL_POOL_SAMPLER
@@ -251,11 +251,11 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     from simulation.batch_runner import _WORKER_SHARED
     from simulation.full_pool_sampler import FullPoolSampler
 
-    # SIM-402: pass the shared views to load() so the disk-load path SKIPS
-    # the big .npy reads when the parent has already published them into
-    # shared memory.  This is the meaningful cold-worker speedup — without
-    # it, 9 cold workers each reading ~150 MB from the Windows-Docker
-    # volume serialize into a ~500 s stall on a 10-iteration request.
+    # Pass the shared views to load(), so the loader SKIPS the big .npy reads
+    # the parent already published into shared memory. Without it, 9 cold
+    # workers each read ~150 MB from the Windows Docker volume, and the reads
+    # serialize into a ~500 s stall on a 10-game request (the worker warm-up,
+    # SIM-402).
     views = _WORKER_SHARED.get("views") or {}
     try:
         art = EngineArtifacts.load(art_dir, shared_views=views)
@@ -265,23 +265,24 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
             f"({type(exc).__name__}: {exc}). There is no fallback simulator; build "
             "the bundle (python -m pipeline.batch.engine_artifacts --what all)."
         ) from exc
-    # SIM-491 (the SIM-412 rebuild): the home-field draw weight. 1.0 (the
-    # default, and any unparsable value) disables the reweight EXACTLY —
-    # byte-identical to pre-SIM-491. SIM-476 (owner ruling 2026-08-30):
-    # production runs w=0.0 — the draw hard-conditions on the batting side,
-    # delivering the pool's own home/away differential (+0.107 R/g
-    # measured, the MLB size). Soft weights in (0,1) deliver only
-    # (1-w)/(1+w) of it — the 12x400 A/B in the SIM-476 fit plan.
+    # The home-field draw weight. 1.0, the code default and the value of any
+    # unparsable setting, turns the reweight off exactly. Production runs
+    # w=0.0 (the owner's ruling of 2026-08-30): the draw hard-conditions on the
+    # batting side and delivers the pool's own home/away gap, +0.107 runs a
+    # game, the MLB size. A soft weight w in (0, 1) delivers only (1-w)/(1+w)
+    # of it (the 12 x 400 comparison of the home-field fit, SIM-476).
     home_w = read_float("SIM_HOME_OFF_WEIGHT")
     sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
-    # SIM-563: a bundle built since SIM-563 carries the IBB rates; the worker
-    # then never opens DuckDB for them (a rebuild may hold the lock).
+    # A bundle with the reference data carries the intentional-walk (IBB)
+    # rates, so the worker never opens DuckDB for them (a rebuild may hold
+    # the file's lock).
     if getattr(art, "has_reference", False):
         _CACHED_IBB_RATES = art.ibb_rates
-    # SIM-491 part 2 (the SIM-411 rebuild): the park kernel. 0.0 (the
-    # default, and any unparsable value) disables it EXACTLY. When enabled,
-    # load the (venue_id, season) -> regressed run-factor map read-only;
-    # a load failure leaves the map None and the kernel neutral.
+    # The park kernel. 0.0, the code default and the value of any unparsable
+    # setting, turns it off exactly. When on, the sampler takes the
+    # (venue_id, season) -> regressed run-factor map from the bundle, or from
+    # DuckDB (read-only) for a bundle without the reference data. A failed
+    # load leaves the map None and the kernel neutral.
     park_sigma = read_float("SIM_PARK_KERNEL_SIGMA")
     if park_sigma > 0.0:
         sampler.venue_run_factors = (
@@ -291,55 +292,50 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         )
         if sampler.venue_run_factors:
             sampler.park_sigma = park_sigma
-    # SIM-517: the catcher RECEIVING kernel bandwidths — an anisotropic
-    # metric with the framing dims and the blocking dims under their own
-    # sigma (the part-E ladder measured they need different ones). 0.0
-    # (the default, and any unparsable value) removes that group; both
-    # 0.0 disables the kernel EXACTLY.
+    # The draw-conditioning kernels: fatigue (the pitch count and the times
+    # through the order) on the pitch draw, and the drawn pitch's similarity
+    # on the fielding draw. 0.0, the code default, turns each off exactly.
     for env, attr in (
-        # SIM-518: the draw-conditioning kernels — fatigue (pitch count /
-        # times through the order) on the pitch draw, the drawn pitch's
-        # similarity on the batted-ball draw. 0.0 = off EXACTLY; each is a
-        # SIM-476-style fit target (docs/audit/2026-09-04-sim467-518-plan.md §8).
         ("SIM_FATIGUE_PC_SIGMA", "fatigue_pc_sigma"),
         ("SIM_FATIGUE_TTO_SIGMA", "fatigue_tto_sigma"),
         ("SIM_BB_PITCH_SIGMA", "bb_pitch_sigma"),
     ):
         setattr(sampler, attr, read_float(env))
-    # SIM-548: the pitch draw's situation bandwidth (2.0 = the code default).
+    # The pitch draw's situation bandwidth (2.0 = the code default).
     apply_sit_sigma_env(sampler)
-    # SIM-518 (SIM-464's pitch half): the batting-side weight on the PITCH
-    # draw. 1.0 (the default, and any unparsable value) disables it EXACTLY;
-    # 0.0 is a hard match on the side (the owner's fielding-draw ruling).
+    # The batting-side weight on the PITCH draw. 1.0, the code default and the
+    # value of any unparsable setting, turns it off exactly; 0.0 is a hard
+    # match on the side, as the owner ruled for the fielding draw.
     sampler.pitch_home_off_weight = read_float("SIM_PITCH_HOME_OFF_WEIGHT")
-    # SIM-467: the pitch-draw cell index. OFF (the default) keeps the whole-pool
-    # weight assembly byte for byte; ON hard-filters each plate appearance to
-    # its (runners, outs, score band, side) cell with decision #19's widening
-    # ladder below SIM_PITCH_MIN_CELL rows. The default flips on in the
-    # certification commit (docs/audit/2026-09-04-sim467-518-plan.md §5.4).
+    # The pitch-draw cell index. OFF, the code default, weights the whole
+    # pool; ON hard-filters each plate appearance to its (runners, outs, score
+    # band, side) cell, and widens a cell that holds fewer than
+    # SIM_PITCH_MIN_CELL rows.
     sampler.pitch_cell_index = read_bool("SIM_PITCH_CELL_INDEX")
     sampler.pitch_min_cell = read_int("SIM_PITCH_MIN_CELL")
     apply_actor_matrix_env(sampler)
     apply_result_split_env(sampler)
     apply_fielding_env(sampler)
     apply_manager_env(sampler)
-    apply_running_game_env(sampler)  # SIM-554
+    apply_running_game_env(sampler)
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler
 
 
-#: SIM-515: the per-worker cached IBB rate table (sim.ibb_rates is ~48 rows;
-#: loaded once, like the venue-factor map). The sentinel False = not yet
-#: attempted; None = attempted and unavailable.
+#: The per-worker cache of the IBB rate table (``sim.ibb_rates``, about 48
+#: rows). The sampler build fills it from a bundle with the reference data.
+#: False = not yet tried; None = tried and unavailable.
 _CACHED_IBB_RATES: dict[tuple[int, int, bool, bool], float] | None | bool = False
 
 
 def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
-    """SIM-515: load the measured IBB rate per cell from sim.ibb_rates,
-    read-only, cached per worker. Returns None on any failure (no duckdb, a
-    missing file, a pre-0020 DB, an empty table) — no IBB then fires, which is
-    the no-op-safe contract, not a silent formula fallback."""
+    """Return the measured IBB rate per cell, cached per worker.
+
+    The rates come from the bundle when the sampler build cached them, else
+    from ``sim.ibb_rates``, read-only. Returns None on any failure (no duckdb,
+    a missing file, a database before migration 0020, an empty table); then no
+    intentional walk fires. There is no formula to fall back to."""
     global _CACHED_IBB_RATES
     if _CACHED_IBB_RATES is not False:
         return _CACHED_IBB_RATES  # type: ignore[return-value]
@@ -350,8 +346,8 @@ def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
 
         con = open_sim_duckdb()
         if con is None:
-            # SIM-563: not cached. A rebuild holding the lock is temporary, so the
-            # next machine build tries again instead of losing the IBB for good.
+            # Not cached: a rebuild that holds the lock is temporary, so the next
+            # machine build tries again instead of losing the IBB for good.
             return None
         try:
             rows = con.execute(
@@ -368,10 +364,11 @@ def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
 
 
 def _load_venue_run_factors() -> dict[tuple[int, int], float] | None:
-    """SIM-491 part 2 (SIM-411): load the (venue_id, season) -> regressed run
-    park-factor map from the sim DuckDB, read-only. Returns None on any failure
-    (no duckdb, a missing file, an empty table) — the park kernel then stays
-    neutral. Loaded once per worker alongside the cached sampler."""
+    """Load the (venue_id, season) -> regressed run park-factor map from
+    DuckDB, read-only. Returns None on any failure (no duckdb, a missing file,
+    an empty table); the park kernel then stays neutral. The sampler build
+    calls it once per worker, and only for a bundle without the reference
+    data."""
     try:
         from simulation.sim_kwargs import open_sim_duckdb
 
@@ -393,39 +390,41 @@ def _load_venue_run_factors() -> dict[tuple[int, int], float] | None:
 
 
 def reset_caches() -> None:
-    """SIM-402: clear THIS process's cached full-pool sampler.
+    """Clear THIS process's cached full-pool sampler and IBB rates.
 
-    The cache lives at module scope, so it persists for the life of the worker
-    process (the intended behaviour) AND across tests in the same process.  Tests
-    that exercise the full-pool path call this in setup/teardown so one test's
-    cached sampler can't leak into the next; production never needs it (a worker
-    builds its cache once and keeps it).
+    The cache lives at module scope, so it lasts for the life of the worker
+    process (as intended) AND across tests in the same process. A test that
+    runs the full-pool path calls this in setup or teardown, so one test's
+    cached sampler cannot leak into the next. Production never calls it: a
+    worker builds its cache once and keeps it.
     """
     global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR, _CACHED_IBB_RATES
     _CACHED_FULL_POOL_SAMPLER = None
     _CACHED_FULL_POOL_ART_DIR = None
-    _CACHED_IBB_RATES = False  # SIM-515: back to "not yet attempted"
+    _CACHED_IBB_RATES = False  # back to "not yet tried"
 
 
 def _warm_sampler(sampler: Any) -> None:
-    """SIM-402: force the FullPoolSampler's lazy, one-time per-hand precomputes so a
-    pre-warmed worker is FULLY hot.
+    """Run the sampler's lazy one-time precomputes, so a prewarmed worker is
+    FULLY hot.
 
-    ``FullPoolSampler.__init__`` is cheap — the expensive ``O(pool)`` index builds
-    are DEFERRED to first use: the pitch-pool ``_pool_meta(hand)`` (fires on the
-    first ``new_half_inning``) and the batted-ball ``_bb_pool_bat_idx(hand)``
-    (fires on the first ``battedball_new_pa``).  Building the sampler alone would
-    therefore leave both for the worker's FIRST real game — defeating the point of
-    pre-warming.  We trigger both for every hand in the bundle, so the first game
-    runs at the amortized per-game cost.  This only POPULATES caches (no rng /
-    matchup state is touched), so it cannot perturb a later game.  Defensive: a
-    partial bundle / missing attr just leaves that part to warm lazily.
+    ``FullPoolSampler.__init__`` is cheap: it defers the expensive ``O(pool)``
+    index builds to first use. The pitch pool's ``_pool_meta(hand)`` fires on
+    the first ``new_half_inning``, the batted-ball ``_bb_pool_bat_idx(hand)``
+    on the first ``battedball_new_pa``, and the steal pool's
+    ``_steal_meta(target)`` on its first use. A sampler built alone leaves all
+    three for the worker's FIRST real game. This function runs them for every
+    key of each pool map (a batter hand, or a target base for the steal
+    pools), so the first game runs at the usual per-game cost. It only fills
+    caches and touches no rng or matchup state, so it cannot change a later
+    game. A partial bundle or a missing attribute leaves that part to warm
+    lazily.
     """
     art = getattr(sampler, "a", None)
     for pools_attr, method_name in (
         ("pools", "_pool_meta"),
         ("bb_pools", "_bb_pool_bat_idx"),
-        # SIM-474: the steal-opportunity cell index + embedding-row gathers.
+        # The steal pool's cell indexes and embedding-row gathers, per target base.
         ("steal_pools", "_steal_meta"),
     ):
         warm = getattr(sampler, method_name, None)
@@ -439,21 +438,21 @@ def _warm_sampler(sampler: Any) -> None:
 
 
 def warm_worker_cache(pool_dir: str | None = None) -> bool:
-    """SIM-402: populate THIS process's full-pool sampler cache up front.
+    """Fill THIS process's full-pool sampler cache up front.
 
-    Builds the full-pool sampler AND triggers its lazy per-hand precomputes
-    (:func:`_warm_sampler`) into the per-process cache
-    :func:`production_machine_factory` reads, so the FIRST real ``/simulate`` game
-    on this process is a warm cache hit instead of paying the ~per-worker
-    artifact-load + per-hand index-build cost on the request path.  This is the
-    function :meth:`simulation.batch_runner.BatchRunner.prewarm` runs on every
-    warm-pool worker at startup -- the fix for the n>1 cold-fan-out stall, where a
-    fresh pool gives each worker exactly one game so the per-worker cache (which
-    only pays off on the 2nd+ seed) never warms in time.
+    Builds the full-pool sampler and runs its lazy precomputes
+    (:func:`_warm_sampler`) into the per-process cache that
+    :func:`production_machine_factory` reads. The FIRST real ``/simulate`` game
+    on this process is then a warm cache hit: it does not pay the bundle load
+    and the index builds on the request path.
+    :meth:`simulation.batch_runner.BatchRunner.prewarm` runs this on every pool
+    worker at startup. Without it, a fresh pool gives each worker one game of
+    an n>1 request, and the per-worker cache, which pays off only from a
+    worker's second game, never warms in time.
 
     Returns ``True`` when a full-pool sampler is now cached, else ``False`` (a
-    missing/corrupt bundle -> the request path raises loudly at machine build).
-    Never raises: any build failure is swallowed and reported as ``False``.
+    missing or corrupt bundle: the request path then raises at machine build).
+    Never raises: any build failure returns ``False``.
     """
     try:
         spec = GameSpec(sim_kwargs={"_pool_dir": pool_dir} if pool_dir else {})
@@ -467,56 +466,45 @@ def warm_worker_cache(pool_dir: str | None = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# SIM-434 — manager wiring (GATED by SIM_MANAGER; default OFF == unchanged)
+# The manager wiring (gated by SIM_MANAGER; default OFF)
 # ---------------------------------------------------------------------------
 #
-# With SIM_MANAGER off (the unit-test default), the factory wires NO manager onto
-# the StateMachine, so every SIM-323 §3/§5.3 hook early-returns and the simulated
-# game is byte-identical to before.  With SIM_MANAGER on (production), the factory
-# attaches a default manager-tendency profile + a generic per-team bullpen so the
-# starter is actually pulled at a realistic workload (the SIM-429 K/BB-distribution
-# unlock).  Populating REAL per-team bullpen rosters + true reliever similarity
-# profiles is the SIM-427 follow-on; the generic default here is a valid
-# league-flat stand-in until then.
+# With SIM_MANAGER off (the unit-test default), the factory wires NO manager
+# onto the StateMachine, so every manager hook returns at once. With it on
+# (production), the factory attaches the manager marker and stages a
+# placeholder pen per team on the machine.
 
-#: A default manager-tendency profile: a plain dict of the SIM-2.8 manager-
-#: similarity rate names the SIM-323 hooks read by name.  Tuned to league-typical
-#: behaviour (a starter is reliably pulled around the floor/ceiling; modest
-#: small-ball aggression).  A duck-typed dict so no engine import is needed.
-#: SIM-427 (2026-09-13): the machine's manager GATE. ``StateMachine.manager``
-#: is ``None`` (every manager hook a no-op) or this marker (the hooks run). The
-#: six hand-set league-flat rates that lived here are gone: the pull is a draw
-#: from the change pool, the steal weight reads each side's REAL profile and
-#: the league mean off the game state, and the hooks that read the other four
-#: rates are deleted (the SIM-434 pull formula went at the flip, 2026-09-13).
+#: The machine's manager gate. ``StateMachine.manager`` is ``None`` (every
+#: manager hook does nothing) or this marker (the hooks run). The marker holds
+#: no rates: the pitching change is a draw from the change pool, and the steal
+#: weight reads each side's real profile and the league mean off the game state.
 _DEFAULT_MANAGER_PROFILE: dict[str, float] = {}
 
 
 def _manager_enabled() -> bool:
-    """Whether SIM_MANAGER enables the SIM-434 manager wiring (default OFF).
+    """Whether ``SIM_MANAGER`` turns the manager wiring on (default OFF).
 
-    Unset / ``0`` / ``false`` / ``no`` / ``off`` -> disabled.  Centralised so the
-    factory and any test read the gate the same way.
+    Unset, ``0``, ``false``, ``no`` or ``off`` turns it off.
     """
     return read_bool("SIM_MANAGER")
 
 
 def _manager_draw_enabled() -> bool:
-    """SIM-523 part D / SIM-427: whether SIM_MANAGER_DRAW makes the pitching
-    change a draw from the opportunity pool (production ON since the flip of
-    2026-09-13; OFF = no pitching change, the unit lane's byte-identical state)."""
+    """Whether ``SIM_MANAGER_DRAW`` makes the pitching change a draw from the
+    change opportunity pool. Production runs it ON (the real manager and pen,
+    SIM-427); OFF means no pitching change, the unit lane's state."""
     return read_bool("SIM_MANAGER_DRAW")
 
 
 def apply_manager_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-523 part D: the pitching-change draw's bandwidth
-    (``SIM_CHANGE_SIT_SIGMA``, 1.0), the live pitcher's power
-    (``SIM_CHANGE_PITCHER_POWER``, 1.0; 0 = off) and the cell floor
-    (``SIM_CHANGE_MIN_CELL``, 20)."""
+    """Read the pitching-change draw's bandwidth (``SIM_CHANGE_SIT_SIGMA``,
+    1.0), the live pitcher's power (``SIM_CHANGE_PITCHER_POWER``, 1.0; 0 =
+    off), the cell floor (``SIM_CHANGE_MIN_CELL``, 20) and the reliever draw's
+    weights."""
     sampler.change_sit_sigma = read_float("SIM_CHANGE_SIT_SIGMA", env)
     sampler.change_pitcher_power = read_float("SIM_CHANGE_PITCHER_POWER", env)
     sampler.change_min_cell = read_int("SIM_CHANGE_MIN_CELL", env)
-    # SIM-427: the reliever draw's weights (every one OFF by default).
+    # The reliever draw's weights (every one off at its code default).
     for key, attr in (
         ("SIM_RELIEF_ROLE_SIGMA", "relief_role_sigma"),
         ("SIM_RELIEF_PITCHER_POWER", "relief_pitcher_power"),
@@ -529,20 +517,20 @@ def apply_manager_env(sampler: Any, env: Mapping[str, str] | None = None) -> Non
 
 
 def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:
-    """Build a generic per-team bullpen (SIM-434), keyed by the ``Team`` int value.
+    """Build a placeholder pen per team, keyed by the ``Team`` int value.
 
-    Until SIM-427 ingests real per-(team, season) bullpen rosters, we synthesise a
-    small generic pen per team from a deterministic id offset so a pulled reliever
-    is a distinct (league-flat) arm rather than re-using the starter.  Keyed by the
-    int Team value (0 == AWAY, 1 == HOME) so it survives pickling through the
-    GameSpec without importing the Team enum here.  Six arms per side (closer
-    first), enough to cover a full game's worth of changes.
+    Each side gets six synthetic arms from a deterministic id offset, enough
+    for a full game of changes, so a pulled starter gives way to a distinct
+    arm. The keys are the int Team values (0 == AWAY, 1 == HOME), so the map
+    survives pickling through the GameSpec without importing the Team enum
+    here. ``simulate_game`` uses this pen only when the request passes no pen
+    of its own.
     """
     away_starter = int(_kwarg(spec, "away_pitcher_id", 0) or 0)
     home_starter = int(_kwarg(spec, "home_pitcher_id", 0) or 0)
-    # Synthetic, deterministic, collision-avoiding ids (negative so they never
-    # alias a real player id in the pool — a pulled arm degrades to a league-flat
-    # draw, which is valid per the SIM-427 note).
+    # Synthetic, deterministic ids. They are negative, so they never match a
+    # real player id in the pool, and a placeholder arm draws as a
+    # league-average arm.
     base = _PLACEHOLDER_ID_BASE
     away_pen = [-(base + away_starter * 10 + i) for i in range(1, 7)]
     home_pen = [-(base + home_starter * 10 + i) for i in range(1, 7)]
@@ -557,7 +545,7 @@ _PLACEHOLDER_ID_BASE = 9_000_000
 def placeholder_reliever_number(player_id: int) -> int | None:
     """The 1-6 number of a placeholder arm, read from its id; None for a real id.
 
-    SIM-561: the game page names a placeholder arm "Generic reliever N".
+    The game page names a placeholder arm "Generic reliever N".
     """
     offset = -int(player_id) - _PLACEHOLDER_ID_BASE
     if offset < 1:  # a real id, or a negative id below the placeholder range
@@ -574,8 +562,9 @@ _BULLPEN_BUILDER: Callable[[GameSpec], dict[int, list[int]]] = _default_bullpen_
 def set_bullpen_builder(
     builder: Callable[[GameSpec], dict[int, list[int]]] | None,
 ) -> Callable[[GameSpec], dict[int, list[int]]]:
-    """Install ``builder`` as the active bullpen builder; return the previous one
-    (SIM-434).  ``None`` restores :func:`_default_bullpen_for_spec`."""
+    """Install ``builder`` as the active bullpen builder; return the previous one.
+
+    ``None`` restores :func:`_default_bullpen_for_spec`."""
     global _BULLPEN_BUILDER
     prev = _BULLPEN_BUILDER
     _BULLPEN_BUILDER = builder if builder is not None else _default_bullpen_for_spec
@@ -583,59 +572,54 @@ def set_bullpen_builder(
 
 
 def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine:
-    """Build the REAL :class:`StateMachine` for the worker: the full-pool sampler
-    over the engine-artifact bundle (cached per process), the SIM-434 manager
-    wiring when ``SIM_MANAGER`` is on, and the SIM-515 IBB rate table.
+    """Build the REAL :class:`StateMachine` for a worker.
 
-    Shares the ``factory(seed, spec) -> StateMachine`` contract with
-    :func:`simulation.batch_runner.rng_driven_machine_factory`, so it drops into
-    the same :class:`GameSpec.machine_factory` seam.  Referenced by dotted path
-    ``"simulation.production_factory:production_machine_factory"``.
+    The machine carries the full-pool sampler over the engine-artifact bundle
+    (cached per process), the manager wiring when ``SIM_MANAGER`` is on, and
+    the IBB rate table. It shares the ``factory(seed, spec) -> StateMachine``
+    contract with :func:`simulation.batch_runner.rng_driven_machine_factory`,
+    so it drops into the same :class:`GameSpec.machine_factory` seam. Its
+    dotted path is ``"simulation.production_factory:production_machine_factory"``.
 
-    ``simulate_game`` re-seeds both the machine's loop rng AND the sampler's rng
-    from the per-game ``seed`` again on its way through, so determinism holds
-    end-to-end regardless of how the factory seeded them here.
+    ``simulate_game`` re-seeds the machine's loop rng AND the sampler's rng
+    from the per-game ``seed``, so determinism holds end to end, whatever seed
+    the factory used here.
     """
     full_pool = _build_full_pool_sampler(spec, seed)
-    # SIM-535: the point-in-time cutoff. ``build_sim_kwargs`` resolves it to the
-    # day before the game being simulated and passes it as a factory-only key.
-    # Absent (a live request, a test, any caller that does not set it) the
-    # sampler draws from the whole pool exactly as before.
+    # The point-in-time cutoff. ``build_sim_kwargs`` resolves it to the day
+    # before the game and passes it as a factory-only key. Without it (a live
+    # request, a test, any caller that does not set it), the sampler draws
+    # from the whole pool.
     #
-    # SIM-538 fix: ``full_pool`` is a per-worker singleton CACHED across every
-    # game this worker ever builds (see ``_build_full_pool_sampler`` above) —
-    # so this call must always run, passing ``None`` when this request carries
-    # no cutoff, rather than skipping the call. Skipping it left a PRIOR
-    # game's cutoff in place on the next game that carried no cutoff of its
-    # own — a cross-game leak (an adversarial review of SIM-538 confirmed a
-    # backtest game whose own cutoff failed to resolve could silently inherit
-    # an unrelated, later-dated game's cutoff, or no cutoff at all, from
-    # whatever this same worker scored right before it). ``set_asof`` already
-    # accepts ``None`` and correctly clears the cutoff, so always calling it
-    # is the whole fix.
+    # ``full_pool`` is a per-worker singleton, cached across every game this
+    # worker builds (see ``_build_full_pool_sampler``). So this call always
+    # runs, and passes ``None`` when the request carries no cutoff. Skipping
+    # it would leave the previous game's cutoff in place: a backtest game
+    # whose own cutoff failed to resolve would inherit an unrelated game's
+    # cutoff (found in review of the backtest cutoff, SIM-538). ``set_asof``
+    # accepts ``None`` and clears the cutoff.
     if full_pool is not None:
         asof = (spec.sim_kwargs or {}).get("_asof_ymd")
         full_pool.set_asof(int(asof) if asof is not None else None)
-    # SIM-434: GATED manager wiring.  With SIM_MANAGER off ``manager`` stays None
-    # -> the StateMachine makes every §3/§5.3 hook a no-op.  With it on, attach a
-    # default tendency profile and stage a generic per-team bullpen on the
-    # machine; ``simulate_game`` seeds that bullpen onto the GameState (its own
-    # ``bullpen=`` param takes priority).
+    # The gated manager wiring. With SIM_MANAGER off, ``manager`` stays None and
+    # every manager hook does nothing. With it on, the factory attaches the
+    # manager marker and stages the placeholder pen on the machine;
+    # ``simulate_game`` seeds that pen onto the GameState unless its own
+    # ``bullpen=`` is set.
     manager = _DEFAULT_MANAGER_PROFILE if _manager_enabled() else None
     machine = StateMachine(
         full_pool,
         rng=np.random.default_rng(seed),
         manager=manager,
-        # SIM-515: the measured IBB rate table. None with no manager (the hook
-        # is a no-op then anyway) and on a pre-0020 DB (no IBB fires).
+        # The measured IBB rate table. None with no manager (the hook does
+        # nothing then) and when the table does not load (no IBB fires).
         ibb_rates=_load_ibb_rates() if manager is not None else None,
     )
     if manager is not None:
-        # Stage the generic bullpen on the machine so ``simulate_game`` can seed it
-        # onto the GameState (it falls back to ``machine.bullpen`` when no explicit
-        # ``bullpen=`` is passed — the production path through ``_run_one``).
+        # Stage the placeholder pen on the machine. ``simulate_game`` falls back
+        # to ``machine.bullpen`` when no ``bullpen=`` is passed.
         machine.bullpen = _BULLPEN_BUILDER(spec)
-        # SIM-523 part D: the pitching change as a draw (SIM_MANAGER_DRAW).
+        # The pitching change as a draw (SIM_MANAGER_DRAW).
         machine.manager_draw = _manager_draw_enabled()
     return machine
 

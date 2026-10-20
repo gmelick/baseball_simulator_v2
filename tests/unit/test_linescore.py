@@ -1,11 +1,7 @@
-"""
-test_linescore.py
-========================
-Unit tests for SIM-362 -- the per-inning linescore + team R/H/E derivation in
-simulation.linescore (Phase 5, Sprint 4).
+"""Tests of the per-inning linescore and the team R/H/E in simulation.linescore.
 
-These build small synthetic ``PlayResult`` streams from plainly-constructed
-``GameState`` next-states (no loop run, no DB, no FAISS, no API) and assert:
+The tests build small synthetic ``PlayResult`` streams from plain ``GameState``
+next-states (no loop run, no database, no API) and assert:
   * the per-inning runs grid is correct across several innings (TOP -> away
     column, BOTTOM -> home column);
   * team hits are counted from the hit events (1B/2B/3B/HR), batting side;
@@ -154,8 +150,8 @@ def test_hits_tolerate_canonical_event_naming():
 
 
 def test_reach_on_error_is_not_a_hit_even_if_canonical_maps_to_single():
-    # SIM-312 maps a reach-on-error to the run-value of a "single", but it must
-    # NOT be counted as a base hit -- and it IS an error.
+    # The run resolver gives a reach-on-error the run value of a "single", but
+    # it must NOT count as a base hit -- and it IS an error.
     plays = [
         _play(1, Half.TOP, event="field_error", canonical_event="single", is_error=True),
     ]

@@ -1,25 +1,22 @@
 """
 test_simulate_game_requires_lineup.py
 ============================================
-``simulate_game`` refuses a game with no batting order BEFORE the first pitch
-(SIM-552).
+``simulate_game`` refuses a game with no batting order BEFORE the first pitch.
 
 Why this guard exists.  The loop rotates the batter through each side's
 lineup.  It seats a batter who reaches base by his id.  With no lineup the
 batter id is None.  The in-play resolver then substitutes ``-1``, and the
-first hit trips the SIM-500 base guard deep inside the resolver.  That
-message does not name the cause ("Bases.1B has a negative runner id: -1").
-The weekly performance lane failed on exactly that: its batch bench ran the
-no-DB factory with no lineup.  Since the per-tile fallback was deleted
-(SIM-486), that factory builds the production machine.  The driver now names
-the requirement up front.
+first hit trips the base guard deep inside the resolver.  That message does
+not name the cause ("Bases.1B has a negative runner id: -1").  The no-DB
+batch factory builds the production machine, so a bench that runs it with no
+lineup meets that message.  The driver names the requirement up front.
 
 Coverage:
   * no lineup on either side -> ValueError that names the batting order;
   * one side only (away or home) -> the same ValueError;
   * an ``initial_state`` with no lineup -> the same rule on that path;
   * the no-DB batch factory with no lineup -> the clear error, never the
-    SIM-500 negative-runner message;
+    base guard's negative-runner message;
   * both lineups -> the game plays (the control).
 """
 
@@ -30,7 +27,8 @@ import pytest
 
 from simulation.batch_runner import GameSpec, _run_one, derive_seed
 from simulation.game_state import GameState
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.loop.boxscore import GameSimResult
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024
@@ -42,7 +40,7 @@ _NO_DB_FACTORY = "simulation.batch_runner:rng_driven_machine_factory"
 
 
 def _machine(seed: int = 0) -> StateMachine:
-    """The production machine over the in-memory league bundle (SIM-486)."""
+    """The production machine over the in-memory league bundle."""
     return StateMachine(
         synthetic_sampler(league_artifacts(), seed), rng=np.random.default_rng(seed)
     )
@@ -88,9 +86,8 @@ class TestRefusesAGameWithNoBattingOrder:
             simulate_game(_machine(3), initial_state=state, seed=3)
 
     def test_the_no_db_batch_factory_with_no_lineup_fails_loudly(self):
-        # The shape the weekly perf bench used to run: the no-DB factory and a
-        # spec with no lineup.  The error must name the batting order, never
-        # the SIM-500 negative-runner message the lane used to fail on.
+        # The no-DB factory and a spec with no lineup.  The error must name the
+        # batting order, never the base guard's negative-runner message.
         spec = GameSpec(machine_factory=_NO_DB_FACTORY, sim_kwargs={"max_innings": 9})
         with pytest.raises(ValueError) as info:
             _run_one(spec, derive_seed(335, 0))

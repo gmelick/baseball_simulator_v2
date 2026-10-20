@@ -4,25 +4,31 @@ The user picks a plate appearance of the real game and makes real managerial
 moves before it. :func:`apply_changes` writes them onto a start state (see
 ``simulation.start_state``) and returns a new one; the input is not changed.
 
-The moves:
+The moves, by their key in ``changes``:
 
-* **pinch-hit** ``{"side", "slot", "player_id"}``: the batting side's lineup slot
-  (0-8) gets a bench hitter; he takes the replaced man's field position too.
-* **reliever** ``{"side", "player_id"}``: the fielding side brings in an arm from
-  its bullpen; he takes the P of the defense, starts at 0 pitches, and leaves
-  the pen. In a lineup without a DH he takes the pitcher's batting slot.
-* **pinch-run** ``{"base", "player_id"}``: a bench player replaces the runner on
-  ``first``, ``second`` or ``third`` and takes that runner's lineup slot and field
+* ``pinch_hit``, a list of ``{"side", "slot", "player_id"}``: a bench hitter
+  takes the batting side's lineup slot (0-8) and the replaced man's field
   position.
-* **defense** ``{"side", "position", "player_id"}``: a player already in the
-  game moves to the position (the man there takes his old one), or a bench
-  player replaces the man at it (and his lineup slot). ``position`` ``P`` is a
-  reliever.
+* ``pitcher``, one ``{"side", "player_id"}``: the fielding side brings in an arm
+  from its bullpen. He takes P in the defense, starts at 0 pitches and leaves
+  the pen. In a lineup without a designated hitter he also takes the pitcher's
+  batting slot.
+* ``pinch_run``, a list of ``{"base", "player_id"}``: a bench player replaces the
+  runner on ``first``, ``second`` or ``third`` and takes that runner's lineup
+  slot and field position.
+* ``defense``, a list of ``{"side", "position", "player_id"}``: a player already
+  in the game moves to the position (the man there takes his old one), or a
+  bench player replaces the man at it (and takes his lineup slot). Position
+  ``P`` brings in a reliever.
 
-Every move is checked against the start state's ``eligible`` lists (bench
-hitters, unused arms) and its ``used`` lists: a player who left the game cannot
-come back, and a bench player enters once. A bad move raises
-:class:`IllegalChange` with the reason.
+A move with no ``side`` takes the side at bat (``pinch_hit``) or the side in the
+field (``pitcher``, ``defense``). Before the first pitch either side may change
+its lineup or its starter.
+
+Every entering player must be on the start state's ``eligible`` lists (bench
+hitters, unused arms). The feed leaves off those lists every player who has left
+the game, so a player who left cannot come back, and a bench player enters
+once. A bad move raises :class:`IllegalChange` with the reason.
 """
 
 from __future__ import annotations
@@ -153,7 +159,7 @@ def apply_changes(start: Mapping[str, Any], changes: Mapping[str, Any]) -> dict[
 
 
 def describe_changes(changes: Mapping[str, Any], names: Mapping[str, str]) -> list[str]:
-    """One plain line per move ("Pinch-hit: J. McNeil for slot 7")."""
+    """One plain line per move ("Pinch-hit: J. McNeil in slot 7")."""
 
     def n(pid: Any) -> str:
         return str(names.get(str(pid), pid))

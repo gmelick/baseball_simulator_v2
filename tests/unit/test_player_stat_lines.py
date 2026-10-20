@@ -1,23 +1,17 @@
-"""
-test_player_stat_lines.py
-======================
-Unit tests for SIM-328 -- the **per-player sim-average accumulators** built into
-the plate-appearance loop in ``simulation/sim_loop.py`` (Sprint 3 of the Phase-4
-loop build).
+"""Tests of the per-player stat lines the state machine keeps.
 
-As a game simulates, each completed terminal plate appearance is attributed to
-the current batter (offense) and the current pitcher (defense), accumulating a
-per-player stat line on a per-game :class:`BoxScore`:
+As a game simulates, the machine credits each completed plate appearance to
+the current batter (offense) and the current pitcher (defense), on a
+per-player stat line of a per-game :class:`BoxScore`:
 
   * Batters:  AB / H / HR / RBI.
   * Pitchers: IP (outs / thirds) / K / BB / ER.
 
-These tests run with NO live DuckDB/FAISS: the machine is driven with explicit
-``pitch_outcome`` strings (count-machine-only mode) and an injected
-:class:`PlayResolver` supplies the batted-ball resolution, mirroring the
-SIM-316/319/320 "inject the signal" pattern.
+The tests run with NO database: explicit ``pitch_outcome`` strings drive the
+count machine, and a fixed-play bundle (one event in every base-out cell)
+supplies each batted ball through the production in-play path.
 
-Coverage (the SIM-328 acceptance criteria):
+What the tests cover:
   * a walk does NOT count as an AB (PA - BB) but is charged to the pitcher as BB;
   * a HR credits the batter an AB + H + HR and the RBI(s) it drives in;
   * a strikeout is an AB for the batter + a K + an out (IP) for the pitcher;
@@ -34,13 +28,8 @@ import numpy as np
 import pytest
 
 from simulation.game_state import Bases, GameState, Half, Team
-from simulation.sim_loop import (
-    BoxScore,
-    GameSimResult,
-    PlayerStatLine,
-    StateMachine,
-    simulate_game,
-)
+from simulation.loop.boxscore import BoxScore, GameSimResult, PlayerStatLine
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import fixed_play_artifacts, league_artifacts, synthetic_sampler
 
 SEASON = 2024
@@ -55,8 +44,8 @@ HOME_LINEUP = list(range(201, 210))  # 9 home batters
 
 
 def _machine(play: str | None = None) -> StateMachine:
-    """A machine whose every batted ball is ``play`` (SIM-486: the production
-    in-play path over a fixed-play bundle), or count-machine-only when None."""
+    """A machine whose every batted ball is ``play`` (the production in-play
+    path over a fixed-play bundle), or the count machine alone when None."""
     fp = synthetic_sampler(fixed_play_artifacts(play), 0) if play else None
     return StateMachine(fp, rng=np.random.default_rng(0))
 
@@ -75,7 +64,7 @@ def _fresh_state(**kw) -> GameState:
 
 
 def _drive_walk(sm: StateMachine, state: GameState) -> None:
-    """Drive a 4-pitch walk through the count-machine-only path."""
+    """Drive a 4-pitch walk through the count machine alone."""
     for _ in range(4):
         sm.step_pitch(state, pitch_outcome="ball")
 
@@ -357,7 +346,7 @@ class TestBoxscoreExposedOnResult:
 
 
 # ===========================================================================
-# Additive contract: the boxscore field does not break the SIM-320 return
+# The boxscore field is optional on GameSimResult
 # ===========================================================================
 
 

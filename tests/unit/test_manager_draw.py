@@ -1,12 +1,13 @@
 """
 tests/unit/test_manager_draw.py
 ======================================
-SIM-523 part D — the manager decisions at the START of a plate appearance,
-the pitching change as a DRAW from an opportunity pool (plan:
-docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part D; the loop's
-step 1).
+The manager decisions at the START of a plate appearance: the pitching change
+as a DRAW from an opportunity pool (the play-picker redesign plan:
+docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md).
 
-What these tests pin:
+The builder runs on an in-memory DuckDB into ``tmp_path``; the sampler and the
+loop run on small in-memory bundles, so no test needs a database. What these
+tests pin:
 
   * the builder turns the situation table + the pitch pool into one row per
     plate-appearance boundary with the right pitcher, pitch count, batters
@@ -22,8 +23,7 @@ What these tests pin:
     half's plate-appearance count and the starters are tracked;
   * the switch: with the draw on, the pull follows the drawn row (no floor, no
     ceiling) and without a pool no change is drawn; with the draw off nobody is
-    ever changed (the SIM-434 formula was deleted at the SIM-427 flip,
-    2026-09-13); with the manager off nothing runs;
+    ever changed (there is no pull formula); with the manager off nothing runs;
   * the factory env reads.
 """
 
@@ -157,7 +157,6 @@ class TestTheBuilder:
         # The situation columns of plate appearance 14: 100 had thrown 7 PAs x 3
         # = 21 pitches and faced 7 batters; a runner on first, one out, home
         # (the fielding side in the top) up 2-0 -> +2.
-        order = np.argsort(cp.pitcher_id * 0 + np.arange(cp.n))  # file order = at-bat order
         sit14 = cp.sit[
             [i for i in range(cp.n) if cp.incoming_id[i] == 101 and cp.changed[i] == 1][0]
         ]
@@ -169,9 +168,8 @@ class TestTheBuilder:
         assert manifest["rates"]["changed"] == pytest.approx(1 / 16)
         assert manifest["rates"]["changed_new_half"] == 0.0
         assert manifest["rates"]["changed_reliever"] == 0.0
-        del order
-        # SIM-535 (2026-09-13): every row carries its game date, so a backtest's
-        # point-in-time cutoff applies to this draw too.
+        # Every row carries its game date, so a backtest's point-in-time
+        # cutoff applies to this draw too.
         assert manifest["game_ymd"] is True
         assert cp.game_ymd is not None and set(cp.game_ymd.tolist()) == {20240601}
 
@@ -222,7 +220,7 @@ class TestTheBuilder:
         _minimal_pitch_pool(tmp_path)
         assert EngineArtifacts.load(str(tmp_path)).change_pool is None
 
-    # --- SIM-427: the fielding manager, the incoming arm's rest, the roles ---
+    # --- the fielding manager, the incoming arm's rest, the roles ---
     def test_without_a_game_context_every_row_is_unknown(self, tmp_path):
         con = duckdb.connect(":memory:")
         try:
@@ -437,22 +435,6 @@ class TestTheDraw:
         assert last is not None and last["changed"] is True and last["incoming_id"] == 101
         assert last["pitcher_id"] == 100
 
-    def test_a_manager_weight_multiplies_the_rows(self):
-        rows = [(95, 22, 7, 1, 1, 0, 1, 0, 1, 100)] * 6 + [(95, 22, 7, 1, 1, 0, 1, 0, 0, 100)] * 6
-        fp = _sampler(_change_pool(rows))
-        w = np.array([1.0] * 6 + [0.0] * 6, dtype=np.float32)
-        base = {
-            "is_starter": True,
-            "new_half": False,
-            "pitch_count": 95,
-            "batters_faced": 22,
-            "inning": 7,
-            "outs": 1,
-            "runners_state": 1,
-            "score_diff": 0,
-        }
-        assert all(fp.pitching_change_draw("100:2024", manager_weight=w, **base) for _ in range(20))
-
 
 # ===========================================================================
 # The order and the switch
@@ -573,7 +555,7 @@ class TestTheSwitch:
         return m
 
     def test_the_draw_decides_without_floor_or_ceiling(self):
-        # 30 pitches — far below the formula's 75-pitch floor — but the drawn
+        # 30 pitches — a count no pitch-count floor would pull — but the drawn
         # row says "changed": the pitcher leaves.
         fp = _DrawSampler([True])
         m = self._machine(fp)
@@ -587,8 +569,8 @@ class TestTheSwitch:
             call["new_half"] is True and call["pitch_count"] == 30 and call["batters_faced"] == 20
         )
         assert call["inning"] == 6 and call["score_diff"] == 2  # the fielding (home) side's view
-        # 120 pitches — past the formula's forced ceiling — but the drawn row
-        # says "no change": he stays.
+        # 120 pitches — past any forced ceiling — but the drawn row says "no
+        # change": he stays.
         fp2 = _DrawSampler([False])
         m2 = self._machine(fp2)
         s2 = _state_for_pull(120)
@@ -607,9 +589,8 @@ class TestTheSwitch:
         assert fp.calls[0]["batters_faced"] == 3
 
     def test_no_pool_draws_no_change(self):
-        # SIM-427 (2026-09-13): with the draw ON, a bundle without a change
-        # pool (the draw answers None) changes nothing — 120 pitches or not.
-        # The formula's forced ceiling belongs to the OFF arm alone.
+        # With the draw ON, a bundle without a change pool (the draw answers
+        # None) changes nothing — 120 pitches or not.
         fp = _DrawSampler([None])
         m = self._machine(fp)
         s = _state_for_pull(120)
@@ -617,9 +598,8 @@ class TestTheSwitch:
         assert s.pitcher_id == 100 and not m.manager_decisions
 
     def test_the_switch_off_changes_nobody_since_the_flip(self):
-        # The SIM-434 formula and its forced ceiling were deleted at the SIM-427
-        # flip (2026-09-13): with the draw switch off, 120 pitches or not, the
-        # starter stays and the sampler is never asked.
+        # There is no pull formula: with the draw switch off, 120 pitches or
+        # not, the starter stays and the sampler is never asked.
         fp = _DrawSampler([True])
         m = self._machine(fp, draw=False)
         s = _state_for_pull(120)
@@ -668,7 +648,7 @@ class TestTheFactoryEnv:
 
     def test_the_unit_suite_pins_the_draw_off(self):
         # The unit lane's byte-identical state: no manager, no draw (production
-        # runs the draw since the SIM-427 flip; the compose file carries it).
+        # runs the draw; the compose file sets it).
         assert os.environ.get("SIM_MANAGER_DRAW") == "0"
 
 

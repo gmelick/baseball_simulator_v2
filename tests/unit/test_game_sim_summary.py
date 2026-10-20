@@ -1,8 +1,8 @@
 """
 test_game_sim_summary.py
 ======================
-Unit tests for SIM-327 -- the **multi-iteration aggregation contract**
-:class:`simulation.results.GameSimSummary` (Phase 4, Sprint 3).
+The **multi-iteration aggregation contract**
+:class:`simulation.results.GameSimSummary`.
 
 These tests build N synthetic per-game :class:`GameSimResult`s (no loop run, no
 DB/FAISS) and assert the aggregation contract:
@@ -26,11 +26,12 @@ import numpy as np
 import pytest
 
 from simulation.game_state import GameState
-from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
 
-# GameSimResult is also defined in sim_loop; confirm results.py re-exports the
-# SAME object so a consumer importing from either place gets one type.
-from simulation.sim_loop import GameSimResult as _LoopGameSimResult
+# GameSimResult is defined in simulation/loop/boxscore.py; confirm results.py
+# re-exports the SAME object so a consumer importing from either place gets one
+# type.
+from simulation.loop.boxscore import GameSimResult as _LoopGameSimResult
+from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
 
 
 def _state() -> GameState:

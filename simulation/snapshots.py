@@ -1,43 +1,39 @@
-"""
-snapshots.py
-============
-SIM-331 -- field/baserunner state + pitch-level play-by-play snapshot contracts
-(Phase 4, Sprint 3).
+"""The data shapes of the field graphic, the play-by-play and the override.
 
-The Phase-6 frontend and the Phase-5 API need typed data shapes for the visual +
-replay surface the simulator drives.  This module owns those contracts and the
-pure builders that derive them from existing loop state -- a SPEC/dataclass
-deliverable, NOT UI and NOT live API endpoints.
+The API and the frontend need typed shapes for the replay surface the
+simulator drives. This module owns those shapes and the pure builders that
+derive them from the loop's state. It holds no UI and serves no route itself.
 
-Four contracts map 1:1 onto the UX-Designer (Agent 7) deliverables and the
-Backend (Agent 5) endpoint list:
+Four shapes, one per surface:
 
-  * FieldSnapshot      -- the BaseballFieldGraphic state (9 defensive positions +
-                          batter + baserunners + count/outs/inning/half/score).
-                          Built via FieldSnapshot.from_game_state(state).
+  * FieldSnapshot      -- the state of the field graphic (the 9 defensive
+                          positions, the batter, the runners, and the count,
+                          outs, inning, half and score). Built by
+                          FieldSnapshot.from_game_state(state).
   * PlayByPlayEntry +  -- GET /api/games/{game_pk}/plays: one entry per pitch
-    PlayByPlay            (resolved PA event on the terminal pitch).  Built via
-                          PlayByPlay.from_play_results(results).
+    PlayByPlay            (the plate appearance's event on its last pitch).
+                          Built by PlayByPlay.from_play_results(results).
   * StateAtPitch       -- GET /api/games/{game_pk}/state/{at_bat}/{pitch}: a
-                          point-in-time FieldSnapshot tagged with at_bat/pitch.
+                          FieldSnapshot tagged with its at-bat and pitch.
   * OverrideDelta      -- POST .../simulate/with_override: a baseline-vs-override
-                          comparison.  Built via OverrideDelta.from_summaries(...).
+                          comparison. Built by OverrideDelta.from_summaries(...).
 
-DESIGN
-------
-  * Additive + pure.  Every builder is a classmethod/staticmethod reading
-    existing GameState / PlayResult / GameSimSummary objects.  No DB, no FAISS,
-    no live API, no rng, no mutation.  sim_loop.py is NOT touched (import only).
-  * Player labels optional + injectable.  The loop carries integer ids; the name
-    lookup is a Phase-5 join.  Builders accept labels: Mapping[int, str]; with no
-    map the label falls back to "#<id>" so contracts render standalone in tests.
-  * One entry per pitch, terminal event on the last pitch.  The PA's resolved
-    event lives on the terminal pitch (pa_terminal / is_pa_end); entries group
-    into PAs by an at_bat index so the scroll collapses a PA / expands to pitches.
-  * SIM-554: no entry for a result with no pitch thrown.  A pickoff before the
-    pitch that makes the third out returns a result whose ``pitch_outcome`` is
-    ``NO_PITCH``.  The play-by-play skips it; :func:`thrown_pitches` gives the
-    results that DO hold a pitch, one per entry, in order.
+THE DESIGN
+----------
+  * Pure. Every builder is a classmethod or staticmethod that reads existing
+    GameState / PlayResult / GameSimSummary objects: no database, no live API,
+    no random draw, no mutation.
+  * Player labels are optional. The loop carries integer ids. A builder takes
+    labels: Mapping[int, str]; with no map, the label is "#<id>".
+  * One entry per pitch, the event on the last pitch. The plate appearance's
+    event lives on its terminal pitch (pa_terminal / is_pa_end). An at_bat
+    index groups the entries, so the scroll can collapse or expand a plate
+    appearance.
+  * No entry for a result with no pitch thrown. A pickoff before the pitch
+    that makes the third out returns a result whose ``pitch_outcome`` is
+    ``NO_PITCH`` (the running game on the pitch, SIM-554). The play-by-play
+    skips it; :func:`thrown_pitches` gives the results that DO hold a pitch,
+    one per entry, in order.
 """
 
 from __future__ import annotations
@@ -52,8 +48,8 @@ from simulation.game_state import NO_PITCH, GameState, Half, PlayResult
 # Vocabulary
 # ---------------------------------------------------------------------------
 
-#: The 9 defensive positions in canonical scorebook order (1=P ... 9=RF) -- the
-#: order the BaseballFieldGraphic SVG renders.
+#: The 9 defensive positions in scorebook order (1=P ... 9=RF): the order the
+#: field graphic (``BaseballFieldGraphic``) renders.
 DEFENSE_POSITIONS: tuple[str, ...] = (
     "P",
     "C",
@@ -72,8 +68,8 @@ POSITION_NUMBER: dict[str, int] = {p: i + 1 for i, p in enumerate(DEFENSE_POSITI
 BASE_LABELS: tuple[str, ...] = ("1B", "2B", "3B")
 
 #: The metric attribute names OverrideDelta compares by default, in display
-#: order.  Module-level (NOT a class attr) so it coexists with the slots=True
-#: dataclass without becoming a slot descriptor.
+#: order. Module-level, NOT a class attribute, so the slots=True dataclass does
+#: not turn it into a slot descriptor.
 OVERRIDE_METRIC_FIELDS: tuple[str, ...] = (
     "home_win_pct",
     "away_win_pct",
@@ -113,13 +109,14 @@ class PlayerRef:
 
 
 # ---------------------------------------------------------------------------
-# FieldSnapshot -- the BaseballFieldGraphic state
+# FieldSnapshot -- the state of the field graphic
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class FieldSnapshot:
-    """The BaseballFieldGraphic state: defense + batter + baserunners + chrome."""
+    """The state of the field graphic: the defense, the batter, the runners,
+    and the count, outs, inning, half and score."""
 
     #: Keyed by DEFENSE_POSITIONS ("P", "C", "1B", ... "RF"); None == unassigned.
     positions: dict[str, PlayerRef | None]
@@ -135,7 +132,8 @@ class FieldSnapshot:
     half: str  # "top" / "bottom"
     home_score: int
     away_score: int
-    #: Base-occupancy bitmask (RE24 / run_resolution encoding).
+    #: The base-occupancy bitmask (the encoding of ``Bases.runners_state`` and
+    #: ``run_resolution``).
     runners_state: int = 0
 
     @property
@@ -158,9 +156,10 @@ class FieldSnapshot:
     ) -> FieldSnapshot:
         """Build a FieldSnapshot from a live GameState.
 
-        labels resolves ids to display names.  defense_positions is an optional
-        {position: player_id} map for the fielding side; when omitted the 9 slots
-        are present but empty (the loop does not yet track per-position fielders).
+        labels resolves ids to display names. defense_positions is an optional
+        {position: player_id} map for the fielding side. Without it the 9 slots
+        are present but empty: the builder does not read the state's defense
+        map.
         """
         positions: dict[str, PlayerRef | None] = {}
         for pos in DEFENSE_POSITIONS:
@@ -197,7 +196,7 @@ class FieldSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PitchContext:
-    """The game state just before one pitch (SIM-561).
+    """The game state just before one pitch.
 
     The play recorder captures one per step, from the state it hands the
     machine.  The batter, inning and outs are right at that moment: the loop
@@ -226,16 +225,16 @@ class PitchContext:
 class PlayByPlayEntry:
     """One pitch in the play-by-play scroll (GET .../plays), pitch-level.
 
-    at_bat groups pitches into a PA; pitch is the 1-based pitch number within the
-    PA; sequence is the global 0-based pitch index across the game.  The PA's
-    resolved event is carried on the terminal pitch (is_pa_end).
+    at_bat groups the pitches of one plate appearance (PA); pitch is the 1-based
+    pitch number within the PA; sequence is the 0-based pitch index across the
+    game. The terminal pitch (is_pa_end) carries the PA's event.
     """
 
-    sequence: int  # global 0-based pitch index
+    sequence: int  # 0-based pitch index across the game
     at_bat: int  # 0-based plate-appearance index
     pitch: int  # 1-based pitch number WITHIN the PA
 
-    pitch_outcome: str  # ball / called_strike / swinging_strike / foul / in_play
+    pitch_outcome: str  # ball / called_strike / swinging_strike / foul / in_play / hit_by_pitch
     is_contact: bool
     is_pa_end: bool
 
@@ -251,9 +250,9 @@ class PlayByPlayEntry:
     runs: float = 0.0
     canonical_event: str | None = None
 
-    # SIM-561: who, when and the score. The inning, half, outs and batter are
-    # the state BEFORE the pitch; the pitcher is the arm that threw it; the
-    # score is AFTER it. None when the stream was recorded without a context.
+    # Who, when and the score. The inning, half, outs and batter are the state
+    # BEFORE the pitch; the pitcher is the arm that threw it; the score is
+    # AFTER it. None when the stream was recorded without a context.
     inning: int | None = None
     half: str | None = None
     outs_before: int | None = None
@@ -272,10 +271,10 @@ class PlayByPlayEntry:
         pitch: int,
         context: PitchContext | None = None,
     ) -> PlayByPlayEntry:
-        """Build one entry from a PlayResult + its position indices.
+        """Build one entry from a PlayResult and its position indices.
 
-        ``context`` is the state before the pitch (SIM-561).  The pitcher and the
-        score come from the result itself, so they fill without a context.
+        ``context`` is the state before the pitch. The pitcher and the score
+        come from the result itself, so they fill without a context.
         """
         ns = result.next_state
         pitcher = getattr(result, "pitcher_id", None)
@@ -306,19 +305,19 @@ class PlayByPlayEntry:
 
 @dataclass(frozen=True, slots=True)
 class PlayByPlay:
-    """The GET /api/games/{game_pk}/plays collection -- pitch-level entries."""
+    """The GET /api/games/{game_pk}/plays collection: one entry per pitch."""
 
     entries: list[PlayByPlayEntry] = field(default_factory=list)
 
     @property
     def n_pitches(self) -> int:
-        """Total pitches in the play-by-play (thrown pitches only: a no-pitch
+        """The pitches in the play-by-play (thrown pitches only: a no-pitch
         result makes no entry)."""
         return len(self.entries)
 
     @property
     def n_plate_appearances(self) -> int:
-        """Distinct plate appearances (count of terminal pitches)."""
+        """The plate appearances: the count of terminal pitches."""
         return sum(1 for e in self.entries if e.is_pa_end)
 
     def pitches_for_at_bat(self, at_bat: int) -> list[PlayByPlayEntry]:
@@ -345,22 +344,21 @@ class PlayByPlay:
         (``pa_terminal``) or ends the half-inning, and the within-PA pitch
         counter resets to 1.
 
-        SIM-554: a thrown pitch can end the half and leave the plate appearance
-        open. Example: with two outs, the runner is caught stealing on ball
-        two. The next pitch belongs to the other team's batter, so it starts a
-        new at-bat. The test for the end of the half is the linescore's: the
-        pitch records an out and the committed state is back to 0 outs. The
-        caught runner's teammate leads off his team's next inning later with a
-        fresh count.
+        A thrown pitch can end the half and leave the plate appearance open.
+        Example: with two outs, the runner is caught stealing on ball two. The
+        next pitch belongs to the other team's batter, so it starts a new
+        at-bat. The test for the end of the half is the linescore's: the pitch
+        records an out and the committed state is back to 0 outs. The caught
+        runner's teammate leads off his team's next inning with a fresh count.
 
-        SIM-554: a no-pitch result (a pickoff before the pitch made the third
-        out) makes no entry, so ``sequence`` stays contiguous over the thrown
-        pitches. That pickoff voids the plate appearance and rolls the half.
-        When the voided PA already holds pitches, the next thrown pitch starts a
-        new at-bat, by the same rule.
+        A no-pitch result (a pickoff before the pitch made the third out) makes
+        no entry, so ``sequence`` stays contiguous over the thrown pitches.
+        That pickoff voids the plate appearance and rolls the half. When the
+        voided PA already holds pitches, the next thrown pitch starts a new
+        at-bat, by the same rule.
 
-        SIM-561: ``contexts`` is the play recorder's state-before-each-step list,
-        one per result (no-pitch results included).  Each entry takes its own.
+        ``contexts`` is the play recorder's list of the state before each step,
+        one per result (no-pitch results included). Each entry takes its own.
         """
         if contexts is not None and len(contexts) != len(results):
             raise ValueError(
@@ -395,7 +393,7 @@ class PlayByPlay:
 
 
 def thrown_pitches(results: Iterable[PlayResult]) -> list[PlayResult]:
-    """SIM-554: the results that hold a thrown pitch, in order.
+    """The results that hold a thrown pitch, in order.
 
     These pair one-to-one with ``PlayByPlay.from_play_results(results).entries``.
     A no-pitch result (``pitch_outcome == NO_PITCH``) is left out. A reader that
@@ -413,14 +411,14 @@ def thrown_pitches(results: Iterable[PlayResult]) -> list[PlayResult]:
 class StateAtPitch:
     """The GET /api/games/{game_pk}/state/{at_bat}/{pitch} contract.
 
-    A point-in-time snapshot: the FieldSnapshot as of a given at-bat/pitch index,
-    tagged with those indices and the global pitch sequence (if known).
+    A point-in-time snapshot: the FieldSnapshot as of a given at-bat and pitch,
+    tagged with those indices and the game's pitch sequence (if known).
     """
 
-    at_bat: int  # 0-based plate-appearance index this is as-of
-    pitch: int  # 1-based pitch number within the PA (0 == pre-PA)
-    field: FieldSnapshot  # the BaseballFieldGraphic state at that point
-    sequence: int | None = None  # global pitch index, if known
+    at_bat: int  # the 0-based plate-appearance index of the snapshot
+    pitch: int  # 1-based pitch number within the PA (0 == before the PA)
+    field: FieldSnapshot  # the state of the field graphic at that point
+    sequence: int | None = None  # the pitch index across the game, if known
 
     @classmethod
     def from_game_state(
@@ -452,7 +450,7 @@ class StateAtPitch:
 
 @dataclass(frozen=True, slots=True)
 class MetricDelta:
-    """A single baseline-vs-override metric: baseline, override, and the delta."""
+    """One baseline-vs-override metric: the baseline, the override and the delta."""
 
     metric: str
     baseline: float
@@ -468,9 +466,9 @@ class MetricDelta:
 class OverrideDelta:
     """The POST .../simulate/with_override baseline-vs-override comparison.
 
-    Build from two GameSimSummary objects (or any object exposing the same
-    attribute names) via from_summaries.  Each tracked metric is a MetricDelta;
-    metrics keys them by name.  description optionally records the roster change.
+    Build it from two GameSimSummary objects (or any objects with the same
+    attribute names) with from_summaries. Each tracked metric is a MetricDelta;
+    metrics keys them by name. description optionally records the roster change.
     """
 
     metrics: dict[str, MetricDelta]
@@ -482,7 +480,7 @@ class OverrideDelta:
 
     @property
     def home_win_pct_delta(self) -> float:
-        """Convenience: the change in P(home win) from the override."""
+        """The change in P(home win) from the override."""
         return self.delta("home_win_pct")
 
     @classmethod
@@ -496,9 +494,9 @@ class OverrideDelta:
     ) -> OverrideDelta:
         """Build an OverrideDelta from two summaries.
 
-        baseline / override are any objects exposing the metric attributes (e.g.
-        two GameSimSummary objects).  metrics overrides the default tracked field
-        set (OVERRIDE_METRIC_FIELDS).  Pure: reads attributes only.
+        baseline / override are any objects with the metric attributes (e.g.
+        two GameSimSummary objects). metrics replaces the default tracked set
+        (OVERRIDE_METRIC_FIELDS). Pure: it reads attributes only.
         """
         fields_to_track = tuple(metrics) if metrics is not None else OVERRIDE_METRIC_FIELDS
         out: dict[str, MetricDelta] = {}

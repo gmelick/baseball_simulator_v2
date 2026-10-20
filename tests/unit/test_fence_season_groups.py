@@ -1,23 +1,24 @@
 """
 tests/unit/test_fence_season_groups.py
 =============================================
-SIM-478/480 — the fence stage reads a version-2 park geometry: an eleven-
-sector grid (spray -55 to +55 degrees) and, per venue, SEASON GROUPS keyed
-``"FIRST-LAST"`` (a fence that moved gets a new group at the season of the
-move). What these tests pin on the sampler:
+The fence stage reads a version-2 park geometry (the fence certification,
+SIM-478/480): an eleven-sector grid (spray -55 to +55 degrees) and, per venue,
+SEASON GROUPS keyed ``"FIRST-LAST"`` (a fence that moved gets a new group at
+the season of the move). The sampler runs over a small in-memory bundle, so
+no test needs a database. What these tests pin on the sampler:
 
   * ``fence_at`` picks the group whose range holds the live season, and the
     LATEST group when no range holds it or the season is unknown;
-  * a plain-list venue (the old shape) still reads inside a new document;
+  * a plain-list venue (the version-1 shape) reads inside a version-2 document;
   * a None sector falls to the league line; the sector index follows the
     document's own grid (``spray_min`` / ``sector_deg`` / ``n_sectors``);
   * ``fence_decision`` with a season: the same ball is short before a move
     and over after it;
   * the sixth fence counter (not an air ball) rides with the short counter;
   * the parsed-group cache is keyed to the document object;
-  * SIM-478 §11 / §12.7 on the groups: the carry offset's shift reads the
-    live season's fence, and every row's wall margin follows its own
-    season's group.
+  * the fence amendments (the certification plan's §11 / §12.7) on the
+    groups: the carry offset's shift reads the live season's fence, and
+    every row's wall margin follows its own season's group.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ def _geometry() -> dict:
                 "2025-2026": _line(s0=330.0, s1=372.0, s5=None),
             },
             "7": {"2026-2026": _line(s1=350.0, s10=None)},
-            # The old shape inside a new document: one plain list.
+            # The version-1 shape inside a version-2 document: one plain list.
             "9": _line(s1=360.0, s5=410.0),
         },
         "carry": {"coef": [0.0, 4.0, 0.0, 0.0, 0.0, 0.0]},

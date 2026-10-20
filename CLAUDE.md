@@ -667,12 +667,16 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 
 - `api/` — FastAPI app. `main.py` (create_app + lifespan), `routes/` (games, betting, metrics, similarity),
   `schemas.py` (Pydantic), `serialization.py` (numpy-safe `to_jsonable`), `auth.py`, `state.py` (engine build).
-- `simulation/` — `sim_loop.py` (the simulator, biggest file; full-pool draw + engine-backed
-  advancement and steal draws live here; also the reliever pick, `_pick_reliever`),
-  `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
-  count-bucket CDFs over the pitch-draw cell index, the actor score-matrix factors, the
-  fielding draw with the fence stage, the pickoff, steal and advancement draws; reads the SIM-430 dense
-  `pitcher_sim_matrix` fast path), `start_state.py` + `whatif.py` (SIM-562: a game started from a real plate appearance, and the managerial changes applied to that spot), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
+- `simulation/` — `sim_loop.py` (the simulator: `StateMachine`'s core — the pitch step, the
+  pitch draw, the run ledger, the half-inning roll — and the full-game driver `simulate_game`)
+  with its mixins in `loop/` (SIM-493: `values` the constants, value objects and count machine;
+  `boxscore`; `in_play` the fielding draw and the advancement draws; `running_game` the steal,
+  pickoff and got-away; `terminals` the walk and strikeout; `manager` the intentional walk and
+  the pitching change, `_pick_reliever` included; `credit` the box-score credit),
+  `full_pool_sampler.py` (the full-pool similarity sampler `FullPoolSampler`, its constructor)
+  with its mixins in `sampler/`, one per draw (`kernels`, `base`, `pitch` with the cell index,
+  `pitch_result`, `fielding`, `fence`, `steal`, `advancement`, `manager`; the pitch draw reads
+  the dense `pitcher_sim_matrix`), `start_state.py` + `whatif.py` (SIM-562: a game started from a real plate appearance, and the managerial changes applied to that spot), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
   no-DB test and the batch runner's no-DB factory draw from — the same loop, the same sampler),
   `game_market_distributions.py` (SIM-421, 2026-09-12: per-iteration segment runs from the
   linescore and the probability of every game market the book posts — first-inning / first-five

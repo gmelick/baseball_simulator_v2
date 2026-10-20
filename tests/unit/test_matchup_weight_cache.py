@@ -1,37 +1,32 @@
 """
 tests/unit/test_matchup_weight_cache.py
 =======================================
-SIM-455 — the full-pool weight cache needs THREE lifetimes, not one.
+The full-pool weight cache has THREE lifetimes, not one.
 
-``StateMachine._full_pool_outcome`` gated BOTH sampler refreshes behind one key::
-
-    key = (state.pitcher_id, hand, state.batter_id)
-
-That single key was wrong in two independent ways.
-
-**Defect 1 — wasted work (the filed ticket).** The key carries ``batter_id``, so a
-new batter re-ran ``new_half_inning``, which recomputes ``f_pitcher`` over the
-WHOLE pool. A game has ~83 plate appearances and ~5 pitchers, so ~78 of those
-full-pool passes recomputed a vector that had not changed.
-
-**Defect 2 — staleness (on no ticket before this module).** The key OMITS the
-base-out state, which ``new_plate_appearance`` reads to build the situation
-factor. Base-out changes INSIDE a plate appearance — a steal, a runner advancing
-on a wild pitch, a caught stealing adding an out — and nothing refreshed, so the
-situation factor stayed frozen at the state the plate appearance opened with.
-
-The three lifetimes now are:
+``StateMachine._full_pool_outcome`` refreshes the sampler's weights on three
+separate keys:
 
   * ``f_pitcher``       -> recompute on a (pitcher, hand) change
   * ``f_batter``        -> recompute on a batter change
   * situation factor    -> recompute on a base-out change
 
+``new_half_inning`` recomputes ``f_pitcher`` over the WHOLE pool. A game has
+~83 plate appearances and ~5 pitchers, so a key that carried the batter would
+run ~78 needless full-pool passes a game. ``new_plate_appearance`` reads the
+base-out state to build the situation factor, and the base-out state can change
+INSIDE a plate appearance (a steal, a runner advancing on a wild pitch, a
+caught stealing adding an out). A key without the base-out state would freeze
+the situation factor at the state the plate appearance opened with.
+
 What each test must be able to detect
 -------------------------------------
 Every test in :class:`TestPitcherFactorLifetime` and
-:class:`TestSituationFactorLifetime` FAILS against the single-key code. The
-counting tests fail because the pre-fix count equals the batter count, and the
-staleness tests fail because the pre-fix situation factor never refreshes.
+:class:`TestSituationFactorLifetime` FAILS against one shared key
+``(pitcher_id, hand, batter_id)``. The counting tests fail because that key's
+pass count equals the batter count; the staleness tests fail because that
+key's situation factor never refreshes inside a plate appearance. The tests run
+a real ``FullPoolSampler`` over a small in-memory pool, so no test needs a
+database.
 """
 
 from __future__ import annotations
@@ -95,7 +90,7 @@ def _situation_pool() -> HandPool:
 class _CountingPool(FullPoolSampler):
     """A real ``FullPoolSampler`` that counts the two expensive refreshes.
 
-    ``_f_pitcher`` IS the full-pool pass the ticket counts: it scores every row in
+    ``_f_pitcher`` IS the full-pool pass these tests count: it scores every row in
     the pool against the pitcher. ``new_plate_appearance`` rebuilds the per-plate-
     appearance weight and its 12 count-bucket CDFs.
     """
@@ -153,7 +148,7 @@ def _state(**kw) -> GameState:
 
 class TestPitcherFactorLifetime:
     def test_nine_batters_one_pitcher_is_one_full_pool_pass(self):
-        """The headline number. Pre-fix this is 9 — one full-pool pass per batter."""
+        """The headline number. A per-batter key makes it 9: one full-pool pass per batter."""
         machine, fp = _machine()
         state = _state()
         for batter in _LINEUP:
@@ -162,9 +157,8 @@ class TestPitcherFactorLifetime:
         assert fp.f_pitcher_calls == 1
 
     def test_the_wasted_passes_are_gone_across_a_full_game_of_batters(self):
-        """~83 plate appearances against ~5 pitchers. The ticket says that is ~78
-        unnecessary full-pool passes. Pin the corrected arithmetic: 5 pitchers ->
-        5 passes, not 83."""
+        """~83 plate appearances against ~5 pitchers: 5 pitchers -> 5 passes,
+        not 83."""
         machine, fp = _machine()
         state = _state()
         pitchers = [_PITCHER_A, _PITCHER_B, 902, 903, 904]
@@ -237,8 +231,8 @@ class TestBatterFactorLifetime:
         assert fp.f_pitcher_calls == 1
 
     def test_the_per_hand_precompute_runs_once(self):
-        """The batter factor is the matrix row (SIM-523; no batter matrix is
-        wired here, so the factor is ones). The pool's `_pool_meta` cache is
+        """The batter factor is the matrix row (no batter matrix is wired here,
+        so the factor is ones). The ``_pool_meta`` cache (``_pool_cache``) is
         what proves the per-hand precompute ran once per hand."""
         machine, fp = _machine()
         state = _state()
@@ -255,8 +249,8 @@ class TestBatterFactorLifetime:
 
 
 class TestSituationFactorLifetime:
-    """Every test here FAILS against the single-key code, which never refreshed
-    the situation factor inside a plate appearance."""
+    """Every test here FAILS against one shared ``(pitcher, hand, batter)`` key,
+    which never refreshes the situation factor inside a plate appearance."""
 
     def test_a_steal_mid_plate_appearance_refreshes_the_situation_factor(self):
         """The runner takes second on pitch 2 of the SAME plate appearance. The
@@ -313,7 +307,7 @@ class TestSituationFactorLifetime:
         assert fp.pa_calls[-1][1][3] == 3.0
 
     def test_the_score_diff_stays_clamped_to_plus_or_minus_five(self):
-        """Pre-existing behaviour the refactor must not change."""
+        """The base-out vector clamps the score difference to +/-5."""
         machine, fp = _machine()
         state = _state()
         state.away_score = 40
@@ -336,8 +330,8 @@ class TestSituationFactorLifetime:
         assert machine._full_pool_outcome(state) == "ball"
 
     def test_an_unchanged_base_out_does_not_rebuild(self):
-        """The staleness fix must not turn the cache into a per-pitch recompute —
-        that would reintroduce the cost SIM-455 exists to remove."""
+        """The base-out key must not turn the cache into a per-pitch recompute:
+        that would bring back the cost the cache exists to remove."""
         machine, fp = _machine()
         state = _state()
         for _ in range(12):

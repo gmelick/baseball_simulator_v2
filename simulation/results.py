@@ -1,41 +1,30 @@
-"""
-results.py
-==========
-SIM-327 -- the **multi-iteration aggregation contract** (Phase 4, Sprint 3).
+"""The aggregate of N simulated games of one matchup.
 
-WHAT THIS IS
-------------
 :func:`simulation.sim_loop.simulate_game` returns ONE per-game
-:class:`GameSimResult` (SIM-320).  A Monte-Carlo run plays the *same* matchup N
-times; the downstream consumers (the UI win-probability / score-distribution
-panels, the betting / CLV edge engine, the perf batch runner) do not read N
-individual games -- they read **one aggregate**.  This module defines that
-aggregate, :class:`GameSimSummary`, and its pure-Python/numpy constructor
-:meth:`GameSimSummary.from_results`.
+:class:`GameSimResult`. A Monte-Carlo run plays the *same* matchup N times.
+The consumers (the win-probability and score panels, the betting edge engine,
+the batch runner) do not read N games: they read **one aggregate**. This
+module defines that aggregate, :class:`GameSimSummary`, and its constructor
+:meth:`GameSimSummary.from_results` (Python and numpy only).
 
-DESIGN DECISIONS (the SIM-327 acceptance criteria, see the audit ticket row)
----------------------------------------------------------------------------
-  * **One import home.**  Consumers import BOTH the per-game result and the
-    aggregate from here -- :class:`GameSimResult` is re-exported from
-    :mod:`simulation.sim_loop` so a downstream ticket never has to know the
-    aggregate and the per-game type live in different files.  The loop file is
-    NOT modified by this ticket; the aggregation is additive and decoupled.
-  * **RAW per-iteration arrays, not a histogram.**  We keep the full
+THE DESIGN
+----------
+  * **One import home.** Consumers import the per-game result, its box score
+    types and the aggregate from here. The per-game types live in
+    :mod:`simulation.loop.boxscore`; this module re-exports them.
+  * **Raw per-iteration arrays, not a histogram.** The summary keeps the full
     per-iteration ``home_score`` / ``away_score`` / total arrays (length N, in
-    input order).  Props / over-under / any percentile the betting layer wants
-    can be computed from the raw signal; a pre-binned histogram would throw away
-    exactly the resolution SIM-329 (prop PMFs) needs.  This is the SIM-112
-    "preserve the raw distribution" requirement.
-  * **Confidence intervals: normal-approximation (Wald), documented.**  We use
-    the closed-form normal approximation rather than a bootstrap so the contract
-    is deterministic, dependency-light (no resampling rng to seed) and O(1):
-      - win%:   Wald interval  p +/- z * sqrt(p(1-p)/N)  (clamped to [0, 1]).
-      - mean score: Wald interval  xbar +/- z * (s / sqrt(N))  using the sample
-        standard deviation (ddof=1).
-    Both narrow as O(1/sqrt(N)).  ``z`` defaults to 1.96 (95%); the confidence
-    level is recorded on the summary so a consumer knows what it was given.  A
-    bootstrap variant can be added later WITHOUT changing this contract.
-  * **simulated_at** is a timezone-aware UTC timestamp stamped at construction.
+    input order). A prop, an over/under or any percentile comes from the raw
+    values; a histogram would throw away the resolution the prop probability
+    mass functions (PMFs) need.
+  * **Normal-approximation (Wald) confidence intervals.** The closed form is
+    deterministic, needs no resampling random generator and costs O(1):
+      - win share: p +/- z * sqrt(p(1-p)/N), clamped to [0, 1];
+      - mean score: xbar +/- z * (s / sqrt(N)), with the sample standard
+        deviation s (ddof=1).
+    Both narrow as 1/sqrt(N). ``z`` defaults to 1.96 (95%); the summary records
+    the confidence level, so a consumer knows what it was given.
+  * **simulated_at** is a timezone-aware UTC time, stamped at construction.
 """
 
 from __future__ import annotations
@@ -49,12 +38,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-# Re-export the per-game result so consumers have ONE import home (the loop file
-# is the source of truth for the per-game type; we never redefine it).
-# SIM-328: also re-export the per-game boxscore types (PlayerStatLine / BoxScore)
-# the loop attaches to ``GameSimResult.boxscore`` so a downstream prop-aggregation
-# consumer (SIM-329) imports them from the same one aggregation home.
-from simulation.sim_loop import BoxScore, GameSimResult, PlayerStatLine
+# Re-export the per-game result and the box score types the loop attaches to
+# ``GameSimResult.boxscore``, so a consumer has ONE import home. The loop owns
+# these types; this module never redefines them.
+from simulation.loop.boxscore import BoxScore, GameSimResult, PlayerStatLine
 
 #: Default two-sided z-multiplier for a 95% normal-approximation interval.
 _Z_95 = 1.959963984540054
@@ -72,10 +59,10 @@ _Z_BY_LEVEL: dict[float, float] = {
 class ConfidenceInterval:
     """A two-sided confidence interval around a point estimate.
 
-    ``low <= point <= high`` always holds (the point estimate is the interval
-    centre for the symmetric normal approximation, modulo clamping at 0/1 for a
-    proportion).  ``level`` is the nominal confidence (e.g. 0.95) and ``method``
-    names how it was computed so a downstream consumer can report it honestly.
+    ``low <= point <= high`` always holds. The point is the interval's centre,
+    except where a proportion's interval is clamped at 0 or 1. ``level`` is the
+    nominal confidence (e.g. 0.95); ``method`` names how the interval was
+    computed, so a consumer can report it.
     """
 
     point: float
@@ -92,11 +79,11 @@ class ConfidenceInterval:
 
 @dataclass(slots=True)
 class GameSimSummary:
-    """Aggregate of N per-game :class:`GameSimResult`s for one matchup (SIM-327).
+    """The aggregate of N per-game :class:`GameSimResult`s for one matchup.
 
-    This is the contract every multi-iteration consumer reads: the UI score /
-    win-probability panels, the betting / CLV edge engine, and the perf batch
-    runner.  Build it with :meth:`from_results`; do not populate it by hand.
+    Every multi-iteration consumer reads it: the score and win-probability
+    panels, the betting edge engine and the batch runner. Build it with
+    :meth:`from_results`; do not fill it by hand.
     """
 
     #: Number of iterations aggregated (== len of every raw array below).
@@ -124,7 +111,7 @@ class GameSimSummary:
     away_scores: NDArray[np.int64]
     total_scores: NDArray[np.int64]
 
-    # --- confidence intervals (SIM-112) ----------------------------------------
+    # --- confidence intervals ---------------------------------------------------
     home_win_ci: ConfidenceInterval
     away_win_ci: ConfidenceInterval
     home_score_ci: ConfidenceInterval
@@ -138,22 +125,22 @@ class GameSimSummary:
     confidence_level: float = 0.95
     #: The CI method (matches each ``ConfidenceInterval.method``).
     ci_method: str = "normal"
-    #: SIM-546, the inning grid: ``(home_cells, away_cells)`` per iteration, in
-    #: input order. A cell is one team's runs in one inning; ``None`` marks a
-    #: half the game never played. This is the light form
-    #: ``SegmentRuns.from_inning_grids`` reads to price the segment and team
-    #: markets. ``None`` when any result carried no grid (a result built by
-    #: hand in a test). Keep this field LAST: a summary pickled before it
-    #: existed restores without it, and ``__getattr__`` below then reads None.
+    #: The inning grid: ``(home_cells, away_cells)`` per iteration, in input
+    #: order. A cell is one team's runs in one inning; ``None`` marks a half
+    #: the game never played. ``SegmentRuns.from_inning_grids`` reads this
+    #: light form to price the segment and team markets. ``None`` when any
+    #: result carried no grid (a result built by hand in a test). Keep this
+    #: field LAST: a pickled state with no grid slot then still restores, and
+    #: ``__getattr__`` below reads the field as None.
     inning_grids: list[tuple[list[int | None], list[int | None]]] | None = None
 
     def __getattr__(self, name: str) -> object:
-        """Read ``inning_grids`` as None on a summary pickled before it existed.
+        """Read ``inning_grids`` as None when its slot is unset.
 
-        A slot left unset raises ``AttributeError``, and Python then calls
-        this method. A summary cached by the old code has no grid slot, so
-        every reader, ``to_jsonable`` included, gets None for it instead of
-        an error. Every other missing name still raises.
+        An unset slot raises ``AttributeError``, and Python then calls this
+        method. A summary unpickled from a state with no grid slot has the
+        slot unset, so every reader, ``to_jsonable`` included, gets None for
+        it instead of an error. Every other missing name still raises.
         """
         if name == "inning_grids":
             return None
@@ -169,12 +156,12 @@ class GameSimSummary:
     ) -> GameSimSummary:
         """Aggregate a list of per-game results into one :class:`GameSimSummary`.
 
-        Pure Python + numpy; no DB, no FAISS, no rng.  ``results`` must be
-        non-empty (you cannot summarise zero iterations).  ``confidence_level``
-        selects the z-multiplier (0.80 / 0.90 / 0.95 / 0.99 are tabulated; any
-        other level falls back to the 95% z with the level still recorded for
-        honest reporting).  ``simulated_at`` can be injected for deterministic
-        tests; it defaults to ``datetime.now(timezone.utc)``.
+        Python and numpy only: no database and no random draw. ``results`` must
+        be non-empty. ``confidence_level`` selects the z-multiplier: 0.80,
+        0.90, 0.95 and 0.99 are tabulated, and any other level uses the 95% z
+        while the summary still records the level passed in. ``simulated_at``
+        can be injected for a deterministic test; it defaults to the current
+        UTC time.
         """
         if not results:
             raise ValueError("GameSimSummary.from_results requires >= 1 result")
@@ -202,8 +189,8 @@ class GameSimSummary:
         away_score_ci = _mean_ci(away, z, confidence_level)
         total_score_ci = _mean_ci(total, z, confidence_level)
 
-        # SIM-546: the inning grid of every iteration, or None when any result
-        # lacks one (a grid with a hole would misprice the segment markets).
+        # The inning grid of every iteration, or None when any result lacks
+        # one (a grid with a hole would misprice the segment markets).
         grids: list[tuple[list[int | None], list[int | None]]] = []
         for r in results:
             home_cells = getattr(r, "home_by_inning", None)
@@ -239,7 +226,7 @@ class GameSimSummary:
         )
 
     def to_json(self) -> dict[str, Any]:
-        """A JSON-ready dict of the summary (SIM-443f: the Redis cache's form).
+        """A JSON-ready dict of the summary: the form the Redis cache stores.
 
         The shape equals ``api.serialization.to_jsonable(summary)``: the arrays
         as int lists, each interval as a dict, ``simulated_at`` as ISO-8601 text
@@ -339,11 +326,11 @@ def _utc_from_iso(text: str) -> datetime:
 
 
 def _proportion_ci(p: float, n: int, z: float, level: float) -> ConfidenceInterval:
-    """Wald (normal-approximation) CI on a proportion, clamped to [0, 1].
+    """The Wald (normal-approximation) interval on a proportion, clamped to [0, 1].
 
-    half-width = z * sqrt(p(1-p)/n).  Degenerate at p in {0, 1} (zero variance)
-    -- the interval collapses to the point, which is the honest Wald answer; a
-    consumer that needs a non-degenerate bound there can switch to Wilson later.
+    The half-width is z * sqrt(p(1-p)/n). At p = 0 or 1 the variance is zero,
+    so the interval collapses to the point: the Wald answer. A Wilson interval
+    would give a non-degenerate bound there.
     """
     se = (p * (1.0 - p) / n) ** 0.5
     margin = z * se
@@ -357,10 +344,10 @@ def _proportion_ci(p: float, n: int, z: float, level: float) -> ConfidenceInterv
 
 
 def _mean_ci(values: NDArray, z: float, level: float) -> ConfidenceInterval:
-    """Wald CI on a sample mean: xbar +/- z * (s / sqrt(n)), s = std(ddof=1).
+    """The Wald interval on a sample mean: xbar +/- z * (s / sqrt(n)), s = std(ddof=1).
 
-    With n == 1 the sample std is undefined; we report a zero-width interval at
-    the single observation (no spread is estimable from one draw)."""
+    With n == 1 the sample standard deviation is undefined, so the interval
+    has zero width at the single value."""
     n = int(values.size)
     mean = float(values.mean())
     if n < 2:
@@ -379,9 +366,9 @@ def _mean_ci(values: NDArray, z: float, level: float) -> ConfidenceInterval:
 
 
 __all__ = [
-    "GameSimResult",  # re-exported from sim_loop -> one import home
-    "PlayerStatLine",  # SIM-328 per-game boxscore line (re-exported)
-    "BoxScore",  # SIM-328 per-game boxscore accumulator (re-exported)
+    "GameSimResult",  # re-exported from simulation.loop.boxscore
+    "PlayerStatLine",  # the per-game box score line (re-exported)
+    "BoxScore",  # the per-game box score (re-exported)
     "GameSimSummary",
     "ConfidenceInterval",
 ]

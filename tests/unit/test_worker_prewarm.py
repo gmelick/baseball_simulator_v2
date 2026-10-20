@@ -1,20 +1,19 @@
 """
 test_worker_prewarm.py
 ======================
-Unit tests for SIM-402 -- the cold-worker ``/simulate`` SLA fix.
+The worker contracts the cold-worker ``/simulate`` speed rests on.
 
 Two contracts are covered here (the wall-clock SLA itself is verified live in
 the container; these lock the CONTRACTS the speed-up rests on):
 
-  1. **The factory has no fallback (SIM-486)** -- with no engine-artifact bundle
-     on disk, :func:`simulation.production_factory.production_machine_factory`
-     raises loudly and :func:`warm_worker_cache` reports ``False``; the per-tile
-     fallback and its fingerprint deriver are gone.
+  1. **The factory has no fallback** -- with no engine-artifact bundle on disk,
+     :func:`simulation.production_factory.production_machine_factory` raises
+     loudly and :func:`warm_worker_cache` reports ``False``.
 
   2. **Worker pre-warm** -- :func:`production_factory.warm_worker_cache` populates
      the per-process full-pool cache, and :meth:`BatchRunner.prewarm` runs it on
-     every warm-pool worker up front.  This is the fix for the n>1 cold-fan-out
-     stall: a fresh n-iteration batch gives each worker one game, so the per-worker
+     every warm-pool worker up front.  This prevents the n>1 cold-fan-out stall:
+     a fresh n-iteration batch gives each worker one game, so the per-worker
      cache (which only pays off on the 2nd+ seed) never warms in time -- prewarm
      does it once per worker at startup instead.
 
@@ -85,7 +84,7 @@ def _clean_caches_and_builders():
 
 
 # ===========================================================================
-# 1. No fallback (SIM-486): the factory raises without a bundle
+# 1. No fallback: the factory raises without a bundle
 # ===========================================================================
 
 
@@ -105,13 +104,11 @@ class TestNoFallback:
         assert warm_worker_cache(str(tmp_path)) is False
 
     def test_factory_wires_the_built_sampler(self, monkeypatch):
-        # SIM-538: production_machine_factory now unconditionally calls
-        # full_pool.set_asof(...) (even with None) instead of skipping the
-        # call when the request carries no cutoff -- see its docstring for
-        # why (a cross-game leak this fix closes). A bare `object()` sentinel
-        # can no longer stand in for the built sampler here; it needs a
-        # set_asof method, same as every real FullPoolSampler has. Identity
-        # (`is sentinel`) is still what this test is proving, unaffected.
+        # production_machine_factory always calls full_pool.set_asof(...),
+        # even with None, so one game's cutoff never leaks into the next (see
+        # its docstring). So the sentinel needs a set_asof method, as every
+        # real FullPoolSampler has. Identity (`is sentinel`) is what this
+        # test proves.
         class _SentinelSampler:
             def set_asof(self, ymd: int | None) -> None:
                 pass

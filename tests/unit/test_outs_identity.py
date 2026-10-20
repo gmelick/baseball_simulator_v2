@@ -1,12 +1,11 @@
-"""SIM-557 — every out on a pitcher's line: the identity over whole games.
+"""Every out on a pitcher's line: the identity over whole games.
 
-The box used to lose about 0.3 outs a game. A caught stealing or a pickoff
-on a pitch that did not end the plate appearance recorded an out on the
-state, but no pitcher's line received it, because the credit sat at the end
-of the plate appearance. The fix moves the one credit to the out recorder
-(``StateMachine._record_outs``), so every out the defense records lands on
-the line of the pitcher on the mound
-(``docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md``, §5 and §7).
+The out recorder (``StateMachine._record_outs``) is the one writer of a
+pitcher's outs, so every out the defense records lands on the line of the
+pitcher on the mound (``docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md``,
+§5 and §7). A credit at the end of the plate appearance misses a caught
+stealing or a pickoff on a pitch that does not end the plate appearance:
+about 0.3 outs a game.
 
 This file holds the plan's three identity tests (§7, tests 19 to 21). Each
 runs 25 seeded synthetic games on a bundle with busy runners, pickoff rows at
@@ -25,7 +24,8 @@ every count and the pitching-change draw on, in both steal orders:
 21. ``outs_played`` equals the sum of the recorded plays' ``outs_recorded``.
 
 A guard test checks that the games hold caught-stealing and pickoff outs and
-pitching changes. Without them the identity proves nothing about the defect.
+pitching changes. Without them the identity proves nothing. The games run on
+an in-memory synthetic bundle, so no test needs a database.
 """
 
 from __future__ import annotations
@@ -39,8 +39,9 @@ import pytest
 
 from pipeline.batch.engine_artifacts import StealPool
 from simulation.game_state import PlayResult, Team
+from simulation.loop.boxscore import GameSimResult
 from simulation.play_recorder import RecordingMachine
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,
@@ -167,7 +168,7 @@ def _pickoff_outs(plays: list[PlayResult]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# The guard: the games hold the outs the defect lost
+# The guard: the games hold the outs an end-of-PA credit would miss
 # ---------------------------------------------------------------------------
 
 
@@ -183,10 +184,9 @@ class TestTheGamesHoldTheRunningGame:
     def test_some_caught_stealing_or_pickoff_outs_land_on_a_pitch_that_does_not_end_the_plate_appearance(
         self, games
     ):
-        # These are the outs the old credit at the end of the plate
-        # appearance missed. A play that ends no plate appearance has no
-        # event; a caught stealing or a pickoff out on it must still reach a
-        # pitcher's line.
+        # A credit at the end of the plate appearance would miss these outs.
+        # A play that ends no plate appearance has no event; a caught
+        # stealing or a pickoff out on it must still reach a pitcher's line.
         mid_pa = sum(
             1
             for g in games
@@ -250,7 +250,7 @@ class TestTheIdentity:
         assert checked > 0
 
     def test_each_sides_box_outs_equal_the_outs_of_the_plays_it_fielded(self, games):
-        # The play names its own side (SIM-557, decision 2). Read the sides
+        # The play names its own side (the plan's decision 2). Read the sides
         # from the stream: the box and the stream agree side by side.
         for seed, g in enumerate(games):
             assert all(r.fielding_team is not None for r in g.plays), f"seed {seed}"
@@ -291,10 +291,10 @@ class TestTheBattersFacedFollowTheLoopsCount:
     in the single pre-pitch draw, a pickoff or a caught stealing can make the
     third out before the pitch's result. The loop still ends that plate
     appearance, so the pitcher gets a batter faced (and the batter an at-bat).
-    The batter's line and the loop's count carried that flaw before the batters
-    faced existed. Its fix changes the batter's line too, so it belongs to its
-    own ticket. This test pins that the two counts agree, so the batters faced
-    never drift from the count the manager reads."""
+    The batter's line and the loop's count share that limit. A fix changes the
+    batter's line too, so it belongs to its own ticket. This test pins that the
+    two counts agree, so the batters faced never drift from the count the
+    manager reads."""
 
     def test_each_pitchers_box_batters_faced_equal_the_loops_count(self, games):
         for seed, g in enumerate(games):

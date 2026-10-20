@@ -1,11 +1,12 @@
-"""tests/unit/test_pitcher_sim_matrix.py — SIM-430 fan-out / OOM fix.
+"""tests/unit/test_pitcher_sim_matrix.py — the dense pitcher similarity matrix.
 
-The fan-out/OOM half of SIM-430: 10 ProcessPool workers OOM-killed the host because
-each held a full PRIVATE copy of the ``pitcher_sim`` dict-of-dicts (~2 GB resident,
-NOT shareable through multiprocessing.shared_memory). The fix densifies it into a
-small (n_prof x n_prof) float32 ``pitcher_sim_matrix`` that rides the existing
-SIM-403b shared-memory seam (one read-only view for all workers) and lets the
-~2 GB dict be skipped entirely on load.
+A worker that holds a full PRIVATE copy of the ``pitcher_sim`` dict-of-dicts
+carries ~2 GB resident that multiprocessing.shared_memory cannot share; 10
+ProcessPool workers holding one each ran the host out of memory (the worker
+fan-out, SIM-430). So the bundle densifies the dict into a small
+(n_prof x n_prof) float32 ``pitcher_sim_matrix`` that rides the shared-memory
+seam (one read-only view for all workers), and a worker skips the ~2 GB dict
+on load.
 
 These tests pin the invariants that make it SAFE + REAL:
   1. **Byte-identical draw** — the dense-matrix ``_f_pitcher`` reproduces the
@@ -83,7 +84,7 @@ def _hand_pool(n: int, seed: int) -> HandPool:
 def _bb_pool(n: int, seed: int) -> BattedBallPool:
     rng = np.random.default_rng(seed)
     sit = rng.standard_normal((n, 6)).astype(np.float32)
-    # SIM-486: the batted-ball draw hard-filters the live base-out cell, so
+    # The batted-ball draw hard-filters the live base-out cell, so
     # every row sits in the cell ``_draw_sequence`` plays in (one out, a
     # runner on first) and carries its transition: a single that pushes that
     # runner to second.
@@ -174,7 +175,7 @@ class TestMatrixEquivalence:
 
 class TestMatrixNeedsNoDict:
     def test_matrix_path_scores_with_empty_dict(self):
-        # The OOM fix: a worker carries the matrix but NOT the 2 GB dict.
+        # A worker carries the matrix but NOT the 2 GB dict.
         art = _bundle(with_matrix=True, with_dict=False)
         assert art.pitcher_sim == {}
         s = FullPoolSampler(art, np.random.default_rng(0))

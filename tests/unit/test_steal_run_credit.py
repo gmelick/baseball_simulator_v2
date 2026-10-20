@@ -1,17 +1,17 @@
-"""SIM-483 — steal runs earn no RBI (Rule 9.04(b)); they stay EARNED (9.16(a)).
+"""Tests that a steal run earns no RBI (Rule 9.04(b)) and stays EARNED (9.16(a)).
 
-Latent until SIM-474 revived the running game; live since. Two credits were
-wrong on a steal of home:
+Two credits on a steal of home (the steal run credits, SIM-483):
 
   * a TERMINAL-pitch steal of home folds its run into the play's ``runs``, and
-    ``_accumulate_pa`` credited the batter an RBI for it — Rule 9.04(b) awards
-    no run batted in on a stolen base;
-  * a NON-terminal steal of home charged the pitcher ``r_allowed`` but never
-    ``er``, though a stolen-base run is an earned run (Rule 9.16(a)) — every
-    such run under-counted ERA's numerator.
+    ``_accumulate_pa`` must not credit the batter an RBI for it: Rule 9.04(b)
+    awards no run batted in on a stolen base;
+  * a NON-terminal steal of home charges the pitcher ``r_allowed`` AND ``er``:
+    a stolen-base run is an earned run (Rule 9.16(a)), unless an earlier
+    error means the inning should already be over. Without the ``er`` charge,
+    every such run would under-count ERA's numerator.
 
-The harness mirrors ``test_boxscore_extended``: no DB, the machine driven
-directly through ``_resolve_steal_outcome`` / ``_accumulate_pa``.
+The harness mirrors ``test_boxscore_extended``: no database; the tests drive
+the machine directly through ``_resolve_steal_outcome`` / ``_accumulate_pa``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,8 @@ from __future__ import annotations
 import numpy as np
 
 from simulation.game_state import Bases, GameState, PlayResult
-from simulation.sim_loop import StateMachine, StealResolution
+from simulation.loop.values import StealResolution
+from simulation.sim_loop import StateMachine
 
 SEASON = 2024
 PITCHER = 477132

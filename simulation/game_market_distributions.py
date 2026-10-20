@@ -1,12 +1,12 @@
 """
 simulation/game_market_distributions.py
 =======================================
-SIM-421 (owner ruling 2026-09-12) — the simulator prices EVERY game market
-the book posts, not only the full-game moneyline, run line and total.
+The simulator prices EVERY game market the book posts, not only the full-game
+moneyline, run line and total (the owner's ruling of 2026-09-12, SIM-421).
 
 WHY THIS EXISTS
 ---------------
-The odds tables now carry fifteen game markets (``pipeline/odds_provider.py``
+The odds tables carry fifteen game markets (``pipeline/odds_provider.py``
 ``GAME_MARKET_TYPES``): the three full-game markets plus twelve segment and
 team markets — the first-inning and first-five-innings moneyline, total and
 run line; each side's full-game and first-five team total; the first team to
@@ -20,19 +20,17 @@ THE INPUT
 ---------
 :class:`SegmentRuns` holds, per iteration, the run totals every market settles
 on: each team's full-game runs, first-inning runs and runs through five
-innings, plus which team scored first. Build it from the per-iteration
-:class:`~simulation.linescore.Linescore` (``from_linescores``), from the raw
-per-iteration play streams (``from_plays``), or from plain per-inning run
-lists (``from_inning_grids`` — the pickle-light form a parallel worker can
-carry back). A half-inning that was never played (the scoreboard "x") counts
-as zero runs, the way the official record does.
+innings, plus which team scored first. Build it from plain per-inning run
+lists (``from_inning_grids``: the light form a worker sends back to the parent
+and the run summary keeps), or from the official grid of one real game
+(``from_official_grid``). A half-inning that was never played (the
+scoreboard "x") counts as zero runs, the way the official record does.
 
 THE OUTPUT
 ----------
 :func:`market_probability` answers "what is the simulator's probability of the
 reference side of this market at this line?" for any market type, using the
-same conventions the full-game markets already use in
-:mod:`betting.clv_engine`:
+same conventions the full-game markets use in :mod:`betting.clv_engine`:
 
   * a total-kind market (``total``, ``f1_total``, ``f5_total``, the four team
     totals) — the OVER is the STRICT ``P(runs > line)``; a whole-number line
@@ -41,17 +39,17 @@ same conventions the full-game markets already use in
     total kind at line 0.5;
   * a moneyline-kind market (``moneyline``, ``first_to_score``) — HOME is
     ``P(home outscored away)`` over the segment (for the first team to score,
-    ``P(home scored first)``); the full-game moneyline has no tie because a
-    game plays until a winner;
+    ``P(home scored first)``); a full game ties only at the loop's
+    max-innings guard;
   * a three-way market (``f1_moneyline``, ``f5_moneyline``) — HOME is
     ``P(home led after the segment)``, AWAY the mirror, and DRAW
     ``P(the segment ended tied)``; the three sum to one;
   * a run-line-kind market (``runline``, ``f1_runline``, ``f5_runline``) — HOME
     covers when ``home_runs + spread > away_runs`` over the segment; an equal
     result is a push (mirrors :func:`betting.clv_engine.spread_cover_prob`).
-    SIM-549: the AWAY bet at its own spread is priced too (``side="away"``),
-    because the book sometimes lists the two teams' run lines as two
-    separate bets rather than the two sides of one.
+    The AWAY bet at its own spread is priced too (``side="away"``): the book
+    sometimes lists the two teams' run lines as two separate bets rather than
+    the two sides of one (the run-line scoring, SIM-549).
 
 DETERMINISM
 -----------
@@ -74,7 +72,8 @@ from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_SEGMENT, GAME_M
 FIRST_FIVE_INNINGS = 5
 
 #: ``first_to_score`` codes: the home team scored first, the away team did, or
-#: nobody scored (a suspended or 0-0 grid; never a completed game).
+#: nobody scored (a 0-0 grid: a suspended real game, or a simulated game tied
+#: 0-0 at the max-innings guard).
 HOME_FIRST = 1
 AWAY_FIRST = -1
 NOBODY_FIRST = 0
@@ -157,19 +156,6 @@ class SegmentRuns:
         )
 
     @classmethod
-    def from_linescores(cls, linescores: Iterable[Any]) -> SegmentRuns:
-        """Build from per-iteration :class:`~simulation.linescore.Linescore` objects."""
-        return cls.from_inning_grids((ls.home_by_inning, ls.away_by_inning) for ls in linescores)
-
-    @classmethod
-    def from_plays(cls, per_iteration_plays: Iterable[Sequence[Any]]) -> SegmentRuns:
-        """Build from the per-iteration ordered ``PlayResult`` streams (the
-        ``record_game_plays`` output), through ``linescore_from_plays``."""
-        from simulation.linescore import linescore_from_plays
-
-        return cls.from_linescores(linescore_from_plays(plays) for plays in per_iteration_plays)
-
-    @classmethod
     def from_official_grid(cls, inning_scores: dict[str, Sequence[int]]) -> SegmentRuns:
         """Build a one-iteration ``SegmentRuns`` from the official
         ``raw.games.inning_scores`` grid (``{"home": [...], "away": [...]}``) —
@@ -239,9 +225,9 @@ def side_probabilities(runs: SegmentRuns, market_type: str) -> tuple[float, floa
     """``(p_home, p_away, p_draw)`` for a moneyline-kind, three-way, or
     first-to-score market over its segment.
 
-    ``p_draw`` is the tie share of the segment (zero for a completed full game,
-    which plays until a winner; zero for the first team to score). The three
-    sum to one when every iteration produced a result.
+    ``p_draw`` is the tie share of the segment.  A full game ties only at the
+    loop's max-innings guard; for the first team to score, ``p_draw`` is the
+    share of games with no run.  The three always sum to one.
     """
     kind = _validate_market(market_type)
     if kind not in ("moneyline", "three_way"):
@@ -283,7 +269,7 @@ def cover_probabilities(
     )
 
 
-#: SIM-549: the two sides of a run-line market. The home side is the
+#: The two sides of a run-line market. The home side is the
 #: accuracy comparison's reference side; the away side is scored only when the
 #: book lists the two teams' run lines as two separate bets.
 RUN_LINE_SIDES: tuple[str, ...] = ("home", "away")
@@ -308,8 +294,8 @@ def market_probability(
     spread; a side market ignores it. A run line's away bet is the one
     exception (below).
 
-    SIM-549: a run-line market also takes ``side="away"``, and then ``line``
-    is the AWAY team's own spread. The book sometimes lists the two teams'
+    A run-line market also takes ``side="away"``, and then ``line`` is the
+    AWAY team's own spread. The book sometimes lists the two teams'
     run lines as two separate bets (home −1.5 and away −1.5), so the away bet
     needs its own probability at its own line. An away bet at spread ``A``
     covers when ``away + A > home``, that is ``home − away < A``: the away leg
@@ -340,10 +326,10 @@ def market_outcome(
     A push (the total on the line, the adjusted margin exactly zero, a tied
     segment on a two-way side market) has no 0/1 label and returns ``None``;
     a tied segment on a THREE-way market is a real loss for the home side
-    (the draw was a priced outcome), so it returns 0. ``line`` is the total
+    (the draw is a priced outcome), so it returns 0. ``line`` is the total
     line or the home spread, except for a run line's away bet (below).
 
-    SIM-549: a run-line market also takes ``side="away"``; ``line`` is then
+    A run-line market also takes ``side="away"``; ``line`` is then
     the away team's own spread, and the away bet covers when
     ``away − home + line > 0``. Every other market kind ignores ``side``.
     """
@@ -384,10 +370,10 @@ def market_outcome(
 def segment_runs_from_summary(summary: Any) -> SegmentRuns | None:
     """The ``SegmentRuns`` of a ``GameSimSummary``, or None when it has no grid.
 
-    SIM-546, the inning grid: the runner's summary keeps each iteration's runs
-    per inning (``inning_grids``). A summary built by hand in a test, or one
-    pickled before the grid existed, has none; the caller then prices the
-    full-game markets only.
+    The runner's summary keeps each iteration's runs per inning
+    (``inning_grids``). A summary without them (one built by hand in a test,
+    for example) yields None, and the caller then prices the full-game
+    markets only.
     """
     grids = getattr(summary, "inning_grids", None)
     return None if not grids else SegmentRuns.from_inning_grids(grids)

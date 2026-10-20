@@ -1,11 +1,11 @@
-"""SIM-553 — the count chain of the pitch pool and the label check.
+"""The count chain of the pitch pool and the label check.
 
 ``pipeline/batch/pool_chain.py`` solves the count chain (the per-plate-
 appearance rates a faithful sampler of the pool's per-count class shares
 produces) and compares it with real plate appearances. These tests pin:
 
-  * the solver on matrices with closed-form answers, and against the deleted
-    original (``scripts/sim429_chain_analysis.py``, commit 6ab341c^) as an
+  * the solver on matrices with closed-form answers, and against the original
+    solver (``scripts/sim429_chain_analysis.py`` at commit 6ab341c^) as an
     oracle;
   * the solver against the simulator's own count machine (``advance_count``),
     so a rule change in the loop cannot leave the chain behind;
@@ -31,15 +31,10 @@ import pytest
 
 from pipeline.batch import pool_chain as pc
 from simulation.game_state import PITCH_OUTCOMES
-from simulation.sim_loop import (
-    EVENT_HIT_BY_PITCH,
-    EVENT_STRIKEOUT,
-    EVENT_WALK,
-    advance_count,
-)
+from simulation.loop.values import EVENT_HIT_BY_PITCH, EVENT_STRIKEOUT, EVENT_WALK, advance_count
 
 # ---------------------------------------------------------------------------
-# The oracle: the deleted solver, verbatim
+# The oracle: the original solver, verbatim
 # (git show 6ab341c^:scripts/sim429_chain_analysis.py)
 # ---------------------------------------------------------------------------
 
@@ -246,7 +241,7 @@ class TestTheSolverIsTheDeletedOriginal:
 
 
 class TestTheSolverMatchesTheCountMachine:
-    """The chain's rules are the loop's rules (``simulation.sim_loop.advance_count``)."""
+    """The chain's rules are the loop's rules (``simulation.loop.values.advance_count``)."""
 
     def test_the_chain_classes_are_the_simulator_vocabulary(self):
         assert set(pc.OUTCOMES) == set(PITCH_OUTCOMES)
@@ -527,7 +522,7 @@ _EVENT_CASES: tuple[str | None, ...] = (
 
 
 class TestThePlateAppearanceRows:
-    """``pa_only`` reads only the pool rows of real plate appearances (SIM-553).
+    """``pa_only`` reads only the pool rows of real plate appearances.
 
     The label check compares the chain with real plate appearances, so both
     sides must count the same ``(game_pk, at_bat_number)`` groups.
@@ -763,7 +758,7 @@ class TestTheLabelCheck:
             assert c == chain[channel] and r == real[channel]
             assert gap == pytest.approx((c - r) / r)
         verdict = {r[0]: r[4] for r in rows}
-        # The SIM-553 defect on the all-rows chain: K -4.1%, BB +2.9%, HBP
+        # The foul-tip mislabel (SIM-553) on the all-rows chain: K -4.1%, BB +2.9%, HBP
         # +0.9%, pitches +1.1% (the pa_only read: -4.29 / +2.31 / +1.12 / +0.90%).
         assert verdict == {"k": False, "walk": False, "hbp": False, "pitches": False}
 
@@ -782,8 +777,11 @@ class TestTheLabelCheck:
         all_rows = _rates(0.22622, 0.08289, 0.01117, 3.90555)
         assert all(r[4] for r in pc.label_check(all_rows, real))
 
-    def test_the_sim553_coding_fails_on_the_pa_only_read(self):
-        """The old coding, pa_only (2026-09-25): -4.29 / +2.31 / +1.12 / +0.90% — every channel fails."""
+    def test_the_foul_tip_as_foul_coding_fails_on_the_pa_only_read(self):
+        """The foul-tip-as-foul coding, pa_only (2026-09-25): -4.29 / +2.31 / +1.12 / +0.90%.
+
+        Every channel fails.
+        """
         rows = pc.label_check(
             _rates(0.2159, 0.0845, 0.0113, 3.9301), _rates(0.22554, 0.08259, 0.01118, 3.8949)
         )

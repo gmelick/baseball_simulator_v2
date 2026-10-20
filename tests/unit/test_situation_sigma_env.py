@@ -1,12 +1,12 @@
 """
 tests/unit/test_situation_sigma_env.py
 =======================================
-SIM-548: the pitch draw's situation bandwidth has an environment variable.
+The pitch draw's situation bandwidth has an environment variable.
 
-``FullPoolSampler.sit_sigma`` is the Gaussian on the base-out situation. Its
-code default is 2.0. Before SIM-548 no variable set it, so the offline fit
-could ladder it but no arm could run it. ``SIM_SIT_SIGMA`` closes that gap:
-the factory applies it to the production sampler next to the fatigue sigmas.
+``FullPoolSampler.sit_sigma`` is the width of the bell-curve (Gaussian) weight
+on the base-out situation. Its code default is 2.0. ``SIM_SIT_SIGMA`` sets it,
+so an arm of the accuracy fit (SIM-548) can run a fitted value: the factory
+applies it to the production sampler next to the fatigue sigmas.
 
 The sampler is built over a tiny in-memory bundle, the way
 ``tests/unit/test_actor_powers.py`` builds one.
@@ -102,11 +102,10 @@ def test_sit_sigma_changes_the_situation_weight() -> None:
     """The bandwidth reaches the draw: a row far from the live situation
     weighs less under a narrow bandwidth than under a wide one."""
     fp = _sampler()
-    far = np.zeros(6, dtype=np.float32)
-    far[4] = 5.0
-    far[0] = 3.0  # a different base state from every pool row
+    # (outs, runners, inning, score margin): far from every pool row.
+    far = np.array([2.0, 7.0, 15.0, 5.0], dtype=np.float32)
     apply_sit_sigma_env(fp, {"SIM_SIT_SIGMA": "2.0"})
-    wide = float(fp._f_situation("R", far)[0])
+    wide = float(fp._f_situation_baseout("R", far)[0])
     apply_sit_sigma_env(fp, {"SIM_SIT_SIGMA": "0.5"})
-    narrow = float(fp._f_situation("R", far)[0])
+    narrow = float(fp._f_situation_baseout("R", far)[0])
     assert narrow < wide

@@ -1,16 +1,9 @@
-"""
-test_game_state_contract.py
-======================
-Unit tests for SIM-311 -- the ``GameState`` / ``PlayResult`` dataclass contract
-(``simulation/game_state.py``).
+"""Tests of the ``GameState`` / ``PlayResult`` dataclass contract.
 
-This is a CONTRACT deliverable: the tests construct + mutate a ``GameState``,
-assert the lightweight invariants, round-trip a ``PlayResult``, and confirm the
-dataclasses expose the fields the SIM-310 spec
-(``docs/architecture/2026-06-17-phase4-sim-loop-spec.md`` §2 step I/O) requires.
-
-No DB / no FAISS: plain construction only (the state-machine that drives these
-types is SIM-316; the invalid-state harness is SIM-326).
+The types live in ``simulation/game_state.py``. The tests construct and change
+a ``GameState``, assert its light invariants, build a ``PlayResult``, and
+confirm the dataclasses expose the fields the loop reads and writes. No
+database: plain construction only.
 """
 
 from __future__ import annotations
@@ -51,12 +44,12 @@ def test_gamestate_constructs_with_sane_defaults():
     assert gs.home_score == 0 and gs.away_score == 0
     assert gs.bases.count_on_base == 0
     assert gs.runners_state == 0
-    # Manager context hook exists and is typed (SIM-323 fills it).
+    # The manager context exists and is typed (the manager hooks fill it).
     assert isinstance(gs.manager, ManagerContext)
 
 
 def test_sampler_prefilter_keys_present():
-    """Spec §4.3 — (pitcher_id, bat_hand, season) are tile pre-filter keys."""
+    """``sampler_prefilter`` returns the (pitcher_id, bat_hand, season) tuple."""
     gs = _fresh_state(pitcher_id=123, bat_hand="R", season=2023)
     assert gs.sampler_prefilter() == (123, "R", 2023)
 
@@ -150,7 +143,7 @@ def test_base_occupancy_and_runners_state_encoding():
     bases = Bases(first=101, third=303)  # runners on 1B and 3B
     assert bases.occupancy == (True, False, True)
     assert bases.count_on_base == 2
-    # bit0=1B, bit2=3B -> 0b101 == 5 (matches run_resolution encoding).
+    # bit0=1B, bit2=3B -> 0b101 == 5 (the run_resolution encoding).
     assert bases.runners_state == 0b101
     bases.assert_consistent()
     # Loaded bases -> 0b111 == 7.
@@ -166,8 +159,8 @@ def test_negative_runner_id_rejected():
 
 
 def test_gamestate_runners_state_feeds_re24():
-    """A GameState's (outs, runners_state) plug straight into the SIM-312 RE24
-    matrix -- the encodings are byte-compatible."""
+    """A GameState's (outs, runners_state) plug straight into the run
+    expectancy (RE24) matrix: the encodings are byte-compatible."""
     gs = _fresh_state()
     gs.bases = Bases(first=10, second=20)  # 1B+2B -> 0b011 == 3
     gs.record_out()  # 1 out
@@ -188,12 +181,12 @@ def test_assert_invariants_aggregate():
 
 
 # ===========================================================================
-# PlayResult round-trip + spec field coverage
+# PlayResult defaults and field coverage
 # ===========================================================================
 
 
 def test_playresult_defaults_non_contact():
-    """A non-contact pitch result has no batted-ball payload + neutral deltas."""
+    """A non-contact pitch result has no batted-ball payload and neutral deltas."""
     pr = PlayResult(pitch_outcome="ball")
     assert pr.is_contact is False
     assert pr.event is None
@@ -205,8 +198,8 @@ def test_playresult_defaults_non_contact():
 
 
 def test_playresult_carries_run_resolution_provenance():
-    """SIM-312 alignment: PlayResult exposes the run-resolution provenance so the
-    loop never re-derives run values inline (spec §8)."""
+    """PlayResult carries where its run value came from, so the loop never
+    derives run values again inline."""
     pr = PlayResult(
         pitch_outcome="in_play",
         is_contact=True,
@@ -230,38 +223,38 @@ def test_playresult_carries_run_resolution_provenance():
 
 
 # ===========================================================================
-# Spec §2 step-I/O field coverage (the contract other tickets compile against)
+# The fields the loop reads and writes (the contract other modules compile against)
 # ===========================================================================
 
 
 def test_gamestate_exposes_spec_step1_situation_context_fields():
-    """Spec step 1 reads: count, outs, inning/half, base state, score diff,
-    leverage, pitcher pitch-count, batter PA-count, park."""
+    """The situation the loop reads: count, outs, inning/half, base state,
+    score, matchup, pitch count, plate-appearance count, park and lineups."""
     gs = _fresh_state()
     for fld in (
         "balls",
-        "strikes",  # count (step 4 / §5.1)
-        "outs",  # §6.1
+        "strikes",  # the count
+        "outs",
         "inning",
         "half",  # inning/half
-        "bases",  # base state (step 7)
+        "bases",  # the base state
         "home_score",
-        "away_score",  # score (step 8)
+        "away_score",  # the score
         "pitcher_id",
         "bat_hand",
-        "season",  # pre-filter (§4.3)
+        "season",  # the matchup key
         "batter_id",
-        "throw_hand",  # matchup (step 2)
+        "throw_hand",  # the matchup
         "pitcher_pitch_count",
         "batter_pa_count",
-        "park",  # step-1 reads
+        "park",  # the live park
         "away_lineup",
-        "home_lineup",  # batting order (§6.1)
+        "home_lineup",  # the batting orders
         "away_lineup_slot",
-        "home_lineup_slot",  # lineup pointers (§6.1)
+        "home_lineup_slot",  # the lineup pointers
         "manager",
         "seed",
-    ):  # manager hook (§3) / RNG (§6.3)
+    ):  # the manager context / the seed
         assert hasattr(gs, fld), f"GameState missing spec field: {fld}"
     # Derived situation reads.
     for prop in ("offense", "defense", "score_diff", "runners_state"):
@@ -269,10 +262,10 @@ def test_gamestate_exposes_spec_step1_situation_context_fields():
 
 
 def test_manager_context_fields_present():
-    """Spec §3 pre-pitch hook context (IBB / bullpen / leverage) — SIM-323.
-    The green-light rate, the pitch-out and the hit-and-run signals left with
-    their hooks on 2026-09-13 (SIM-427): the steal is a draw with the manager's
-    measured rate as a weight; no signal field carries it."""
+    """The manager context carries the intentional walk, the pen and the
+    leverage. It carries no green-light rate, pitch-out or hit-and-run
+    signal: the steal is a draw with the manager's measured rate as a weight
+    (the real manager and pen, SIM-427)."""
     mc = ManagerContext()
     for fld in ("leverage", "bullpen_available", "intentional_walk_signalled"):
         assert hasattr(mc, fld)
@@ -281,24 +274,24 @@ def test_manager_context_fields_present():
 
 
 def test_playresult_exposes_spec_step_deltas():
-    """Spec steps 5/6/7 deltas + step-8 next-state pointer all have typed homes."""
+    """The pitch's results and the next-state pointer all have typed fields."""
     pr = PlayResult(pitch_outcome="in_play")
     for fld in (
         "pitch_outcome",
         "is_contact",
         "pa_terminal",
-        "event",  # step 3/4
+        "event",  # the pitch and its event
         "exit_velo",
         "launch_angle",
-        "spray_angle",  # step 5
+        "spray_angle",  # the batted ball
         "fielder_id",
         "is_error",
-        "outs_recorded",  # step 6
+        "outs_recorded",  # the fielding
         "baserunner_advances",
         "steal_attempted",
-        "steal_outcome",  # step 7
+        "steal_outcome",  # the running game
         "runs",
-        "runs_scored",  # step 8 runs
+        "runs_scored",  # the runs
         "next_state",
-    ):  # step 8 state
+    ):  # the committed state
         assert hasattr(pr, fld), f"PlayResult missing spec field: {fld}"
