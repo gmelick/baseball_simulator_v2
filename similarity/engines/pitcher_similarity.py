@@ -1,120 +1,65 @@
-"""
-pitcher_similarity.py
-=====================
-Step 2.1 — Pitcher-to-Pitcher Similarity (Command & Pitch Profile)
-MLB Baseball Simulation Platform
-(SIM-075: arsenal W2 cache lookup vectorized via NumPy matrix row-slice)
+"""The pitcher similarity engine: how alike two pitcher-seasons are.
 
-Computes a composite similarity score [0, 1] between any two MLB
-pitcher-season profiles by combining:
-  1. Arsenal similarity  — GMM-to-GMM distance via Wasserstein-2 optimal
-                           transport across mixture components
-  2. Command similarity  — Gaussian RBF kernel over plate-discipline
-                           metrics
+The engine scores two pitcher-seasons of the same throwing hand from 0 to 1
+(1 = identical). The score is a weighted sum of two sub-scores:
 
-Each sub-score is individually normalized to [0, 1] and then combined
-using a configurable weighted average (arsenal most-weighted per the
-project specification).
+* The arsenal (weight 0.65): how alike the two pitch mixes are. Each
+  pitcher-season is a GMM (a Gaussian mixture model: one Gaussian per pitch
+  cluster, over velocity, movement, spin and the release point). The engine
+  measures the W₂ distance (the Wasserstein-2 distance: the least cost to move
+  one mixture onto the other) and scores it as exp(-W₂ / ARSENAL_SCALE).
+* The command (weight 0.35): an RBF kernel (a Gaussian kernel,
+  score = exp(-distance² / 2σ²)) over seven plate-discipline rates.
 
-CRITICAL DESIGN PRINCIPLE — EXHAUSTIVE SCORING:
-  The simulation's pitch-pool weighting requires a similarity score
-  for EVERY pitcher-season in the population, not just a pre-filtered
-  top-N. The engine therefore scores a query against ALL same-handedness
-  profiles and returns the full scored list. Cross-season comparisons
-  (e.g. 2025 Scherzer vs. 2024 Scherzer) are first-class — only the
-  exact same (pitcher_id, season) pair is excluded.
+Why W₂. W₂ is a true metric: it is symmetric and obeys the triangle
+inequality, and KL divergence is neither. It compares mixtures with different
+numbers of components. Between two single Gaussians it has a closed form (the
+Bures-Wasserstein distance) that reads the full covariance, so a pitch's
+velocity-spin correlation counts. The POT library (Python Optimal Transport)
+solves the transport between the components.
 
-Architecture
-------------
-  DuckDB (read-only)
-    ├── derived.pitcher_season_metrics   → command metrics + GMM JSON
-    ├── derived.pitcher_gmm_components   → fast SQL-queryable component centroids
-    └── derived.league_averages          → fallback profiles for small-sample pitchers
-         │
-         ▼
-  PitcherSimilarityEngine (this module)
-    ├── PitcherProfile          — dataclass holding one pitcher/season profile
-    ├── GMMModel                — deserialized GMM with components
-    ├── ArsenalSimilarity       — Wasserstein-2 optimal transport scorer
-    ├── RBFSimilarity           — vectorized batch RBF kernel scorer
-    ├── EmpiricalBayesShrinkage — blends small-sample profiles toward league avg
-    └── ArsenalCache            — lazy + optional batch W2 distance cache
-         │
-         ▼
-  query(pitcher_id, season, n=None) → List[SimilarityResult]
-                                     (default n=None returns ALL)
+Why the linear form exp(-W₂ / ARSENAL_SCALE). The simulator weights every
+pitch in the pool by similarity, not only the top matches. The squared form
+exp(-γ·W₂²) crushes every far pitcher to about 0; the linear form keeps the
+tail apart. The scale puts the median pair at 0.50: 2.84 / ln 2 = 4.10
+(CLAUDE.md §10).
 
-Performance Model
------------------
-  RBF sub-scores are vectorized as matrix operations against the
-  full handedness partition. For 2,400 RHP profiles this takes <1ms.
+The handedness gate. A left-hander never matches a right-hander: the release
+geometry and the batter's view differ. Each hand is its own partition. Two
+seasons of one pitcher do match; only the query's own (pitcher_id, season)
+is left out of the results.
 
-  Arsenal W2 is the expensive path (~0.5ms per pair due to 8×8 matrix
-  square roots). Two strategies:
+The adjustments. EB (empirical-Bayes shrinkage) pulls each command vector
+toward its season's league average, with weight α = N / (N + EB_N_PRIOR) on
+the pitcher's own N pitches. The composite is multiplied by
+√min(α_query, α_candidate), a confidence discount. A pair without both GMMs
+moves the arsenal weight onto the command score.
 
-    1. Lazy caching: first query for a pitcher computes W2 against all
-       same-handedness profiles (~1.2s for 2,400 RHP). Results are
-       cached; subsequent queries for the same pitcher are instant.
+The performance model. The command scores of a partition are one matrix
+operation (under 1 ms for thousands of profiles). The W₂ distance needs two
+8 × 8 matrix square roots per pair of components: about 0.5 ms a pitcher
+pair, so a first query against 2,400 right-handers takes about 1.2 s.
+``ArsenalCache`` (``similarity/engines/arsenal_cache.py``) keeps every
+distance once. It fills lazily, or all at once through
+``precompute_arsenal_cache``, and then serves a query as one row of a dense
+matrix. The simulator does not query this engine: the nightly artifact build
+scores every profile once and ships the scores as a matrix.
 
-    2. Batch precomputation: call precompute_arsenal_cache() after build()
-       to fill the full pairwise cache (~20min for 2,400 RHP with
-       multiprocessing). Can be persisted to disk.
+The data, read-only from DuckDB: ``derived.pitcher_season_metrics`` (the
+command rates and the GMM JSON) and ``derived.league_averages`` (the
+shrinkage targets).
 
-  For simulation: the first iteration pays the ~1s lazy-cache cost per
-  pitcher; all 99 subsequent iterations are <1ms.
+``ARSENAL_SCALE`` is a module global on purpose. ``apply_calibration``
+rewrites it, and ``ArsenalSimilarity.score``, ``HandednessPartition.score_all``
+and ``PitcherSimilarityEngine._score_pair`` read it at call time, so the four
+stay in this file.
 
-Key Design Decisions
---------------------
-- **Wasserstein-2 (Earth Mover's Distance) for arsenal comparison:**
-  The gold-standard distance between two Gaussian Mixture Models. Unlike
-  KL divergence it is a true metric (symmetric, satisfies triangle
-  inequality), handles mixtures with different numbers of components
-  naturally, and has a closed-form solution between individual Gaussian
-  components. We solve the optimal transport problem via the POT library
-  (Python Optimal Transport).
+Usage::
 
-- **Full covariance Gaussian distance (Bures-Wasserstein):**
-  The W2 distance between two individual Gaussians N(m1, C1) and
-  N(m2, C2) is:
-    W2² = ||m1 - m2||² + Tr(C1 + C2 - 2*(C1^{1/2} C2 C1^{1/2})^{1/2})
-  This properly accounts for correlation structure in the pitch profile
-  (e.g. velo/spin correlation) rather than treating features as
-  independent.
-
-- **Empirical Bayes shrinkage for small-sample pitchers:**
-  Pitchers below the minimum sample threshold (200 pitches) have their
-  feature vector shrunk toward the league-average profile. The shrinkage
-  weight is α = N / (N + N_prior), where N_prior is calibrated so that
-  at 200 pitches the prior contributes ~0%.
-
-- **Handedness gating:**
-  LHP and RHP live in separate partitions. A LHP is never matched
-  to a RHP — their release geometry and batter-facing profiles are
-  fundamentally different.
-
-- **Cross-season comparisons are first-class:**
-  2025 Scherzer vs. 2024 Scherzer is a valid and useful comparison.
-  Only the exact same (pitcher_id, season) tuple is excluded from
-  results. This enables the simulation to track pitcher evolution and
-  blend multi-year profiles.
-
-Dependencies
-------------
-  pip install duckdb numpy scipy scikit-learn POT (python-ot)
-
-Usage
------
-  engine = PitcherSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
-  engine.build(seasons=[2022, 2023, 2024, 2025])
-
-  # All similar pitchers (exhaustive)
-  results = engine.query(pitcher_id=543037, season=2025)
-
-  # Top-20 only
-  results = engine.query(pitcher_id=543037, season=2025, n=20)
-
-  # Optional: pre-warm the full arsenal cache for instant queries
-  engine.precompute_arsenal_cache(n_workers=4)
+    engine = PitcherSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
+    engine.build(seasons=[2023, 2024, 2025, 2026])
+    every_match = engine.query(pitcher_id=543037, season=2025)
+    top_20 = engine.query(pitcher_id=543037, season=2025, n=20)
 """
 
 from __future__ import annotations
@@ -134,19 +79,15 @@ from db.introspect import duck_columns
 from similarity.engines.arsenal_cache import ArsenalCache
 
 if TYPE_CHECKING:
-    # SIM-346/361: annotation-only import — avoids a runtime circular import with
-    # similarity_calibration (which imports engine helpers).
+    # For annotations only: the engine does not load the calibration package
+    # when it imports.
     from similarity.calibration.report import CalibrationReport
 
-# POT (Python Optimal Transport) provides the EMD solver used by the
-# W2 arsenal distance.  It does not yet publish cp313 wheels (as of
-# 2026-05) — a top-level `import ot` therefore makes the whole module
-# unimportable on Python 3.13, breaking the engine-build smoke tests
-# even though they mock duckdb and never touch the W2 code path.
-#
-# Gate it behind a lazy import: smoke tests don't reach the W2 path,
-# so they don't need POT installed.  Real build/query paths call
-# `_require_pot()` first and raise a clean RuntimeError if missing.
+# POT (Python Optimal Transport) solves the transport behind the W₂ distance.
+# requirements.txt installs it, but the import stays optional, so the module
+# imports on a host without POT (the engine-build smoke tests mock DuckDB and
+# never reach W₂). Without POT, ArsenalSimilarity.distance uses a greedy
+# transport instead.
 try:  # pragma: no cover
     import ot
 
@@ -158,7 +99,7 @@ except ImportError as _pot_err:  # pragma: no cover
 
 
 def _require_pot() -> None:
-    """Raise a clean RuntimeError when POT is needed but not installed."""
+    """Raise a RuntimeError when POT is not installed."""
     if not _POT_AVAILABLE:  # pragma: no cover
         raise RuntimeError(
             "POT (Python Optimal Transport) is required for W2 arsenal "
@@ -184,31 +125,31 @@ log = logging.getLogger("pitcher_similarity")
 # Config
 # ---------------------------------------------------------------------------
 
-# SIM-533 (designed 2026-09-18, decided by the owner 2026-09-19): Savant's arm angle, active spin
-# and spin-axis deviation are NOT features, by owner decision on the measurements in
+# The eight dimensions of the arsenal GMM. The list must match GMM_FEATURE_NAMES
+# in player_profile_computor, which fits the GMMs.
+# Savant's arm angle, active spin and spin-axis deviation are NOT features, by owner
+# decision (the arm-angle and spin-shape study, SIM-533) on the measurements in
 # docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md.
-#   * The release point is already here (release_x, release_z, release_ext,
-#     per pitch cluster). SIM-067 removed a second release sub-score that
-#     double-counted it; the model reads the release point once.
-#   * Arm angle = atan2(release z - shoulder z, |release x - shoulder x|)
-#     (r 1.000 on Savant's own columns). Our release point reproduces 73% of
-#     it, 81% with height; the rest is the shoulder's posture, which the
-#     ball's flight does not carry. On 67,941 same-hand pairs of 2024 that
-#     remainder adds 0.0005 R2 to the score's fit of nine outcome rates.
-#   * Active spin follows movement x velocity / spin rate (r 0.94); the
-#     measured axis IS spin_axis (0.992); the inferred axis is a formula on
-#     ivb/hb (0.987); their difference rebuilds at r 0.80. None adds more than
-#     0.009 R2 on outcomes the score does not read.
-#   * The one signal points the other way: given the score, a larger
-#     arm-angle gap goes with a SMALLER outcome gap (coefficient -0.17), so
-#     the W2's equal weighting of its release dimensions may be too heavy.
-#     A per-dimension weight is a candidate tunable for the comprehensive
-#     sweep (SIM-548), not a feature.
-#   * Savant's per-pitch arm angle already sits in raw.savant_pitch_tracking
-#     (Alembic 0020 carried it for this ticket); it stays stored and unread.
-# The guard is tests/unit/test_arm_angle_decision.py; the numbers
-# re-run from scripts/probes/arm_angle_probe.py.
-# Feature names inside GMM (must match GMM_FEATURE_NAMES in player_profile_computor)
+#   * The release point is here already (release_x, release_z, release_ext, per
+#     pitch cluster). The model reads it once; a second release sub-score would
+#     count it twice.
+#   * Arm angle = atan2(release z - shoulder z, |release x - shoulder x|) (r 1.000
+#     on Savant's own columns). Our release point reproduces 73% of it, 81% with
+#     height. The rest is the shoulder's posture, which the ball's flight does not
+#     carry. On 67,941 same-hand pairs of 2024, that rest adds 0.0005 R² to the
+#     score's fit of nine outcome rates.
+#   * Active spin follows movement × velocity / spin rate (r 0.94). The measured
+#     axis IS spin_axis (r 0.992). The inferred axis is a formula on ivb and hb
+#     (r 0.987). Their difference rebuilds at r 0.80. None adds more than 0.009 R²
+#     on outcomes the score does not read.
+#   * One signal points the other way: given the score, a larger arm-angle gap
+#     goes with a SMALLER outcome gap (coefficient -0.17). The W₂ may weight its
+#     three release dimensions too heavily. A weight per dimension is a candidate
+#     for the comprehensive sweep of the tunable parameters (SIM-548), not a feature.
+#   * Savant's per-pitch arm angle is stored in raw.savant_pitch_tracking and
+#     stays unread.
+# tests/unit/test_arm_angle_decision.py guards the decision;
+# scripts/probes/arm_angle_probe.py re-runs the numbers.
 GMM_FEATURE_NAMES = [
     "velo",
     "ivb",
@@ -221,7 +162,7 @@ GMM_FEATURE_NAMES = [
 ]
 GMM_FEATURE_DIM = len(GMM_FEATURE_NAMES)
 
-# Command features used for the RBF command sub-score
+# The plate-discipline rates of the command sub-score, in vector order.
 COMMAND_FEATURES = [
     "bb_rate",
     "k_rate",
@@ -232,69 +173,58 @@ COMMAND_FEATURES = [
     "whiff_rate",
 ]
 
-# Sub-score weights — arsenal most weighted per project spec
+# The sub-score weights. The project specification gives the arsenal the most.
 WEIGHT_ARSENAL = 0.65
 WEIGHT_COMMAND = 0.35
 _TOTAL_WEIGHT = WEIGHT_ARSENAL + WEIGHT_COMMAND
 assert abs(_TOTAL_WEIGHT - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# RBF bandwidth parameters (gamma = 1 / (2 * sigma²))
-# Calibrated so that the median MLB pitcher pair gets a score
-# around 0.4–0.6 (useful discrimination range).
-RBF_SIGMA_COMMAND = 1.0453  # tighter — command is lower-dimensional
+# The bandwidth σ of the command kernel: gamma = 1 / (2σ²). The value puts the
+# median pitcher pair's command score at about 0.4 to 0.6, where the score
+# still tells pairs apart.
+RBF_SIGMA_COMMAND = 1.0453
 
-# Arsenal W2 distance → similarity score transform.
+# The arsenal score: score = exp(-W₂ / ARSENAL_SCALE). The project locks this
+# linear form (CLAUDE.md §10); the module docstring says why.
 #
-# SINGLE CANONICAL FORM (SIM-346): linear exponential ONLY.
-#   score = exp(-W₂ / ARSENAL_SCALE)
+# The scale puts the median pair at a target score:
+#   ARSENAL_SCALE = -median_W₂ / ln(target) = 2.84 / 0.693 = 4.10 for a 0.50 target.
+# The calibrator fits the squared form's gamma on the same anchor.
+# arsenal_scale_from_gamma converts that gamma into this scale, and
+# PitcherSimilarityEngine.apply_calibration rewrites this global with it.
 #
-# Linear rather than squared because the simulation uses similarity as a
-# weight for ALL historical pitches in the pool, not just top-N. The
-# linear form keeps the tail (dissimilar pitchers) distinguishable rather
-# than crushing them all to ~0, which matters when even moderately
-# different pitchers contribute to the weighted sample. This is the locked
-# project convention (agent_team.md: "linear exponential exp(-W₂ / 4.10)
-# used over squared exponential"). The squared-exponential ``arsenal_gamma``
-# form (exp(-γ·W₂²)) that the calibrator computes is the SAME calibration
-# anchor expressed differently and is converted into this linear scale by
-# ``arsenal_scale_from_gamma`` / ``PitcherSimilarityEngine.apply_calibration``
-# — there is no longer a second, divergent squared code path in the engine.
-#
-# Calibration: ARSENAL_SCALE = -median_W₂ / ln(target).
-# For median W₂ ≈ 2.84 and target 0.50: scale = 2.84 / 0.693 = 4.10.
-# (Previously a hand-tuned 4.25 literal, which drifted off the calibrated
-# value and was never reconciled with the calibrator output — fixed in
-# SIM-346.)
-#
-# Recalibrate from real data and wire the result into the engine via:
+# To refit from real data (the calibrator fits the arsenal only when it gets
+# the distances):
 #   from similarity.similarity_calibration import SimilarityCalibrator
-#   report = SimilarityCalibrator(db).calibrate_from_population(seasons)
-#   engine.apply_calibration(report)   # overrides ARSENAL_SCALE from the report
+#   engine.precompute_arsenal_cache()
+#   dists = engine._arsenal_cache.finite_distances()
+#   report = SimilarityCalibrator(duckdb_path).calibrate_from_population(
+#       seasons, arsenal_w2_distances=dists)
+#   engine.apply_calibration(report)
 ARSENAL_SCALE = 4.10
 
-# Default used whenever no CalibrationReport has been applied. apply_calibration
-# overrides the module-level ARSENAL_SCALE; this constant preserves the locked
-# fallback so a fresh engine is still on the calibrated 0.50-median scale.
+# The scale when no CalibrationReport applies. apply_calibration rewrites
+# ARSENAL_SCALE; this constant keeps the 4.10 fallback (median pair at 0.50).
 DEFAULT_ARSENAL_SCALE = 4.10
 
-# Empirical Bayes shrinkage prior strength
-# At N_PRIOR pitches, the shrinkage weight α = N / (N + N_PRIOR) = 0.5
-# At 200 pitches (the minimum sample threshold), α ≈ 200/(200+50) = 0.80
+# The EB prior: the shrinkage weight is α = N / (N + EB_N_PRIOR) for N pitches.
+# At N = EB_N_PRIOR, α = 0.5. At the 200-pitch minimum, α = 200 / 205 ≈ 0.98.
 EB_N_PRIOR = 5
 
-# Minimum cluster size for GMM — components with fewer assigned pitches
-# than this are merged into the nearest larger component.
+# A GMM component with fewer assigned pitches merges into its nearest other
+# component (enforce_min_cluster_size).
 MIN_CLUSTER_SIZE = 30
 
-# Minimum sample for similarity (matches player_profile_computor.py)
+# The minimum sample of a profile, as in player_profile_computor.py. The engine
+# loads only the profiles that the computor marks at or above it.
 MIN_PITCHER_PITCHES = 200
 
 
 def arsenal_scale_from_gamma(gamma: float, median_w2: float) -> float:
-    """Convert a calibrated squared-exponential ``arsenal_gamma`` into the
-    engine's canonical LINEAR ``ARSENAL_SCALE`` (SIM-346 reconciliation).
+    """Convert the calibrator's squared-form ``arsenal_gamma`` into the
+    engine's linear ``ARSENAL_SCALE``.
 
-    The calibrator solves its anchor in squared-exponential form::
+    The calibrator solves its anchor in the squared form::
 
         target = exp(-gamma * median_w2 ** 2)   =>   gamma = -ln(target)/median_w2²
 
@@ -302,22 +232,22 @@ def arsenal_scale_from_gamma(gamma: float, median_w2: float) -> float:
 
         target = exp(-median_w2 / scale)        =>   scale  = -median_w2/ln(target)
 
-    Both pin the SAME median W₂ to the SAME target score, so they share the
-    identity ``-ln(target) = gamma * median_w2² = median_w2 / scale``, giving::
+    Both pin the SAME median W₂ to the SAME target score, so
+    ``-ln(target) = gamma * median_w2² = median_w2 / scale``, and::
 
         scale = 1 / (gamma * median_w2)
 
     Parameters
     ----------
     gamma : float
-        ``CalibrationReport.arsenal_gamma`` (squared-exp coefficient).
+        ``CalibrationReport.arsenal_gamma``, the squared form's coefficient.
     median_w2 : float
-        Median finite W₂ distance used as the calibration anchor.
+        The median finite W₂ distance of the calibration anchor.
 
     Returns
     -------
-    The equivalent linear ``ARSENAL_SCALE`` (defaults to ``DEFAULT_ARSENAL_SCALE``
-    if the inputs are non-positive / non-finite).
+    The linear ``ARSENAL_SCALE``, or ``DEFAULT_ARSENAL_SCALE`` when an input is
+    missing, not finite or not positive.
     """
     if (
         gamma is None
@@ -338,55 +268,46 @@ def arsenal_scale_from_gamma(gamma: float, median_w2: float) -> float:
 
 @dataclass(frozen=True, slots=True)
 class GMMComponent:
-    """One component of a pitcher's Gaussian Mixture Model."""
+    """One component of a pitcher's GMM: one pitch cluster."""
 
     component_id: int
-    weight: float  # mixing proportion (sums to 1.0)
-    mean: NDArray[np.float64]  # shape (8,) — original feature units
-    covariance: NDArray[np.float64]  # shape (8, 8) — full covariance
+    weight: float  # the mixing proportion; a GMM's weights sum to 1.0
+    mean: NDArray[np.float64]  # shape (8,): original units, z-scores after standardize_gmm
+    covariance: NDArray[np.float64]  # shape (8, 8): the full covariance, in the mean's units
     n_pitches: int
 
 
 @dataclass(slots=True)
 class GMMModel:
-    """Full GMM for one pitcher/season."""
+    """The GMM (Gaussian mixture model) of one pitcher-season."""
 
     n_components: int
     feature_names: list[str]
-    feature_means: NDArray[np.float64]  # global standardization mean
-    feature_stds: NDArray[np.float64]  # global standardization std
+    # The standardization of the fit (the pitcher's own pitches) on load; the
+    # population's after standardize_gmm.
+    feature_means: NDArray[np.float64]
+    feature_stds: NDArray[np.float64]
     components: list[GMMComponent]
     bic: float = 0.0
 
     @classmethod
     def from_json(cls, model_json: dict) -> GMMModel:
-        """Deserialize from the JSON stored in pitcher_season_metrics.gmm_model.
+        """Build a GMMModel from the JSON in ``pitcher_season_metrics.gmm_model``.
 
-        SIM-322 — covariance de-standardization on load.
+        The profile computor (``player_profile_computor._fit_gmm_for_pitcher``)
+        stores each component's ``mean`` in original feature units, but its
+        ``covariance`` in the standardized space of the pitcher's own fit::
 
-        The nightly computor (player_profile_computor._fit_gmm_for_pitcher)
-        stores each component's ``mean`` in ORIGINAL feature units but its
-        ``covariance`` in PER-PITCHER STANDARDIZED space, i.e.
+            cov_std = D⁻¹ · cov_orig · D⁻¹,   D = diag(feature_stds)
 
-            cov_std = D_feat⁻¹ · cov_orig · D_feat⁻¹,   D_feat = diag(feature_stds)
+        This method restores the covariance to original units::
 
-        (see the storage comment "covariance stored in STANDARDIZED space").
-        Loading ``mean`` (original) alongside ``covariance`` (standardized)
-        would leave the two on inconsistent scales.  Downstream,
-        ``standardize_gmm`` standardizes BOTH from ORIGINAL units
-        (``z_mean = (μ−pop_mean)/pop_std`` and ``z_cov = D⁻¹ Σ D⁻¹``); feeding
-        it an already-standardized covariance double-standardizes the cov while
-        the mean is standardized only once, corrupting the W2 / Bures term.
+            cov_orig = D · cov_std · D
 
-        Fix: restore the covariance to ORIGINAL units on load so that the
-        in-memory ``GMMComponent`` is internally consistent (mean and cov both
-        in original units), letting ``standardize_gmm`` apply ONE consistent
-        standardization to both:
-
-            cov_orig = D_feat · cov_std · D_feat
-
-        This is an engine-side fix (no nightly recompute required); the stored
-        JSON convention is unchanged.
+        The mean and the covariance then share one scale, and
+        ``standardize_gmm`` applies one population standardization to both.
+        Without the restore, the covariance is standardized twice and the mean
+        once, and the covariance term of the W₂ distance is wrong.
         """
         feature_means = np.array(
             model_json.get("feature_means", [0.0] * GMM_FEATURE_DIM),
@@ -396,13 +317,10 @@ class GMMModel:
             model_json.get("feature_stds", [1.0] * GMM_FEATURE_DIM),
             dtype=np.float64,
         )
-        # D_feat = diag(feature_stds) — used to de-standardize the stored cov.
         d_feat = np.diag(feature_stds)
 
         components = []
         for c in model_json.get("components", []):
-            # Stored covariance is in per-pitcher STANDARDIZED space; convert
-            # back to ORIGINAL units so it matches the original-unit ``mean``.
             cov_std = np.array(c["covariance"], dtype=np.float64)
             cov_orig = d_feat @ cov_std @ d_feat
             components.append(
@@ -427,29 +345,30 @@ class GMMModel:
 
 @dataclass(slots=True)
 class PitcherProfile:
-    """Complete pitcher profile for similarity scoring."""
+    """One pitcher-season's profile, as the engine scores it."""
 
     pitcher_id: int
     season: int
     p_throws: str  # "L" or "R"
     sample_pitches: int
 
-    # Sub-models
+    # The arsenal; None when the pitcher-season has no fitted GMM.
     gmm: GMMModel | None
 
-    # Command vector (normalized externally before scoring)
+    # The command rates. build() shrinks them toward the league average, and
+    # the FeatureNormalizer z-scores them when the engine scores.
     command_vec: NDArray[np.float64]  # shape (len(COMMAND_FEATURES),)
 
-    # Empirical Bayes shrinkage weight (1.0 = fully own data, 0.0 = fully league avg)
+    # The EB shrinkage weight α (1.0 = all own data, 0.0 = all league average).
     eb_alpha: float = 1.0
 
-    # Below minimum sample flag
+    # True when the sample is under the minimum.
     below_minimum: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
-    """One entry in the similarity query output."""
+    """One candidate pitcher-season in a query's results."""
 
     pitcher_id: int
     season: int
@@ -461,21 +380,20 @@ class SimilarityResult:
 
 
 # ============================================================================
-# Arsenal Similarity — Wasserstein-2 Optimal Transport
+# The arsenal sub-score: the W₂ distance by optimal transport
 # ============================================================================
 
 
 class ArsenalSimilarity:
-    """
-    Computes similarity between two pitchers' arsenals modeled as GMMs
-    using Wasserstein-2 (Earth Mover's Distance) optimal transport.
+    """The arsenal sub-score: the W₂ distance between two pitchers' GMMs.
 
-    The cost matrix between components is the Bures–Wasserstein distance
-    (the W2 distance between individual Gaussian components), which
-    accounts for full covariance structure.
+    The W₂ distance solves an optimal transport between the components of the
+    two mixtures. The cost to move component i onto component j is their
+    squared Bures-Wasserstein distance (the closed-form W₂² between two
+    Gaussians), which reads the full covariance.
 
-    When the POT library is not available, falls back to a greedy
-    nearest-component matching that is a reasonable approximation.
+    Without the POT library, ``distance`` uses a greedy transport, which
+    matches the cheapest component pairs first.
     """
 
     @staticmethod
@@ -485,36 +403,30 @@ class ArsenalSimilarity:
         m2: NDArray,
         C2: NDArray,
     ) -> float:
-        """
-        Squared Bures–Wasserstein distance between N(m1, C1) and N(m2, C2):
+        """The squared Bures-Wasserstein distance between N(m1, C1) and N(m2, C2)::
 
-            W2² = ||m1 - m2||² + Tr(C1 + C2 - 2 * (C1^½ C2 C1^½)^½)
+            W₂² = ||m1 - m2||² + Tr(C1 + C2 - 2 (C1^½ C2 C1^½)^½)
 
-        This is the closed-form W2 distance for multivariate Gaussians.
-        Uses the matrix square root (scipy.linalg.sqrtm).
-
-        Returns a non-negative float. Numerically stable implementation
-        clamps small negative eigenvalues that arise from floating-point
-        error in the matrix square root.
+        This is the closed-form W₂² between two multivariate Gaussians, with
+        the matrix square root of ``scipy.linalg.sqrtm``. Rounding can give
+        ``sqrtm`` a tiny imaginary part: the method keeps the real part, and
+        clamps the result at 0.
         """
         mean_diff_sq = np.sum((m1 - m2) ** 2)
 
-        # Compute C1^{1/2}
         C1_sqrt = sqrtm(C1)
         if np.iscomplexobj(C1_sqrt):
             C1_sqrt = C1_sqrt.real
 
-        # Inner product: C1^{1/2} @ C2 @ C1^{1/2}
         inner = C1_sqrt @ C2 @ C1_sqrt
 
-        # Matrix square root of inner product
         inner_sqrt = sqrtm(inner)
         if np.iscomplexobj(inner_sqrt):
             inner_sqrt = inner_sqrt.real
 
         trace_term = np.trace(C1) + np.trace(C2) - 2.0 * np.trace(inner_sqrt)
 
-        # Clamp to handle floating point noise
+        # Rounding can push a near-zero distance below 0.
         return float(max(mean_diff_sq + trace_term, 0.0))
 
     @classmethod
@@ -523,11 +435,9 @@ class ArsenalSimilarity:
         gmm_a: GMMModel,
         gmm_b: GMMModel,
     ) -> NDArray[np.float64]:
-        """
-        Build the |K_a| × |K_b| cost matrix where entry (i, j) is the
-        squared Bures–Wasserstein distance between component i of gmm_a
-        and component j of gmm_b.
-        """
+        """The |K_a| × |K_b| cost matrix: entry (i, j) is the squared
+        Bures-Wasserstein distance between component i of gmm_a and
+        component j of gmm_b."""
         n_a = len(gmm_a.components)
         n_b = len(gmm_b.components)
         cost = np.zeros((n_a, n_b), dtype=np.float64)
@@ -544,16 +454,15 @@ class ArsenalSimilarity:
 
     @classmethod
     def distance(cls, gmm_a: GMMModel, gmm_b: GMMModel) -> float:
-        """
-        Wasserstein-2 distance between two Gaussian Mixture Models.
+        """The W₂ distance between two GMMs.
 
-        Solves the optimal transport problem:
-            min_{T} Σ_{ij} T_{ij} * C_{ij}
-            s.t. T @ 1 = weights_a, T.T @ 1 = weights_b
+        The method solves the optimal transport problem::
 
-        where C_{ij} is the squared Bures–Wasserstein distance.
+            min_T Σ_ij T_ij · C_ij   subject to   T · 1 = weights_a,   Tᵀ · 1 = weights_b
 
-        Returns the square root of the transport cost (W2, not W2²).
+        where C_ij is the squared Bures-Wasserstein distance between the
+        components. It returns the square root of the least cost (W₂, not
+        W₂²), or inf when either GMM has no component.
         """
         if not gmm_a.components or not gmm_b.components:
             return float("inf")
@@ -562,15 +471,14 @@ class ArsenalSimilarity:
         weights_a = np.array([c.weight for c in gmm_a.components], dtype=np.float64)
         weights_b = np.array([c.weight for c in gmm_b.components], dtype=np.float64)
 
-        # Normalize weights (should already sum to 1, but safety)
+        # The weights should sum to 1 already; normalize them to be safe.
         weights_a /= weights_a.sum()
         weights_b /= weights_b.sum()
 
         if ot is not None:
-            # Exact Earth Mover's Distance via POT linear programming
+            # The exact transport: POT's linear-program solver.
             transport_cost = ot.emd2(weights_a, weights_b, cost)
         else:
-            # Fallback: greedy nearest-component matching
             transport_cost = cls._greedy_transport(weights_a, weights_b, cost)
 
         return float(np.sqrt(max(transport_cost, 0.0)))
@@ -581,11 +489,11 @@ class ArsenalSimilarity:
         wb: NDArray,
         cost: NDArray,
     ) -> float:
-        """
-        Greedy approximation to optimal transport when POT is unavailable.
+        """A greedy transport, for a host without POT.
 
-        Iteratively matches the cheapest remaining (i, j) pair, transferring
-        as much mass as possible. Not optimal but reasonable for small K.
+        The method takes the (i, j) pairs from the cheapest up, and moves as
+        much mass as both sides still hold. The result is not optimal, but it
+        is close for a few components.
         """
         wa = wa.copy()
         wb = wb.copy()
@@ -610,19 +518,10 @@ class ArsenalSimilarity:
 
     @classmethod
     def score(cls, gmm_a: GMMModel, gmm_b: GMMModel) -> float:
-        """
-        Arsenal similarity score in [0, 1].
+        """The arsenal score in [0, 1]: exp(-W₂ / ARSENAL_SCALE).
 
-        SIM-346: canonical LINEAR-exponential transform (the single form used
-        everywhere in this engine — see ARSENAL_SCALE):
-            score = exp(-W₂ / ARSENAL_SCALE)
-
-        (The old docstring described a squared ``exp(-ARSENAL_GAMMA * W₂²)``
-        form that the code never actually used — that dead/divergent path is
-        gone; the calibrator's ``arsenal_gamma`` is converted to this linear
-        scale via ``arsenal_scale_from_gamma``.)
-
-        A distance of 0 → score 1.0 (identical).
+        A distance of 0 scores 1.0; an infinite distance scores 0.0. The
+        method reads the module global ``ARSENAL_SCALE`` at call time.
         """
         d = cls.distance(gmm_a, gmm_b)
         if not np.isfinite(d):
@@ -631,19 +530,18 @@ class ArsenalSimilarity:
 
 
 # ============================================================================
-# Command / Result Similarity — Gaussian RBF Kernel
+# The command sub-score: the RBF kernel
 # ============================================================================
 
 
 class RBFSimilarity:
-    """
-    Gaussian RBF (Radial Basis Function) kernel similarity with
-    dimensionality-invariant scaling.
+    """The RBF kernel (a Gaussian kernel) of the command sub-score.
 
-    K(x, y) = exp(-γ * mean_i[(x_i - y_i)²])
+    K(x, y) = exp(-γ · mean_i (x_i - y_i)²), with γ = 1 / (2σ²).
 
-    Features are z-score normalized before computing the distance so
-    that each feature contributes roughly equally.
+    The mean, not the sum, of the squared gaps keeps the score on one scale
+    for any number of features. A NaN gap counts as 0. The caller z-scores the
+    vectors first (``FeatureNormalizer``), so each feature counts about equally.
     """
 
     def __init__(self, sigma: float = 1.0) -> None:
@@ -651,7 +549,7 @@ class RBFSimilarity:
         self.gamma = 1.0 / (2.0 * sigma**2)
 
     def score(self, x: NDArray, y: NDArray) -> float:
-        """Compute RBF similarity between two vectors. Returns [0, 1]."""
+        """The kernel score of two vectors, in [0, 1]."""
         diff = x - y
         diff = np.nan_to_num(diff, nan=0.0)
         mean_dist_sq = np.dot(diff, diff) / len(diff)
@@ -662,10 +560,8 @@ class RBFSimilarity:
         query: NDArray,
         candidates: NDArray,
     ) -> NDArray[np.float64]:
-        """
-        Compute RBF similarity between one query vector and an array of
-        candidate vectors. Returns shape (n_candidates,).
-        """
+        """The kernel scores of one query vector against each candidate row,
+        shape (n_candidates,)."""
         diff = candidates - query[np.newaxis, :]
         diff = np.nan_to_num(diff, nan=0.0)
         n_features = diff.shape[1]
@@ -674,34 +570,28 @@ class RBFSimilarity:
 
 
 # ============================================================================
-# Empirical Bayes Shrinkage
+# EB shrinkage
 # ============================================================================
 
 
 class EmpiricalBayesShrinkage:
-    """
-    Shrinks a pitcher's raw feature vector toward the league-average
-    profile based on sample size.
+    """EB (empirical-Bayes) shrinkage: pull a vector toward the league average
+    by its sample size.
 
-    Shrinkage weight: α = N / (N + N_prior)
-      - Large N  → α → 1.0 → trust pitcher's own data
-      - Small N  → α → 0.0 → rely on league average
+    The shrinkage weight is α = N / (N + n_prior) for N pitches. A large N
+    gives α near 1 (the pitcher's own rates); a small N gives α near 0 (the
+    league average). With EB_N_PRIOR = 5, a pitcher at the 200-pitch minimum
+    keeps about 98% of his own rates.
 
-    N_prior is calibrated so that at MIN_PITCHER_PITCHES (200), the
-    pitcher's own data accounts for ~80% of the blended profile.
-
-    For GMM models specifically, shrinkage is applied to the *command*
-    and *result* feature vectors only — the GMM itself is either used
-    as-is (if above threshold) or replaced with the league-average GMM
-    (if below threshold). Partially shrinking GMM mixture models is not
-    meaningful because the component structure changes.
+    The engine shrinks the command vector only. A GMM has no partial blend
+    with another GMM, because their components differ, so it stays as fitted.
     """
 
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
     def alpha(self, n_samples: int) -> float:
-        """Shrinkage weight: proportion of own data vs. prior."""
+        """The shrinkage weight α: the share of the pitcher's own data."""
         return n_samples / (n_samples + self.n_prior)
 
     def shrink(
@@ -710,17 +600,15 @@ class EmpiricalBayesShrinkage:
         league_avg_vec: NDArray[np.float64],
         n_samples: int,
     ) -> NDArray[np.float64]:
-        """
-        Returns α * raw_vec + (1 - α) * league_avg_vec.
-        Handles NaN in raw_vec by using league_avg in those positions.
-        """
+        """Return α · raw_vec + (1 - α) · league_avg_vec. A NaN in raw_vec
+        takes the league value."""
         a = self.alpha(n_samples)
         raw_clean = np.where(np.isnan(raw_vec), league_avg_vec, raw_vec)
         return a * raw_clean + (1.0 - a) * league_avg_vec
 
 
 # ============================================================================
-# GMM Post-Processing — Minimum Cluster Size Enforcement
+# GMM post-processing: the standardization and the minimum cluster size
 # ============================================================================
 
 
@@ -729,35 +617,33 @@ def standardize_gmm(
     pop_mean: NDArray[np.float64],
     pop_std: NDArray[np.float64],
 ) -> GMMModel:
-    """
-    Transform a GMM's component means and covariances from original
-    feature units into z-score (standardized) space.
+    """Move a GMM's component means and covariances from original units to
+    z-scores (the gap from the population mean, in population standard
+    deviations).
 
-    This is CRITICAL for making the W2 distance dimensionality-invariant.
-    Without standardization, spin_rate (range ~1000 RPM) dominates
-    velocity (range ~15 mph) in the distance calculation because W2
-    operates on raw Euclidean distances between component centroids.
+    W₂ reads raw Euclidean gaps between the component means. In original
+    units, spin rate (a range of about 1,000 rpm) outweighs velocity (about
+    15 mph). In z-scores, each feature counts on one scale.
 
-    Standardized mean:  z_μ = (μ - pop_mean) / pop_std
-    Standardized cov:   z_Σ = D⁻¹ Σ D⁻¹   where D = diag(pop_std)
+        z_μ = (μ - pop_mean) / pop_std
+        z_Σ = D⁻¹ Σ D⁻¹,   D = diag(pop_std)
 
-    The covariance transform follows from the linear transformation
-    property: if Y = AX, then Cov(Y) = A Cov(X) Aᵀ, where A = D⁻¹.
+    The covariance rule follows from Cov(AX) = A Cov(X) Aᵀ, with A = D⁻¹.
 
     Parameters
     ----------
     gmm : GMMModel
-        GMM with means/covariances in original feature units.
+        A GMM with its means and covariances in original units.
     pop_mean : (D,) array
-        Population mean for each feature (computed across all GMM
-        component centroids, weighted by component weight).
+        The population mean of each feature: the weight-averaged component
+        mean over every profile.
     pop_std : (D,) array
-        Population std for each feature. Zeros replaced with 1.0.
+        The population standard deviation of each feature. A zero becomes 1.0.
 
     Returns
     -------
-    New GMMModel with standardized means and covariances. Weights and
-    component structure are unchanged.
+    A new GMMModel in z-scores. The weights and the components stay as they
+    are.
     """
     safe_std = pop_std.copy()
     safe_std[safe_std == 0] = 1.0
@@ -789,15 +675,23 @@ def standardize_gmm(
 
 def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
     """
-    Merges GMM components with fewer than MIN_CLUSTER_SIZE assigned pitches
-    into the nearest (by centroid Euclidean distance) larger component.
+    Merge each GMM component with fewer than MIN_CLUSTER_SIZE pitches into
+    its nearest other component.
 
-    This resolves the 'extreme archetype' outlier issue noted in the
-    project plan Step 2.1 — tiny components (e.g. 10 pitches of an
-    experimental pitch) can dominate distance calculations due to their
-    unusual location in feature space.
+    A tiny component (say, ten pitches of an experimental pitch) sits in an
+    odd spot of the feature space and can dominate the W₂ distance. Each pass
+    takes the smallest such component and merges it into the component with
+    the nearest mean (the Euclidean distance, in the units the GMM holds;
+    ``build`` runs this before the standardization, so original units). That
+    component can be small too. The passes stop when no small component is
+    left, or one component remains.
 
-    Returns a new GMMModel with the cleaned components.
+    A merge keeps the first two moments: the merged mean and covariance blend
+    the two by weight, and the covariance adds the spread between the two
+    means. At the end the weights are renormalized to sum to 1, and the
+    components are renumbered from 0.
+
+    Returns a new GMMModel.
     """
     if not gmm.components:
         return gmm
@@ -850,7 +744,6 @@ def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
             changed = True
             break
 
-    # Re-normalize weights
     total_w = sum(c.weight for c in components)
     if total_w > 0:
         components = [
@@ -875,25 +768,24 @@ def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
 
 
 # ============================================================================
-# Feature Normalization
+# The command vector's z-score normalizer
 # ============================================================================
 
 
 @dataclass(slots=True)
 class FeatureNormalizer:
-    """
-    Z-score normalizer fit on the population of pitcher profiles.
+    """The z-score normalizer of the command vectors, fit on the loaded profiles.
 
-    Stores per-feature mean and std for command and result feature vectors.
-    Missing values (NaN) are filled with the population
-    mean (i.e. z-score of 0) so they contribute nothing to distance.
+    It keeps each command feature's population mean and standard deviation. A
+    NaN rate becomes the population mean (z-score 0), so it adds nothing to the
+    distance. A feature with zero spread gets a standard deviation of 1.
     """
 
     command_mean: NDArray[np.float64] | None = None
     command_std: NDArray[np.float64] | None = None
 
     def fit(self, profiles: list[PitcherProfile]) -> None:
-        """Compute population statistics from all profiles."""
+        """Fit the mean and the standard deviation on every profile."""
         if not profiles:
             return
 
@@ -904,6 +796,7 @@ class FeatureNormalizer:
         self.command_std[self.command_std == 0] = 1.0
 
     def normalize_command(self, vec: NDArray) -> NDArray:
+        """The z-scores of one command vector; the raw vector before ``fit``."""
         if self.command_mean is None:
             return vec
         normed = (vec - self.command_mean) / self.command_std
@@ -911,30 +804,29 @@ class FeatureNormalizer:
 
 
 # ============================================================================
-# Handedness Partition — Vectorized RBF Matrices
+# The handedness partition: one throwing hand's profiles
 # ============================================================================
 
 
 class HandednessPartition:
-    """
-    Stores all profiles for one handedness (L or R) with pre-built
-    normalized feature matrices for vectorized batch RBF scoring.
+    """Every profile of one throwing hand (L or R), with the z-scored command
+    matrix built once.
 
-    The query path:
-      1. Command/result RBF scores: single matrix op (< 1ms for 3000 profiles)
-      2. Arsenal W2 scores: lookup from ArsenalCache (lazy or precomputed)
-      3. Composite: weighted sum with confidence discount
+    A query runs in three steps:
+      1. The command scores: one matrix operation (under 1 ms for 3,000 profiles).
+      2. The arsenal scores: one row of W₂ distances from the ``ArsenalCache``.
+      3. The composite: the weighted sum, times the confidence discount.
     """
 
     def __init__(self, hand: str) -> None:
         self.hand = hand
         self.profiles: list[PitcherProfile] = []
-        self.keys: list[tuple[int, int]] = []  # parallel to profiles
+        self.keys: list[tuple[int, int]] = []  # (pitcher_id, season), parallel to profiles
 
-        # Normalized feature matrices — shape (N, feature_dim)
+        # The z-scored command vectors, shape (N, len(COMMAND_FEATURES)).
         self._cmd_matrix: NDArray | None = None
 
-        # Confidence (EB alpha) array — shape (N,)
+        # The EB weight α of each profile, shape (N,).
         self._eb_alphas: NDArray | None = None
 
     def build(
@@ -942,7 +834,7 @@ class HandednessPartition:
         profiles: list[PitcherProfile],
         normalizer: FeatureNormalizer,
     ) -> None:
-        """Populate the partition and build vectorized matrices."""
+        """Fill the partition and build the command matrix and the α array."""
         self.profiles = profiles
         self.keys = [(p.pitcher_id, p.season) for p in profiles]
 
@@ -966,16 +858,14 @@ class HandednessPartition:
         arsenal_cache: ArsenalCache,
         command_rbf: RBFSimilarity,
     ) -> list[SimilarityResult]:
-        """
-        Score the query profile against EVERY profile in this partition.
+        """Score the query profile against EVERY profile in this partition.
 
-        Returns a SimilarityResult for each profile EXCEPT the exact
-        same (pitcher_id, season) as the query. Cross-season matches
-        for the same pitcher_id ARE included.
+        The result holds one SimilarityResult for each profile EXCEPT the
+        query's own (pitcher_id, season). The query pitcher's other seasons
+        ARE in it.
 
-        RBF sub-scores are computed in a single vectorized pass.
-        Arsenal W2 distances are looked up from the cache (computed
-        lazily on miss).
+        The command scores come from one vectorized pass. The arsenal
+        distances come from the cache, which computes a missing one.
         """
         if not self.profiles:
             return []
@@ -983,31 +873,25 @@ class HandednessPartition:
         n = len(self.profiles)
         query_key = (query_profile.pitcher_id, query_profile.season)
 
-        # --- Vectorized RBF sub-scores (< 1ms for thousands of profiles) ---
+        # The command scores, in one pass.
         cmd_q = normalizer.normalize_command(query_profile.command_vec)
 
         command_scores = command_rbf.score_batch(cmd_q, self._cmd_matrix)
 
-        # --- Arsenal W2 scores (from cache, vectorized all-vs-one) ---
-        # SIM-075: instead of an O(N) per-candidate dict loop calling
-        # get_or_compute, fetch the entire W2-distance row in one shot
-        # (a single matrix row slice once the dense matrix is built) and
-        # transform it with NumPy. ``row_distances`` returns raw W2 with
-        # 0.0 for self and inf for missing pairs — numerically identical to
-        # the old loop — so the exp/mask below reproduces the same scores.
+        # The arsenal scores. ``row_distances`` returns the query's whole row of
+        # raw W₂ distances (0.0 for the query itself, inf for a pair without
+        # both GMMs), and NumPy turns the finite ones into scores.
         query_has_gmm = query_profile.gmm is not None
 
         w2_row = arsenal_cache.row_distances(query_profile, self.profiles)
         finite_mask = np.isfinite(w2_row)
         arsenal_scores = np.zeros(n, dtype=np.float64)
         arsenal_scores[finite_mask] = np.exp(-w2_row[finite_mask] / ARSENAL_SCALE)
-        # The exact self (pitcher_id, season) is excluded from results below;
-        # match the legacy loop, which left its arsenal score at 0.0 (it
-        # never called get_or_compute for self).
+        # The query's own row leaves the results below; its arsenal score is 0.0.
         self_mask = np.array([k == query_key for k in self.keys], dtype=bool)
         arsenal_scores[self_mask] = 0.0
 
-        # --- Composite scores ---
+        # The composite scores.
         has_arsenal = np.array(
             [query_has_gmm and p.gmm is not None for p in self.profiles],
             dtype=bool,
@@ -1015,39 +899,28 @@ class HandednessPartition:
 
         composite = np.zeros(n, dtype=np.float64)
 
-        # Path 1: both GMMs present — full weighted sum
+        # Both GMMs present: the full weighted sum.
         mask_full = has_arsenal
         composite[mask_full] = (
             WEIGHT_ARSENAL * arsenal_scores[mask_full] + WEIGHT_COMMAND * command_scores[mask_full]
         )
 
-        # Path 2: missing GMM — redistribute the arsenal weight onto command.
-        #
-        # SIM-346 BUG FIX: the old code computed ``(WEIGHT_COMMAND / remaining)``
-        # with ``remaining = WEIGHT_COMMAND``, i.e. an exact ×1.0 no-op. That
-        # left a GMM-less pitcher's composite at ``WEIGHT_COMMAND * command``
-        # (max 0.35) — NOT comparable to a full pitcher's composite (max 1.0),
-        # so command-only pitchers were systematically under-scored and could
-        # never out-rank a mediocre full-arsenal match.
-        #
-        # Correct redistribution: pour the freed arsenal weight into the only
-        # surviving sub-score so the weights still sum to 1.0. With one
-        # remaining sub-score that means rescaling command by
-        # ``(WEIGHT_ARSENAL + WEIGHT_COMMAND) / WEIGHT_COMMAND`` (== 1/0.35 ≈
-        # 2.857), which is exactly ``_TOTAL_WEIGHT / WEIGHT_COMMAND``. The
-        # composite is then a pure command similarity on the same [0, 1] scale
-        # as a full-arsenal composite, just with the confidence discount below.
+        # A GMM missing: the arsenal weight moves onto the command score, so the
+        # weights still sum to 1. The command score is multiplied by
+        # _TOTAL_WEIGHT / WEIGHT_COMMAND (1 / 0.35, about 2.86), and the composite
+        # stays on the same [0, 1] scale as a full pair. Without the move, a
+        # pair without a GMM tops out at 0.35 and never outranks a weak full match.
         mask_no_arsenal = ~has_arsenal
         command_redistrib = _TOTAL_WEIGHT / WEIGHT_COMMAND
         composite[mask_no_arsenal] = command_redistrib * command_scores[mask_no_arsenal]
 
-        # Confidence discount: sqrt(min(alpha_query, alpha_candidate))
+        # The confidence discount: √min(α_query, α_candidate).
         query_alpha = query_profile.eb_alpha
         pair_confidence = np.minimum(query_alpha, self._eb_alphas)
         composite *= np.sqrt(pair_confidence)
         composite = np.clip(composite, 0.0, 1.0)
 
-        # --- Build results (exclude exact self-match only) ---
+        # The results: every profile but the query's own.
         results = []
         for i in range(n):
             if self.keys[i] == query_key:
@@ -1069,36 +942,25 @@ class HandednessPartition:
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class PitcherSimilarityEngine:
-    """
-    The Pitcher-to-Pitcher Similarity Engine.
+    """The pitcher similarity engine: the composite score in [0, 1] of two
+    pitcher-seasons, from the arsenal (W₂) and the command (RBF) sub-scores.
 
-    Computes a composite similarity score [0, 1] between any two
-    pitcher-season profiles using:
-      1. Arsenal similarity (GMM-to-GMM Wasserstein-2 optimal transport)
-      2. Command similarity (RBF kernel over discipline metrics)
+    A query scores EVERY pitcher-season of the same hand. Two seasons of one
+    pitcher (2025 Scherzer against 2024 Scherzer) match; only the query's own
+    (pitcher_id, season) is left out. The module docstring holds the model.
 
-    Scores are computed EXHAUSTIVELY against all same-handedness
-    pitcher-season profiles. Cross-season comparisons (e.g. 2025
-    Scherzer vs. 2024 Scherzer) are included — only the exact same
-    (pitcher_id, season) tuple is excluded.
+    Usage::
 
-    Usage:
         engine = PitcherSimilarityEngine(duckdb_path="path/to/db.duckdb")
-        engine.build(seasons=[2022, 2023, 2024, 2025])
-
-        # All similar pitcher-seasons (exhaustive)
-        all_results = engine.query(pitcher_id=543037, season=2025)
-
-        # Top-20 only
+        engine.build(seasons=[2023, 2024, 2025, 2026])
+        every_match = engine.query(pitcher_id=543037, season=2025)
         top_20 = engine.query(pitcher_id=543037, season=2025, n=20)
-
-        # Optional: pre-warm full cache for instant subsequent queries
-        engine.precompute_arsenal_cache(n_workers=4)
+        engine.precompute_arsenal_cache(n_workers=4)  # optional: fill every W₂ now
     """
 
     def __init__(self, duckdb_path: str) -> None:
@@ -1110,26 +972,24 @@ class PitcherSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._command_rbf = RBFSimilarity(sigma=RBF_SIGMA_COMMAND)
 
-        # Handedness partitions with vectorized matrices
+        # One partition per throwing hand.
         self._partition_l = HandednessPartition("L")
         self._partition_r = HandednessPartition("R")
 
-        # Arsenal W2 distance cache (shared across both partitions)
+        # The W₂ distances of both partitions.
         self._arsenal_cache = ArsenalCache()
 
-        # SIM-346: the calibrated arsenal scale actually in force. Defaults to
-        # the locked DEFAULT_ARSENAL_SCALE; apply_calibration() overrides it
-        # from a CalibrationReport so the engine reads the calibrated value
-        # instead of a hardcoded literal.
+        # The arsenal scale that apply_calibration last set; DEFAULT_ARSENAL_SCALE
+        # until then. The scoring reads the module global ARSENAL_SCALE.
         self._arsenal_scale: float = DEFAULT_ARSENAL_SCALE
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0027 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff every loaded profile declares (the point-in-time rule,
+        # SIM-537). None when the table has no asof_date column (a DuckDB file
+        # before migration 0027) or every row's value is NULL.
         self._asof_date = None
 
     # ------------------------------------------------------------------
-    # Calibration wiring (SIM-346)
+    # Calibration
     # ------------------------------------------------------------------
 
     def apply_calibration(
@@ -1137,30 +997,27 @@ class PitcherSimilarityEngine:
         report: CalibrationReport,
         median_w2: float | None = None,
     ) -> float:
-        """Wire a ``CalibrationReport`` into the engine's arsenal transform.
+        """Apply a ``CalibrationReport`` to the arsenal score.
 
-        Closes the SIM-346 "computed-but-never-applied" gap: the
-        ``SimilarityCalibrator`` produces ``CalibrationReport.arsenal_gamma``
-        (squared-exponential coefficient) plus the median W₂ it was anchored
-        on, but the engine previously ignored it and used a hardcoded
-        ``ARSENAL_SCALE`` literal, letting medians silently drift off 0.50.
+        The ``SimilarityCalibrator`` fits ``report.arsenal_gamma`` (the
+        coefficient of the squared form exp(-gamma · W₂²)) and records the
+        median W₂ of its anchor. This method converts the two into the linear
+        ``ARSENAL_SCALE`` (``arsenal_scale_from_gamma``) and rewrites the
+        module global, so ``ArsenalSimilarity.score``,
+        ``HandednessPartition.score_all`` and ``_score_pair`` read the new
+        scale. The global is shared: the scale reaches every engine in the
+        process. A report with no usable gamma sets ``DEFAULT_ARSENAL_SCALE``.
 
-        This method converts the report's gamma into the engine's canonical
-        LINEAR ``ARSENAL_SCALE`` (via ``arsenal_scale_from_gamma``) and
-        overrides the module-level constant so EVERY scoring path
-        (``score_all``, ``ArsenalSimilarity.score``, ``_score_pair``) picks it
-        up. If the report carries no usable gamma, the locked
-        ``DEFAULT_ARSENAL_SCALE`` is kept.
+        The method reads only the arsenal fields of the report.
 
         Parameters
         ----------
         report : CalibrationReport
-            Must expose ``arsenal_gamma`` (and optionally
-            ``arsenal_median_w2`` / ``target_median_score``).
+            Read for ``arsenal_gamma`` and ``arsenal_median_w2``.
         median_w2 : float, optional
-            Median finite W₂ used as the calibration anchor. If omitted, falls
-            back to ``report.arsenal_median_w2`` then to this engine's own
-            cache (``finite_distances()``), then to the canonical 2.84.
+            The median finite W₂ of the anchor. Without it, the method takes
+            ``report.arsenal_median_w2``, then the median of this engine's
+            cache (``finite_distances()``), then the project's 2.84.
 
         Returns
         -------
@@ -1170,9 +1027,8 @@ class PitcherSimilarityEngine:
 
         gamma = float(getattr(report, "arsenal_gamma", 0.0) or 0.0)
 
-        # Note: the report's median defaults to 0.0 (dataclass default), so a
-        # falsy/non-positive value means "not provided" and we fall back to the
-        # engine's own W2 cache, then to the locked canonical median.
+        # A median of 0.0 (the report's default) means none was fitted: fall back
+        # to this engine's cache, then to the project's median.
         if median_w2 is None or median_w2 <= 0.0:
             report_median = getattr(report, "arsenal_median_w2", 0.0) or 0.0
             median_w2 = float(report_median) if report_median > 0.0 else None
@@ -1184,12 +1040,11 @@ class PitcherSimilarityEngine:
             except Exception:  # pragma: no cover - defensive
                 median_w2 = None
         if median_w2 is None or median_w2 <= 0.0:
-            median_w2 = 2.84  # locked canonical median (agent_team.md)
+            median_w2 = 2.84  # the project's median W₂ (CLAUDE.md §10)
 
         scale = arsenal_scale_from_gamma(gamma, median_w2)
         self._arsenal_scale = scale
-        # Override the module-level constant so all scoring paths read it
-        # (same override pattern the calibrator documents for the batter sigmas).
+        # Every scoring path reads the module global at call time.
         ARSENAL_SCALE = scale
         log.info(
             "SIM-346: applied CalibrationReport — arsenal_gamma=%.5f, "
@@ -1203,7 +1058,11 @@ class PitcherSimilarityEngine:
 
     @property
     def arsenal_scale(self) -> float:
-        """The arsenal W₂→score linear scale currently in force."""
+        """The arsenal scale that this engine's ``apply_calibration`` last set.
+
+        The scoring reads the module global ``ARSENAL_SCALE``, which another
+        engine's ``apply_calibration`` can change.
+        """
         return self._arsenal_scale
 
     # ------------------------------------------------------------------
@@ -1215,18 +1074,19 @@ class PitcherSimilarityEngine:
         seasons: list[int] | None = None,
         arsenal_cache_path: str | None = None,
     ) -> None:
-        """
-        Load all pitcher profiles from DuckDB, apply Empirical Bayes
-        shrinkage, and build vectorized scoring matrices.
+        """Load the profiles from DuckDB and prepare them for scoring.
+
+        The steps: load the league averages and the profiles, shrink each
+        command vector, merge the small GMM components, standardize the GMMs,
+        fit the command normalizer, and build the two hand partitions.
 
         Parameters
         ----------
         seasons : list[int]
-            Seasons to include. If None, loads all available seasons.
+            The seasons to load; None loads every season.
         arsenal_cache_path : str, optional
-            Path to a previously saved arsenal cache file. If provided
-            and the file exists, cached W2 distances are loaded to avoid
-            re-computation.
+            A saved arsenal cache. When the file exists, the engine loads its
+            W₂ distances and does not compute them again.
         """
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
@@ -1237,31 +1097,28 @@ class PitcherSimilarityEngine:
         finally:
             conn.close()
 
-        # Apply Empirical Bayes shrinkage to all profiles
         self._apply_shrinkage()
 
-        # GMM post-processing: enforce minimum cluster size
+        # Merge the small GMM components (in original units).
         for key, profile in self._profiles.items():
             if profile.gmm is not None:
                 self._profiles[key].gmm = enforce_min_cluster_size(profile.gmm)
 
-        # Standardize all GMM component means/covariances into z-score space.
-        # This makes the W2 distance dimensionality-invariant — without it,
-        # spin_rate (range ~1000) dominates velocity (range ~15) in the
-        # distance calculation and arsenal scores collapse to near-zero.
+        # Move every GMM into z-scores. Without it, spin rate (a range of about
+        # 1,000) outweighs velocity (about 15) in W₂, and the arsenal scores
+        # collapse to near 0.
         self._standardize_arsenals()
 
-        # Fit normalizer on the full population
+        # Fit the command normalizer on every profile.
         all_profiles = list(self._profiles.values())
         self._normalizer.fit(all_profiles)
 
-        # Build handedness partitions with vectorized matrices
+        # Build one partition per throwing hand.
         profiles_l = [p for p in all_profiles if p.p_throws == "L"]
         profiles_r = [p for p in all_profiles if p.p_throws == "R"]
         self._partition_l.build(profiles_l, self._normalizer)
         self._partition_r.build(profiles_r, self._normalizer)
 
-        # Optionally load a persisted arsenal cache
         if arsenal_cache_path:
             self._arsenal_cache.load(arsenal_cache_path)
 
@@ -1279,19 +1136,17 @@ class PitcherSimilarityEngine:
         n_workers: int = 1,
         save_path: str | None = None,
     ) -> None:
-        """
-        Batch-precompute ALL pairwise arsenal W2 distances.
+        """Compute every same-hand W₂ distance now, so no query computes one.
 
-        This is optional but recommended for production use. After this
-        call, all subsequent query() calls will be instant (no lazy W2
-        computation needed).
+        The cache then builds each hand's dense matrix, and a query reads one
+        row of it.
 
         Parameters
         ----------
         n_workers : int
-            Number of parallel workers. 1 = serial.
+            The number of worker processes; 1 runs in this process.
         save_path : str, optional
-            If provided, the cache is persisted to disk after computation.
+            A file to save the cache to after the computation.
         """
         log.info("Precomputing arsenal cache (LHP) …")
         self._arsenal_cache.precompute(self._partition_l.profiles, n_workers)
@@ -1306,7 +1161,7 @@ class PitcherSimilarityEngine:
             self._arsenal_cache.save(save_path)
 
     # ------------------------------------------------------------------
-    # Data Loading (private)
+    # Data loading
     # ------------------------------------------------------------------
 
     def _load_league_averages(
@@ -1314,7 +1169,9 @@ class PitcherSimilarityEngine:
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
     ) -> None:
-        """Load league-average profiles from derived.league_averages."""
+        """Load each season's league-average command vector, the shrinkage
+        target, from ``derived.league_averages``. A missing table leaves the
+        command vectors unshrunk."""
         try:
             season_filter = ""
             if seasons:
@@ -1348,15 +1205,15 @@ class PitcherSimilarityEngine:
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
     ) -> None:
-        """Load pitcher profiles from DuckDB."""
+        """Load the pitcher profiles at or above the minimum sample from
+        ``derived.pitcher_season_metrics``."""
         season_filter = ""
         if seasons:
             season_list = ", ".join(str(s) for s in seasons)
             season_filter = f"AND psm.season IN ({season_list})"
 
-        # SIM-537: graceful-optional column, same pattern SIM-534 uses for the
-        # batter engine — a database that has not run migration 0027 yet still
-        # builds; asof_date just comes back NULL for every row.
+        # A DuckDB file before migration 0027 has no asof_date column: the query
+        # reads NULL for it, and the engine still builds.
         _present = duck_columns(conn, "derived", "pitcher_season_metrics")
         _asof_col = "psm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
@@ -1388,7 +1245,7 @@ class PitcherSimilarityEngine:
 
         log.info("Loading %d pitcher profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare one cutoff (the point-in-time rule, SIM-537).
         asof_values: set = set()
 
         for row in rows:
@@ -1448,9 +1305,8 @@ class PitcherSimilarityEngine:
                 below_minimum=bool(below_min),
             )
 
-        # SIM-537: refuse a mixed set — same reasoning as the batter engine.
-        # Profiles built at two different cutoffs (or one stamped, one not)
-        # are not comparable, and nothing downstream would show it.
+        # Refuse a mixed set: profiles built at two cutoffs (or one stamped and
+        # one not) do not compare, and nothing downstream shows it.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "pitcher profiles were built at different cutoffs "
@@ -1462,7 +1318,8 @@ class PitcherSimilarityEngine:
             log.info("Pitcher profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
-        """Apply Empirical Bayes shrinkage to command and result vectors."""
+        """Shrink each profile's command vector toward its season's league
+        average. A season with no league average leaves its vectors as they are."""
         for _key, profile in self._profiles.items():
             season = profile.season
             la_cmd = self._league_avg_command.get(season)
@@ -1475,19 +1332,13 @@ class PitcherSimilarityEngine:
                 )
 
     def _standardize_arsenals(self) -> None:
-        """
-        Compute population-level mean/std from all GMM component centroids,
-        then standardize every GMM's components into z-score space.
+        """Fit the population mean and standard deviation of the GMM component
+        means, then move every GMM into z-scores (``standardize_gmm``).
 
-        This makes the W2 distance dimensionality-invariant. Without it,
-        features like spin_rate (range ~1000 RPM) dominate velocity
-        (range ~15 mph) because W2 uses raw Euclidean distances.
-
-        Population stats are computed as the weight-averaged centroid across
-        all components of all profiles (each component contributes its
-        centroid weighted by its mixing proportion).
+        Each component of each profile counts by its mixing weight. W₂ reads
+        raw Euclidean gaps: without this step, spin rate (a range of about
+        1,000 rpm) outweighs velocity (about 15 mph).
         """
-        # Collect all component centroids with their weights
         all_means = []
         all_weights = []
         for profile in self._profiles.values():
@@ -1504,7 +1355,6 @@ class PitcherSimilarityEngine:
         weights = np.array(all_weights, dtype=np.float64)
         weights /= weights.sum()
 
-        # Weighted population mean and std
         pop_mean = np.average(means, axis=0, weights=weights)
         pop_var = np.average((means - pop_mean) ** 2, axis=0, weights=weights)
         pop_std = np.sqrt(pop_var)
@@ -1516,7 +1366,6 @@ class PitcherSimilarityEngine:
             ", ".join(f"{v:.1f}" for v in pop_std),
         )
 
-        # Standardize every profile's GMM
         for key, profile in self._profiles.items():
             if profile.gmm is not None:
                 self._profiles[key].gmm = standardize_gmm(
@@ -1535,27 +1384,22 @@ class PitcherSimilarityEngine:
         season: int,
         n: int | None = None,
     ) -> list[SimilarityResult]:
-        """
-        Score the query pitcher against ALL same-handedness pitcher-season
-        profiles in the engine.
+        """Score the query pitcher-season against EVERY profile of the same hand.
 
         Parameters
         ----------
         pitcher_id : int
-            MLB player ID of the query pitcher.
+            The MLB player ID of the query pitcher.
         season : int
-            Season of the query pitcher's profile.
+            The season of the query profile.
         n : int or None
-            If provided, return only the top-N results (sorted by score
-            descending). If None, return ALL results sorted by score
-            descending.
+            The number of top results to return; None returns all of them.
 
         Returns
         -------
-        List of SimilarityResult for every pitcher-season in the same
-        handedness partition, sorted by composite score descending.
-        The query pitcher's exact (pitcher_id, season) is excluded, but
-        other seasons of the same pitcher_id ARE included.
+        The SimilarityResults, highest composite score first. The query's own
+        (pitcher_id, season) is left out; the pitcher's other seasons are in.
+        An unknown pitcher-season returns an empty list.
         """
         query_profile = self._profiles.get((pitcher_id, season))
         if query_profile is None:
@@ -1587,17 +1431,18 @@ class PitcherSimilarityEngine:
         pitcher_a: tuple[int, int],
         pitcher_b: tuple[int, int],
     ) -> SimilarityResult | None:
-        """
-        Compute the similarity between two specific pitcher-seasons.
+        """Score two pitcher-seasons against each other.
 
         Parameters
         ----------
         pitcher_a : (pitcher_id, season)
+            The query.
         pitcher_b : (pitcher_id, season)
+            The candidate; the result names this one.
 
         Returns
         -------
-        SimilarityResult or None if either pitcher is not in the engine.
+        A SimilarityResult, or None when either pitcher-season is not loaded.
         """
         pa = self._profiles.get(pitcher_a)
         pb = self._profiles.get(pitcher_b)
@@ -1621,24 +1466,17 @@ class PitcherSimilarityEngine:
         query: PitcherProfile,
         candidate: PitcherProfile,
     ) -> tuple[float, float, float]:
-        """
-        Compute all sub-scores and the weighted composite between two
-        pitcher profiles. Used by query_pair() for ad-hoc comparisons.
+        """The two sub-scores and the composite of one pair, for ``query_pair``.
+
+        For two different pitcher-seasons, the arithmetic matches
+        ``HandednessPartition.score_all``.
 
         Returns
         -------
-        (composite, arsenal, command) — all in [0, 1].
-
-        SIM-148 / SIM-067: pre-SIM-067 this returned a 5-tuple including
-        a separate ``release`` and ``results`` sub-score.  SIM-067 removed
-        the release sub-score (release-point information is already inside
-        the per-component GMM means and was double-counting); ``results``
-        was folded into the composite via the empirical-Bayes confidence
-        multiplier rather than carried as a separate sub-score.
-
-        Permanent regression test:
-            tests/unit/test_pitcher_similarity.py::TestScoreProperties::
-            test_score_pair_returns_three_subscores  guards this shape.
+        (composite, arsenal, command), each in [0, 1]. The engine has no
+        release sub-score: the GMM means carry the release point.
+        ``TestScoreProperties.test_score_pair_returns_three_subscores`` in
+        tests/unit/test_pitcher_similarity.py holds the shape.
         """
         key_q = (query.pitcher_id, query.season)
         key_c = (candidate.pitcher_id, candidate.season)
@@ -1659,11 +1497,8 @@ class PitcherSimilarityEngine:
         if has_arsenal:
             composite = WEIGHT_ARSENAL * arsenal_s + WEIGHT_COMMAND * command_s
         else:
-            # SIM-346: redistribute the arsenal weight onto command so a
-            # GMM-less pair lands on the same [0, 1] scale as a full pair.
-            # (Old code rescaled by WEIGHT_COMMAND / WEIGHT_COMMAND == 1.0, a
-            # no-op that capped command-only composites at WEIGHT_COMMAND.)
-            # Mirrors the vectorized path in HandednessPartition.score_all.
+            # A GMM missing: the arsenal weight moves onto the command score, so
+            # the pair stays on the same [0, 1] scale as a full pair.
             composite = (_TOTAL_WEIGHT / WEIGHT_COMMAND) * command_s
 
         confidence = min(query.eb_alpha, candidate.eb_alpha)
@@ -1676,39 +1511,37 @@ class PitcherSimilarityEngine:
         )
 
     # ------------------------------------------------------------------
-    # Utilities
+    # Lookups
     # ------------------------------------------------------------------
 
     def get_profile(self, pitcher_id: int, season: int) -> PitcherProfile | None:
-        """Retrieve a loaded pitcher profile by ID and season."""
+        """The loaded profile of one pitcher-season, or None."""
         return self._profiles.get((pitcher_id, season))
 
     @property
     def profile_count(self) -> int:
-        """Number of profiles currently loaded in the engine."""
+        """The number of loaded profiles."""
         return len(self._profiles)
 
     def profile_ids(self) -> list[tuple[int, int]]:
-        """List all (pitcher_id, season) pairs in the engine."""
+        """Every loaded (pitcher_id, season)."""
         return list(self._profiles.keys())
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff every loaded profile declares, or ``None`` (the
+        point-in-time rule, SIM-537)."""
         return self._asof_date
 
     @property
     def arsenal_cache_size(self) -> int:
-        """Number of cached arsenal W2 distances."""
+        """The number of cached W₂ distances."""
         return self._arsenal_cache.size
 
 
 # ============================================================================
-# Entry Point — CLI for testing
+# A manual build run
 # ============================================================================
-# (SIM-075: arsenal W2 cache now matrix-backed; see ArsenalCache.build_matrix)
 if __name__ == "__main__":
     engine = PitcherSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
-    # engine.precompute_arsenal_cache(n_workers=8)
-    # w2_scor

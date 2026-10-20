@@ -42,7 +42,7 @@ def _cache_key(
     a: tuple[int, int],
     b: tuple[int, int],
 ) -> tuple[tuple[int, int], tuple[int, int]]:
-    """Canonical symmetric key: always smaller tuple first."""
+    """The symmetric key of a pair: the smaller (pitcher_id, season) first."""
     return (a, b) if a <= b else (b, a)
 
 
@@ -76,7 +76,7 @@ class ArsenalCache:
         a: tuple[int, int],
         b: tuple[int, int],
     ) -> float | None:
-        """Look up cached distance. Returns None on miss."""
+        """The cached distance of a pair, or None on a miss."""
         return self._cache.get(_cache_key(a, b))
 
     def put(
@@ -85,7 +85,7 @@ class ArsenalCache:
         b: tuple[int, int],
         distance: float,
     ) -> None:
-        """Store a distance in the cache."""
+        """Store the distance of a pair."""
         self._cache[_cache_key(a, b)] = distance
         # A write may change a pair the dense matrix holds: drop the matrix;
         # the next vectorized lookup rebuilds it.
@@ -100,22 +100,18 @@ class ArsenalCache:
         self,
         profiles: list[PitcherProfile],
     ) -> None:
-        """
-        Build the dense symmetric W2 distance matrix for ``profiles``.
+        """Build the dense symmetric W₂ matrix of ``profiles``.
 
-        Ensures every pair is present in the sparse cache (lazy-computing
-        and caching misses, exactly as ``get_or_compute`` would), then
-        materializes a symmetric ``(n, n)`` float matrix and the
-        ``id -> row index`` map. Subsequent all-vs-one lookups are a single
-        NumPy row slice rather than an O(N) dict loop.
+        The method fills every missing pair through ``get_or_compute``, then
+        writes the symmetric ``(n, n)`` matrix and the key-to-row map. A later
+        all-vs-one lookup is one NumPy row slice, not a loop over the dict.
 
-        Matrix encoding (raw W2 distances):
-          * diagonal = 0.0 (self-distance),
-          * NaN where a pair's cached distance is non-finite (a GMM was
-            None → ``inf`` in the dict), i.e. "missing"/below-availability,
-          * the finite W2 distance otherwise.
+        The matrix holds the raw W₂ distance:
+          * 0.0 on the diagonal (the self-distance),
+          * NaN for a pair with no distance (a GMM was None, stored as inf),
+          * the finite W₂ distance otherwise.
 
-        Every value equals what ``get_or_compute`` returns for the pair.
+        Each finite value equals what ``get_or_compute`` returns for the pair.
         """
         keys = [(p.pitcher_id, p.season) for p in profiles]
         n = len(keys)
@@ -136,7 +132,7 @@ class ArsenalCache:
         self._matrix_index = {k: i for i, k in enumerate(keys)}
 
     def has_matrix(self, profiles: list[PitcherProfile]) -> bool:
-        """True if a dense matrix covering exactly ``profiles`` is current."""
+        """True when the current dense matrix covers exactly ``profiles``."""
         if self._matrix is None:
             return False
         keys = [(p.pitcher_id, p.season) for p in profiles]
@@ -149,21 +145,20 @@ class ArsenalCache:
         query_profile: PitcherProfile,
         profiles: list[PitcherProfile],
     ) -> NDArray[np.float64]:
-        """
-        Return raw W2 distances from ``query_profile`` to every profile in
-        ``profiles`` as a single 1-D array (aligned to ``profiles`` order).
+        """The raw W₂ distances from ``query_profile`` to each of ``profiles``,
+        as one 1-D array in the order of ``profiles``.
 
-        This is the vectorized all-vs-one lookup: when the query belongs to
-        the matrix population it is a single matrix **row slice**; otherwise
-        the row is built once (lazy-computing/caching any misses) and reused.
+        When a dense matrix covers ``profiles`` and the query, the row is one
+        matrix slice. Otherwise the method builds the row from the dict, and
+        computes and keeps each missing pair.
 
         The values match ``get_or_compute``:
-          * 0.0 for the exact self (pitcher_id, season),
-          * ``float('inf')`` for a pair with no distance (a GMM was None),
+          * 0.0 for the query's own (pitcher_id, season),
+          * inf for a pair with no distance (a GMM was None),
           * the finite W₂ distance otherwise.
 
         The matrix stores NaN for a pair with no distance; this method maps
-        NaN back to inf, so a caller's ``np.isfinite`` mask sees inf.
+        NaN back to inf, so a caller's ``np.isfinite`` mask drops the pair.
         """
         query_key = (query_profile.pitcher_id, query_profile.season)
 
@@ -195,11 +190,10 @@ class ArsenalCache:
         gmm_a: GMMModel | None,
         gmm_b: GMMModel | None,
     ) -> float:
-        """
-        Return cached W2 distance, or compute + cache on miss.
+        """The cached W₂ distance of a pair; on a miss, compute it and keep it.
 
-        Returns float('inf') if either GMM is None (missing model).
-        Returns 0.0 for self-comparisons.
+        The distance is 0.0 when the two keys are equal, and inf when either
+        GMM is None.
         """
         if key_a == key_b:
             return 0.0
@@ -221,16 +215,17 @@ class ArsenalCache:
         profiles: list[PitcherProfile],
         n_workers: int = 1,
     ) -> None:
-        """
-        Batch-fill the cache for all pairs in the given profile list.
+        """Fill the cache for every pair of ``profiles``, then build their
+        dense matrix.
 
         Parameters
         ----------
         profiles : list[PitcherProfile]
-            All profiles in one handedness partition.
+            Every profile of one hand partition.
         n_workers : int
-            Number of parallel workers. 1 = serial (safe, no overhead).
-            >1 = multiprocessing (faster for large populations).
+            The number of worker processes. 1 runs in this process, with no
+            start-up cost; more than 1 uses a process pool, which is faster
+            for a large partition.
         """
         pairs_to_compute = []
         for i in range(len(profiles)):
@@ -327,16 +322,15 @@ class ArsenalCache:
 
     @property
     def size(self) -> int:
-        """Number of cached distances."""
+        """The number of cached distances."""
         return len(self._cache)
 
     def finite_distances(self) -> NDArray[np.float64]:
-        """
-        Return every cached W₂ distance as a 1-D array, without the inf values
-        (the pairs where one or both GMMs were missing).
+        """Every cached W₂ distance as a 1-D array, without the inf values (the
+        pairs with a missing GMM).
 
-        This is the array to pass to calibrate_arsenal_gamma(); the engine
-        turns the fitted squared-exponential gamma into its linear
+        This is the array to pass to calibrate_arsenal_gamma(). The engine
+        turns the fitted gamma of the squared form into its linear
         ARSENAL_SCALE with arsenal_scale_from_gamma():
 
             from similarity.calibration.fitting import calibrate_arsenal_gamma
@@ -353,13 +347,17 @@ class ArsenalCache:
         return all_dists[np.isfinite(all_dists)]
 
     def save(self, path: str) -> None:
-        """Persist cache to disk (pickle)."""
+        """Save the cache to a pickle file."""
         with Path(path).open("wb") as f:
             pickle.dump(self._cache, f, protocol=pickle.HIGHEST_PROTOCOL)
         log.info("Arsenal cache saved: %d entries → %s", len(self._cache), path)
 
     def load(self, path: str) -> None:
-        """Load cache from disk. Merges with existing entries."""
+        """Load a pickle file that ``save`` wrote, and merge it into the cache.
+
+        Unpickling can run code from the file: load only a file this engine
+        wrote. A missing file logs a warning and loads nothing.
+        """
         p = Path(path)
         if not p.exists():
             log.warning("Cache file not found: %s", path)
@@ -377,7 +375,7 @@ class ArsenalCache:
 
 
 def _serialize_gmm(gmm: GMMModel) -> dict:
-    """Serialize GMM to a plain dict for cross-process pickling."""
+    """The GMM's components as a plain dict, to send to a worker process."""
     return {
         "components": [
             {
@@ -391,7 +389,8 @@ def _serialize_gmm(gmm: GMMModel) -> dict:
 
 
 def _deserialize_gmm(data: dict) -> GMMModel:
-    """Reconstruct a minimal GMMModel from serialized data."""
+    """Rebuild a minimal GMMModel (the weights, means and covariances only)
+    from ``_serialize_gmm``'s dict."""
     from similarity.engines.pitcher_similarity import (
         GMM_FEATURE_DIM,
         GMM_FEATURE_NAMES,
@@ -423,7 +422,8 @@ def _compute_w2_chunk(
     keys: list[tuple[int, int]],
     gmm_data: dict[tuple[int, int], dict],
 ) -> list[tuple[tuple[tuple[int, int], tuple[int, int]], float]]:
-    """Worker function for parallel W2 computation."""
+    """The worker: the W₂ distance of each (i, j) pair of one chunk. A pair
+    without both GMMs gets inf."""
     results = []
     for i, j in pairs:
         key_a, key_b = keys[i], keys[j]
