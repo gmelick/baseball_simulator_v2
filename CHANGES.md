@@ -1,3 +1,247 @@
+# CLEAN-UP B5 — the scripts and the test harness: the accuracy comparison and the two pool rebuilds split by stage, the grab-bag tests split by subject, the comments in the present tense — SIM-493, 2026-10-20
+
+**Why.** Phase B of the code clean-up (`docs/audit/2026-10-19-sim493-code-cleanup-plan.md`
+§11) gives each area one session. This entry is area B5: `scripts/`, the acceptance,
+regression, integration and performance tests, the conftest files, `tests/fixtures`,
+`tests/script_loader.py` and the unit tests the plan marks B5. Every change is
+behaviour-neutral; the neutral checks below prove it. Branch
+`claude/sim493-scripts-harness-66671b`.
+
+**What moved.**
+
+- **The accuracy comparison** (`scripts/accuracy_comparison.py`, 4,428 lines) keeps the
+  command line (601 lines): `run`, `parse_args`, `main`, the exit codes, the default
+  output. Its stages move to the package `scripts/accuracy/` (3,610 lines in nine files):
+  `records`, `selection`, `pricing`, `grading`, `replay`, `confidence`, `report`,
+  `hypothetical_return`. Every module logs as `"accuracy_comparison"`. Every moved
+  definition is AST-identical to the original, docstrings aside, except two:
+  `bundle_provenance` checks each recorded flag name against the registry (the values
+  stay raw), and `_MP_START_METHOD` reads through `simulation.flags.read_str` (same
+  default).
+- **The two pool rebuilds** split by step. `scripts/rebuild_pitch_pool.py` (2,283 → 496)
+  keeps its command line; `scripts/pitch_pool_rebuild/` holds `common`, `preflight`,
+  `checks`, `export` (1,917 lines). `scripts/rebuild_steal_pool.py` (1,816 → 458) keeps
+  its command line; `scripts/steal_pool_rebuild/` holds `common`, `migration`, `bundle`,
+  `preflight`, `pickoffs`, `checks`, `export` (1,549 lines).
+- **The script loaders.** Twenty test files that loaded a script by path with their own
+  `importlib` block call `tests/script_loader.load_script`. `scripts_on_path()` puts
+  `scripts/` on `sys.path`, so a test imports a stage module by name. A patch target
+  moves to the module whose globals the patched code reads: `_fetch_game_odds` in
+  `accuracy.replay`; `_fetch_final_games` stays on the command line, which reads it in
+  `run()`.
+- **The acceptance tests** lose their ticket suffixes (`_sim450`, `_sim484`, `_sim518`,
+  `_sim548`, `_sim427`, `_sim554`; 100 functions); five that collided or named a round
+  take a subject name. The rosters in `ci.yml` (acceptance-arithmetic) and
+  `acceptance-nightly.yml` follow. The module docstrings of `bands.py`, the acceptance
+  `conftest.py`, `test_band_arithmetic.py` and `test_production_bands.py` say what the
+  lane does now; the FLOOR CHANGELOG section goes (MOVING A BAND rule 4 points at
+  `CHANGES.md`). The data strings the tests pin stay.
+- **The grab-bag tests**, split by subject (every test body the same AST, docstrings
+  stripped; the classes lose their ticket numbers):
+
+  | Old file | New files |
+  |---|---|
+  | `test_backend_assorted_guards.py` (471) | `test_live_game_state_builder.py`, `test_live_connection_manager.py`, `test_live_resimulate_cooldown.py`, `test_live_pipeline_setup.py`, `test_pitcher_similarity_contract.py`, `test_secrets_baseline.py` |
+  | `test_profile_indexes_and_etl_fallbacks.py` (541) | `test_schema_pitch_indexes.py`, `test_venue_id_fallback.py`, `test_release_speed_bounds.py`, `test_delete_seasons_coverage.py` |
+  | `test_odds_dedup_and_etl_errors.py` (455) | `test_odds_hash_dedup.py`, `test_etl_error_ledger.py`, `test_migration_chain.py` |
+  | `test_secondary_engines.py` (1,119) | `test_baserunner_steal_scores.py` (with the generic diagnostics, which build the steal engine), `test_catcher_similarity_scores.py`, `test_pitcher_steal_similarity.py`, `test_manager_similarity.py`, `test_situation_engine_queries.py`, `test_baserunner_extra_base_similarity.py`, `test_weighted_rbf_kernel.py` |
+  | `test_odds_reload_scripts.py` (2,296) | `test_odds_census_sql.py`, `test_book_sharpness.py`, `test_retire_consensus_odds.py`, `test_rescore_graded_book.py`, `test_odds_book_census.py` (1,157) |
+  | `test_steal_pool_rebuild_scripts.py` (1,530) | `test_steal_pool_rebuild.py` (1,132), `test_running_game_census.py` (405; it tests `scripts/probes/running_game_census.py`) |
+- **The scripts' flags.** Every `SIM_*` read in `scripts/` goes through `simulation.flags`
+  or records a raw value in a report's provenance. `tests/unit/test_script_flag_names.py`
+  fails on a `SIM_*` name in `scripts/` (less `scripts/probes/`) that the registry does not
+  hold; every name there is registered today.
+- **The comments.** Every script outside `scripts/probes/`, the eleven shell scripts and
+  the B5 tests drop the ticket tags that only named the ticket that added the code, and
+  the history ("used to", "before SIM-555", "master's builder", part labels, review
+  rounds). A tag that cites a ruling or a measurement stays, the work first. Comments
+  and docstrings only: every Python file's AST, docstrings stripped, equals the version
+  before the pass, and every non-comment line of the shell scripts is unchanged. A file
+  whose `--help` is its module docstring keeps that text. The probes keep their
+  comments (one-off tools).
+- **The docs.** `docs/technical/scripts-frontend.md` maps the accuracy package and the
+  two rebuild packages; CLAUDE.md §5 names the three packages and the flag-name check.
+
+**Deleted.** `LINE_TYPES` and `_collect_game_results` in the accuracy comparison (no
+caller; the park-blind replay guard in `test_sim_kwargs.py` tests `_replay_game`); the
+unused helper `_v` of `test_secondary_engines.py`; the FLOOR CHANGELOG section of
+`bands.py`; the six old test files of the table above (each replaced by its new files).
+
+**Runtime strings changed.** Each was wrong. `scripts/sim_stats.py` prints "vs MLB-2025"
+(it printed "vs MLB-2023" over the 2025 baseline), and its `--help` text (the module
+docstring) is in the present tense. The acceptance lane's park-bias assert ends "Run the
+whole game set." (it said "Run all 12 games." over the 45-game set). Every other log,
+error, report and test message stays.
+
+**Pins changed.** `tests/unit/test_sim_kwargs.py`: the park-blind replay pin names
+`_replay_game`, and the call-site table names `scripts/accuracy/replay.py`.
+
+**Neutral checks.**
+
+The accuracy comparison and the ten-game smoke ran in the app image with the worktree
+mounted, on the pinned bundle (`BASEBALL_ENGINE_ARTIFACT_DIR=/data/sim493/bundle_pin`,
+version `20261019T081435Z`), base code `fe81d79` against this branch. The arithmetic lane
+ran on the host.
+
+| Check | Result |
+|---|---|
+| The accuracy comparison, 20 Final games of 2024, 10 iterations, `--workers 1` (serial) | the report JSON equal to the base's apart from the timing fields: 0 differences |
+| The same, `--workers 6` (parallel) | the record multisets equal; the aggregates equal within 1e-12 (the completion order changes the float sums' last bits; the serial run is the exact check) |
+| `scripts/sim_stats.py`, ten games of the balanced set, 20 iterations | the JSON equal apart from `elapsed_s`: 0 differences |
+| The acceptance arithmetic lane (`tests/acceptance/test_band_arithmetic.py`) with CI's roster step | `58 passed`; "PASS: all 27 required band-rule tests ran" |
+
+The comment pass after these runs changed comments and docstrings only; each file's AST,
+docstrings stripped, equals the code the neutral runs ran (`comment_check`). A final re-run on the branch tip follows the nightly rebuild (below).
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| The B5 share of the unit lane, plus `tests/acceptance` and `tests/regression` (app image, the worktree mounted; 77 unit files) | `1 failed, 1576 passed, 2 skipped, 2 deselected in 457.54s`. The one failure is `test_pool_label_check.py::test_both_sides_read_the_same_plate_appearances`, a live-data read: the 07:00 UTC finals load had added 78 plate appearances to `raw.pitches` that the pool gains at the 08:00 rebuild (pool 740,424, real 740,502). No code of this branch reads into it. |
+| The full unit lane (app image, the worktree mounted) | not completed: a run at 07:19 UTC passed every test it reached but ran ten times slower than the groundwork's (42% in 25 minutes) and hit my timeout; the container was removed before the 08:00 rebuild. The full lane runs again after the nightly rebuild. |
+| `ruff check .` / `ruff format --check .` (ruff 0.16.7) | pass (521 files formatted) |
+| `mypy similarity/ pipeline/ api/` (host, mypy 1.13) | `Success: no issues found in 77 source files`; this branch changes no file in that scope |
+| Collection of `tests/integration`, `tests/performance`, `tests/regression` (host) | every file collects |
+| Each split test file | every test body is the same AST as before, docstrings stripped (`testbodies`); the test counts match |
+| Every comment-pass file | the AST, docstrings stripped, equals the code before (`comment_check`); the shell scripts' non-comment lines are unchanged |
+
+**Files over 1,500 lines in B5's area, and why.**
+
+- `scripts/probes/odds_book_census.py` (1,874): a probe of the one-row-per-book re-load. The plan
+  gives a probe comments and names only, so it is not split. Every other file in B5's area
+  is under 1,500 lines; the largest are `tests/unit/test_sim_kwargs.py` (1,426),
+  `scripts/running_game_replay.py` (1,473) and `scripts/fence_check.py` (1,444).
+
+**Bugs found (to file).** None is fixed here.
+
+1. **The nightly acceptance lane requires three tests that do not exist.** The REQUIRED
+   roster of `.github/workflows/acceptance-nightly.yml` lists
+   `test_full_pool_out_advancement_runs_sim450`, `test_full_pool_steal_decision_runs_sim450`
+   and `test_reach_on_error_band_sim450`. No test of those names exists on this branch or
+   on the groundwork base (`git grep` finds none), and the roster step fails when a
+   required name did not run. So the nightly lane reds on every run, whatever the bands
+   read. Done: the roster names only real tests, and one nightly run passes its roster
+   step. Fix: delete the three names, or name the tests that took their place.
+2. **The pitch rebuild's after-smoke reads a path that no longer holds its file.**
+   `scripts/pitch_pool_rebuild/export.py` `_smoke_games` opens
+   `scripts/sim553_smoke_before.json`; the groundwork moved run outputs to `results/`
+   (its docstring and fallback text name `results/sim553/sim553_smoke_before.json`). The
+   function always prints its placeholder. Done: it reads the `results/` path. Fix: one
+   path.
+3. **`--report-hypothetical-return` crashes when no bet qualifies.**
+   `scripts/accuracy/hypothetical_return.py` `_fmt_row` formats the means and the range
+   with `:.4f` and no guard for None. With no qualifying bet, `_json_safe` turns the NaNs
+   into None and `format_hypothetical_return` raises `TypeError` (reproduced:
+   `aggregate_hypothetical_return([], edge_threshold=0.02, ...)` then the format). `run()`
+   prints this table before it writes the report and before the zero-games check, so a
+   run that priced nothing, or one where no record clears `--edge-threshold`, ends in a
+   traceback with no report and no exit code 5. Done: the table prints "n/a" as the
+   accuracy table does (`_fmt_or_na`). Fix: the same guard.
+4. **The resumable sweep stops on a crash before its first game.**
+   `scripts/resumable_sweep.py` runs its zero-progress stop (`gained == 0`) after a crash
+   too, so a segfault before the first game of an attempt loads ends the sweep (exit 1)
+   instead of retrying. Found by reading the code; not exercised. Done: a crashed attempt
+   with no gain retries up to `--max-attempts`. Fix: apply the stop only to an attempt
+   that exited cleanly.
+5. **Two dormant defects in the odds-hash backfill probe.**
+   `scripts/probes/backfill_odds_hash.py` `_dedup_rows` orders by `received_at`, a column
+   `raw.game_odds` does not have (it has `fetched_at`; no migration adds one), so its
+   DELETE fails with an undefined column. Its `ODDS_COLUMNS` leaves out `draw_ml`, so it
+   would hash a three-way row unlike the live writer. Both are dormant: the unique index of
+   migration 0012 prevents duplicate groups, and the hash column is NOT NULL since 0012.
+   Done: the probe is fixed or retired. Fix: retire the probe (its job ended with 0012).
+6. **The minimum-sample read has two documented, unfixed limits.**
+   `scripts/accuracy/confidence.py`: the 0.02 floor assumes a coin-flip market, so its
+   power is weaker than stated for a market far from 0.5 (a home-run prop); and a small
+   sample whose observed spread is exactly zero reads as fully resolved. An adversarial
+   review of the minimum-sample work (SIM-539) found both; no ticket holds them. Done: the
+   owner decides whether to fix or accept them. Fix: a per-market `4p(1-p)` correction and
+   an upper bound on the spread.
+7. **Runtime texts that state something false** (left unedited by rule):
+   - `SIM_PARK_FACTOR` is deleted (`docker-compose.yml`), yet the park-guard messages name
+     it: `scripts/validate_props.py` lines 340, 348, 432; `scripts/accuracy_comparison.py`
+     lines 263, 271, 343; `tests/acceptance/conftest.py` line 785; and the `--help` of
+     `scripts/sim_stats.py` (line 39) tells the operator to set it.
+   - The two rebuilds' exit-3 texts and the steal rebuild's lock message blame the app's
+     worker server for the DuckDB lock; the app holds no DuckDB handle since SIM-524.
+     `scripts/steal_pool_rebuild/checks.py` (about lines 368-377) and `export.py` (line 350)
+     still say to merge the running-game code before the next pool build; it is merged.
+   - `scripts/running_game_replay.py` `--help`: "production today: a steal can land on any
+     pitch". Production runs the class-aware steal draw.
+   - After the split, three texts point at a module docstring that no longer holds the
+     section: `scripts/accuracy/hypothetical_return.py` line 333, `scripts/accuracy/report.py`
+     line 305, and the `--report-hypothetical-return` help of `scripts/accuracy_comparison.py`
+     (its `--help` never shows the docstring).
+   - `scripts/measure_filter_cells.py` `DEFAULT_OUTPUT` writes into `docs/audit/`; run
+     outputs go to `results/`. Its `originated_by` value and three prints say the sampler
+     "must import" constants it restates in code.
+   - `scripts/resumable_sweep.py` `--help` cites a crash-investigation record in
+     `docs/audit/` that is no longer there.
+   - The rationale strings in `tests/acceptance/bands.py` cite `BACKLOG.md:18`-`:20`; that
+     file is gone (its history is `docs/archive/BACKLOG-history.md`).
+   Done: each text says what is true. Fix: one edit per text, with the runtime-string
+   changes listed.
+8. **Two copies of the prop ground-truth readers.** `scripts/validate_props.py` and
+   `scripts/accuracy/grading.py` each define `_fetch_official_boxscore` and
+   `_fetch_pa_events`. Done: one reader both import. Fix: move it to
+   `simulation/prop_validation.py`.
+9. **No CI job runs the batch-runner stress test.** `tests/integration/test_batch_runner_stress.py`
+   carries only the `slow` marker. The CI slow lane runs `tests/unit/ -m slow`;
+   `integration-weekly.yml` and `make test-integration` select `-m integration`; the e2e job
+   runs `test_api_end_to_end.py` alone. Done: one lane runs it. Fix: mark it `integration`,
+   or add the path to the slow lane.
+10. **The regression gate's config holds eight dead constants.**
+    `tests/regression/regression_config.py`: only `SYMMETRY_TOLERANCE` has a reader;
+    `REGRESSION_DIR`, `SCORE_ABS_TOLERANCE`, the `BOUNDS_*`, `MIN_REGRESSION_PROFILES`,
+    `N_FIXTURE_QUERIES`, `TOP_K_STABLE` and `REGRESSION_SEED` have none (the conftest
+    hard-codes the seed 2026). Two texts still name golden files the gate does not have:
+    the assert message at `tests/regression/test_engine_regression.py` line 322 and the
+    `regression` marker text in `pyproject.toml`. Done: the dead constants go and the texts
+    say what the gate checks. Fix: delete them and edit the two texts.
+11. **Bench 1 and 2 time a call the loop no longer makes.** `tests/performance/bench_simulation.py`
+    times `PitcherSimilarityEngine.query()` as the per-pitch cost; the loop reads the dense
+    pitcher matrix, and only the nightly matrix build and the similarity API call `query()`.
+    `tests/performance/bench_api_simulate.py` (line 139) says an authoritative gate runs on
+    target hardware with the DB-backed factory; no job does. Done: the benches time what the
+    loop runs, and the SLA text names the job that gates it. Fix: bench the matrix read.
+12. **A stale park-factor literal.** `tests/unit/test_sim_kwargs.py` uses `0.8723846078` for
+    venue 680 in six places; the pinned 2024 table in the same file holds `0.8725842237`.
+    The tests pass (the literal is only an input). Done: one value. Fix: read it from the
+    table.
+
+**For Phase C.**
+
+- **The grab-bag files are deleted here and re-pointed on B2's branch.** B2 re-points the
+  imports in `test_backend_assorted_guards.py` and
+  `test_profile_indexes_and_etl_fallbacks.py`; the merge shows a modify/delete conflict.
+  Apply B2's import lines to the new files of the table above (each old class sits in the
+  file named for its subject), then delete the old files.
+- **`test_steal_pool_rebuild.py` patches `ppc.POOL_BUILDER_VERSION`**
+  (`pipeline.batch.player_profile_computor`). `steal_pool_rebuild.common._builder()` reads
+  it from that module. If B2 moves the constant, the patch follows the module whose
+  globals the builder reads.
+- **`tests/acceptance/conftest.py` imports `_DOUBLE_PLAY_EVENTS` from
+  `simulation.sim_loop`**, which B1 keeps as a marked re-export. Re-point it to
+  `simulation/loop/values.py` when the re-export goes.
+- **Prose outside B5 that names an old file or function:**
+  `pipeline/batch/player_profile_computor.py` (about line 1882) and
+  `docs/technical/pipeline-betting-db.md` line 51 name
+  `test_profile_indexes_and_etl_fallbacks.py` (now `test_delete_seasons_coverage.py` and
+  `test_venue_id_fallback.py`); `tests/unit/test_etl_historical_loader.py` line 18 names
+  `test_odds_dedup_and_etl_errors.py` (now `test_etl_error_ledger.py`);
+  `tests/unit/test_baserunner_steal_engine.py` line 8 names `test_secondary_engines.py`
+  (now `test_baserunner_steal_scores.py`); `docs/technical/simulation.md` and
+  `docs/technical/pipeline-betting-db.md` name functions of `scripts/accuracy_comparison.py`
+  that now live in `scripts/accuracy/` (the module map is in
+  `docs/technical/scripts-frontend.md`).
+- **The `test_sim_kwargs.py` call-site table** names `scripts/accuracy/replay.py`; B3 may
+  edit the adjacent `api/routes/games.py` entry.
+- **Prose in the API (B3) that the harness pass found stale:** the `_resolved_sim_kwargs`
+  docstring in `api/routes/games.py` (about lines 670-672) calls a missing connection "a
+  real neutral 1.0, which is a resolved answer", against the sentinel that
+  `test_sim_kwargs.py` proves; `api/routes/games.py` (about lines 650-655) and `api/main.py`
+  (about line 768) name the deleted flags `SIM_PARK_FACTOR` and `SIM_FIELDER_RBF`.
+
 # GROUNDWORK — the code clean-up's shared steps: a behaviour fingerprint, scripts and tests named by purpose, run outputs out of `scripts/`, one flag registry and one existence probe — SIM-493, 2026-10-19
 
 **Why.** The owner widened the code-hygiene refactor (SIM-493) on 2026-10-19: review and clean
