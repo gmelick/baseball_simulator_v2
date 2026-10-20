@@ -1,7 +1,6 @@
 """The wiring that carries the realism inputs into the ``simulate_game`` GameSpec.
 
-The two helpers live in ``simulation/sim_kwargs.py``. The tests import them through
-``api.routes.games``.
+The two helpers live in ``simulation/sim_kwargs.py``; the tests import them from there.
 
   * ``_sim_kwargs_from_state`` carries the per-position defense maps and the venue's
     park run factor from the resolved GameState.
@@ -14,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 
-from api.routes.games import _resolve_park_run_factor, _sim_kwargs_from_state
 from simulation.game_state import GameState
+from simulation.sim_kwargs import resolve_park_run_factor as _resolve_park_run_factor
+from simulation.sim_kwargs import sim_kwargs_from_state as _sim_kwargs_from_state
 
 
 def test_sim_kwargs_carries_defense_maps_and_park_factor():
