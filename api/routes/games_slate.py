@@ -45,14 +45,21 @@ log = logging.getLogger("api.routes.games")
 router = APIRouter()
 
 
-class GameStatus(StrEnum):
-    """3-state (+ postponed) game status for the Day Summary UI.
+# ---------------------------------------------------------------------------
+# The game's state and its season records
+# ---------------------------------------------------------------------------
 
-    Maps the 8 raw ``raw.games.status`` values to the 4 canonical UI states:
-      * ``scheduled`` -- game not yet started (Preview / Warmup / Pre-Game)
-      * ``live``      -- game in progress
-      * ``final``     -- game completed
-      * ``postponed`` -- game postponed, suspended, or cancelled
+
+class GameStatus(StrEnum):
+    """The four states of a game on the status card.
+
+    :data:`_RAW_STATUS_TO_GAME_STATUS` maps the eight ``raw.games.status``
+    values to them:
+
+      * ``scheduled`` -- not started yet (Preview, Warmup, Pre-Game)
+      * ``live``      -- in progress
+      * ``final``     -- over
+      * ``postponed`` -- postponed, suspended or cancelled
     """
 
     SCHEDULED = "scheduled"
@@ -74,11 +81,11 @@ _RAW_STATUS_TO_GAME_STATUS: dict[str, GameStatus] = {
 
 
 def _team_records_cte(cutoff: str) -> str:
-    """The ``team_records`` CTE body, with the date cutoff expression spliced in.
+    """The ``team_records`` CTE: each team's season record before a cutoff date.
 
-    ``cutoff`` is a trusted SQL fragment (a literal/sub-select chosen by THIS
-    module, never user input) -- e.g. ``"$1"`` or
-    ``"(SELECT game_date FROM game_date_lookup)"``.
+    The status card and the stored listing share it; only the cutoff differs.
+    ``cutoff`` is a trusted SQL fragment that this module chooses, never user
+    input: ``"$1"`` or ``"(SELECT game_date FROM game_date_lookup)"``.
     """
     return f"""team_records AS (
         -- Season-to-date records: only Final games BEFORE the cutoff date.
@@ -104,8 +111,7 @@ def _team_records_cte(cutoff: str) -> str:
     )"""
 
 
-#: The team/venue/records LEFT JOIN tail shared by both record-bearing queries
-#: (byte-identical in the original two copies).
+#: The team, venue and records joins that both record-bearing queries share.
 _TEAM_RECORDS_JOIN_TAIL = """      FROM raw.games g
       LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
       LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
@@ -114,10 +120,8 @@ _TEAM_RECORDS_JOIN_TAIL = """      FROM raw.games g
       LEFT JOIN team_records ar  ON ar.team_id  = g.away_team_id AND ar.season  = g.season"""
 
 
-#: SQL to fetch the SIM-383-enriched identity + final scores for a single
-#: game_pk.  The ``team_records`` CTE computes season-to-date win/loss records
-#: from ``raw.games`` final results strictly before the game's own date.
-#: Single parameter: ``$1 = game_pk (int)``.
+#: One game's identity, names, venue, final score and season records before
+#: its own date (``$1`` = game_pk).
 _GAME_CARD_SQL = f"""
     WITH game_date_lookup AS (
         SELECT game_date, season FROM raw.games WHERE game_pk = $1
@@ -144,6 +148,7 @@ _GAME_CARD_SQL = f"""
 """
 
 
+#: The stored listing of a date, with the same columns (``$1`` = the date).
 _GAMES_ON_DATE_SQL = f"""
     WITH {_team_records_cte("$1")}
     SELECT g.game_pk, g.season, g.game_date, g.status,
@@ -168,19 +173,16 @@ _GAMES_ON_DATE_SQL = f"""
 
 
 def _parse_date(date_str: str) -> _date:
-    """Parse a ``YYYY-MM-DD`` path param, 422 on a malformed value.
+    """Parse a ``YYYY-MM-DD`` path parameter; 422 on a malformed value.
 
-    FastAPI does not coerce a path str to a date for us here (the param is a
-    plain str so the same path can also match a numeric game_pk on the sibling
-    routes), so we validate explicitly and raise 422 on a bad format -- the same
-    status FastAPI uses for a validation error.
+    The parameter is a plain string, so FastAPI does not parse it. The function
+    raises 422 on a bad format, the status FastAPI uses for a validation error.
     """
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
     except (ValueError, TypeError) as exc:
-        # 422 (the FastAPI validation-error status). Used as a literal int rather
-        # than status.HTTP_422_* because that constant's name changed across
-        # Starlette versions (ENTITY -> CONTENT); the numeric code is stable.
+        # A literal 422: the name of Starlette's constant for it changed
+        # between versions (ENTITY -> CONTENT); the number did not.
         raise HTTPException(
             status_code=422,
             detail=f"invalid date {date_str!r}; expected YYYY-MM-DD",
@@ -188,16 +190,14 @@ def _parse_date(date_str: str) -> _date:
 
 
 def _game_card(row: Any) -> GameCard:
-    """Map one raw.games row (Record or dict) to a GameCard.
+    """Map one row of the stored listing (a Record or a dict) to a GameCard.
 
-    SIM-383: the enriched query joins ``raw.teams`` (×2) + ``raw.venues`` +
-    the ``team_records`` CTE so the row carries name, abbreviation, city, and
-    season-to-date win/loss fields.  All new fields are optional -- rows that
-    don't include them (e.g. old cached payloads, unit-test stubs) silently
-    default to ``None``.
+    The listing's query joins the teams, the venue and the ``team_records``
+    CTE, so the row carries the names, the city and the season records. A row
+    without those columns (a unit-test stub) leaves them ``None``.
     """
     gd = _row_get(row, "game_date")
-    # game_date may be a date/datetime (asyncpg) or an ISO string (canned rows).
+    # game_date is a date (asyncpg) or an ISO string (a canned row).
     game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
 
     return GameCard(
@@ -208,7 +208,7 @@ def _game_card(row: Any) -> GameCard:
         home_team_id=_opt_int(row, "home_team_id"),
         away_team_id=_opt_int(row, "away_team_id"),
         venue_id=_opt_int(row, "venue_id"),
-        # SIM-383 enrichment fields (None when the row predates the enriched query)
+        # The names, the venue and the records
         home_team_name=_opt_str(row, "home_team_name"),
         home_team_abbrev=_opt_str(row, "home_team_abbrev"),
         away_team_name=_opt_str(row, "away_team_name"),
@@ -219,25 +219,29 @@ def _game_card(row: Any) -> GameCard:
         home_losses=_opt_int(row, "home_losses"),
         away_wins=_opt_int(row, "away_wins"),
         away_losses=_opt_int(row, "away_losses"),
-        # SIM-409: bool from the EXISTS(...) subquery; None when absent.
+        # The EXISTS(...) lineup flag; None when the row lacks it.
         lineup_ready=bool(_row_get(row, "lineup_ready"))
         if _row_get(row, "lineup_ready") is not None
         else None,
     )
 
 
+# ---------------------------------------------------------------------------
+# The slate: the league's schedule plus the stored data
+# ---------------------------------------------------------------------------
+
 #: The slate's calendar: the league keys games on the local (official) date,
 #: and "today" is today in Eastern time, where the league's day turns over.
 SLATE_TZ = ZoneInfo("America/New_York")
 
-#: The schedule cache's time to live by date class (SIM-519 §4.3).
+#: The schedule cache's time to live by date class (the live-slate design, SIM-519).
 SLATE_TTL_PAST_S = 24 * 3600
 SLATE_TTL_TODAY_S = 20
 SLATE_TTL_FUTURE_S = 600
 #: The last good schedule of a date, served when the feed errors.
 SLATE_LAST_GOOD_TTL_S = 24 * 3600
 
-#: The stored enrichment of the schedule's games, in one query (SIM-519 §4.3).
+#: The stored enrichment of the schedule's games, in one query.
 _SLATE_ENRICH_SQL = """
     SELECT g.game_pk, g.status, v.city AS venue_city,
            EXISTS(
@@ -248,9 +252,9 @@ _SLATE_ENRICH_SQL = """
      WHERE g.game_pk = ANY($1::int[])
 """
 
-#: The same, with the source of the lineup the simulator would read (Alembic
-#: 0029, SIM-519 Part B): the final box first, then a published, then a
-#: projected lineup.
+#: The same, with the source of the lineup the simulator would read (the
+#: ``source`` column, Alembic 0029): the final box first, then a published,
+#: then a projected lineup.
 _SLATE_ENRICH_SOURCE_SQL = """
     SELECT g.game_pk, g.status, v.city AS venue_city,
            ls.source IS NOT NULL AS lineup_ready,
@@ -285,6 +289,7 @@ _SLATE_PREGAME_RUNS_SQL = """
 
 
 def _slate_today() -> _date:
+    """Today's date in the league's time zone (:data:`SLATE_TZ`)."""
     return datetime.now(SLATE_TZ).date()
 
 
@@ -298,6 +303,7 @@ def _slate_ttl(day: _date, today: _date) -> int:
 
 
 def _stored_summary(run: Mapping[str, Any] | None) -> GameSimSummaryLite | None:
+    """A stored run row's summary as the lite model; None for no run or a bad summary."""
     if run is None:
         return None
     stored = _row_get(run, "summary")
@@ -310,7 +316,10 @@ def _stored_summary(run: Mapping[str, Any] | None) -> GameSimSummaryLite | None:
 
 
 def _schedule_card(g: Any, enrich: Any | None, run: Any | None) -> GameCard:
-    """One schedule game + our stored data → a GameCard (D1: the schedule's records)."""
+    """One schedule game and our stored data as a GameCard.
+
+    The records come from the schedule, not from ``raw.games``.
+    """
     from pipeline.mlb_schedule import card_state
 
     state = card_state(g)
@@ -408,7 +417,11 @@ async def _slate_schedule_payload(
 
 
 async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], dict[int, Any]]:
-    """The stored enrichment and the newest run per game: two queries, best effort."""
+    """The stored enrichment and the newest run per game: two queries.
+
+    Each query falls back to its plain form before the migration that adds its
+    columns; a failed read logs a warning and leaves that map empty.
+    """
     enrich: dict[int, Any] = {}
     runs: dict[int, Any] = {}
     if pool is None or not pks:
@@ -418,14 +431,14 @@ async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], 
             for r in await pool.fetch(sql, pks) or []:
                 enrich[int(_row_get(r, "game_pk"))] = r
             break
-        except Exception as exc:  # noqa: BLE001 -- before 0029, the plain read; else no enrichment
+        except Exception as exc:  # noqa: BLE001 -- before 0029 the plain read; else none
             log.warning("slate: the stored enrichment read failed: %s", exc)
     for sql in (_SLATE_PREGAME_RUNS_SQL, _SLATE_RUNS_SQL):
         try:
             for r in await pool.fetch(sql, pks) or []:
                 runs[int(_row_get(r, "game_pk"))] = r
             break
-        except Exception as exc:  # noqa: BLE001 -- before 0030 the plain read; no table = no sim line
+        except Exception as exc:  # noqa: BLE001 -- before 0030 the plain read; else no sim line
             log.warning("slate: the sim-run read failed: %s", exc)
     return enrich, runs
 
@@ -486,7 +499,7 @@ async def get_games_on_date(
             fetched_at=fetched_at,
         )
 
-    # The stored listing, memoized at POOL_QUERY_TTL_S (SIM-359).
+    # The stored listing, memoized for POOL_QUERY_TTL_S.
     pool = _get_pool(request)
     cache = _get_sim_cache(request)
     db_key = f"games:on_date:{parsed.isoformat()}"
@@ -508,7 +521,7 @@ async def get_games_on_date(
     )
     if use_cache and cache is not None:
         try:
-            # SIM-443f: the Redis cache stores JSON only, so dump the dates as text.
+            # The Redis cache stores JSON only, so the dates go in as text.
             cache.set(db_key, resp.model_dump(mode="json"), POOL_QUERY_TTL_S)
         except Exception as exc:  # noqa: BLE001
             log.warning("listing cache write failed for %s: %s", db_key, exc)
@@ -550,7 +563,7 @@ async def get_game_status_card(
 ) -> GameCardAggregateResponse:
     pool = _get_pool(request)
 
-    # 1. Fetch the enriched game identity row.
+    # 1. The game's identity row.
     acquire = getattr(pool, "acquire", None)
     if acquire is not None:
         async with pool.acquire() as conn:
@@ -564,11 +577,11 @@ async def get_game_status_card(
             detail=f"game_pk {game_pk} not found",
         )
 
-    # 2. Map raw status → 3-state enum.
+    # 2. The stored status as one of the four states.
     raw_status = _row_get(row, "status")
     game_status = _RAW_STATUS_TO_GAME_STATUS.get(raw_status or "", GameStatus.SCHEDULED).value
 
-    # 3. Load the most-recent persisted sim summary (best-effort; never breaks the response).
+    # 3. The newest stored sim summary; a failed read leaves None.
     sim_summary: GameSimSummaryLite | None = None
     try:
         if acquire is not None:
@@ -581,12 +594,12 @@ async def get_game_status_card(
     except Exception:  # noqa: BLE001 -- sim history is best-effort
         pass
 
-    # 4. Build and return the aggregate response.
+    # 4. The response.
     gd = _row_get(row, "game_date")
     game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
 
-    # SIM-519: the schedule's view of the game (state, start, probables), from
-    # the slate's cached schedule for the date. Best effort.
+    # The schedule's view of the game (state, start, probables), from the
+    # slate's cached schedule for the date. With none, the stored fields stand.
     sched = await _schedule_game_for(request, gd, int(game_pk))
     extra: dict[str, Any] = {}
     if sched is not None:

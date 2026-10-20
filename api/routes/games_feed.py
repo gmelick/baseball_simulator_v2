@@ -44,7 +44,7 @@ log = logging.getLogger("api.routes.games")
 router = APIRouter()
 
 
-#: The feed cache's time to live by card state (SIM-519 Part I).
+#: The feed cache's time to live by the game's state, in seconds.
 FEED_TTL_BY_STATE_S = {"live": 10, "scheduled": 600, "final": 24 * 3600, "postponed": 24 * 3600}
 #: The last good feed of a game, served when the league read fails.
 FEED_LAST_GOOD_TTL_S = 24 * 3600
@@ -56,7 +56,8 @@ async def _league_game_payload(
     """The league's raw feed of one game, cached; ``(payload, source, error)``.
 
     One cached copy serves the slate card (``/feed``), the real play-by-play
-    (``/feed/plays``) and the what-if state (``/feed/state``). The TTL follows
+    (``/feed/plays``), the what-if state (``/feed/state``), the what-if result
+    and the betting card's grading. The TTL follows
     the game's state (10 s live, 10 min before the game, 24 h final). On a league
     error the last good copy is served (``source = feed_cached``); with none the
     payload is None.
@@ -103,6 +104,7 @@ async def _league_game_payload(
 
 
 def _feed_unavailable(game_pk: int, error: str | None) -> Any:
+    """The 503 a feed route answers when no copy of the league feed is at hand."""
     from fastapi.responses import JSONResponse
 
     return JSONResponse(
@@ -173,6 +175,7 @@ async def get_real_plays(game_pk: int, request: Request) -> Any:
 
 
 def _option(ss: Mapping[str, Any], pid: int, position: str | None = None) -> PlayerOption:
+    """One player of a start state as a PlayerOption (name, hands, position)."""
     return PlayerOption(
         id=int(pid),
         name=str((ss.get("names") or {}).get(str(pid), f"Player {pid}")),
@@ -183,6 +186,11 @@ def _option(ss: Mapping[str, Any], pid: int, position: str | None = None) -> Pla
 
 
 def _pa_state_model(game_pk: int, ss: Mapping[str, Any]) -> PaStateModel:
+    """A start state (``pipeline.mlb_game_feed.state_at_pa``) as the /feed/state model.
+
+    ``live`` has the shape of the slate card's field, at a 0-0 count with the
+    batter due up.
+    """
     sides: dict[str, SideState] = {}
     for side in ("away", "home"):
         defense = ss[f"{side}_defense"]
@@ -355,7 +363,7 @@ async def get_live_game_state(
 
     def _ids(key: str) -> list[int]:
         # The live service stores each roster entry as an object with a
-        # ``player_id`` (GameStateBuilder._parse_roster); older rows hold bare ids.
+        # ``player_id`` (GameStateBuilder._parse_roster); an older row holds bare ids.
         v = gs.get(key)
         if not v:
             return []

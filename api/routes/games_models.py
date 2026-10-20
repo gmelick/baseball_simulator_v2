@@ -45,25 +45,25 @@ class GameCard(BaseModel):
     home_team_id: int | None = None
     away_team_id: int | None = None
     venue_id: int | None = None
-    # SIM-383 enrichment -------------------------------------------------------
+    # The names, the venue and the records
     home_team_name: str | None = None
     home_team_abbrev: str | None = None
     away_team_name: str | None = None
     away_team_abbrev: str | None = None
     venue_name: str | None = None
     venue_city: str | None = None
-    # Season records entering the game (all games with status='Final' AND
-    # game_date < this game's date).  0-0 when no prior results exist.
+    # The season records entering the game (every final game before this
+    # game's date); 0-0 when there is none.
     home_wins: int | None = None
     home_losses: int | None = None
     away_wins: int | None = None
     away_losses: int | None = None
-    # SIM-409: True when raw.game_lineups has at least one row for this game;
-    # False for scheduled games whose lineups haven't been published yet.
-    # None when the caller did not include the lineup check (older code paths).
+    # True when raw.game_lineups holds a row for the game; False for a
+    # scheduled game whose lineup is not published yet; None when the caller
+    # made no lineup check.
     lineup_ready: bool | None = None
-    # SIM-519 Part A: the schedule-driven card. Every field is optional, so a
-    # stored payload, a unit stub or an old mock still deserialises.
+    # The schedule's view of the game. Every field is optional, so a stored
+    # payload, a unit stub or an old mock still deserialises.
     game_status: Literal["scheduled", "live", "final", "postponed"] | None = None
     detailed_state: str | None = None
     reason: str | None = None
@@ -122,7 +122,7 @@ class GameCardAggregateResponse(BaseModel):
     game_status: str  # one of GameStatus values
     game_date: str
     season: int
-    # SIM-383 enrichment (all optional -- None when DB join has no matching row)
+    # The names, the venue and the records (None when the join finds no row)
     home_team_id: int | None = None
     away_team_id: int | None = None
     venue_id: int | None = None
@@ -136,15 +136,15 @@ class GameCardAggregateResponse(BaseModel):
     home_losses: int | None = None
     away_wins: int | None = None
     away_losses: int | None = None
-    # Final scores (populated when game_status == "final")
+    # The final score (set when game_status is "final")
     home_score_final: int | None = None
     away_score_final: int | None = None
-    # Most-recent Monte-Carlo summary (None when no run has been persisted yet)
+    # The newest stored Monte-Carlo summary (None before the first run)
     sim_summary: GameSimSummaryLite | None = None
-    # Odds (Phase 6 Sprint 4+ -- SIM-405/SIM-395)
+    # Always None: the slate card's lines come from /api/betting/.../card-odds
     odds: None = None
-    # SIM-519 Part A: the schedule's fields for the game page header (best
-    # effort; None when the league feed has no entry for the game).
+    # The schedule's fields for the game page header (None when the league
+    # feed has no entry for the game).
     detailed_state: str | None = None
     start_utc: str | None = None
     start_time_tbd: bool | None = None
@@ -441,7 +441,7 @@ class RosterOverride(BaseModel):
 
     home_lineup: list[int] | None = None
     away_lineup: list[int] | None = None
-    # SIM-388: targeted substitution list (applied after full-lineup overrides)
+    # The single-player substitutions, applied after any full lineup
     substitutions: list[SubstitutionSlot] | None = None
     pitcher_id: int | None = None
     bat_hand: str | None = Field(default=None, max_length=1)
@@ -474,7 +474,7 @@ class GameCardResponse(BaseModel):
     game_pk: int
     linescore: LinescoreModel
     decisions: PitcherDecisionsModel
-    #: SIM-561: the stored run and its seed; /plays?run_id= reads the same game.
+    #: The stored run and its seed; /plays?run_id= reads the same game.
     run_id: int | None = None
     base_seed: int | None = None
 
@@ -550,9 +550,9 @@ class WhatIfResult(BaseModel):
 def _with_half_width(ci: Any) -> Any:
     """A stored interval dict with ``half_width`` filled from its bounds.
 
-    SIM-546 review: the stored JSON lacks the field (see
-    ``_sim_summary_lite_from_stored``). A value that is not such a dict
-    passes through unchanged, and the model then rejects it.
+    The stored JSON lacks the field (:func:`_sim_summary_lite_from_stored`). A
+    value that is not such a dict passes through unchanged, and the model then
+    rejects it.
     """
     if (
         isinstance(ci, dict)
@@ -567,19 +567,17 @@ def _with_half_width(ci: Any) -> Any:
 def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | None:
     """Build a ``GameSimSummaryLite`` from a stored (JSONB) summary dict.
 
-    Strips the three raw per-iteration score arrays (``home_scores``,
-    ``away_scores``, ``total_scores``) and the per-iteration inning grid
-    (``inning_grids``, SIM-546) before passing to ``model_validate``
-    because ``GameSimSummaryLite`` does not carry those fields and the base
-    ``_ApiModel`` uses ``extra="forbid"``.  Returns ``None`` on any failure
-    (missing keys, type errors, unknown format) so callers never see an
-    exception from a sim-history read.
+    The function drops the three per-iteration score arrays (``home_scores``,
+    ``away_scores``, ``total_scores``) and the per-iteration inning grids
+    (``inning_grids``) before ``model_validate``: the lite model has no such
+    fields and forbids extra ones. It returns ``None`` on any failure (a
+    missing key, a wrong type, an unknown format), so a caller never sees an
+    exception from a history read.
 
-    SIM-546 review: the stored summary carries no ``half_width`` on its
-    intervals. ``half_width`` is a property of the interval dataclass, and
-    ``to_jsonable`` writes fields only. The lite model requires it, so the
-    projection fills it from ``(high - low) / 2`` on each ``*_ci`` dict that
-    lacks it. Without the fill every stored summary read None.
+    The stored summary has no ``half_width`` on its intervals: ``half_width``
+    is a property of the interval dataclass, and ``to_jsonable`` writes fields
+    only. The lite model requires it, so the function fills it from
+    ``(high - low) / 2`` on each ``*_ci`` dict that lacks it.
     """
     if not summary:
         return None
@@ -590,5 +588,5 @@ def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | 
             if k not in ("home_scores", "away_scores", "total_scores", "inning_grids")
         }
         return GameSimSummaryLite.model_validate(lite_dict)
-    except Exception:  # noqa: BLE001 -- best-effort deserialization
+    except Exception:  # noqa: BLE001 -- an unreadable summary reads as None
         return None

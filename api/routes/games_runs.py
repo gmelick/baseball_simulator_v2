@@ -32,6 +32,7 @@ router = APIRouter()
 
 
 def _get_sim_jobs(request: Request) -> Any:
+    """The run registry (``app.state.sim_jobs``), or 503 when the lifespan has none."""
     jobs = getattr(request.app.state, "sim_jobs", None)
     if jobs is None:
         raise HTTPException(
@@ -42,6 +43,7 @@ def _get_sim_jobs(request: Request) -> Any:
 
 
 def _run_model(run: Mapping[str, Any], *, existing: bool = False) -> SimRunModel:
+    """One ``sim.sim_runs`` row as the API model; ``existing`` marks a reused run."""
     summary = run.get("summary")
     return SimRunModel(
         run_id=int(run["run_id"]),
