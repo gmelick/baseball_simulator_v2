@@ -1,7 +1,8 @@
-"""simulation/cache_codec.py -- the JSON codec of the Redis sim cache (SIM-443f).
+"""The JSON codec of the Redis sim cache.
 
-The Redis cache used to pickle its values. A pickle load runs code, so anyone
-who can write to Redis could run code in the API. This codec stores JSON only.
+The codec stores JSON only, never a pickle. A pickle load runs code, so a
+pickle in Redis would let anyone who can write to Redis run code in the API
+(the security hardening, SIM-443f).
 
 Every stored value is an envelope: ``{"t": <tag>, "v": <payload>}``.
 
@@ -10,8 +11,8 @@ Every stored value is an envelope: ``{"t": <tag>, "v": <payload>}``.
 * ``json`` -- any plain JSON value (a dict, a list, a string, a number).
 
 ``encode`` raises ``TypeError`` on a value JSON cannot hold; the cache then
-skips the write. ``decode`` never raises: any text it cannot read (an old
-pickle, a truncated value, a wrong tag) is a miss, and the caller recomputes.
+skips the write. ``decode`` never raises: any text it cannot read (a pickle,
+a truncated value, a wrong tag) is a miss, and the caller recomputes.
 """
 
 from __future__ import annotations
