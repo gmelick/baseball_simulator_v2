@@ -1,8 +1,8 @@
 /**
- * PlayerDetailPage.tsx — SIM-439
- * Cross-engine hub for one player: identity + seasons on file, and a card per
- * relevant similarity engine that deep-links into its explorer pre-seeded with
- * this player + their latest season. Reachable from any player-id cell/comp row.
+ * PlayerDetailPage.tsx — the cross-engine hub for one player: the identity,
+ * the seasons on file, and a card per relevant similarity engine. Each card
+ * deep-links into its explorer, seeded with this player and the latest season.
+ * Any player-id cell or comp row links here.
  */
 import React from 'react'
 import { Link, useParams } from 'react-router-dom'

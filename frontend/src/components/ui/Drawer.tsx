@@ -1,9 +1,9 @@
 /**
- * Drawer — SIM-439 design system primitive
- *
- * A right-edge slide-over panel (a full-width bottom sheet on mobile), used for
- * the similarity pair-drill detail. Focus-trap-lite: closes on Esc and on
- * backdrop click, restores focus on unmount, and locks body scroll while open.
+ * Drawer — the design system's slide-over panel from the right edge (a
+ * full-width bottom sheet on mobile). The Similarity Explorer's pair detail
+ * uses it. It handles the focus lightly: it closes on Esc and on a backdrop
+ * click, restores the focus when it closes, and locks the body scroll while
+ * open.
  */
 import React, { useEffect, useRef } from 'react'
 

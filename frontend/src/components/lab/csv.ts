@@ -1,7 +1,7 @@
 /**
- * csv.ts — SIM-439
- * Client-side CSV export for a result set (kept out of the ResultGrid component
- * file so react-refresh's only-export-components rule stays happy).
+ * csv.ts — the client-side CSV export of a result set. It lives outside the
+ * ResultGrid component file, so react-refresh's only-export-components rule
+ * passes.
  */
 export function downloadCsv(columns: string[], rows: unknown[][], filename = 'query_result.csv'): void {
   const esc = (v: unknown): string => {

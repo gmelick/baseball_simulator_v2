@@ -1,5 +1,5 @@
 /**
- * CardField.tsx — the design's "On the field" diagram (SIM-519 Part I).
+ * CardField.tsx — the design's "On the field" diagram.
  *
  * The SVG is the design's field (viewBox 0 -10 400 310). Each fielder's
  * label sits at the design's point for his position; an occupied base turns

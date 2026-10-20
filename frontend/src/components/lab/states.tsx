@@ -1,8 +1,8 @@
 /**
- * states.tsx — SIM-439
- * Shared load / empty / error / engine-warming / not-configured states for the
- * Data Lab + Similarity Explorer. Keeps every page's failure modes consistent
- * with the existing app (role=alert on errors, aria-busy on loading).
+ * states.tsx — the shared loading / empty / error / engine-warming /
+ * not-configured states of the Data Lab and the Similarity Explorer. They keep
+ * every page's failure modes consistent with the rest of the app (role=alert
+ * on errors, aria-busy on loading).
  */
 import React from 'react'
 

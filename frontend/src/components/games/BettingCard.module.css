@@ -1,5 +1,5 @@
 /**
- * BettingCard.module.css — SIM-395
+ * BettingCard.module.css — the game page's betting card.
  */
 
 .gate {
@@ -71,7 +71,7 @@
   border-radius: var(--sim-radius-md);
 }
 
-/* The side the sim favors (positive edge). */
+/* The side the sim favours (a positive edge). */
 .favored {
   border-color: var(--sim-color-win);
   background: var(--sim-success-100);
@@ -138,14 +138,14 @@
   }
 }
 
-/* SIM-549: how the run line was priced. */
+/* The note on how the run line was priced. */
 .note {
   margin: 0 0 var(--sim-space-2);
   font-size: var(--sim-text-xs);
   color: var(--sim-color-text-muted);
 }
 
-/* SIM-546: the sub-heading over a group of markets (Full game, First five innings,
+/* The sub-heading over a group of markets (Full game, First five innings,
    First inning, Team totals). */
 .groupTitle {
   margin: 0;

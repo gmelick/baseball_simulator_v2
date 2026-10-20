@@ -1,9 +1,9 @@
 /**
- * ResultGrid.tsx — SIM-439
- * A dense, sortable result table used by BOTH the SQL Console and the AI
- * assistant. Sticky header, monospace right-aligned numerics, muted NULL glyph,
- * click-to-sort, an overflow-x scroller (the page body never scrolls sideways),
- * and player-id cells rendered as deep links to /player/:id.
+ * ResultGrid.tsx — a dense, sortable result table. The SQL Console and the AI
+ * assistant both use it. It has a sticky header, monospace right-aligned
+ * numbers, a muted NULL glyph, click-to-sort and an overflow-x scroller (the
+ * page body never scrolls sideways). A player-id cell renders as a deep link
+ * to /player/:id.
  */
 import React, { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -15,7 +15,7 @@ export interface ResultGridProps {
   rows: unknown[][]
   /** Column names whose integer cells link to the player detail page. */
   idColumns?: string[]
-  /** Max rows to render (windowing guard for very wide results). */
+  /** The most rows to render (a guard for a very long result). */
   maxRender?: number
 }
 

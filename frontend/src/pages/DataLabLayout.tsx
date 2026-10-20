@@ -1,7 +1,7 @@
 /**
- * DataLabLayout.tsx — SIM-439
- * The Data Lab shell: a persistent segmented tab control (Summary · SQL Console
- * · AI Assistant) over a nested <Outlet/>. /lab redirects to /lab/summary.
+ * DataLabLayout.tsx — the Data Lab shell: a persistent segmented tab control
+ * (Summary · SQL Console · AI Assistant) over a nested <Outlet/>. /lab
+ * redirects to /lab/summary.
  */
 import React from 'react'
 import { NavLink, Outlet } from 'react-router-dom'

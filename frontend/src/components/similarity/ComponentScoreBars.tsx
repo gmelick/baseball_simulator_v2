@@ -1,9 +1,9 @@
 /**
- * ComponentScoreBars.tsx — SIM-439
- * The core breakdown: one weighted bar per component sub-score (fill = the raw
- * 0..1 value, a faint tick at the sub-score's weight), a composite header, and
- * the honest footnote that the composite is discounted by sample confidence —
- * NOT Σ(weight·sub-score). Handles 1/2/3/4-bar engines.
+ * ComponentScoreBars.tsx — the core breakdown: one weighted bar per component
+ * sub-score (the fill is the raw 0..1 value; a faint tick marks the
+ * sub-score's weight), a composite header and an honest footnote. The
+ * footnote says the composite is discounted by sample confidence, so it is
+ * NOT Σ(weight·sub-score). It handles engines of 1, 2, 3 or 4 bars.
  */
 import React from 'react'
 

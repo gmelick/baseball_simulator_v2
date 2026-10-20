@@ -1,8 +1,8 @@
 /**
- * EngineIndexPage.tsx — SIM-439
- * The Similarity engine chooser. Group A = the 8 player-comparison (score)
- * engines with a build-status badge; Group B = the pattern-finder (distance)
- * engines, honestly labeled and routed to the Situation Finder / Data Lab.
+ * EngineIndexPage.tsx — the Similarity Explorer's engine chooser. Group A is
+ * the 8 player-comparison (score) engines, each with a build-status badge.
+ * Group B is the pattern-finder (distance) engines, honestly labelled and
+ * routed to the Situation Finder or the Data Lab.
  */
 import React from 'react'
 import { Link } from 'react-router-dom'

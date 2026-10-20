@@ -1,5 +1,5 @@
 /**
- * Panel.module.css — SIM-380
+ * Panel.module.css — the design system's Panel.
  */
 
 .panel {
@@ -9,7 +9,7 @@
   position: relative;
 }
 
-/* Left accent bar for visual grouping */
+/* A left accent bar groups a panel visually. */
 .accent-primary  { border-left: 3px solid var(--sim-primary-600); }
 .accent-success  { border-left: 3px solid var(--sim-color-win); }
 .accent-danger   { border-left: 3px solid var(--sim-color-loss); }
@@ -26,7 +26,7 @@
 }
 
 .content {
-  /* Children manage their own layout */
+  /* The children manage their own layout. */
 }
 
 /* A collapsible panel's heading is a button. */

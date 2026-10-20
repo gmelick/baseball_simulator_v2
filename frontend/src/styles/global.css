@@ -1,7 +1,6 @@
 /**
- * global.css — SIM-380
- * Base resets and layout primitives. All specific component styles live in
- * their component CSS modules or alongside the component files.
+ * global.css — the base reset, the app shell and a few utility classes.
+ * Each component's own styles live in its CSS module beside the component.
  */
 
 @import './tokens.css';
@@ -48,7 +47,7 @@ h1, h2, h3, h4, h5, h6 {
   line-height: var(--sim-leading-tight);
 }
 
-/* SIM-519 Part T: headings take the condensed display face of the design. */
+/* Headings take the condensed display face of the Daily Diamond design. */
 h1, h2, h3 {
   font-family: var(--dd-font-display);
   font-weight: var(--sim-font-bold);
@@ -75,15 +74,15 @@ button {
  * Accessibility: visible keyboard focus + reduced motion
  * ========================================================================== */
 
-/* A consistent keyboard-only focus ring across interactive elements (mouse
- * clicks don't trigger :focus-visible, so this doesn't add visual noise). */
+/* One keyboard-only focus ring on every interactive element. A mouse click
+ * does not trigger :focus-visible, so the ring adds no visual noise. */
 :focus-visible {
   outline: 2px solid var(--sim-color-interactive);
   outline-offset: 2px;
   border-radius: var(--sim-radius-sm);
 }
 
-/* Honor the OS "reduce motion" setting — disable transitions + the LIVE pulse. */
+/* Honour the OS "reduce motion" setting: stop the transitions and the animations (the LIVE pulse too). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -123,8 +122,8 @@ button {
   min-height: 100dvh;
 }
 
-/* SIM-519 Part T: the Daily Diamond header — a forest bar, the stitched-ball
- * mark, the condensed wordmark and a red stitch rule under it. */
+/* The Daily Diamond header: a forest bar, the stitched-ball mark, the
+ * condensed wordmark and a red stitch rule under it. */
 .app-header {
   position: sticky;
   top: 0;
@@ -190,7 +189,7 @@ button {
   gap: var(--sim-space-4);
 }
 
-/* SIM-439: primary nav (Games / Data Lab / Similarity) in the app-shell header. */
+/* The header's left group: the brand and the primary nav (Games / Data Lab / Similarity). */
 .app-header__left {
   display: flex;
   align-items: center;
@@ -224,14 +223,14 @@ button {
   border-bottom: 2px solid var(--dd-stitch);
 }
 
-/* The routed pages (.page) own their own max-width + padding, so the shell
- * wrapper just grows to fill — avoids double-constraining width / padding. */
+/* Each routed page (.page) sets its own max-width and padding. The shell
+ * wrapper only grows to fill, so it does not constrain them a second time. */
 .app-main {
   flex: 1;
   width: 100%;
 }
 
-/* Tighter header on small screens; let the title truncate rather than overflow. */
+/* A tighter header on small screens: a smaller title and logo, and the groups wrap. */
 @media (max-width: 640px) {
   .app-header__bar {
     padding: var(--sim-space-2) var(--sim-space-4);

@@ -1,8 +1,8 @@
 /**
- * unauthorized.ts — SIM-443c
- * The one signal that a data request came back 401 (no valid credential).
+ * unauthorized.ts — the one signal that a data request came back 401 (no
+ * valid credential).
  *
- * Every API route now requires a login. When the session cookie expires,
+ * Every API route requires a login. When the session cookie expires,
  * each data client calls notifyUnauthorized() on a 401. AuthContext listens
  * for the event and marks the session logged out, so App renders the login
  * page instead of a wall of error cards.

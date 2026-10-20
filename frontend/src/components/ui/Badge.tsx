@@ -1,16 +1,14 @@
 /**
- * Badge — SIM-380 design system primitive
- *
- * A compact status indicator. Covers:
- *   - Game status: "LIVE" (pulsing), "FINAL", "SCHEDULED"
- *   - Betting signal: "+EV", "CLV +"
- *   - Override state: "OVERRIDE ACTIVE" (amber)
- *   - General counts / labels
+ * Badge — the design system's compact status indicator. It covers:
+ *   - the game status: "LIVE" (pulsing), "FINAL", "SCHEDULED"
+ *   - a betting signal: "+EV", a settled bet's result
+ *   - a caution state: "read-only", "warming" (amber)
+ *   - general counts and labels
  *
  * @example
  * <Badge variant="live" pulse>LIVE</Badge>
  * <Badge variant="success">+EV</Badge>
- * <Badge variant="warning">OVERRIDE</Badge>
+ * <Badge variant="warning">read-only</Badge>
  */
 import React from 'react'
 import styles from './Badge.module.css'
@@ -22,13 +20,13 @@ export type BadgeVariant =
   | 'danger'
   | 'warning'
   | 'info'
-  | 'live'     // shorthand for info + pulse
-  | 'final'    // shorthand for muted/gray
-  | 'scheduled' // shorthand for gray outline
+  | 'live'     // the live tag: pale red, always with the pulsing dot
+  | 'final'    // the table band, ink text
+  | 'scheduled' // grass green
 
 export interface BadgeProps {
   variant?: BadgeVariant
-  /** Adds a pulsing dot before the label (used for LIVE status) */
+  /** Adds a pulsing dot before the label (the LIVE status) */
   pulse?: boolean
   children: React.ReactNode
   className?: string

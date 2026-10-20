@@ -1,12 +1,13 @@
 /**
- * lab.ts — SIM-439
- * Browser-side client for the Data Lab surface: summary analytics, the schema
- * tree, the read-only SQL runner, and the AI-assistant capability probe.
+ * lab.ts — the browser's client for the Data Lab: the summary analytics, the
+ * data freshness, the schema tree, the read-only SQL runner and the
+ * AI-assistant capability probe.
  *
- * Mirrors the games.ts client (credentials:'include' so the httpOnly session
- * cookie rides along; the Vite dev proxy forwards /api/* to :8000). Response
- * types are hand-mirrored from the FastAPI models in api/routes/{analytics,
- * schema_introspect,sql_runner,ai_assistant}.py — keep them in sync.
+ * It works like the games.ts client. `credentials: 'include'` sends the
+ * httpOnly session cookie, and the Vite dev proxy forwards /api/* to the
+ * backend. The response types mirror the FastAPI models in
+ * api/routes/{analytics,data_health,schema_introspect,sql_runner,ai_assistant}.py
+ * by hand. Keep them in sync.
  */
 import { GamesApiError } from '@/api/games'
 import { notifyUnauthorized } from '@/api/unauthorized'
@@ -96,8 +97,9 @@ export interface ZoneRow {
 }
 
 /**
- * SIM-572: the games a season read covers. 'R' (the API's default) reads the
- * regular season alone; 'all' adds the postseason.
+ * The games a season read covers (the Data Lab game-type filter, SIM-572).
+ * 'R' (the API's default) reads the regular season alone; 'all' adds the
+ * postseason.
  */
 export type GameType = 'R' | 'all'
 
@@ -137,7 +139,7 @@ export const fetchZone = (f: AnalyticsFilter): Promise<ZoneRow[]> =>
   getJson<ZoneRow[]>(`/api/analytics/zone${qs({ season: f.season, pitcher: f.pitcher, game_type: f.gameType })}`)
 
 // ---------------------------------------------------------------------------
-// Data freshness (existing endpoint)
+// Data freshness
 // ---------------------------------------------------------------------------
 
 export interface DataFreshness {

@@ -1,7 +1,7 @@
 /**
- * players.ts — SIM-439
- * Name typeahead + player identity (api/routes/players.py). Reused by the
- * universal PlayerSearchInput and the Player Detail hub.
+ * players.ts — the name typeahead and the player identity client
+ * (api/routes/players.py). The universal PlayerSearchInput and the Player
+ * Detail hub use it.
  */
 import { GamesApiError } from '@/api/games'
 import { notifyUnauthorized } from '@/api/unauthorized'

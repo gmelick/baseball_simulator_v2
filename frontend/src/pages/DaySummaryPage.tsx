@@ -1,11 +1,11 @@
 /**
- * DaySummaryPage.tsx — the Daily Diamond day slate (SIM-391; rebuilt for SIM-519).
+ * DaySummaryPage.tsx — the Daily Diamond day slate.
  *
  * The date lives in the URL (`/date/:date`; `/` is today). One call to
  * GET /api/games/{date} lists the day from the league's schedule. The page:
  *
- *   - sorts the cards live first, then scheduled by first pitch, then final,
- *     then postponed;
+ *   - sorts the cards live first, then scheduled, then final, then postponed,
+ *     each group by first pitch;
  *   - polls the slate every 30 seconds while a game is live or the date is
  *     today, and only while the tab is visible;
  *   - opens a live card by default on a wide screen, and no card on a phone;

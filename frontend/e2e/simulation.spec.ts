@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 /**
- * simulation.spec.ts — SIM-519 Part E: one simulation run per game.
+ * simulation.spec.ts — one simulation run per game.
  *
  * The game page's Simulation card: Run queues a run, the bar polls its
  * progress, a done run feeds the projections panel (which reads the run, no

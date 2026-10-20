@@ -1,7 +1,7 @@
 /**
- * StatTile.tsx — SIM-439
- * A label + big monospace number + optional context line; KpiRow lays them out
- * in a responsive strip. DataFreshnessBadge shows the ingest watermark.
+ * StatTile.tsx — a tile with a label, a big monospace number and an optional
+ * context line. KpiRow lays the tiles out in a responsive strip.
+ * DataFreshnessBadge shows the ingest watermark.
  */
 import React from 'react'
 

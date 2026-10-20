@@ -1,16 +1,15 @@
 /**
- * BaseballFieldGraphic.tsx — SIM-392
- *
- * A compact SVG of the field: the diamond, the 9 standard fielding positions,
- * the batter at the plate, and runner markers on occupied bases. Presentational
- * only — the Game page (SIM-393) feeds it the live baserunner state (SIM-386
- * on_1b/on_2b/on_3b) and, when known, player names.
+ * BaseballFieldGraphic.tsx — a compact SVG of the field: the diamond, the 9
+ * standard fielding positions, the batter at the plate and the runner markers
+ * on occupied bases. The component is presentational only: a caller passes the
+ * runners (the on_1b/on_2b/on_3b state) and, when known, the player names. No
+ * page renders it; the slate card and the what-if panel draw CardField.
  *
  * Label-collision rules:
- *   - Outfield position labels sit ABOVE their dot; infield labels BELOW — so
- *     a fielder label never overlaps the base/dot it annotates.
- *   - Runner name labels are anchored OUTSIDE the diamond at each base (right
- *     of 1B, above 2B, left of 3B) so they never collide with the base marker
+ *   - An outfield position label sits ABOVE its dot and an infield label BELOW,
+ *     so a fielder label never overlaps the base or dot it annotates.
+ *   - A runner name label is anchored OUTSIDE the diamond at its base (right
+ *     of 1B, above 2B, left of 3B), so it never collides with the base marker
  *     or the infield position labels.
  *   - The batter label sits below home plate, clear of the catcher dot.
  */
@@ -65,7 +64,7 @@ function Base({
   y: number
   occupied: boolean
 }): React.ReactElement {
-  // A 16px square rotated 45° (a diamond) centered on (x, y).
+  // An 18-unit square rotated 45° (a diamond), centred on (x, y).
   const s = 9
   return (
     <rect
@@ -97,7 +96,7 @@ export function BaseballFieldGraphic({
     'bases empty'
   const label = ariaLabel ?? `Field: runners on ${baseSummary}`
 
-  // Runner labels are only drawn when a name string (not just `true`) is given.
+  // A runner label draws only when the caller gives a name string (not just `true`).
   const runnerName = (v: string | boolean | null | undefined): string | null =>
     typeof v === 'string' && v !== '' ? v : null
 
@@ -123,7 +122,7 @@ export function BaseballFieldGraphic({
       <Base x={BASES.first.x} y={BASES.first.y} occupied={first} />
       <Base x={BASES.second.x} y={BASES.second.y} occupied={second} />
       <Base x={BASES.third.x} y={BASES.third.y} occupied={third} />
-      {/* Home plate (pentagon-ish: just a small marker) */}
+      {/* Home plate: a small circle marker */}
       <circle cx={BASES.home.x} cy={BASES.home.y} r={5} className={styles.homePlate} />
 
       {/* Fielders */}

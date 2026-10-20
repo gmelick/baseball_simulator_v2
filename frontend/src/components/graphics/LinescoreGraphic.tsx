@@ -1,19 +1,17 @@
 /**
- * LinescoreGraphic.tsx — SIM-392
+ * LinescoreGraphic.tsx — the classic baseball linescore: a per-inning run
+ * grid and each team's Runs / Hits / Errors totals. The away row sits on top
+ * and the home row below (the scoreboard convention).
  *
- * The classic baseball linescore: a per-inning run grid plus each team's
- * Runs / Hits / Errors totals. Renders the away row on top, home on the
- * bottom (scoreboard convention).
+ * The cell meaning (it mirrors simulation.linescore / LinescoreModel):
+ *   - a number     → the runs scored in that half-inning
+ *   - `null` ("x") → a half that was never played (the bottom of the 9th when
+ *                    the home team already leads, a walk-off, or innings the
+ *                    away team played but the home team did not reach). It
+ *                    renders as the classic scoreboard "x".
  *
- * Cell semantics (mirrors simulation.linescore / LinescoreModel, SIM-362):
- *   - a number     → runs scored in that half-inning
- *   - `null` ("x") → a half that was never played (bottom of the 9th when the
- *                    home team already leads, a walk-off, or innings the away
- *                    team played but the home team didn't reach). Rendered as
- *                    the classic scoreboard "x".
- *
- * Extra innings (N > 9) widen the grid automatically. Presentational only —
- * the Game page (SIM-393) adapts the /linescore payload into these props.
+ * Extra innings (N > 9) widen the grid. The component is presentational only:
+ * the Game page adapts the /linescore payload into these props.
  */
 import React from 'react'
 

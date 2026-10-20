@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 /**
- * slate.spec.ts — SIM-519: the Daily Diamond slate.
+ * slate.spec.ts — the Daily Diamond slate.
  *
  * One date with a card in each state (live, scheduled, final, postponed), the
  * league feed and the card odds mocked per game. Checks the state tags, the

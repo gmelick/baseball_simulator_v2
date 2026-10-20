@@ -15,15 +15,18 @@ import { SituationFinderPage } from '@/pages/SituationFinderPage'
 import { SummaryPage } from '@/pages/SummaryPage'
 
 /**
- * AppShell — rendered once the AuthProvider confirms the session.
+ * AppShell — reads the auth state from the AuthProvider. It shows a loading
+ * splash during the session probe, the login page with no session, and the
+ * routed app with one.
  *
- * SIM-391 (Sprint 2) wires React Router: `/` and `/date/:date` show the Day
- * Summary slate; `/game/:gamePk` shows the Game page (a stub until SIM-393).
+ * The routes: `/` and `/date/:date` show the day slate; `/game/:gamePk` shows
+ * the game page; `/lab/*` is the Data Lab; `/similarity/*` and
+ * `/player/:playerId` are the Similarity Explorer.
  */
 function AppShell(): React.ReactElement {
   const { authenticated, loading, logout } = useAuth()
 
-  // Suspense-style loading splash while the /auth/me probe runs on mount.
+  // A loading splash while the /auth/me probe runs on mount.
   if (loading) {
     return (
       <div
@@ -85,7 +88,7 @@ function AppShell(): React.ReactElement {
             <Route path="/date/:date" element={<DaySummaryPage />} />
             <Route path="/game/:gamePk" element={<GamePage />} />
 
-            {/* SIM-439 — Data Lab (raw.pitches explorer) */}
+            {/* The Data Lab (the raw.pitches explorer) */}
             <Route path="/lab" element={<DataLabLayout />}>
               <Route index element={<Navigate to="/lab/summary" replace />} />
               <Route path="summary" element={<SummaryPage />} />
@@ -93,7 +96,7 @@ function AppShell(): React.ReactElement {
               <Route path="assistant" element={<AssistantPage />} />
             </Route>
 
-            {/* SIM-439 — Similarity Explorer */}
+            {/* The Similarity Explorer */}
             <Route path="/similarity" element={<EngineIndexPage />} />
             <Route path="/similarity/situation" element={<SituationFinderPage />} />
             <Route path="/similarity/:engine" element={<EngineExplorerPage />} />
@@ -108,9 +111,9 @@ function AppShell(): React.ReactElement {
 }
 
 /**
- * App — root. Wraps the entire tree in AuthProvider so every component can
- * call useAuth(). AppShell reads the auth state and renders either the login
- * page or the main application.
+ * App — the root. It wraps the whole tree in AuthProvider, so every component
+ * can call useAuth(). AppShell reads the auth state and renders either the
+ * login page or the main application.
  */
 function App(): React.ReactElement {
   return (

@@ -1,5 +1,5 @@
 /**
- * GameCard.tsx — the Daily Diamond slate card (SIM-519; design 2026-10-08).
+ * GameCard.tsx — the Daily Diamond slate card.
  *
  * The header shows the state tag, both clubs (logo, colour chip, name,
  * record) and the score or "vs". A click on the header opens the card in

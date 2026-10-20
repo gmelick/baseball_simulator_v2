@@ -1,8 +1,8 @@
 /**
- * CompTable.tsx — SIM-439
- * The ranked comps grid: rank, player (→ /player/:id), season, composite bar,
- * per-sub-score mini-bars, and the sample size that drives the confidence
- * discount. A row click opens the pair drill.
+ * CompTable.tsx — the ranked comps grid: the rank, the player
+ * (→ /player/:id), the season, a composite bar, a mini-bar per sub-score and
+ * the sample size that drives the confidence discount. A row click opens the
+ * pair detail.
  */
 import React from 'react'
 import { Link } from 'react-router-dom'

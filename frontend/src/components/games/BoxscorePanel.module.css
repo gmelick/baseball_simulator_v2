@@ -1,5 +1,5 @@
 /**
- * BoxscorePanel.module.css — SIM-394
+ * BoxscorePanel.module.css — the game page's box score panel.
  */
 
 .gate {
@@ -36,7 +36,7 @@
   margin-bottom: var(--sim-space-3);
 }
 
-/* SIM-560: one section per team — batters in batting order, then pitchers. */
+/* One section per team: the batters in batting order, then the pitchers. */
 .team + .team {
   margin-top: var(--sim-space-4);
   padding-top: var(--sim-space-3);

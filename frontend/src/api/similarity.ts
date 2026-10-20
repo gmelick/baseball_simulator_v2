@@ -1,9 +1,9 @@
 /**
- * similarity.ts — SIM-439
- * Client for the generalized Similarity Explorer (api/routes/similarity_explorer.py).
- * Handles the 8 score engines (comps + component sub-scores) and the situation
- * (distance) engine. 503 → engine warming; 404 → subject not found / distance
- * engine on a score path.
+ * similarity.ts — the client for the Similarity Explorer
+ * (api/routes/similarity_explorer.py). It serves the 8 score engines (comps
+ * and component sub-scores) and the situation (distance) engine. A 503 means
+ * the engine is warming. A 404 means the subject is not found, or a distance
+ * engine was asked on a score path.
  */
 import { GamesApiError } from '@/api/games'
 import { notifyUnauthorized } from '@/api/unauthorized'

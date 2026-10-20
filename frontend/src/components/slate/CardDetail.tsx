@@ -1,5 +1,5 @@
 /**
- * CardDetail.tsx — the open Daily Diamond card (SIM-519 Part I).
+ * CardDetail.tsx — the open Daily Diamond card.
  *
  * Reads the real game from GET /api/games/{pk}/feed and the book's lines from
  * GET /api/betting/games/{pk}/card-odds, then shows the design's sections by

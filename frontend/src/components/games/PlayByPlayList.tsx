@@ -1,16 +1,16 @@
 /**
- * PlayByPlayList.tsx — SIM-393, SIM-561
+ * PlayByPlayList.tsx — the pitch-by-pitch scroll of a simulated game, grouped
+ * into plate appearances (PAs).
  *
- * The pitch-by-pitch scroll, grouped into plate appearances. Each PA shows its
- * resolved event (carried on the terminal pitch) plus runs/outs; clicking a PA
- * expands its pitch sequence (the drill-down). A plain scroll container handles
- * a full game (~80 PAs / ~300 pitches) comfortably; swap in windowing later if
- * a much larger feed ever lands here.
+ * Each PA shows its resolved event (carried on the terminal pitch) and its runs
+ * and outs. A click on a PA expands its pitch sequence (the drill-down). A plain
+ * scroll container handles a full game (~80 PAs / ~300 pitches) well, so the
+ * list has no windowing.
  *
- * SIM-561: a stored game carries each pitch's inning, half, batter, pitcher and
- * score. The scroll groups the plate appearances under a header per half-inning,
- * names the batter and the pitcher, and shows the score after a scoring play. A
- * stream stored without them reads as before ("PA 12").
+ * A stored game carries each pitch's inning, half, batter, pitcher and score.
+ * The scroll then groups the PAs under a header per half-inning, names the
+ * batter and the pitcher, and shows the score after a scoring play. A stream
+ * stored without them shows each PA by its number ("PA 12").
  */
 import React, { useMemo, useState } from 'react'
 

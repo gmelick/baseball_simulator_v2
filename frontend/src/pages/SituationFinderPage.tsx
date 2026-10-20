@@ -1,6 +1,6 @@
 /**
- * SituationFinderPage.tsx — SIM-439
- * The honest home for the KDTree situation engine: it compares GAME STATES, not
+ * SituationFinderPage.tsx — the honest home for the KDTree situation engine
+ * (a nearest-neighbour search over game states): it compares GAME STATES, not
  * players, and returns a DISTANCE (lower = more similar), not a 0–1 score. A
  * vector-builder form on the left, the nearest historical situations on the
  * right. No composite / sub-score UI (there is none to fake).
