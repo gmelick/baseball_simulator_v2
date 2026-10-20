@@ -38,11 +38,12 @@ valid in substance.
    pitch, the box score and the linescore. The RNG call order does not change. Each area
    adds its own neutral check (its brief names it). A change the fingerprint cannot cover
    (a log line, an error text) is listed in the session's `CHANGES.md` entry.
-2. **A bug found is ticketed, not fixed.** Add a `BACKLOG.xlsx` row: the evidence, the
-   definition of done and a proposed fix. Re-read the subtitle row right before you write,
-   then bump the next free ID; another session may have filed one meanwhile. Check for
-   `~$BACKLOG.xlsx` first (the lock file of an open workbook; the git-stash trap in the
-   memory index).
+2. **A bug found is ticketed, not fixed.** A session does NOT edit `BACKLOG.xlsx`: five
+   branches editing one binary workbook cannot merge. It lists each bug in its `CHANGES.md`
+   entry under "Bugs found (to file)": the defect in plain words, the evidence (file, line,
+   a failing input), a definition of done and a proposed fix. Phase C files every one in
+   `BACKLOG.xlsx`, gives each its ID and bumps the subtitle's next free ID (SIM-575 when
+   Phase B starts).
 3. **The comment standard (CLAUDE.md §14).**
    - A comment or docstring says what the code does now and why, in the present tense.
    - History goes: deleted code, the old behaviour, "was X", dated narrative, sprint and
@@ -101,6 +102,13 @@ valid in substance.
     the live app holds 6.7 GB. Heavy runs: the full unit lane, a production fingerprint, a
     bundle build, a profile build. Run `docker ps` before you start one and wait when two
     app-image containers already run. The host blue-screens: commit and push often.
+11. **Never edit code in the main checkout.** The live `app`, `jobs` and `live` containers
+    mount its `api/`, `pipeline/`, `similarity/`, `simulation/` and `db/`, and the app
+    hot-reloads on an edit. On 2026-10-20 at 01:30 UTC the groundwork's edits in the main
+    checkout reloaded the app; the reload republished the 642 MB of shared arrays without
+    freeing the old ones, `/dev/shm` filled, and the app hung until a forced recreate
+    (`docker compose up -d --force-recreate app`). Work in your worktree; the main checkout
+    stays on master until Phase C deploys with the owner's OK.
 
 ## 3. Phase A: what the groundwork did
 
@@ -110,8 +118,8 @@ valid in substance.
 | A2 | `dded0f0` | Citations name a section or a constant, never a line: "CLAUDE.md §11", `scripts/sim_stats.py::_MLB_2025`. The two tests that required a ticket comment in source test the content instead. |
 | A3 + A4 | `3262c0a` | Scripts named by purpose; one-off probes in `scripts/probes/`; inputs in `scripts/data/`; committed run records in `docs/audit/records/`; run outputs in `results/` (git- and Docker-ignored). One test-side script loader, `tests/script_loader.py`. Table in §13.1. |
 | A5 | `24707d3` | 237 test files named by subject. Table in §13.2. |
-| A6 | `b459d53` and the next commit | `simulation/flags.py`, the registry of the `SIM_*` flags (`b459d53`), and `db/introspect.py`, the existence probe. |
-| A7 | (see `git log`) | The coverage omit list drops two deleted files; `make test-unit` measures the five CI packages. |
+| A6 | `b459d53`, `0a31cf3` | `simulation/flags.py`, the registry of the `SIM_*` flags (`b459d53`), and `db/introspect.py`, the existence probe (`0a31cf3`). |
+| A7 | `63143cb` | The coverage omit list drops two deleted files; `make test-unit` measures the five CI packages. |
 
 **The flag registry.** `simulation/flags.py` holds one row per `SIM_*` flag: name, type,
 code default, owner and meaning. Read a flag only through `read_bool`, `read_float`,
@@ -197,9 +205,9 @@ MSYS_NO_PATHCONV=1 docker compose -f "C:/Users/grego/Documents/baseball_simulato
 
 A session must NOT merge into master, deploy, restart the app, run a rebuild that publishes
 a bundle, edit the CI mypy scope (Phase C does), or edit another session's area beyond a
-forced re-point (rule 6). It files a ticket for every bug it finds (rule 2). It ends by
+forced re-point (rule 6). It lists every bug it finds in its `CHANGES.md` entry (rule 2). It ends by
 reporting: the branch, the commits, the line counts before and after, the files over 1,500
-lines, the deletions, the tickets filed, and the gates with their results.
+lines, the deletions, the bugs found, and the gates with their results.
 
 ## 7. B1, Simulation
 
@@ -372,7 +380,7 @@ tests marked B5.
    the balanced set (detached, about 2.5 h), reading the six non-passes of the 2026-10-07
    lane at like sizes.
 6. Records: the `CHANGES.md` close entry, CLAUDE.md, `docs/technical/README.md` and the
-   cheat sheet, `BACKLOG.xlsx` (the SIM-493 row deleted, the new tickets checked), the
+   cheat sheet, `BACKLOG.xlsx` (the SIM-493 row deleted; every session's "Bugs found" filed as tickets), the
    memory index.
 7. With the owner's OK: merge into master and push; rebuild the app image (`scripts/` is
    baked in); recreate `app`, `jobs` and `live` outside 10:00–11:00 UTC with no `.running`

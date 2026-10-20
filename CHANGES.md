@@ -1,3 +1,173 @@
+# GROUNDWORK — the code clean-up's shared steps: a behaviour fingerprint, scripts and tests named by purpose, run outputs out of `scripts/`, one flag registry and one existence probe — SIM-493, 2026-10-19
+
+**Why.** The owner widened the code-hygiene refactor (SIM-493) on 2026-10-19: review and clean
+up all code. The plan runs in three phases (`docs/audit/2026-10-19-sim493-code-cleanup-plan.md`).
+This entry records Phase A, the groundwork that the five area sessions start from. Every step
+is behaviour-neutral; the fingerprint below proves it for the simulator.
+
+**What was built (branch `sim493-groundwork`).**
+
+- **The behaviour fingerprint** (`scripts/behaviour_fingerprint.py`). It runs seeded games,
+  records every pitch, and writes one SHA-256 hash per game of the result, the plays and the
+  state before each play. Four modes: the no-database factory (200 games), the production
+  factory over the in-memory bundle with the flags unset and with the app's compose flags
+  (400), the production factory over a pinned real bundle with the 45 balanced games' real
+  lineups (180), and a built bundle's arrays by content. `compare` diffs two records. The
+  baselines on `fe81d79` sit in `results/sim493/`; the real-bundle mode reads a copy of bundle
+  version `20261019T081435Z` at `/data/sim493/bundle_pin` and the games' inputs cached in
+  `results/sim493/production_kwargs.json`. Two runs of the base gave identical records.
+- **Citations name a section or a constant, never a line.** The acceptance bands cited
+  `CLAUDE.md:911` / `:914` and `scripts/sim_stats.py:90` / `:104`, and two tests failed when an
+  edit above those lines moved them. They now cite "CLAUDE.md §11" and
+  `scripts/sim_stats.py::_MLB_2025`. Two tests that required a ticket number in a source
+  comment now test the content.
+- **Scripts named by purpose; run outputs out of `scripts/`.** The general tools keep
+  `scripts/` under purpose names: the paired accuracy comparison is `scripts/pair_accuracy.py`
+  and the accuracy comparison is `scripts/accuracy_comparison.py` (was `clv_backtest.py`). The
+  one-off probes, rebuilds and backfills moved to `scripts/probes/`, the fixed-path inputs to
+  `scripts/data/`, and the committed run records to `docs/audit/records/`. About 260 MB of
+  untracked run outputs moved to `results/` (ignored by git and by Docker; the images no
+  longer copy them). Thirteen test-side copies of a script loader became one,
+  `tests/script_loader.py`. The full table is below.
+- **Tests named by subject.** 237 test files carried a ticket number in their name; each is
+  now named for what it tests. The table is §13.2 of the plan.
+- **One flag registry.** `simulation/flags.py` holds one row per `SIM_*` flag (52 and the
+  actor-power family): type, code default, owner and meaning. Every read in `api/` and
+  `simulation/` goes through its readers. `tests/unit/test_flag_registry.py` fails when code
+  reads, or compose sets, an unregistered name.
+- **One existence probe.** `db/introspect.py` answers "does this table or column exist" for
+  DuckDB, psycopg2 and asyncpg. It replaces 32 copies in the eight engines, the calibrator,
+  the artifact builder, the profile computor, the loader and the live pipeline.
+  `_table_exists` in the profile computor is gone; its two script users call
+  `duck_table_exists`.
+- **A ticket filed: SIM-574 (P3).** 24 of the flags compose sets have a code default that
+  differs from production (the cell index, the fence stage, the manager draw, ...), so a
+  script that forgets one runs a different simulator. The registry shows the gap; the
+  ticket asks the owner whether an unset flag should mean production. Next free ID SIM-575.
+- **Small config fixes.** The coverage omit list drops two deleted files;
+  `make test` and `make test-unit` measure the five packages CI measures.
+
+**Behaviour changes on purpose (error paths only).** No configured run changes; the
+fingerprint is identical. These changes touch only a value no configuration uses:
+
+- An on/off `SIM_*` flag set to a value outside `1 true yes on` / `"" 0 false no off` now
+  raises `FlagValueError`. Before, an allow-list flag read it as off and a deny-list flag as
+  on.
+- A `SIM_*` number that does not parse keeps its default and logs a warning. Before, most
+  kept the default silently; `SIM_PREWARM_MAX_CONCURRENT` crashed the module's import and
+  `SIM_JOB_MAX_CONCURRENT` fell back to 1.
+- A whole-number flag written as a decimal (`"20.0"`) reads its whole part; before, most
+  fell back to the default.
+- The batch runner's start-up log prints the parsed worker count, not the raw text.
+- The existence probes' SQL text changed spacing (`table_schema = 'sim'`) and the schema
+  probe reads `LIMIT 0` where it read `LIMIT 1`; a test fake that matched the old text was
+  re-pointed.
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| The full unit lane after the renames (container, the checkout mounted) | `6532 passed, 2 skipped, 22 deselected`; the one failure was the new registry test, written before its wiring |
+| The full unit lane after every slice (container) | `6545 passed, 2 skipped, 22 deselected, 10 warnings in 317.19s` |
+| The regression lane (container, the worktree mounted and proved) | `33 passed` |
+| `ruff check .` / `ruff format --check .` (ruff 0.16.7) | pass |
+| `mypy similarity/ pipeline/ api/` | `Success: no issues found in 77 source files` |
+| Fingerprint, no-database factory, 200 games, against `fe81d79` | `IDENTICAL: 200 hashes` |
+| Fingerprint, in-memory bundle, 2 flag sets x 200 games, against `fe81d79` | `IDENTICAL: 400 hashes` |
+| Fingerprint, the real bundle, 45 games x 4 seeds, against `fe81d79` | `IDENTICAL: 180 hashes`, run from the worktree with its code mounted (and once from the main checkout before the incident below, also identical) |
+| The base's real-bundle record run twice | `IDENTICAL: 180 hashes` |
+
+**An incident on the way (2026-10-20, 01:30 UTC).** The groundwork's first slices were edited
+in the main checkout, which the live app mounts. The app hot-reloaded the branch's code; the
+reload republished 642 MB of shared arrays without freeing the old ones, `/dev/shm` filled
+(1.0 G of 1.0 G) and the health check timed out. I switched the main checkout back to master
+and recreated the app (`docker compose up -d --force-recreate app`, 01:34 UTC); it came back
+on master's code with `/dev/shm` empty. The rest of the groundwork ran in the worktree
+`.claude/worktrees/sim493-groundwork`. The plan's rule 11 now forbids edits in the main
+checkout. The code the app ran for those four minutes was the groundwork's,
+behaviour-neutral by the fingerprint.
+
+**The script moves.**
+
+| Old path | New path |
+|---|---|
+| `scripts/sim518_pair_accuracy.py` | `scripts/pair_accuracy.py` |
+| `scripts/clv_backtest.py` | `scripts/accuracy_comparison.py` |
+| `scripts/sim523_game_set.py` | `scripts/balanced_game_set.py` |
+| `scripts/sim478_fence_check.py` | `scripts/fence_check.py` |
+| `scripts/sim553_rebuild_pitch_pool.py` | `scripts/rebuild_pitch_pool.py` |
+| `scripts/sim554_rebuild_steal_pool.py` | `scripts/rebuild_steal_pool.py` |
+| `scripts/sim548_market_skill.py` | `scripts/market_skill.py` |
+| `scripts/sim548_calibrate_markets.py` | `scripts/calibrate_markets.py` |
+| `scripts/sim548_design.py` | `scripts/designed_experiment.py` |
+| `scripts/sim548_offline_fit.py` | `scripts/offline_draw_fit.py` |
+| `scripts/sim554_running_game_replay.py` | `scripts/running_game_replay.py` |
+| `scripts/sim545_boxscore_audit.py` | `scripts/boxscore_audit.py` |
+| `scripts/sim548_accuracy_split.sh` | `scripts/accuracy_split_arm.sh` |
+| `scripts/sim548_baseline_1000.sh` | `scripts/accuracy_baseline_1000.sh` |
+| `scripts/sim548_design_run.sh` | `scripts/designed_experiment_run.sh` |
+| `scripts/sim427_manager_probe.py` | `scripts/probes/manager_probe.py` |
+| `scripts/sim427_manager_recompute.py` | `scripts/probes/manager_profile_recompute.py` |
+| `scripts/sim427_pen_check.py` | `scripts/probes/bullpen_check.py` |
+| `scripts/sim478_wall_zone_probe.py` | `scripts/probes/wall_zone_probe.py` |
+| `scripts/sim518_fatigue_probe.py` | `scripts/probes/fatigue_probe.py` |
+| `scripts/sim518_fatigue_scan.py` | `scripts/probes/fatigue_kernel_scan.py` |
+| `scripts/sim523_concentration.py` | `scripts/probes/actor_concentration_check.py` |
+| `scripts/sim523_fit_probe.py` | `scripts/probes/conditional_rate_probe.py` |
+| `scripts/sim523_receiving_probe.py` | `scripts/probes/catcher_receiving_probe.py` |
+| `scripts/sim531_runner_recompute.py` | `scripts/probes/runner_profile_recompute.py` |
+| `scripts/sim532_fielder_recompute.py` | `scripts/probes/fielder_profile_recompute.py` |
+| `scripts/sim533_arm_angle_probe.py` | `scripts/probes/arm_angle_probe.py` |
+| `scripts/sim549_rescore_runlines.py` | `scripts/probes/rescore_runlines.py` |
+| `scripts/sim550_arm_recompute.py` | `scripts/probes/outfield_arm_recompute.py` |
+| `scripts/sim554_running_game_census.py` | `scripts/probes/running_game_census.py` |
+| `scripts/sim555_book_probe.py` | `scripts/probes/odds_book_census.py` |
+| `scripts/sim555_book_sharpness.py` | `scripts/probes/book_sharpness.py` |
+| `scripts/sim555_rescore_reports.py` | `scripts/probes/rescore_graded_book.py` |
+| `scripts/sim555_retire_consensus_rows.py` | `scripts/probes/retire_consensus_odds.py` |
+| `scripts/sim555_odds_census.sql` | `scripts/probes/odds_census.sql` |
+| `scripts/sim559_backfill_start_positions.py` | `scripts/probes/backfill_start_positions.py` |
+| `scripts/steal_weight_volume_probe.py` | `scripts/probes/steal_weight_volume_probe.py` |
+| `scripts/backfill_odds_hash.py` | `scripts/probes/backfill_odds_hash.py` |
+| `scripts/check_bat_side_coverage.py` | `scripts/probes/check_bat_side_coverage.py` |
+| `scripts/run_index_acceptance.py` | `scripts/probes/run_index_acceptance.py` |
+| `scripts/sim523_game_set.json` | `scripts/data/balanced_game_set.json` |
+| `scripts/sim548_games_2024_chunk2.txt` | `scripts/data/games_2024_chunk2.txt` |
+| `scripts/sim548_games_2024_chunk3.txt` | `scripts/data/games_2024_chunk3.txt` |
+| `scripts/sim548_games_2024_chunk4.txt` | `scripts/data/games_2024_chunk4.txt` |
+| `scripts/sim548_games_2024_design.txt` | `scripts/data/games_2024_design.txt` |
+| `scripts/sim478_lane.txt` | `docs/audit/records/sim478_lane.txt` |
+| `scripts/sim518_fatigue_scan.json` | `docs/audit/records/sim518_fatigue_scan.json` |
+| `scripts/sim548_accuracy_pair_split.json` | `docs/audit/records/sim548_accuracy_pair_split.json` |
+| `scripts/sim548_accuracy_pair_split.sim549.json` | `docs/audit/records/sim548_accuracy_pair_split.sim549.json` |
+| `scripts/sim548_accuracy_pair_split.sim549.txt` | `docs/audit/records/sim548_accuracy_pair_split.sim549.txt` |
+| `scripts/sim548_accuracy_pair_split.txt` | `docs/audit/records/sim548_accuracy_pair_split.txt` |
+| `scripts/sim548_baseline_1000_skill.json` | `docs/audit/records/sim548_baseline_1000_skill.json` |
+| `scripts/sim548_baseline_1000_skill.sim555.json` | `docs/audit/records/sim548_baseline_1000_skill.sim555.json` |
+| `scripts/sim548_baseline_1000_skill.sim555.txt` | `docs/audit/records/sim548_baseline_1000_skill.sim555.txt` |
+| `scripts/sim548_baseline_1000_skill.txt` | `docs/audit/records/sim548_baseline_1000_skill.txt` |
+| `scripts/sim548_lane_production_20260915.txt` | `docs/audit/records/sim548_lane_production_20260915.txt` |
+| `scripts/sim548_lane_production_20260915_timedout.txt` | `docs/audit/records/sim548_lane_production_20260915_timedout.txt` |
+| `scripts/sim548_market_calibration_2024split.json` | `docs/audit/records/sim548_market_calibration_2024split.json` |
+| `scripts/sim548_market_calibration_2024split.txt` | `docs/audit/records/sim548_market_calibration_2024split.txt` |
+| `scripts/sim548_offline_pitch_20260915_partial57.txt` | `docs/audit/records/sim548_offline_pitch_20260915_partial57.txt` |
+| `scripts/sim548_offline_pitch_v1_partial_20260915.txt` | `docs/audit/records/sim548_offline_pitch_v1_partial_20260915.txt` |
+| `scripts/sim548_offline_smoke.json` | `docs/audit/records/sim548_offline_smoke.json` |
+| `scripts/sim548_offline_smoke_settings.json` | `docs/audit/records/sim548_offline_smoke_settings.json` |
+| `scripts/sim548_offline_v2_20260915.json` | `docs/audit/records/sim548_offline_v2_20260915.json` |
+| `scripts/sim548_offline_v2_20260915.txt` | `docs/audit/records/sim548_offline_v2_20260915.txt` |
+| `scripts/sim548_skill_first250.json` | `docs/audit/records/sim548_skill_first250.json` |
+| `scripts/sim548_skill_first500.json` | `docs/audit/records/sim548_skill_first500.json` |
+| `scripts/sim555_book_sharpness.txt` | `docs/audit/records/sim555_book_sharpness.txt` |
+| `scripts/steal_weight_volume_probe_2025.json` | `docs/audit/records/steal_weight_volume_probe_2025.json` |
+| `scripts/steal_weight_volume_probe_2025.txt` | `docs/audit/records/steal_weight_volume_probe_2025.txt` |
+| `scripts/steal_weight_volume_probe_2026.json` | `docs/audit/records/steal_weight_volume_probe_2026.json` |
+| `scripts/steal_weight_volume_probe_2026.txt` | `docs/audit/records/steal_weight_volume_probe_2026.txt` |
+
+**Not done.** Phase B (the five area sessions) and Phase C (the integration, the 45 × 130
+lane and the deploy) follow; the plan holds their briefs. Nothing is merged into master or
+deployed. The fingerprint's bundle mode and the area sessions' paired builds run in Phase B.
+
 # CLOSED — the frontend's API snapshot and its generated types match the API again, and two checks keep them there — SIM-573, 2026-10-19
 
 **Why.** `frontend/openapi.json` is a copy of the API's contract, its OpenAPI schema.
