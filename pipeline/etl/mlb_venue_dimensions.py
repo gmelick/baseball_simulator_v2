@@ -46,8 +46,6 @@ VENUE_DIMENSIONS_FILE = "venue_dimensions.json"
 
 #: The five published distances the prior interpolates (feet), in field order.
 PUBLISHED_DISTANCES = ("leftLine", "leftCenter", "center", "rightCenter", "rightLine")
-#: The other fields kept when the API carries them.
-_EXTRA_FIELDS = ("left", "right", "roofType", "turfType")
 
 
 def _as_feet(value: Any) -> float | None:

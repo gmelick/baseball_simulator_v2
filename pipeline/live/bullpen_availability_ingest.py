@@ -139,17 +139,6 @@ class _GameMeta:
     away_team_id: int
 
 
-# Columns the workload DataFrame (from _compute_bullpen_workload) must carry.
-_WORKLOAD_COLS = (
-    "game_pk",
-    "team_id",
-    "pitcher_id",
-    "days_rest",
-    "pitches_last_3d",
-    "back_to_back",
-)
-
-
 @dataclass
 class BullpenAvailabilityIngest:
     """Fetch + parse + persist per-game bullpen availability.

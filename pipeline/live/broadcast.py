@@ -26,7 +26,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -40,10 +40,6 @@ HEARTBEAT_STALE_S = 90
 
 def channel(game_pk: int) -> str:
     return CHANNEL.format(game_pk=int(game_pk))
-
-
-class Broadcaster(Protocol):
-    async def broadcast(self, game_pk: int, payload: dict) -> None: ...
 
 
 class RedisBroadcaster:

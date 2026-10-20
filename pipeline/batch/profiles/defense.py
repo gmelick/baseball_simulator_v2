@@ -47,22 +47,17 @@ AVG_THROW_VELO = {
 }
 
 INFIELD_EXCHANGE_TIME = 0.80
-OUTFIELD_EXCHANGE_TIME = 1.00
 # The defensive run values, from simulation.constants: infield 0.75,
 # outfield 0.90, block 0.25, strike 0.125.
 RUNS_PER_OAA_INFIELD = DEFENSIVE_RUN_VALUES["runs_per_oaa_infield"]
 RUNS_PER_OAA_OUTFIELD = DEFENSIVE_RUN_VALUES["runs_per_oaa_outfield"]
 RUNS_PER_BLOCK_SAVED = DEFENSIVE_RUN_VALUES["runs_per_block_saved"]
 RUNS_PER_STRIKE_ABOVE_AVG = DEFENSIVE_RUN_VALUES["runs_per_strike_above_avg"]
-FRAMING_SHADOW_INNER = 0.0
-FRAMING_SHADOW_OUTER = 0.5
 ZONE_HALF_WIDTH = 0.833
 OF_GOING_BACK_PENALTY_FPS = 1.0
 IF_AWAY_FROM_BAG_PENALTY_S = 0.20
 GRAVITY_FPS2 = 32.174
 DEFAULT_SPRINT_SPEED_FPS = 27.0
-MIN_CATCHER_PITCHES = 500
-MIN_DP_OPPORTUNITIES = 20
 
 
 # ---------------------------------------------------------------------------
