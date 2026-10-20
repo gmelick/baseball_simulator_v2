@@ -88,7 +88,7 @@ seasons} x {batter hand L, R, both}.
     last three completed seasons plus the current one), so the artifact holds 4
     of the 10 swept seasons.
   * hand L / R vs both measures what the batter-hand partition costs. The
-    pools are partitioned by batter hand (``pipeline/batch/engine_artifacts.py``
+    pools are partitioned by batter hand (``pipeline/batch/artifacts/``
     filters on ``stand``), so PER-HAND row counts are what the sampler sees, not
     totals.
 
@@ -109,7 +109,7 @@ So:
     so the clamp is a verified no-op on pool data. The function applies it
     anyway so it is correct standalone.
   * The recent-season set comes from ``last_n_seasons()`` in
-    ``pipeline/batch/engine_artifacts.py`` — the same call the artifact builder
+    ``pipeline/batch/artifacts/common.py`` — the same call the artifact builder
     makes — never from a re-derivation.
   * The outcome-pool row filter copies the three NOT NULL predicates from
     ``build_battedball_pool_artifact``, so the measurement counts the rows the
@@ -147,10 +147,10 @@ all.
 
 ``duckdb`` really is absent from a bare import of this module, and the unit
 suite proves it in a clean subprocess. That needs TWO lazy imports, not one:
-:func:`open_connection` imports ``duckdb`` itself, and :func:`_engine_artifacts`
-imports ``pipeline.batch.engine_artifacts``, which imports ``duckdb`` at module
+:func:`open_connection` imports ``duckdb`` itself, and :func:`_artifact_common`
+imports ``pipeline.batch.artifacts.common``, which imports ``duckdb`` at module
 scope. A direct module-scope import of
-``engine_artifacts`` pulls ``duckdb`` in transitively and makes the claim false
+that module pulls ``duckdb`` in transitively and makes the claim false
 while every ``hasattr(module, "duckdb")`` check still passes.
 
 The DuckDB connection is opened READ ONLY. This script cannot damage the pools.
@@ -204,17 +204,17 @@ SCRIPT_VERSION = "SIM-451/2"
 EXIT_UNHEALTHY = 2
 
 
-def _engine_artifacts() -> Any:
-    """Import ``pipeline.batch.engine_artifacts`` lazily and return the module.
+def _artifact_common() -> Any:
+    """Import ``pipeline.batch.artifacts.common`` lazily and return the module.
 
-    The import stays inside this function on purpose. ``engine_artifacts``
-    imports ``duckdb`` at module scope, so importing it at the top of this file
+    The import stays inside this function on purpose. The module imports
+    ``duckdb`` at module scope, so importing it at the top of this file
     would pull ``duckdb`` into every bare import of this script and break the
     no-database promise the pure layer makes.
     """
-    from pipeline.batch import engine_artifacts
+    from pipeline.batch.artifacts import common
 
-    return engine_artifacts
+    return common
 
 
 def recency_floor_seasons() -> int:
@@ -223,17 +223,17 @@ def recency_floor_seasons() -> int:
     The script never hardcodes the floor. It reads the same constant the
     artifact builder reads, so a change there reaches this measurement.
     """
-    return int(_engine_artifacts().RECENCY_FLOOR_SEASONS)
+    return int(_artifact_common().RECENCY_FLOOR_SEASONS)
 
 
 def last_n_seasons(con: Any, n: int) -> list[int]:
     """Return the newest ``n`` seasons through the artifact builder's own call.
 
     This is a thin lazy wrapper around
-    ``pipeline.batch.engine_artifacts.last_n_seasons``. The measurement must use
+    ``pipeline.batch.artifacts.common.last_n_seasons``. The measurement must use
     the builder's definition of "recent", never a re-derivation.
     """
-    return list(_engine_artifacts().last_n_seasons(con, int(n)))
+    return list(_artifact_common().last_n_seasons(con, int(n)))
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +634,7 @@ DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_OUTPUT = "docs/audit/2026-08-10-sim451-filter-cell-occupancy.json"
 
 #: The three NOT NULL predicates copied from
-#: ``pipeline/batch/engine_artifacts.build_battedball_pool_artifact``. The
+#: ``pipeline/batch/artifacts/battedball_pool.build_battedball_pool_artifact``. The
 #: batted-ball artifact keeps only rows that carry all three geometry columns, so
 #: the measurement must apply the same filter or it counts rows the sampler never
 #: sees.
