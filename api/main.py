@@ -41,14 +41,11 @@ log = logging.getLogger("api.main")
 
 
 async def _background_prewarm(runner, pool_dir: str) -> None:
-    """SIM-402: warm the sim-runner workers OFF the startup path.
+    """Warm the sim runner's workers, off the startup path.
 
-    Scheduled as a background task by the lifespan and NEVER awaited before
-    ``yield``, so a slow / stalled / OOM'd warm can't wedge startup (a blocking
-    pre-warm, even wrapped in ``asyncio.wait_for``, was observed to hang the
-    lifespan — ``wait_for`` can't interrupt a synchronous thread blocked in
-    multiprocessing C-calls).  Logs the outcome; any failure leaves the lazy
-    per-game warm-up as the fallback.
+    The lifespan schedules it as a background task and never awaits it before
+    ``yield``, so a slow, stalled or out-of-memory warm-up cannot hold the boot.
+    It logs the outcome; on a failure each worker warms on its first game.
     """
     try:
         n_warm = await asyncio.to_thread(runner.prewarm, pool_dir)
@@ -70,9 +67,10 @@ async def lifespan(app: FastAPI):
     similarity engines, load the calibration, open the assistant's client and
     the read-only pool, start the live feed, open the replay store, prime the
     park-factor source, build the shared BatchRunner, schedule its pre-warm and
-    watch for a new bundle. A failure to open the Postgres pool or the Redis
-    cache, or to build the pitcher engine, stops the boot; every other step
-    degrades and logs.
+    watch for a new bundle. The Postgres pool, the Redis cache and the
+    pitcher engine are required: a failure there stops the boot. The optional
+    resources (the assistant, the read-only pool, the replay store, the
+    park-factor source, the bundle preload) degrade and log.
 
     Shutdown closes the resources in reverse order
     (:func:`api.startup.close_resources`), then the park-factor source.
@@ -91,8 +89,8 @@ async def lifespan(app: FastAPI):
     app.state.pg_pool = await open_pg_pool(dsn)
     app.state.player_name_resolver = make_pg_name_resolver(app.state.pg_pool)
 
-    # SIM-519 Part E: the run jobs. A queued or running row left by a previous
-    # process can never finish, so it is marked failed('restart') at boot.
+    # The run registry. A queued or running row that a previous process left
+    # can never finish, so the boot marks it failed('restart').
     from api.sim_jobs import SimJobRegistry
 
     app.state.sim_jobs = SimJobRegistry(app.state.pg_pool)
@@ -103,8 +101,8 @@ async def lifespan(app: FastAPI):
     log.info("Opening Redis cache ...")
     app.state.redis_client, app.state.similarity_cache = await open_redis_cache(redis_url)
 
-    # SIM-519 Part A: the league reader the slate (schedule) and the card detail
-    # (per-game feed) share. SLATE_SCHEDULE_ENABLED=0 leaves it off, and the
+    # The league reader that the slate (the schedule) and the card detail (the
+    # per-game feed) share. SLATE_SCHEDULE_ENABLED=0 leaves it off, and the
     # slate then serves the stored listing (source "db").
     if os.environ.get("SLATE_SCHEDULE_ENABLED", "1") != "0":
         from api.league_feed import LeagueFeed
@@ -181,9 +179,9 @@ async def lifespan(app: FastAPI):
     # warm workers. The boot never waits on it: asyncio.wait_for cannot stop a
     # thread blocked in a multiprocessing call, so a blocking warm-up could hang
     # the boot. A failed warm-up leaves each worker to warm on its first game.
-    # SIM-563: with a pinned version the workers find the bundle through the pin,
-    # so the pre-warm passes no pool dir (an explicit one would bypass the pin and
-    # cache the sampler under a different key than the real games use).
+    # With a pinned version the workers find the bundle through the pin, so the
+    # pre-warm passes no pool dir: an explicit one would bypass the pin and cache
+    # the sampler under a different key than the real games use.
     prewarm_pool_dir = (
         None
         if app.state.bundle_version
@@ -204,11 +202,15 @@ async def lifespan(app: FastAPI):
 
 
 # ---------------------------------------------------------------------------
-# App factory
+# The app factory
 # ---------------------------------------------------------------------------
 
 
 def create_app() -> FastAPI:
+    """Build the app: the middleware, every router and the health, readiness and SPA routes.
+
+    It opens no connection; the lifespan does that when the server starts.
+    """
     app = FastAPI(
         title="MLB Baseball Simulation Platform",
         description=(
@@ -221,11 +223,11 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # CORS (SIM-351) — env-driven allowlist. CORS_ORIGINS (comma-separated)
-    # wins; else FRONTEND_URL; else a safe localhost default. The "*" wildcard
-    # is reachable ONLY under ENVIRONMENT=development, so production is never
-    # ["*"] while allow_credentials=True (a spec violation browsers reject).
-    # See api/auth.resolve_cors_origins for the precedence rules.
+    # CORS: the allowed origins come from CORS_ORIGINS (comma-separated), else
+    # FRONTEND_URL, else a localhost default (api/auth.resolve_cors_origins).
+    # The "*" wildcard is possible only under ENVIRONMENT=development, so
+    # production never pairs "*" with allow_credentials=True, which browsers
+    # reject.
     origins = resolve_cors_origins()
     app.add_middleware(
         CORSMiddleware,
@@ -235,130 +237,99 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Rate limiting (SIM-351) — lightweight in-memory sliding window keyed by
-    # API key / client IP. Disabled by default (RATE_LIMIT_PER_MINUTE unset/<=0)
-    # so dev + the test suite are unaffected; opt in via RATE_LIMIT_PER_MINUTE.
-    # /health, /ready, / are exempt inside the middleware.
+    # The rate limit: an in-memory sliding window per API key or client
+    # address. Off by default (RATE_LIMIT_PER_MINUTE unset or <= 0), so a dev
+    # stack and the tests are unaffected. /health, /ready and / are exempt.
     app.add_middleware(RateLimitMiddleware)
 
-    # p95 latency tracking (SIM-410) — rolling 200-request window; stores the
-    # computed p95 on app.state.api_p95_seconds so /metrics can expose it to
-    # Prometheus/Grafana. /health, /ready, /, /metrics are exempt.
+    # The p95 latency over a rolling 200-request window, kept on
+    # app.state.api_p95_seconds for /metrics. /health, /ready, / and /metrics
+    # are exempt.
     app.add_middleware(LatencyMiddleware)
 
-    # SIM-453 — tell the caller whether the park factor was real. An unavailable
-    # source used to be indistinguishable from a neutral park, in the logs and in
-    # the response alike. Now every response says which one it was.
+    # Every response says whether the park factors were real
+    # (X-Park-Factor-Source), so a caller can tell an unavailable source from a
+    # neutral park.
     app.add_middleware(ParkFactorSourceMiddleware)
 
     # ----------------------------------------------------------------
-    # Routers — registered as phases complete
+    # The routers. Registering a router needs no live connection; a route
+    # whose resource is missing answers 503 itself.
     # ----------------------------------------------------------------
-    # SIM-389: Browser session auth (login / me / logout).
-    # Registered FIRST so the /auth/* routes are always resolvable
-    # regardless of other router registration order.
+    # The browser session (login, me, logout), registered first.
     #
-    # SIM-443c: every data router below carries require_auth at the router
-    # level (its APIRouter(dependencies=...)), so a new route on one of them
-    # is gated without a per-route line. Two routers are deliberately open:
-    # auth_router (the login itself) and ws_router: require_auth takes a
-    # Request, and FastAPI does not supply one in a WebSocket scope, so on
-    # ws_router it would fail every handshake with a TypeError. ws_router
-    # therefore carries no router dependency, and the handler calls
-    # authenticate_websocket first. tests/unit/test_route_auth_coverage.py walks app.routes
-    # and fails on any ungated data route.
+    # Every data router below carries require_auth at the router level (its
+    # APIRouter(dependencies=...)), so a new route on one of them is gated
+    # without a line of its own (the login on every route, SIM-443c). Two
+    # routers are open on purpose: auth_router (the login itself) and
+    # ws_router. require_auth takes a Request, and FastAPI supplies none in a
+    # WebSocket scope, so on ws_router it would fail every handshake; the
+    # WebSocket handler calls authenticate_websocket first instead.
+    # tests/unit/test_route_auth_coverage.py walks app.routes and fails on any
+    # ungated data route.
     from api.routes.auth import router as auth_router
 
     app.include_router(auth_router)
 
-    # Similarity Score Explorer (v1: pitcher engine).
-    # Spec: docs/similarity_visualization_spec.md. The lifespan above
-    # attaches the engine, name resolver, and Redis cache to app.state.
+    # The pitcher similarity explorer (docs/similarity_visualization_spec.md).
+    # The lifespan attaches its engine, name resolver and Redis cache.
     from api.routes.similarity import router as similarity_router
 
     app.include_router(similarity_router)
 
-    # Phase 5 (SIM-355/358/359): game simulation router.
-    #   GET  /api/games/{date}                            -- games on a date
-    #   GET  /api/games/{game_pk}/simulate                -- Monte-Carlo summary
-    #   POST /api/games/{game_pk}/simulate/with_override  -- baseline vs override
-    # Registered unconditionally -- route registration needs no live DB/Redis.
-    # The handlers read app.state.pg_pool + app.state.sim_cache (attached below /
-    # in the lifespan); a missing pool returns 503 from the route itself.
-    #
-    # SIM-359: attach a sim-result cache to app.state at factory time so the
-    # BatchRunner the games router builds memoizes summaries (keyed on
-    # spec+seed+N at SIM_RESULT_TTL_S) AND the date listing (at POOL_QUERY_TTL_S).
-    # make_cache() is no-op-safe: it returns a RedisCache only when a server
-    # answers ping(), else an in-process InMemoryCache -- so this never requires
-    # Redis and the test suite runs on the in-memory fallback with no server.
+    # The game routes (/api/games): the slate, the real game, the simulations
+    # and the replay reads. The sim cache attaches here, at factory time, so
+    # the routes' BatchRunner memoizes summaries and the slate its listing.
+    # make_cache() returns a RedisCache only when a server answers ping(), else
+    # an in-process InMemoryCache, so the tests need no Redis.
     from api.routes.games import router as games_router
     from simulation.batch_runner import make_cache
 
     app.state.sim_cache = make_cache()
     app.include_router(games_router)
 
-    # Phase 5 (SIM-367/368/369): betting API surface.
-    #   GET /api/betting/games/{game_pk}/edges          -- per-market edge reports
-    #   GET /api/betting/games/{game_pk}/signals        -- ranked +EV bet signals
-    #   GET /api/betting/games/{game_pk}/line-movement  -- opening->closing series
-    #   GET /api/betting/games/{game_pk}/clv            -- entry-vs-close snapshot
-    # Registered unconditionally -- route registration needs no live DB/Redis. The
-    # edge/signal handlers reuse the games router's sim seam (factory ref + the
-    # BatchRunner + sim cache attached above); line-movement/clv read raw.game_odds
-    # off app.state.pg_pool (503 without a pool). Odds for edges/signals are
-    # injected via query params or fall back to the deterministic mock provider.
+    # The betting routes (/api/betting): the edges, the signals, the line
+    # movement, the CLV and the slate card's lines. /edges and /signals use the
+    # game routes' simulation seam.
     from api.routes.betting import router as betting_router
 
     app.include_router(betting_router)
 
-    # SIM-417: data-freshness / health surface for the UI.
-    #   GET /api/data/freshness — ingest watermark + per-season coverage.
-    # The route reads app.state.pg_pool_ro, the read-only pool (SIM-566, the
-    # Data Lab read routes on the read-only pool). It answers 503 without that
-    # pool and never falls back to the main pool. Aggregate counts only.
+    # GET /api/data/freshness: the ingest watermark and each season's coverage,
+    # aggregate counts only. It reads the read-only pool and answers 503
+    # without it.
     from api.routes.data_health import router as data_health_router
 
     app.include_router(data_health_router)
 
-    # Phase 5 (SIM-354): live ingestion routers.
-    #   ws_router   — WebSocket /ws/games/{game_pk} (frontend live subscriptions)
-    #   odds_router — REST /api/odds/{game_pk}, /api/odds/today/all
-    # These are registered unconditionally — route registration requires no live
-    # DB/Redis/WS connection. The background pipeline that *feeds* the WS clients
-    # is started in lifespan only when LIVE_PIPELINE_ENABLED=true.
-    # SIM-443c: odds_router carries require_auth; the WebSocket handler checks
-    # the handshake's cookie or key itself and closes with 1008 on a failure.
+    # The live routers: ws_router (the WebSocket /ws/games/{game_pk}, the
+    # frontend's live subscriptions) and odds_router (/api/odds/{game_pk},
+    # /api/odds/today/all). The messages come from the live service through
+    # the Redis bridge, or from an in-process pipeline when
+    # LIVE_PIPELINE_ENABLED is on. odds_router carries require_auth; the
+    # WebSocket handler checks the handshake's cookie or key itself and closes
+    # with 1008 on a failure.
     from pipeline.live.live_ingestion_pipeline import odds_router, ws_router
 
     app.include_router(ws_router)
     app.include_router(odds_router)
 
-    # Phase 5 (SIM-374): Prometheus metrics endpoint.
-    #   GET /metrics — application metrics in Prometheus text exposition format
-    #                  (text/plain; version=0.0.4) for the deploy/monitoring/
-    #                  Prometheus scrape + Grafana dashboards.
-    # Registered unconditionally — import-safe and connection-free: the handler
-    # reads only app.state scalars (no DB/Redis), and prometheus_client is an
-    # OPTIONAL dependency (the route falls back to a hand-rolled exposition when
-    # it is not installed), so this never affects boot or the test suite.
+    # GET /metrics: the app's metrics in the Prometheus text format, for the
+    # Prometheus scrape and the Grafana dashboards (deploy/monitoring/).
     from api.routes.metrics import router as metrics_router
 
     app.include_router(metrics_router)
 
-    # SIM-439: Data Lab (raw.pitches explorer) + generalized Similarity Explorer.
-    #   POST /api/sql/run           — read-only SQL console executor
-    #   GET  /api/analytics/*       — summary analytics over raw.pitches
-    #   GET  /api/players/*         — name typeahead + player identity
-    #   GET  /api/schema            — raw.* schema tree for the console/assistant
-    #   GET  /api/similarity/*      — generalized comps across all engines
-    #   *    /api/assistant/*       — optional AI assistant (gated on ANTHROPIC_API_KEY)
-    # Registered unconditionally (route registration needs no live DB/engine); the
-    # handlers read app.state and 503 gracefully when a dependency is missing.
-    # The SQL console, the assistant, analytics, players and schema read ONLY
-    # app.state.pg_pool_ro, the read-only pool (SIM-443e; SIM-566 for the three
-    # Data Lab read routers). Without it they answer 503; none falls back to the
-    # main pool. The similarity explorer reads the engines, not Postgres.
+    # The Data Lab and the similarity explorer:
+    #   POST /api/sql/run           the read-only SQL console
+    #   GET  /api/analytics/*       summary analytics over raw.pitches
+    #   GET  /api/players/*         the name typeahead and a player's identity
+    #   GET  /api/schema            the raw.* schema tree for the console and the assistant
+    #   GET  /api/similarity/*      comparisons across all the engines
+    #   *    /api/assistant/*       the AI assistant (needs ANTHROPIC_API_KEY)
+    # The SQL console, the assistant, analytics, players and schema read only
+    # the read-only pool; without it they answer 503, and none falls back to
+    # the main pool. The similarity explorer reads the engines, not Postgres.
     from api.routes.ai_assistant import router as ai_assistant_router
     from api.routes.analytics import router as analytics_router
     from api.routes.players import router as players_router
@@ -372,9 +343,8 @@ def create_app() -> FastAPI:
     app.include_router(schema_router)
     app.include_router(similarity_explorer_router)
     app.include_router(ai_assistant_router)
-    # ----------------------------------------------------------------
 
-    # ---- Health / readiness -----------------------------------------
+    # ---- The health and readiness probes ------------------------------
 
     @app.get("/health", tags=["ops"], summary="Liveness probe")
     async def health() -> dict:
@@ -382,10 +352,10 @@ def create_app() -> FastAPI:
             "status": "ok",
             "phase": "6",
             "environment": os.environ.get("ENVIRONMENT", "development"),
-            # SIM-443c: false only under the AUTH_DISABLED=1 opt-out.
+            # False only under the AUTH_DISABLED=1 opt-out.
             "auth_enforced": not _auth_disabled(),
-            # SIM-443e: whether the SQL console's read-only pool is open, and as
-            # which database role. No DSN, no password.
+            # Whether the SQL console's read-only pool is open, and as which
+            # database role. No DSN, no password.
             "sql_console": {
                 "ro_pool": getattr(app.state, "pg_pool_ro", None) is not None,
                 "role": getattr(app.state, "sql_console_role", None),
@@ -432,7 +402,7 @@ def create_app() -> FastAPI:
                 checks["redis"] = f"error: {type(exc).__name__}"
                 all_ok = False
 
-        # SIM-519 Part C: the live service's heartbeat (informational only).
+        # The live service's heartbeat (informational only).
         if redis_client is not None:
             from pipeline.live.broadcast import heartbeat_status
 
@@ -449,13 +419,11 @@ def create_app() -> FastAPI:
             status_code=status_code,
         )
 
-    # ---- SIM-381: Serve the Vite-built SPA -----------------------------------
-    # In production, nginx serves frontend/dist/ directly (see deploy/nginx/nginx.conf).
-    # This mount is a dev/staging convenience: when running uvicorn directly,
-    # the built assets are served from FastAPI so the app is fully self-contained.
-    #
-    # The mount is CONDITIONAL on the dist directory existing so the app boots
-    # cleanly before the first `npm run build` (CI / fresh clone).
+    # ---- The built frontend (the SPA) ----------------------------------------
+    # In production nginx serves frontend/dist/ (deploy/nginx/nginx.conf). This
+    # mount serves the built assets from FastAPI when uvicorn runs on its own.
+    # It needs the dist directory, so the app boots before the first
+    # `npm run build`.
     #
     # Mount order matters: FastAPI matches routes in registration order, so the
     # API routes and /health and /ready come first. The `/{full_path:path}`
@@ -465,7 +433,7 @@ def create_app() -> FastAPI:
     if _spa_dist.is_dir():
         _spa_assets = _spa_dist / "assets"
         if _spa_assets.is_dir():
-            # Hashed filenames from Vite → safe for immutable caching in prod.
+            # Vite hashes the file names, so the assets can be cached forever.
             app.mount(
                 "/assets",
                 StaticFiles(directory=str(_spa_assets)),
@@ -486,7 +454,7 @@ def create_app() -> FastAPI:
             "health": "/health",
         }
 
-    # App-level exception handling (SIM-416) — structured 500 envelope.
+    # The app's exception handlers: a structured 500 envelope (api/errors.py).
     install_exception_handlers(app)
 
     return app

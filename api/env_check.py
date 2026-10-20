@@ -23,9 +23,9 @@ _REQUIRED_ENV_VARS = [
     "REDIS_URL",
 ]
 
-# SIM-443c: the auth variables are required in EVERY environment. The one
-# opt-out is AUTH_DISABLED=1, which validate_environment() logs as a warning.
-# (SIM-389 required them only outside development; that relaxed mode is gone.)
+# The auth variables are required in every environment (the login on every
+# route, SIM-443c). The one opt-out is AUTH_DISABLED=1, which
+# validate_environment() logs as a warning.
 _REQUIRED_AUTH_ENV_VARS = [
     "SECRET_KEY",  # HMAC signing key for session tokens
     "AUTH_PASSWORD",  # shared browser login password
@@ -33,17 +33,16 @@ _REQUIRED_AUTH_ENV_VARS = [
 
 
 def validate_environment() -> None:
-    """
-    Asserts all required environment variables are present at startup.
-    Raises RuntimeError with a clear message listing what is missing.
-    Called inside the lifespan so a misconfigured container fails fast
-    rather than silently running with broken connections.
+    """Check that every required environment variable is set; raise RuntimeError if not.
 
-    SIM-443c: the auth variables (SECRET_KEY, AUTH_PASSWORD) are required in
-    every environment; ``ENVIRONMENT`` plays no part. A blank or
-    whitespace-only value counts as missing. With ``AUTH_DISABLED=1`` the
-    function logs ONE warning and skips the auth requirement; the test suite
-    runs this way (tests/conftest.py).
+    The error lists what is missing. The lifespan calls it first, so a
+    misconfigured container fails at boot instead of running with broken
+    connections.
+
+    The auth variables (SECRET_KEY, AUTH_PASSWORD) are required in every
+    environment; ``ENVIRONMENT`` plays no part. A blank or whitespace-only value
+    counts as missing. With ``AUTH_DISABLED=1`` the function logs one warning
+    and skips the auth check; the test suite runs this way (tests/conftest.py).
     """
     missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
     if missing:

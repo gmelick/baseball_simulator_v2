@@ -51,20 +51,12 @@ async def build_engines(app: FastAPI) -> None:
 
     if engine_enabled:
         log.info("Building pitcher similarity engine (this may take a few seconds) ...")
-        # The pitcher engine keeps its FAIL-FAST posture: a build failure here
-        # crashes boot loudly so the similarity route's contract is unchanged.
+        # A failure to build the pitcher engine stops the boot.
         app.state.pitcher_engine = await asyncio.to_thread(build_pitcher_engine)
 
-        # ------------------------------------------------------------
-        # SIM-361: build ALL 11 similarity engines and attach them as
-        # app.state.engines (keyed by ENGINE_REGISTRY name). build_all_engines
-        # is per-engine resilient — an engine with a missing/empty profile table
-        # is logged + skipped, so the *additional* engines degrade gracefully and
-        # never take down boot the way the pitcher engine (above) intentionally
-        # does. app.state.pitcher_engine is preserved (set above) for the
-        # existing similarity route's backward-compat; the built dict's "pitcher"
-        # entry is the same contract under the new keying.
-        # ------------------------------------------------------------
+        # All eleven engines, keyed by their ENGINE_REGISTRY name. An engine
+        # with a missing or empty profile table is logged and skipped; its
+        # failure never stops the boot.
         log.info("Building all similarity engines (SIM-361) ...")
         app.state.engines = await asyncio.to_thread(build_all_engines)
         log.info(
@@ -77,7 +69,7 @@ async def build_engines(app: FastAPI) -> None:
             "The /api/similarity/* routes will return 503 until this is "
             "re-enabled and the DuckDB profile file exists."
         )
-        # No engines built; expose an empty dict so consumers can probe safely.
+        # No engines: an empty dict, so a consumer can probe it safely.
         app.state.engines = {}
 
 
@@ -230,9 +222,7 @@ async def start_live_feed(app: FastAPI, *, dsn: str, redis_url: str) -> None:
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 
         async def _resim_signal(game_pk: int, game_state: dict) -> None:
-            # Phase-5 seam: the simulation runner will replace this hook with a
-            # real re-sim trigger. Until then, record the signal so /ready and
-            # tests can observe that the wiring fired.
+            # The re-sim hook records the signal; no simulation runs from it.
             log.info(
                 "Re-sim signal received: game %s | inning %s | score %s-%s",
                 game_pk,
@@ -241,9 +231,8 @@ async def start_live_feed(app: FastAPI, *, dsn: str, redis_url: str) -> None:
                 game_state.get("away_score"),
             )
             app.state.last_resim_signal = {"game_pk": game_pk, "game_state": game_state}
-            # SIM-410 metrics: the freshness gauge reads last_resim_signal_ts (a unix
-            # ts); stamp it here so baseball_sim_pipeline_freshness_seconds reports the
-            # real age of the last signal instead of always -1 ("no data").
+            # The freshness gauge (baseball_sim_pipeline_freshness_seconds)
+            # reads this Unix time as the age of the last signal.
             app.state.last_resim_signal_ts = time.time()
 
         log.info("Starting live ingestion pipeline (LIVE_PIPELINE_ENABLED=true) ...")
@@ -259,10 +248,10 @@ async def start_live_feed(app: FastAPI, *, dsn: str, redis_url: str) -> None:
             "LIVE_PIPELINE_ENABLED is false — ws_router/odds_router are mounted "
             "but the background live ingestion pipeline is NOT started."
         )
-        # SIM-519 Part C (decision D2): the live service runs in its own
-        # container and publishes on Redis; this bridge forwards a game's
-        # messages to the browsers watching it. Never set LIVE_PIPELINE_ENABLED
-        # on the compose stack: the `live` service is the one publisher.
+        # The live service runs in its own container and publishes on Redis;
+        # this bridge forwards a game's messages to the browsers watching it.
+        # Never set LIVE_PIPELINE_ENABLED on the compose stack: the `live`
+        # service is the one publisher.
         from pipeline.live.broadcast import RedisBridge
         from pipeline.live.live_ingestion_pipeline import connection_manager
 
@@ -287,29 +276,25 @@ async def build_sim_runner(app: FastAPI) -> None:
     from simulation.batch_runner import BatchRunner, default_max_workers, make_cache
 
     sim_cache = getattr(app.state, "sim_cache", None) or make_cache()
-    # SIM-403: SIM_RUNNER_WORKERS unset → None → BatchRunner.resolve_max_workers()
-    # uses default_max_workers() = min(cpu_count - 1, 10) at run time, enabling
-    # real parallelism.  Explicit "1" keeps the serialised in-process path for
-    # environments that can't fork (e.g. some CI runners).
+    # SIM_RUNNER_WORKERS unset gives None: BatchRunner.resolve_max_workers()
+    # then uses default_max_workers() = min(cpu_count - 1, 10) at run time. An
+    # explicit "1" keeps the run in this process, for a host that cannot fork.
     sim_runner_workers = read_int("SIM_RUNNER_WORKERS")
     resolved_workers = (
         sim_runner_workers if sim_runner_workers is not None else default_max_workers()
     )
 
-    # SIM-403b: when the engine-artifact bundle is on disk, load it ONCE here
-    # and extract the big shareable numpy arrays so BatchRunner can publish
-    # them into ``multiprocessing.shared_memory`` zero-copy. The worker-side
-    # splice happens in
-    # :func:`simulation.production_factory._build_full_pool_sampler`. If the
-    # bundle isn't present (no-DB tests, sandbox without a built artifact dir),
-    # we skip the publish; each worker then disk-loads the bundle itself and
-    # fails loudly at the first /simulate if it is absent (SIM-486: there is
-    # no fallback simulator).
+    # The bundle loads once here, and its large arrays go to the BatchRunner,
+    # which publishes them to shared memory without a copy; each worker splices
+    # them in (simulation.production_factory._build_full_pool_sampler). With no
+    # bundle (a no-DB test, a host with no built bundle) nothing is published,
+    # and each worker loads the bundle itself, failing at its first game when
+    # there is none.
     #
-    # SIM-563: the bundle is a link to a published version. Pin the version this
-    # boot loads, BEFORE the worker pool starts (the forkserver's workers inherit
-    # the environment), so a worker that respawns after a rebuild reads the same
-    # version as the shared arrays. The pin is undone at shutdown.
+    # The bundle is a link to a published version. The version this boot loads
+    # is pinned before the worker pool starts (the forkserver's workers inherit
+    # the environment), so a worker that respawns after a rebuild reads the
+    # same version as the shared arrays. The shutdown undoes the pin.
     from api.bundle_watch import PINNED_ENV, bundle_link, pin_bundle_version
 
     app.state.bundle_pin_prev_env = os.environ.get(PINNED_ENV)
@@ -335,9 +320,8 @@ async def build_sim_runner(app: FastAPI) -> None:
             total_mb,
         )
     except Exception as exc:  # noqa: BLE001
-        # Defensive: a missing/corrupt artifact dir must not prevent the
-        # API from starting (the health + data routes still serve). Log and
-        # move on without shared arrays.
+        # A missing or corrupt bundle never stops the boot (the health and
+        # data routes still serve); the runner starts without shared arrays.
         log.warning(
             "SIM-403b: engine-artifact preload failed (%s: %s); "
             "workers will disk-load per process.",
@@ -386,7 +370,7 @@ async def close_resources(app: FastAPI) -> None:
     The lifespan closes the park-factor source after this. Each close is
     guarded, so one failure does not stop the rest.
     """
-    # SIM-563: stop the bundle watch, release this boot's version and its pin.
+    # Stop the bundle watch; release this boot's version and its pin.
     watch_task = getattr(app.state, "bundle_watch_task", None)
     if watch_task is not None and not watch_task.done():
         watch_task.cancel()
@@ -405,9 +389,10 @@ async def close_resources(app: FastAPI) -> None:
         else:
             os.environ[_PINNED_ENV] = prev
 
-    # SIM-402: stop awaiting the background pre-warm if it's still running. Its worker
-    # threads are detached and finish on their own; cancelling just releases our await
-    # so shutdown isn't blocked, and close() (below) tears the pool + shm down.
+    # Stop awaiting the background pre-warm if it still runs. Its worker
+    # threads finish on their own; the cancel only releases the await, so the
+    # shutdown does not wait, and close() (below) tears the pool and the shared
+    # memory down.
     prewarm_task = getattr(app.state, "prewarm_task", None)
     if prewarm_task is not None and not prewarm_task.done():
         prewarm_task.cancel()
@@ -418,42 +403,40 @@ async def close_resources(app: FastAPI) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    # Phase 5 (SIM-360): shut the persistent BatchRunner down first (reverse
-    # order of acquisition) — close() shutdown(wait=True)s its warm pool and
-    # unlinks the SIM-333 shared-mem segments. Idempotent + a no-op if no pooled
-    # run ever happened, so this never raises even on a clean (unused) boot.
+    # The shared BatchRunner: close() shuts its warm pool down (wait=True) and
+    # unlinks its shared-memory segments. It is idempotent and a no-op when no
+    # pooled run happened.
     if getattr(app.state, "sim_runner", None) is not None:
         try:
             app.state.sim_runner.close()
         except Exception:  # noqa: BLE001
             pass
 
-    # SIM-519 Part E: stop the run jobs (their rows are recovered at next boot).
+    # The run jobs (the next boot recovers their rows).
     if getattr(app.state, "sim_jobs", None) is not None:
         try:
             await app.state.sim_jobs.close()
         except Exception:  # noqa: BLE001
             pass
 
-    # SIM-519 Part C: stop the live bridge's subscriptions.
+    # The live bridge's subscriptions.
     if getattr(app.state, "live_bridge", None) is not None:
         try:
             await app.state.live_bridge.close()
         except Exception:  # noqa: BLE001
             pass
 
-    # SIM-519: close the league reader's HTTP session.
+    # The league reader's HTTP session.
     if getattr(app.state, "league_feed", None) is not None:
         try:
             await app.state.league_feed.close()
         except Exception:  # noqa: BLE001
             pass
 
-    # Reverse order of acquisition for shutdown — engine has no
-    # explicit close, just drop the reference.
+    # The Redis client, then the pools. The engines need no close.
     if hasattr(app.state, "redis_client"):
         await app.state.redis_client.aclose()
-    # SIM-439: close the optional read-only SQL pool before the main pool.
+    # The read-only pool before the main pool.
     if getattr(app.state, "pg_pool_ro", None) is not None:
         try:
             await app.state.pg_pool_ro.close()
@@ -462,13 +445,11 @@ async def close_resources(app: FastAPI) -> None:
     if hasattr(app.state, "pg_pool"):
         await app.state.pg_pool.close()
 
-    # ----------------------------------------------------------------
-    # Phase 5 (SIM-354): cleanly stop the pipeline if it was started.
-    # ----------------------------------------------------------------
+    # The in-process live pipeline, when one started.
     if hasattr(app.state, "pipeline"):
         await app.state.pipeline.stop()
 
-    # Phase 5 (SIM-357) / SIM-561: close the replay store.
+    # The replay store.
     if getattr(app.state, "replay_duckdb", None) is not None:
         try:
             app.state.replay_duckdb.close()

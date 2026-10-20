@@ -15,11 +15,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class ParkFactorSourceMiddleware(BaseHTTPMiddleware):
-    """Stamp ``X-Park-Factor-Source`` on every response (SIM-453).
+    """Stamp ``X-Park-Factor-Source`` on every response (the park-factor source, SIM-453).
 
-    A WARNING in the container log tells the OPERATOR that the park factor is
-    unavailable. It tells the API caller nothing, and the caller is the one holding
-    the numbers. This header carries the same fact out to them:
+    A WARNING in the container log tells the operator that the park factor is
+    unavailable. It tells the API caller nothing, and the caller holds the
+    numbers. This header carries the same fact to the caller:
 
     * ``duckdb:<n>`` — the source is open and holds ``n`` rows in
       ``derived.park_factors``. Simulations use real venue factors.
@@ -27,14 +27,14 @@ class ParkFactorSourceMiddleware(BaseHTTPMiddleware):
       response ran at a neutral 1.0 and ``SIM_PARK_FACTOR`` did nothing.
     * ``unknown`` — the lifespan has not run (a TestClient built without it).
 
-    A header cannot break a client that ignores it, so no route needs editing and
-    no response body changes shape.
+    A client that ignores the header is not affected, and no response body
+    changes shape.
     """
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        # SIM-563: the module's live verdict first, so the header follows a
-        # re-read (a boot during a rebuild recovers its park factors later).
+        # The module's live verdict first, so the header follows a re-read (a
+        # boot during a rebuild recovers its park factors later).
         from simulation.sim_kwargs import park_factor_source_status
 
         source = park_factor_source_status() or getattr(
