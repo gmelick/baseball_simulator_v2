@@ -104,6 +104,10 @@ omit = [
     "api/state.py",
     "simulation/production_factory.py",
     "api/routes/games.py",
+    "api/routes/games_feed.py",
+    "api/routes/games_models.py",
+    "api/routes/games_runs.py",
+    "api/routes/games_slate.py",
     # SIM-439 Data Lab / Similarity Explorer: live-DB + engine-backed routes,
     # exercised by integration/E2E, not the unit suite (same rationale as
     # games.py). The pure SELECT-only validator (api/routes/sql_safety.py) is

@@ -35,6 +35,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import api.routes.games as games_mod
+import api.routes.games_feed as games_feed
+import api.routes.games_slate as games_slate
 from api.routes.games import router as games_router
 from simulation.batch_runner import InMemoryCache
 from simulation.game_state import GameState
@@ -538,13 +540,14 @@ class TestMultiSubstitutionOverride:
 
     def test_apply_override_helper_targeted_sub(self):
         """Unit-test _apply_override directly: targeted sub modifies the correct slot."""
-        from api.routes.games import SubstitutionSlot, _apply_override
+        from api.routes.games import _apply_override
+        from api.routes.games_models import RosterOverride, SubstitutionSlot
 
         base = {
             "home_lineup": [1, 2, 3, 4, 5, 6, 7, 8, 9],
             "away_lineup": [10, 11, 12, 13, 14, 15, 16, 17, 18],
         }
-        override = games_mod.RosterOverride(
+        override = RosterOverride(
             substitutions=[
                 SubstitutionSlot(batting_order=4, player_id=999, side="home"),
                 SubstitutionSlot(batting_order=1, player_id=888, side="away"),
@@ -965,7 +968,7 @@ class TestGameCardAggregate:
             }
 
         monkeypatch.setattr(
-            games_mod,
+            games_slate,
             "sim_store",
             type(
                 "_FakeSS",
@@ -1277,7 +1280,7 @@ class TestLiveGameState:
             }
 
         monkeypatch.setattr(
-            games_mod,
+            games_feed,
             "sim_store",
             type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
         )
@@ -1320,7 +1323,7 @@ class TestLiveGameState:
             return None
 
         monkeypatch.setattr(
-            games_mod,
+            games_feed,
             "sim_store",
             type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
         )
@@ -1336,7 +1339,7 @@ class TestLiveGameState:
             return self._canned_live_row()
 
         monkeypatch.setattr(
-            games_mod,
+            games_feed,
             "sim_store",
             type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
         )

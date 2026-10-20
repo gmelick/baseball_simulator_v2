@@ -16,8 +16,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import api.routes.games as games_mod
+import api.routes.games_feed as games_feed
 from api.routes.games import router as games_router
+from api.routes.games_models import GameFeedCardModel
 from pipeline.mlb_game_feed import parse_game_feed
 from simulation.batch_runner import InMemoryCache
 
@@ -147,8 +148,8 @@ def test_postponed_feed() -> None:
 
 def test_every_fixture_validates_against_the_model() -> None:
     for name in ("final_extra_2024-04-13", "final_home_win_2024-08-15", "preview_2026-10-10"):
-        games_mod.GameFeedCardModel(**parse_game_feed(_load(name)))
-    games_mod.GameFeedCardModel(**parse_game_feed(_as_live("final_home_win_2024-08-15")))
+        GameFeedCardModel(**parse_game_feed(_load(name)))
+    GameFeedCardModel(**parse_game_feed(_as_live("final_home_win_2024-08-15")))
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +188,9 @@ def test_endpoint_serves_and_caches() -> None:
 
 
 def test_ttl_by_state() -> None:
-    assert games_mod.FEED_TTL_BY_STATE_S["live"] == 10
-    assert games_mod.FEED_TTL_BY_STATE_S["scheduled"] == 600
-    assert games_mod.FEED_TTL_BY_STATE_S["final"] == 24 * 3600
+    assert games_feed.FEED_TTL_BY_STATE_S["live"] == 10
+    assert games_feed.FEED_TTL_BY_STATE_S["scheduled"] == 600
+    assert games_feed.FEED_TTL_BY_STATE_S["final"] == 24 * 3600
 
 
 def test_error_serves_the_last_good_copy() -> None:
