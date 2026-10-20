@@ -37,7 +37,7 @@ USAGE (the orchestrator runs this; it is read-only against the database)
     python scripts/boxscore_audit.py --game-pks 746437 746438
 
 The SQL builders and the comparison are pure functions, unit-tested on
-hand-built rows in ``tests/unit/test_sim545_boxscore_reader.py``.
+hand-built rows in ``tests/unit/test_boxscore_reader.py``.
 """
 
 from __future__ import annotations

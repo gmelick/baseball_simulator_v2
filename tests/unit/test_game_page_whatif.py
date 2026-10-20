@@ -356,7 +356,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from tests.unit.test_sim519_sim_jobs import _Pool as _RunTable
+    from tests.unit.test_sim_jobs import _Pool as _RunTable
 
     import api.routes.games as games_mod
     import api.sim_jobs as sj

@@ -5,7 +5,7 @@ Pytest fixtures that build deterministic synthetic similarity engines for
 the regression gate.
 
 All engines are constructed via __new__ to bypass DuckDB — identical to
-the pattern used in tests/unit/test_ml_engines_sim066_071.py.  Synthetic
+the pattern used in tests/unit/test_secondary_engines.py.  Synthetic
 profiles are injected directly after construction.
 
 Seeded random data (seed=2026) guarantees bit-for-bit identical inputs

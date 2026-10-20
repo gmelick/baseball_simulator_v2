@@ -15,7 +15,7 @@
 # --------------------------------------
 # tests/acceptance splits in two. This lane runs only the heavy half, selected by
 # `-m acceptance` — 22 tests, collected 2026-08-10. The band ARITHMETIC
-# (tests/acceptance/test_band_arithmetic_sim450.py, 26 tests, no database) runs in
+# (tests/acceptance/test_band_arithmetic.py, 26 tests, no database) runs in
 # ci.yml on every push, in the `acceptance-arithmetic` job. Keep it there: the rule
 # that decides red-or-green must be checked more often than once a night on one box.
 # Both counts said "8" until 2026-08-10 and both were wrong, which is how the

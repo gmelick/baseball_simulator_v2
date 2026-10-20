@@ -6,7 +6,7 @@ measured it clean over the full sweep (32 distinct values, all interpretable),
 while ``outs_on_pitch`` is zero on 92.6% of batted-ball outs and 100% of
 strikeouts in the swept data. Every out label therefore derives from
 ``events``. Do not read ``outs_on_pitch`` in the profile computor —
-``tests/unit/test_sim501a_out_label.py`` fails if any site does. Since the
+``tests/unit/test_out_label.py`` fails if any site does. Since the
 Data Lab vocabulary fix (SIM-571), this module also holds the pitch ``type``
 code sets.
 
@@ -42,7 +42,7 @@ Measured on the live DB, 2024 season (do not re-derive these):
 "did the batter reach" test. It lists ``fielders_choice`` as an out, which
 the measurement above disproves for that question. Reconciling the loop is
 sim-scoped work (the SIM-473/SIM-499 redesign), not this module's job;
-``test_sim501a_out_label.py`` pins the divergence so it cannot drift
+``test_out_label.py`` pins the divergence so it cannot drift
 unnoticed.
 """
 
@@ -144,7 +144,7 @@ BATTER_RETIRED_EVENTS: frozenset[str] = frozenset(
 # moved here from the profile computor in the Data Lab vocabulary fix
 # (SIM-571). The API reads them here, without the computor's duckdb and
 # sklearn imports.
-# `tests/unit/test_sim571_pitch_result_vocabulary.py` holds the 17
+# `tests/unit/test_pitch_result_vocabulary.py` holds the 17
 # (description, code) pairs that the loader stores.
 
 #: A ball: 'B', '*B' a ball in the dirt, 'P' a pitchout the batter took.

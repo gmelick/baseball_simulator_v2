@@ -126,7 +126,7 @@ So the margin ``d / floor`` alone fixes the power::
 
 ``DETECTION_MARGIN`` is 1.6, giving **99.2% power** at the minimum resolving run
 and more at any longer one. ``Reference.must_detect`` carries ``d`` and
-``test_band_arithmetic_sim450.py`` fails if any floor rises above ``d / 1.6``.
+``test_band_arithmetic.py`` fails if any floor rises above ``d / 1.6``.
 
 **Rule B — a channel with no documented defect.** There is no magnitude to aim
 at, so the only non-arbitrary choice is "as sensitive as the run allows". The
@@ -359,7 +359,7 @@ was a pitcher's park set. Measured prefix means, against the full-set 0.99952::
 
 An 8-game run therefore sampled a run environment 3.1% below the set it claimed
 to represent, and the day-one 400-sim measurement in
-``test_production_config_bands_sim450.py`` was taken on exactly that prefix.
+``test_production_bands.py`` was taken on exactly that prefix.
 
 ``BALANCED_GAME_ORDER`` fixes it by pairing extremes: the widest pair first, each
 pair written low-then-high. ``conftest.ACCEPTANCE_GAME_PKS`` now IS this tuple,
@@ -388,7 +388,7 @@ Move a band only under these rules:
   4. Record the old floor, the new floor and the date in the changelog below.
   5. Never raise a floor above ``must_detect / DETECTION_MARGIN``. That field
      records a defect the band is REQUIRED to register, and
-     ``test_band_arithmetic_sim450.py`` fails if a floor crosses it.
+     ``test_band_arithmetic.py`` fails if a floor crosses it.
 
 Widening a band to turn a red lane green, with no model change behind it, is a
 defect in this file. If a channel is red and nobody changed the model, the model
@@ -418,7 +418,7 @@ behind it. Reproduced before changing anything:
     0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md §11`` records the
     defect as "stuck at the structural-only ~.510-.515", and this lane's own
     first production run measured 0.5125
-    (``test_production_config_bands_sim450.py``). The band passed on the whole
+    (``test_production_bands.py``). The band passed on the whole
     documented range and on the lane's own reading.
   * ``evaluate("H", [8.0, 8.0])`` returned ``passed=True`` — two observations,
     7% off the MLB centre.
@@ -566,7 +566,7 @@ class Reference:
     ``must_detect`` is a deviation, in the channel's own units, that this band is
     REQUIRED to register. It is set only where a defect is documented with a
     magnitude, ``detect_source`` names the file and the section, and
-    ``test_band_arithmetic_sim450.py`` fails if a floor ever rises above
+    ``test_band_arithmetic.py`` fails if a floor ever rises above
     ``must_detect / DETECTION_MARGIN``. It is the machine-checked half of the
     "MOVING A BAND" policy.
 

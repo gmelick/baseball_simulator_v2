@@ -240,8 +240,8 @@ def last_n_seasons(con: Any, n: int) -> list[int]:
 # SIM-467 moved the algebra into ``simulation/filter_cells.py`` so the sampler's
 # cell index and this measurement share ONE definition (``scripts/`` is not
 # importable from the container's ``simulation`` package). The names below are
-# re-exported unchanged; ``tests/unit/test_sim451_filter_cells.py`` reads them
-# from this module and ``tests/unit/test_sim467_cell_index.py`` pins that they
+# re-exported unchanged; ``tests/unit/test_filter_cells.py`` reads them
+# from this module and ``tests/unit/test_pitch_cell_index.py`` pins that they
 # ARE the module's objects.
 from simulation.filter_cells import (  # noqa: E402
     _BASE_LABELS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report

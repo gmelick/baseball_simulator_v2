@@ -179,7 +179,7 @@ container within that time with no restart. Before SIM-570 nginx looked the
 name up once, at its own start, and every route on port 80 answered 502 until
 `docker compose restart nginx`. The config is baked into the nginx image: a
 config change needs `docker compose build nginx` and `docker compose up -d
-nginx`. `tests/unit/test_sim570_nginx_resolve.py` guards the three directives.
+nginx`. `tests/unit/test_nginx_resolve.py` guards the three directives.
 
 ## Environment tiers
 

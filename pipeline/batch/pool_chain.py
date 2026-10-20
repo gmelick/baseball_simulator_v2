@@ -43,7 +43,7 @@ docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
 The check cannot see two kinds of mislabel. The count machine treats a called
 and a swinging strike alike, and every in-play sub-type alike, so a swap
 inside either group moves no chain rate. The unit truth tables
-(``tests/unit/test_sim553_foul_tip_strike_three.py``) guard those.
+(``tests/unit/test_foul_tip_strike_three.py``) guard those.
 
 THE POPULATION RULE
 ===================
@@ -98,7 +98,7 @@ WHO USES IT
     in ``tests/acceptance/bands.py`` prints the label check per window.
   * ``scripts/rebuild_pitch_pool.py`` — the pool rebuild stops before
     the export when the check fails.
-  * ``tests/acceptance/test_sim553_pool_label_check.py`` — the standing test.
+  * ``tests/acceptance/test_pool_label_check.py`` — the standing test.
 
 The chain solver is the one ``scripts/sim429_chain_analysis.py`` carried
 (deleted by commit 6ab341c on 2026-09-06); its logic is unchanged.
@@ -218,7 +218,7 @@ def solve_chain(rates: list[list[float]]) -> dict[str, float]:
     The row is in :data:`OUTCOMES` order and need not be normalised (counts or
     weights work). Returns the keys ``walk``, ``k``, ``in_play``, ``hbp`` and
     ``pitches``. The logic is the deleted ``scripts/sim429_chain_analysis.py``
-    solver, unchanged; ``tests/unit/test_sim553_pool_chain.py`` holds the
+    solver, unchanged; ``tests/unit/test_pool_chain.py`` holds the
     original as its oracle.
 
     Two edges the original did not guard. A two-strike row that is all fouls

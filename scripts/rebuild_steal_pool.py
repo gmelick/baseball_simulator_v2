@@ -1533,7 +1533,7 @@ def print_next_steps() -> None:
     )
     _log("  6. the ten-game smoke (scripts/sim_stats.py, 10 x 50): no collapse")
     _log(
-        "  7. the lane (45 x 130, tests/acceptance/test_production_config_bands_sim450.py); "
+        "  7. the lane (45 x 130, tests/acceptance/test_production_bands.py); "
         "update the steal centres in tests/acceptance/bands.py first if the lines above say MOVED"
     )
     _log("  8. close: CHANGES.md, BACKLOG.xlsx, the docs; merge before the next nightly pool build")

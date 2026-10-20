@@ -1318,7 +1318,7 @@ class BatterSimilarityEngine:
 
         ⚠ This must agree with ``BatterPartition.score_all`` on every pair.
         ``score_all`` is the vectorized path the nightly actor matrix uses;
-        this one serves ``query_pair``. ``test_sim529_batter_physical.py``
+        this one serves ``query_pair``. ``test_batter_physical_features.py``
         compares them, because the two drifting apart is silent.
         """
         disc_q = self._normalizer.normalize_discipline(query.discipline_vec)

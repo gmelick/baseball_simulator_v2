@@ -552,7 +552,7 @@ def test_bench_phase4_simulation_loop(benchmark):
 # loop rotates the batter through it.  It seats a batter who reaches base by
 # his id.  Without a lineup the batter id is None, and the first hit trips the
 # SIM-500 base guard ("Bases.1B has a negative runner id: -1").  The two
-# lineups mirror the spec that tests/unit/test_backend_sim332.py passes to the
+# lineups mirror the spec that tests/unit/test_batch_runner.py passes to the
 # runner (SIM-552).
 _BENCH5_AWAY_LINEUP = list(range(101, 110))
 _BENCH5_HOME_LINEUP = list(range(201, 210))
@@ -581,7 +581,7 @@ def test_bench_phase4_batch_runner(benchmark):
     _BATCH_N = 3  # small batch — enough to exercise fan-in without a slow bench
     _BASE_SEED = 335
 
-    # The same spec shape tests/unit/test_backend_sim332.py runs the runner on.
+    # The same spec shape tests/unit/test_batch_runner.py runs the runner on.
     # No inning cap: the game ends by its own rules (a decided game, extras
     # allowed), the contract production plays.
     spec = GameSpec(

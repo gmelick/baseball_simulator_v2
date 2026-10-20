@@ -15,7 +15,7 @@ Targets:
     require live MLB-API HTML scraping and are out of scope for unit tests)
   - _fetch_game_pitches end-to-end with a minimal feed/live payload
 
-Mocking style mirrors tests/unit/test_data_engineer_sim092_sim093.py — psycopg2
+Mocking style mirrors tests/unit/test_odds_dedup_and_etl_errors.py — psycopg2
 connections are MagicMock objects that simulate context-manager semantics.
 """
 

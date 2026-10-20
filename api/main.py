@@ -855,7 +855,7 @@ def create_app() -> FastAPI:
     # Request, and FastAPI does not supply one in a WebSocket scope, so on
     # ws_router it would fail every handshake with a TypeError. ws_router
     # therefore carries no router dependency, and the handler calls
-    # authenticate_websocket first. tests/unit/test_sim443c_route_auth_coverage.py walks app.routes
+    # authenticate_websocket first. tests/unit/test_route_auth_coverage.py walks app.routes
     # and fails on any ungated data route.
     from api.routes.auth import router as auth_router
 

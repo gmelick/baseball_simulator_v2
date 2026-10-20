@@ -8,7 +8,7 @@ tests/integration/conftest.py and are only instantiated when integration tests r
 SIM-152 — Shared unit-test fixtures
 -----------------------------------
 The live-ingestion-pipeline tests (test_live_pipeline_bugs.py,
-test_data_engineer_sim340.py, test_live_pipeline_sim348.py) all stand up the
+test_odds_provider_ingestion.py, test_live_pipeline.py) all stand up the
 same handful of mocks: an AsyncMock asyncpg pool, an AsyncMock Redis client, a
 mock aiohttp session, a minimal feed/live payload, and a built game_state.
 SIM-152 hoists those into shared fixtures here so each module reuses them
@@ -130,8 +130,8 @@ os.environ["SIM_RELIEF_HAND_OFF_WEIGHT"] = "1.0"
 # is AUTH_DISABLED=1. The suite opts out here so the route tests that build a
 # bare app or router need no credentials. setdefault (not a pin) keeps an
 # explicit value from the shell. The two files that test the enforcement
-# delete the variable with monkeypatch: tests/unit/test_api_auth_session_sim389.py
-# and tests/unit/test_sim443c_route_auth_coverage.py.
+# delete the variable with monkeypatch: tests/unit/test_api_auth_session.py
+# and tests/unit/test_route_auth_coverage.py.
 os.environ.setdefault("AUTH_DISABLED", "1")
 
 # SIM-567 (the test lane's odds provider): the app container reads the
@@ -142,8 +142,8 @@ os.environ.setdefault("AUTH_DISABLED", "1")
 # the vendor's provider. The MLB Stats API answered its reads with HTTP
 # 404. The pin is a hard one, not setdefault, because the explicit .env
 # value is the defect. A test that wants the vendor name sets it with
-# monkeypatch (tests/unit/test_sim555_writers.py). The clean_env fixture
-# of tests/unit/test_odds_provider_sim370.py deletes it. Monkeypatch
+# monkeypatch (tests/unit/test_odds_writers.py). The clean_env fixture
+# of tests/unit/test_odds_provider_seam.py deletes it. Monkeypatch
 # restores the pinned value on teardown. The pin removes the API key too.
 # A test that still builds the vendor's provider then sends no BettingPros
 # request. The provider's _bp_get raises "needs an API key" first. The

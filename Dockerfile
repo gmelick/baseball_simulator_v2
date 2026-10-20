@@ -148,7 +148,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt \
 COPY tests/        /app/tests/
 COPY pyproject.toml /app/pyproject.toml
 
-# Files that test_backend_sim101_to_106_148_153.py::TestSim153SecretsBaseline
+# Files that test_backend_assorted_guards.py::TestSim153SecretsBaseline
 # asserts ship with the image (SIM-153 secrets-baseline acceptance gates).
 # These were previously stripped by `.dockerignore` (`.env.*`, `*.md`) or
 # never COPY'd by this stage — now restored so `make test` is self-contained.
@@ -165,7 +165,7 @@ COPY README.md         /app/README.md
 COPY .github/  /app/.github/
 
 # Operator scripts (SIM-157 backfill, SIM-158 index acceptance, SIM-160
-# bat_side audit).  test_data_engineer_sim157.py + test_perf_eng_sim158.py
+# bat_side audit).  test_backfill_odds_hash.py + test_index_acceptance_harness.py
 # both `importlib`-load these by path and need them inside the image.
 COPY scripts/  /app/scripts/
 

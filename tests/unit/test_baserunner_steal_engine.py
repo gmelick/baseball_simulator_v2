@@ -5,7 +5,7 @@ Dedicated unit tests for ``BaserunnerStealSimilarityEngine``
 
 The baserunner-steal engine was the only similarity engine without its
 own dedicated test file (it was only exercised incidentally inside
-``test_ml_engines_sim066_071.py``).  This module pins down invariants of
+``test_secondary_engines.py``).  This module pins down invariants of
 the RBF engine's scoring contract.
 
 All engines are tested without DuckDB using in-memory profile

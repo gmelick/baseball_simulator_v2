@@ -540,7 +540,7 @@ About three weeks elapsed, of which nine to twelve days are unattended compute.
   (`CHANGES.md` 2026-09-15) is the starting table for §3.
 - **§5.1 built 2026-09-14, §5.4 / §5.2 (the pitch draws) / §5.3 built 2026-09-15**
   (`scripts/market_skill.py`, `calibrate_markets.py`, `offline_draw_fit.py`,
-  `designed_experiment.py`; `tests/unit/test_sim548_instruments.py`). `FullPoolSampler.result_weights`
+  `designed_experiment.py`; `tests/unit/test_accuracy_fit_instruments.py`). `FullPoolSampler.result_weights`
   factored out for the fidelity rule. The backtest records `sim_prob_raw` on the moneyline.
 - **The calibration layer, first read (§7; fitted on games 1–500 of 2024, read on 501–1000):**
   the strikeout map (a +0.08, b 0.15) takes the market from 0.0183 behind the line to level

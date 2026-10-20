@@ -131,7 +131,7 @@ standing owner rulings that govern all new work:
   PITCHES_PA 3.906. A paired read (old vs new bundle, 10 games × 300) measured the sim's
   strikeouts +3.5% per plate appearance (±0.6%; the pool moved 4.6%) and runs −2.8%, so the
   next lane's K_PA band should read about −1.8% (floor 2%). `pipeline/batch/pool_chain.py` holds the count chain and the label check;
-  `tests/acceptance/test_sim553_pool_label_check.py` and `scripts/pool_window_census.py
+  `tests/acceptance/test_pool_label_check.py` and `scripts/pool_window_census.py
   --strict` fail when the pool's chain drifts more than 0.5% from real play — the pool-totals
   grade cannot see a labelling defect, because it reads the same labels. The steal and
   advancement pools in DuckDB are AHEAD of the bundle (the 2026 games of 08-14 to 08-29,
@@ -905,7 +905,7 @@ Open defects are rows in `BACKLOG.xlsx`. The Phase-5-close defect list, the 2026
 bring-up record and the steal-volume history are in `docs/archive/CLAUDE-md-history.md`.
 
 `tests/acceptance/bands.py` sizes two band floors on the magnitudes below, and the acceptance
-tests cite them as "CLAUDE.md §11". `tests/unit/test_sim449_sim_kwargs.py` fails when this
+tests cite them as "CLAUDE.md §11". `tests/unit/test_sim_kwargs.py` fails when this
 section stops saying "Runs run ~7-8% low". Change that sentence only with a re-calibration.
 
 - **Runs run ~7-8% low (down from ~12% pre-fix).** This was the run-conversion gap after the
@@ -1006,5 +1006,5 @@ ticket description, docstring, and inline comment.
   parameter, a field or a route's description. In the same commit, run
   `python scripts/export_openapi.py` in the app image with the checkout mounted, never on the
   host: the host's Pydantic 2.10 drops `additionalProperties: true`. Then run
-  `cd frontend && npm run gen:api`. `tests/unit/test_sim573_openapi_snapshot.py` and a step of
+  `cd frontend && npm run gen:api`. `tests/unit/test_openapi_snapshot.py` and a step of
   the CI frontend job fail on a stale `frontend/openapi.json` or `schema.d.ts`.

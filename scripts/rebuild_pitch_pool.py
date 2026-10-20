@@ -1955,7 +1955,7 @@ def _print_next_steps() -> None:
         "       MSYS_NO_PATHCONV=1 docker compose run --rm -T -e SIM_ACCEPTANCE=1 "
         '-v "$PWD/tests:/app/tests" -v "$PWD/pipeline:/app/pipeline" '
         '-v "$PWD/pyproject.toml:/app/pyproject.toml" app python -m pytest '
-        "tests/acceptance/test_sim553_pool_label_check.py -p no:cacheprovider"
+        "tests/acceptance/test_pool_label_check.py -p no:cacheprovider"
     )
     _log(
         "  6. the balanced set's score on the rebuilt pool: the chosen dates must be the set's in "

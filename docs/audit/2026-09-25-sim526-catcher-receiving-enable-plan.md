@@ -345,7 +345,7 @@ SIM_CATCHER_RECEIVING_POWER:  "1"
 "SIM_CATCHER_RECEIVING": os.environ.get("SIM523_LANE_RECEIVING", "1"),            # was "0"
 "SIM_CATCHER_RECEIVING_POWER": os.environ.get("SIM526_LANE_RECEIVING_POWER", "1"),
 # tests/conftest.py (the unit lane): SIM_CATCHER_RECEIVING stays "0"; SIM_CATCHER_RECEIVING_POWER pinned "1"
-# tests/acceptance/test_band_arithmetic_sim450.py: test_the_compose_file_carries_the_same_receiving_values_sim526 (both keys)
+# tests/acceptance/test_band_arithmetic.py: test_the_compose_file_carries_the_same_receiving_values_sim526 (both keys)
 ```
 
 ### 5.5 Documents
@@ -376,13 +376,13 @@ or power changes. Every similarity power stays 1.
 
 | Test | Holds |
 |---|---|
-| `test_priors_are_the_fitted_values` (`tests/unit/test_sim523_receiving_ratio.py`) | `RECV_FRAME_PRIOR == 1200.0`, `RECV_BLOCK_PRIOR == 20.0`, with §2.1's evidence in the docstring; the document written by the builder carries both |
+| `test_priors_are_the_fitted_values` (`tests/unit/test_receiving_ratio.py`) | `RECV_FRAME_PRIOR == 1200.0`, `RECV_BLOCK_PRIOR == 20.0`, with §2.1's evidence in the docstring; the document written by the builder carries both |
 | `test_rates_priors_and_clamps` (existing) | unchanged in logic — it reads the constants symbolically; its comments name the new values (a 300-pitch catcher with no strikes now reads ×0.80, not ×0.40; the ten-for-ten catcher ×1.04, not ×1.25) |
 | `test_power_zero_is_neutral` | `catcher_receiving_power = 0` draws the same sequence as OFF for any catcher, on the whole-pool path, the cell path and the result draw |
 | `test_power_squares_the_ratio` | at power 2 the drawn called-strike share among taken pitches for catcher 700 matches L·m² within the binomial; the taken share and every swung-at weight unchanged (the invariant at every power) |
 | `test_power_env` | `apply_result_split_env` reads `SIM_CATCHER_RECEIVING_POWER` (default 1.0; "0" → 0.0; "2" → 2.0); the switch's default stays False in an empty env |
 | `test_the_cache_keys_the_power` | one sampler asked at two powers returns two factors, not one |
-| `test_the_compose_file_carries_the_same_receiving_values_sim526` (`tests/acceptance/test_band_arithmetic_sim450.py`) | the compose file and `PRODUCTION_FLAGS` agree on both keys; the lane's switch defaults to "1" |
+| `test_the_compose_file_carries_the_same_receiving_values_sim526` (`tests/acceptance/test_band_arithmetic.py`) | the compose file and `PRODUCTION_FLAGS` agree on both keys; the lane's switch defaults to "1" |
 
 The existing thirteen tests stay (`test_off_is_byte_identical`, the mass invariant, the
 split's placement, the deleted kernel). The unit lane pins the switch OFF, so nothing there
@@ -393,7 +393,7 @@ draws differently.
 ## 8. Run book
 
 ```text
-# 1. the code lands; ruff, mypy; the unit lane (test_sim523_receiving_ratio, test_band_arithmetic_sim450); no engine change, no regression lane
+# 1. the code lands; ruff, mypy; the unit lane (test_receiving_ratio, test_band_arithmetic); no engine change, no regression lane
 # 2. rebuild the document (DuckDB read-only — the app stays up; seconds):
 docker compose run --rm app python -m pipeline.batch.engine_artifacts --what receiving
 #    check the log line: 422 catcher-seasons; the outside multipliers of the regulars 0.86..1.19 (5th–95th); frame_prior 1200 / block_prior 20 in the file

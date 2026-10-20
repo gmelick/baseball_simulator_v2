@@ -301,7 +301,7 @@ jobs:
 
       - name: Run API E2E suite (TestClient; no live DB)
         run: |
-          pytest tests/integration/test_api_e2e_sim371.py \
+          pytest tests/integration/test_api_end_to_end.py \
             -v \
             --tb=native \
             --timeout=120 \
@@ -320,10 +320,10 @@ jobs:
   # Job 4e — Acceptance band arithmetic (SIM-450)
   #
   # tests/acceptance splits in two. The HEAVY half
-  # (test_production_config_bands_sim450.py) needs a 3.2 GB DuckDB, the
+  # (test_production_bands.py) needs a 3.2 GB DuckDB, the
   # engine-artifact bundle and Postgres, so it runs only in
   # acceptance-nightly.yml. The band ARITHMETIC half
-  # (test_band_arithmetic_sim450.py) needs none of that — 26 tests, pure maths,
+  # (test_band_arithmetic.py) needs none of that — 26 tests, pure maths,
   # 0.6 s measured on 2026-08-10. Until this job existed, CI collected neither
   # half, so the rule that decides red-or-green for every box-score channel was
   # itself untested on every push.
@@ -361,7 +361,7 @@ jobs:
         # (SIM_ACCEPTANCE is unset here), so naming the file directly is what
         # keeps this lane cheap and deterministic.
         run: |
-          pytest tests/acceptance/test_band_arithmetic_sim450.py \
+          pytest tests/acceptance/test_band_arithmetic.py \
             -v \
             --tb=native \
             --timeout=60 \
@@ -660,7 +660,7 @@ jobs:
 
       # SIM-573: the generated API types must equal a fresh generation from the
       # committed snapshot (frontend/openapi.json). The unit test
-      # tests/unit/test_sim573_openapi_snapshot.py holds the snapshot to the API.
+      # tests/unit/test_openapi_snapshot.py holds the snapshot to the API.
       - name: Generated API types match the snapshot
         run: |
           npm run gen:api

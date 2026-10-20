@@ -303,7 +303,7 @@ def load_calibration_map(path: str | None = None):
     ``api/main.py`` (``load_calibration_report`` + ``CalibrationMap.from_report``),
     which is kept separate so the same loaded report can also be fed to
     :func:`apply_calibration_to_engines`. Retained as low-risk library surface
-    (deleting it would also touch ``tests/unit/test_ml_engines_sim361.py``).
+    (deleting it would also touch ``tests/unit/test_calibration_report_json.py``).
     """
     from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
 

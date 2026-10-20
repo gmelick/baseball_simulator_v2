@@ -320,7 +320,7 @@ duckdb db\schemas\baseball_simulator.duckdb -c "SELECT player_id, season, framin
 pytest tests\unit\test_engine_build_smoke.py -v
 python similarity\engines\pitcher_similarity.py
 python similarity\engines\catcher_similarity.py
-pytest tests\unit\test_ml_engines_sim041.py tests\unit\test_ml_engines_sim042.py -v
+pytest tests\unit\test_pitch_pitch_engine.py tests\unit\test_batted_ball_engine.py -v
 pytest tests\regression\ -v --timeout=60
 ```
 

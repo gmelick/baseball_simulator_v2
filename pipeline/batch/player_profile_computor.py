@@ -181,8 +181,8 @@ _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 # (SQL_OUTCOME_TYPE, below) is rendered from these sets, and the profile SQL
 # reads WHIFF_TYPES / NON_SWING_TYPES, so a pitcher's whiff rate and the pool
 # the simulator draws from describe the same events.
-# `tests/unit/test_sim501_profile_code_sets.py` and
-# `tests/unit/test_sim553_foul_tip_strike_three.py` run the expression and fail
+# `tests/unit/test_profile_code_sets.py` and
+# `tests/unit/test_foul_tip_strike_three.py` run the expression and fail
 # if the two ever diverge.
 #
 # The sets live in pipeline/statcast_events.py since the Data Lab vocabulary
@@ -267,7 +267,7 @@ _STANCE_FEATURES: tuple[tuple[str, str], ...] = (
 #: SELECT to the table by POSITION. ``ALTER TABLE ... ADD COLUMN`` appends to
 #: the end of the table, so these must come last in the SELECT and in exactly
 #: this order. Migration 0025 adds them in this order, the SELECT tail is
-#: generated from this tuple, and ``test_sim529_batter_physical.py`` asserts the
+#: generated from this tuple, and ``test_batter_physical_features.py`` asserts the
 #: live table's trailing columns match it. Do not hand-edit one side.
 PHYSICAL_COLUMN_ORDER: tuple[str, ...] = tuple(
     f"{stem}{suffix}"
@@ -1907,7 +1907,7 @@ class PlayerProfileComputor:
         SIM-091: Per-play detail tables (outfield/infield/dp) are explicitly
         enumerated below.  When you add a new derived.* table with a `season`
         column, also add it here OR add it to _EXCLUDED_FROM_DELETE_SEASONS in
-        tests/unit/test_data_engineer_sim085_to_091.py with a comment — the
+        tests/unit/test_profile_indexes_and_etl_fallbacks.py with a comment — the
         SIM-091 regression test enforces this.
 
         Intentionally omitted:

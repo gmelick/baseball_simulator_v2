@@ -42,7 +42,7 @@ Verdict: the code mirrors the loop faithfully where it matters (cutoff, keys, `r
 
 ## 3. Fidelity divergences
 
-Verified faithful: the cutoff (day before, inclusive), hand pools, `pid:season` keys, `result_weights` as the one function the draw samples, the chain's anchor rows, and the fatigue inputs. The unit test at `test_sim548_instruments.py:277` holds only at batter power 1 on the whole-pool path, but the fit's fidelity is structural (it reads `diff(_bucket_cdf)` and `result_weights` directly), so this is a test-scope note, not a defect.
+Verified faithful: the cutoff (day before, inclusive), hand pools, `pid:season` keys, `result_weights` as the one function the draw samples, the chain's anchor rows, and the fatigue inputs. The unit test at `test_accuracy_fit_instruments.py:277` holds only at batter power 1 on the whole-pool path, but the fit's fidelity is structural (it reads `diff(_bucket_cdf)` and `result_weights` directly), so this is a test-scope note, not a defect.
 
 Divergences that do not bias the ranking: the missing catcher (ratio OFF today); the −1 side (no such rows). One that does: **both the fit and the backtest key the pitcher and batter to full-season profiles**, which include the scored pitch. `set_asof` cuts rows, not profiles; the batter engine carries whiff/contact/K rates. The leak favours sharper powers and the 2025 hold-out inherits it. Run one setting with `{id}:2023` keys and stamp the size in §8 (mind the confound: rookies fall to a flat factor, and the pitcher matrix's diagonal is 0, not 1).
 
