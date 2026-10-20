@@ -133,17 +133,22 @@ def test_a_bundle_without_dates_is_fine_with_no_cutoff() -> None:
 # Every draw carries it
 # ---------------------------------------------------------------------------
 
-#: The four draws that read a dated pool. If a fifth is added without the
+#: The five draws that read a dated pool. If a sixth is added without the
 #: cutoff, a backtest silently sees the future through it.
 _DRAW_SITES = 5  # pitch base, batted ball, manager change, steal, advancement
 
 
-def test_every_draw_applies_the_cutoff() -> None:
+def _sampler_source() -> str:
+    """The sampler's source: its constructor module and every mixin module."""
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parents[2] / "simulation" / "full_pool_sampler.py").read_text(
-        encoding="utf-8"
-    )
+    sim = Path(__file__).resolve().parents[2] / "simulation"
+    files = [sim / "full_pool_sampler.py", *sorted((sim / "sampler").glob("*.py"))]
+    return "\n".join(f.read_text(encoding="utf-8") for f in files)
+
+
+def test_every_draw_applies_the_cutoff() -> None:
+    src = _sampler_source()
     assert src.count("self._apply_asof(") == _DRAW_SITES, (
         "a draw was added or removed without updating the cutoff wiring"
     )
@@ -152,12 +157,7 @@ def test_every_draw_applies_the_cutoff() -> None:
 def test_the_pitch_draw_inherits_it_from_the_half_inning_base() -> None:
     """Both pitch paths — the cell index and the plain bucket draw — build on
     the same base, so folding the cutoff there covers both."""
-    from pathlib import Path
-
-    src = (Path(__file__).resolve().parents[2] / "simulation" / "full_pool_sampler.py").read_text(
-        encoding="utf-8"
-    )
-    assert "self._base = self._apply_asof(" in src
+    assert "self._base = self._apply_asof(" in _sampler_source()
 
 
 def test_a_drawn_pitch_never_postdates_the_cutoff() -> None:

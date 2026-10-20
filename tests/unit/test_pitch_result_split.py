@@ -46,9 +46,10 @@ from pipeline.batch.engine_artifacts import (
     build_pitch_pool_artifact,
     join_rows,
 )
-from simulation.full_pool_sampler import _PITCH_FEATURE_WEIGHTS, FullPoolSampler, _repower
+from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.production_factory import apply_result_split_env
+from simulation.sampler.kernels import _PITCH_FEATURE_WEIGHTS, _repower
 from simulation.sim_loop import StateMachine
 
 _SEASON = 2024
