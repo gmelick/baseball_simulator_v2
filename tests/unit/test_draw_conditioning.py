@@ -31,6 +31,7 @@ architecture rule):
 
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 
@@ -511,7 +512,8 @@ class TestBuilderWindowExpressions:
         # sim523g.1 -> sim553.1 (SIM-553: a two-strike foul tip / foul bunt is strike three)
         # sim553.1 -> sim554.1 (SIM-554: the steal pool's pitch class and pickoff rows)
         assert ppc.POOL_BUILDER_VERSION == "sim554.1"
-        src = Path(ppc.__file__).read_text(encoding="utf-8")
+        # The pitch pool's SELECT lives in the pool builder's mixin.
+        src = inspect.getsource(ppc.PlayerProfileComputor._build_pitch_pool)
         i_got = src.index("AS got_away,")
         i_bh = src.index("AS bat_home,", i_got)
         i_pc = src.index("AS pitcher_pitch_count,", i_bh)

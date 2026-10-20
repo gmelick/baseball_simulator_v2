@@ -18,12 +18,14 @@ the reason this file exists:
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
 from similarity.engines.batter_similarity import (
     PHYSICAL_FEATURES,
     WEIGHT_BATTED_BALL,
@@ -45,6 +47,19 @@ MIGRATION = REPO / "db" / "migrations" / "duckdb" / "0025_sim529_batter_physical
 DUCKDB_SCHEMA = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 VERSION_FILE = REPO / "db" / "schemas" / "duckdb_schema_version.txt"
 COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+
+
+def _method_source(name: str) -> str:
+    """One computor method's source, from its ``def`` line (the method may live
+    in a mixin of ``pipeline/batch/profiles``)."""
+    src = inspect.getsource(getattr(PlayerProfileComputor, name))
+    return src[src.index(f"def {name}") :]
+
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
 def _column_order():
@@ -292,15 +307,11 @@ _ARM_BLOCK_COLUMNS = (
 
 
 def _fill_step_body() -> str:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _fill_outfield_arm_block")
-    return src[start : src.index("\n    def ", start + 1)]
+    return _method_source("_fill_outfield_arm_block")
 
 
 def _aggregator_body() -> str:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _aggregate_fielder_season_metrics")
-    return src[start : src.index("def _assert_fielder_profiles_have_no_leakage", start)]
+    return _method_source("_aggregate_fielder_season_metrics")
 
 
 def test_the_fill_step_writes_every_arm_block_column_and_nulls_the_run_value() -> None:
@@ -333,7 +344,7 @@ def test_the_throw_velocity_still_comes_from_the_arm_strength_board() -> None:
 
 
 def test_the_catcher_arm_is_no_longer_a_null_placeholder() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
+    src = _computor_source()
     assert not re.search(r"NULL::\w+\s+AS arm_strength_mean", src)
 
 
@@ -349,7 +360,7 @@ def test_the_advancement_block_stays_outfield_only() -> None:
 def test_pop_time_prefers_the_measurement_over_the_old_proxy() -> None:
     """The old value was 2.0 + (0.25 - cs_rate) * 2.0 — a function of the
     caught-stealing rate, which the same sub-score already weights."""
-    src = COMPUTOR.read_text(encoding="utf-8")
+    src = _computor_source()
     m = re.search(r"COALESCE\(\s*spt\.pop_time_2b,\s*sct\.pop_time,", src)
     assert m is not None, "pop time no longer prefers the measured sources"
     proxy = src.index("2.0 + (0.25 - t.cs_rate) * 2.0")
