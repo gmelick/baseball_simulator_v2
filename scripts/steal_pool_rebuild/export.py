@@ -182,10 +182,10 @@ def steal_centres(
 
     ``pitch_class`` holds the class codes (1-6; 0 = a pickoff row), or None
     for a pool without classes (every row a pitch row). The attempt rate is
-    recency-weighted and the safe share is not, as the steal probe that set
-    the band centres computed them (``scripts/archive/sim476_steal_probe.py``, git history).
-    The pickoff outcomes count every row: the tags on pitch rows and the
-    pickoff rows, over the pitch rows.
+    recency-weighted and the safe share is not: the same reading gives the
+    steal band centres of ``tests/acceptance/bands.py``. The pickoff outcomes
+    count every row (the tags on pitch rows and the pickoff rows) over the
+    pitch rows.
     """
     att = np.asarray(attempted).astype(bool)
     suc = np.asarray(success).astype(bool)
@@ -255,7 +255,7 @@ def band_centres() -> tuple[dict[str, float], str]:
         spec.loader.exec_module(mod)
         refs = mod.POOL_REFERENCES
         return {k: float(refs[k].centre) for k in FALLBACK_CENTRES}, str(path)
-    except Exception as exc:  # noqa: BLE001 - the copy below is the 2026-09 value
+    except Exception as exc:  # noqa: BLE001 - FALLBACK_CENTRES holds the 2026-09 values
         return dict(FALLBACK_CENTRES), f"the script's copy ({type(exc).__name__}: {exc})"
 
 

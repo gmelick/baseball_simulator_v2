@@ -71,13 +71,14 @@ from simulation.sim_loop import BoxScore, simulate_game  # noqa: E402
 
 _FACTORY = "simulation.production_factory:production_machine_factory"
 
-# The MLB-2025 per-team per-game baseline (the calibration target; owner
-# decision 2026-08-18, SIM-508): THIS PROJECT'S OWN ingested 2025 season, 2,430
+# The MLB-2025 per-team per-game baseline (the calibration target, SIM-508,
+# owner decision 2026-08-18): THIS PROJECT'S OWN ingested 2025 season, 2,430
 # regular-season Final games and 4,860 team-games, measured 2026-08-18. 2025 sits
-# inside the pool window, so the sim is graded against the era it draws from. BB includes intentional walks (595 from raw.play_events
-# — the probe counts both canonical walk classes); CS includes all scored
-# classes: pitch-steal CS, K+CS double plays, and advancing pickoffs (149
-# from raw.play_events, Rule 9.07(h)).
+# inside the pool window, so the sim is graded against the era it draws from.
+# BB includes intentional walks (595 from raw.play_events — the probe counts
+# both canonical walk classes). CS includes all scored classes: pitch-steal CS,
+# K+CS double plays, and advancing pickoffs (149 from raw.play_events, Rule
+# 9.07(h)).
 _MLB_2025 = {
     "R": 4.4473,
     "H": 8.2588,
@@ -90,12 +91,13 @@ _MLB_2025 = {
     "CS": 0.1922,
 }
 
-#: The measured 2025 home win share, over the same 2,430 games (SIM-508).
+#: The measured 2025 home win share, over the same 2,430 games (the calibration
+#: target, SIM-508).
 _MLB_HOME_WIN_PCT = 0.5428
 
 #: Every env flag that changes what the sim does (each a registered flag of
 #: ``simulation/flags.py``). The harness prints all of them, so an operator reads
-#: a result against the exact configuration that produced it (SIM-449).
+#: a result against the exact configuration that produced it.
 _REALISM_FLAGS = (
     "SIM_MANAGER",
     "SIM_BB_PLATOON",
@@ -135,7 +137,7 @@ _REALISM_FLAGS = (
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # no default password (SIM-443b)
+    from pipeline.db_dsn import require_dsn  # the DSN or a loud error: no default password
 
     return require_dsn()
 
@@ -227,8 +229,8 @@ def _game_summary(result, *, home_ids: set[int], away_ids: set[int]) -> dict:
         "home_win": int(home_R > away_R),
         "away_win": int(away_R > home_R),
         "tie": int(home_R == away_R),
-        # The outs on the pitchers' lines, and the outs the game played. An
-        # older simulator has no played count: None.
+        # The outs on the pitchers' lines, and the outs the game played. A
+        # result without ``outs_played`` gives None.
         "p_outs": p_outs,
         "outs_played": getattr(result, "outs_played", None),
     }
@@ -571,8 +573,8 @@ def main() -> None:
                 if fence_counts is None:
                     fp.fence_counts[:] = 0
                 fence_counts = fp.fence_counts
-            # The wall-margin band's counters, the same way (an older sampler
-            # has none: the line is skipped).
+            # The wall-margin band's counters, the same way (a sampler without
+            # them skips the line).
             if fp is not None and hasattr(fp, "bb_margin_counts"):
                 if margin_counts is None:
                     fp.bb_margin_counts[:] = 0
@@ -636,8 +638,8 @@ def main() -> None:
             # band's when the sampler has them.
             **fence_record,
             **margin_record,
-            # The outs check's three numbers (played is None on an older
-            # simulator).
+            # The outs check's three numbers (played is None when the results
+            # carry no ``outs_played``).
             "outs_credited_per_game": outs_check["credited_per_game"],
             "outs_played_per_game": outs_check["played_per_game"],
             "outs_mismatch_game_sims": outs_check["mismatch_game_sims"],

@@ -39,7 +39,8 @@ from .common import (
 
 
 def _unknown_codes(con: Any, seasons: list[int]) -> list[tuple[Any, Any, int]]:
-    """Source rows the new coding gives no class (decision 3: no ELSE).
+    """Source rows the new coding gives no class (owner decision 3, the
+    design's §14: no ELSE).
 
     Any such row makes the pool INSERT fail on the NOT NULL column. The
     pre-flight names them before the rebuild deletes a row.

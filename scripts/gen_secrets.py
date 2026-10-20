@@ -2,8 +2,8 @@
 """
 scripts/gen_secrets.py
 ======================
-SIM-443b — generate the stack's secrets. The code and the compose file carry no
-default password, so every secret must sit in ``.env``.
+Generate the stack's secrets. The code and the compose file carry no default
+password (the security hardening, SIM-443b), so every secret must sit in ``.env``.
 
 The script writes eight secrets: the three Postgres role passwords, the Redis
 password, the Grafana admin password, the session-signing key, the login
@@ -33,7 +33,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-#: The secrets the stack needs, in the order they are written.
+#: The secrets the stack needs, in the order the script writes them.
 SECRET_KEYS: tuple[str, ...] = (
     "POSTGRES_PASSWORD",
     "BASEBALL_APP_DB_PASSWORD",

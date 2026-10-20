@@ -1,10 +1,10 @@
 """
-scripts/trace_game.py — per-pitch sim trace (SIM-408 path-A diagnostic).
+scripts/trace_game.py — a per-pitch trace of one simulated game.
 
 Runs ONE game through the PRODUCTION sim loop (the full-pool sampler) and
-emits a CSV with one row per pitch. (SIM-554: a pickoff before the pitch that
-makes the third out is a row too; its ``pitch_outcome`` reads "no_pitch", and
-the summary's pitch count leaves it out.) Each row holds:
+emits a CSV with one row per pitch. A pickoff before the pitch that makes the
+third out is a row too: its ``pitch_outcome`` reads "no_pitch", and the
+summary's pitch count leaves it out. Each row holds:
 
   * game state BEFORE the pitch (inning/half/outs/count/baserunners/score/batter/pitcher)
   * box-score totals BEFORE (AB/H/HR/RBI aggregated across all batters)
@@ -13,8 +13,8 @@ the summary's pitch count leaves it out.) Each row holds:
   * game state AFTER
   * box-score totals AFTER
 
-This surfaces exactly where hits stop being recorded / runs get over-credited:
-watch for rows where ``runs_scored > 0`` (RBI/score climbs) while
+The trace shows where a hit goes unrecorded or a run is over-credited.
+Watch for rows where ``runs_scored > 0`` (the RBI or the score climbs) while
 ``canonical_event`` is NOT a hit and the box ``H`` does not increment.
 
 Usage (inside the app container, which has the DuckDB + Postgres on the net):
@@ -46,7 +46,7 @@ _FACTORY = "simulation.production_factory:production_machine_factory"
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+    from pipeline.db_dsn import require_dsn  # the DSN or a loud error: no default password
 
     return require_dsn()
 
@@ -73,7 +73,7 @@ def _box_totals(box) -> tuple[int, int, int, int]:
 
 
 def _pitches_thrown(rows: list[dict]) -> int:
-    """The pitches thrown in the trace (SIM-554).
+    """The pitches thrown in the trace.
 
     The trace writes one row per ``step_pitch``. A pickoff before the pitch
     that makes the third out is a step with no pitch thrown: its row reads

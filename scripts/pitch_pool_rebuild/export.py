@@ -82,15 +82,15 @@ def _export(duckdb_path: str, art_dir: str, window: list[int]) -> None:
     """Step 4: export the pitch pool ONLY, then recompute its batted-ball join.
 
     ``build_pitch_pool_artifact`` (the nightly export's own function) writes
-    ``pitch_pool/`` from DuckDB, read-only. The rebuild re-inserted the rows,
-    so their file order moved, and ``pitch_pool/{hand}.bb_row.npy`` (each
-    pitch's row in the batted-ball pool) must move with them. It is
-    recomputed exactly as ``build_battedball_pool_artifact`` computes it
+    ``pitch_pool/`` from DuckDB, read-only. The rebuild re-inserts the rows,
+    so their file order moves, and ``pitch_pool/{hand}.bb_row.npy`` (each
+    pitch's row in the batted-ball pool) must move with them. This step
+    recomputes it exactly as ``build_battedball_pool_artifact`` computes it
     (:func:`_join_bb_row`), against the bundle's untouched
-    ``battedball_pool/{hand}.pitch_id.npy``. The batted-ball, steal and
-    advancement pools are not written: DuckDB's steal and advancement pools
-    are ahead of the bundle (the drift line), and refreshing them is a
-    separate owner decision. The round-trip proves all three untouched.
+    ``battedball_pool/{hand}.pitch_id.npy``. The step writes no batted-ball,
+    steal or advancement pool: DuckDB's steal and advancement pools can run
+    ahead of the bundle (the drift line), and a refresh of them is a separate
+    owner decision. The round-trip proves all three untouched.
     """
     ro = duckdb.connect(duckdb_path, read_only=True)
     try:
@@ -294,9 +294,8 @@ def _roundtrip_pitch_pool(
         manifest's ``pitch_join``;
       * each pitch keeps its geometry and situation rows (``geom`` and
         ``sit`` aligned on ``pitch_id``). The rebuild leaves these columns as
-        they are (the review's dry run, and the pre-flight's row-for-row
-        read against DuckDB), so a difference means the copy or the export
-        is misaligned.
+        they are (the pre-flight reads them row for row against DuckDB), so
+        a difference means the copy or the export is misaligned.
     Hard, over both sides: the copy reads ONE coding, every moving pitch on
     its old class or every one on its new class, never a mix.
     Reported only: the copy-to-export class pairs, and any other meta column

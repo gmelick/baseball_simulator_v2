@@ -127,7 +127,7 @@ DESIGNS = (
 D_IDX = {d: i for i, d in enumerate(DESIGNS)}
 #: The designs on the single pitch draw (one step for the pitch and its result).
 #: ``single_today`` / ``single_reads_class`` are that family's own baselines: the
-#: single draw for the pitch, the separate steal draw as today / reading the class.
+#: single draw for the pitch, the separate steal draw as in ``today`` / reading the class.
 SINGLE = ("single_today", "single_reads_class", "one_draw", "one_draw_2step")
 #: The designs on the two-step pitch draw production runs (the pitch, then its result).
 SPLIT = tuple(d for d in DESIGNS if d not in SINGLE)
@@ -200,7 +200,7 @@ SLOTS = (
     "p_class_safe",  # the odds of the real result WITH a stolen base
 )
 S_REAL, S_CLASS, S_SAFE, S_JS0, S_SQ, S_SQC, S_CSAFE = 0, 1, 2, 3, 9, 10, 11
-CLASS_MIN_CELL = 20  # plan v1: a class cell under 20 rows widens to the count cell
+CLASS_MIN_CELL = 20  # the plan's version 1: a class cell under 20 rows widens to the count cell
 IMPOSSIBLE = 1e-9
 
 
@@ -360,8 +360,8 @@ class RunningData:
             self.sp_cls[str(tb)] = np.concatenate(parts["cls"])
         fp.a.steal_pools = pools
         fp._steal_meta_cache.clear()
-        # The new pools carry no pitch class: forget the cached answer, so the
-        # sampler reads these pools and not the bundle's.
+        # The in-memory pools carry no pitch class: forget the cached answer, so
+        # the sampler reads these pools and not the bundle's.
         fp._steal_classes = None
         self.seconds = time.time() - t0
 
@@ -680,7 +680,7 @@ class Pass:
                 if g is not None:
                     f *= g
 
-            # the steal draw from its own pool (today's draw), whole and by result
+            # the steal draw from its own pool (the ``today`` design), whole and by result
             got = fp.steal_weights(
                 r["target"],
                 rkey,

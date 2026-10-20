@@ -8,8 +8,8 @@ The running game on the pitch (SIM-554) needs two new columns on the steal
 opportunity pool (``sim.steal_opportunity_pool``, migration 0031): the class
 of the pitch each row rode (``pitch_class``) and the mark of a pickoff row
 (``is_pickoff_row``). A pickoff row is a pickoff outcome thrown before any
-pitch of its pair in the plate appearance; the old builder dropped those
-(22% of the real pickoff outcomes that fit a pair). The builder ``sim554.1``
+pitch of its pair in the plate appearance; a builder older than sim554.1
+drops those (22% of the real pickoff outcomes that fit a pair). The builder ``sim554.1``
 writes both. This script rebuilds the pool for the window seasons on that
 builder, proves the rebuild changed only what the design says it changes,
 exports the steal pool ONLY into the engine-artifact bundle, and proves the
@@ -33,7 +33,8 @@ export changed nothing else. The design is
   2. Rebuild the pool for the seasons inside ONE transaction. With
      ``--apply-migration`` the transaction first applies migration 0031,
      AFTER the snapshot, so a failed check or a raise rolls the two columns
-     back with the rows (master's pool builder fails on a migrated table).
+     back with the rows (a pool builder older than sim554.1 fails on a
+     migrated table).
   3. Check, still inside the transaction:
        a. every snapshot row is back with the same six values;
        b. every new row is a pickoff row (``pitch_id < 0`` and
@@ -83,8 +84,9 @@ migration 0031 separately: the rebuild applies it inside its own
 transaction, and a failed rebuild can roll back only columns it added
 itself (the run then warns that the columns stay).
 
-The app must be STOPPED: its worker server holds the DuckDB writer lock
-(SIM-524). Run docker compose from the MAIN checkout (a compose run from the
+The app must be STOPPED: the export rewrites, in place, the bundle version
+the app's workers read. (The app holds no DuckDB handle; another writer's
+lock stops the run with exit 3.) Run docker compose from the MAIN checkout (a compose run from the
 worktree is a separate project with empty volumes), with the worktree's code
 mounted over the image's. In Git Bash:
 
@@ -292,9 +294,9 @@ def _rebuild(args: argparse.Namespace, t0: float) -> int:
         migrated_here = False
         try:
             # The migration runs INSIDE the transaction, so a failed check or a
-            # raise rolls the two columns back with the rows. Master's builder
-            # (a positional INSERT of 21 values) would otherwise meet a 23-column
-            # table on its next pool build, delete the season, and fail.
+            # raise rolls the two columns back with the rows. A builder older
+            # than sim554.1 (a positional INSERT of 21 values) fails on the
+            # 23-column table: it deletes the season, then the INSERT fails.
             if missing_columns(con):
                 n = apply_migration(con)
                 still = missing_columns(con)

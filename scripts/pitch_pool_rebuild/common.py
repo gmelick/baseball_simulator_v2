@@ -30,13 +30,13 @@ ART_DIR = os.environ.get("BASEBALL_ENGINE_ARTIFACT_DIR") or os.path.join(
 )
 BACKUP_SUFFIX = ".pre_sim553"
 
-#: Decision 4 (owner, 2026-09-23): the rebuild covers all ten seasons.
+#: The rebuild covers all ten seasons (owner decision 4, the design's §14).
 DEFAULT_SEASONS: tuple[int, ...] = tuple(range(2017, 2027))
 
 #: The bundle's other pools. The export writes the pitch pool only (step 4),
 #: so none of these is written; the round-trip proves each is byte-identical
-#: to the copy. (``--what pool`` would rewrite all three from DuckDB, whose
-#: steal and advancement pools are ahead of the bundle: see the drift line.)
+#: to the copy. (``--what pool`` rewrites all three from DuckDB, whose steal
+#: and advancement pools can run ahead of the bundle: the drift line reads the gap.)
 UNCHANGED_POOLS: tuple[str, ...] = ("battedball_pool", "steal_pool", "advancement_pool")
 
 #: The batting sides the pitch-pool export writes, and each side's files in
@@ -82,18 +82,21 @@ DRIFT_POOLS: tuple[tuple[str, str, str, str], ...] = (
 MOVE_CODES: tuple[str, ...] = ("T", "L", "O", "Q", "R", "H")
 
 #: Measured 2026-09-23 (the design's §2.1): the rows that change class in the
-#: window 2023-2026, and about the same in all ten seasons. Printed beside the
-#: measured counts; the per-row verdict of check b is the gate, not these.
+#: window 2023-2026, and about how many change in all ten seasons. The run
+#: prints them beside its own counts; the per-row verdict of check b is the
+#: gate, not these.
 WINDOW_EXPECTED_MOVES = 11_258
 ALL_SEASONS_EXPECTED_MOVES = 25_961
 
-#: The class move the new coding makes for one ``raw.pitches`` row, as
-#: ``'old>new'``, or NULL for no move. It restates the design's table (§2.1) in
-#: its own words, NOT through SQL_OUTCOME_TYPE, so check b tests the builder
-#: against an independent statement of the intent. The left side is the old
-#: expression's class: 'T' and 'L' were 'foul'; 'O', 'Q', 'R' and an 'H' with
-#: no hit-by-pitch event fell to its ``ELSE 'ball'``. An event of
-#: 'hit_by_pitch' took the first branch in both codings, so it never moves.
+#: The class move for one ``raw.pitches`` row, as ``'old>new'``, or NULL for
+#: no move. The new coding is the sim553.1 builder's SQL_OUTCOME_TYPE; the old
+#: coding is the expression of the builder before it. The CASE restates the
+#: design's table (§2.1) in its own words, NOT through SQL_OUTCOME_TYPE, so
+#: check b tests the builder against an independent statement of the intent.
+#: The left side is the old coding's class: it codes 'T' and 'L' as 'foul', and
+#: 'O', 'Q', 'R' and an 'H' with no hit-by-pitch event fall to its
+#: ``ELSE 'ball'``. An event of 'hit_by_pitch' takes the first branch in both
+#: codings, so it never moves.
 SQL_EXPECTED_MOVE = """CASE
             WHEN events = 'hit_by_pitch' THEN NULL
             WHEN code = 'H' THEN 'ball>hit_by_pitch'
@@ -105,8 +108,8 @@ SQL_EXPECTED_MOVE = """CASE
         END"""
 
 #: The pool build's got-away label, computed from ``raw.pitches`` (the same
-#: expression ``_build_pitch_pool`` writes). The 2017-2022 pool rows hold no
-#: got-away value yet (their builder, sim509.1, predates the column), so
+#: expression ``_build_pitch_pool`` writes). A pool row from a builder older
+#: than the got-away column (sim509.1) holds no got-away value, so
 #: ``--check-only`` reads the label from the source.
 SQL_RAW_GOT_AWAY = """(COALESCE(passed_ball_wild_pitch, FALSE)
                      OR (events IN ('strikeout', 'strikeout_double_play')

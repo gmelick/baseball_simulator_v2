@@ -190,13 +190,13 @@ class Thresholds:
     a4_missed: float = 0.12
     a5_excess: float = 0.05
     #: A7: every park's (c) within this of its fair target (a share). The
-    #: plan's §11.3 line was 1.0 point, set from the clean-fly fit's (c)
-    #: column. The home-run fit (decision 6, the fit that ships) reads
-    #: Yankee −1.4 / Fenway +1.4 / Kauffman +1.1 / Coliseum +1.1 on the
-    #: live pool, so the line is 1.5 points (the review of 2026-09-22).
+    #: plan's §11.3 sets 1.0 point from the clean-fly fit's (c) column. The
+    #: home-run fit that ships (decision 6) reads Yankee −1.4 / Fenway +1.4 /
+    #: Kauffman +1.1 / Coliseum +1.1 on the live pool, so the line is 1.5
+    #: points (the review of 2026-09-22).
     a7_gap: float = 0.015
-    #: B2: r is reported, not graded (the redesign of the plan's §11.4);
-    #: the value stays as the plan's §7 reference.
+    #: B2: r is reported, not graded (the plan's §11.4 redesign); the value
+    #: is the plan's §7 reference.
     b2_r: float = 0.5
     b2_se: float = 3.0
 

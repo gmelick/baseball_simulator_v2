@@ -369,9 +369,9 @@ def _restore(
     con: Any, seasons: list[int], before: dict[int, int], versions: dict[int, str | None]
 ) -> None:
     """--no-transaction: put the snapshot's classes and builders back after a
-    failed check. The rebuild committed row by row (the autocommit pattern), so
-    there is no transaction to roll back. The other columns stay rebuilt from
-    the source; only the class and the builder carry the old coding."""
+    failed check. The autocommit rebuild commits row by row, so there is no
+    transaction to roll back. The other columns stay rebuilt from the source;
+    only the class and the builder carry the old coding."""
     try:
         matched = con.execute(
             "SELECT COUNT(*) FROM _sim553_before b "

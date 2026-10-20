@@ -19,8 +19,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 #: The builder this rebuild is for. The script refuses to run on any other.
 EXPECTED_BUILDER = "sim554.1"
-#: The pitch pool builders whose class the steal pool may copy: the SIM-553
-#: coding, and this ticket's version bump (the same pitch-pool coding).
+#: The pitch-pool builders whose class the steal pool may copy: sim553.1 (a
+#: two-strike foul tip coded as strike three) and sim554.1 (a version bump on
+#: the same pitch-pool coding).
 PITCH_POOL_BUILDERS: tuple[str, ...] = ("sim553.1", "sim554.1")
 
 DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")

@@ -358,7 +358,7 @@ def _log_migration_rolled_back(con: Any, migrated_here: bool) -> None:
     When this run applied 0031 inside the transaction, the columns go with the
     rows. When they were on the table before this run (an earlier run
     committed them, or someone applied 0031 by hand), the rollback cannot
-    remove them, and master's pool builder fails on them until the merge.
+    remove them, and a pool builder older than sim554.1 fails on them.
     """
     left = [c for c in NEW_COLUMNS if c not in missing_columns(con)]
     if not migrated_here:

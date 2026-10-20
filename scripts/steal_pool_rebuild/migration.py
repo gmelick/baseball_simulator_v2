@@ -8,7 +8,7 @@ from typing import Any
 from .common import MIGRATION, NEW_COLUMNS, _table_columns
 
 # ---------------------------------------------------------------------------
-# The migration (sim532's statement splitter)
+# The migration (the same statement splitter as scripts/probes/fielder_profile_recompute.py)
 # ---------------------------------------------------------------------------
 
 

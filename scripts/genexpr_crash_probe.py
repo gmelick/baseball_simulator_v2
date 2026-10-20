@@ -155,16 +155,16 @@ def make_results(i: int, n_results: int) -> list[SimilarityResult]:
     ]
 
 
-# --- the shapes, each written exactly as the production site had it ----------
+# --- the shapes: each OLD / NEW pair is one production site's two forms -------
 
 
 def key_of_genexpr(result, key_attrs: tuple[str, ...]) -> str:
-    # engine_artifacts._key_of before the sweep: str.join pulls a generator.
+    # OLD: engine_artifacts._key_of as it crashed; str.join pulls a generator.
     return ":".join(str(getattr(result, a)) for a in key_attrs)
 
 
 def key_of_listcomp(result, key_attrs: tuple[str, ...]) -> str:
-    # engine_artifacts._key_of after the sweep: the comprehension is inlined.
+    # NEW: engine_artifacts._key_of as master runs it; the comprehension is inlined.
     return ":".join([str(getattr(result, a)) for a in key_attrs])
 
 
@@ -173,13 +173,13 @@ def key_of_concat(result) -> str:
 
 
 def score_band_genexpr(score_diff: int) -> int:
-    # filter_cells.score_band before the sweep.
+    # OLD: filter_cells.score_band as master runs it.
     sd = max(-SCORE_CLAMP, min(SCORE_CLAMP, int(score_diff)))
     return sum(1 for edge in SCORE_BAND_EDGES if sd > edge)
 
 
 def score_band_loop(score_diff: int) -> int:
-    # filter_cells.score_band after the sweep.
+    # NEW: the sweep's rewrite of filter_cells.score_band (not on master).
     sd = max(-SCORE_CLAMP, min(SCORE_CLAMP, int(score_diff)))
     band = 0
     for edge in SCORE_BAND_EDGES:
@@ -189,22 +189,22 @@ def score_band_loop(score_diff: int) -> int:
 
 
 def runner_ids_genexpr(first, second, third) -> tuple[int, ...]:
-    # game_state.Bases.runner_ids before the sweep.
+    # OLD: game_state.Bases.runner_ids as master runs it.
     return tuple(int(r) for r in (first, second, third) if r is not None)
 
 
 def runner_ids_listcomp(first, second, third) -> tuple[int, ...]:
-    # game_state.Bases.runner_ids after the sweep.
+    # NEW: the sweep's rewrite of game_state.Bases.runner_ids (not on master).
     return tuple([int(r) for r in (first, second, third) if r is not None])
 
 
 def any_none_genexpr(vals: list) -> bool:
-    # full_pool_sampler._f_born_similarity before the sweep.
+    # OLD: the check in full_pool_sampler._f_born_similarity as master runs it.
     return any(v is None for v in vals)
 
 
 def any_none_loop(vals: list) -> bool:
-    # full_pool_sampler._f_born_similarity after the sweep. The loop IS the
+    # NEW: the sweep's rewrite of that check (not on master). The loop IS the
     # point here, so the "use any()" lint is silenced on purpose.
     for v in vals:  # noqa: SIM110
         if v is None:

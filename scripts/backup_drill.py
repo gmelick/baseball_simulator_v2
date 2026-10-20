@@ -1,4 +1,4 @@
-"""The restore drill for the scheduled backups (SIM-525).
+"""The restore drill for the scheduled backups.
 
 The drill proves that a backup set restores. It runs on the host with the
 Windows ``py`` launcher and uses only the standard library. It never touches
@@ -13,8 +13,8 @@ the live stack's database:
 5. It removes the scratch container and its volume, whatever happened.
 6. It writes ``<backup dir>/drills/<start time>.json`` and prints a report.
 
-The drill also restores from the off-site copy (SIM-568). The off-site copy
-is the OneDrive folder that ``OFFSITE_BACKUP_DIR`` names (default
+The drill also restores from the off-site copy. The off-site copy is the
+OneDrive folder that ``OFFSITE_BACKUP_DIR`` names (default
 ``./backups_offsite``); the jobs container reads it at ``/offsite``. Pass
 ``--offsite``, or pass that folder as ``--backup-dir``. The data verify then
 runs with ``--backups-root /offsite``. The report names its source
@@ -24,14 +24,17 @@ such a dehydrated copy downloads the whole set first, so it takes longer and
 needs the OneDrive client online.
 
 The drill reads ``BACKUP_DIR`` and ``OFFSITE_BACKUP_DIR`` in the order docker
-compose reads them (SIM-568): the shell environment first, then the repo's
-``.env``. So the drill and the jobs container's mounts name the same folders.
+compose reads them: the shell environment first, then the repo's ``.env``.
+So the drill and the jobs container's mounts name the same folders.
 
 Exit 0 when every step passes, 1 when a step fails, 2 when the drill refuses
 to start: a leftover scratch container or volume, no complete set,
 ``--offsite`` with a ``--backup-dir`` that is not the off-site folder, a
 backup folder that is neither the local folder nor the off-site folder the
 jobs container reads, or no ``db/backup`` folder in the repo.
+
+The design and the restore run book: ``docs/audit/2026-10-14-sim525-backups-plan.md``;
+the off-site copy: ``docs/audit/2026-10-17-sim568-offsite-copy.md``.
 
 Usage::
 
@@ -67,7 +70,7 @@ RESTORE_SCRIPT = "/opt/baseball/backup/pg_restore.sh"
 TAIL_LINES = 40
 READY_TIMEOUT_S = 120.0
 READY_POLL_S = 2.0
-# The roots where the jobs container mounts the two backup folders (SIM-568).
+# The roots where the jobs container mounts the two backup folders.
 LOCAL_ROOT = "/backups"
 OFFSITE_ROOT = "/offsite"
 
@@ -168,7 +171,7 @@ def read_env_file(path: Path) -> dict[str, str]:
 
 
 def compose_value(key: str, repo: Path) -> str:
-    """Return the value docker compose reads for one variable (SIM-568).
+    """Return the value docker compose reads for one variable.
 
     Compose takes a variable from the shell environment first, and from the
     repo's .env only when the shell does not set it. The drill reads the same
@@ -196,7 +199,7 @@ def resolve_backup_dir(flag: str | None, repo: Path) -> Path:
 
 
 def resolve_offsite_dir(flag: str | None, repo: Path) -> Path:
-    """Pick the off-site folder (SIM-568).
+    """Pick the off-site folder.
 
     The flag wins; else OFFSITE_BACKUP_DIR from the shell environment, then
     .env (``compose_value``); else ./backups_offsite, the same default that the
@@ -381,8 +384,8 @@ def _restore_postgres(set_id: str, set_dir: Path, timeout_s: float) -> dict[str,
 def verify_argv(data_set: str, container_root: str = LOCAL_ROOT) -> list[str]:
     """Build the argv of the data verify in the jobs container.
 
-    The local root keeps the argv of the scheduled backups (SIM-525). Any
-    other root, such as the off-site root (SIM-568), adds
+    The local root adds no root flag: the data job reads ``/backups`` by
+    default. Any other root, such as the off-site root, adds
     ``--backups-root <root>``.
     """
     argv = ["docker", "compose", "run", "--rm", "-T", "jobs", "python", "-m"]
@@ -444,8 +447,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     compose_dir = resolve_backup_dir(None, REPO)
     offsite_dir = resolve_offsite_dir(None, REPO)
     backup_dir = offsite_dir if args.offsite else resolve_backup_dir(args.backup_dir, REPO)
-    # The off-site copy (SIM-568): --offsite, or a --backup-dir that is the
-    # off-site folder. The local folder wins when the two are one folder.
+    # The drill reads the off-site copy on --offsite, or on a --backup-dir that
+    # is the off-site folder. The local folder wins when the two are one folder.
     offsite = args.offsite or (backup_dir == offsite_dir and backup_dir != compose_dir)
     source = "offsite" if offsite else "local"
     container_root = OFFSITE_ROOT if offsite else LOCAL_ROOT
@@ -468,8 +471,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         data_set_id: str | None = None
         if not args.skip_data:
             # The jobs container reads /backups through compose's BACKUP_DIR
-            # and /offsite through OFFSITE_BACKUP_DIR (SIM-568), so the verify
-            # only means something when this folder is one of the two.
+            # and /offsite through OFFSITE_BACKUP_DIR, so the verify means
+            # something only when this folder is one of the two.
             if not offsite and compose_dir != backup_dir:
                 raise DrillError(
                     f"--backup-dir {backup_dir} is not a folder the jobs container "

@@ -49,7 +49,7 @@ changed nothing else. The design is
        e. ``sim.pool_build_metadata`` reads the builder version for every season.
      A failed check rolls the transaction back, so the table keeps its old
      coding and the bundle is untouched (exit 2). Then COMMIT. The ten-season
-     COMMIT takes about 195 s (peak memory 4.2 GB, measured in review), so with
+     COMMIT takes about 195 s (peak memory 4.2 GB, measured), so with
      the checks, the copy and the export the app is down about ten to fifteen
      minutes.
   4. Copy the bundle aside (``<bundle>.pre_sim553``), or keep an existing
@@ -98,8 +98,9 @@ another database and bundle.
 
 RUN
 ===
-The app must be STOPPED: its worker server holds the DuckDB writer lock
-(SIM-524). From the repo root (``scripts/`` is NOT bind-mounted):
+The app must be STOPPED: the export rewrites, in place, the bundle version
+the app's workers read. (The app holds no DuckDB handle; another writer's
+lock stops the run with exit 3.) From the repo root (``scripts/`` is NOT bind-mounted):
 
     docker compose stop app
     MSYS_NO_PATHCONV=1 docker compose run -d --rm \\
