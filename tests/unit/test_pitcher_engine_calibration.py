@@ -41,13 +41,13 @@ import numpy as np
 import similarity.engines.pitcher_similarity as ps
 from similarity.calibration.fitting import calibrate_arsenal_gamma
 from similarity.calibration.report import CalibrationReport
+from similarity.engines.arsenal_cache import ArsenalCache
 from similarity.engines.pitcher_similarity import (
     DEFAULT_ARSENAL_SCALE,
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
     WEIGHT_ARSENAL,
     WEIGHT_COMMAND,
-    ArsenalCache,
     ArsenalSimilarity,
     FeatureNormalizer,
     GMMComponent,

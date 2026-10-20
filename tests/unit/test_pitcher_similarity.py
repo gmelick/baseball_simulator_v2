@@ -30,11 +30,11 @@ from pathlib import Path
 
 import numpy as np
 
+from similarity.engines.arsenal_cache import ArsenalCache
 from similarity.engines.pitcher_similarity import (
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
     MIN_CLUSTER_SIZE,
-    ArsenalCache,
     ArsenalSimilarity,
     EmpiricalBayesShrinkage,
     FeatureNormalizer,

@@ -35,11 +35,11 @@ import unittest
 
 import numpy as np
 
+from similarity.engines.arsenal_cache import ArsenalCache
 from similarity.engines.pitcher_similarity import (
     ARSENAL_SCALE,
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
-    ArsenalCache,
     ArsenalSimilarity,
     EmpiricalBayesShrinkage,
     FeatureNormalizer,
