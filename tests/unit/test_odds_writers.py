@@ -44,14 +44,35 @@ import scripts.load_historical_odds as loader
 from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
 from pipeline.etl.opening_line_job import OpeningLineJob
 from pipeline.live import live_ingestion_pipeline as live
-from pipeline.live.live_ingestion_pipeline import (
-    ConnectionManager,
-    LiveIngestionPipeline,
-    MockOddsAPI,
-    _jsonable_odds,
-    _stamp_param,
+from pipeline.live.ingestion.constants import (
+    PREGAME_ODDS_CADENCE_S,
+    PROP_FETCH_CADENCE_S,
+    PROP_ROLE_BATTER,
+    PROP_ROLE_BOTH,
+    PROP_ROLE_PITCHER,
+    SCHEDULE_HYDRATE,
 )
-from pipeline.odds_provider import GAME_MARKET_TYPES, register_odds_provider
+from pipeline.live.ingestion.mlb_websocket import ConnectionManager
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
+from pipeline.live.ingestion.odds_rows import (
+    _GAME_ODDS_INSERT_SQL,
+    _PROP_ODDS_INSERT_SQL,
+    _json_default,
+    _jsonable_odds,
+    _odds_facts_may_be_stale,
+    _stamp_param,
+    game_odds_insert_args,
+    insert_game_odds_rows,
+    insert_prop_odds_rows,
+    prop_odds_insert_args,
+)
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+from pipeline.odds_provider import (
+    GAME_MARKET_TYPES,
+    GAME_ODDS_FIELDS,
+    PITCHER_PROP_STATS,
+    register_odds_provider,
+)
 from pipeline.odds_row_guard import RefusalTally
 
 # ===========================================================================
@@ -958,7 +979,7 @@ class TestLiveCyclePersistsEveryBook:
         class _Empty(MockOddsAPI):
             def get_odds_by_book(self, game_pk, *, line_type="current", market_type="moneyline"):
                 row = MockOddsAPI.get_odds(game_pk, line_type=line_type, market_type=market_type)
-                return [{**row, **dict.fromkeys(live.GAME_ODDS_FIELDS)}]
+                return [{**row, **dict.fromkeys(GAME_ODDS_FIELDS)}]
 
         p = _bare_pipeline(_odds=_Empty())
         assert await p._persist_game_odds_cycle(1) == 0
@@ -991,18 +1012,18 @@ class TestPregameCycle:
         }
         roles = LiveIngestionPipeline._pregame_prop_player_roles(game)
         assert roles == {
-            682243: live.PROP_ROLE_BOTH,
-            605400: live.PROP_ROLE_PITCHER,
-            1: live.PROP_ROLE_BATTER,
-            2: live.PROP_ROLE_BOTH,
-            3: live.PROP_ROLE_BOTH,
-            4: live.PROP_ROLE_BATTER,
+            682243: PROP_ROLE_BOTH,
+            605400: PROP_ROLE_PITCHER,
+            1: PROP_ROLE_BATTER,
+            2: PROP_ROLE_BOTH,
+            3: PROP_ROLE_BOTH,
+            4: PROP_ROLE_BATTER,
         }
         assert list(roles) == [682243, 605400, 1, 2, 3, 4]
 
     def test_before_the_lineups_post_only_the_probable_pitchers_are_asked(self) -> None:
         game = {"teams": {"home": {"probablePitcher": {"id": 7}}, "away": {}}}
-        assert LiveIngestionPipeline._pregame_prop_player_roles(game) == {7: live.PROP_ROLE_PITCHER}
+        assert LiveIngestionPipeline._pregame_prop_player_roles(game) == {7: PROP_ROLE_PITCHER}
         assert LiveIngestionPipeline._pregame_prop_player_roles({}) == {}
         assert LiveIngestionPipeline._pregame_prop_player_roles({"lineups": None}) == {}
 
@@ -1048,7 +1069,7 @@ class TestPregameCycle:
         # Ten minutes on, the pass stores his props at once. The game markets
         # add nothing: only the pre-game clock is moved back here, so their
         # own one-minute clock is still closed.
-        p._last_pregame_fetch[776465] = _minutes_ago(live.PREGAME_ODDS_CADENCE_S / 60 + 1)
+        p._last_pregame_fetch[776465] = _minutes_ago(PREGAME_ODDS_CADENCE_S / 60 + 1)
         assert await p._persist_pregame_odds(776465, game) == 2
         # The live refresh can also store them at once: the prop clock stayed open.
         p2 = _bare_pipeline(_odds=_every_payload())
@@ -1062,8 +1083,8 @@ class TestPregameCycle:
         for every game; only the cycles' 60-second clocks throttled it, so a
         game read the vendor every minute all day. The pre-game pass now has
         its own ten-minute clock per game, checked before either cycle."""
-        assert live.PREGAME_ODDS_CADENCE_S == 600
-        assert live.PREGAME_ODDS_CADENCE_S > live.PROP_FETCH_CADENCE_S
+        assert PREGAME_ODDS_CADENCE_S == 600
+        assert PREGAME_ODDS_CADENCE_S > PROP_FETCH_CADENCE_S
 
         class _Counting(MockOddsAPI):
             reads = 0
@@ -1228,7 +1249,7 @@ class TestPregameCycle:
         await p._sync_live_games()
         for _ in range(3):  # let the created tasks run
             await asyncio.sleep(0)
-        assert seen_params[0]["hydrate"] == live.SCHEDULE_HYDRATE == "probablePitcher,lineups"
+        assert seen_params[0]["hydrate"] == SCHEDULE_HYDRATE == "probablePitcher,lineups"
         p._persist_pregame_odds.assert_awaited_once_with(11, preview)
         p._write_preview_lineup.assert_awaited_once_with(preview)
         assert p._upsert_game_record.await_count == 2
@@ -1321,7 +1342,7 @@ class TestPregameCycle:
         p = _bare_pipeline(_odds=MockOddsAPI())
         p._forget_odds_game(21)  # MockOddsAPI keeps nothing: no call, no error
         p._forget_odds_game(None)
-        assert not live._odds_facts_may_be_stale({"gamePk": 1, "status": {}})
+        assert not _odds_facts_may_be_stale({"gamePk": 1, "status": {}})
 
 
 class TestRefreshLoop:
@@ -1372,7 +1393,7 @@ class TestPersistMany:
         assert await p._persist_odds_many(9, rows) == 2
         (call,) = p._db.executemany.await_args_list
         sql, params = call.args
-        assert sql == live._GAME_ODDS_INSERT_SQL
+        assert sql == _GAME_ODDS_INSERT_SQL
         assert [t[3] for t in params] == ["a", "b"]
         assert [t[-1] for t in params] == [LiveIngestionPipeline._odds_hash(r) for r in rows]
         # The one-row writer sends the same binds.
@@ -1382,7 +1403,7 @@ class TestPersistMany:
         props = [MockOddsAPI.get_prop_odds(9, 7, "walks", book=b) for b in ("a", "b")]
         assert await p._persist_prop_odds_many(props) == 2
         sql, params = p._db.executemany.await_args.args
-        assert sql == live._PROP_ODDS_INSERT_SQL
+        assert sql == _PROP_ODDS_INSERT_SQL
         assert [t[-1] for t in params] == [LiveIngestionPipeline._prop_odds_hash(r) for r in props]
 
     def test_the_module_binders_are_the_pipelines(self) -> None:
@@ -1391,22 +1412,22 @@ class TestPersistMany:
             **MockOddsAPI.get_odds(9, market_type="moneyline", book="bp:12"),
             "book_line_at": _T_AT,
         }
-        assert live.game_odds_insert_args(9, row) == p._odds_params(9, row)
+        assert game_odds_insert_args(9, row) == p._odds_params(9, row)
         prop = MockOddsAPI.get_prop_odds(9, 7, "walks", book="bp:12")
-        assert live.prop_odds_insert_args(prop) == p._prop_odds_params(prop)
+        assert prop_odds_insert_args(prop) == p._prop_odds_params(prop)
 
     @pytest.mark.asyncio
     async def test_the_module_writers_send_one_batch(self) -> None:
         conn = _RecordingConn()
         rows = [MockOddsAPI.get_odds(9, book=b) for b in ("bp:10", "bp:12")]
-        assert await live.insert_game_odds_rows(conn, 9, rows) == 2
-        assert await live.insert_game_odds_rows(conn, 9, []) == 0
+        assert await insert_game_odds_rows(conn, 9, rows) == 2
+        assert await insert_game_odds_rows(conn, 9, []) == 0
         props = [MockOddsAPI.get_prop_odds(9, 7, "walks", book="bp:12")]
-        assert await live.insert_prop_odds_rows(conn, props) == 1
-        assert await live.insert_prop_odds_rows(conn, []) == 0
+        assert await insert_prop_odds_rows(conn, props) == 1
+        assert await insert_prop_odds_rows(conn, []) == 0
         assert [(sql, len(params)) for sql, params in conn.batches] == [
-            (live._GAME_ODDS_INSERT_SQL, 2),
-            (live._PROP_ODDS_INSERT_SQL, 1),
+            (_GAME_ODDS_INSERT_SQL, 2),
+            (_PROP_ODDS_INSERT_SQL, 1),
         ]
 
     def test_the_stamp_stays_out_of_the_hash(self) -> None:
@@ -1460,7 +1481,7 @@ class TestJsonSafety:
 
     def test_the_json_default_still_refuses_an_unknown_type(self) -> None:
         with pytest.raises(TypeError):
-            json.dumps({"x": object()}, default=live._json_default)
+            json.dumps({"x": object()}, default=_json_default)
 
 
 # ===========================================================================
@@ -1477,7 +1498,7 @@ class _EmptyOneRow:
 
     def get_odds(self, game_pk, *, line_type="current", market_type="moneyline", **kw):
         row = MockOddsAPI.get_odds(game_pk, line_type=line_type, market_type=market_type)
-        return {**row, **dict.fromkeys(live.GAME_ODDS_FIELDS), "source": "bettingpros"}
+        return {**row, **dict.fromkeys(GAME_ODDS_FIELDS), "source": "bettingpros"}
 
     def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current", **kw):
         row = MockOddsAPI.get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)
@@ -1514,7 +1535,7 @@ class TestOpeningLineJob:
         # carries the odds_hash the live schema requires, and the dedup.
         assert job._db.executes == []
         ((sql, params),) = job._db.batches
-        assert sql == live._GAME_ODDS_INSERT_SQL
+        assert sql == _GAME_ODDS_INSERT_SQL
         assert "ON CONFLICT (game_pk, source, odds_hash)" in sql
         (args,) = params
         assert len(args) == 19
@@ -1530,7 +1551,7 @@ class TestOpeningLineJob:
         assert inserted == 1
         assert job._db.executes == []
         ((sql, params),) = job._db.batches
-        assert sql == live._PROP_ODDS_INSERT_SQL
+        assert sql == _PROP_ODDS_INSERT_SQL
         (args,) = params
         assert args[0] == 776465 and args[1] == 682243
         assert args[4] == "strikeouts" and args[5] == 5.5
@@ -1596,9 +1617,9 @@ class TestOpeningLineJob:
         ((_sql, (args,)),) = job._db.batches
         assert args[3] == "consensus" and args[2] is True and args[-2] is None
         inserted = await job._capture_prop_opening_lines(745000, 682243, 682244)
-        assert inserted == 2 * len(live.PITCHER_PROP_STATS)
+        assert inserted == 2 * len(PITCHER_PROP_STATS)
         # One batch per (pitcher, market).
-        assert len(job._db.batches) == 1 + 2 * len(live.PITCHER_PROP_STATS)
+        assert len(job._db.batches) == 1 + 2 * len(PITCHER_PROP_STATS)
 
     @pytest.mark.asyncio
     async def test_a_dry_run_writes_nothing(self) -> None:

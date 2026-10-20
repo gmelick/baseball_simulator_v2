@@ -1,4 +1,4 @@
-"""pipeline/backup/offsite.py — the off-site copy of the backup sets (SIM-568).
+"""pipeline/backup/offsite.py — the off-site copy of the backup sets.
 
 Run it in the jobs container as ``appuser``:
 
@@ -67,6 +67,7 @@ from pipeline.backup.common import (
     GIB,
     Clock,
     Sleep,
+    env_float,
     fresh_marks,
     fsync_path,
     human_bytes,
@@ -82,13 +83,13 @@ from pipeline.backup.status import (
     newest_complete_set,
 )
 
-#: The mark of the data job of the scheduled backups (SIM-525). The copy waits while it runs.
+#: The mark of the data job of the scheduled backups. The copy waits while it runs.
 DATA_JOB_MARK = "nightly-backup"
 
 #: The Postgres job's lock file under the backup root. It holds "<pid> <start epoch>".
 POSTGRES_LOCK_OWNER = Path("postgres") / ".lock" / "owner"
 
-#: The copy lock in the mark folder (SIM-568): one copy run at a time.
+#: The copy lock in the mark folder: one copy run at a time.
 #: It holds "<pid> <start epoch> <host>".
 COPY_LOCK = "offsite-copy.lock"
 
@@ -162,13 +163,6 @@ def _iso(dt: datetime) -> str:
 def log(message: str) -> None:
     """Print one log line with a UTC stamp."""
     print(f"[backup-offsite {_iso(datetime.now(UTC))}] {message}", flush=True)
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except ValueError:
-        return default
 
 
 def _unlink_quiet(path: Path) -> None:
@@ -396,7 +390,7 @@ def free_space_ok(
 
 
 # ---------------------------------------------------------------------------
-# The copy lock (SIM-568)
+# The copy lock
 # ---------------------------------------------------------------------------
 
 
@@ -739,7 +733,7 @@ def mirror_store(
             flush=True,
         )
         copied.append(info.set_id)
-    # SIM-568: protect every wanted set, not only the ones copied now. An
+    # Protect every wanted set, not only the ones copied now. An
     # off-site set newer than any local one would otherwise push a wanted set
     # out, and the next run would copy it back.
     prune_offsite(offsite_root, plan.store, keep, protect=wanted_ids)
@@ -777,8 +771,8 @@ def _plans_with_room(
     if needed > 0 and not free_space_ok(
         offsite_root,
         needed,
-        min_free_gb=_env_float("BACKUP_MIN_FREE_GB", 10.0),
-        factor=_env_float("BACKUP_FREE_FACTOR", 1.5),
+        min_free_gb=env_float("BACKUP_MIN_FREE_GB", 10.0),
+        factor=env_float("BACKUP_FREE_FACTOR", 1.5),
     ):
         log(f"refused: the off-site disk is short of space for {human_bytes(needed)}")
         return None
@@ -822,7 +816,7 @@ def run_copy(
             return 2
         print_dry_run(offsite_root, plans, keep)
         return 0
-    # SIM-568: one copy run at a time. The lock spans the wait and the copy.
+    # One copy run at a time. The lock spans the wait and the copy.
     lock, refusal = take_lock(mark_dir, lock_stale_s=waits["lock_stale_s"], now=clock())
     if refusal is not None:
         log(f"refused: {refusal}")

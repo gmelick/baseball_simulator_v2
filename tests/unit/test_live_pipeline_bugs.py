@@ -33,11 +33,9 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    GameStateBuilder,
-    LiveIngestionPipeline,
-    MockOddsAPI,
-)
+from pipeline.live.ingestion.game_state_builder import GameStateBuilder  # noqa: E402
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 # ===========================================================================
 # Helpers
@@ -105,7 +103,7 @@ def _make_minimal_feed(
 # ===========================================================================
 
 
-class TestSIM099RedisKeyMismatch:
+class TestRedisKeyMismatch:
     """
     Regression tests ensuring _cache_to_redis() writes 'game_feed:{pk}'
     and _fetch_feed() reads the same key.
@@ -246,7 +244,7 @@ class TestSIM099RedisKeyMismatch:
 # ===========================================================================
 
 
-class TestSIM100RosterParsing:
+class TestRosterParsing:
     """
     Tests for the four roster parsing bugs fixed in SIM-100.
     """
@@ -400,7 +398,7 @@ class TestSIM100RosterParsing:
 # ===========================================================================
 
 
-class TestSIM132MockOddsVig:
+class TestMockOddsVig:
     """
     Tests that MockOddsAPI moneylines carry realistic book overround.
 
@@ -496,7 +494,7 @@ class TestSIM132MockOddsVig:
         assert not missing, f"get_odds() is missing keys: {missing}"
 
 
-class TestSIM132ResimTrigger:
+class TestResimTrigger:
     """
     Regression tests confirming _should_resimulate() fires on every completed
     PA, with NO inning/score-diff filter.

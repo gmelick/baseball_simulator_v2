@@ -38,11 +38,8 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.etl.etl_historical_loader import (  # noqa: E402
-    ETL_DB_POOL_MAX,
-    ETL_DB_POOL_MIN,
-    HistoricalDataLoader,
-)
+from pipeline.etl.etl_historical_loader import HistoricalDataLoader  # noqa: E402
+from pipeline.etl.historical.base import ETL_DB_POOL_MAX, ETL_DB_POOL_MIN  # noqa: E402
 
 
 def _make_pooled_conn() -> MagicMock:
@@ -78,7 +75,7 @@ def _make_mock_pool() -> MagicMock:
     return pool
 
 
-class TestSim090PoolCreatedOnce:
+class TestPoolCreatedOnce:
     """The pool must be constructed exactly once and shared across games."""
 
     def test_pool_created_once_across_multiple_game_loads(self):
@@ -126,7 +123,7 @@ class TestSim090PoolCreatedOnce:
         pool_ctor.assert_not_called()
 
 
-class TestSim090GetconnPutconnPerRoundTrip:
+class TestGetconnPutconnPerRoundTrip:
     """Per round-trip the loader must borrow + return, never connect + close."""
 
     def test_getconn_putconn_used_not_fresh_connect(self):
@@ -178,7 +175,7 @@ class TestSim090GetconnPutconnPerRoundTrip:
         mock_pool.putconn.assert_called_once_with(boom_conn)
 
 
-class TestSim090Shutdown:
+class TestShutdown:
     """close() must tear the pool down via closeall()."""
 
     def test_close_calls_closeall(self):

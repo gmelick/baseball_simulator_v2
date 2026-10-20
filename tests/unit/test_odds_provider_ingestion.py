@@ -43,12 +43,12 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from pipeline.live import live_ingestion_pipeline as live  # noqa: E402
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
+from pipeline.odds_provider import (  # noqa: E402
     BATTER_PROP_STATS,
     PITCHER_PROP_STATS,
     PROP_STATS,
-    LiveIngestionPipeline,
-    MockOddsAPI,
 )
 
 # ===========================================================================
@@ -131,7 +131,7 @@ _DEFAULT_FIXTURE_OFFERS = len(PITCHER_PROP_STATS) + 3 * len(BATTER_PROP_STATS)
 # ===========================================================================
 
 
-class TestSIM340PersistPropOddsWired:
+class TestPersistPropOddsWired:
     @pytest.mark.asyncio
     async def test_cycle_calls_persist_prop_odds(self) -> None:
         """
@@ -195,7 +195,7 @@ class TestSIM340PersistPropOddsWired:
 # ===========================================================================
 
 
-class TestSIM340MultiBookSharpFlag:
+class TestMultiBookSharpFlag:
     def test_the_fixed_book_list_is_gone(self) -> None:
         """SIM-555 rewrote this on purpose. It pinned a sharp and a soft book on
         PROP_BOOKS; that list wrote one price set four times under four names.
@@ -281,7 +281,7 @@ def _current_prop_row(row_id: int, player_id: int, *, line_type: str = "current"
     return row
 
 
-class TestSIM340MarkClosingPropLines:
+class TestMarkClosingPropLines:
     """SIM-546 rewrote the marker: one candidate per (player, prop, book), the
     hash rewritten to the closing hash, and a second call promotes nothing."""
 
@@ -344,7 +344,7 @@ class TestSIM340MarkClosingPropLines:
 # ===========================================================================
 
 
-class TestSIM340OpeningLineCapture:
+class TestOpeningLineCapture:
     @pytest.mark.asyncio
     async def test_capture_opening_writes_opening_line_type(self) -> None:
         """capture_opening_prop_lines must persist rows with line_type='opening'."""
@@ -387,7 +387,7 @@ class TestSIM340OpeningLineCapture:
 # ===========================================================================
 
 
-class TestSIM340FetchCadence:
+class TestFetchCadence:
     @pytest.mark.asyncio
     async def test_cadence_skips_second_immediate_call(self) -> None:
         """A second cycle within PROP_FETCH_CADENCE_S must be a no-op."""
@@ -423,7 +423,7 @@ class TestSIM340FetchCadence:
 # ===========================================================================
 
 
-class TestSIM340DedupHash:
+class TestDedupHash:
     def test_identical_quotes_same_hash(self) -> None:
         q1 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", book="pinnacle")
         q2 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", book="pinnacle")

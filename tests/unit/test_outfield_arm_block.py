@@ -37,6 +37,7 @@ What these tests hold:
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -50,6 +51,22 @@ duckdb = pytest.importorskip("duckdb")
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
+
+def _method_source(name: str) -> str:
+    """One computor method's source, from its ``def`` line (the method may live
+    in a mixin of ``pipeline/batch/profiles``)."""
+    from pipeline.batch.player_profile_computor import PlayerProfileComputor
+
+    src = inspect.getsource(getattr(PlayerProfileComputor, name))
+    return src[src.index(f"def {name}") :]
+
 
 ARM_BLOCK = (
     "arm_opportunities",
@@ -513,30 +530,25 @@ class TestAggregatorThenFill:
 
 class TestSourceShape:
     def test_the_dead_extraction_and_its_temp_table_are_gone(self) -> None:
-        src = COMPUTOR.read_text(encoding="utf-8")
+        src = _computor_source()
         assert "_compute_outfield_arm_metrics" not in src
         assert "_tmp_of_arm" not in src
         # SIM-532 re-created ``_SQL_IS_OF`` as the jump columns' outfield guard.
         # In the fielder aggregator the guard wraps only the four jump columns
         # (alias ``sj``), and the deleted board join (alias ``sbr``) is gone.
-        start = src.index("def _aggregate_fielder_season_metrics")
-        body = src[start : src.index("def _assert_fielder_profiles_have_no_leakage", start)]
+        body = _method_source("_aggregate_fielder_season_metrics")
         uses = re.findall(r"\{_SQL_IS_OF\}\s+THEN\s+(\w+)\.", body)
         assert uses == ["sj"] * 4
         assert "sbr." not in body
 
     def test_the_fielder_aggregator_reads_no_baserunning_board(self) -> None:
-        src = COMPUTOR.read_text(encoding="utf-8")
-        start = src.index("def _aggregate_fielder_season_metrics")
-        body = src[start : src.index("def _assert_fielder_profiles_have_no_leakage", start)]
+        body = _method_source("_aggregate_fielder_season_metrics")
         assert "savant_baserunning" not in body
         assert "of_arm_runs_in_cutoff_season" not in body
         assert "LEFT JOIN pg.raw.savant_arm_strength sas" in body
 
     def test_the_fill_runs_after_the_pools_in_run(self) -> None:
-        src = COMPUTOR.read_text(encoding="utf-8")
-        start = src.index("    def run(")
-        body = src[start : src.index("def _delete_seasons", start)]
+        body = _method_source("run")
         pool = body.index("self._build_advancement_opportunity_pool(")
         fill = body.index("self._fill_outfield_arm_block(seasons, asof=asof)")
         aggregate = body.index("self._aggregate_fielder_season_metrics(seasons, asof=asof)")
@@ -548,9 +560,7 @@ class TestSourceShape:
         4 spans the tag from first, second to third and third to home,
         whose attempt rates differ tenfold. The GROUP BY and the USING
         must carry the same six columns."""
-        src = COMPUTOR.read_text(encoding="utf-8")
-        start = src.index("def _fill_outfield_arm_block")
-        body = src[start : src.index("def _ensure_catcher_temp_tables_exist", start)]
+        body = _method_source("_fill_outfield_arm_block")
         assert "SELECT season, scenario, from_base, target_base, outs, fielder_pos," in body
         assert "GROUP BY 1, 2, 3, 4, 5, 6" in body
         assert "USING (season, scenario, from_base, target_base, outs, fielder_pos)" in body
@@ -558,9 +568,7 @@ class TestSourceShape:
     def test_the_fill_resets_the_requested_seasons_before_the_join(self) -> None:
         """The reset (every arm column NULL over the requested seasons) runs
         before the join UPDATE, so the fill alone leaves the table right."""
-        src = COMPUTOR.read_text(encoding="utf-8")
-        start = src.index("def _fill_outfield_arm_block")
-        body = src[start : src.index("def _ensure_catcher_temp_tables_exist", start)]
+        body = _method_source("_fill_outfield_arm_block")
         reset = body.index("arm_opportunities          = NULL")
         join = body.index("arm_opportunities          = a.chances")
         assert reset < join
@@ -569,7 +577,7 @@ class TestSourceShape:
             assert f"{col:<26} = NULL" in reset_stmt, col
 
     def test_the_shared_prior_is_fifty_chances(self) -> None:
-        from pipeline.batch.player_profile_computor import ARM_ALPHA_PRIOR_CHANCES
+        from pipeline.batch.profiles.constants import ARM_ALPHA_PRIOR_CHANCES
 
         assert ARM_ALPHA_PRIOR_CHANCES == 50
 
@@ -591,7 +599,7 @@ class TestLeagueWriter:
         """Two left fielders above the sample floor: one never challenged
         (a NULL thrown-out rate, which AVG skips), one without a velocity.
         A third, below the floor, is excluded as every other key is."""
-        from pipeline.batch.player_profile_computor import LeagueAverageProfiles
+        from pipeline.batch.profiles.league_averages import LeagueAverageProfiles
 
         path = str(tmp_path / "sim550.duckdb")
         con = duckdb.connect(path)

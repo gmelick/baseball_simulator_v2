@@ -51,19 +51,18 @@ if str(_ROOT) not in sys.path:
 import scripts.load_historical_odds as loader  # noqa: E402
 
 from pipeline import odds_provider  # noqa: E402
-from pipeline.bettingpros_odds_provider import (  # noqa: E402
-    _PROP_MARKET_IDS,
-    BettingProsOddsProvider,
-)
+from pipeline.bettingpros.markets import _PROP_MARKET_IDS  # noqa: E402
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
 from pipeline.etl import opening_line_job  # noqa: E402
-from pipeline.live import live_ingestion_pipeline as live  # noqa: E402
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+from pipeline.live.ingestion import prop_odds  # noqa: E402
+from pipeline.live.ingestion.constants import (  # noqa: E402
+    PROP_FETCH_CADENCE_S,  # noqa: E402
     PROP_ROLE_BATTER,
     PROP_ROLE_BOTH,
     PROP_ROLE_PITCHER,
-    LiveIngestionPipeline,
-    MockOddsAPI,
 )
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 from pipeline.odds_provider import (  # noqa: E402
     BATTER_PROP_STATS,
     PITCHER_PROP_STATS,
@@ -168,10 +167,10 @@ class TestVocabularySingleSource:
         assert PROP_STAT_TO_MODEL_PROP == _CONTRACT_MODEL_MAP
         assert set(PROP_STAT_TO_MODEL_PROP) == set(PROP_STATS)
 
-    def test_live_pipeline_re_exports_the_source_tuples(self) -> None:
-        assert live.PROP_STATS is odds_provider.PROP_STATS
-        assert live.PITCHER_PROP_STATS is odds_provider.PITCHER_PROP_STATS
-        assert live.BATTER_PROP_STATS is odds_provider.BATTER_PROP_STATS
+    def test_the_live_prop_cycle_reads_the_source_tuples(self) -> None:
+        assert prop_odds.PROP_STATS is odds_provider.PROP_STATS
+        assert prop_odds.PITCHER_PROP_STATS is odds_provider.PITCHER_PROP_STATS
+        assert prop_odds.BATTER_PROP_STATS is odds_provider.BATTER_PROP_STATS
 
     def test_mock_provider_config_keys_equal_the_vocabulary(self) -> None:
         assert set(MockOddsAPI._PROP_CONFIG) == set(PROP_STATS)
@@ -619,7 +618,7 @@ class TestBettingProsOffersCache:
         monkeypatch.delenv(BettingProsOddsProvider.OFFERS_CACHE_TTL_ENV, raising=False)
         prov = BettingProsOddsProvider(api_key="k")
         assert prov._offers_cache_ttl_s == 30.0
-        assert prov._offers_cache_ttl_s < live.PROP_FETCH_CADENCE_S
+        assert prov._offers_cache_ttl_s < PROP_FETCH_CADENCE_S
 
     def test_env_sets_the_ttl_and_the_argument_wins(self, monkeypatch) -> None:
         monkeypatch.setenv(BettingProsOddsProvider.OFFERS_CACHE_TTL_ENV, "12.5")

@@ -1,7 +1,7 @@
 """
 savant_pitch_tracking_loader.py
 ===============================
-SIM-534 — the per-PITCH tracking measurements, loaded one day at a time.
+The per-PITCH tracking measurements, loaded one day at a time.
 
 WHY PER PITCH AND NOT PER SEASON
 --------------------------------
@@ -26,7 +26,7 @@ point the data is incomplete and there is no way to tell which rows are missing.
 
 Every returned row's date is checked against the day requested. The search
 export honours its date parameters, but the leaderboards taught us not to
-assume that (see SIM-528).
+assume that (the Savant loader, SIM-528).
 
 WHAT EXISTS WHEN (measured 2026-09-10)
 --------------------------------------

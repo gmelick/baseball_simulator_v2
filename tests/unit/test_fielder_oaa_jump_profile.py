@@ -32,6 +32,7 @@ What these tests hold:
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from datetime import date
@@ -41,13 +42,13 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
-from pipeline.batch.player_profile_computor import (  # noqa: E402
+from pipeline.batch.player_profile_computor import PlayerProfileComputor  # noqa: E402
+from pipeline.batch.profiles.constants import (  # noqa: E402
     FIELDER_TAIL_COLUMNS,
     JUMP_ALPHA_PRIOR_PLAYS,
     OAA_JUMP_COLUMN_ORDER,
-    LeagueAverageProfiles,
-    PlayerProfileComputor,
 )
+from pipeline.batch.profiles.league_averages import LeagueAverageProfiles  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
@@ -55,6 +56,20 @@ VERSION_FILE = REPO / "db" / "schemas" / "duckdb_schema_version.txt"
 MIGRATIONS = REPO / "db" / "migrations" / "duckdb"
 MIGRATION_0030 = MIGRATIONS / "0030_sim532_fielder_oaa_jump.sql"
 COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+
+
+def _method_source(name: str) -> str:
+    """One computor method's source, from its ``def`` line (the method may live
+    in a mixin of ``pipeline/batch/profiles``)."""
+    src = inspect.getsource(getattr(PlayerProfileComputor, name))
+    return src[src.index(f"def {name}") :]
+
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
 
 JUMP_COLUMNS = ("jump_reaction_ft", "jump_burst_ft", "jump_route_ft")
 TAIL_SQL = ", ".join(OAA_JUMP_COLUMN_ORDER)
@@ -74,7 +89,7 @@ def _real_ddl(table: str) -> str:
 def _placeholder_ddl(table: str) -> str:
     """The aggregator's own placeholder DDL for a ``_tmp_*`` table, copied
     from the source so the fixture's columns can never drift from it."""
-    src = COMPUTOR.read_text(encoding="utf-8")
+    src = _computor_source()
     start = src.index(f"CREATE TABLE IF NOT EXISTS {table} (")
     end = src.index(")", start)
     return src[start : end + 1]
@@ -340,9 +355,7 @@ class TestAggregatorExecuted:
 
 
 def _aggregator_body() -> str:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _aggregate_fielder_season_metrics")
-    return src[start : src.index("def _assert_fielder_profiles_have_no_leakage", start)]
+    return _method_source("_aggregate_fielder_season_metrics")
 
 
 # ===========================================================================

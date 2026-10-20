@@ -735,7 +735,13 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   SIM-430 dense `pitcher_sim_matrix` — batter/catcher/fielder/baserunner/manager embeddings, batted-ball
   pools), `odds_provider.py` (the provider seam AND, since SIM-421, the one source of the 15-market prop
   vocabulary), `bettingpros_odds_provider.py` (SIM-435 `closing`-line branch; SIM-421 per-(event, market)
-  offers cache + pagination).
+  offers cache + pagination). Since the code clean-up (SIM-493), each of these five big files keeps
+  its class and the names tests patch, and its parts live in a package beside it:
+  `batch/profiles/` (the computor's mixins, SQL, GMM and pool metadata), `batch/artifacts/` (one
+  module per bundle artifact), `etl/historical/` (the loader's rows, venues, schedule and write
+  mixins), `live/ingestion/` (the odds cycles, the mock odds, the game-state builder, the
+  WebSocket parts) and `bettingpros/` (the provider's rules, parsing, transport, event match and
+  rows). `docs/technical/pipeline-betting-db.md` maps each module.
 - `scripts/` — operational scripts (NOT bind-mounted; see §2a): `sim_stats.py` (v2 sim harness),
   `load_historical_odds.py` (SIM-435 opening+closing backfill → `raw.game_odds`/`raw.prop_odds`; SIM-421
   `--prop-stats` / `--line-types` / `--no-game-odds` for the eight-new-markets pass),

@@ -1,9 +1,9 @@
 """
-pipeline/batch/bundle_versions.py — the engine-artifact bundle as published versions (SIM-563).
+pipeline/batch/bundle_versions.py — the engine-artifact bundle as published versions.
 
-Why: the export used to rewrite ``/data/play_pool/engine_artifacts`` in place.
-The running app's workers read that folder whenever one of them (re)starts, so
-a worker that respawned during a rebuild could read a half-written file, or
+Why: the running app's workers read ``/data/play_pool/engine_artifacts``
+whenever one of them (re)starts. An export that rewrote that folder in place
+would let a worker that respawned during a rebuild read a half-written file, or
 pair the parent's old shared arrays with new files.
 
 What this module does:
@@ -23,7 +23,7 @@ The first publish on a host converts a legacy real folder: it moves the folder
 under ``engine_artifacts.versions/legacy-<ts>`` and links to it, so the old
 path keeps resolving to the same files.
 
-Owner: Data Engineer (SIM-563).
+Owner: Data Engineer.
 """
 
 from __future__ import annotations

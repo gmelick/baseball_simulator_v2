@@ -34,14 +34,15 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
+from pipeline.batch.artifacts.pools import (
     STEAL_PITCH_CLASS_CODE,
     STEAL_PITCH_CLASSES,
-    EngineArtifacts,
-    build_steal_pool_artifact,
     steal_pitch_class_codes,
 )
-from pipeline.batch.player_profile_computor import PlayerProfileComputor, recency_weight
+from pipeline.batch.artifacts.steal_pool import build_steal_pool_artifact
+from pipeline.batch.engine_artifacts import EngineArtifacts
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from pipeline.batch.profiles.pool_meta import recency_weight
 from simulation.game_state import PITCH_OUTCOMES
 
 REPO = Path(__file__).resolve().parents[2]

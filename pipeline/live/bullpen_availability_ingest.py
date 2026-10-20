@@ -1,14 +1,14 @@
 """
 pipeline/live/bullpen_availability_ingest.py
 ============================================
-SIM-433 — per-game bullpen availability ingestion.
+Per-game bullpen availability ingestion.
 
 ``raw.game_lineups`` records who *played*, not who was *available*. The manager
-USAGE profile (SIM-427 / SIM-434) needs the available-but-unused signal: was a
+USAGE profile needs the available-but-unused signal: was a
 reliever NOT used because the manager chose to hold him, or because he *couldn't*
 pitch (on the IL, or rest-unavailable after a heavy / back-to-back outing)?
 
-SIM-433-v2: a row is emitted for every pitcher on each team's FULL active roster
+A row is emitted for every pitcher on each team's FULL active roster
 (both home + away), not just the arms that pitched — so the available-but-UNUSED
 relievers (the "chose-not-to-use" signal) are captured. The rest of an arm that
 did not pitch in a given game is derived from its appearance timeline (see
@@ -20,7 +20,7 @@ combining two sources:
 
   * **rest / recent workload** (days_rest, pitches_last_3d, back_to_back) —
     derived from ``raw.pitches`` by
-    :meth:`pipeline.batch.player_profile_computor.PlayerProfileComputor._compute_bullpen_workload`
+    :meth:`pipeline.batch.profiles.manager.ManagerProfilesMixin._compute_bullpen_workload`
     and passed in here as a DataFrame (no network);
   * **active roster + IL** — fetched per (team, game-date) from the public MLB
     Stats API (statsapi.mlb.com) active-roster endpoint, whose entries carry a
@@ -71,8 +71,7 @@ log = logging.getLogger("pipeline.live.bullpen_availability_ingest")
 _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 
 #: pitches in the last 3 calendar days at/above which a reliever is treated as
-#: rest-unavailable ('recent_use'). Conservative; tune against the manager-profile
-#: validation once SIM-427/434 reads this signal.
+#: rest-unavailable ('recent_use'). Conservative, and not fitted.
 REST_PITCHES_3D = 45
 
 #: MLB roster ``status.code`` values that mean "on the active roster / available
@@ -140,20 +139,9 @@ class _GameMeta:
     away_team_id: int
 
 
-# Columns the workload DataFrame (from _compute_bullpen_workload) must carry.
-_WORKLOAD_COLS = (
-    "game_pk",
-    "team_id",
-    "pitcher_id",
-    "days_rest",
-    "pitches_last_3d",
-    "back_to_back",
-)
-
-
 @dataclass
 class BullpenAvailabilityIngest:
-    """Fetch + parse + persist per-game bullpen availability (SIM-433).
+    """Fetch + parse + persist per-game bullpen availability.
 
     Parameters
     ----------
@@ -187,7 +175,7 @@ class BullpenAvailabilityIngest:
     def _resolve_game_meta(self, game_pk: int) -> _GameMeta | None:
         """``game_pk`` → (date, home_team_id, away_team_id) via the MLB schedule.
 
-        SIM-536: ``date`` MUST come from the schedule's ``officialDate`` field
+        ``date`` MUST come from the schedule's ``officialDate`` field
         (the local calendar date the game is actually played on), never from
         truncating ``gameDate`` (a UTC timestamp). For a West-/Mountain-time
         night game the UTC clock has already rolled into the next calendar
@@ -195,11 +183,9 @@ class BullpenAvailabilityIngest:
         `date` is used below to fetch each team's active roster AS OF this
         game, so a day off by one silently pulls the wrong day's roster
         snapshot and mis-stamps the persisted availability record's
-        ``game_date``. Same bug as SIM-536's fix in
-        ``pipeline/bettingpros_odds_provider.py``; unlike that file, resolving
-        a roster date never involves matching against a second, third-party
-        schedule, so there is no doubleheader/event-matching risk here to fix
-        alongside it.
+        ``game_date``. The odds provider's event match (``pipeline/bettingpros/``)
+        has the same rule; unlike that match, a roster date never matches against
+        a second, third-party schedule, so there is no double-header risk here.
         """
         if game_pk in self._meta_cache:
             return self._meta_cache[game_pk]
@@ -332,7 +318,7 @@ class BullpenAvailabilityIngest:
         timeline: Mapping[int, Iterable[tuple[date, int]]] | None = None,
         game_date: date | None = None,
     ) -> list[AvailabilityRow]:
-        """SIM-433-v2: build one availability row per pitcher on each team's FULL
+        """Build one availability row per pitcher on each team's FULL
         active roster — not just the arms that pitched — so the available-but-UNUSED
         relievers (the manager USAGE "chose-not-to-use" signal) are captured.
 
@@ -437,7 +423,7 @@ class BullpenAvailabilityIngest:
     ) -> list[AvailabilityRow]:
         """Resolve + persist availability for one game; returns the rows written.
 
-        SIM-433-v2: fetches the active-roster/IL status for BOTH teams (the
+        Fetches the active-roster/IL status for BOTH teams (the
         schedule's home + away — not just the teams that pitched), so the full
         bullpen of each side is captured, then builds one row per roster arm
         (:meth:`build_rows`) using ``timeline`` for the rest of arms that did not
@@ -468,7 +454,7 @@ class BullpenAvailabilityIngest:
         (``df.to_dict('records')``). Returns the total rows persisted. Per-game
         failures are logged and skipped (never abort the whole run).
 
-        SIM-433-v2: builds the per-pitcher appearance ``timeline`` ONCE from the
+        Builds the per-pitcher appearance ``timeline`` ONCE from the
         whole workload so :meth:`ingest_game` can derive rest for roster arms that
         did not pitch in a given game (the available-but-unused signal).
         """
@@ -561,7 +547,7 @@ def _as_date(value: Any) -> date | None:
 def _rest_as_of(
     appearances: Iterable[tuple[date, int]], game_date: date | None
 ) -> tuple[int | None, int, bool]:
-    """SIM-433-v2: rest state of an arm AS OF ``game_date`` from its appearance
+    """The rest state of an arm AS OF ``game_date`` from its appearance
     timeline — so a roster pitcher who did NOT appear in this game still gets the
     same (days_rest, pitches_last_3d, back_to_back) the appeared-pitcher workload
     carries. Mirrors ``_compute_bullpen_workload``: pitches in the 3 calendar days

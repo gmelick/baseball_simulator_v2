@@ -28,10 +28,14 @@ unit test does not have).
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
 import pytest
+
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from pipeline.batch.profiles.leverage import build_run_expectancy_matrix
 
 REPO = Path(__file__).resolve().parents[2]
 MIGRATION = (
@@ -56,14 +60,17 @@ ALL_ENGINES = [
 ]
 
 
-def _src() -> str:
-    return COMPUTOR.read_text(encoding="utf-8")
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
-def _method_body(src: str, name: str, next_marker: str) -> str:
-    start = src.index(f"def {name}")
-    end = src.index(next_marker, start)
-    return src[start:end]
+def _method_source(name: str) -> str:
+    """One computor method's source, from its ``def`` line (the method may live
+    in a mixin of ``pipeline/batch/profiles``)."""
+    src = inspect.getsource(getattr(PlayerProfileComputor, name))
+    return src[src.index(f"def {name}") :]
 
 
 def _nowhitespace(text: str) -> str:
@@ -79,34 +86,26 @@ def _nowhitespace(text: str) -> str:
 
 
 def test_baserunner_profiles_filter_raw_pitches_by_the_cutoff() -> None:
-    body = _method_body(
-        _src(), "_compute_baserunner_profiles", "def _assert_baserunner_profiles_have_no_leakage"
-    )
+    body = _method_source("_compute_baserunner_profiles")
     assert "game_date <= DATE '{asof_sql}'" in body
     assert body.count("{date_cutoff}") == 1
 
 
 def test_baserunner_profiles_season_shift_the_sprint_speed_join() -> None:
-    body = _method_body(
-        _src(), "_compute_baserunner_profiles", "def _assert_baserunner_profiles_have_no_leakage"
-    )
+    body = _method_source("_compute_baserunner_profiles")
     assert "CASE WHEN ap.season = {asof_date.year} THEN ap.season - 1 ELSE ap.season END" in body
     assert 'else "ap.season"' in body
     assert "ss.season = {sprint_speed_season}" in body
 
 
 def test_a_baserunner_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_body(
-        _src(), "_compute_baserunner_profiles", "def _assert_baserunner_profiles_have_no_leakage"
-    )
+    body = _method_source("_compute_baserunner_profiles")
     assert "DELETE FROM derived.baserunner_season_metrics" in body
     assert "season > {asof_date.year}" in body
 
 
 def test_every_baserunner_profile_ends_up_stamped() -> None:
-    body = _method_body(
-        _src(), "_compute_baserunner_profiles", "def _assert_baserunner_profiles_have_no_leakage"
-    )
+    body = _method_source("_compute_baserunner_profiles")
     assert "AS asof_date" in body
     # SIM-551: the whole-table stamp through the shared helper, guarded by
     # the pre-write check against a mixed cutoff.
@@ -118,15 +117,15 @@ def test_every_baserunner_profile_ends_up_stamped() -> None:
 
 
 def test_the_baserunner_leakage_assertion_covers_raw_pitches() -> None:
-    src = _src()
-    start = src.index("def _assert_baserunner_profiles_have_no_leakage")
-    body = src[start : start + 1200]
+    body = _method_source("_assert_baserunner_profiles_have_no_leakage")[:1200]
     assert "raw.pitches" in body
     assert "game_date <=" in body
 
 
 def test_baserunner_asof_is_threaded_from_run() -> None:
-    assert "self._compute_baserunner_profiles(seasons,asof=asof)" in _nowhitespace(_src())
+    assert "self._compute_baserunner_profiles(seasons,asof=asof)" in _nowhitespace(
+        _computor_source()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,31 +134,19 @@ def test_baserunner_asof_is_threaded_from_run() -> None:
 
 
 def test_baserunner_steal_metrics_filter_raw_pitches_by_the_cutoff() -> None:
-    body = _method_body(
-        _src(),
-        "_build_baserunner_steal_metrics",
-        "def _assert_baserunner_steal_profiles_have_no_leakage",
-    )
+    body = _method_source("_build_baserunner_steal_metrics")
     assert "game_date <= DATE '{asof_sql}'" in body
     assert body.count("{date_cutoff}") == 1
 
 
 def test_a_baserunner_steal_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_body(
-        _src(),
-        "_build_baserunner_steal_metrics",
-        "def _assert_baserunner_steal_profiles_have_no_leakage",
-    )
+    body = _method_source("_build_baserunner_steal_metrics")
     assert "DELETE FROM derived.baserunner_steal_metrics" in body
     assert "season > {asof_date.year}" in body
 
 
 def test_every_baserunner_steal_profile_ends_up_stamped() -> None:
-    body = _method_body(
-        _src(),
-        "_build_baserunner_steal_metrics",
-        "def _assert_baserunner_steal_profiles_have_no_leakage",
-    )
+    body = _method_source("_build_baserunner_steal_metrics")
     # asof_date is named in the explicit INSERT column list, not appended
     # positionally, so this checks the column list carries it.
     assert re.search(r"steal_success_rate_2b, below_minimum_sample,\s*\n\s*asof_date", body)
@@ -171,7 +158,9 @@ def test_every_baserunner_steal_profile_ends_up_stamped() -> None:
 
 
 def test_baserunner_steal_asof_is_threaded_from_run() -> None:
-    assert "self._build_baserunner_steal_metrics(seasons,asof=asof)" in _nowhitespace(_src())
+    assert "self._build_baserunner_steal_metrics(seasons,asof=asof)" in _nowhitespace(
+        _computor_source()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -181,31 +170,20 @@ def test_baserunner_steal_asof_is_threaded_from_run() -> None:
 
 
 def test_pitcher_steal_metrics_filter_raw_pitches_by_the_cutoff() -> None:
-    body = _method_body(
-        _src(), "_build_pitcher_steal_metrics", "def _assert_pitcher_steal_profiles_have_no_leakage"
-    )
+    body = _method_source("_build_pitcher_steal_metrics")
     assert "game_date <= DATE '{asof_sql}'" in body
     assert body.count("{date_cutoff}") == 1
 
 
 def test_pitcher_steal_metrics_threads_its_cutoff_to_both_cte_helpers() -> None:
-    body = _nowhitespace(
-        _method_body(
-            _src(),
-            "_build_pitcher_steal_metrics",
-            "def _assert_pitcher_steal_profiles_have_no_leakage",
-        )
-    )
+    body = _nowhitespace(_method_source("_build_pitcher_steal_metrics"))
     assert "self._play_events_outs_cte(asof_sqlifasofisnotNoneelseNone)" in body
     assert "self._play_events_disengagement_cte(" in body
     assert body.count("asof_sqlifasofisnotNoneelseNone") == 2
 
 
 def test_the_disengagement_helper_takes_an_optional_cutoff() -> None:
-    src = _src()
-    start = src.index("def _play_events_disengagement_cte")
-    end = src.index("def _pickoff_outcomes_cte")
-    body = src[start:end]
+    body = _method_source("_play_events_disengagement_cte")
     assert "asof_sql: str | None = None" in body
     assert "game_date <= DATE '{asof_sql}'" in body
 
@@ -248,25 +226,20 @@ def test_disengagement_cte_falls_back_when_the_table_is_absent() -> None:
 
 
 def test_a_pitcher_steal_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_body(
-        _src(), "_build_pitcher_steal_metrics", "def _assert_pitcher_steal_profiles_have_no_leakage"
-    )
+    body = _method_source("_build_pitcher_steal_metrics")
     assert "DELETE FROM derived.pitcher_steal_metrics" in body
     assert "season > {asof_date.year}" in body
 
 
 def test_the_pitcher_steal_leakage_assertion_covers_both_sources() -> None:
-    src = _src()
-    start = src.index("def _assert_pitcher_steal_profiles_have_no_leakage")
-    end = src.index("def _compute_bullpen_workload")
-    body = src[start:end]
+    body = _method_source("_assert_pitcher_steal_profiles_have_no_leakage")
     assert '"raw.pitches"' in body
     assert '"raw.play_events"' in body
     assert "duck_relation_readable(" in body
 
 
 def test_pitcher_steal_asof_is_threaded_from_run() -> None:
-    assert "self._build_pitcher_steal_metrics(seasons, asof=asof)" in _src()
+    assert "self._build_pitcher_steal_metrics(seasons, asof=asof)" in _computor_source()
 
 
 # ---------------------------------------------------------------------------
@@ -276,43 +249,37 @@ def test_pitcher_steal_asof_is_threaded_from_run() -> None:
 
 
 @pytest.mark.parametrize(
-    "method,next_marker,expected_cutoffs",
+    "method,expected_cutoffs",
     [
-        ("_compute_catcher_framing", "def _compute_catcher_blocking", 1),
-        ("_compute_catcher_blocking", "def _compute_catcher_throwing", 1),
-        ("_compute_catcher_throwing", "def _compute_outfield_catch_probability", 2),
-        ("_compute_catcher_uncaught_k3", "def _assert_catcher_profiles_have_no_leakage", 1),
+        ("_compute_catcher_framing", 1),
+        ("_compute_catcher_blocking", 1),
+        ("_compute_catcher_throwing", 2),
+        ("_compute_catcher_uncaught_k3", 1),
     ],
 )
 def test_catcher_methods_filter_raw_pitches_by_the_cutoff(
-    method: str, next_marker: str, expected_cutoffs: int
+    method: str, expected_cutoffs: int
 ) -> None:
-    body = _method_body(_src(), method, next_marker)
+    body = _method_source(method)
     assert "game_date <= DATE" in body
     assert body.count("{date_cutoff}") == expected_cutoffs
 
 
 def test_a_catcher_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_body(
-        _src(), "_aggregate_catcher_season_metrics", "def _compute_catcher_uncaught_k3"
-    )
+    body = _method_source("_aggregate_catcher_season_metrics")
     assert "DELETE FROM derived.catcher_season_metrics" in body
     assert "season > {asof_date.year}" in body
 
 
 def test_catcher_aggregator_season_shifts_the_two_savant_joins() -> None:
-    body = _method_body(
-        _src(), "_aggregate_catcher_season_metrics", "def _compute_catcher_uncaught_k3"
-    )
+    body = _method_source("_aggregate_catcher_season_metrics")
     assert "CASE WHEN {catcher_season_col} = {asof_date.year}" in body
     assert "spt.season    = {savant_season}" in body
     assert "sct.season    = {savant_season}" in body
 
 
 def test_every_catcher_profile_ends_up_stamped() -> None:
-    body = _method_body(
-        _src(), "_aggregate_catcher_season_metrics", "def _compute_catcher_uncaught_k3"
-    )
+    body = _method_source("_aggregate_catcher_season_metrics")
     assert "below_minimum_sample, updated_at, asof_date" in body
     assert (
         'self._refuse_a_mixed_cutoff("derived.catcher_season_metrics", seasons, asof_date)' in body
@@ -321,15 +288,13 @@ def test_every_catcher_profile_ends_up_stamped() -> None:
 
 
 def test_the_catcher_leakage_assertion_covers_raw_pitches() -> None:
-    src = _src()
-    start = src.index("def _assert_catcher_profiles_have_no_leakage")
-    body = src[start : start + 1200]
+    body = _method_source("_assert_catcher_profiles_have_no_leakage")[:1200]
     assert "raw.pitches" in body
     assert "game_date <=" in body
 
 
 def test_catcher_asof_is_threaded_from_run() -> None:
-    src = _src()
+    src = _computor_source()
     for call in [
         "self._compute_catcher_framing(seasons, asof=asof)",
         "self._compute_catcher_blocking(seasons, asof=asof)",
@@ -351,41 +316,39 @@ def test_catcher_asof_is_threaded_from_run() -> None:
 
 
 @pytest.mark.parametrize(
-    "method,next_marker",
+    "method",
     [
-        ("_compute_outfield_catch_probability", "def _compute_infield_oaa"),
-        ("_compute_infield_oaa", "def _compute_dp_metrics"),
-        ("_compute_dp_metrics", "def _compute_bunt_defense"),
-        ("_compute_bunt_defense", "def _compute_first_base_scooping"),
-        ("_compute_first_base_scooping", "def _compute_error_decomposition"),
-        ("_compute_error_decomposition", "def _aggregate_fielder_season_metrics"),
+        "_compute_outfield_catch_probability",
+        "_compute_infield_oaa",
+        "_compute_dp_metrics",
+        "_compute_bunt_defense",
+        "_compute_first_base_scooping",
+        "_compute_error_decomposition",
     ],
 )
 def test_fielder_per_play_methods_filter_raw_pitches_by_the_cutoff(
-    method: str, next_marker: str
+    method: str,
 ) -> None:
-    body = _method_body(_src(), method, next_marker)
+    body = _method_source(method)
     assert "game_date <= DATE" in body
     assert body.count("{date_cutoff}") == 1
 
 
 def test_infield_oaa_season_shifts_its_sprint_speed_lookup() -> None:
-    body = _method_body(_src(), "_compute_infield_oaa", "def _compute_dp_metrics")
+    body = _method_source("_compute_infield_oaa")
     assert "def _speed_lookup_season(row_season: int) -> int:" in body
     assert "return asof_date.year - 1" in body
     assert "_speed_lookup_season(int(r[" in body
 
 
 def test_dp_metrics_season_shifts_its_sprint_speed_join() -> None:
-    body = _method_body(_src(), "_compute_dp_metrics", "def _compute_bunt_defense")
+    body = _method_source("_compute_dp_metrics")
     assert "CASE WHEN bsm.season = {asof_date.year} THEN bsm.season - 1 ELSE bsm.season END" in body
     assert "ss.season = {sprint_speed_season}" in body
 
 
 def test_a_fielder_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_body(
-        _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
-    )
+    body = _method_source("_aggregate_fielder_season_metrics")
     assert "DELETE FROM derived.fielder_season_metrics" in body
     assert "season > {asof_date.year}" in body
 
@@ -395,9 +358,7 @@ def test_fielder_aggregator_season_shifts_all_four_savant_joins() -> None:
     (the last two joined by SIM-532; neither board has a date control). The
     baserunning board's join left with SIM-550: the arm block now comes
     from our own dated pool."""
-    body = _method_body(
-        _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
-    )
+    body = _method_source("_aggregate_fielder_season_metrics")
     assert "CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END" in body
     assert body.count("season = {savant_season}") == 4
     assert "ss.season = {savant_season}" in body
@@ -412,7 +373,7 @@ def test_the_arm_block_fill_filters_the_pool_by_the_cutoff_and_not_without() -> 
     """SIM-550: the pool carries game_date, so the fill takes the plain
     ``game_date <= cutoff`` filter — no season shift — and a live build
     (asof None) applies no date filter at all."""
-    body = _method_body(_src(), "_fill_outfield_arm_block", "def _ensure_catcher_temp_tables_exist")
+    body = _method_source("_fill_outfield_arm_block")
     assert "FROM sim.advancement_opportunity_pool" in body
     assert (
         'date_cutoff = f"AND game_date <= DATE \'{asof.isoformat()}\'" if asof is not None else ""'
@@ -424,7 +385,7 @@ def test_the_arm_block_fill_filters_the_pool_by_the_cutoff_and_not_without() -> 
 
 
 def test_the_arm_block_leakage_check_names_the_pool() -> None:
-    body = _method_body(_src(), "_fill_outfield_arm_block", "def _ensure_catcher_temp_tables_exist")
+    body = _method_source("_fill_outfield_arm_block")
     assert '"sim.advancement_opportunity_pool"' in body
     assert "SELECT MAX(game_date) FROM sim.advancement_opportunity_pool" in body
     assert "asof or date.today()" in body
@@ -435,11 +396,9 @@ def test_every_fielder_profile_ends_up_stamped_last() -> None:
     follow asof_date in ``OAA_JUMP_COLUMN_ORDER`` — the INSERT carries no
     column list, the trap sprint_speed already documents. The SELECT tail
     must read ``FIELDER_TAIL_COLUMNS`` in order."""
-    from pipeline.batch.player_profile_computor import FIELDER_TAIL_COLUMNS
+    from pipeline.batch.profiles.constants import FIELDER_TAIL_COLUMNS
 
-    body = _method_body(
-        _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
-    )
+    body = _method_source("_aggregate_fielder_season_metrics")
     sprint_idx = body.index("ss.sprint_speed AS sprint_speed")
     asof_idx = body.index("DATE '{asof_sql}' AS asof_date")
     assert asof_idx > sprint_idx
@@ -456,15 +415,13 @@ def test_every_fielder_profile_ends_up_stamped_last() -> None:
 
 
 def test_the_fielder_leakage_assertion_covers_raw_pitches() -> None:
-    src = _src()
-    start = src.index("def _assert_fielder_profiles_have_no_leakage")
-    body = src[start : start + 1200]
+    body = _method_source("_assert_fielder_profiles_have_no_leakage")[:1200]
     assert "raw.pitches" in body
     assert "game_date <=" in body
 
 
 def test_fielder_asof_is_threaded_from_run() -> None:
-    src = _src()
+    src = _computor_source()
     for call in [
         "self._compute_outfield_catch_probability(seasons, asof=asof)",
         "self._compute_infield_oaa(seasons, asof=asof)",
@@ -479,7 +436,7 @@ def test_fielder_asof_is_threaded_from_run() -> None:
     # SIM-550: the dead extraction is gone, and the fill runs after the pool
     # it reads.
     assert "_compute_outfield_arm_metrics" not in src
-    run_body = _method_body(src, "run", "def _delete_seasons")
+    run_body = _method_source("run")
     assert run_body.index("self._build_advancement_opportunity_pool(") < run_body.index(
         "self._fill_outfield_arm_block("
     )
@@ -492,25 +449,19 @@ def test_fielder_asof_is_threaded_from_run() -> None:
 
 
 def test_run_expectancy_matrix_takes_an_optional_cutoff() -> None:
-    src = _src()
-    start = src.index("def build_run_expectancy_matrix")
-    end = src.index("\ndef ", start + 1)
-    body = src[start:end]
+    body = inspect.getsource(build_run_expectancy_matrix)
     assert "asof: date | None = None" in body
     assert body.count("{date_cutoff}") == 2
 
 
 def test_run_expectancy_matrix_skips_persisting_a_cutoff_build() -> None:
-    src = _src()
-    start = src.index("def build_run_expectancy_matrix")
-    end = src.index("\ndef ", start + 1)
-    body = src[start:end]
+    body = inspect.getsource(build_run_expectancy_matrix)
     assert "if asof is not None:" in body
     assert "not persisted" in body
 
 
 def test_run_expectancy_matrix_asof_is_threaded_from_run() -> None:
-    assert "build_run_expectancy_matrix(self._conn, seasons, asof=asof)" in _src()
+    assert "build_run_expectancy_matrix(self._conn, seasons, asof=asof)" in _computor_source()
 
 
 # ---------------------------------------------------------------------------

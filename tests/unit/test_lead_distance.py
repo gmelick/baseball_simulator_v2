@@ -53,6 +53,13 @@ SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 PG_SCHEMA_SQL = REPO / "db" / "schemas" / "01_postgres_schema.sql"
 COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
 
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
+
 STEAL_COLUMNS = (
     "lead_primary_ft",
     "lead_secondary_ft",
@@ -615,7 +622,7 @@ class TestBuilderSource:
 
     @staticmethod
     def _body(name: str, next_marker: str) -> str:
-        src = COMPUTOR.read_text(encoding="utf-8")
+        src = _computor_source()
         start = src.index(f"def {name}")
         return src[start : src.index(next_marker, start)]
 

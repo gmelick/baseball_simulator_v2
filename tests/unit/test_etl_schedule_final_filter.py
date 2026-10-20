@@ -9,7 +9,7 @@ fetch + an empty raw.games stub each).
 
 from __future__ import annotations
 
-from pipeline.etl.etl_historical_loader import _schedule_game_is_final
+from pipeline.etl.historical.schedule import _schedule_game_is_final
 
 
 def _game(state: str | None) -> dict:

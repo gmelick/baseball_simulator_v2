@@ -12,13 +12,13 @@ strings, ``None``, or — from pandas-backed sources — ``NaN`` floats.  These
 helpers coerce such values to a typed result or ``None`` so the row builders
 never have to special-case missing data.
 
-Semantics (single source of truth — previously duplicated per-loader, SIM-437):
+Semantics (the one source for both loaders):
   - ``""`` / ``None``   -> ``None``
-  - ``NaN`` float       -> ``None``  (was a latent gap in the sprint loader's copy)
+  - ``NaN`` float       -> ``None``
   - otherwise           -> the coerced value, or ``None`` if coercion fails
 
 NOTE: the ``_opt_int`` (`pipeline/live/bullpen_availability_ingest.py`) and
-``_opt_float`` (`pipeline/bettingpros_odds_provider.py`) helpers are a *different*
+``_opt_float`` (`pipeline/bettingpros/parsing.py`) helpers are a *different*
 family — they do NOT treat ``""`` as missing — and are intentionally left
 separate.  Folding them in here would be a behavior change, not a refactor.
 """

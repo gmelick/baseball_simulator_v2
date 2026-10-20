@@ -22,7 +22,7 @@ Canonical vocabulary and SQL/Python helper functions that translate raw.pitches'
 
 **Used by:** `pipeline/batch/player_profile_computor.py`, `api/routes/analytics.py`, `api/routes/ai_assistant.py`
 
-> **Notes for anyone changing this file:** This is the ONLY place that should decide 'how many outs did this play record' / 'was the batter retired' / 'was a steal attempted' — a dedicated unit test (tests/unit/test_out_label.py) fails if any other site reads outs_on_pitch directly instead of these events-based helpers. The two questions use DIFFERENT event sets on purpose (FIELDING_OUT_EVENTS includes force_out/fielders_choice_out; BATTER_RETIRED_EVENTS excludes them because the batter reached) — do not merge them. simulation/sim_loop.py intentionally carries its own, different `_OUT_EVENTS` list for a different question ('did the batter reach for the loop's own purposes'); that divergence is documented sim-scoped work, not a bug in this file.
+> **Notes for anyone changing this file:** This is the ONLY place that should decide 'how many outs did this play record' / 'was the batter retired' / 'was a steal attempted' — a dedicated unit test (tests/unit/test_out_label.py) fails if any other site reads outs_on_pitch directly instead of these events-based helpers. The two questions use DIFFERENT event sets on purpose (FIELDING_OUT_EVENTS includes force_out/fielders_choice_out; BATTER_RETIRED_EVENTS excludes them because the batter reached) — do not merge them.
 
 ---
 
@@ -38,7 +38,7 @@ Shared 'empty/missing -> None' type-coercion helpers (to_float/to_int/to_bool/to
 
 **Used by:** `pipeline/etl/etl_historical_loader.py`, `pipeline/etl/etl_sprint_speed_loader.py`
 
-> **Notes for anyone changing this file:** Deliberately does NOT absorb the differently-behaved `_opt_int`/`_opt_float` helpers in pipeline/live/bullpen_availability_ingest.py and pipeline/bettingpros_odds_provider.py — those do not treat '' as missing. Do not 'consolidate' those in a future cleanup; the module docstring calls this out explicitly as a behavior change, not a refactor.
+> **Notes for anyone changing this file:** Deliberately does NOT absorb the differently-behaved `_opt_int`/`_opt_float` helpers in pipeline/live/bullpen_availability_ingest.py and pipeline/bettingpros/parsing.py — those do not treat '' as missing. Do not 'consolidate' those in a future cleanup; the module docstring calls this out explicitly as a behavior change, not a refactor.
 
 ---
 
@@ -164,7 +164,7 @@ SIM-427: the pen's FACTS from the official box score and the MLB box's per-game 
 | `rotation_starters_sql(driver)` / `game_listing_sql(driver)` / `game_managers_sql(driver)` / `pitcher_throws_sql(driver)` | The team's rotation as of a date (the distinct starters of its last five games), the box listing for one game and team (`raw.game_bullpen`), the two managers of every game in the seasons (`raw.games`), every pitcher's throwing hand (`raw.players`). | `fetch_pen_for_game`<br>`fetch_game_context_sync` | — |
 | `pen_from_listing(listing, rotation, exclude)` | PURE: the pen = the arms listed `bullpen` or `pitched` minus the rotation minus `exclude` (today's starter); the `pitched` arms first in listing order (the arms the manager used), then the rest — the stable order the positional pick reads. | `fetch_pen_for_game` | — |
 | `fetch_pen_for_game(conn, *, game_pk, team_id, game_date, exclude)` (async) | The resolver's read: `(pen, {pitcher_id: ArmUsage})`, or None when the box lists nothing for the game (the caller falls back to the synthetic pen and says so). | `simulation/lineup_resolver._attach_bullpens` | `fetch_usage_for_candidates` |
-| `fetch_game_context_sync(dsn, seasons)` | The builder's one Postgres read (psycopg2): `{game_pk: (home_manager_id, away_manager_id)}`, `{(game_pk, pitcher_id): (days_rest, pitched_2d, pitches_3d)}` and `{pitcher_id: throws code}` (THROWS_CODE: L 1, R 2, unknown 0). | `pipeline/batch/engine_artifacts.build_pitching_change_pool` | — |
+| `fetch_game_context_sync(dsn, seasons)` | The builder's one Postgres read (psycopg2): `{game_pk: (home_manager_id, away_manager_id)}`, `{(game_pk, pitcher_id): (days_rest, pitched_2d, pitches_3d)}` and `{pitcher_id: throws code}` (THROWS_CODE: L 1, R 2, unknown 0). | `pipeline/batch/artifacts/manager_pool.build_pitching_change_pool` | — |
 | `ArmUsage` | One arm's recent usage as of a game date; `as_tuple()` is the `(days_rest, pitched_2d, pitches_3d)` triple the game state carries in `pitcher_recent_usage`. | `fetch_usage_for_candidates` | — |
 
 **Depends on:** `raw.game_player_stats (SIM-545)`, `raw.game_bullpen (SIM-427, Alembic 0025)`, `raw.games`, `raw.players`
@@ -180,6 +180,19 @@ SIM-427: the pen's FACTS from the official box score and the MLB box's per-game 
 ### `pipeline/etl/etl_historical_loader.py`
 
 The main historical/nightly ETL: fetches MLB Stats API feed/live JSON per game, upserts every FK prerequisite (venues, teams, players, managers, the game row, lineups), validates and batch-inserts every pitch into PostgreSQL raw.pitches (plus non-pitch events via play_events.py into raw.play_events), and offers a corrective 'reload' path that can overwrite already-ingested games.
+
+**Layout (the code clean-up, SIM-493).** The file keeps the HTTP plumbing (`_connect`, `_http_get`, `_fetch_once`, the single `urlopen(`), `INSERT_SQL`, `_fetch_game_pitches` and the `HistoricalDataLoader` class with its venue, player, prerequisite, load and refresh methods and `_ensure_game_player_stats`: the tests patch those names here. The class's other parts are mixins and modules in `pipeline/etl/historical/`:
+
+| Module | What it holds |
+|---|---|
+| `base.py` | `LoaderBase`: the shared state, the connection pool (`_ensure_pool`, `_get_conn`, `close`, `ETL_DB_POOL_MIN/MAX`). |
+| `rows.py` | The pitch row: the required fields, the feed-to-column map, `_build_row_dict`, `_validate_row`. |
+| `savant.py` | The parser of the JSON Baseball Savant embeds in its HTML pages. |
+| `venues.py` | `_resolve_venue` and the venue overrides. |
+| `game_values.py` | The game, lineup and player values read from the feed, `_build_starting_lineup_rows` and `_manager_from_coaches`. |
+| `schedule.py` | The date windows of a range load and the final-game filter. |
+| `reference_rows.py` | `ReferenceRowsMixin`: the teams, managers, game row and lineups a game needs before its pitches. |
+| `writes.py` | `WritesMixin`: `_batch_insert`, the play events, the error ledger, `BATCH_SIZE`, `ReloadShrinkError`. |
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
@@ -208,7 +221,21 @@ The main historical/nightly ETL: fetches MLB Stats API feed/live JSON per game, 
 
 ### `pipeline/live/live_ingestion_pipeline.py`
 
-The live-game ingestion service: polls the MLB schedule for live games, opens one WebSocket per live game, rebuilds a game_state JSON on every signal, persists it (Postgres sim.lineup_state + raw.games, and Redis), fetches game/prop odds via the SIM-370 provider seam, fires a re-simulation callback at the end of every plate appearance, and broadcasts state to frontend WebSocket clients.
+The live-game ingestion service: polls the MLB schedule for live games, opens one WebSocket per live game, rebuilds a game_state JSON on every signal, persists it (Postgres sim.lineup_state + raw.games, and Redis), fetches game/prop odds through the provider seam, fires a re-simulation callback at the end of every plate appearance, and broadcasts state to frontend WebSocket clients.
+
+**Layout (the code clean-up, SIM-493).** The file keeps `LiveIngestionPipeline` (its lifecycle, the schedule poll `_sync_live_games`, the per-signal refresh and the re-simulation trigger), `create_app`, the frontend WebSocket route and the `connection_manager` singleton. The rest lives in `pipeline/live/ingestion/`:
+
+| Module | What it holds |
+|---|---|
+| `constants.py` | The MLB endpoints, the poll, reconnect and cadence settings, the prop roles. |
+| `base.py` | `PipelineBase`: the shared state, the column probe and the vendor thread. |
+| `game_odds.py` / `prop_odds.py` | `GameOddsMixin` / `PropOddsMixin`: each cycle's fetch, load guard, writes and closing marker. |
+| `odds_rows.py` | The odds rows: the INSERT strings, `_odds_hash` / `_prop_odds_hash`, the insert arguments and writers. |
+| `closing_rows.py` | The closing-row rule: `closing_candidates`, `closing_hash`, the two promoters. |
+| `mock_odds.py` | `MockOddsAPI`, the deterministic odds source (`pipeline.odds_provider` imports it lazily from here). |
+| `odds_routes.py` | `odds_router`, the `/api/odds` routes. |
+| `game_state_builder.py` | `GameStateBuilder`. |
+| `mlb_websocket.py` | `MLBGameWebSocket` and `ConnectionManager`. |
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
@@ -249,9 +276,9 @@ SIM-433 per-game bullpen availability ingestion: for every pitcher on each team'
 | `BullpenAvailabilityIngest.ingest_game(game_pk, workload, timeline) / ingest(workload_records)` | Per-game and whole-run entry points; per-game failures are logged and skipped rather than aborting the run. | `main() CLI` | `_resolve_game_meta`<br>`_fetch_team_pitchers`<br>`build_rows`<br>`_persist` |
 | `BullpenAvailabilityIngest._fetch_team_pitchers(team_id, date_str)` | The MLB-API network seam: merges the active 26-man roster fetch with the fullSeason roster's IL entries so injured arms aren't lost. | `ingest_game` | — |
 | `BullpenAvailabilityIngest._persist(rows)` | psycopg2 execute_values UPSERT into raw.game_bullpen_availability (ON CONFLICT game_pk/team_id/pitcher_id DO UPDATE); overridden in unit tests to avoid a live DB. | `ingest_game` | — |
-| `_load_workload_records(duckdb_path, pg_dsn, seasons)` | Module-level: constructs a PlayerProfileComputor purely to run _compute_bullpen_workload and return its records as dicts, so the CLI is self-contained. | `main() CLI` | `pipeline.batch.player_profile_computor.PlayerProfileComputor._compute_bullpen_workload` |
+| `_load_workload_records(duckdb_path, pg_dsn, seasons)` | Module-level: constructs a PlayerProfileComputor purely to run _compute_bullpen_workload and return its records as dicts, so the CLI is self-contained. | `main() CLI` | `PlayerProfileComputor._compute_bullpen_workload` (in `pipeline/batch/profiles/manager.py`) |
 
-**Depends on:** `pipeline/batch/player_profile_computor.py (_compute_bullpen_workload, workload source — no network)`, `MLB Stats API teams/{id}/roster (network)`, `psycopg2`
+**Depends on:** `pipeline/batch/profiles/manager.py (_compute_bullpen_workload, workload source — no network)`, `MLB Stats API teams/{id}/roster (network)`, `psycopg2`
 
 **Environment flags read here:** `BASEBALL_DB_DSN (CLI --dsn default)`
 
@@ -260,6 +287,16 @@ SIM-433 per-game bullpen availability ingestion: for every pitcher on each team'
 ---
 
 ### `pipeline/batch/player_profile_computor.py`
+
+**Layout (the code clean-up, SIM-493).** The file keeps `PlayerProfileComputor` with `__init__`, the connection, the schema DDL, `run`, `_delete_seasons`, `_recreate_indexes` and the command line; `run()` stays where the tests' `build_run_expectancy_matrix` patch reaches it. The class's methods are mixins, and the shared code is modules, in `pipeline/batch/profiles/`:
+
+| Module | What it holds |
+|---|---|
+| `base.py` | `ComputorBase`: the state, the one-cutoff guard (`_refuse_a_mixed_cutoff`, `_stamp_one_cutoff`) and the shared probes. |
+| `constants.py` / `sql.py` | The sample floors, priors and positional-insert column orders; the shared SQL fragments (`SQL_OUTCOME_TYPE`, the swing and stance selects). |
+| `defense.py` / `leverage.py` / `gmm.py` | The field geometry; the leverage index and `build_run_expectancy_matrix`; the arsenal mixture fit (`_fit_gmm_batch`, a process-pool target). |
+| `pool_meta.py` / `league_averages.py` | `POOL_BUILDER_VERSION`, the recency weights, `_source_state`; `LeagueAverageProfiles`. |
+| `park.py`, `pitcher.py`, `batter.py`, `baserunner.py`, `manager.py`, `catcher.py`, `fielder_plays.py`, `fielder.py`, `pools.py` | One mixin each: the park factors, the pitcher, batter, baserunner and steal, manager and bullpen workload, catcher, per-play fielder and fielder season profiles, and the sim pools. |
 
 The nightly Step-1.4 batch job: reads raw.pitches (plus raw.games/raw.managers) from Postgres via DuckDB's postgres extension and computes every derived per-player/park metric table (pitcher GMM arsenals, batter/fielder/baserunner/catcher/manager season metrics, park factors, the RE24 run-expectancy matrix) plus every simulation play-pool table (pitch/outcome/stolen-base/steal-opportunity/advancement-opportunity pools, IBB rates, at-bat situations) that the similarity engines and the full-pool sampler read from.
 
@@ -290,6 +327,8 @@ The nightly Step-1.4 batch job: reads raw.pitches (plus raw.games/raw.managers) 
 ---
 
 ### `pipeline/batch/engine_artifacts.py`
+
+**Layout (the code clean-up, SIM-493).** The file keeps the actor-matrix cluster (`_ENGINE_LOADER`, `_matrix_from_queries`, `build_actor_sim_matrices`, `concentration_report`: the tests patch them here), `_load_actor_sim`, `EngineArtifacts` and the command line. `EngineArtifacts.load` calls one loader per artifact. Each artifact's builder and loader live in `pipeline/batch/artifacts/`: `pitch_pool.py`, `battedball_pool.py`, `steal_pool.py`, `advancement_pool.py`, `manager_pool.py`, `pitcher_sim.py`, `actor_embeddings.py`, `park_geometry.py`, `receiving.py` and `reference.py`; `pools.py` holds the pool dataclasses and `common.py` the pool columns, the default paths, the season window, `take_view` and `_savez_plain`.
 
 SIM-422 nightly BUILDER (and per-worker LOADER, EngineArtifacts) for the disk-resident 'engine artifact bundle' that lets a stateless ProcessPool worker reconstruct the full-pool similarity sampler without any live engine object crossing the fork: per-hand pitch/batted-ball/steal/advancement opportunity pools, the pitcher x pitcher similarity matrix, the SIM-523 actor score matrices, park geometry, the pitching-change opportunity pool, and catcher receiving profiles.
 
@@ -347,19 +386,20 @@ SIM-370 provider-abstraction seam: a typing.Protocol plus an env-selected factor
 | `odds_rows_by_book(provider, game_pk, *, line_type, market_type) / prop_rows_by_book(provider, game_pk, player_id, prop_stat, *, line_type)` | SIM-555: every writer's entry point: the provider's by-book method when it has one, else the one-row method wrapped in a list, so a test fake with only `get_odds` still works. | `pipeline/live/live_ingestion_pipeline.py`<br>`scripts/load_historical_odds.py`<br>`pipeline/etl/opening_line_job.py` | — |
 | `get_odds_provider(name=None)` | Selects a provider by explicit name, else the ODDS_PROVIDER env var, else 'mock'. | `pipeline/live/live_ingestion_pipeline.py (LiveIngestionPipeline.__init__ default)`<br>`pipeline/etl/opening_line_job.py (_fetch_current_odds/_capture_prop_opening_lines)`<br>`scripts/load_historical_odds.py` | `registered factory (._make_mock_provider or ._make_bettingpros_provider)` |
 | `register_odds_provider(name, factory)` | Registers a named zero-arg provider factory; the mock and BettingPros providers self-register at import time via this at module bottom, and tests use it to inject fakes. | — | — |
-| `RealOddsAPIProvider` | A documented STUB template only — no ODDS_PROVIDER value resolves to it any more (both 'bettingpros' and 'real' map to BettingProsOddsProvider); every method raises RuntimeError. | — | — |
 
-**Depends on:** `pipeline/live/live_ingestion_pipeline.py (MockOddsAPI, lazily imported to avoid a circular import and keep this module importable without the live pipeline's heavy deps)`, `pipeline/bettingpros_odds_provider.py (BettingProsOddsProvider, lazily imported)`
+**Depends on:** `pipeline/live/ingestion/mock_odds.py (MockOddsAPI, lazily imported to avoid a circular import and keep this module importable without the live pipeline's heavy deps)`, `pipeline/bettingpros_odds_provider.py (BettingProsOddsProvider, lazily imported)`
 
 **Used by:** `pipeline/live/live_ingestion_pipeline.py`, `pipeline/etl/opening_line_job.py`, `scripts/load_historical_odds.py`
 
-**Environment flags read here:** `ODDS_PROVIDER (selects 'mock' | 'bettingpros' | 'real')`, `ODDS_PROVIDER_API_KEY (read only by the unreachable RealOddsAPIProvider stub)`
+**Environment flags read here:** `ODDS_PROVIDER (selects 'mock' | 'bettingpros' | 'real'; 'real' is an alias of 'bettingpros')`
 
-> **Notes for anyone changing this file:** RealOddsAPIProvider is dead/unreachable via the public factory — it exists purely as an implementation template for a THIRD provider; setting ODDS_PROVIDER=real does not exercise unfinished code, it resolves to the live BettingProsOddsProvider. Any new provider MUST return the exact MockOddsAPI dict shapes documented in this module's docstring, since raw.game_odds/raw.prop_odds inserts and the CLV engine depend on those exact keys. A new prop market is added in FOUR places together: the tuples here, the CHECK constraint (a new Alembic migration in the 0022 style), MockOddsAPI._PROP_CONFIG and the BettingPros market-id map — the import-time guard and the vocabulary unit test fail if any one lags. `hits` is the BATTER market and `hits_allowed` the PITCHER market; they map to different model props (H vs H_ALLOWED) and must never be swapped.
+> **Notes for anyone changing this file:** Any new provider MUST return the exact MockOddsAPI dict shapes documented in this module's docstring, since raw.game_odds/raw.prop_odds inserts and the CLV engine depend on those exact keys. A new prop market is added in FOUR places together: the tuples here, the CHECK constraint (a new Alembic migration in the 0022 style), MockOddsAPI._PROP_CONFIG and the BettingPros market-id map — the import-time guard and the vocabulary unit test fail if any one lags. `hits` is the BATTER market and `hits_allowed` the PITCHER market; they map to different model props (H vs H_ALLOWED) and must never be swapped.
 
 ---
 
 ### `pipeline/bettingpros_odds_provider.py`
+
+**Layout (the code clean-up, SIM-493).** The file keeps `BettingProsOddsProvider` (its settings, the public reads and `_choose_row`, which reads `GRADED_BOOK_PREFERENCE` here) and `__all__`. The class is `BettingProsOddsProvider(OfferRowsMixin, ProviderBase)`; its parts live in `pipeline/bettingpros/`: `rules.py` (the vendor-data rules), `parsing.py` (one offer's sides and lines), `schedule.py` (the MLB schedule facts), `markets.py` (the market ids and their import-time guards), `transport.py` (`TransportMixin`, the HTTP reads and retries), `events.py` (`EventMatchMixin`, the event match and caches), `rows.py` (`OfferRowsMixin`, the rows by book) and `base.py` (`ProviderBase`).
 
 SIM-405 real OddsProvider implementation backed by the BettingPros v3 HTTP API; bridges MLB game_pk/player_id identifiers to BettingPros events/offers (date+team-nickname matching, normalized player-name matching) and returns odds in the exact MockOddsAPI dict shape.
 

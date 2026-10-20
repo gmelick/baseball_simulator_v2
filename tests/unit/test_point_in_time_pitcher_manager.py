@@ -15,6 +15,7 @@ unit test does not have). A few execute the pure Python pieces directly.
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -22,13 +23,28 @@ from unittest.mock import MagicMock
 import pytest
 
 import pipeline.batch.player_profile_computor as ppc
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
 
 REPO = Path(__file__).resolve().parents[2]
 MIGRATION = REPO / "db" / "migrations" / "duckdb" / "0027_sim537_pitcher_manager_asof.sql"
 VERSION_FILE = REPO / "db" / "schemas" / "duckdb_schema_version.txt"
 COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+
 PITCHER_ENGINE = REPO / "similarity" / "engines" / "pitcher_similarity.py"
 MANAGER_ENGINE = REPO / "similarity" / "engines" / "manager_similarity.py"
+
+
+def _method_source(name: str) -> str:
+    """One computor method's source, from its ``def`` line (the method may live
+    in a mixin of ``pipeline/batch/profiles``)."""
+    src = inspect.getsource(getattr(PlayerProfileComputor, name))
+    return src[src.index(f"def {name}") :]
+
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
 def _computor() -> ppc.PlayerProfileComputor:
@@ -43,29 +59,20 @@ def _computor() -> ppc.PlayerProfileComputor:
 
 
 def test_pitcher_query_filters_raw_pitches_by_the_cutoff() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_pitcher_profiles")
-    end = src.index("def _assert_pitcher_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_pitcher_profiles")
     assert "game_date <= DATE '{asof_sql}'" in body
     # Pass 1's pitch_stats CTE AND Pass 2's per-season GMM feature fetch.
     assert body.count("{date_cutoff}") == 2
 
 
 def test_the_pickoff_outs_helper_takes_an_optional_cutoff() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _play_events_outs_cte")
-    end = src.index("def _play_events_disengagement_cte")
-    body = src[start:end]
+    body = _method_source("_play_events_outs_cte")
     assert "asof_sql: str | None = None" in body
     assert "game_date <= DATE '{asof_sql}'" in body
 
 
 def test_pitcher_profiles_pass_their_own_cutoff_to_the_pickoff_helper() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_pitcher_profiles")
-    end = src.index("def _assert_pitcher_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_pitcher_profiles")
     assert "self._play_events_outs_cte(asof_sql if asof is not None else None)" in body
 
 
@@ -74,18 +81,12 @@ def test_pitcher_steal_metrics_now_passes_its_own_cutoff_to_the_helper() -> None
     gave _build_pitcher_steal_metrics its own point-in-time pass, so it now
     threads its own cutoff into the pickoff-outs helper instead of calling
     it with none."""
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _build_pitcher_steal_metrics")
-    end = src.index("def _assert_pitcher_steal_profiles_have_no_leakage")
-    body = re.sub(r"\s+", "", src[start:end])
+    body = re.sub(r"\s+", "", _method_source("_build_pitcher_steal_metrics"))
     assert "self._play_events_outs_cte(asof_sqlifasofisnotNoneelseNone)" in body
 
 
 def test_the_pitcher_leakage_assertion_covers_both_sources() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _assert_pitcher_profiles_have_no_leakage")
-    end = src.index("def _compute_batter_profiles")
-    body = src[start:end]
+    body = _method_source("_assert_pitcher_profiles_have_no_leakage")
     assert '"raw.pitches"' in body
     assert '"raw.play_events"' in body
     # The table-absent case must be a schema-availability skip, not a crash:
@@ -94,20 +95,14 @@ def test_the_pitcher_leakage_assertion_covers_both_sources() -> None:
 
 
 def test_a_pitcher_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_pitcher_profiles")
-    end = src.index("def _assert_pitcher_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_pitcher_profiles")
     assert "DELETE FROM derived.pitcher_gmm_components" in body
     assert "DELETE FROM derived.pitcher_season_metrics" in body
     assert body.count("season > {asof_date.year}") >= 1
 
 
 def test_every_pitcher_profile_ends_up_stamped() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_pitcher_profiles")
-    end = src.index("def _assert_pitcher_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_pitcher_profiles")
     # SIM-551: the whole-table stamp through the shared helper, guarded by
     # the pre-write check against a mixed cutoff.
     assert (
@@ -117,7 +112,7 @@ def test_every_pitcher_profile_ends_up_stamped() -> None:
 
 
 def test_pitcher_asof_is_threaded_from_run() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
+    src = _computor_source()
     assert "self._compute_pitcher_profiles(seasons, asof=asof)" in src
 
 
@@ -155,28 +150,19 @@ def test_pickoff_outs_cte_falls_back_when_the_table_is_absent() -> None:
 
 
 def test_manager_query_filters_raw_pitches_by_the_cutoff() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_manager_profiles")
-    end = src.index("def _assert_manager_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_manager_profiles")
     # The `p` CTE and the `staff` CTE both read raw.pitches.
     assert body.count("{date_cutoff}") == 2
 
 
 def test_a_manager_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_manager_profiles")
-    end = src.index("def _assert_manager_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_manager_profiles")
     assert "DELETE FROM derived.manager_season_metrics" in body
     assert "season > {asof_date.year}" in body
 
 
 def test_every_manager_profile_ends_up_stamped() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_manager_profiles")
-    end = src.index("def _assert_manager_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_manager_profiles")
     assert (
         'self._refuse_a_mixed_cutoff("derived.manager_season_metrics", seasons, asof_date)' in body
     )
@@ -184,7 +170,7 @@ def test_every_manager_profile_ends_up_stamped() -> None:
 
 
 def test_manager_asof_is_threaded_from_run() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
+    src = _computor_source()
     assert "self._compute_manager_profiles(seasons, asof=asof)" in src
 
 

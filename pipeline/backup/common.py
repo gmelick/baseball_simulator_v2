@@ -1,8 +1,8 @@
-"""pipeline/backup/common.py — the helpers the backup modules share (SIM-525, SIM-568).
+"""pipeline/backup/common.py — the helpers the backup modules share.
 
 The data-store backup (``data_stores``) and the off-site copy (``offsite``) use
 them. This module is pure standard library: ``data_stores`` imports duckdb at
-module level, and the off-site copy (SIM-568) must never import it.
+module level, and the off-site copy must never import it.
 """
 
 from __future__ import annotations
@@ -19,6 +19,15 @@ CHUNK = 8 * 1024 * 1024
 #: A clock returns epoch seconds. A sleep waits. The tests pass fakes of both.
 Clock = Callable[[], float]
 Sleep = Callable[[float], object]
+
+
+def env_float(name: str, default: float) -> float:
+    """The environment variable ``name`` as a float; ``default`` when it is unset
+    or does not parse."""
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
 
 
 def human_bytes(n: int) -> str:

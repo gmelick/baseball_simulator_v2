@@ -1,4 +1,4 @@
-"""The league schedule client (SIM-519 Part A).
+"""The league schedule client (the live slate, SIM-519).
 
 The day slate is schedule-driven (owner ruling 2026-08-29): the league's public
 schedule says which games exist on a date, when they start and what state they

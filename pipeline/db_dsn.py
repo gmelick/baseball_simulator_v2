@@ -1,7 +1,7 @@
 """
 pipeline/db_dsn.py
 ==================
-SIM-443b — the one reader of the Postgres connection string for scripts and jobs.
+The one reader of the Postgres connection string for scripts and jobs.
 
 The code carries no default database password. A script that needs Postgres
 calls :func:`require_dsn`. The function returns the variable's value, or it

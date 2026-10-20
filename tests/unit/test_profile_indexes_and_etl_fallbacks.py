@@ -263,7 +263,7 @@ class TestSim087ReleaseSpeedThreshold:
 
     def test_validate_row_accepts_68_mph(self) -> None:
         """68 mph slow curve should not produce a release_speed warning."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 68.0})
         # Sanity: row passed hard validation
@@ -276,7 +276,7 @@ class TestSim087ReleaseSpeedThreshold:
 
     def test_validate_row_accepts_60_mph_boundary(self) -> None:
         """The 60 mph boundary itself must be inclusive."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 60.0})
         assert not result.hard_errors
@@ -287,7 +287,7 @@ class TestSim087ReleaseSpeedThreshold:
 
     def test_validate_row_still_flags_impossible_low(self) -> None:
         """A 35 mph pitch is implausible and must still warn."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         assert not result.hard_errors
@@ -296,7 +296,7 @@ class TestSim087ReleaseSpeedThreshold:
 
     def test_validate_row_still_flags_too_fast(self) -> None:
         """SIM-440: the ceiling moved 102 -> 110, so 112 mph is the impossible case."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 112.0})
         assert not result.hard_errors
@@ -310,7 +310,7 @@ class TestSim087ReleaseSpeedThreshold:
         sim.pitch_pool and the arsenal GMMs.  Statcast records four-figure counts
         of 102-105 mph pitches every season (max ~105.8).
         """
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         for velo in (102.5, 104.0, 105.8, 110.0):
             result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": velo})
@@ -326,7 +326,7 @@ class TestSim087ReleaseSpeedThreshold:
         stricter Python bound won on every row and no pitch in [50, 60) was ever
         rescued.  Both layers now state 50.
         """
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         for velo in (50.0, 55.0, 59.9):
             result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": velo})
@@ -335,7 +335,7 @@ class TestSim087ReleaseSpeedThreshold:
 
     def test_validator_warning_text_advertises_actual_bounds(self) -> None:
         """Warning text must state the band the code actually enforces."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         rs_warnings = [w for w in result.warnings if "release_speed" in w]

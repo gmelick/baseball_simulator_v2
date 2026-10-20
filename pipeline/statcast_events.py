@@ -1,13 +1,14 @@
-"""The Statcast ``events`` out-label vocabulary (SIM-501a).
+"""The Statcast ``events`` out-label vocabulary.
 
 ``raw.pitches.events`` holds the plate-appearance result. It is set on the
-final pitch of the plate appearance and NULL on every other row. SIM-501
-measured it clean over the full sweep (32 distinct values, all interpretable),
+final pitch of the plate appearance and NULL on every other row. The
+out-label audit (SIM-501) measured it clean over the full sweep (32 distinct
+values, all interpretable),
 while ``outs_on_pitch`` is zero on 92.6% of batted-ball outs and 100% of
 strikeouts in the swept data. Every out label therefore derives from
 ``events``. Do not read ``outs_on_pitch`` in the profile computor —
 ``tests/unit/test_out_label.py`` fails if any site does. Since the
-Data Lab vocabulary fix (SIM-571), this module also holds the pitch ``type``
+Data Lab vocabulary fix, this module also holds the pitch ``type``
 code sets.
 
 Two DIFFERENT questions, and the sets that answer them. Do not conflate them:
@@ -27,7 +28,7 @@ Measured on the live DB, 2024 season (do not re-derive these):
 * Completed-half-inning identity: SUM(play outs + caught-stealing outs) over
   a completed half equals exactly 3 on 40,780 of 41,542 halves (98.2%).
   The undercount tail (1.6% of halves, ~0.5% of outs) is pickoff outs and
-  runner outs the feed anchors off the pitch record — the SIM-502 domain.
+  runner outs the feed anchors off the pitch record (``raw.play_events``).
   The overcount tail (0.2%) is the uncaught third strike, which Statcast
   scores ``strikeout`` with no out recorded.
 * The steal columns (``sb_attempt_*`` / ``sb_success_*``) are FALSE on every
@@ -37,13 +38,6 @@ Measured on the live DB, 2024 season (do not re-derive these):
   no-double-count property does not rest on the feed keeping that promise.
 * No in-play row (type X/D/E) carries a steal attempt, so a per-play out
   count over batted balls needs no caught-stealing term.
-
-``simulation/sim_loop.py`` carries ``_OUT_EVENTS`` as the loop's own
-"did the batter reach" test. It lists ``fielders_choice`` as an out, which
-the measurement above disproves for that question. Reconciling the loop is
-sim-scoped work (the SIM-473/SIM-499 redesign), not this module's job;
-``test_out_label.py`` pins the divergence so it cannot drift
-unnoticed.
 """
 
 from __future__ import annotations
@@ -142,7 +136,7 @@ BATTER_RETIRED_EVENTS: frozenset[str] = frozenset(
 # Its csw_rate still spells a code list of its own inline. The batter profile
 # SQL still spells the swing list inline. A test pins that text. The sets
 # moved here from the profile computor in the Data Lab vocabulary fix
-# (SIM-571). The API reads them here, without the computor's duckdb and
+# . The API reads them here, without the computor's duckdb and
 # sklearn imports.
 # `tests/unit/test_pitch_result_vocabulary.py` holds the 17
 # (description, code) pairs that the loader stores.
@@ -167,15 +161,15 @@ WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M", "Q")
 #: below two strikes.
 FOUL_TYPES: tuple[str, ...] = ("F", "T", "L", "O", "R")
 
-#: SIM-553: the fouls that are STRIKE THREE with two strikes. A foul tip is a
+#: The fouls that are STRIKE THREE with two strikes. A foul tip is a
 #: strike at any count (the rulebook's definition of a strike; it must be caught
 #: to be a foul tip), and so is a bunt fouled off (Rule 5.09(a)(4): the batter
 #: is out when he bunts foul on the third strike). A plain foul ('F', 'R') with
-#: two strikes is not. Before SIM-553 the pool coded 'T' and 'L' as 'foul' and
-#: 'O' as 'ball' at two strikes, so the count machine pitched on after a real
-#: strikeout: 7.1% of 2025's strikeouts end this way, and the count chain put
-#: the simulator's loss at 4.4% of its strikeouts
-#: (docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
+#: two strikes is not. A pool that codes them 'foul' or 'ball' pitches on
+#: after a real strikeout: 7.1% of 2025's strikeouts end this way, and the
+#: count chain measured the simulator's loss at 4.4% of its strikeouts (the
+#: foul-tip coding, SIM-553;
+#: docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
 STRIKE_THREE_FOUL_TYPES: tuple[str, ...] = ("T", "O", "L")
 
 #: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
@@ -185,8 +179,8 @@ NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
 
 #: The three in-play `type` codes. X = in play with out(s) and no run;
 #: D = in play, no out, no run; E = in play with run(s). X alone is 65% of
-#: balls in play, and the missing 35% ARE the hits — filtering on X was the
-#: SIM-457 defect.
+#: balls in play, and the missing 35% ARE the hits, so a filter on X alone
+#: loses every hit (SIM-457).
 IN_PLAY_TYPES: tuple[str, ...] = ("X", "D", "E")
 
 #: The foul tips: the bat touches the ball and the catcher holds it. 'T' is
@@ -313,7 +307,7 @@ def sql_cs_out(q: str = "") -> str:
     ``_STEAL_OUT_EVENTS``) contribute nothing here, whatever the steal
     columns say. On the swept data the guard never fires — the steal
     columns are FALSE on all 3,211 such rows across 2017-2026 — but the
-    formula no longer depends on the feed keeping that promise.
+    formula does not depend on the feed keeping that promise.
     """
     return (
         f"CASE WHEN (COALESCE({q}sb_attempt_2b, FALSE) "
@@ -330,21 +324,21 @@ def sql_cs_out(q: str = "") -> str:
 def sql_outs_recorded(q: str = "") -> str:
     """Total outs recorded on this row: play outs + caught-stealing outs.
 
-    This is the innings-pitched building block (SIM-501c): SUM it per
+    This is the innings-pitched building block: SUM it per
     pitcher. Known residual, measured on 2024: ~0.5% of real outs are
     invisible here — pickoff outs and feed-displaced runner outs live in
-    no ``raw.pitches`` row (SIM-502) — and the uncaught third strike
+    no ``raw.pitches`` row — and the uncaught third strike
     over-counts by ~0.06%. The column this replaces missed ~36%.
     """
     return f"({sql_play_outs(q)} + ({sql_cs_out(q)}))"
 
 
-#: SIM-502c — the measured residual of the IP formula, so nobody re-derives it.
+#: The measured residual of the IP formula, so nobody re-derives it.
 #: Over 357 games / 19,072 outs, 131 out-movements were keyed to a non-pitch
-#: index. 53 pickoffs live in `raw.play_events` — and since SIM-504 the two
-#: profile `outs_recorded` consumers ADD them from that table (the computor's
-#: `_play_events_outs_cte`), closing most of what was a ~0.5% residual at the
-#: next recompute; 63 mid-PA caught stealings live in the `sb_*` columns (the
+#: index. 53 pickoffs live in `raw.play_events`, and the two profile
+#: `outs_recorded` consumers ADD them from that table (the computor's
+#: `_play_events_outs_cte`), which closes most of a ~0.5% residual; 63 mid-PA
+#: caught stealings live in the `sb_*` columns (the
 #: CS term above counts them); 7 displaced batter strikeouts live in `events`
 #: (the terms above count them). The ~8 runner outs anchored to
 #: `other_out`/`wild_pitch` actions that do not end the PA reach no table:
@@ -353,9 +347,9 @@ def sql_outs_recorded(q: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Transition destinations (SIM-510)
+# Transition destinations
 # ---------------------------------------------------------------------------
-# The fielding-transition draw (SIM-511) applies a drawn pool row's whole
+# The fielding-transition draw applies a drawn pool row's whole
 # base-state transition, so the pool must encode where each body ended.
 # `raw.pitches` carries the truth: the ETL parser initializes the post-play
 # seats from the pre-play seats, re-seats every runner ``movement.end``,
@@ -424,7 +418,7 @@ def sql_batter_retired(q: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Steal-attempt labels (SIM-506)
+# Steal-attempt labels
 # ---------------------------------------------------------------------------
 # A steal outcome lives in TWO disjoint places in raw.pitches:
 #
@@ -438,8 +432,7 @@ def sql_batter_retired(q: str = "") -> str:
 # 330 column CS + 249 event-only CS — 43% of caught stealings live only in
 # ``events``), but a successful steal almost never does (2024: 3 event SB
 # against 2,773 column SB). A consumer that reads the columns alone therefore
-# inflates every steal SUCCESS rate by ~5-7 points — that defect shipped in
-# the SIM-468 opportunity pool and every steal-feature builder (SIM-506).
+# inflates every steal SUCCESS rate by ~5-7 points.
 # Use these two helpers at EVERY site that labels a steal attempt or outcome;
 # do not write a third definition.
 #

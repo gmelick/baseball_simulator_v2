@@ -1,4 +1,4 @@
-"""The league's per-game live feed → the slate card's detail (SIM-519 Part I).
+"""The league's per-game live feed → the slate card's detail (the live slate, SIM-519).
 
 The Daily Diamond card, expanded, shows the real game: the linescore, both
 teams' box scores, the posted lineups before first pitch, and for a live game
@@ -57,7 +57,7 @@ def _person(v: Any) -> dict[str, Any] | None:
 
 
 def _position(p: Mapping[str, Any]) -> str | None:
-    """The starting position (``allPositions[0]``, the SIM-559 rule), else the last."""
+    """The starting position (``allPositions[0]``, SIM-559), else the last."""
     allp = p.get("allPositions") or []
     first = allp[0] if allp else p.get("position") or {}
     return first.get("abbreviation") if isinstance(first, Mapping) else None

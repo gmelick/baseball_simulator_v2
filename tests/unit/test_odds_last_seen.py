@@ -14,7 +14,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from api.routes import betting as b
-from pipeline.live import live_ingestion_pipeline as live
+from pipeline.live.ingestion.odds_rows import (
+    _GAME_ODDS_INSERT_SQL,
+    _GAME_ODDS_RESTAMP_SQL,
+    _PROP_ODDS_RESTAMP_SQL,
+    insert_game_odds_rows,
+)
 
 T0 = datetime(2026, 10, 9, 18, 0, tzinfo=UTC)
 
@@ -75,12 +80,12 @@ def test_rows_without_the_stamp_are_all_kept() -> None:
 
 
 def test_the_restamp_sql_updates_last_seen() -> None:
-    assert "DO UPDATE SET last_seen_at = NOW()" in live._GAME_ODDS_RESTAMP_SQL
-    assert "DO UPDATE SET last_seen_at = NOW()" in live._PROP_ODDS_RESTAMP_SQL
+    assert "DO UPDATE SET last_seen_at = NOW()" in _GAME_ODDS_RESTAMP_SQL
+    assert "DO UPDATE SET last_seen_at = NOW()" in _PROP_ODDS_RESTAMP_SQL
     # The insert itself is the same: only the conflict clause differs.
     assert (
-        live._GAME_ODDS_RESTAMP_SQL.split("ON CONFLICT")[0]
-        == live._GAME_ODDS_INSERT_SQL.split("ON CONFLICT")[0]
+        _GAME_ODDS_RESTAMP_SQL.split("ON CONFLICT")[0]
+        == _GAME_ODDS_INSERT_SQL.split("ON CONFLICT")[0]
     )
 
 
@@ -94,9 +99,9 @@ def test_the_writer_restamps_only_when_the_column_exists() -> None:
         "home_ml": -150,
         "away_ml": 130,
     }
-    asyncio.run(live.insert_game_odds_rows(conn, 1, [row], restamp=True))
+    asyncio.run(insert_game_odds_rows(conn, 1, [row], restamp=True))
     assert "DO UPDATE SET last_seen_at" in conn.executemany.await_args.args[0]
-    asyncio.run(live.insert_game_odds_rows(conn, 1, [row]))
+    asyncio.run(insert_game_odds_rows(conn, 1, [row]))
     assert "DO NOTHING" in conn.executemany.await_args.args[0]
 
 

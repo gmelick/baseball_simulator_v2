@@ -1,16 +1,15 @@
 """
 pipeline/etl/mlb_venue_dimensions.py
 ====================================
-SIM-478 (the fence certification plan,
-``docs/audit/2026-09-20-sim478-480-fence-certification-plan.md``, §4 and §5.1):
-the MLB Stats API's PUBLISHED fence distances, the floor under a new park's
-fence line.
+The MLB Stats API's PUBLISHED fence distances, the floor under a new park's
+fence line (the fence certification plan, SIM-478,
+``docs/audit/2026-09-20-sim478-480-fence-certification-plan.md``, §4 and §5.1).
 
 The venues call (``VENUES_URL``, ``hydrate=fieldInfo``) answers with every
 venue of the season and its ``fieldInfo``: the five published distances
 (``leftLine``, ``leftCenter``, ``center``, ``rightCenter``, ``rightLine``),
 the two off-alley points (``left``, ``right``) some parks publish, the roof
-and the turf. The geometry builder (``pipeline/batch/engine_artifacts.py``,
+and the turf. The geometry builder (``pipeline/batch/artifacts/park_geometry.py``,
 ``build_park_geometry``) interpolates the five distances at a sector's
 midpoint angle and adds the league's offset to build the PRIOR line of a
 sector the pool's own balls cannot support.
@@ -47,8 +46,6 @@ VENUE_DIMENSIONS_FILE = "venue_dimensions.json"
 
 #: The five published distances the prior interpolates (feet), in field order.
 PUBLISHED_DISTANCES = ("leftLine", "leftCenter", "center", "rightCenter", "rightLine")
-#: The other fields kept when the API carries them.
-_EXTRA_FIELDS = ("left", "right", "roofType", "turfType")
 
 
 def _as_feet(value: Any) -> float | None:

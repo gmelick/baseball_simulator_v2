@@ -33,6 +33,7 @@ in-memory DuckDB; nothing needs a live database or a rebuild.
 
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 
@@ -514,7 +515,8 @@ class TestBuilderWindowExpressions:
         # pool's pitch class and pickoff rows. The fatigue columns (sim518.1) stay
         # in the SELECT, in order.
         assert ppc.POOL_BUILDER_VERSION == "sim554.1"
-        src = Path(ppc.__file__).read_text(encoding="utf-8")
+        # The pitch pool's SELECT lives in the pool builder's mixin.
+        src = inspect.getsource(ppc.PlayerProfileComputor._build_pitch_pool)
         i_got = src.index("AS got_away,")
         i_bh = src.index("AS bat_home,", i_got)
         i_pc = src.index("AS pitcher_pitch_count,", i_bh)

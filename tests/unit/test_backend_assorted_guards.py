@@ -27,6 +27,8 @@ import sys
 
 import pytest
 
+from pipeline.live.ingestion.constants import RESIM_COOLDOWN_S
+
 # ---------------------------------------------------------------------------
 # Repo root on sys.path
 # ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ class TestSim102OpenerRole:
     """Opener slot must sit between SP and MRP."""
 
     def _infer(self, ip: str | float, bf: int) -> str:
-        from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+        from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 
         return GameStateBuilder._infer_role(
             {"inningsPitched": str(ip), "battersFaced": bf},
@@ -74,7 +76,7 @@ class TestSim102OpenerRole:
         assert self._infer("0.2", 3) == "RP"
 
     def test_missing_battersfaced_falls_back_safely(self) -> None:
-        from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+        from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 
         # No battersFaced key — must not crash; falls back to old IP-only logic
         role = GameStateBuilder._infer_role({"inningsPitched": "2.0"}, {})
@@ -94,7 +96,7 @@ class TestSim103BroadcastSnapshot:
         raise ``RuntimeError: Set changed size during iteration``.  We force a
         mutation during the simulated send and assert no crash + remaining
         client got the message."""
-        from pipeline.live.live_ingestion_pipeline import ConnectionManager
+        from pipeline.live.ingestion.mlb_websocket import ConnectionManager
 
         cm = ConnectionManager()
         live_set = cm._subscriptions.setdefault(745001, set())
@@ -143,7 +145,7 @@ class TestSim104ResimulateRateLimit:
         from pipeline.live import live_ingestion_pipeline as lip
 
         assert hasattr(lip, "RESIM_COOLDOWN_S")
-        assert lip.RESIM_COOLDOWN_S >= 5  # at least a few seconds
+        assert RESIM_COOLDOWN_S >= 5  # at least a few seconds
 
     def test_endpoint_source_uses_redis_cooldown(self) -> None:
         """Source-level grep regression: the endpoint must use Redis to gate."""
@@ -238,7 +240,7 @@ class TestSim101BuilderCache:
     """GameStateBuilder must cache history across refreshes."""
 
     def test_builder_holds_history_state(self) -> None:
-        from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+        from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 
         b = GameStateBuilder.__new__(GameStateBuilder)
         b._history = []
@@ -266,7 +268,7 @@ class TestSim101BuilderCache:
     def test_builder_replaces_in_flight_at_bat(self) -> None:
         """Mid-PA refresh: same atBatIndex with updated event must overwrite
         the last cached entry, not append a duplicate."""
-        from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+        from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 
         b = GameStateBuilder.__new__(GameStateBuilder)
         b._history = []
@@ -286,10 +288,8 @@ class TestSim101BuilderCache:
 
     def test_pipeline_caches_builders_per_game(self) -> None:
         """Two refreshes for the same game_pk return the SAME builder."""
-        from pipeline.live.live_ingestion_pipeline import (
-            GameStateBuilder,
-            LiveIngestionPipeline,
-        )
+        from pipeline.live.ingestion.game_state_builder import GameStateBuilder
+        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._db = None

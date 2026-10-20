@@ -1,7 +1,7 @@
 """
 savant_loader.py
 ================
-SIM-528 — one loader for every Baseball Savant leaderboard in
+One loader for every Baseball Savant leaderboard in
 ``savant_boards.BOARDS``.
 
 WHAT IT DOES
@@ -77,8 +77,8 @@ MAX_RETRIES = 3
 #: whole-run fetch does not read as a hammering client.
 PAUSE_BETWEEN_FETCHES_S = 1.5
 
-#: Columns whose target name says they hold a label, not a number.
-#: SIM-532 adds the two position labels of the outs-above-average board.
+#: Columns whose target name says they hold a label, not a number (the
+#: outs-above-average board carries the two position labels).
 _TEXT_TARGETS = frozenset({"bat_side", "split", "position", "primary_position"})
 #: Target columns that are whole numbers.
 _INT_TARGETS = frozenset(
@@ -97,12 +97,12 @@ _INT_TARGETS = frozenset(
         "n_scoop",
         "outs_scoop",
         "height_in_inches",
-        # SIM-531: the running-game boards' counts.
+        # The running-game boards' counts.
         "n_init",
         "n_sb",
         "n_pk",
         "n_bk",
-        # SIM-532: the outs-above-average board's counts (all whole outs) and the
+        # The outs-above-average board's counts (all whole outs) and the
         # outfield jump's outs above average on its plays (also whole). The name
         # ``outs_above_average`` is a target on these two boards only: first base
         # receiving stores ``total_oaa`` (a float), so no other board's column
@@ -149,7 +149,7 @@ def build_url(
     if split_value:
         params[board.split_param] = split_value
     if asof is not None:
-        # SIM-534: a point-in-time pull. dateStart is 1 January so the window is
+        # A point-in-time pull. dateStart is 1 January so the window is
         # "this season up to and including the cutoff" — the same span a
         # simulator standing on that date would have seen.
         if not board.supports_date_range:

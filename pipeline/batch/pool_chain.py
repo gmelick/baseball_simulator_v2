@@ -1,7 +1,7 @@
 """
 pipeline/batch/pool_chain.py
 ============================
-SIM-553 — the count chain of the pitch pool, and the label check against real
+The count chain of the pitch pool, and the label check against real
 plate appearances.
 
 THE COUNT CHAIN
@@ -27,9 +27,9 @@ labels, so a labelling defect in the pool build reads green: a faithful
 sampler of a mislabelled pool matches the mislabelled centre. Two defects in
 the pool build's class expression hid that way:
 
-  * SIM-509 (2026-08-18): hit-by-pitch pitches coded as balls, so an HBP could
+  * hit-by-pitch pitches coded as balls (SIM-509, 2026-08-18), so an HBP could
     become ball four.
-  * SIM-553 (2026-09-23): a two-strike foul tip or foul bunt coded as a foul,
+  * a two-strike foul tip or foul bunt coded as a foul (SIM-553, 2026-09-23),
     so the count machine pitched on after a real strikeout. The count chain
     lost 4.4% of its strikeouts (0.2163 per plate appearance against 0.2262
     on the corrected coding).
@@ -75,7 +75,7 @@ pitch / pitches per plate appearance, the chain's relative gap to real play):
 
   * the corrected coding, ``pa_only``:  +0.09% / -0.25% / +0.08% / +0.07%;
   * the corrected coding, all rows:     +0.30% / +0.36% / -0.13% / +0.27%;
-  * the SIM-553 coding, ``pa_only``:    -4.29% / +2.31% / +1.12% / +0.90%
+  * the foul-tip defect, ``pa_only``:   -4.29% / +2.31% / +1.12% / +0.90%
     (FAIL; all rows read -4.08% / +2.94% / +0.91% / +1.11%).
 
 Two known residuals are not label errors:
@@ -122,9 +122,9 @@ OUTCOMES: tuple[str, ...] = (
 
 #: The largest relative gap the label check accepts between the pool's chain
 #: (read with ``pa_only=True``) and real plate appearances; owner decision 5 of
-#: the SIM-553 plan. On the window 2023-2026 the corrected pool reads +0.09% /
-#: -0.25% / +0.08% / +0.07% (strikeouts / walks / hit by pitch / pitches); the
-#: SIM-553 defect reads -4.29% / +2.31% / +1.12% / +0.90%. A FAIL is a coding
+#: the foul-tip plan (SIM-553). On the window 2023-2026 the corrected pool reads
+#: +0.09% / -0.25% / +0.08% / +0.07% (strikeouts / walks / hit by pitch /
+#: pitches); the foul-tip defect reads -4.29% / +2.31% / +1.12% / +0.90%. A FAIL is a coding
 #: defect to find, never a reason to widen this.
 LABEL_CHECK_TOLERANCE = 0.005
 
@@ -165,7 +165,7 @@ def _sql_is_batting_event(col: str = "events") -> str:
 def _sql_pa_flag(col: str = "events") -> str:
     """The group aggregate that marks a plate appearance: 1 when a row's ``col`` is a batting event.
 
-    SIM-553: :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
+    :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
     chain (on ``sim.pitch_pool``) both judge a ``(game_pk, at_bat_number)``
     group with this one expression, so the two sides cannot disagree on what a
     plate appearance is.
@@ -191,7 +191,7 @@ def _sql_pa_keys(pred: str) -> str:
 def pa_group_count(con: Any, pred: str) -> int:
     """The number of plate appearances the ``pa_only`` chain reads from ``sim.pitch_pool WHERE ({pred})``.
 
-    SIM-553: a plate appearance is a ``(game_pk, at_bat_number)`` group whose
+    A plate appearance is a ``(game_pk, at_bat_number)`` group whose
     rows inside ``pred`` hold a batting event, judged from the pool's own
     ``events`` column (:func:`_sql_pa_keys`, the SQL the ``pa_only`` read
     uses). The label check compares this with ``real_pa_rates(...)['n_pa']``:
@@ -258,7 +258,7 @@ def solve_chain(rates: list[list[float]]) -> dict[str, float]:
         else:
             denom = 1.0 - sh["foul"]  # the two-strike foul self-loop
             if denom <= 0.0:
-                # SIM-553 guard: a two-strike count where every pitch is a foul
+                # The guard: a two-strike count where every pitch is a foul
                 # never ends, and the closed form would divide by zero.
                 raise ValueError(
                     f"every pitch at count {b}-{s} is a foul: the count chain "
@@ -283,7 +283,7 @@ def pool_count_matrix(
     :data:`OUTCOMES` order. ``pred`` is a SQL predicate on the pool's columns
     (``season``, ``game_date``, ...).
 
-    ``pa_only`` (SIM-553) keeps only the rows of real plate appearances: the
+    ``pa_only`` keeps only the rows of real plate appearances: the
     rows whose ``(game_pk, at_bat_number)`` group holds a batting event in the
     pool's own ``events`` column. The group test is :func:`_sql_pa_flag`, the
     one :func:`real_pa_rates` applies to ``raw.pitches``, and it reads
@@ -305,7 +305,7 @@ def pool_count_matrix(
 
     Raises ``ValueError`` when a row carries a class outside :data:`OUTCOMES`
     (or a NULL class) or a count outside 0-3 balls / 0-2 strikes. A new class
-    must not vanish from the chain silently; the old census skipped it. It
+    must not vanish from the chain silently. It
     also raises when a count holds no volume: :func:`solve_chain` would read
     that count as all-zero shares and lose its mass without an error. The
     window's thinnest count holds 28,056 rows, so only a broken pool or a
@@ -313,7 +313,7 @@ def pool_count_matrix(
     """
     volume = "SUM(recency_weight)" if weighted else "COUNT(*)"
     if pa_only:
-        # SIM-553: one CTE of the plate-appearance keys (_sql_pa_keys, the SQL
+        # One CTE of the plate-appearance keys (_sql_pa_keys, the SQL
         # pa_group_count counts), joined back. Each key appears once, so the
         # join adds no row. The CTE holds only the two key columns, so a bare
         # column in ``pred`` stays unambiguous. ``pred`` applies twice: in the
@@ -388,7 +388,7 @@ def attach_pg(con: Any, dsn: str | None = None) -> None:
     """Attach Postgres read-only as the catalog ``pg``; a no-op when ``pg`` is attached.
 
     ``dsn`` defaults to ``BASEBALL_DB_DSN``; with neither, the attach raises
-    ``RuntimeError`` naming the variable (SIM-443b: no default password). The
+    ``RuntimeError`` naming the variable (there is no default password). The
     attach works on a read-only DuckDB connection. An attach failure raises
     ``RuntimeError`` with the DSN's password redacted.
     """
@@ -510,7 +510,7 @@ def format_label_check(rows: list[tuple[str, float, float, float, bool]]) -> lis
 def format_pa_count(n_pool: int, n_real: int) -> str:
     """Render the plate-appearance count check on one line, aligned with :func:`format_label_check`.
 
-    SIM-553: ``n_pool`` is :func:`pa_group_count`, ``n_real`` is
+    ``n_pool`` is :func:`pa_group_count`, ``n_real`` is
     ``real_pa_rates(...)['n_pa']``. Equal counts PASS. Unequal counts FAIL,
     with the plain reason: the two sides no longer read the same plate
     appearances.
@@ -527,7 +527,7 @@ def format_pa_count(n_pool: int, n_real: int) -> str:
 def format_gaps(rows: list[tuple[str, float, float, float, bool]]) -> str:
     """Render :func:`label_check` rows' gaps on one line, for a for-the-record read.
 
-    SIM-553: the census and the standing test print the all-rows chain's gaps
+    The census and the standing test print the all-rows chain's gaps
     this way beside the ``pa_only`` verdict.
     """
     return "  ".join(

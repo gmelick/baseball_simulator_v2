@@ -1,15 +1,15 @@
-"""The published-lineup writer (SIM-519 Part B).
+"""The published-lineup writer (the live slate, SIM-519).
 
 A game that has not started must be simulable, or the slate shows games the
 platform cannot price. The simulator resolves a game from ``raw.game_lineups``,
-and before this module only the historical loader wrote that table, from a
-FINAL game's box. So every upcoming game answered 503 to ``/simulate``.
+and the historical loader writes that table only from a FINAL game's box,
+so without this module every upcoming game answers 503 to ``/simulate``.
 
 The live service calls :meth:`PublishedLineupWriter.on_preview` for each game
 the schedule shows in Preview. When the league has posted both lineups, the
 writer reads the game's feed once, builds the starting rows with the loader's
 own builder (``_build_starting_lineup_rows``: each starter at his starting
-position, the SIM-559 rule) and writes them with ``source = 'published'``.
+position, SIM-559) and writes them with ``source = 'published'``.
 Before first pitch the box lists no pitcher, so the schedule's probable
 pitcher becomes each side's ``P`` row (the resolver's starter when the box has
 none).
@@ -44,7 +44,7 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
-from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows, _parse_height
+from pipeline.etl.historical.game_values import _build_starting_lineup_rows, _parse_height
 from pipeline.mlb_schedule import LIVE, SCHEDULED, card_state, parse_game
 
 log = logging.getLogger(__name__)

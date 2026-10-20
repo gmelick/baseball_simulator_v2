@@ -1,7 +1,4 @@
-"""
-pipeline/odds_row_guard.py
-==========================
-SIM-555 (2026-09-28) — the load guard: refuse an odds row that cannot be one bet.
+"""The load guard: refuse an odds row that cannot be one bet (one row per book, SIM-555).
 
 Both writers (the historical loader and the live cycle) call :func:`check_row`
 on every non-empty row before they persist it. A refused row is not written;
@@ -35,9 +32,7 @@ What the guard refuses (the evidence is the scope note and the plan,
     placeholder line the book never took. A line of 1.5 is real: books post it as
     an alternate, priced in step with the main line (DraftKings 2025-06-19 at 1.5,
     -160, beside 2.5 at +100 to +125 elsewhere), so the rule stops at 1.
-    The old provider read those lines too (the 2022-2024 "team totals at a
-    line of 1"); the opener field has no ``is_off`` flag, so only this rule
-    catches them. The first-five team totals are not checked: 0.5 is real there.
+    The opener field has no ``is_off`` flag, so only this rule catches them. The first-five team totals are not checked: 0.5 is real there.
   * ``f5_tie_price``: a first-five tie priced above 0.35 implied: a first-inning tie.
   * ``three_way_sum_below_one``: a three-way row (the first-inning or the
     first-five moneyline with a tie) whose three implied probabilities add
@@ -60,7 +55,7 @@ What the guard refuses (the evidence is the scope note and the plan,
   * ``late_closing_stamp``: a closing line stamped more than 15 minutes after
     the scheduled start. Since 2025 the vendor stamps a snapshot at game time,
     0-5 minutes after the scheduled start; a later stamp is an in-play line.
-  * ``stamped_before_postponement`` (SIM-555, 2026-10-01): a row of a game
+  * ``stamped_before_postponement``: a row of a game
     postponed and made up later, stamped no later than 15 minutes after the
     postponed original start (``CLOSING_STAMP_GRACE``). That price is for the
     game that was not played: bet365's closing price of game 745175 is
@@ -110,26 +105,26 @@ F5_TIE_IMPLIED_MAX = 0.35
 #: 1 + P(tie) + the margin. Above this sum the pair implies a first-inning tie.
 F5_WIN_OR_TIE_SUM_MAX = 1.40
 
-#: SIM-555 (census fix 2026-09-28): the three implied probabilities of a
+#: The three implied probabilities of a
 #: three-way row add to at least this. Below 1.00 a book would sell every
 #: outcome for less than the stake; the 0.02 allowance spares the near-fair
 #: prices of the exchanges and the prediction markets.
 THREE_WAY_SUM_MIN = 0.98
 
-#: SIM-555 (the book-order read, 2026-09-29): the three implied probabilities of a
+#: The three implied probabilities of a
 #: three-way row add to at most this (a real row adds to 1.02-1.15; a two-way pair
 #: listed beside a tie adds to about 1.22 over five innings, 1.64 over one).
 THREE_WAY_SUM_MAX = 1.18
 
-#: SIM-555 (the book-order read, 2026-09-29): the two team prices of a three-way
+#: The two team prices of a three-way
 #: row add to less than this; at or above it they are a two-way (tie-refunded) pair.
 THREE_WAY_TEAM_SUM_MAX = 1.00
 
-#: SIM-555 (census fix 2026-09-28): a first-five total of both teams at this
+#: A first-five total of both teams at this
 #: line or below is a first-inning total (a real first-five total sits at 3.5-6.5).
 F5_TOTAL_LINE_MAX = 1.5
 
-#: SIM-555 (the 2024 season census, 2026-09-29): a full-game team total at this
+#: A full-game team total at this (the 2024 season census)
 #: line or below is a placeholder, not a bet (1.5 is a real alternate line).
 TEAM_TOTAL_LINE_MAX = 1.0
 
@@ -312,7 +307,7 @@ def _check_stamp(row: Mapping[str, Any]) -> Refusal | None:
 
 
 def _check_postponement(row: Mapping[str, Any]) -> Refusal | None:
-    """SIM-555: refuse a made-up game's row stamped up to 15 minutes after its postponed start.
+    """Refuse a made-up game's row stamped up to 15 minutes after its postponed start.
 
     The 15 minutes (``CLOSING_STAMP_GRACE``) cover the vendor's game-time
     snapshot at the original start. Opening and closing rows alike. A row
@@ -336,7 +331,7 @@ def check_row(row: Mapping[str, Any]) -> Refusal | None:
     A prop row (it has ``prop_stat``) is checked as a full-game total at its
     ``line``. A game row is checked by its market's kind and segment. Then every
     closing row is checked for a late stamp, and every row of a made-up game
-    for a stamp at or before its postponed original start (SIM-555). A row with
+    for a stamp at or before its postponed original start. A row with
     every odds field empty is not refused here: the writers skip empty rows
     before the guard.
     """

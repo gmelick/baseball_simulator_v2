@@ -23,7 +23,14 @@ import unittest
 
 import duckdb
 
-import pipeline.batch.player_profile_computor as ppc
+from pipeline.batch.profiles.pool_meta import (  # noqa: E402
+    POOL_BUILDER_VERSION,
+    RECENCY_FLOOR,
+    _recency_weight_sql,
+    _record_pool_build,
+    _seasons_needing_rebuild,
+    recency_weight,
+)
 
 MIGRATION_0004 = os.path.join(
     os.path.dirname(__file__),
@@ -61,18 +68,18 @@ def _conn_with_pg():
 
 class TestRecencyWeightFormula(unittest.TestCase):
     def test_recent_two_seasons_peak(self):
-        self.assertEqual(ppc.recency_weight(2025, 2025), 2.0)
-        self.assertEqual(ppc.recency_weight(2024, 2025), 2.0)
+        self.assertEqual(recency_weight(2025, 2025), 2.0)
+        self.assertEqual(recency_weight(2024, 2025), 2.0)
 
     def test_geometric_decay(self):
-        self.assertAlmostEqual(ppc.recency_weight(2023, 2025), 1.5, places=6)  # 2*0.75^1
-        self.assertAlmostEqual(ppc.recency_weight(2022, 2025), 1.125, places=6)  # 2*0.75^2
+        self.assertAlmostEqual(recency_weight(2023, 2025), 1.5, places=6)  # 2*0.75^1
+        self.assertAlmostEqual(recency_weight(2022, 2025), 1.125, places=6)  # 2*0.75^2
 
     def test_floor(self):
-        self.assertEqual(ppc.recency_weight(2005, 2025), ppc.RECENCY_FLOOR)
+        self.assertEqual(recency_weight(2005, 2025), RECENCY_FLOOR)
 
     def test_monotonic_non_increasing(self):
-        ws = [ppc.recency_weight(s, 2025) for s in range(2025, 2010, -1)]
+        ws = [recency_weight(s, 2025) for s in range(2025, 2010, -1)]
         self.assertEqual(ws, sorted(ws, reverse=True))
 
 
@@ -83,10 +90,10 @@ class TestRecencySqlParity(unittest.TestCase):
         seasons = list(range(2010, 2026))
         c.executemany("INSERT INTO t VALUES (?)", [[s] for s in seasons])
         ref = 2025
-        expr = ppc._recency_weight_sql("season", ref)
+        expr = _recency_weight_sql("season", ref)
         rows = c.execute(f"SELECT season, {expr} AS w FROM t ORDER BY season").fetchall()
         for season, w in rows:
-            self.assertAlmostEqual(w, ppc.recency_weight(season, ref), places=5)
+            self.assertAlmostEqual(w, recency_weight(season, ref), places=5)
 
 
 class TestSeasonsNeedingRebuild(unittest.TestCase):
@@ -105,10 +112,10 @@ class TestSeasonsNeedingRebuild(unittest.TestCase):
         c.execute(
             "INSERT INTO sim.pool_build_metadata "
             "(pool_name, season, row_count, source_max_game_date, source_row_count, recency_ref_season, builder_version) "
-            f"VALUES ('pitch_pool', 2023, 10, DATE '2023-09-01', 1, 2024, '{ppc.POOL_BUILDER_VERSION}'), "
-            f"('pitch_pool', 2024, 10, DATE '2024-08-01', 1, 2024, '{ppc.POOL_BUILDER_VERSION}')"
+            f"VALUES ('pitch_pool', 2023, 10, DATE '2023-09-01', 1, 2024, '{POOL_BUILDER_VERSION}'), "
+            f"('pitch_pool', 2024, 10, DATE '2024-08-01', 1, 2024, '{POOL_BUILDER_VERSION}')"
         )
-        stale = ppc._seasons_needing_rebuild(c, "pitch_pool", [2023, 2024, 2025])
+        stale = _seasons_needing_rebuild(c, "pitch_pool", [2023, 2024, 2025])
         self.assertNotIn(2023, stale)  # fresh
         self.assertIn(2024, stale)  # source advanced
         self.assertIn(2025, stale)  # never built
@@ -128,12 +135,12 @@ class TestSeasonsNeedingRebuild(unittest.TestCase):
             "(pool_name, season, row_count, source_max_game_date, source_row_count, recency_ref_season, builder_version) "
             "VALUES ('pitch_pool', 2023, 10, DATE '2023-09-01', 1, 2024, 'sim076.1')"
         )
-        stale = ppc._seasons_needing_rebuild(c, "pitch_pool", [2023])
+        stale = _seasons_needing_rebuild(c, "pitch_pool", [2023])
         self.assertIn(2023, stale)  # built by an older builder → rebuild
 
     def test_missing_metadata_table_rebuilds_all(self):
         c = duckdb.connect(":memory:")  # no sim.pool_build_metadata
-        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024, 2025]), [2024, 2025])
+        self.assertEqual(_seasons_needing_rebuild(c, "pitch_pool", [2024, 2025]), [2024, 2025])
 
 
 class TestRecordPoolBuild(unittest.TestCase):
@@ -144,7 +151,7 @@ class TestRecordPoolBuild(unittest.TestCase):
             [[2024, dt.date(2024, 9, 1)], [2024, dt.date(2024, 9, 30)]],
         )
         c.executemany("INSERT INTO sim.pitch_pool VALUES (?, 2024, 2.0)", [[1], [2], [3]])
-        ppc._record_pool_build(c, "pitch_pool", [2024], ref_season=2024)
+        _record_pool_build(c, "pitch_pool", [2024], ref_season=2024)
         row = c.execute(
             "SELECT row_count, source_max_game_date, recency_ref_season, builder_version "
             "FROM sim.pool_build_metadata WHERE pool_name='pitch_pool' AND season=2024"
@@ -152,14 +159,14 @@ class TestRecordPoolBuild(unittest.TestCase):
         self.assertEqual(row[0], 3)  # row_count
         self.assertEqual(row[1], dt.date(2024, 9, 30))  # watermark = max source game_date
         self.assertEqual(row[2], 2024)  # recency ref
-        self.assertEqual(row[3], ppc.POOL_BUILDER_VERSION)
+        self.assertEqual(row[3], POOL_BUILDER_VERSION)
 
     def test_idempotent_reupsert(self):
         c = _conn_with_pg()
         c.execute("INSERT INTO pg.raw.pitches VALUES (2024, DATE '2024-09-01', FALSE)")
         c.execute("INSERT INTO sim.pitch_pool VALUES (1, 2024, 2.0)")
-        ppc._record_pool_build(c, "pitch_pool", [2024], 2024)
-        ppc._record_pool_build(c, "pitch_pool", [2024], 2024)
+        _record_pool_build(c, "pitch_pool", [2024], 2024)
+        _record_pool_build(c, "pitch_pool", [2024], 2024)
         n = c.execute(
             "SELECT COUNT(*) FROM sim.pool_build_metadata WHERE pool_name='pitch_pool'"
         ).fetchone()[0]

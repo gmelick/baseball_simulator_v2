@@ -1,4 +1,4 @@
-"""pipeline/backup — the backups of the data stores (SIM-525) and their off-site copy (SIM-568).
+"""pipeline/backup — the backups of the data stores and their off-site copy.
 
 ``status`` reads which backup sets exist (the API imports it, so it stays pure
 stdlib). ``data_stores`` backs up, verifies and restores the DuckDB analytics

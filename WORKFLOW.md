@@ -333,7 +333,7 @@ python tests\regression\generate_fixtures.py --force
 ### 2.4 Live ingestion pipeline
 
 ```bat
-pytest "tests\unit\test_live_pipeline_bugs.py::TestSIM132MockOddsVig" -v
+pytest "tests\unit\test_live_pipeline_bugs.py::TestMockOddsVig" -v
 
 docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT COUNT(*) AS null_hashes FROM raw.game_odds WHERE odds_hash IS NULL;"
 docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT game_pk, source, odds_hash, COUNT(*) FROM raw.game_odds GROUP BY 1,2,3 HAVING COUNT(*) > 1 LIMIT 5;"

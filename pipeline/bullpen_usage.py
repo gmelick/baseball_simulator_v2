@@ -1,13 +1,13 @@
 """
 pipeline/bullpen_usage.py
 =========================
-SIM-427 — the pen's facts from the official box score and the MLB API's
+The pen's facts from the official box score and the MLB API's
 per-game bullpen listing, for the pitching-change draw and the reliever draw.
 
 Two consumers share these queries so the pool rows and the live candidates
 carry the SAME definitions (the fit compares one against the other):
 
-* the artifact builder (``pipeline/batch/engine_artifacts.py``,
+* the artifact builder (``pipeline/batch/artifacts/manager_pool.py``,
   ``build_pitching_change_pool``), in bulk, for every appearance in the pool
   window — the incoming arm's rest as of the game he entered, and the game's
   two managers;

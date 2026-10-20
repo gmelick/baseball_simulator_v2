@@ -1,8 +1,8 @@
 """
 pipeline/etl/boxscore_ingest.py
 ===============================
-The official per-player box score as the prop ground truth (SIM-545, the
-sub-ticket of the unpriced-prop-markets work, SIM-421).
+The official per-player box score as the prop ground truth (SIM-545, part
+of the unpriced prop markets, SIM-421).
 
 WHY
 ---
@@ -93,7 +93,7 @@ PITCHING_FIELDS: dict[str, str] = {
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 #: Never sleep longer than this on a server's ``Retry-After`` say-so (the
-#: historical loader's cap, SIM-441).
+#: historical loader's cap).
 _MAX_RETRY_AFTER_S = 60.0
 
 
@@ -326,7 +326,7 @@ def persist_sync(cur: Any, rows: Iterable[PlayerGameStats]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# SIM-427: the per-game bullpen listing (the arms the box lists per side)
+# The per-game bullpen listing (the arms the box lists per side)
 # ---------------------------------------------------------------------------
 
 #: ``raw.game_bullpen.listed`` values, in the order the parser emits them.
@@ -337,7 +337,7 @@ LISTED_STARTED = "started"
 
 @dataclass(frozen=True, slots=True)
 class BullpenListing:
-    """One arm the MLB box lists for a game (SIM-427, Alembic 0025).
+    """One arm the MLB box lists for a game (the real pen, SIM-427; Alembic 0025).
 
     ``listed``: ``'bullpen'`` — on the roster, did not pitch; ``'pitched'`` — a
     reliever who appeared; ``'started'`` — the side's starting pitcher (the
@@ -381,7 +381,7 @@ def parse_bullpen_listing(
     home_team_id: int | None = None,
     away_team_id: int | None = None,
 ) -> list[BullpenListing]:
-    """The arms the box lists per side (SIM-427): every id in ``bullpen`` as
+    """The arms the box lists per side: every id in ``bullpen`` as
     ``'bullpen'``, the first id in ``pitchers`` as ``'started'``, the rest of
     ``pitchers`` as ``'pitched'``. An id in both lists (it happens on a
     corrected box) keeps its ``pitchers`` reading. The same ``teams`` dict
@@ -439,12 +439,12 @@ def persist_bullpen_sync(cur: Any, rows: Iterable[BullpenListing]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# The starting position (SIM-559)
+# The starting position
 # ---------------------------------------------------------------------------
 
 
 def starting_position(pdata: Mapping[str, Any]) -> str | None:
-    """The position a player held when he entered the game (SIM-559).
+    """The position a player held when he entered the game.
 
     The box's ``position`` is the LAST position the player held in the game.
     ``allPositions`` lists every position he held, in order, so its first entry
@@ -463,11 +463,12 @@ def starting_position(pdata: Mapping[str, Any]) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class StartingPosition:
-    """One starter's starting and last positions in a game (SIM-559).
+    """One starter's starting and last positions in a game.
 
     ``position_code`` is the starting position (``allPositions[0]``);
     ``last_position_code`` is the box's ``position``, the value the lineup
-    rows loaded before SIM-559 carry. ``batting_order`` is the slot (1-9).
+    rows loaded before the starting-position fix (SIM-559) carry.
+    ``batting_order`` is the slot (1-9).
     """
 
     game_pk: int
@@ -490,7 +491,7 @@ def parse_starting_positions(
     home_team_id: int | None = None,
     away_team_id: int | None = None,
 ) -> list[StartingPosition]:
-    """The starting position of every batting-order STARTER in a box (SIM-559).
+    """The starting position of every batting-order STARTER in a box.
 
     A starter is a player whose ``battingOrder`` ends in ``00``. The starting
     pitcher of a designated-hitter game has no batting order and no row here:
@@ -535,7 +536,7 @@ def parse_starting_positions(
     return rows
 
 
-#: SIM-559: repair the starters' lineup rows in one statement per game. Only a
+#: Repair the starters' lineup rows in one statement per game. Only a
 #: row whose code differs is written, so ``updated_at`` (the table's trigger)
 #: marks exactly the repaired rows.
 STARTING_POSITION_UPDATE_SQL_ASYNCPG: str = """
@@ -584,7 +585,7 @@ def _rows_from_status(status: Any) -> int:
 
 @dataclass
 class BoxscoreIngest:
-    """Fetch the official box score for a game and persist its rows (SIM-545).
+    """Fetch the official box score for a game and persist its rows.
 
     Parameters
     ----------

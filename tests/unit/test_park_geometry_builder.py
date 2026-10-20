@@ -37,7 +37,7 @@ import urllib.error
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
+from pipeline.batch.artifacts.park_geometry import (
     CARRY_OFFSET_FEATURES,
     PARK_N_SECTORS,
     PARK_OFFSET_MIN_HR,

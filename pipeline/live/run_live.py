@@ -1,4 +1,4 @@
-"""The live service's entry point (SIM-519 Part C; decision D2).
+"""The live service's entry point (the live slate, SIM-519; decision D2).
 
 ``python -m pipeline.live.run_live`` runs the live ingestion pipeline in its own
 container (the compose ``live`` service): the schedule poll, the per-game push

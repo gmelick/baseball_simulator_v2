@@ -27,7 +27,7 @@ from pipeline.etl.boxscore_ingest import (
     persist_starting_positions,
     starting_position,
 )
-from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows
+from pipeline.etl.historical.game_values import _build_starting_lineup_rows
 from simulation.lineup_resolver import build_team_defense_map, resolve_lineup_from_rows
 
 HOME, AWAY = 134, 119  # Pittsburgh, Los Angeles (NL) — the real game 823372's sides

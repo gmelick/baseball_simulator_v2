@@ -17,13 +17,12 @@ No test here touches the network.
 from __future__ import annotations
 
 import re
-from dataclasses import fields
 from pathlib import Path
 
 import pytest
 
 from pipeline.etl import savant_loader as sl
-from pipeline.etl.savant_boards import BOARDS, FIELDING_BOARDS, PROBE_SEASON, SavantBoard
+from pipeline.etl.savant_boards import BOARDS, FIELDING_BOARDS, PROBE_SEASON
 
 REPO = Path(__file__).resolve().parents[2]
 ALEMBIC_0027 = REPO / "db" / "migrations" / "versions" / "0027_sim532_savant_oaa_and_jump.py"
@@ -100,14 +99,9 @@ def test_the_split_parameter_defaults_to_the_pitcher_s_hand() -> None:
     assert OAA.split_param == "pos"
 
 
-def test_hand_splits_is_a_read_only_alias_of_splits() -> None:
-    """The old name (SIM-529) still reads; the new name is the field."""
+def test_the_swing_boards_pull_three_pitcher_hand_splits() -> None:
     board = BOARDS["bat_tracking"]
-    assert board.hand_splits == board.splits
     assert board.splits == (("all", ""), ("vs_l", "L"), ("vs_r", "R"))
-    alias = SavantBoard.hand_splits
-    assert isinstance(alias, property) and alias.fset is None
-    assert "hand_splits" not in {f.name for f in fields(SavantBoard)}
 
 
 # ---------------------------------------------------------------------------

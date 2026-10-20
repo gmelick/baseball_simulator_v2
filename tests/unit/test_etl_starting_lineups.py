@@ -8,7 +8,7 @@ no DB.
 
 from __future__ import annotations
 
-from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows
+from pipeline.etl.historical.game_values import _build_starting_lineup_rows
 
 
 def _player(pid: int, batting_order: str | None, pos: str) -> dict:

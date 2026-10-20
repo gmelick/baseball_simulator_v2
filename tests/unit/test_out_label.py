@@ -38,6 +38,13 @@ _COMPUTOR = (
     Path(__file__).resolve().parents[2] / "pipeline" / "batch" / "player_profile_computor.py"
 )
 
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [_COMPUTOR, *sorted((_COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
+
 #: The events vocabulary measured over the swept seasons (32 values), plus
 #: intent_walk / truncated_pa from the feed vocabulary. If a new season adds
 #: an event, add it to PLAY_OUTS_BY_EVENT with a measured out count AND here.
@@ -239,7 +246,7 @@ class TestComputorReadsNoOutsOnPitch:
     it. Comment mentions are allowed; code is not."""
 
     def test_no_code_reads_outs_on_pitch(self):
-        offending = _offending_reads(_COMPUTOR.read_text(encoding="utf-8"))
+        offending = _offending_reads(_computor_source())
         assert not offending, (
             "player_profile_computor.py reads outs_on_pitch — derive the out "
             "label from `events` instead (pipeline/statcast_events.py):\n" + "\n".join(offending)

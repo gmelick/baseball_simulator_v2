@@ -29,20 +29,19 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros_odds_provider import (
+from pipeline.bettingpros.parsing import _book_line, _usable
+from pipeline.bettingpros.rules import (
     F5_EXCLUDED_BOOKS,
     F5_EXCLUDED_MARKETS,
     F5_TWIN_MARKETS,
     TWIN_MONEYLINE_PRICE_TOLERANCE,
     TWIN_PRICE_TOLERANCE,
-    BettingProsOddsProvider,
-    _book_line,
-    _usable,
     f5_excluded_markets,
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from pipeline.live.live_ingestion_pipeline import MockOddsAPI
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.odds_provider import (
     BETTABLE_KINDS,
     BOOK_IDS_BY_NAME,
@@ -56,7 +55,6 @@ from pipeline.odds_provider import (
     ODDS_ROW_VERSION,
     STORED_BOOK_FILTER_SQL,
     OddsProvider,
-    RealOddsAPIProvider,
     bettable_labels,
     book_display_name,
     book_id_from_label,
@@ -480,7 +478,6 @@ class TestByBookSeam:
     def test_every_provider_conforms(self) -> None:
         for provider in (
             MockOddsAPI(),
-            RealOddsAPIProvider(),
             BettingProsOddsProvider(api_key="k"),
         ):
             assert isinstance(provider, OddsProvider)
@@ -522,12 +519,6 @@ class TestByBookSeam:
             {"game_pk": 7, "market_type": "total", "fake": True}
         ]
         assert prop_rows_by_book(_InstanceFlaky(), 7, 9, "hits") == [{"player_id": 9, "fake": True}]
-
-    def test_the_real_stub_raises(self) -> None:
-        with pytest.raises(RuntimeError, match="not yet implemented"):
-            RealOddsAPIProvider().get_odds_by_book(1)
-        with pytest.raises(RuntimeError, match="not yet implemented"):
-            RealOddsAPIProvider().get_prop_odds_by_book(1, 2, "strikeouts")
 
     def test_the_helpers_fall_back_to_the_one_row_methods(self) -> None:
         fake = _OneRowFake()

@@ -17,12 +17,14 @@ row with the date its data runs through turns that rule into arithmetic:
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import re
 from pathlib import Path
 
 import pytest
 
-from pipeline.batch.player_profile_computor import (
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from pipeline.batch.profiles.sql import (
     PHYSICAL_COLUMN_ORDER,
     PROFILE_TAIL_COLUMNS,
     _sql_pitch_swing_agg,
@@ -36,6 +38,19 @@ REPO = Path(__file__).resolve().parents[2]
 MIG_0026 = REPO / "db" / "migrations" / "duckdb" / "0026_sim534_profile_asof.sql"
 VERSION_FILE = REPO / "db" / "schemas" / "duckdb_schema_version.txt"
 COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+
+
+def _method_source(name: str) -> str:
+    """One computor method's source, from its ``def`` line (the method may live
+    in a mixin of ``pipeline/batch/profiles``)."""
+    src = inspect.getsource(getattr(PlayerProfileComputor, name))
+    return src[src.index(f"def {name}") :]
+
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +69,7 @@ _DATED_SOURCES = (
 
 
 def test_every_dated_source_is_filtered_by_the_cutoff() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_batter_profiles")
-    end = src.index("def _assert_batter_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_batter_profiles")
     for table in _DATED_SOURCES:
         assert f"pg.{table}" in body, f"{table} is no longer read — update this test"
     # The pitch sources are cut by game_date, the leaderboards by asof_date.
@@ -68,9 +80,7 @@ def test_every_dated_source_is_filtered_by_the_cutoff() -> None:
 
 
 def test_the_leakage_assertion_covers_every_dated_source() -> None:
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _assert_batter_profiles_have_no_leakage")
-    body = src[start : start + 3000]
+    body = _method_source("_assert_batter_profiles_have_no_leakage")[:3000]
     for table in _DATED_SOURCES:
         assert f'"{table}"' in body, f"{table} is not checked by the leakage assertion"
 
@@ -79,7 +89,7 @@ def test_a_cutoff_build_deletes_seasons_that_had_not_started() -> None:
     """INSERT OR REPLACE only overwrites rows the query produces. Without the
     delete, a 2025 profile survives a build as of April 2024 and the backtest
     scores against a batter who has not played yet."""
-    src = COMPUTOR.read_text(encoding="utf-8")
+    src = _computor_source()
     assert "DELETE FROM derived.batter_season_metrics" in src
     assert "season > {asof_date.year}" in src
 
@@ -88,15 +98,12 @@ def test_every_profile_ends_up_stamped() -> None:
     """SIM-551: the stamp covers the WHOLE table, through the shared helper.
     The old step stamped only the rows with no stamp yet, which is how the
     batter table reached two cutoffs on 2026-09-11."""
-    src = COMPUTOR.read_text(encoding="utf-8")
-    start = src.index("def _compute_batter_profiles")
-    end = src.index("def _assert_batter_profiles_have_no_leakage")
-    body = src[start:end]
+    body = _method_source("_compute_batter_profiles")
     assert (
         'self._refuse_a_mixed_cutoff("derived.batter_season_metrics", seasons, asof_date)' in body
     )
     assert 'self._stamp_one_cutoff("derived.batter_season_metrics", asof_sql)' in body
-    assert "WHERE asof_date IS NULL" not in src
+    assert "WHERE asof_date IS NULL" not in _computor_source()
 
 
 # ---------------------------------------------------------------------------

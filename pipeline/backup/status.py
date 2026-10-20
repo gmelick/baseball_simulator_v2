@@ -1,4 +1,4 @@
-"""pipeline/backup/status.py — which backup sets exist, and how old they are (SIM-525).
+"""pipeline/backup/status.py — which backup sets exist, and how old they are.
 
 The backup root holds one folder per store (``postgres``, ``duckdb``,
 ``bundle``). Each store folder holds one folder per SET, named by the UTC time
