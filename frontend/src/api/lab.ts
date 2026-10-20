@@ -95,8 +95,6 @@ export interface ZoneRow {
   called_strike_pct: number | null
 }
 
-export type LeaderRow = Record<string, number | string | null>
-
 /**
  * SIM-572: the games a season read covers. 'R' (the API's default) reads the
  * regular season alone; 'all' adds the postseason.
@@ -137,29 +135,6 @@ export const fetchVeloDistribution = (f: AnalyticsFilter & { pitchType?: string 
 
 export const fetchZone = (f: AnalyticsFilter): Promise<ZoneRow[]> =>
   getJson<ZoneRow[]>(`/api/analytics/zone${qs({ season: f.season, pitcher: f.pitcher, game_type: f.gameType })}`)
-
-export const fetchPitcherLeaders = (
-  season: number,
-  metric: string,
-  minPa = 200,
-  limit = 50,
-  gameType?: GameType,
-): Promise<LeaderRow[]> =>
-  getJson<LeaderRow[]>(
-    `/api/analytics/leaderboard/pitchers${qs({ season, metric, min_pa: minPa, limit, game_type: gameType })}`,
-  )
-
-export const fetchBatterLeaders = (
-  season: number,
-  metric: string,
-  minPa = 200,
-  limit = 50,
-  vsHand?: string,
-  gameType?: GameType,
-): Promise<LeaderRow[]> =>
-  getJson<LeaderRow[]>(
-    `/api/analytics/leaderboard/batters${qs({ season, metric, min_pa: minPa, limit, vs_hand: vsHand, game_type: gameType })}`,
-  )
 
 // ---------------------------------------------------------------------------
 // Data freshness (existing endpoint)

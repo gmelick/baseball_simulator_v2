@@ -58,20 +58,6 @@ export interface SubScoreMeta {
   weight: number | null
 }
 
-export interface EngineMeta {
-  engine: string
-  method: string
-  partition: string
-  sub_scores: SubScoreMeta[]
-  sample_field: string
-  min_sample: number
-  supports_vs_hand: boolean
-  position_keyed: boolean
-  built: boolean
-  profile_count: number
-  note: string
-}
-
 export interface SimMember {
   entity_id: number
   season: number
@@ -143,9 +129,6 @@ export interface SimQueryParams {
 
 export const fetchEngineCatalog = (): Promise<EngineCatalogEntry[]> =>
   getJson<EngineCatalogEntry[]>('/api/similarity/engines')
-
-export const fetchEngineMeta = (engine: string, position?: string, vsHand?: string): Promise<EngineMeta> =>
-  getJson<EngineMeta>(`/api/similarity/${engine}/meta${qs({ position, vs_hand: vsHand })}`)
 
 export const fetchSimilarity = (engine: string, p: SimQueryParams): Promise<SimQueryResponse> =>
   getJson<SimQueryResponse>(

@@ -614,11 +614,6 @@ export function fetchGameCard(gamePk: number): Promise<GameCardAggregate> {
   return getJson<GameCardAggregate>(`/api/games/${gamePk}/status`)
 }
 
-/** GET /api/games/{game_pk}/linescore — per-inning R/H/E grid (needs a persisted sim). */
-export function fetchLinescore(gamePk: number): Promise<Linescore> {
-  return getJson<Linescore>(`/api/games/${gamePk}/linescore`)
-}
-
 /** GET /api/games/{game_pk}/plays — pitch-by-pitch scroll (needs a persisted sim).
  *  SIM-561: `runId` reads that stored game; omit it for the newest. */
 export function fetchPlays(gamePk: number, runId?: number | null): Promise<PlayByPlay> {

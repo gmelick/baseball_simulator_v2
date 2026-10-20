@@ -110,11 +110,6 @@
   color: var(--sim-danger-700);
 }
 
-.errorHint {
-  margin-top: 4px;
-  font-size: 13px;
-}
-
 @media (max-width: 640px) {
   .page { padding: 16px 16px 48px; }
   .title { font-size: 28px; }

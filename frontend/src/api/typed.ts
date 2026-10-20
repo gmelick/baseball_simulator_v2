@@ -18,23 +18,18 @@ import type { components } from './schema'
 type Schemas = components['schemas']
 
 // Games surface (api/routes/games.py)
-export type GamesOnDate = Schemas['GamesOnDateResponse']
 export type GameCardRow = Schemas['GameCard']
 export type GameCardAggregate = Schemas['GameCardAggregateResponse']
 export type Linescore = Schemas['LinescoreModel']
 export type PlayByPlay = Schemas['PlayByPlayModel']
-export type LiveGameState = Schemas['LiveGameStateResponse']
 export type BoxscoreCard = Schemas['BoxscoreCardModel']
 export type PropEdge = Schemas['PropEdgeResponse']
-export type WithOverrideResponse = Schemas['WithOverrideResponse']
-export type RosterOverride = Schemas['RosterOverride']
 
 // Betting surface (api/routes/betting.py)
 export type EdgesResponse = Schemas['EdgesResponse']
 export type SignalsResponse = Schemas['SignalsResponse']
 export type EdgeReport = Schemas['EdgeReportModel']
 export type BetSignal = Schemas['BetSignalModel']
-export type LineMovementResponse = Schemas['LineMovementResponse']
 
 // Data-freshness surface (api/routes/data_health.py — SIM-417)
 export type DataFreshness = Schemas['DataFreshnessResponse']

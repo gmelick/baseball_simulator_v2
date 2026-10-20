@@ -5,9 +5,6 @@
   margin: 0 auto;
   padding: var(--sim-space-5) var(--sim-space-6);
 }
-.labShell.wide {
-  max-width: none;
-}
 
 .labHeader {
   margin-bottom: var(--sim-space-4);
@@ -69,8 +66,7 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.select,
-.input {
+.select {
   padding: var(--sim-space-1p5) var(--sim-space-2);
   font-size: var(--sim-text-sm);
   font-family: var(--sim-font-sans);
