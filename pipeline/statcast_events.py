@@ -38,13 +38,6 @@ Measured on the live DB, 2024 season (do not re-derive these):
   no-double-count property does not rest on the feed keeping that promise.
 * No in-play row (type X/D/E) carries a steal attempt, so a per-play out
   count over batted balls needs no caught-stealing term.
-
-``simulation/sim_loop.py`` carries ``_OUT_EVENTS`` as the loop's own
-"did the batter reach" test. It lists ``fielders_choice`` as an out, which
-the measurement above disproves for that question. Reconciling the loop is
-simulator work, not this module's job;
-``test_out_label.py`` pins the divergence so it cannot drift
-unnoticed.
 """
 
 from __future__ import annotations
