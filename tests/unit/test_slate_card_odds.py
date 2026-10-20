@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import api.routes.betting as betting_mod
+import api.routes.betting_card as betting_card
 from api.auth import require_auth
 from api.routes.betting import router as betting_router
 
@@ -169,11 +169,11 @@ def test_settlement(away: int, home: int, ml: str, rl: str, total: str) -> None:
 
 
 def test_total_push() -> None:
-    odds = betting_mod.CardOddsResponse(
+    odds = betting_card.CardOddsResponse(
         game_pk=1,
-        total=betting_mod.CardTotal(book="x", line_type="closing", line=8.0, over=-110, under=-110),
+        total=betting_card.CardTotal(book="x", line_type="closing", line=8.0, over=-110, under=-110),
     )
-    s = betting_mod._card_settlement(odds, 3, 5)  # noqa: SLF001
+    s = betting_card._card_settlement(odds, 3, 5)  # noqa: SLF001
     assert s.total == "push"
     assert s.moneyline is None and s.runline is None
 
