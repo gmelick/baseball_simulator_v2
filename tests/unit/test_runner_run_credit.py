@@ -33,8 +33,9 @@ from __future__ import annotations
 import numpy as np
 
 from simulation.game_state import Bases, GameState
+from simulation.loop.values import StealResolution
 from simulation.prop_distributions import PropDistributionSet
-from simulation.sim_loop import StateMachine, StealResolution
+from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024

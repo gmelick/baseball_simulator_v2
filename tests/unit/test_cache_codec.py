@@ -29,10 +29,10 @@ import pytest
 from api.serialization import to_jsonable
 from simulation import cache_codec
 from simulation.batch_runner import RedisCache, make_cache
+from simulation.loop.boxscore import GameSimResult
 from simulation.play_recorder import record_game_plays
 from simulation.prop_distributions import PropDistributionSet
 from simulation.results import ConfidenceInterval, GameSimSummary
-from simulation.sim_loop import GameSimResult
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

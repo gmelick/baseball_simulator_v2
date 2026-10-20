@@ -44,7 +44,8 @@ from simulation.lineup_resolver import (
     resolve_lineup,
     resolve_lineup_from_rows,
 )
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.loop.boxscore import GameSimResult
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 GAME_PK = 823372

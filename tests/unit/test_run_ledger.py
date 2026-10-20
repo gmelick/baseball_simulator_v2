@@ -47,8 +47,9 @@ import numpy as np
 import pytest
 
 from simulation.game_state import Bases, GameState, Half, PlayResult
+from simulation.loop.values import EVENT_WALK
 from simulation.run_resolution import RE24_MATRIX, RunResolution, re24_value, resolve_runs
-from simulation.sim_loop import EVENT_WALK, StateMachine
+from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
@@ -155,7 +156,7 @@ class TestTheBeforeStateIsMeasuredBeforeThePlay:
         from types import SimpleNamespace
 
         from simulation.game_state import PlayResult
-        from simulation.sim_loop import FieldingSignal
+        from simulation.loop.values import FieldingSignal
 
         class _TagFP:
             a = SimpleNamespace(adv_pools={"4_3_4": object()})

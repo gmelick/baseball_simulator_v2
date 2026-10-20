@@ -39,8 +39,9 @@ import pytest
 
 from pipeline.batch.engine_artifacts import StealPool
 from simulation.game_state import PlayResult, Team
+from simulation.loop.boxscore import GameSimResult
 from simulation.play_recorder import RecordingMachine
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,

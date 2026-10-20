@@ -31,7 +31,8 @@ from pipeline.batch.engine_artifacts import (
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, PlayResult
-from simulation.sim_loop import FieldingSignal, StateMachine
+from simulation.loop.values import FieldingSignal
+from simulation.sim_loop import StateMachine
 
 # ---------------------------------------------------------------------------
 # Helpers

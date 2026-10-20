@@ -31,12 +31,7 @@ import pytest
 
 from pipeline.batch import pool_chain as pc
 from simulation.game_state import PITCH_OUTCOMES
-from simulation.sim_loop import (
-    EVENT_HIT_BY_PITCH,
-    EVENT_STRIKEOUT,
-    EVENT_WALK,
-    advance_count,
-)
+from simulation.loop.values import EVENT_HIT_BY_PITCH, EVENT_STRIKEOUT, EVENT_WALK, advance_count
 
 # ---------------------------------------------------------------------------
 # The oracle: the deleted solver, verbatim

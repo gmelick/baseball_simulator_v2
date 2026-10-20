@@ -19,7 +19,8 @@ from __future__ import annotations
 import numpy as np
 
 from simulation.game_state import Bases, GameState, PlayResult
-from simulation.sim_loop import StateMachine, StealResolution
+from simulation.loop.values import StealResolution
+from simulation.sim_loop import StateMachine
 
 SEASON = 2024
 PITCHER = 477132

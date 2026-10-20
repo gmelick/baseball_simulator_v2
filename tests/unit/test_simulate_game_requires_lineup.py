@@ -30,7 +30,8 @@ import pytest
 
 from simulation.batch_runner import GameSpec, _run_one, derive_seed
 from simulation.game_state import GameState
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.loop.boxscore import GameSimResult
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024

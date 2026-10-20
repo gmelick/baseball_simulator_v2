@@ -32,14 +32,10 @@ from __future__ import annotations
 import numpy as np
 
 from simulation.game_state import Bases, GameState, PlayResult
+from simulation.loop.boxscore import PlayerStatLine
+from simulation.loop.values import STEAL_CAUGHT, STEAL_SAFE, StealResolution
 from simulation.prop_distributions import TB_IS_LOWER_BOUND, _total_bases
-from simulation.sim_loop import (
-    STEAL_CAUGHT,
-    STEAL_SAFE,
-    PlayerStatLine,
-    StateMachine,
-    StealResolution,
-)
+from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024

@@ -55,7 +55,8 @@ from simulation.batch_runner import (
     _resolve_dotted,
 )
 from simulation.game_state import PlayResult
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.loop.boxscore import GameSimResult
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.snapshots import PitchContext
 
 #: The default machine factory dotted-ref: the picklable, no-DB rng-driven

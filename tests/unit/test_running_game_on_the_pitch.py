@@ -51,13 +51,8 @@ from pipeline.batch.engine_artifacts import (
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import NO_PITCH, PITCH_OUTCOMES, Bases, GameState, Half
-from simulation.sim_loop import (
-    STEAL_CAUGHT,
-    STEAL_SAFE,
-    StateMachine,
-    StealResolution,
-    simulate_game,
-)
+from simulation.loop.values import STEAL_CAUGHT, STEAL_SAFE, StealResolution
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,

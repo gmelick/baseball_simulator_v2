@@ -29,9 +29,9 @@ from api.schemas import GameSimSummaryLite
 from api.serialization import to_jsonable
 from simulation.game_market_distributions import SegmentRuns, segment_runs_from_summary
 from simulation.linescore import linescore_from_plays
+from simulation.loop.boxscore import GameSimResult
 from simulation.play_recorder import record_game_plays
 from simulation.results import GameSimSummary
-from simulation.sim_loop import GameSimResult
 
 SIM_KWARGS = {
     "season": 2024,

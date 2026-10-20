@@ -37,8 +37,8 @@ from pipeline.batch.engine_artifacts import (
 )
 from pipeline.batch.player_profile_computor import PlayerProfileComputor
 from simulation.full_pool_sampler import FullPoolSampler
-from simulation.game_state import GameState, Half, PlayResult
-from simulation.sim_loop import StateMachine, Team
+from simulation.game_state import GameState, Half, PlayResult, Team
+from simulation.sim_loop import StateMachine
 
 # ---------------------------------------------------------------------------
 # The computor build

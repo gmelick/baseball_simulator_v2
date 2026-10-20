@@ -30,13 +30,8 @@ import numpy as np
 import pytest
 
 from simulation.game_state import Bases, GameState, Half
-from simulation.sim_loop import (
-    EVENT_STRIKEOUT,
-    EVENT_WALK,
-    STEAL_CAUGHT,
-    STEAL_SAFE,
-    StateMachine,
-)
+from simulation.loop.values import EVENT_STRIKEOUT, EVENT_WALK, STEAL_CAUGHT, STEAL_SAFE
+from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024

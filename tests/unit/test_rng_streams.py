@@ -41,13 +41,8 @@ import numpy as np
 
 from pipeline.batch.engine_artifacts import EngineArtifacts
 from simulation.full_pool_sampler import FullPoolSampler
-from simulation.sim_loop import (
-    FULL_POOL_STREAM,
-    LOOP_STREAM,
-    StateMachine,
-    simulate_game,
-    spawn_rng_streams,
-)
+from simulation.loop.values import FULL_POOL_STREAM, LOOP_STREAM, spawn_rng_streams
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import synthetic_artifacts
 
 _SEASON = 2024

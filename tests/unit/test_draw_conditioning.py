@@ -48,7 +48,8 @@ from pipeline.batch.engine_artifacts import (
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, Team
-from simulation.sim_loop import StateMachine, times_through_order
+from simulation.loop.values import times_through_order
+from simulation.sim_loop import StateMachine
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATION = REPO_ROOT / "db" / "migrations" / "duckdb" / "0023_sim518_pitch_pool_conditioning.sql"

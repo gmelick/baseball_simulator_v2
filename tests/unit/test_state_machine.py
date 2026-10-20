@@ -24,14 +24,8 @@ from __future__ import annotations
 import pytest
 
 from simulation.game_state import Bases, GameState, Half, Team
-from simulation.sim_loop import (
-    EVENT_STRIKEOUT,
-    EVENT_WALK,
-    CountAdvance,
-    StateMachine,
-    advance_count,
-    simulate_game,
-)
+from simulation.loop.values import EVENT_STRIKEOUT, EVENT_WALK, CountAdvance, advance_count
+from simulation.sim_loop import StateMachine, simulate_game
 
 SEASON = 2024
 PITCHER = 477132

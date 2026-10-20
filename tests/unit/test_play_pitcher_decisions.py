@@ -36,17 +36,14 @@ import pytest
 
 from simulation.batch_runner import GameSpec, rng_driven_machine_factory
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult, Team
+from simulation.loop.values import EVENT_INTENTIONAL_WALK
 from simulation.pitcher_decisions import (
     STARTER_WIN_MIN_OUTS,
     _side_pitcher_outs,
     decisions_from_plays,
 )
 from simulation.play_recorder import RecordingMachine
-from simulation.sim_loop import (
-    EVENT_INTENTIONAL_WALK,
-    StateMachine,
-    simulate_game,
-)
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,

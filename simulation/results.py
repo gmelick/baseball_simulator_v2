@@ -54,7 +54,7 @@ from numpy.typing import NDArray
 # SIM-328: also re-export the per-game boxscore types (PlayerStatLine / BoxScore)
 # the loop attaches to ``GameSimResult.boxscore`` so a downstream prop-aggregation
 # consumer (SIM-329) imports them from the same one aggregation home.
-from simulation.sim_loop import BoxScore, GameSimResult, PlayerStatLine
+from simulation.loop.boxscore import BoxScore, GameSimResult, PlayerStatLine
 
 #: Default two-sided z-multiplier for a 95% normal-approximation interval.
 _Z_95 = 1.959963984540054

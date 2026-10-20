@@ -26,11 +26,11 @@ import numpy as np
 import pytest
 
 from simulation.game_state import GameState
-from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
 
 # GameSimResult is also defined in sim_loop; confirm results.py re-exports the
 # SAME object so a consumer importing from either place gets one type.
-from simulation.sim_loop import GameSimResult as _LoopGameSimResult
+from simulation.loop.boxscore import GameSimResult as _LoopGameSimResult
+from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
 
 
 def _state() -> GameState:

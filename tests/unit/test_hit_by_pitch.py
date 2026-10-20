@@ -18,11 +18,8 @@ import numpy as np
 
 from pipeline.batch import player_profile_computor as ppc
 from simulation.game_state import PITCH_OUTCOMES, Bases, GameState, PlayResult
-from simulation.sim_loop import (
-    EVENT_HIT_BY_PITCH,
-    StateMachine,
-    advance_count,
-)
+from simulation.loop.values import EVENT_HIT_BY_PITCH, advance_count
+from simulation.sim_loop import StateMachine
 
 
 class TestTheCountMachine:

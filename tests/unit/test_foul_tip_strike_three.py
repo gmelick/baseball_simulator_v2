@@ -44,7 +44,7 @@ from pipeline.batch.player_profile_computor import (
 )
 from pipeline.statcast_events import IN_PLAY_TYPES
 from simulation.game_state import PITCH_OUTCOMES
-from simulation.sim_loop import EVENT_IN_PROGRESS, EVENT_STRIKEOUT, advance_count
+from simulation.loop.values import EVENT_IN_PROGRESS, EVENT_STRIKEOUT, advance_count
 
 _BALL = "ball"
 _CALLED = "called_strike"

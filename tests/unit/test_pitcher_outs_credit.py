@@ -35,8 +35,10 @@ from pipeline.batch.engine_artifacts import EngineArtifacts, StealPool
 from simulation import sim_loop
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult, Team
+from simulation.loop.boxscore import BoxScore
+from simulation.loop.values import STEAL_CAUGHT, StealResolution
 from simulation.prop_distributions import PITCHER_PROPS, PropDistributionSet
-from simulation.sim_loop import STEAL_CAUGHT, StateMachine, StealResolution
+from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
@@ -352,30 +354,35 @@ class TestEveryOutLandsOnThePitchersLine:
         assert body.count(".outs_recorded +=") == 1
         assert "_box_line(" in body
         # Structure check: every write to an ``outs_recorded`` attribute in the
-        # module. The play result's counter (``result.outs_recorded``) is the
-        # play stream's, written beside the recorder's call in the run ledger.
-        # Every other write is a box line's, and there must be one, in
-        # ``_record_outs``.
-        tree = ast.parse(source)
+        # state machine's source, its core module and every mixin module of
+        # ``simulation/loop/``. The play result's counter
+        # (``result.outs_recorded``) is the play stream's, written beside the
+        # recorder's call in the run ledger. Every other write is a box line's,
+        # and there must be one, in ``_record_outs``.
+        loop_dir = Path(inspect.getfile(sim_loop)).parent / "loop"
+        sources = [source] + [p.read_text(encoding="utf-8") for p in sorted(loop_dir.glob("*.py"))]
         box_writes: list[str] = []
         result_writes: list[str] = []
-        for func in ast.walk(tree):
-            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            for node in ast.walk(func):
-                if isinstance(node, ast.AugAssign):
-                    targets = [node.target]
-                elif isinstance(node, ast.Assign):
-                    targets = list(node.targets)
-                else:
+        for tree in map(ast.parse, sources):
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
                     continue
-                for target in targets:
-                    if not (isinstance(target, ast.Attribute) and target.attr == "outs_recorded"):
-                        continue
-                    if isinstance(target.value, ast.Name) and target.value.id == "result":
-                        result_writes.append(func.name)
+                for node in ast.walk(func):
+                    if isinstance(node, ast.AugAssign):
+                        targets = [node.target]
+                    elif isinstance(node, ast.Assign):
+                        targets = list(node.targets)
                     else:
-                        box_writes.append(func.name)
+                        continue
+                    for target in targets:
+                        if not (
+                            isinstance(target, ast.Attribute) and target.attr == "outs_recorded"
+                        ):
+                            continue
+                        if isinstance(target.value, ast.Name) and target.value.id == "result":
+                            result_writes.append(func.name)
+                        else:
+                            box_writes.append(func.name)
         assert box_writes == ["_record_outs"]
         assert set(result_writes) <= {"_commit_run_delta"}
         # The no-pitch return of ``step_pitch`` no longer writes a box line.
@@ -436,7 +443,7 @@ class TestThePitcherList:
         # error) has a batter faced and nothing else: no out, strikeout,
         # walk, earned run or hit. The batter faced alone must list him and
         # give him the pitcher props, or the box and the props disagree.
-        box = sim_loop.BoxScore()
+        box = BoxScore()
         line = box.line(RELIEVER)
         line.bf = 1
         assert (line.outs_recorded, line.k, line.bb, line.er, line.h_allowed) == (0, 0, 0, 0, 0)

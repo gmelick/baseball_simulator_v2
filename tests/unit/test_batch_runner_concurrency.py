@@ -57,8 +57,9 @@ from simulation.batch_runner import (
     NullCache,
     derive_seed,
 )
+from simulation.loop.boxscore import GameSimResult
+from simulation.loop.values import REGULATION_INNINGS
 from simulation.results import GameSimSummary
-from simulation.sim_loop import REGULATION_INNINGS, GameSimResult
 
 # The picklable no-DB factory (rng-driven StateMachine, no sampler) + short
 # lineups so every game progresses and ENDS without a live DB/FAISS.

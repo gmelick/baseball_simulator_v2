@@ -49,6 +49,7 @@ from pipeline.batch.engine_artifacts import (
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
+from simulation.loop.values import _venue_of
 from simulation.production_factory import apply_fielding_env
 from simulation.sim_kwargs import (
     SIM_KWARG_KEYS,
@@ -56,7 +57,7 @@ from simulation.sim_kwargs import (
     sim_kwargs_from_state,
     venue_id_of_state,
 )
-from simulation.sim_loop import StateMachine, _venue_of, simulate_game
+from simulation.sim_loop import StateMachine, simulate_game
 
 _SEASON = 2024
 _PITCHER = "100:2024"

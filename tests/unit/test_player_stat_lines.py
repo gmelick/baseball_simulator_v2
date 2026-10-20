@@ -34,13 +34,8 @@ import numpy as np
 import pytest
 
 from simulation.game_state import Bases, GameState, Half, Team
-from simulation.sim_loop import (
-    BoxScore,
-    GameSimResult,
-    PlayerStatLine,
-    StateMachine,
-    simulate_game,
-)
+from simulation.loop.boxscore import BoxScore, GameSimResult, PlayerStatLine
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import fixed_play_artifacts, league_artifacts, synthetic_sampler
 
 SEASON = 2024

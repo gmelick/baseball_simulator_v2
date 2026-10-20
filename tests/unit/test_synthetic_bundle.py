@@ -24,7 +24,8 @@ import numpy as np
 import pytest
 
 from simulation.game_state import Bases, GameState
-from simulation.sim_loop import EVENT_STRIKEOUT, StateMachine, simulate_game
+from simulation.loop.values import EVENT_STRIKEOUT
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,

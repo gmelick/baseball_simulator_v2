@@ -60,8 +60,9 @@ import pytest
 
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half
+from simulation.loop.boxscore import GameSimResult
 from simulation.run_resolution import OUTS_PER_INNING, RE24_MATRIX, re24_value
-from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024
