@@ -89,10 +89,9 @@ class GameOddsMixin(PipelineBase):
     def _fetch_game_market_odds(self, game_pk: int, *, line_type: str = "current") -> list[dict]:
         """Every book's row of every game market, in market order.
 
-        The rename of the old segment-only fetch: the three full-game markets
-        now come through here too, one row per book and market. A
-        market the provider cannot resolve (no event, no offer) gives no row,
-        so no empty row is ever written.
+        The three full-game markets come through here too, one row per book
+        and market. A market the provider cannot resolve (no event, no offer)
+        gives no row, so no empty row is ever written.
         """
         return [
             row
@@ -103,8 +102,8 @@ class GameOddsMixin(PipelineBase):
     async def _persist_game_odds_cycle(self, game_pk: int) -> int:
         """Persist every book's row of every game market, on the cadence.
 
-        The rename of the old segment cycle. Gated by its own clock
-        (``_last_game_odds_fetch``) at ``PROP_FETCH_CADENCE_S``, so the fifteen
+        Gated by its own clock (``_last_game_odds_fetch``) at
+        ``PROP_FETCH_CADENCE_S``, so the fifteen
         markets are fetched once a minute per game, not on every pitch signal.
         Each market's kept rows go to the database in one batch. Returns the
         rows sent this cycle (0 while the gate is closed).
@@ -188,8 +187,8 @@ class GameOddsMixin(PipelineBase):
     ) -> int:
         """Designate a game's closing rows in raw.game_odds.
 
-        SIM-546 rewrote the rule: one closing row per (market, book), not one
-        per game. Per key, the latest row fetched at or before
+        One closing row per (market, book). Per key, the latest row fetched at
+        or before
         ``first_pitch_at`` among the 'current' and 'closing' rows is promoted
         when it is 'current' and the load guard keeps its stamp against
         ``scheduled_start`` (``None`` = no stamp check). The promoted row's

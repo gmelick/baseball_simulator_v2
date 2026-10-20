@@ -50,7 +50,7 @@ class PipelineBase:
     _running: bool
 
     async def _last_seen_available(self) -> bool:
-        """SIM-519 Part G: whether ``raw.game_odds.last_seen_at`` exists (Alembic 0029), cached."""
+        """Whether ``raw.game_odds.last_seen_at`` exists (Alembic 0029), cached."""
         known = getattr(self, "_last_seen_column", None)
         if known is not None:
             return bool(known)
@@ -64,8 +64,8 @@ class PipelineBase:
     async def _off_loop(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
         """Run a synchronous vendor read on the pipeline's one worker thread.
 
-        SIM-519 Part C: a slow vendor no longer stalls the live refresh. One
-        thread keeps the provider's per-process caches single-threaded.
+        A slow vendor does not stall the live refresh, and one thread keeps
+        the provider's per-process caches single-threaded.
         """
         executor = getattr(self, "_vendor_executor", None)
         if executor is None:

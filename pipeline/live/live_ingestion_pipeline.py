@@ -1,11 +1,16 @@
-"""
-live_ingestion_pipeline.py
-==========================
-Step 1.3 — Live Data Ingestion Pipeline
-MLB Baseball Simulation Platform
+"""The live ingestion pipeline: the day's games, their live state and their odds.
 
-Architecture
-------------
+``LiveIngestionPipeline`` polls the MLB schedule, watches each live game's
+socket, rebuilds the game state on every change, writes the game rows and the
+lineups, stores the odds and signals a re-simulation at the end of every plate
+appearance. ``create_app`` serves it on its own (the ``live`` service, which
+publishes to Redis); the API mounts ``ws_router`` and ``odds_router``. The
+parts live in ``pipeline/live/ingestion/``: the settings, the odds rows and
+closing rows, the mock odds, the odds routes, the game-state builder, the
+WebSocket parts and the game-odds and prop-odds mixins.
+
+The flow
+--------
   MLB Schedule API (30s poll)
        │
        ▼  new game_pk discovered
@@ -24,36 +29,14 @@ Architecture
                │ fires at end of every plate appearance (PA complete)  │
                ▼                                                        │
        simulation_requested signal  ─────────────────────────────────┘
-       (consumed by Phase 5 runner)
+       (the simulation callback, when one is set)
 
-       └── _broadcast_to_clients()  → ws://host/ws/games/{game_pk}
-               (frontend WebSocket clients subscribed to this game)
-
-MockOddsAPI
-  GET /api/odds/{game_pk}
-  Deterministic mock seeded on game_pk.  Drop-in replacement:
-  swap _fetch_odds() in LiveIngestionPipeline to call a real provider.
-
-Additional DDL (run once):
-  raw.game_odds — stores odds snapshots per game
-
-Dependencies
-------------
-  pip install fastapi uvicorn websockets aiohttp asyncpg redis
+       └── _broadcast_message()  → ws://host/ws/games/{game_pk}
+               (the browsers watching this game)
 
 Usage
 -----
-  # Standalone (no FastAPI — useful for testing the pipeline alone):
-  python live_ingestion_pipeline.py
-
-  # Integrated with FastAPI app (in your main app.py):
-  from live_ingestion_pipeline import create_app
-  app = create_app(dsn="postgresql://...", redis_url="redis://localhost")
-
-  # Or mount into existing app:
-  from live_ingestion_pipeline import (
-      lifespan, ws_router, odds_router, connection_manager
-  )
+  python -m pipeline.live.run_live      # the live service (create_app)
 """
 
 from __future__ import annotations
@@ -170,12 +153,10 @@ from pipeline.odds_row_guard import (
 # row is persisted; a refused row is logged, counted and never written.
 from pipeline.odds_row_guard import RefusalTally
 
-# Type alias for the simulation callback. It MUST be an async
-# function — passing a sync function would either raise TypeError when the
-# pipeline awaits it, or silently no-op if the coroutine isn't awaited.
-# The runtime check in LiveIngestionPipeline.__init__ catches misuse at
-# construction time so the failure surfaces immediately during Phase 5
-# wiring rather than during the first re-sim signal in production.
+# The type of the simulation callback. It MUST be an async function: a sync
+# function would raise TypeError when the pipeline awaits it, or never run if
+# its result is not awaited. LiveIngestionPipeline.__init__ checks it, so a
+# misuse fails at construction, not at the first re-simulation signal.
 SimulationCallback = Callable[[int, dict], Coroutine[Any, Any, None]]
 
 # ---------------------------------------------------------------------------
@@ -195,23 +176,22 @@ log = logging.getLogger("live_ingestion")
 
 
 # ---------------------------------------------------------------------------
-# Prop-odds ingestion config (cadence)
+# The odds sources
 # ---------------------------------------------------------------------------
-# SIM-555 (2026-09-28): the provider names the books. Each odds cycle asks the
-# provider for every book's row of a market (``odds_rows_by_book`` /
-# ``prop_rows_by_book``) and persists every row the load guard keeps, each
-# under its own label (``'bp:<id>'`` from BettingPros; the mock's one row keeps
-# ``'consensus'``). The old fixed book list (PROP_BOOKS) is gone: it wrote one
-# price set four times under four names, two of which the vendor never carried.
+# The provider names the books (one row per book, SIM-555). Each odds cycle
+# asks the provider for every book's row of a market (``odds_rows_by_book`` /
+# ``prop_rows_by_book``) and stores every row the load guard keeps, each under
+# its own label (``'bp:<id>'`` from BettingPros; the mock's one row keeps
+# ``'consensus'``).
 #
-# The provider is selected by ODDS_PROVIDER (via the SIM-370
-# get_odds_provider() seam): the deterministic MockOddsAPI is the default, and
-# ODDS_PROVIDER=bettingpros switches to the real BettingProsOddsProvider.
-
+# ODDS_PROVIDER selects the provider (``get_odds_provider()``): the
+# deterministic MockOddsAPI is the default, and ODDS_PROVIDER=bettingpros
+# switches to the real BettingProsOddsProvider.
+#
 # The 15 prop markets live in pipeline/odds_provider.py (PROP_STATS, split into
-# PITCHER_PROP_STATS / BATTER_PROP_STATS — SIM-421). This module imports them
-# and re-exports PROP_STATS; MockOddsAPI._PROP_CONFIG and the raw.prop_odds
-# CHECK constraint (migration 0022) list the same 15 values.
+# PITCHER_PROP_STATS / BATTER_PROP_STATS, the prop-market work of SIM-421);
+# MockOddsAPI._PROP_CONFIG and the raw.prop_odds CHECK constraint (migration
+# 0022) list the same 15 values.
 
 
 # Singleton shared across the FastAPI app
@@ -251,16 +231,15 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
             Redis connection URL (e.g. "redis://localhost:6379").
         simulation_callback
             Optional ``async def callback(game_pk: int, game_state: dict) -> None``
-            called when re-simulation should be triggered (Phase 5 integration
-            point). If None, a log message is emitted instead.
+            called when a re-simulation is due. If None, the signal is logged.
 
-        Simulation_callback MUST be an async function.  Passing a
+        ``simulation_callback`` MUST be an async function.  Passing a
         plain sync function would either raise ``TypeError`` when the pipeline
         awaits it (best case) or silently never run if the returned value
         isn't awaited.  Both modes are hard to diagnose, so we check at
         __init__ time and raise immediately with a clear message.
         """
-        # SIM-106 runtime guard — fail fast on misuse.
+        # Fail fast on a sync callback.
         if simulation_callback is not None and not asyncio.iscoroutinefunction(simulation_callback):
             raise TypeError(
                 "LiveIngestionPipeline.simulation_callback must be an async "
@@ -270,7 +249,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
                 "state): result = await asyncio.to_thread(sync_runner, game_pk, state); ...`"
             )
 
-        # Dsn / redis_url default to env vars when omitted.
+        # dsn and redis_url default to their environment variables.
         # Tests pass explicit values; production uses .env / docker-compose env.
         self._dsn = dsn or os.environ.get("BASEBALL_DB_DSN")
         self._redis_url = redis_url or os.environ.get("REDIS_URL")
@@ -292,7 +271,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
 
         self._db: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
-        # SIM-519 Part C: the browser-message publisher; None = the in-process
+        # The browser-message publisher; None = the in-process
         # connection_manager (see _broadcast_message).
         self._broadcaster: Any = None
         self._http: aiohttp.ClientSession | None = None
@@ -423,9 +402,9 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         entry of a postponed, suspended or made-up game first drops the odds
         provider's cached facts of that game (:func:`_odds_facts_may_be_stale`).
         """
-        # SIM-519 Part C: yesterday through tomorrow in Eastern time, the
-        # league's day. The container's clock is UTC, so date.today() read
-        # tomorrow's schedule from 8 pm Eastern while tonight's games were live.
+        # Yesterday through tomorrow in Eastern time, the league's day. The
+        # container's clock is UTC, so date.today() would read tomorrow's
+        # schedule from 8 pm Eastern while tonight's games are live.
         # Each entry is acted on by its own state; tomorrow's Preview games get
         # their lineups and pregame odds early.
         today = datetime.now(_EASTERN).date()
@@ -489,7 +468,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
                     # nothing from the vendor. The task upserts the game row
                     # itself before its first odds INSERT (the foreign key).
                     asyncio.create_task(self._persist_pregame_odds(game_pk, game))
-                    # SIM-519 Part B: the published lineup and the probable
+                    # The published lineup and the probable
                     # pitchers, so the game can be simulated before it starts.
                     asyncio.create_task(self._write_preview_lineup(game))
 
@@ -511,7 +490,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         await self._write_heartbeat(sorted(current_live))
 
     async def _broadcast_message(self, game_pk: int, payload: dict) -> None:
-        """Send a browser-bound message (SIM-519 Part C).
+        """Send a browser-bound message.
 
         In the app's process (``LIVE_PIPELINE_ENABLED``) the publisher is the
         in-process ``connection_manager``; in the ``live`` container it is a
@@ -522,7 +501,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         await publisher.broadcast(game_pk, payload)
 
     async def on_game_live(self, game_pk: int, first_pitch_at: datetime) -> None:
-        """SIM-519 Part C: the Preview-to-Live hook, once per game.
+        """The Preview-to-Live hook, once per game.
 
         Records ``raw.games.first_pitch_at`` (Alembic 0029; the first write
         wins, so a restart mid-game keeps the true instant). The closing-row
@@ -540,7 +519,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
             log.debug("first_pitch_at not recorded for game %s: %s", game_pk, exc)
 
     async def _write_heartbeat(self, live_game_pks: list[int]) -> None:
-        """SIM-519 Part C: ``live:heartbeat`` and ``live:watching`` for /ready and the gauge."""
+        """Write ``live:heartbeat`` and ``live:watching`` for /ready and the gauge."""
         redis = getattr(self, "_redis", None)
         if redis is None:
             return
@@ -658,16 +637,15 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
                     game_state,
                     feed["gameData"]["status"]["abstractGameState"],
                 )
-                # SIM-421 (owner ruling 2026-09-12): every market the book posts
-                # goes into the odds table. SIM-555: every book's row of all
-                # fifteen game markets, on the prop cadence gate (60 s), never
-                # the per-pitch signal. The ``odds`` row above is not persisted.
+                # Every market the book posts goes into the odds table (owner
+                # ruling 2026-09-12): every book's row of all fifteen game
+                # markets, on the prop cadence gate (60 s), never the per-pitch
+                # signal. The ``odds`` row above is not stored.
                 await self._persist_game_odds_cycle(game_pk)
-                # Persist player-prop odds on the same refresh cycle.
-                # _persist_prop_odds_cycle() self-throttles to PROP_FETCH_CADENCE_S
-                # per game so it does not fire on every WS pitch signal.  This is
-                # the live wiring that finally invokes _persist_prop_odds (which
-                # had been defined but never called before SIM-340).
+                # The player-prop odds, on the same refresh cycle.
+                # _persist_prop_odds_cycle() throttles itself to
+                # PROP_FETCH_CADENCE_S per game, so it does not fire on every
+                # pitch signal of the socket.
                 await self._persist_prop_odds_cycle(game_pk, game_state)
 
                 # Determine whether this update marks the end of a plate
@@ -728,8 +706,8 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         game's hydrated schedule entry. The method has its own clock per game
         (``_last_pregame_fetch``): inside PREGAME_ODDS_CADENCE_S (ten minutes)
         of the last pass it returns 0 and calls neither cycle, so a game reads
-        the vendor at most once every ten minutes before first pitch. SIM-546:
-        inside 15 minutes of the entry's scheduled start the cadence is one
+        the vendor at most once every ten minutes before first pitch. Inside
+        15 minutes of the entry's scheduled start the cadence is one
         minute (:func:`pregame_odds_cadence_s`), so the row the live marker
         promotes to closing at first pitch is fresh. The
         clock is set before the cycles run, so a failed pass also waits the
@@ -822,12 +800,8 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         return True, at_bat_number
 
     async def _signal_resimulation(self, game_pk: int, game_state: dict) -> None:
-        """
-        Phase 5 integration point.  When the simulation runner (Phase 5) is
-        built, set simulation_callback on the pipeline to trigger it here.
-        Until then, this logs the signal so you can verify the trigger logic
-        is firing correctly during development.
-        """
+        """Call the simulation callback with the game state; with no callback
+        set, log the signal."""
         if self._sim_cb:
             try:
                 await self._sim_cb(game_pk, game_state)
@@ -887,10 +861,9 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         }
         status = status_map.get(gd.get("status", {}).get("abstractGameState", "Preview"), "Preview")
 
-        # SIM-519 Part C: the slate keys games on the league's official date
-        # (the local calendar day). gameDate is the UTC start: a West Coast night
-        # game's gameDate falls on the next UTC day, so a game created from it
-        # sat on the wrong slate until the nightly load corrected it.
+        # The slate keys games on the league's official date (the local
+        # calendar day). gameDate is the UTC start: a West Coast night game's
+        # gameDate falls on the next UTC day.
         game_date = date.fromisoformat((gd.get("officialDate") or gd["gameDate"])[:10])
 
         # Supply season.  raw.games.season is INTEGER NOT NULL and is
@@ -977,7 +950,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
             log.debug("schedule fields not written for game %s: %s", entry.get("gamePk"), exc)
 
     async def _write_preview_lineup(self, game: dict) -> None:
-        """SIM-519 Part B: make a Preview game simulable.
+        """Make a Preview game simulable.
 
         The game row first and awaited (``raw.game_lineups.game_pk`` is a
         foreign key), then the published-lineup writer
@@ -1015,7 +988,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         return writer
 
     async def _on_lineup_published(self, game_pk: int, source: str) -> None:
-        """Tell the game page a lineup is in (the Part C bridge carries it)."""
+        """Tell the game page a lineup is in (the Redis bridge carries it)."""
         broadcast = getattr(self, "_broadcast_message", None)
         if broadcast is None:
             return
@@ -1046,10 +1019,8 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
            (POST /api/games/{game_pk}/resimulate) to serve the last known
            state without hitting the DB.
 
-        Root cause of SIM-099: previously only ``game_state:{game_pk}`` was
-        written, but ``_fetch_feed()`` read ``game_feed:{game_pk}`` — a key
-        that was never written.  The rate-limit fallback silently returned
-        None for every live game, dropping every refresh cycle under load.
+        ``_fetch_feed()`` reads ``game_feed:{game_pk}`` as its rate-limit
+        fallback, so both keys must be written.
         """
         if self._redis is None:
             return
@@ -1081,7 +1052,7 @@ async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
     if await authenticate_websocket(websocket) is None:
         return
     await connection_manager.connect(game_pk, websocket)
-    # SIM-519 Part C: in the app, the live service's messages arrive on Redis;
+    # In the app, the live service's messages arrive on Redis;
     # the bridge subscribes to this game's channel while anyone watches it.
     bridge = getattr(websocket.app.state, "live_bridge", None)
     if bridge is not None:
@@ -1105,9 +1076,10 @@ async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
 def create_app(
     dsn=None, redis_url=None, simulation_callback=None, *, publish_to_redis: bool = False
 ) -> FastAPI:
-    """Rate-limited resimulate endpoint + env-var DSN.
+    """The live service's app: the pipeline, the WebSocket and odds routes, a
+    rate-limited resimulate endpoint and ``/health``.
 
-    SIM-519 Part C: the ``live`` container runs this app (``python -m
+    The ``live`` container runs this app (``python -m
     pipeline.live.run_live``) with ``publish_to_redis=True``: every
     browser-bound message goes to the game's Redis channel, which the main
     app's bridge forwards to the browsers. ``/health`` answers with the age of
@@ -1194,7 +1166,7 @@ def create_app(
         if feed is None:
             return {"status": "error", "detail": "could not fetch game state"}
 
-        builder = pipeline._get_or_create_builder(game_pk)  # SIM-101
+        builder = pipeline._get_or_create_builder(game_pk)
         game_state = await builder.build(feed)
         await pipeline._signal_resimulation(game_pk, game_state)
         await pipeline._broadcast_message(

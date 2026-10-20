@@ -19,7 +19,7 @@ SCHEDULE_URL = f"{MLB_BASE}/api/v1/schedule"
 SCHEDULE_HYDRATE = "probablePitcher,lineups"
 
 SCHEDULE_POLL_S = 30  # how often to check for newly-live games
-#: SIM-519 Part C: the league's day turns over in Eastern time.
+#: The league's day turns over in Eastern time.
 _EASTERN = ZoneInfo("America/New_York")
 WS_RECONNECT_BASE = 2.0  # base seconds for WS reconnect backoff
 WS_RECONNECT_MAX = 60.0  # cap on WS reconnect backoff
@@ -27,10 +27,9 @@ HTTP_TIMEOUT_S = 10  # aiohttp request timeout
 REDIS_TTL_LIVE_S = 60  # cache TTL for live game states
 REDIS_TTL_DONE_S = 3600  # cache TTL for completed game states
 
-# Per-game cooldown applied to the manual /resimulate endpoint.
-# 10 seconds is generous enough to avoid frustrating legitimate users
-# (sample one resim, see results, sample again) but tight enough to keep
-# spam from queueing up dozens of 100-iteration sim runs in Phase 5.
+# The per-game cooldown of the manual /resimulate endpoint: generous enough
+# for a user who re-simulates, reads the result and re-simulates again, tight
+# enough that spam cannot queue dozens of 100-iteration runs.
 RESIM_COOLDOWN_S = 10
 
 
@@ -52,10 +51,10 @@ _PITCHER_POSITION_CODES = frozenset({"P", "SP", "RP", "TWP"})
 # Prop-odds fetch cadence.  Prop lines move far more slowly than the
 # WS refresh rate (a WS message fires on every pitch).  Polling every book ×
 # player × prop on every WS signal would issue thousands of redundant writes
-# per game.  We therefore gate prop fetches to at most once per
+# per game, so the prop fetches are gated to at most once per
 # PROP_FETCH_CADENCE_S seconds per game; the dedup hash (migration 0013)
-# collapses any identical snapshot that still slips through.  SIM-555: the
-# game markets (all fifteen, every book) ride the same cadence.
+# collapses any identical snapshot that still slips through. The game markets
+# (all fifteen, every book) ride the same cadence.
 PROP_FETCH_CADENCE_S = 60
 
 #: The cadence of the pre-game odds cycle, per game. The schedule poll

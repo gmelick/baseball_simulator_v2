@@ -40,14 +40,13 @@ class GameStateBuilder:
 
         * ``_history``          — running list of at-bat-level summaries
         * ``_last_at_bat_index``— the highest atBatIndex parsed so far
-        * ``_game_date``        — the game's officialDate (for replay-safe
-          days_rest, see SIM-100)
+        * ``_game_date``        — the game's officialDate (so days_rest is
+          right on a replay)
 
       On each refresh, ``_parse_play_history()`` only walks plays whose
-      ``atBatIndex > _last_at_bat_index``, then appends to ``_history``.
-      Pre-SIM-101 every refresh rebuilt the entire history from scratch —
-      O(N) parse + JSON serialize on every WS signal.  By the 9th inning
-      with ~80 plays, that fired 20+ times per inning.
+      ``atBatIndex > _last_at_bat_index``, then appends to ``_history``: a
+      full rebuild on every socket signal would re-parse and re-serialize
+      every play, 20 and more times an inning.
     """
 
     def __init__(self, db_pool: asyncpg.Pool) -> None:
@@ -198,15 +197,13 @@ class GameStateBuilder:
         bullpen — [{player_id, name, pitch_count_today, days_rest, role, available}]
         bench   — [{player_id, name, position}]
 
-        SIM-100 fixes applied here:
-          - N+1 query eliminated: all bullpen pitcher days_rest fetched in one
-            batch query via ``_batch_days_rest()`` rather than one query per pitcher.
-          - ``used_pitcher_ids`` dead-code set removed entirely.
-          - Availability corrected: a pitcher is available if they haven't thrown
-            today OR if they've rested ≥1 day and thrown fewer than 30 pitches
-            (single-inning appearances by fresh arms).
-          - ``game_date`` passed through to ``_batch_days_rest()`` so historical
-            replay calculates rest relative to game_date, not date.today().
+        - Every bullpen pitcher's days_rest comes from one batch query
+          (``_batch_days_rest()``), not one query per pitcher.
+        - A pitcher is available if he has not thrown today, OR if he has
+          rested at least a day and thrown fewer than 30 pitches (a fresh arm's
+          single inning).
+        - ``game_date`` goes to ``_batch_days_rest()``, so a replay counts rest
+          from the game's date, not date.today().
         """
         team_box = boxscore.get("teams", {}).get(side, {})
         players = team_box.get("players", {})  # keyed "ID{player_id}"
@@ -305,15 +302,13 @@ class GameStateBuilder:
         game_pk: int | None = None,
         as_of_date: date | None = None,
     ) -> dict[int, int | None]:
-        # ``game_pk`` accepted as alias for legacy callers (tests + SIM-100).
+        # ``game_pk`` is accepted as an alias of ``current_game_pk``.
         if current_game_pk is None:
             current_game_pk = game_pk
         """
-        SIM-100: Batch replacement for the old per-pitcher ``_get_days_rest()``.
-
-        Issues a *single* DB query for all bullpen pitchers on a team instead of
-        one query per pitcher.  With a 13-man bullpen, this reduces DB round-trips
-        per WS refresh from 26 (2 teams × 13) to 2 (one per team).
+        Each pitcher's days of rest, from a *single* DB query for all the
+        bullpen pitchers of a team: two round trips per refresh, not 26 for two
+        13-man bullpens.
 
         Parameters
         ----------
@@ -324,7 +319,6 @@ class GameStateBuilder:
         as_of_date
             Date to calculate rest relative to.  Pass ``game_date`` for historical
             replay; defaults to ``date.today()`` for live games.
-            (SIM-100: old code always used date.today(), breaking replay.)
 
         Returns
         -------
@@ -362,11 +356,10 @@ class GameStateBuilder:
         """
         Best-effort role inference from in-game stats.
 
-        Adds an Opener bucket between SP and MRP.  Pre-SIM-102 logic
-        only used IP, so a pitcher who threw 2.0 IP and faced 9 batters was
-        labelled MRP — exactly the misclassification that breaks the Phase 4
-        manager engine, which then treats the opener as a middle reliever
-        available for high-leverage re-use.
+        An Opener bucket sits between SP and MRP: by innings alone, a pitcher
+        who threw 2.0 IP and faced 9 batters would read MRP, and the manager
+        engine would treat the opener as a middle reliever available for
+        high-leverage re-use.
 
         Decision order (most specific → least):
           1. SP      — IP ≥ 4.0   (full starter outing)
@@ -374,8 +367,8 @@ class GameStateBuilder:
           3. MRP     — IP ≥ 1.0   (multi-inning relief)
           4. RP      — otherwise  (one-inning specialist)
 
-        Temporary heuristic until SIM-057 lands a proper season-level
-        opener_rate column on derived.pitcher_season_metrics.
+        A heuristic; a season-level opener rate on
+        derived.pitcher_season_metrics would replace it.
         """
         ip = pitching_stats.get("inningsPitched", "0")
         try:
@@ -405,13 +398,7 @@ class GameStateBuilder:
         play-by-play panel and for simulation replay.
 
         Incremental parse:
-          Pre-SIM-101 this was a static method that walked every play in
-          ``all_plays`` on every WS signal.  By the 9th inning of a 10-inning
-          game with ~90 plays, this fired 20+ times per inning (one per WS
-          message), each time re-parsing every play and re-serializing the
-          full history into JSONB for the upsert.
-
-          Now we cache a per-builder history list and only walk plays whose
+          The builder caches its history list and walks only the plays whose
           ``about.atBatIndex`` is strictly greater than the highest index
           we've already processed.  The terminal at-bat (currentPlay) is
           re-parsed each refresh as long as it hasn't completed (its
@@ -461,9 +448,8 @@ class GameStateBuilder:
 
     @staticmethod
     def _build_history_entry(play: dict) -> dict:
-        """Extracted from the old parser so both the incremental
-        path and any consumer that wants to reformat a single play stay in
-        sync."""
+        """One play's history entry, shared by the incremental parse and any
+        reader that reformats a single play."""
         about = play.get("about", {})
         result = play.get("result", {})
         matchup = play.get("matchup", {})

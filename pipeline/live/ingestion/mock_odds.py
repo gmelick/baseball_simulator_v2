@@ -15,16 +15,6 @@ from pipeline.odds_provider import (
 )
 
 # ---------------------------------------------------------------------------
-# DDL helpers
-# ---------------------------------------------------------------------------
-# NOTE: GAME_ODDS_DDL has been removed from this file.
-# raw.game_odds DDL (including SIM-133 CLV columns) now lives in:
-#   db/schemas/01_postgres_schema.sql
-# Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Mock Odds API
 # ---------------------------------------------------------------------------
 
@@ -35,17 +25,16 @@ class MockOddsAPI:
     game_pk.  All values are consistent within a session (same game_pk always
     returns the same lines) so the frontend never sees odds flicker.
 
-    This is the deterministic default behind the SIM-370 provider seam
-    (get_odds_provider()); set ODDS_PROVIDER=bettingpros to switch the live
-    pipeline to the real BettingProsOddsProvider instead.  This class stays as
-    the local dev / testing source.
+    It is the deterministic default behind the provider seam
+    (get_odds_provider()); ODDS_PROVIDER=bettingpros switches the live pipeline
+    to the real BettingProsOddsProvider. It serves local development and the
+    tests.
 
     American odds encoding:
       Favourite:  odds = -(prob / (1-prob)) * 100  (negative integer)
       Underdog:   odds = ((1-prob) / prob) * 100   (positive integer)
 
-    Added get_prop_odds() for the 7 Betting-Analyst-confirmed prop markets.
-    The eight markets the book already offers joined them (15 in all).
+    ``get_prop_odds()`` serves all fifteen prop markets.
     """
 
     # ------------------------------------------------------------------
@@ -61,10 +50,10 @@ class MockOddsAPI:
     #   - Home runs / RBIs set at 0.5; these are binary-feel props.
     #   - Juice asymmetry on HR (books shade the under) reflects sharp-book
     #     behaviour Betting Analyst observed in real markets.
-    #   - SIM-421 markets: doubles / triples / stolen bases sit at 0.5 with a
+    #   - Doubles, triples and stolen bases sit at 0.5 with a
     #     plus-money over (a rare event); outs recorded centres on a 5.2-inning
     #     start (16.5); hits allowed on 4.5; hits+runs+RBIs on 1.5.
-    # The keys are exactly PROP_STATS (a SIM-421 unit test enforces it).
+    # The keys are exactly PROP_STATS (a unit test enforces it).
     # ------------------------------------------------------------------
     _PROP_CONFIG: dict[str, tuple[float, float, tuple[int, int], tuple[int, int]]] = {
         #  prop_stat       center  ±spread  over_vig        under_vig
@@ -119,8 +108,8 @@ class MockOddsAPI:
         book          : book identifier (e.g. 'consensus', 'pinnacle', 'draftkings')
         is_sharp_book : TRUE for sharp books used as CLV reference (e.g. Pinnacle, Circa)
 
-        SIM-421 (2026-09-12): the three full-game markets keep the original
-        shape (one row carries the moneyline, the run line and the total). A
+        The three full-game markets share one row shape (it carries the
+        moneyline, the run line and the total). A
         segment or team market fills only its own fields, the way the real
         provider does — a first-inning moneyline gets a ``draw_ml`` (a segment
         can end tied), a team total a lower line, a yes / no market an over /
@@ -137,12 +126,10 @@ class MockOddsAPI:
         away_win_prob = 1.0 - home_win_prob
 
         # Apply realistic book vig so mock lines don't produce zero-
-        # overround prices.  Without vig, implied probs sum to exactly 1.0 —
-        # no real book prices this way.  Every edge calculation, calibration
-        # target, and display component built through Phase 6 would be trained
-        # against lines that don't exist in real markets; switching the seam to
-        # real lines (ODDS_PROVIDER=bettingpros) shrinks the edge estimates
-        # 3–8 pp overnight.
+        # overround prices. Without vig, the implied probabilities sum to
+        # exactly 1.0, which no real book does, and every edge, calibration
+        # target and display built on the mock would read 3-8 points larger
+        # than on real lines.
         #
         # vig is the total overround, split evenly between home and away:
         #   home_inflated = home_win_prob * (1 + vig/2)
@@ -176,7 +163,7 @@ class MockOddsAPI:
             "game_pk": game_pk,
             "source": "mock",
             "is_mock": True,
-            # SIM-133 CLV columns
+            # The closing-line-value columns
             "book": book,
             "line_type": line_type,
             "market_type": market_type,

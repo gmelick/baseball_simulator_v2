@@ -44,7 +44,7 @@ class PropOddsMixin(PipelineBase):
     @staticmethod
     def _collect_prop_player_roles(game_state: dict) -> dict[int, str]:
         """
-        Player_id → role for every player eligible for prop-line
+        player_id → role for every player eligible for prop-line
         capture in a built game_state.
 
         Props are offered on the pitcher on the mound and on the batters in
@@ -86,7 +86,7 @@ class PropOddsMixin(PipelineBase):
     @staticmethod
     def _pregame_prop_player_roles(game: Mapping[str, Any]) -> dict[int, str]:
         """
-        Player_id → role for a game that has not started, read from
+        player_id → role for a game that has not started, read from
         the hydrated schedule entry (see ``SCHEDULE_HYDRATE``).
 
         A game before first pitch has no live feed, so the roles come from the
@@ -212,12 +212,11 @@ class PropOddsMixin(PipelineBase):
         """
         A flat list of every book's prop rows for the players.
 
-        SIM-555 (2026-09-28): the provider names the books. The method reads
-        every book's row of each (player, prop_stat) through
-        ``prop_rows_by_book`` — BettingPros gives one row per book, labelled
-        ``'bp:<id>'``; the mock gives its one ``'consensus'`` row. Empty rows
-        are dropped; the load guard runs later, in the persisting cycle. The
-        old fixed book list (PROP_BOOKS) and its ``books`` argument are gone.
+        The provider names the books: the method reads every book's row of
+        each (player, prop_stat) through ``prop_rows_by_book``. BettingPros
+        gives one row per book, labelled ``'bp:<id>'``; the mock gives its one
+        ``'consensus'`` row. Empty rows are dropped; the load guard runs later,
+        in the persisting cycle.
 
         ``roles`` splits the markets by role (see
         :meth:`_prop_offers`).
@@ -258,22 +257,22 @@ class PropOddsMixin(PipelineBase):
 
     async def _persist_prop_odds_cycle(self, game_pk: int, game_state: dict) -> int:
         """
-                Live prop-odds persistence cycle.
+        Live prop-odds persistence cycle.
 
-                Called from _refresh_game_state() on every WS signal, but self-throttled
-                to at most once per PROP_FETCH_CADENCE_S seconds per game (prop lines move
-                far more slowly than the per-pitch WS feed).  When the cadence gate opens,
-                it:
-                  1. Collects prop-eligible players + their roles from the game_state
-                     (SIM-421: pitcher / batter / both).
-                  2. Fetches every book's rows of each offer via _prop_offers()
-        , the pitcher markets for pitchers and the batter markets
-                     for hitters.
-                  3. Runs the load guard on each row and persists each offer's kept
-                     rows in one batch via _persist_prop_odds_many().
+        Called from _refresh_game_state() on every WS signal, but self-throttled
+        to at most once per PROP_FETCH_CADENCE_S seconds per game (prop lines move
+        far more slowly than the per-pitch WS feed).  When the cadence gate opens,
+        it:
+          1. Collects prop-eligible players + their roles from the game_state
+             (pitcher, batter or both).
+          2. Fetches every book's rows of each offer via _prop_offers():
+             the pitcher markets for pitchers and the batter markets
+             for hitters.
+          3. Runs the load guard on each row and persists each offer's kept
+             rows in one batch via _persist_prop_odds_many().
 
-                Returns the number of prop rows sent this cycle (0 when the cadence
-                gate is closed or no eligible players were found).
+        Returns the number of prop rows sent this cycle (0 when the cadence
+        gate is closed or no eligible players were found).
         """
         return await self._persist_prop_roles_cycle(
             game_pk, self._collect_prop_player_roles(game_state)
@@ -332,14 +331,13 @@ class PropOddsMixin(PipelineBase):
 
         Writes the raw.prop_odds rows of each (player, prop_stat) with
         line_type='opening'.  This is the prop analogue of the nightly opening
-        game-line capture (opening_line_job.py / SIM-138): it records the FIRST
+        game-line capture (opening_line_job.py): it records the FIRST
         line posted so opening→closing movement is recoverable for props, not
         just game markets.
 
         The rows are the provider's by-book opening rows (BettingPros:
         the opener's one row, labelled ``'bp:<id>'``); each passes the load
-        guard and each offer's rows go to the database in one batch. The old
-        ``books`` argument is gone with PROP_BOOKS.
+        guard and each offer's rows go to the database in one batch.
 
         Pass ``roles`` (player_id → PROP_ROLE_*) to split the markets
         by role; without it every player is asked for every market.
@@ -365,37 +363,37 @@ class PropOddsMixin(PipelineBase):
 
     async def _persist_prop_odds(self, prop: dict) -> None:
         """
-                Inserts a fresh player prop odds snapshot into raw.prop_odds.
+        Inserts a fresh player prop odds snapshot into raw.prop_odds.
 
-                Parameters
-                ----------
-                prop : dict returned by the configured provider's get_prop_odds()
-                       (MockOddsAPI by default, or BettingProsOddsProvider under
-                       ODDS_PROVIDER=bettingpros).  Required keys:
-                         game_pk, player_id, prop_stat, line,
-                         over_ml, under_ml, book, line_type, is_sharp_book,
-                         source, is_mock
+        Parameters
+        ----------
+        prop : dict returned by the configured provider's get_prop_odds()
+               (MockOddsAPI by default, or BettingProsOddsProvider under
+               ODDS_PROVIDER=bettingpros).  Required keys:
+                 game_pk, player_id, prop_stat, line,
+                 over_ml, under_ml, book, line_type, is_sharp_book,
+                 source, is_mock
 
-                Notes
-                -----
-                The live pipeline writes line_type='current' during active game windows
-                via _persist_prop_odds_cycle() (SIM-340 wiring).  Opening lines are
-                captured by capture_opening_prop_lines() and the nightly opening_line_job
-        .  Closing lines are designated by mark_closing_prop_lines().
+        Notes
+        -----
+        The live pipeline writes line_type='current' during active game windows
+        via _persist_prop_odds_cycle(). Opening lines are
+        captured by capture_opening_prop_lines() and the nightly opening_line_job.
+        Closing lines are designated by mark_closing_prop_lines().
 
-                Also writes ``odds_hash`` (SHA-256 of the prop payload) and uses
-                ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING so the
-                live cadence never accumulates duplicate rows for an unchanged line.
-                Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
-                0013).
+        Also writes ``odds_hash`` (SHA-256 of the prop payload) and uses
+        ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING so the
+        live cadence never accumulates duplicate rows for an unchanged line.
+        Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
+        0013).
 
-                Also writes ``book_line_at`` (migration 0028). The cycles
-                persist one offer's rows at a time through
-                :meth:`_persist_prop_odds_many`.
+        Also writes ``book_line_at`` (migration 0028). The cycles
+        persist one offer's rows at a time through
+        :meth:`_persist_prop_odds_many`.
 
-                The DB enforces prop_stat values via CHECK constraint (migration 0004).
-                Any unknown prop_stat will fail here with a clear IntegrityError before
-                the invalid value reaches the application layer.
+        The DB enforces prop_stat values via CHECK constraint (migration 0004).
+        Any unknown prop_stat will fail here with a clear IntegrityError before
+        the invalid value reaches the application layer.
         """
         await self._db.execute(_PROP_ODDS_INSERT_SQL, *self._prop_odds_params(prop))
 

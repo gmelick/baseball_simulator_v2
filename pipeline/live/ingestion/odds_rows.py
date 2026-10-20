@@ -28,7 +28,7 @@ from pipeline.odds_provider import GAME_ODDS_FIELDS
 
 #: The by-book row keys that serve the load guard and the logs only. They are
 #: never stored and never sent to a browser: the scheduled start (a datetime),
-#: the official date and, SIM-555, a made-up game's postponed original start.
+#: the official date and a made-up game's postponed original start.
 _GUARD_ONLY_KEYS = frozenset({"scheduled_start", "game_date", "postponed_start"})
 
 #: The odds fields of a prop row; a row with all three empty is not a quote.
@@ -146,8 +146,8 @@ def _prop_row_has_odds(row: Mapping[str, Any]) -> bool:
     return any(row.get(f) is not None for f in _PROP_ODDS_FIELDS)
 
 
-#: The raw.game_odds INSERT. SIM-555 adds ``book_line_at``; ``odds_hash`` stays
-#: the LAST parameter (two pinned tests read the hash as the final argument).
+#: The raw.game_odds INSERT. ``odds_hash`` stays the LAST parameter (two pinned
+#: tests read the hash as the final argument).
 _GAME_ODDS_INSERT_SQL = """
             INSERT INTO raw.game_odds
                 (game_pk, source, is_mock,
@@ -162,7 +162,7 @@ _GAME_ODDS_INSERT_SQL = """
               DO NOTHING
             """
 
-#: The raw.prop_odds INSERT. SIM-555 adds ``book_line_at``; ``odds_hash`` stays last.
+#: The raw.prop_odds INSERT; ``odds_hash`` stays last.
 _PROP_ODDS_INSERT_SQL = """
             INSERT INTO raw.prop_odds
                 (game_pk, player_id, source, is_mock,
@@ -175,7 +175,7 @@ _PROP_ODDS_INSERT_SQL = """
             """
 
 
-#: SIM-519 Part G: the live writers' form. A row the book still posts (the same
+#: The live writers' form. A row the book still posts (the same
 #: hash) is re-stamped instead of skipped, so the pre-game read knows the
 #: price is current. Needs Alembic 0029 (``last_seen_at``).
 _GAME_ODDS_RESTAMP_SQL = _GAME_ODDS_INSERT_SQL.replace(
@@ -237,10 +237,9 @@ def _odds_hash(odds: dict) -> str:
         return str(v)
 
     payload = "|".join(f"{k}={_fmt(odds.get(k))}" for k in ordered_keys)
-    # SIM-421 (2026-09-12): the tie price of a three-way segment moneyline
-    # joins the hash ONLY when it is set. A two-way market's payload is
-    # therefore byte-identical to what it was before the column existed,
-    # so every hash stored before this change still deduplicates.
+    # The tie price of a three-way segment moneyline joins the hash ONLY when
+    # it is set, so a two-way market's payload (and every hash stored for one)
+    # is the same as a row without the column.
     if odds.get("draw_ml") is not None:
         payload += f"|draw_ml={_fmt(odds.get('draw_ml'))}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -353,7 +352,7 @@ async def insert_game_odds_rows(
     ``conn`` is an asyncpg pool or connection. The SQL is the live writer's
     (``odds_hash`` last, ``ON CONFLICT ... DO NOTHING``). Returns the number of
     rows sent (the dedup may insert fewer). An empty list sends nothing.
-    SIM-519 Part G: ``restamp`` re-stamps ``last_seen_at`` on a row already
+    ``restamp`` re-stamps ``last_seen_at`` on a row already
     stored (the live writers, once Alembic 0029 is applied).
     """
     if not rows:

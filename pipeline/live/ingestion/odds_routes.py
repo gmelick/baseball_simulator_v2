@@ -16,8 +16,9 @@ from pipeline.live.ingestion.constants import (
 )
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
 
-# FastAPI router — mounts at /api/odds. SIM-443c: every route on it requires a
-# login (cookie or API key), in the main app and in the live service's app.
+# The FastAPI router, mounted at /api/odds. Every route on it requires a login
+# (cookie or API key; the security hardening, SIM-443), in the main app and in
+# the live service's app.
 odds_router = APIRouter(prefix="/api/odds", tags=["odds"], dependencies=[Depends(require_auth)])
 
 

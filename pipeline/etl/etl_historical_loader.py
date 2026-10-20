@@ -1078,7 +1078,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         write_csv: bool = False,
         csv_output_dir: str = ".",
     ) -> None:
-        # Dsn is now optional — falls back to BASEBALL_DB_DSN env var.
+        # The DSN defaults to the BASEBALL_DB_DSN environment variable.
         # Pass an explicit DSN to override (test fixtures, ad-hoc backfills).
         # Raises a clear error if neither is set, rather than letting psycopg2
         # surface a confusing "could not connect" error mid-run.
