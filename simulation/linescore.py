@@ -1,34 +1,32 @@
 """
 linescore.py
 ============
-SIM-362 -- per-inning linescore + team R/H/E derivation (Phase 5, Sprint 4).
+The per-inning linescore and each team's runs / hits / errors (R/H/E).
 
-The loop output / box-score surface (and the Phase-6 frontend scoreboard) needs
-the classic baseball **linescore**: the per-inning runs grid plus each team's
-Runs / Hits / Errors totals::
+The box-score surface and the frontend scoreboard show the classic baseball
+**linescore**: the per-inning runs grid plus each team's Runs / Hits / Errors
+totals::
 
          1 2 3 4 5 6 7 8 9   R  H  E
-    AWAY 0 1 0 0 2 0 0 0 0   3  7  1
-    HOME 1 0 0 0 0 1 0 0 x   2  6  0
+    AWAY 0 1 0 0 1 0 0 0 0   2  7  1
+    HOME 1 0 0 0 0 2 0 0 x   3  6  0
 
-This module owns that contract + the *pure* derivation from one game's ordered
-``PlayResult`` stream (the recorder's per-pitch output).  It is a SPEC/dataclass
-+ pure-function deliverable in the style of ``simulation.snapshots`` -- NOT UI,
-NOT a live API endpoint, NOT a loop edit.  Another agent wires it into the API.
+This module holds the linescore dataclasses and the *pure* derivation from one
+game's ordered ``PlayResult`` stream (the recorder's per-pitch output).
 
 DESIGN
 ------
-  * Additive + pure.  ``linescore_from_plays`` reads existing ``PlayResult`` /
-    ``GameState`` objects only.  No DB, no FAISS, no live API, no rng, no
-    mutation.  ``sim_loop.py`` is NOT touched (import only).
-  * Frozen, slotted dataclasses, matching ``simulation.snapshots`` style.
+  * Pure.  ``linescore_from_plays`` only reads ``PlayResult`` / ``GameState``
+    objects: no DB, no FAISS, no live API, no random draw, no mutation.
+  * Frozen, slotted dataclasses, in the style of ``simulation.snapshots``.
 
 INNING / HALF -> COLUMN MAPPING
 -------------------------------
-Each ``PlayResult`` carries ``next_state`` -- the committed ``GameState`` AFTER
-the pitch -- which we read for ``(inning, half)``.  A play's runs/hits/errors are
-attributed to the inning + half of the *state it produced* (i.e. the half the
-play occurred in):
+Each ``PlayResult`` carries ``next_state``, the committed ``GameState`` AFTER
+the pitch.  The derivation reads ``(inning, half)`` from it and credits the
+play's runs, hits and errors to the half the play was played in (a play that
+ends a half-inning is moved back to that half; see
+:func:`linescore_from_plays`).  The half picks the column:
 
   * ``Half.TOP``    -> the **away** team is batting -> away column.
   * ``Half.BOTTOM`` -> the **home** team is batting -> home column.
@@ -65,22 +63,21 @@ from simulation.game_state import Half, PlayResult
 # Vocabulary
 # ---------------------------------------------------------------------------
 
-#: The event names that count as a **hit** for the H column.  We accept both the
-#: canonical outcome spellings (``simulation.constants``) and the raw
-#: ``PlayResult.event`` spellings -- which happen to coincide for the four hit
-#: types -- so the derivation is tolerant of either field being populated.
+#: The event names that count as a **hit** for the H column.  The canonical
+#: outcome spellings (``simulation.constants``) and the raw ``PlayResult.event``
+#: spellings coincide for the four hit types, so the derivation works with
+#: either field set.
 HIT_EVENTS: frozenset[str] = frozenset({"single", "double", "triple", "home_run"})
 
 
 def _is_hit(result: PlayResult) -> bool:
     """True when this play is a base hit (1B/2B/3B/HR).
 
-    Tolerant of canonical-vs-raw naming: a play counts as a hit if EITHER its
-    ``canonical_event`` (the resolved canonical outcome key, SIM-312) OR its
-    raw ``event`` is in :data:`HIT_EVENTS`.  A reach-on-error is its own
-    canonical outcome since SIM-511 (it aliased to ``"single"`` before), so it
-    never enters here; the ``is_error`` guard below stays as defense in depth
-    for a legacy path that still labels the event a hit.
+    A play counts as a hit if EITHER its ``canonical_event`` (the resolved
+    canonical outcome key) OR its raw ``event`` is in :data:`HIT_EVENTS`.  A
+    reach on an error has its own canonical outcome (``field_error``), so it
+    never matches a hit name.  The ``is_error`` guard is defense in depth: it
+    keeps an error out of the H column even when a play labels its event a hit.
     """
     if result.is_error:
         return False
@@ -100,8 +97,8 @@ class InningLine:
 
     ``away`` / ``home`` are the integer runs scored in that half-inning.  A half
     that was never played (e.g. the bottom of the final inning when the home team
-    already leads, or a walk-off that ended the game) is ``None`` -- the
-    scoreboard "x" -- distinguished from ``0`` (the half was played and scoreless).
+    already leads) is ``None`` -- the scoreboard "x" -- distinguished from ``0``
+    (the half was played and scoreless).
     """
 
     inning: int
@@ -170,26 +167,23 @@ def linescore_from_plays(results: Sequence[PlayResult]) -> Linescore:
     committed ``next_state`` names that half for every play except the one
     that records the third out: the loop rolls the half-inning before it
     commits, so ``next_state`` then names the NEXT half.  Such a play can still
-    carry runs (a lead runner scores before a trailing runner is thrown out —
-    Rule 5.08 timing, which the SIM-512 advancement draws play), so the roll
-    is detected (``outs_recorded > 0`` and the committed ``outs`` is back to
-    0) and the play is attributed to the half it ended.  Before SIM-486 the
-    no-DB harness could never produce that play, so the misattribution went
-    unseen.  Runs (``runs_scored``) are summed
-    per half-inning into the away (TOP) / home (BOTTOM) columns; hits are counted
-    per **batting** team; errors are charged to the **fielding** team.  See the
-    module docstring for the full mapping + in-progress conventions.
+    carry runs: a lead runner scores before a trailing runner is thrown out
+    (the Rule 5.08 timing, which the advancement draws play).  So the roll is
+    detected (``outs_recorded > 0`` and the committed ``outs`` back at 0), and
+    the play is attributed to the half it ended.  Runs (``runs_scored``) are
+    summed per half-inning into the away (TOP) / home (BOTTOM) columns; hits
+    are counted per **batting** team; errors are charged to the **fielding**
+    team.  See the module docstring for the full mapping and the walk-off
+    conventions.
 
-    A play whose ``next_state`` is ``None`` (e.g. a non-terminal pitch a recorder
-    chose to omit a committed state for) is skipped for the runs grid but still
-    contributes its hit/error to the team derived from... it cannot be placed, so
-    it is skipped entirely.  In normal recorder output every committed play
-    carries ``next_state``.
+    A play whose ``next_state`` is ``None`` cannot be placed on the grid, so
+    it is skipped entirely (its runs, hit and error too).  In normal recorder
+    output every committed play carries ``next_state``.
 
     An empty stream yields an empty :class:`Linescore` (no innings, all zeros).
     """
-    # Per-(inning) accumulators.  We track which halves were actually played so
-    # an unplayed bottom half stays None rather than collapsing to 0.
+    # Per-inning accumulators.  The played-half sets keep an unplayed half at
+    # None rather than 0.
     away_runs_by_inning: dict[int, int] = {}
     home_runs_by_inning: dict[int, int] = {}
     away_played: set[int] = set()

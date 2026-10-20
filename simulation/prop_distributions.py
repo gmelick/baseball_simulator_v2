@@ -1,77 +1,70 @@
 """
 prop_distributions.py
 =====================
-SIM-329 -- the **prop-distribution aggregator** over N Monte-Carlo iterations
-(Phase 4, Sprint 4).
+The **prop-distribution aggregator**: one probability distribution per player
+and prop over the N games of a Monte-Carlo run.
 
 WHAT THIS IS
 ------------
-SIM-328 made every simulated game produce a per-game :class:`~simulation.results.BoxScore`
-(per-player AB/H/HR/RBI on offense, outs/K/BB/ER on defense, keyed by
-``player_id``).  SIM-327 keeps the RAW per-iteration substrate rather than a
-pre-binned histogram precisely so the betting layer can build full distributions.
-THIS module is that layer's head: over the N per-game boxscores of a Monte-Carlo
-run it builds, for **each player and each prop**, a full integer-support
-**probability mass function** (PMF) -- value -> probability, summing to 1 -- not
-just a mean.  The CLV / edge engine (SIM-339) consumes these PMFs to price an
-over/under against a book line; a mean alone cannot answer ``P(K >= 6.5)``.
+Every simulated game produces a :class:`~simulation.results.BoxScore`: one
+:class:`PlayerStatLine` per player, keyed by ``player_id`` (AB/H/HR/RBI on
+offense, outs/K/BB/ER on defense).  A run keeps every game's box score, not a
+pre-binned histogram, so this module can build full distributions.  For **each
+player and each prop** it builds a full integer-support **probability mass
+function** (PMF): value -> probability, summing to 1, not just a mean.  The
+betting layer (``betting/clv_engine.py``) prices an over/under against a book
+line from these PMFs; a mean alone cannot answer ``P(K >= 6.5)``.
 
 THE PROPS
 ---------
-Every prop reads directly off the SIM-328 :class:`PlayerStatLine` fields.  The
-first four of each list are the original SIM-329 props; the rest are the
-market's other prop-bet types the platform did not price until SIM-421.  The
-tuples keep the original four FIRST because the frontend renders a player's
-prop chips in tuple order.
+Every prop reads directly off the :class:`PlayerStatLine` fields.  Each tuple
+lists its four core props first, then the other prop markets the platform
+prices (the fifteen prop markets, SIM-421).  Keep that order: the frontend
+renders a player's prop chips in tuple order.
 
   * **Pitcher** (charged on defense) -- :data:`PITCHER_PROPS`:
       - ``K``         -- strikeouts (``line.k``)
       - ``BB``        -- walks (``line.bb``)
       - ``ER``        -- earned runs (``line.er``)
       - ``OUTS``      -- outs recorded == IP in thirds (``line.outs_recorded``).
-        We expose the prop in *outs* (an exact integer) rather than the
-        ``x.1/x.2`` IP string, because a PMF needs an integer support and
-        ``2.1`` IP is not a real number you can sum -- ``7`` outs is.  A
-        consumer that wants "P(IP >= 6.0)" asks ``p_at_least(18)`` (6 innings
-        == 18 outs).
-      - ``H_ALLOWED`` -- hits allowed (``line.h_allowed``; SIM-421).  This is
-        the PITCHER's market.  It is a separate field from the batter's ``H``.
+        The prop is in *outs* (an exact integer), not the ``x.1/x.2`` IP
+        string, because a PMF needs an integer support: ``2.1`` IP is not a
+        number you can sum, ``7`` outs is.  A consumer that wants
+        "P(IP >= 6.0)" asks ``p_at_least(18)`` (6 innings == 18 outs).
+      - ``H_ALLOWED`` -- hits allowed (``line.h_allowed``).  This is the
+        PITCHER's market.  It is a separate field from the batter's ``H``.
 
   * **Batter** (credited on offense) -- :data:`BATTER_PROPS`:
       - ``H``   -- hits (``line.h``)
       - ``HR``  -- home runs (``line.hr``)
       - ``RBI`` -- runs batted in (``line.rbi``)
       - ``TB``  -- total bases (see the note below).
-      - ``1B``  -- singles (SIM-421).  The boxscore tracks doubles, triples and
-        home runs as subsets of ``h``, so singles are the remainder
+      - ``1B``  -- singles.  The box score tracks doubles, triples and home
+        runs as subsets of ``h``, so singles are the remainder
         ``h - b2 - b3 - hr``.
-      - ``2B``  -- doubles (``line.b2``; SIM-421)
-      - ``3B``  -- triples (``line.b3``; SIM-421)
-      - ``R``   -- runs scored (``line.r``; SIM-421)
-      - ``SB``  -- stolen bases (``line.sb``; SIM-421)
-      - ``HRR`` -- hits + runs + RBI (``line.h + line.r + line.rbi``; SIM-421).
-        The market prices this combined line as ONE number.  We compute the
-        sum PER ITERATION (one game's ``h + r + rbi``) and then build the PMF
-        from those per-game sums.  Do NOT build it from the three marginal
-        PMFs.  A convolution of the H, R and RBI PMFs treats them as
-        independent.  They are not: a home run is a hit, a run and an RBI at
-        once.  The convolution throws that within-game correlation away and
-        gives a wrong PMF.
+      - ``2B``  -- doubles (``line.b2``)
+      - ``3B``  -- triples (``line.b3``)
+      - ``R``   -- runs scored (``line.r``)
+      - ``SB``  -- stolen bases (``line.sb``)
+      - ``HRR`` -- hits + runs + RBI (``line.h + line.r + line.rbi``).
+        The market prices this combined line as ONE number.  The module sums
+        it PER ITERATION (one game's ``h + r + rbi``) and builds the PMF from
+        those per-game sums.  Do NOT build it from the three marginal PMFs.
+        A convolution of the H, R and RBI PMFs treats them as independent.
+        They are not: a home run is a hit, a run and an RBI at once.  The
+        convolution throws that within-game correlation away and gives a
+        wrong PMF.
 
-TOTAL BASES (TB) -- NOW EXACT (SIM-365)
----------------------------------------
-True total bases is ``1B + 2*2B + 3*3B + 4*HR``.  SIM-365 extended the boxscore
-:class:`PlayerStatLine` to track doubles (``b2``) and triples (``b3``) as
-subsets of ``h``, alongside ``hr``.  Singles are therefore the remainder
-(``h - b2 - b3 - hr``), so :func:`_total_bases` now computes TB EXACTLY::
+TOTAL BASES (TB)
+----------------
+True total bases is ``1B + 2*2B + 3*3B + 4*HR``.  The box score tracks doubles
+(``b2``) and triples (``b3``) as subsets of ``h``, alongside ``hr``.  Singles
+are therefore the remainder (``h - b2 - b3 - hr``), so :func:`_total_bases`
+computes TB exactly::
 
     TB = (h - b2 - b3 - hr)*1 + b2*2 + b3*3 + hr*4 = h + b2 + 2*b3 + 3*hr
 
-This is no longer a lower bound: :data:`TB_IS_LOWER_BOUND` is now ``False``.
-:func:`_total_bases` remains the single place that maps hit-types to bases; the
-PMF/API above it are unchanged.  (Prior to SIM-365 the boxscore tracked only
-``(h, hr)`` and TB was a documented lower bound, treating every non-HR hit as a
-single: ``h + 3*hr``.)
+:func:`_total_bases` is the one place that maps a hit type to its bases.
 
 THE OVER/UNDER API (the core betting query)
 -------------------------------------------
@@ -116,7 +109,7 @@ from simulation.results import (
 )
 
 #: Two-sided z-multipliers for the common confidence levels (mirrors the table in
-#: ``simulation/results.py`` so a prop CI and a SIM-327 CI agree on z).
+#: ``simulation/results.py``, so a prop CI and a run-summary CI agree on z).
 _Z_95 = 1.959963984540054
 _Z_BY_LEVEL: dict[float, float] = {
     0.80: 1.2815515594457,
@@ -125,32 +118,25 @@ _Z_BY_LEVEL: dict[float, float] = {
     0.99: 2.5758293035489004,
 }
 
-#: Pitcher prop names (charged on defense).  The original four stay first
-#: (the frontend renders chips in tuple order); ``H_ALLOWED`` is SIM-421.
+#: Pitcher prop names (charged on defense).  The four core props stay first:
+#: the frontend renders chips in tuple order.
 PITCHER_PROPS: tuple[str, ...] = ("K", "BB", "ER", "OUTS", "H_ALLOWED")
-#: Batter prop names (credited on offense).  The original four stay first;
-#: ``1B`` / ``2B`` / ``3B`` / ``R`` / ``SB`` / ``HRR`` are SIM-421.
+#: Batter prop names (credited on offense).  The four core props stay first.
 BATTER_PROPS: tuple[str, ...] = ("H", "HR", "RBI", "TB", "1B", "2B", "3B", "R", "SB", "HRR")
 #: Every prop name this aggregator can build.
 ALL_PROPS: tuple[str, ...] = PITCHER_PROPS + BATTER_PROPS
 
-#: TB is now EXACT (SIM-365): the boxscore tracks ``b2``/``b3`` alongside
-#: ``h``/``hr``, so :func:`_total_bases` computes true total bases.
-TB_IS_LOWER_BOUND = False
-
 
 def _total_bases(line: PlayerStatLine) -> int:
-    """True total bases from the (h, b2, b3, hr) fields (EXACT, SIM-365).
+    """True total bases from the (h, b2, b3, hr) fields.
 
-    True TB = 1B + 2*2B + 3*3B + 4*HR.  With doubles (``b2``) and triples
-    (``b3``) now tracked as subsets of ``h`` (SIM-365), singles are the
-    remainder (``h - b2 - b3 - hr``), so::
+    True TB = 1B + 2*2B + 3*3B + 4*HR.  Doubles (``b2``) and triples (``b3``)
+    are subsets of ``h``, so singles are the remainder (``h - b2 - b3 - hr``)::
 
         TB = (h - b2 - b3 - hr)*1 + b2*2 + b3*3 + hr*4
            = h + b2 + 2*b3 + 3*hr
 
-    This is the single place that reads the bases-per-hit; nothing above this
-    function changes.
+    This is the one place that maps a hit type to its bases.
     """
     h = int(line.h)
     b2 = int(line.b2)
@@ -160,7 +146,7 @@ def _total_bases(line: PlayerStatLine) -> int:
 
 
 def _singles(line: PlayerStatLine) -> int:
-    """Singles from the (h, b2, b3, hr) fields (SIM-421).
+    """Singles from the (h, b2, b3, hr) fields.
 
     The boxscore tracks doubles (``b2``), triples (``b3``) and home runs
     (``hr``) as subsets of ``h``, so singles are the remainder::
@@ -171,12 +157,12 @@ def _singles(line: PlayerStatLine) -> int:
 
 
 def _hits_runs_rbi(line: PlayerStatLine) -> int:
-    """Hits + runs + RBI for ONE game (SIM-421).
+    """Hits + runs + RBI for ONE game.
 
     The market prices this combined line as one number.  This function sums
-    the three fields per iteration.  The PMF is then built from the per-game
+    the three fields for one game, and the PMF is built from those per-game
     sums.  A convolution of the three marginal PMFs drops the within-game
-    correlation between a hit, a run and an RBI.  That PMF is wrong.
+    correlation between a hit, a run and an RBI, so that PMF is wrong.
     """
     return int(line.h) + int(line.r) + int(line.rbi)
 
@@ -189,12 +175,12 @@ _PROP_EXTRACTORS = {
     "BB": lambda ln: int(ln.bb),
     "ER": lambda ln: int(ln.er),
     "OUTS": lambda ln: int(ln.outs_recorded),
-    "H_ALLOWED": lambda ln: int(ln.h_allowed),  # SIM-421: the pitcher's hits allowed
+    "H_ALLOWED": lambda ln: int(ln.h_allowed),  # the pitcher's hits allowed
     "H": lambda ln: int(ln.h),
     "HR": lambda ln: int(ln.hr),
     "RBI": lambda ln: int(ln.rbi),
     "TB": _total_bases,
-    # SIM-421: the market's other batter lines.
+    # The market's other batter lines.
     "1B": _singles,
     "2B": lambda ln: int(ln.b2),
     "3B": lambda ln: int(ln.b3),
@@ -293,12 +279,11 @@ class PropDistribution:
 
     # ----------------------------------------------------------------- CI
     def mean_ci(self, *, confidence_level: float = 0.95) -> ConfidenceInterval:
-        """Wald CI on the prop's sample mean (the SIM-327 :class:`ConfidenceInterval`).
+        """The normal-approximation (Wald) confidence interval on the prop's sample mean.
 
-        half-width = z * (s / sqrt(n)), s = std(ddof=1).  With n < 2 the spread is
-        unestimable, so a zero-width interval at the single observation is
-        returned -- the same honest degenerate answer ``simulation.results._mean_ci``
-        gives.
+        half-width = z * (s / sqrt(n)), s = std(ddof=1).  With n < 2 the spread
+        cannot be estimated, so the result is a zero-width interval at the single
+        observation, the same answer ``simulation.results._mean_ci`` gives.
         """
         z = _Z_BY_LEVEL.get(round(float(confidence_level), 4), _Z_95)
         if self.n < 2:
@@ -354,24 +339,23 @@ class PropDistribution:
 
 @dataclass(slots=True)
 class PropDistributionSet:
-    """All prop PMFs for all players over one Monte-Carlo run (SIM-329).
+    """All prop PMFs for all players over one Monte-Carlo run.
 
-    The collection a downstream consumer (SIM-339 CLV) reads: indexed by
+    The API's prop routes and the betting layer read it, indexed by
     ``player_id`` then prop name.  Build it with :meth:`from_boxscores` (a list of
     per-game :class:`BoxScore`) or :meth:`from_results` (a list of
     :class:`GameSimResult`, each carrying ``.boxscore``).
 
-    A player who never appears in any boxscore is simply ABSENT from
+    A player who never appears in any box score is ABSENT from
     :attr:`by_player`; :meth:`get` returns ``None`` for them rather than raising.
     """
 
     #: Number of iterations (games) aggregated.
     n_iterations: int
-    #: ``player_id -> {prop_name -> PropDistribution}``.  Built lazily-uniformly:
-    #: a player gets exactly the props (pitcher and/or batter) for which they had
-    #: any per-game line -- but every player who pitched gets ALL pitcher props
-    #: (even an all-zero ER PMF), and every batter gets all batter props, so the
-    #: keyspace is predictable for a consumer iterating a known prop list.
+    #: ``player_id -> {prop_name -> PropDistribution}``.  A player who pitched
+    #: gets ALL pitcher props (even an all-zero ER PMF), and a player who batted
+    #: gets all batter props, so the key set is predictable for a consumer that
+    #: iterates a known prop list.
     by_player: dict[int, dict[str, PropDistribution]] = field(default_factory=dict)
 
     # ------------------------------------------------------------- lookups
@@ -403,7 +387,7 @@ class PropDistributionSet:
 
     # ------------------------------------------------------------ storage
     def to_json(self) -> dict[str, Any]:
-        """A JSON-ready dict of the whole set (SIM-519 Part E: a run row's ``prop_set``)."""
+        """A JSON-ready dict of the whole set (a stored run row's ``prop_set``)."""
         return {
             "n_iterations": int(self.n_iterations),
             "by_player": {
@@ -448,24 +432,22 @@ class PropDistributionSet:
     def from_boxscores(cls, boxscores: Iterable[BoxScore]) -> PropDistributionSet:
         """Build the full prop-PMF set from the N per-game :class:`BoxScore`s.
 
-        For each game we read every player's line; a player who did not appear in
-        a given game contributes a ZERO for that game to every prop they own (a
-        DNP is 0 K / 0 H, etc.), so the PMF denominator is always the full N -- a
+        Every player's line is read for each game.  A player who did not appear
+        in a given game contributes a ZERO for that game to every prop he owns (a
+        DNP is 0 K / 0 H, etc.), so the PMF denominator is always the full N.  A
         consumer reading ``P(K >= 6)`` gets a probability over the whole run, not
         over "games the pitcher happened to be listed in".
 
-        Whether a player gets pitcher props, batter props, or both is decided by
-        whether they EVER recorded pitching / batting activity across the run,
-        so a pure batter never gets a (meaningless) all-zero K PMF.  Batting
-        activity is an AB, a hit, an RBI, a run, a steal, a double or a triple.
-        So a pinch runner who only scores or steals owns the batter props
-        (SIM-421).  Pitching activity is an out, a batter faced, a K, a BB, an
-        ER or a hit allowed (SIM-421; the batter faced since SIM-557).  So a
-        reliever who faces one batter and records no out owns the pitcher
-        props.  This net is wider than :attr:`BoxScore.batters` /
-        :attr:`BoxScore.pitchers`.  The batter list reads the original SIM-328
-        fields only; the pitcher list reads an out, a batter faced, a K, a BB
-        or an ER, but not a hit allowed.
+        Whether a player gets pitcher props, batter props, or both depends on
+        whether he EVER recorded pitching or batting activity across the run,
+        so a pure batter never gets a meaningless all-zero K PMF.  Batting
+        activity is an AB, a hit, an RBI, a run, a steal, a double or a triple,
+        so a pinch runner who only scores or steals owns the batter props.
+        Pitching activity is an out, a batter faced, a K, a BB, an ER or a hit
+        allowed, so a reliever who faces one batter and records no out owns the
+        pitcher props.  This net is wider than :attr:`BoxScore.batters` (an AB,
+        a hit or an RBI) and :attr:`BoxScore.pitchers` (an out, a batter faced,
+        a K, a BB or an ER, but not a hit allowed).
         """
         games = list(boxscores)
         n = len(games)
@@ -483,8 +465,8 @@ class PropDistributionSet:
             per_game_lines.append(lines)
             for pid, ln in lines.items():
                 all_ids.add(int(pid))
-                # SIM-421: a hit allowed is pitching activity too. SIM-557: so
-                # is a batter faced, which lists a reliever with no out.
+                # A hit allowed is pitching activity too, and so is a batter
+                # faced, which lists a reliever with no out.
                 if (
                     ln.outs_recorded
                     or getattr(ln, "bf", 0)
@@ -494,8 +476,8 @@ class PropDistributionSet:
                     or ln.h_allowed
                 ):
                     pitched.add(int(pid))
-                # SIM-421: a run, a steal, a double or a triple is batting
-                # activity too, so a pinch-runner-only game owns batter props.
+                # A run, a steal, a double or a triple is batting activity too,
+                # so a pinch-runner-only game owns batter props.
                 if ln.ab or ln.h or ln.rbi or ln.r or ln.sb or ln.b2 or ln.b3:
                     batted.add(int(pid))
 
@@ -529,11 +511,11 @@ class PropDistributionSet:
     def from_results(cls, results: Iterable[GameSimResult]) -> PropDistributionSet:
         """Build the prop-PMF set from N :class:`GameSimResult`s (each ``.boxscore``).
 
-        Convenience wrapper over :meth:`from_boxscores`: pulls ``r.boxscore`` from
-        each result.  A result with ``boxscore is None`` (a SIM-320/327 run that
-        did not accumulate one) contributes an EMPTY boxscore -- it still counts
-        toward N (every player gets a 0 for that game) so the denominator stays the
-        full iteration count.
+        A convenience wrapper over :meth:`from_boxscores` that pulls
+        ``r.boxscore`` from each result.  A result with ``boxscore is None`` (a
+        result built without one) contributes an EMPTY box score.  It still counts
+        toward N (every player gets a 0 for that game), so the denominator stays
+        the full iteration count.
         """
         boxscores = [r.boxscore if r.boxscore is not None else BoxScore() for r in results]
         return cls.from_boxscores(boxscores)
@@ -545,5 +527,4 @@ __all__ = [
     "PITCHER_PROPS",
     "BATTER_PROPS",
     "ALL_PROPS",
-    "TB_IS_LOWER_BOUND",
 ]

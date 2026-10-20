@@ -33,7 +33,6 @@ from simulation.game_state import GameState
 from simulation.prop_distributions import (
     BATTER_PROPS,
     PITCHER_PROPS,
-    TB_IS_LOWER_BOUND,
     PropDistribution,
     PropDistributionSet,
     _total_bases,
@@ -186,8 +185,6 @@ def test_total_bases_formula():
     assert _total_bases(_batter_line(BATTER, ab=4, h=2, hr=0)) == 2
     # two HR among 2 hits -> 8
     assert _total_bases(_batter_line(BATTER, ab=4, h=2, hr=2)) == 8
-    # SIM-365 retired the lower-bound caveat: TB is now EXACT.
-    assert TB_IS_LOWER_BOUND is False
 
 
 def test_tb_pmf_per_game():

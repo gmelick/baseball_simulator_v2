@@ -1,30 +1,26 @@
 """
 test_boxscore_extended.py
-===========================
-Unit tests for SIM-365 -- the **extended per-player boxscore** (Phase 5,
-Sprint 4): the SIM-328 :class:`PlayerStatLine` grows additive batting fields
-``b2`` (doubles) / ``b3`` (triples) / ``r`` (runs scored) / ``sb`` (stolen
-bases) and pitching fields ``h_allowed`` / ``r_allowed``, accumulated inside the
-plate-appearance loop, plus the corresponding upgrade of
-``prop_distributions._total_bases`` to an EXACT total-bases formula (the
-``TB_IS_LOWER_BOUND`` caveat is retired).
+=========================
+The extended per-player box score: the batting fields ``b2`` (doubles), ``b3``
+(triples), ``r`` (runs scored) and ``sb`` (stolen bases), the pitching fields
+``h_allowed`` and ``r_allowed``, and the exact total-bases formula of
+``prop_distributions._total_bases``.
 
-These tests run with NO live DuckDB/FAISS: ``_accumulate_pa`` is driven directly
-with synthetic :class:`PlayResult`s (the cleanest way to exercise the boxscore
-mapping), the steal accumulation is driven through ``_resolve_steal_outcome`` (the
-single steal-commit site, which also catches a steal on a NON-terminal pitch),
-and one end-to-end double is driven through the count-machine path with an
-fixed-play bundle (SIM-486), so the production in-play path runs.
+No live DuckDB or FAISS: ``_accumulate_pa`` runs on synthetic
+:class:`PlayResult`s, the steal credit runs through ``_resolve_steal_outcome``
+(the one steal-commit site, which also credits a steal on a NON-terminal
+pitch), and one double runs end to end through a fixed-play bundle, so the
+production in-play path runs.
 
-Coverage (the SIM-365 acceptance criteria):
-  * the new PlayerStatLine fields default to 0 (existing constructions unaffected);
+Coverage:
+  * the new PlayerStatLine fields default to 0;
   * a double increments b2 (and h); a triple increments b3 (and h);
   * a scoring runner (baserunner_advances end_base == 0) increments that runner's r;
   * a successful steal increments the runner's sb; a steal of home also scores;
   * a CAUGHT stealing is NOT credited a steal, nor counted as a run;
   * the pitcher is charged h_allowed on a hit and r_allowed on any run scored,
     including UNEARNED (error) runs that ER excludes -- so r_allowed >= er;
-  * _total_bases is now EXACT and TB_IS_LOWER_BOUND is False.
+  * _total_bases is exact.
 """
 
 from __future__ import annotations
@@ -34,7 +30,7 @@ import numpy as np
 from simulation.game_state import Bases, GameState, PlayResult
 from simulation.loop.boxscore import PlayerStatLine
 from simulation.loop.values import STEAL_CAUGHT, STEAL_SAFE, StealResolution
-from simulation.prop_distributions import TB_IS_LOWER_BOUND, _total_bases
+from simulation.prop_distributions import _total_bases
 from simulation.sim_loop import StateMachine
 from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
@@ -297,7 +293,7 @@ class TestPitcherHitsAndRunsAllowed:
 # ===========================================================================
 
 
-class TestSim414InningReconstruction:
+class TestUnearnedRunInningReconstruction:
     def test_reach_on_error_increments_half_inning_error_outs_lost(self):
         """The canonical reach-on-error (is_error + outs_recorded==0) adds 1
         to the per-half-inning missed-out counter."""
@@ -510,14 +506,11 @@ class TestStealRunAttributionDoesNotDoubleCount:
 
 
 # ===========================================================================
-# prop_distributions._total_bases is now EXACT (TB_IS_LOWER_BOUND is False)
+# prop_distributions._total_bases is EXACT
 # ===========================================================================
 
 
 class TestTotalBasesExact:
-    def test_tb_is_no_longer_a_lower_bound(self):
-        assert TB_IS_LOWER_BOUND is False
-
     def test_exact_total_bases_with_a_double_and_a_triple(self):
         # h=3 incl. 1 double + 1 triple (and 1 single): TB = 1 + 2 + 3 = 6
         # via the formula h + b2 + 2*b3 + 3*hr = 3 + 1 + 2*1 + 0 = 6.

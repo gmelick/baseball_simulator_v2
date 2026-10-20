@@ -1,29 +1,28 @@
 """
 simulation/prop_validation.py
 =============================
-SIM-407 — validate the simulator's PROBABILITY outputs against real outcomes and
-FIT the win-probability reliability curve that SIM-406 left empty.
+Validate the simulator's PROBABILITY outputs against real outcomes, and FIT the
+win-probability reliability curve.
 
 WHY THIS EXISTS
 ---------------
-SIM-329 (:mod:`simulation.prop_distributions`) turns a Monte-Carlo run into
-per-player prop PMFs (``P(K >= 6.5)`` etc.); SIM-330
-(:mod:`simulation.win_probability`) turns it into a home/away win probability.
+:mod:`simulation.prop_distributions` turns a Monte-Carlo run into per-player
+prop probability mass functions (PMFs: ``P(K >= 6.5)`` etc.);
+:mod:`simulation.win_probability` turns it into a home/away win probability.
 Both are *uncalibrated model probabilities* until something checks them against
-what actually happened. The Phase-5 audit flagged exactly this: "PMFs have no
-calibration seam/backtest; ablation is synthetic-only", and SIM-406 closed the
-similarity-engine calibration but deliberately left
-``CalibrationReport.reliability_curve`` EMPTY (so the win-prob ``CalibrationMap``
-stayed the identity) — fitting it is THIS ticket.
+what actually happened.  This module does that check.  It also fits the
+reliability curve that ``CalibrationReport.reliability_curve`` carries: the
+curve the win-prob ``CalibrationMap`` is built from.  A reliability curve maps
+each predicted probability to the rate at which the event really happened.
 
-The SIM-220 backtester (:mod:`similarity.backtesting.backtester`) already has the
-MULTI-CLASS metric spine (ECE / Brier / log-loss over a discrete-outcome
-distribution) and the walk-forward ablation harness. But a win probability and an
-over/under are BINARY events (home-won? / went-over?), which the multi-class
-confidence reliability does not score correctly (its "confidence" is the argmax
-prob, not the probability of the positive class). This module is the BINARY
-counterpart — the piece the prop/win-prob validation needs — and it reuses the
-SIM-220 log-loss epsilon convention so the two layers agree.
+The similarity backtester (:mod:`similarity.backtesting.backtester`) has the
+MULTI-CLASS metrics over a discrete-outcome distribution: the expected
+calibration error (ECE), the Brier score and the log-loss.  A win probability
+and an over/under are BINARY events (home won? went over?).  The multi-class
+reliability does not score them correctly: its "confidence" is the argmax
+probability, not the probability of the positive class.  This module is the
+BINARY counterpart.  It reuses the backtester's log-loss epsilon, so the two
+layers agree.
 
 WHAT IT PROVIDES
 ----------------
@@ -34,25 +33,25 @@ WHAT IT PROVIDES
 2. **The win-prob reliability fit** (``fit_reliability_curve``): bins predicted
    home-win probabilities, measures the observed home-win rate per bin, and emits
    the ``[[predicted_p, observed_p], ...]`` anchor list that
-   ``CalibrationReport.reliability_curve`` consumes — closing the SIM-406 → 407
-   handoff so ``CalibrationMap.from_report`` becomes a real (monotone) map.
+   ``CalibrationReport.reliability_curve`` consumes.
+   ``CalibrationMap.from_report`` turns that list into a monotone map.
 
 3. **Prop-PMF over/under validation** (``validate_prop_over_under``): given
    ``(PropDistribution, actual_value)`` pairs + a book line, scores the PMF's
-   ``p_over(line)`` against the realized over/under — the prop-PMF backtest the
-   audit said was missing.
+   ``p_over(line)`` against the realized over/under.
 
-4. **PMF goodness-of-fit** (``pit_values`` / ``pmf_coverage``): the (mid-)PIT of a
-   discrete PMF — if the PMFs are calibrated the PIT is ~Uniform(0,1), so its mean
-   sits near 0.5 and central intervals cover at their nominal rate.
+4. **PMF goodness-of-fit** (``pit_values`` / ``pmf_coverage``): the mid-P
+   probability integral transform (PIT) of a discrete PMF.  If the PMFs are
+   calibrated the PIT is ~Uniform(0,1), so its mean sits near 0.5 and central
+   intervals cover at their nominal rate.
 
 5. **A persistable report** (:class:`PropValidationReport`) aggregating the above
    + the fitted win-prob curve, JSON round-trippable like ``CalibrationReport``.
 
 6. **The prop ground truth** — two readers that turn real data into per-player
    prop totals. :func:`real_props_from_boxscore_rows` reads the official box
-   score (``raw.game_player_stats``, the official box-score ground truth,
-   SIM-545) and covers every prop the market offers
+   score (``raw.game_player_stats``; the owner's decision to grade props on the
+   box, SIM-545) and covers every prop the market offers
    (:data:`BOXSCORE_BATTER_PROPS` / :data:`BOXSCORE_PITCHER_PROPS`).
    :func:`real_props_from_pa_events` reads the ``raw.pitches`` event labels and
    covers H / HR / TB and K / BB only; it is the FALLBACK for a game that has
@@ -75,7 +74,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
-# Reuse the SIM-220 log-loss clip so the binary + multi-class layers agree.
+# Reuse the backtester's log-loss clip, so the binary and multi-class layers agree.
 from similarity.backtesting.backtester import DEFAULT_N_BINS, OUTCOME_PROB_EPS
 
 if TYPE_CHECKING:
@@ -151,7 +150,7 @@ def binary_reliability_curve(
     bins; for each populated bin returns ``mean_pred`` (mean forecast),
     ``observed`` (empirical positive rate), ``count``, and ``gap =
     |mean_pred - observed|``. A well-calibrated forecaster lies on the diagonal
-    (gap≈0 everywhere). Empty bins are omitted. Unlike the SIM-220 multi-class
+    (gap≈0 everywhere). Empty bins are omitted. Unlike the backtester's multi-class
     ``reliability_curve`` (which bins the argmax *confidence*), this bins the
     probability of the POSITIVE class — the correct quantity for a binary forecast.
     """
@@ -225,7 +224,7 @@ def binary_log_loss(
 
 
 # ---------------------------------------------------------------------------
-# The win-prob reliability FIT (closes the SIM-406 → 407 handoff)
+# The win-prob reliability FIT
 # ---------------------------------------------------------------------------
 
 
@@ -241,9 +240,9 @@ def fit_reliability_curve(
     ``CalibrationReport.reliability_curve`` consumes (and
     ``CalibrationMap.from_report`` turns into a monotone p→p win-prob map).
 
-    For each populated bin we emit ``[mean_pred, observed_rate]`` — i.e. "when the
-    simulator said ~``mean_pred``, the event actually happened ``observed_rate`` of
-    the time". ``CalibrationMap.from_report`` sorts these by ``mean_pred``, enforces
+    Each populated bin emits ``[mean_pred, observed_rate]``: "when the simulator
+    said ~``mean_pred``, the event actually happened ``observed_rate`` of the
+    time". ``CalibrationMap.from_report`` sorts these by ``mean_pred``, enforces
     monotonicity via a running max, and linearly interpolates, so a forecaster that
     is systematically over-confident gets pulled back toward the truth.
 
@@ -261,9 +260,9 @@ def fit_reliability_curve(
         When True (default), prepend ``[0.0, 0.0]`` and append ``[1.0, 1.0]`` if the
         fitted points don't already span those ends, so the interpolated map covers
         the full [0, 1] domain instead of clamping to the first/last populated bin.
-        The anchors are only added when they don't contradict the fitted data
-        (i.e. the lowest observed ≥ 0 and highest ≤ 1, always true), and never
-        duplicate an existing endpoint.
+        An anchor never duplicates an existing endpoint: ``[0.0, 0.0]`` is added
+        only when the first predicted_p is above 0, ``[1.0, 1.0]`` only when the
+        last is below 1.
 
     Returns
     -------
@@ -291,7 +290,7 @@ def fit_reliability_curve(
 
 
 # ---------------------------------------------------------------------------
-# Prop-PMF over/under validation (the prop backtest the audit wanted)
+# Prop-PMF over/under validation
 # ---------------------------------------------------------------------------
 
 
@@ -421,7 +420,7 @@ def pmf_coverage(
 
 
 # ---------------------------------------------------------------------------
-# Real prop outcomes from raw.pitches `events` (the prop ground truth)
+# Real prop outcomes (the prop ground truth)
 # ---------------------------------------------------------------------------
 
 #: MLB Stats API / Statcast per-PA `events` labels that are HITS, mapped to their
@@ -430,34 +429,31 @@ _HIT_EVENTS: dict[str, int] = {"single": 1, "double": 2, "triple": 3, "home_run"
 #: `events` labels that are pitcher strikeouts (the K prop).
 _STRIKEOUT_EVENTS = frozenset({"strikeout", "strikeout_double_play"})
 #: `events` labels counted as a pitcher walk (the BB prop). The intentional
-#: walk (``intent_walk``, the Statcast spelling) COUNTS: the sim issues one as
-#: a per-PA draw (SIM-515, ``sim.ibb_rates``) and its box line counts it as a
-#: walk (``_BB_CANONICAL`` in ``simulation/sim_loop.py``), and the official
-#: box score counts it too. The fallback's vocabulary has to match both.
-#: This is a vocabulary completion, not a data change: ``raw.pitches`` carries
-#: no ``intent_walk`` row today (an IBB is signalled, not thrown — its rows
-#: live in ``raw.play_events``), so the event-label fallback still under-counts
-#: a pitcher's walks by his intentional ones. The box-score reader (SIM-545)
-#: is the ground truth that carries them.
+#: walk (``intent_walk``, the Statcast spelling) COUNTS: the sim's manager
+#: issues one as a per-PA draw, its box line counts it as a walk
+#: (``StateMachine._BB_CANONICAL`` in ``simulation/loop/credit.py``), and the
+#: official box score counts it too. The fallback's vocabulary matches both.
+#: ``raw.pitches`` carries no ``intent_walk`` row: an intentional walk is
+#: signalled, not thrown, so its rows live in ``raw.play_events``. The
+#: event-label fallback therefore under-counts a pitcher's walks by his
+#: intentional ones. The box-score reader carries them.
 _WALK_EVENTS = frozenset({"walk", "intent_walk"})
 
 #: Prop totals EXACTLY recoverable from the per-PA event LABEL alone. RBI, ER and
 #: OUTS are intentionally NOT derived: RBI needs the per-PA runs-driven-in count,
-#: ER needs earned/unearned run attribution, and OUTS needs a per-event out count
-#: — none carried by the event label — so deriving them from ``events`` would
-#: produce wrong "actuals" that silently corrupt the calibration. They are scored
-#: only when a richer box-score source supplies them.
+#: ER needs earned/unearned run attribution, and OUTS needs a per-event out count.
+#: The event label carries none of them, so deriving them from ``events`` would
+#: produce wrong "actuals" that silently corrupt the calibration.
 #:
-#: That richer source now exists: the official box-score ground truth (SIM-545,
-#: ``raw.game_player_stats``, read by :func:`real_props_from_boxscore_rows`)
-#: supersedes this event-label derivation whenever a game has box-score rows.
-#: These tuples stay as the FALLBACK for a game with no rows, and they keep
-#: ``scripts/validate_props.py`` unchanged.
+#: The official box score (``raw.game_player_stats``, read by
+#: :func:`real_props_from_boxscore_rows`) supplies them, and it replaces this
+#: event-label derivation whenever a game has box-score rows. These tuples are
+#: the FALLBACK for a game with no rows.
 DERIVABLE_BATTER_PROPS: tuple[str, ...] = ("H", "HR", "TB")
 DERIVABLE_PITCHER_PROPS: tuple[str, ...] = ("K", "BB")
 
-#: The props the official box score grades (SIM-545) — every batter and pitcher
-#: market the platform prices (SIM-421). Order is not significant: these tuples
+#: The props the official box score grades: every batter and pitcher prop
+#: market the platform prices. Order is not significant: these tuples
 #: feed pairing (:func:`pair_props_for_validation`) and set membership (the
 #: backtest's scored-prop set) only. The display order lives in
 #: ``simulation/prop_distributions.py`` (``BATTER_PROPS`` / ``PITCHER_PROPS``).
@@ -486,7 +482,7 @@ DEFAULT_PROP_LINES: dict[str, float] = {
     "TB": 1.5,
     "K": 5.5,
     "BB": 1.5,
-    # SIM-545: the box-score-graded props.
+    # The props only the box-score reader produces.
     "RBI": 0.5,
     "1B": 0.5,
     "2B": 0.5,
@@ -516,9 +512,9 @@ def real_props_from_pa_events(
     Only props exactly recoverable from the event LABEL are produced (see
     ``DERIVABLE_*_PROPS``); RBI/ER/OUTS are omitted. Unknown / out labels (field
     outs, GIDP, HBP, …) correctly contribute 0. The event match is
-    case-insensitive and whitespace-tolerant. This is the prop ground truth the
-    sim's prop PMFs are validated against — derived from the SAME ``raw.pitches``
-    the engines are built from, so no extra data source is needed.
+    case-insensitive and whitespace-tolerant. This is the fallback ground truth
+    for a game with no box-score rows; it reads the same ``raw.pitches`` the
+    engines are built from.
     """
     batter: dict[int, dict[str, int]] = {}
     pitcher: dict[int, dict[str, int]] = {}
@@ -550,7 +546,7 @@ def _row_int(row: Any, key: str) -> int:
 def real_props_from_boxscore_rows(
     rows: Iterable[Any],
 ) -> tuple[dict[int, dict[str, int]], dict[int, dict[str, int]]]:
-    """Turn official box-score rows into real per-player prop totals (SIM-545).
+    """Turn official box-score rows into real per-player prop totals.
 
     ``rows`` is an iterable of ``raw.game_player_stats`` rows for ONE game —
     asyncpg Records or plain dicts keyed by the table's column names. Returns
@@ -623,14 +619,13 @@ def pair_props_for_validation(
     the number of pairs added.
 
     ``batter_props`` / ``pitcher_props`` select which props to pair. The default
-    is the event-label tuples (``DERIVABLE_*_PROPS``), so
-    ``scripts/validate_props.py`` is unchanged; pass
+    is the event-label tuples (``DERIVABLE_*_PROPS``); pass
     :data:`BOXSCORE_BATTER_PROPS` / :data:`BOXSCORE_PITCHER_PROPS` with the
-    box-score actuals (SIM-545) to pair every market. A prop absent from a
-    player's totals (a mixed-source run) is skipped, never a KeyError.
+    box-score actuals to pair every market. A prop absent from a player's
+    totals (a mixed-source run) is skipped, never a KeyError.
 
-    ``pset`` is typed ``Any`` so this module needn't import the heavy
-    prop_distributions at module load; it just needs ``pset.get(pid, prop)``.
+    ``pset`` is typed ``Any`` so this module does not import prop_distributions
+    at module load; it needs only ``pset.get(pid, prop)``.
     """
     lines = prop_lines or DEFAULT_PROP_LINES
     added = 0
@@ -658,12 +653,13 @@ def pair_props_for_validation(
 
 @dataclass
 class PropValidationReport:
-    """Aggregated SIM-407 validation output: win-prob calibration + the fitted
+    """The aggregated validation output: win-prob calibration + the fitted
     reliability curve + per-prop over/under calibration + PMF coverage.
 
     JSON round-trippable (``to_json`` / ``from_json``) like ``CalibrationReport``.
-    The ``winprob_reliability_curve`` is the artifact the SIM-406 ``CalibrationReport``
-    consumes — see :func:`reliability_curve_for_calibration_report`.
+    The ``winprob_reliability_curve`` is the artifact the ``CalibrationReport``
+    (``similarity/similarity_calibration.py``) consumes; see
+    :func:`reliability_curve_for_calibration_report`.
     """
 
     #: Win-probability calibration over the validated games.
@@ -703,8 +699,8 @@ def reliability_curve_for_calibration_report(
     """The win-prob reliability curve in the exact shape
     ``CalibrationReport.reliability_curve`` expects (a list of ``[pred, obs]``).
 
-    A thin accessor so the SIM-407 fit can be written onto the SIM-406
-    ``CalibrationReport`` without the caller reaching into the dataclass:
+    A thin accessor, so the fit can be written onto a ``CalibrationReport``
+    without the caller reaching into the dataclass:
 
         cal_report.reliability_curve = reliability_curve_for_calibration_report(val)
 
@@ -788,8 +784,8 @@ def write_reliability_curve_to_calibration_report(
     report: PropValidationReport,
     calibration_path: str,
 ) -> bool:
-    """Write the fitted win-prob reliability curve INTO an existing SIM-406
-    ``CalibrationReport`` JSON file, closing the SIM-406 → 407 loop on disk.
+    """Write the fitted win-prob reliability curve INTO an existing
+    ``CalibrationReport`` JSON file.
 
     Loads the ``CalibrationReport`` at ``calibration_path`` (the file the API boots
     from — see ``CALIBRATION_REPORT_PATH``), sets its ``reliability_curve`` to this
