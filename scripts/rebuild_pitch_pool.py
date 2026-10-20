@@ -7,7 +7,7 @@ WHAT IT DOES
 The pool build codes a two-strike foul tip or foul bunt (Gameday ``T``,
 ``L``, ``O``) as strike three: class ``swinging_strike``. It also codes ``O``,
 ``Q``, ``R``, ``P`` and ``H`` explicitly and has no ELSE
-(``pipeline/batch/player_profile_computor.py`` ``SQL_OUTCOME_TYPE``; builder
+(``pipeline/batch/profiles/sql.py`` ``SQL_OUTCOME_TYPE``; builder
 ``sim553.1``). This script rebuilds ``sim.pitch_pool`` on that coding. It
 proves the rebuild moved exactly the rows the coding says it moves. It exports
 the pitch pool ONLY into the engine-artifact bundle, and it proves the export

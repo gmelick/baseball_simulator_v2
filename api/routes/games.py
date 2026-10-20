@@ -252,9 +252,10 @@ async def _resolved_sim_kwargs(
     with the looked-up factor. A route that called the bare builder instead
     would raise ``UnresolvedParkFactorError``.
 
-    The lookup reads ``app.state.sim_duckdb`` (:func:`_get_sim_duckdb`), else the
-    primed snapshot. With neither, the resolver returns a neutral ``1.0``, which
-    is a resolved answer, not a skipped lookup.
+    The lookup reads ``app.state.sim_duckdb`` (:func:`_get_sim_duckdb`) when a test
+    sets it. The app sets none, so the lookup reads the snapshot that the lifespan
+    primed. With neither, the resolver returns the unresolved sentinel (it equals
+    1.0), and ``build_sim_kwargs`` builds the kwargs anyway with a WARNING.
     """
     return await _build_sim_kwargs(
         state,

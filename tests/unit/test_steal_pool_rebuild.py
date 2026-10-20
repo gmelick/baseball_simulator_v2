@@ -61,6 +61,7 @@ from steal_pool_rebuild.export import (  # noqa: E402
 from steal_pool_rebuild.migration import migration_statements  # noqa: E402
 from steal_pool_rebuild.preflight import bundle_problems  # noqa: E402
 
+import pipeline.batch.profiles.pool_meta as pool_meta  # noqa: E402
 from pipeline.batch.engine_artifacts import build_steal_pool_artifact  # noqa: E402
 
 WINDOW = [2023, 2024, 2025, 2026]
@@ -361,7 +362,7 @@ def _write_steal_pool(
 
 @pytest.fixture
 def builder_554(monkeypatch):
-    monkeypatch.setattr(rb.ppc, "POOL_BUILDER_VERSION", "sim554.1")
+    monkeypatch.setattr(pool_meta, "POOL_BUILDER_VERSION", "sim554.1")
 
 
 def _clean_state(tmp_path: Path):
@@ -404,7 +405,7 @@ class TestThePreflight:
 
     def test_the_wrong_builder_stops(self, tmp_path, monkeypatch):
         c, art, backup = _clean_state(tmp_path)
-        monkeypatch.setattr(rb.ppc, "POOL_BUILDER_VERSION", "sim553.1")
+        monkeypatch.setattr(pool_meta, "POOL_BUILDER_VERSION", "sim553.1")
         problems = _preflight(c, art, backup)
         assert len(problems) == 1 and "POOL_BUILDER_VERSION is 'sim553.1'" in problems[0]
 

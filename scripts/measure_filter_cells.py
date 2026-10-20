@@ -105,7 +105,7 @@ So:
     ``simulation/filter_cells.py``, the module the sampler's cell index
     imports. This script re-exports them; it never redefines them.
   * :func:`score_band` applies the loop's +/-5 clamp. The pool builder already
-    clamps ``score_diff`` to -5..+5 (``pipeline/batch/player_profile_computor.py``),
+    clamps ``score_diff`` to -5..+5 (``pipeline/batch/profiles/pools.py``),
     so the clamp is a verified no-op on pool data. The function applies it
     anyway so it is correct standalone.
   * The recent-season set comes from ``last_n_seasons()`` in
@@ -798,7 +798,7 @@ def build_half_inning_map(con: Any, source: str) -> int:
 
     ``bat_is_home`` is 1 when the home team bats. Postgres marks that with
     ``inning_topbot = 'Bot'``; the DuckDB table stores the same convention in
-    ``top_or_bottom`` (``player_profile_computor.py`` builds it from the same
+    ``top_or_bottom`` (``pipeline/batch/profiles/pools.py`` builds it from the same
     expression), so the two sources are definitionally identical and only
     their coverage differs.
 

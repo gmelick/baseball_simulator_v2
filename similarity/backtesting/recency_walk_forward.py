@@ -3,7 +3,7 @@
 The harness tests whether the ``recency_weight`` column improves the
 out-of-sample fit of a similarity-based prediction of a scalar outcome. The
 pool builders write the column by the rule of
-``pipeline.batch.player_profile_computor.recency_weight``: 2.0 for the two most
+``pipeline.batch.profiles.pool_meta.recency_weight``: 2.0 for the two most
 recent seasons, then ×0.75 for each older season, with a floor of 0.25,
 relative to the build's reference season. This module does not compute the
 weights; it reads the ``recency_weight`` already on each row.

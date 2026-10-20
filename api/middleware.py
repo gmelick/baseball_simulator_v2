@@ -24,7 +24,7 @@ class ParkFactorSourceMiddleware(BaseHTTPMiddleware):
     * ``duckdb:<n>`` — the source is open and holds ``n`` rows in
       ``derived.park_factors``. Simulations use real venue factors.
     * ``unavailable`` — nothing answered the lookup. Every simulation in this
-      response ran at a neutral 1.0 and ``SIM_PARK_FACTOR`` did nothing.
+      response ran at a neutral park factor of 1.0.
     * ``unknown`` — the lifespan has not run (a TestClient built without it).
 
     A client that ignores the header is not affected, and no response body
