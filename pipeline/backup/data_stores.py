@@ -57,6 +57,7 @@ from pipeline.backup.common import (  # the shared helpers moved there (SIM-568)
     Clock,
     Sleep,
     copy_file_synced,
+    env_float,
     fresh_marks,
     fsync_path,
     human_bytes,
@@ -721,13 +722,6 @@ def print_status(root: Path, as_json: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except ValueError:
-        return default
-
-
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m pipeline.backup.data_stores",
@@ -814,9 +808,9 @@ def run_backup(
     if not root.is_dir() or not os.access(root, os.W_OK):
         log(f"refused: the backup root {root} is missing or cannot be written")
         return 2
-    keep = args.keep if args.keep is not None else int(_env_float("BACKUP_KEEP", 3))
-    min_free_gb = _env_float("BACKUP_MIN_FREE_GB", 10.0)
-    factor = _env_float("BACKUP_FREE_FACTOR", 1.5)
+    keep = args.keep if args.keep is not None else int(env_float("BACKUP_KEEP", 3))
+    min_free_gb = env_float("BACKUP_MIN_FREE_GB", 10.0)
+    factor = env_float("BACKUP_FREE_FACTOR", 1.5)
     clear_partials(root, stores)
     window = 0.0 if getattr(args, "new_set", False) else float(args.rerun_window_s)
     done = recent_sets(root, stores, window_s=window, now=clock())

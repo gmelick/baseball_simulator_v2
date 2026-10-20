@@ -67,6 +67,7 @@ from pipeline.backup.common import (
     GIB,
     Clock,
     Sleep,
+    env_float,
     fresh_marks,
     fsync_path,
     human_bytes,
@@ -162,13 +163,6 @@ def _iso(dt: datetime) -> str:
 def log(message: str) -> None:
     """Print one log line with a UTC stamp."""
     print(f"[backup-offsite {_iso(datetime.now(UTC))}] {message}", flush=True)
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except ValueError:
-        return default
 
 
 def _unlink_quiet(path: Path) -> None:
@@ -777,8 +771,8 @@ def _plans_with_room(
     if needed > 0 and not free_space_ok(
         offsite_root,
         needed,
-        min_free_gb=_env_float("BACKUP_MIN_FREE_GB", 10.0),
-        factor=_env_float("BACKUP_FREE_FACTOR", 1.5),
+        min_free_gb=env_float("BACKUP_MIN_FREE_GB", 10.0),
+        factor=env_float("BACKUP_FREE_FACTOR", 1.5),
     ):
         log(f"refused: the off-site disk is short of space for {human_bytes(needed)}")
         return None

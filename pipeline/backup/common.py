@@ -21,6 +21,15 @@ Clock = Callable[[], float]
 Sleep = Callable[[float], object]
 
 
+def env_float(name: str, default: float) -> float:
+    """The environment variable ``name`` as a float; ``default`` when it is unset
+    or does not parse."""
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
 def human_bytes(n: int) -> str:
     """A size in the largest unit that keeps the number at 1 or more (up to GiB)."""
     size = float(n)
