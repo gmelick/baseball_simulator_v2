@@ -29,19 +29,18 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros_odds_provider import (
+from pipeline.bettingpros.parsing import _book_line, _usable
+from pipeline.bettingpros.rules import (
     F5_EXCLUDED_BOOKS,
     F5_EXCLUDED_MARKETS,
     F5_TWIN_MARKETS,
     TWIN_MONEYLINE_PRICE_TOLERANCE,
     TWIN_PRICE_TOLERANCE,
-    BettingProsOddsProvider,
-    _book_line,
-    _usable,
     f5_excluded_markets,
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.odds_provider import (
     BETTABLE_KINDS,

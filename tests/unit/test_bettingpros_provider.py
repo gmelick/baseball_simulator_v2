@@ -22,7 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider, _normalize_name
+from pipeline.bettingpros.parsing import _normalize_name
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
 from pipeline.odds_provider import graded_book_labels, is_bettable
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"

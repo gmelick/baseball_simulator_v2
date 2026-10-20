@@ -42,13 +42,13 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros_odds_provider import (
+from pipeline.bettingpros.schedule import (
     _MAX_EVENT_TIME_DELTA,
     _MAX_SINGLE_EVENT_DELTA,
-    BettingProsOddsProvider,
     _is_postponed,
     _read_schedule,
 )
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
 from pipeline.odds_provider import GAME_MARKET_TYPES
 from pipeline.odds_row_guard import RULES, RefusalTally, check_row, refuse_reason
 

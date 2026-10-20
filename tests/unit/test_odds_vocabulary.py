@@ -51,10 +51,8 @@ if str(_ROOT) not in sys.path:
 import scripts.load_historical_odds as loader  # noqa: E402
 
 from pipeline import odds_provider  # noqa: E402
-from pipeline.bettingpros_odds_provider import (  # noqa: E402
-    _PROP_MARKET_IDS,
-    BettingProsOddsProvider,
-)
+from pipeline.bettingpros.markets import _PROP_MARKET_IDS  # noqa: E402
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
 from pipeline.etl import opening_line_job  # noqa: E402
 from pipeline.live.ingestion import prop_odds  # noqa: E402
 from pipeline.live.ingestion.constants import (  # noqa: E402

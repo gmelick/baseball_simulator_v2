@@ -168,7 +168,7 @@ def test_closing_prefer_book_id_absent_yields_none():
 
 
 def test_book_line_handles_empty_books_and_unstamped_lines():
-    from pipeline.bettingpros_odds_provider import _book_line
+    from pipeline.bettingpros.parsing import _book_line
 
     # No books at all → None, not an exception.
     assert _book_line({"books": []}, 1) is None
