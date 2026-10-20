@@ -52,11 +52,6 @@ def _make_profile(
     pa_vs_l: int = 150,
     pa_vs_r: int = 350,
 ) -> BatterProfile:
-    len(DISCIPLINE_FEATURES)
-    len(BATTED_BALL_FEATURES)
-    len(POWER_FEATURES)
-    len(PLATOON_FEATURES)
-
     return BatterProfile(
         batter_id=batter_id,
         season=season,
@@ -427,7 +422,6 @@ class TestPlatoonAwareQuery(unittest.TestCase):
         the engine end to end.
         """
         # Three platoon splits: a good one, a bad one and an average one.
-        len(PLATOON_FEATURES)
         vec_good = np.array([0.25, 0.72, 0.15, 0.12, 0.14, 0.38, 0.10])  # elite approach
         vec_bad = np.array([0.38, 0.58, 0.32, 0.05, 0.30, 0.50, 0.02])  # bad approach
         vec_avg = np.array([0.30, 0.66, 0.22, 0.09, 0.20, 0.42, 0.07])  # average

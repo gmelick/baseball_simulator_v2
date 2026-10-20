@@ -194,7 +194,7 @@ class TestBattedBallEngineBasic(unittest.TestCase):
                 self.assertEqual(r_b.pitch_id, r_i.pitch_id)
 
 
-class TestBattedBallSpray051Readiness(unittest.TestCase):
+class TestBattedBallSprayColumnChoice(unittest.TestCase):
     """The loader picks `pull_relative_spray_angle` when the outcome pool has
     the column, else the raw `spray_angle`."""
 
