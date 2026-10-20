@@ -101,6 +101,9 @@ omit = [
     # Live-infra wiring + integration/real-DB paths: exercised by the SIM-371
     # E2E suite + integration tests, not unit tests (same rationale as above).
     "api/main.py",
+    "api/env_check.py",
+    "api/middleware.py",
+    "api/startup.py",
     "api/state.py",
     "simulation/production_factory.py",
     "api/routes/games.py",

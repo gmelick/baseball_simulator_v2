@@ -1,19 +1,15 @@
 """
 api/main.py
 ===========
-MLB Baseball Simulation Platform — FastAPI Application Entry Point
+The FastAPI app of the MLB Baseball Simulation Platform: the app factory and its
+lifespan.
 
-Current wiring:
-  - Lifespan opens the asyncpg pool, the Redis client + cache, and
-    builds the PitcherSimilarityEngine (Backend Developer slice of
-    Phase 5; spec: docs/similarity_visualization_spec.md).
-  - Similarity Explorer router is registered and serves real engine
-    output against the live DuckDB profiles.
-
-Routers added here as phases complete:
-  Phase 5: simulation runner, game state, managerial override
-  Phase 6: frontend serving
-  Phase 7: monitoring, deployment hardening
+:func:`create_app` adds the middleware, includes every router and adds the
+health, readiness and SPA routes. It opens no connection, so a test or the
+OpenAPI export can build the app. :func:`lifespan` opens the app's resources at
+startup and closes them at shutdown; its steps that no test patches live in
+:mod:`api.startup`, the environment check in :mod:`api.env_check` and the
+park-factor header in :mod:`api.middleware`.
 """
 
 from __future__ import annotations
@@ -21,94 +17,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
 
+from api import startup
 from api.auth import (
     LatencyMiddleware,
     RateLimitMiddleware,
     _auth_disabled,
     resolve_cors_origins,
 )
+from api.env_check import validate_environment
 from api.errors import install_exception_handlers
-from api.state import (
-    apply_calibration_to_engines,
-    build_all_engines,
-    build_pitcher_engine,
-    load_calibration_report,
-    make_pg_name_resolver,
-    open_pg_pool,
-    open_redis_cache,
-)
-from simulation.flags import read_int
+from api.middleware import ParkFactorSourceMiddleware
+from api.state import make_pg_name_resolver, open_pg_pool, open_redis_cache
 
 log = logging.getLogger("api.main")
-
-# ---------------------------------------------------------------------------
-# Environment validation (SIM-153)
-# ---------------------------------------------------------------------------
-
-_REQUIRED_ENV_VARS = [
-    "BASEBALL_DB_DSN",
-    "REDIS_URL",
-]
-
-# SIM-443c: the auth variables are required in EVERY environment. The one
-# opt-out is AUTH_DISABLED=1, which validate_environment() logs as a warning.
-# (SIM-389 required them only outside development; that relaxed mode is gone.)
-_REQUIRED_AUTH_ENV_VARS = [
-    "SECRET_KEY",  # HMAC signing key for session tokens
-    "AUTH_PASSWORD",  # shared browser login password
-]
-
-
-def validate_environment() -> None:
-    """
-    Asserts all required environment variables are present at startup.
-    Raises RuntimeError with a clear message listing what is missing.
-    Called inside the lifespan so a misconfigured container fails fast
-    rather than silently running with broken connections.
-
-    SIM-443c: the auth variables (SECRET_KEY, AUTH_PASSWORD) are required in
-    every environment; ``ENVIRONMENT`` plays no part. A blank or
-    whitespace-only value counts as missing. With ``AUTH_DISABLED=1`` the
-    function logs ONE warning and skips the auth requirement; the test suite
-    runs this way (tests/conftest.py).
-    """
-    missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
-    if missing:
-        raise RuntimeError(
-            f"Missing required environment variable(s): {', '.join(missing)}. "
-            f"Copy .env.example to .env and fill in the required values."
-        )
-
-    if _auth_disabled():
-        log.warning(
-            "SIM-443c: AUTH_DISABLED is set - every API route and the live "
-            "WebSocket accept requests with no credentials."
-        )
-        return
-
-    missing_auth = [v for v in _REQUIRED_AUTH_ENV_VARS if not os.environ.get(v, "").strip()]
-    if missing_auth:
-        raise RuntimeError(
-            f"Missing required auth variable(s): {', '.join(missing_auth)}. "
-            f"Run: python scripts/gen_secrets.py --append .env "
-            f"(or set AUTH_DISABLED=1 to run with no login)."
-        )
-    log.info("SIM-443c: login enforced on every API route and the live WebSocket.")
-
-
-# ---------------------------------------------------------------------------
-# Lifespan — startup / shutdown
-# ---------------------------------------------------------------------------
 
 
 async def _background_prewarm(runner, pool_dir: str) -> None:
@@ -134,21 +63,20 @@ async def _background_prewarm(runner, pool_dir: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application lifespan context manager.
+    """Open the app's resources at startup and close them at shutdown.
 
-    On startup:
-      - Validates environment variables (SIM-153)
-      - Opens the asyncpg Postgres pool
-      - Opens the aioredis client + Similarity payload cache
-      - Builds the PitcherSimilarityEngine (under asyncio.to_thread
-        so the event loop stays responsive during the multi-second
-        DuckDB load)
+    Startup, in order: check the environment, open the Postgres pool, the run
+    registry and the Redis cache, attach the league reader, build the
+    similarity engines, load the calibration, open the assistant's client and
+    the read-only pool, start the live feed, open the replay store, prime the
+    park-factor source, build the shared BatchRunner, schedule its pre-warm and
+    watch for a new bundle. A failure to open the Postgres pool or the Redis
+    cache, or to build the pitcher engine, stops the boot; every other step
+    degrades and logs.
 
-    On shutdown:
-      - Closes the Redis client and the Postgres pool in reverse order.
+    Shutdown closes the resources in reverse order
+    (:func:`api.startup.close_resources`), then the park-factor source.
     """
-    # Validate env at boot; fail fast on misconfiguration
     validate_environment()
 
     log.info(
@@ -156,22 +84,6 @@ async def lifespan(app: FastAPI):
         os.environ.get("ENVIRONMENT", "development"),
     )
 
-    # ----------------------------------------------------------------
-    # Similarity Explorer resources (v1: pitcher engine).
-    # Spec: docs/similarity_visualization_spec.md.
-    #
-    # The three attributes set on app.state are the contract consumed
-    # by api/routes/similarity.py:
-    #   - pitcher_engine          (built PitcherSimilarityEngine)
-    #   - player_name_resolver    (async: pitcher_ids -> {id: name})
-    #   - similarity_cache        (Redis-backed TTL cache; optional —
-    #                              route degrades gracefully if missing)
-    #
-    # Failures here are fatal — same fail-fast posture as
-    # validate_environment(). A misconfigured DuckDB path or
-    # unreachable Postgres should crash boot loudly rather than serve
-    # 5xxs at request time.
-    # ----------------------------------------------------------------
     dsn = os.environ["BASEBALL_DB_DSN"]
     redis_url = os.environ["REDIS_URL"]
 
@@ -199,268 +111,19 @@ async def lifespan(app: FastAPI):
 
         app.state.league_feed = LeagueFeed()
 
-    # Dev-onboarding escape hatch: SIMILARITY_ENGINE_ENABLED=false skips the
-    # engine build entirely so the stack can boot before the DuckDB profile
-    # file exists (i.e. before the multi-hour ETL has run). When skipped,
-    # ``app.state.pitcher_engine`` is left unset and the similarity route
-    # returns 503 "engine warming" — which is exactly its documented
-    # contract for that condition.
-    engine_enabled = os.environ.get("SIMILARITY_ENGINE_ENABLED", "true").strip().lower() not in (
-        "0",
-        "false",
-        "no",
-    )
+    await startup.build_engines(app)
+    await startup.load_calibration(app)
+    startup.open_assistant_client(app)
+    await startup.open_read_only_pool(app, open_pg_pool)
+    await startup.start_live_feed(app, dsn=dsn, redis_url=redis_url)
 
-    if engine_enabled:
-        log.info("Building pitcher similarity engine (this may take a few seconds) ...")
-        # The pitcher engine keeps its FAIL-FAST posture: a build failure here
-        # crashes boot loudly so the similarity route's contract is unchanged.
-        app.state.pitcher_engine = await asyncio.to_thread(build_pitcher_engine)
-
-        # ------------------------------------------------------------
-        # SIM-361: build ALL 11 similarity engines and attach them as
-        # app.state.engines (keyed by ENGINE_REGISTRY name). build_all_engines
-        # is per-engine resilient — an engine with a missing/empty profile table
-        # is logged + skipped, so the *additional* engines degrade gracefully and
-        # never take down boot the way the pitcher engine (above) intentionally
-        # does. app.state.pitcher_engine is preserved (set above) for the
-        # existing similarity route's backward-compat; the built dict's "pitcher"
-        # entry is the same contract under the new keying.
-        # ------------------------------------------------------------
-        log.info("Building all similarity engines (SIM-361) ...")
-        app.state.engines = await asyncio.to_thread(build_all_engines)
-        log.info(
-            "Similarity engines attached: %s",
-            sorted(app.state.engines.keys()),
-        )
-    else:
-        log.warning(
-            "SIMILARITY_ENGINE_ENABLED is false — skipping engine build. "
-            "The /api/similarity/* routes will return 503 until this is "
-            "re-enabled and the DuckDB profile file exists."
-        )
-        # No engines built; expose an empty dict so consumers can probe safely.
-        app.state.engines = {}
-
-    # ----------------------------------------------------------------
-    # SIM-361: win-probability calibration map.
-    #
-    # Load a persisted CalibrationReport from CALIBRATION_REPORT_PATH (if set
-    # and readable) and turn its fitted reliability curve into a CalibrationMap
-    # for the win_probability(...) transform. Best-effort: a missing / corrupt
-    # report, or a report with no fitted curve, degrades to IDENTITY_CALIBRATION
-    # (the "well-calibrated until a curve says otherwise" default) — never a boot
-    # failure. Always attached so consumers can read app.state.calibration_map
-    # unconditionally.
-    # ----------------------------------------------------------------
-    # SIM-406: load the persisted CalibrationReport ONCE, then both
-    #   (a) APPLY it to every similarity engine that supports apply_calibration
-    #       (the engine-layer similarity calibration — closes the audit gap that
-    #       calibration was wired only on the pitcher engine), and
-    #   (b) derive the win-probability CalibrationMap from its fitted reliability
-    #       curve (SIM-361).
-    # Best-effort throughout: a missing/corrupt report degrades to identity win-prob
-    # + uncalibrated engine defaults — never a boot failure.
-    from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
-
-    calibration_report = await asyncio.to_thread(load_calibration_report)
-    app.state.calibration_report = calibration_report
-    if calibration_report is not None:
-        applied = apply_calibration_to_engines(app.state.engines, calibration_report)
-        app.state.calibration_map = CalibrationMap.from_report(calibration_report)
-        log.info(
-            "SIM-406: applied fitted calibration to %d engines; win-prob map: %s",
-            len(applied),
-            app.state.calibration_map.name,
-        )
-    else:
-        app.state.calibration_map = IDENTITY_CALIBRATION
-        log.info(
-            "No CalibrationReport found (CALIBRATION_REPORT_PATH unset/missing) — "
-            "engines on locked defaults, win-prob map: %s",
-            app.state.calibration_map.name,
-        )
-
-    # ----------------------------------------------------------------
-    # SIM-439: optional Data Lab integrations (both feature-gated on env).
-    #   - app.state.anthropic_client : the AI assistant's LLM client, created
-    #     ONLY when ANTHROPIC_API_KEY is set (best-effort; None otherwise so the
-    #     assistant route 503s and /api/assistant/status reports configured:false).
-    #   - app.state.pg_pool_ro       : the read-only Postgres pool
-    #     (BASEBALL_DB_RO_DSN → the baseball_ro role, SELECT on raw.* only). It
-    #     serves the SQL console, the assistant (SIM-443e) and the Data Lab read
-    #     routes: schema, analytics, players and data freshness (SIM-566). It is
-    #     the ONLY pool they use. The lifespan checks the role and refuses a
-    #     superuser or a role that can write; with no acceptable pool every one
-    #     of those routes answers 503.
-    # Neither is in _REQUIRED_ENV_VARS — absence never blocks boot (mirrors
-    # ODDS_API_KEY / the calibration report).
-    # ----------------------------------------------------------------
-    app.state.anthropic_client = None
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        try:
-            import anthropic
-
-            app.state.anthropic_client = anthropic.AsyncAnthropic()
-            log.info(
-                "SIM-439: AI assistant enabled (model=%s).",
-                os.environ.get("ASSISTANT_MODEL", "claude-sonnet-5"),
-            )
-        except Exception as exc:  # noqa: BLE001 — a bad SDK/key must not crash boot
-            log.warning(
-                "SIM-439: ANTHROPIC_API_KEY set but client init failed (%s: %s); assistant disabled.",
-                type(exc).__name__,
-                exc,
-            )
-    else:
-        log.info(
-            "SIM-439: ANTHROPIC_API_KEY unset — AI assistant disabled "
-            "(SQL console + analytics still work)."
-        )
-
-    # SIM-443e: open the read-only pool, check its role, and keep it only when
-    # the role is safe. The pool serves the SQL console, the assistant and the
-    # Data Lab read routes (SIM-566). No route falls back to the main pool.
-    from api.routes.sql_safety import ReadOnlyRoleCheck, check_read_only_role
-    from api.state import redact_dsn
-
-    app.state.pg_pool_ro = None
-    app.state.sql_console_role = None
-    ro_dsn = os.environ.get("BASEBALL_DB_RO_DSN", "").strip()
-    if not ro_dsn:
-        log.warning(
-            "SIM-443e: BASEBALL_DB_RO_DSN is unset; the SQL console, the assistant and the "
-            "Data Lab read routes (schema, analytics, players, data freshness) answer 503."
-        )
-    else:
-        ro_pool = None
-        role_check: ReadOnlyRoleCheck | None = None
-        try:
-            ro_pool = await open_pg_pool(ro_dsn, server_settings={"search_path": "raw"})
-            role_check = await check_read_only_role(ro_pool)
-        except Exception as exc:  # noqa: BLE001 — a driver message can echo the DSN
-            log.error(
-                "SIM-443e: the read-only pool failed to open or to check its role "
-                "(%s); the SQL console, the assistant and the Data Lab read routes "
-                "(schema, analytics, players, data freshness) answer 503.",
-                type(exc).__name__,
-            )
-            role_check = None
-        if role_check is not None and not role_check.acceptable:
-            log.error(
-                "SIM-443e: refused the read-only pool: role %s is not read-only "
-                "(%s); the SQL console, the assistant and the Data Lab read routes "
-                "(schema, analytics, players, data freshness) answer 503.",
-                role_check.role,
-                role_check.flags(),
-            )
-        if role_check is None or not role_check.acceptable:
-            if ro_pool is not None:
-                try:
-                    await ro_pool.close()
-                except Exception:  # noqa: BLE001
-                    pass
-        else:
-            app.state.pg_pool_ro = ro_pool
-            app.state.sql_console_role = role_check.role
-            log.info(
-                "SIM-443e: read-only pool open as %s (superuser=False) at %s; it serves "
-                "the SQL console, the assistant and the Data Lab read routes "
-                "(schema, analytics, players, data freshness)",
-                role_check.role,
-                redact_dsn(ro_dsn),
-            )
-            if not role_check.raw_select:
-                log.warning(
-                    "SIM-443e: role %s cannot SELECT raw.pitches; console queries "
-                    "will fail until the grants are applied (make db-roles).",
-                    role_check.role,
-                )
-
-    # ----------------------------------------------------------------
-    # Phase 5 (SIM-354): live ingestion pipeline.
-    #
-    # Gated behind LIVE_PIPELINE_ENABLED (default FALSE) so importing/booting
-    # the app — including the test suite and `create_app()` import-time wiring —
-    # never requires a live MLB WebSocket, the MLB Stats REST API, or any other
-    # external connection. The ws_router / odds_router are ALWAYS registered in
-    # create_app() (route registration needs no live connection); only the
-    # background poller + WS subscriptions are started here when enabled.
-    #
-    # The pipeline's simulation_callback is the Phase-5 re-sim seam: it fires
-    # at the end of every plate appearance via
-    # LiveIngestionPipeline._signal_resimulation(game_pk, game_state). We wire a
-    # default async hook that logs the signal and stashes the latest state on
-    # app.state.last_resim_signal; the Phase-5 simulation runner replaces this
-    # callback with the real re-sim trigger once that slice lands.
-    # ----------------------------------------------------------------
-    pipeline_enabled = os.environ.get("LIVE_PIPELINE_ENABLED", "false").strip().lower() not in (
-        "0",
-        "false",
-        "no",
-        "",
-    )
-
-    if pipeline_enabled:
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-
-        async def _resim_signal(game_pk: int, game_state: dict) -> None:
-            # Phase-5 seam: the simulation runner will replace this hook with a
-            # real re-sim trigger. Until then, record the signal so /ready and
-            # tests can observe that the wiring fired.
-            log.info(
-                "Re-sim signal received: game %s | inning %s | score %s-%s",
-                game_pk,
-                game_state.get("inning"),
-                game_state.get("home_score"),
-                game_state.get("away_score"),
-            )
-            app.state.last_resim_signal = {"game_pk": game_pk, "game_state": game_state}
-            # SIM-410 metrics: the freshness gauge reads last_resim_signal_ts (a unix
-            # ts); stamp it here so baseball_sim_pipeline_freshness_seconds reports the
-            # real age of the last signal instead of always -1 ("no data").
-            app.state.last_resim_signal_ts = time.time()
-
-        log.info("Starting live ingestion pipeline (LIVE_PIPELINE_ENABLED=true) ...")
-        pipeline = LiveIngestionPipeline(
-            dsn=dsn,
-            redis_url=redis_url,
-            simulation_callback=_resim_signal,
-        )
-        await pipeline.start()
-        app.state.pipeline = pipeline
-    else:
-        log.info(
-            "LIVE_PIPELINE_ENABLED is false — ws_router/odds_router are mounted "
-            "but the background live ingestion pipeline is NOT started."
-        )
-        # SIM-519 Part C (decision D2): the live service runs in its own
-        # container and publishes on Redis; this bridge forwards a game's
-        # messages to the browsers watching it. Never set LIVE_PIPELINE_ENABLED
-        # on the compose stack: the `live` service is the one publisher.
-        from pipeline.live.broadcast import RedisBridge
-        from pipeline.live.live_ingestion_pipeline import connection_manager
-
-        app.state.live_bridge = RedisBridge(app.state.redis_client, connection_manager.broadcast)
-
-    # ----------------------------------------------------------------
-    # Phase 5 (SIM-357) / SIM-561: the replay store -- a DuckDB file of its own.
-    #
-    # Gated behind REPLAY_PERSISTENCE_ENABLED (default FALSE; docker-compose sets
-    # it). When enabled, open the replay file (REPLAY_DUCKDB_PATH, default
-    # /data/replay.duckdb) WRITABLE, create its tables (db.sim_store
-    # ensure_replay_schema: DuckDB 0008, 0009, 0010, 0032) and attach it as
-    # app.state.replay_duckdb. /simulate, /boxscore and POST /sample-game store a
-    # game there; /plays, /state, /linescore, /decisions and /card read it.
-    #
-    # SIM-561: before this, the flag opened the ANALYTICS file writable as
-    # app.state.sim_duckdb. That file holds no replay tables, and the write lock
-    # would block the nightly rebuilds and every read-only script. Only the app
-    # opens the replay file, and the analytics connection stays read-only.
-    #
-    # Best-effort: a failure to open never blocks boot — the replay reads return
+    # The replay store: a DuckDB file of its own (REPLAY_DUCKDB_PATH, default
+    # /data/replay.duckdb), opened writable when REPLAY_PERSISTENCE_ENABLED is
+    # on (compose sets it). open_replay_store creates its tables. The routes
+    # that store a game write it; /plays, /state, /linescore, /decisions and
+    # /card read it. Only the app opens this file, and the analytics file stays
+    # read-only. A failed open never stops the boot: the replay reads answer
     # 503 and the stores skip.
-    # ----------------------------------------------------------------
     replay_enabled = os.environ.get("REPLAY_PERSISTENCE_ENABLED", "false").strip().lower() not in (
         "0",
         "false",
@@ -485,23 +148,10 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
-    # ----------------------------------------------------------------
-    # SIM-453: the park-factor source, opened SEPARATELY from replay persistence.
-    #
-    # THE DEFECT. Before this block, api/routes/games.py read the venue park factor
-    # through app.state.sim_duckdb, which only the block above ever set. That block
-    # is gated on REPLAY_PERSISTENCE_ENABLED, and that variable is set in NEITHER
-    # .env NOR docker-compose.yml (it is set only in .env.production.example and
-    # .env.staging.example). So on the default stack every route resolved a neutral
-    # 1.0 park factor while the instrument reported the factor "resolved" — and the
-    # data was sitting in the file the whole time (2,952 rows in
-    # derived.park_factors; 35 for 2024 factor_type='R', from 0.8724 to 1.1339).
-    #
-    # THE DECISION. Reading park factors is a READ. Replay persistence is a WRITE.
-    # We open the read-only source on its own. The full reasoning, with the
-    # queries that measured it, is in simulation/sim_kwargs.py. Since SIM-561 the
-    # replay store is a different file (above), so this source always opens here.
-    # ----------------------------------------------------------------
+    # The park-factor source, primed on its own: reading the park factors is a
+    # read, the replay store a write, so the prime is not gated on the replay
+    # flag. The prime reads the factors into memory and closes the file
+    # (simulation/sim_kwargs.py holds the reasoning).
     from simulation.sim_kwargs import (
         close_park_factor_source,
         prime_park_factor_source,
@@ -525,106 +175,12 @@ async def lifespan(app: FastAPI):
             park_source.detail,
         )
 
-    # ----------------------------------------------------------------
-    # Phase 5 (SIM-360): the long-lived, persistent BatchRunner.
-    #
-    # Build ONE BatchRunner at startup and attach it as app.state.sim_runner so
-    # the /simulate handlers REUSE a single warm ProcessPoolExecutor (and the
-    # SIM-333 shared-mem segments, published once) across requests rather than
-    # forking + publishing/unlinking per call (the SIM-332 one-shot lifecycle).
-    #
-    # The runner reuses the cache create_app() already attached
-    # (app.state.sim_cache) when present, else makes its own. SIM_RUNNER_WORKERS
-    # (env) overrides the worker count; default 1 keeps the in-process,
-    # deterministic path on (no fork until a deployment opts into a pooled count),
-    # so this is always safe to create -- a BatchRunner with no pooled run yet
-    # holds no resources, and close() on shutdown is a no-op in that case. The
-    # /simulate handler still offloads the run via asyncio.to_thread.
-    # ----------------------------------------------------------------
-    from simulation.batch_runner import BatchRunner, default_max_workers, make_cache
+    await startup.build_sim_runner(app)
 
-    sim_cache = getattr(app.state, "sim_cache", None) or make_cache()
-    # SIM-403: SIM_RUNNER_WORKERS unset → None → BatchRunner.resolve_max_workers()
-    # uses default_max_workers() = min(cpu_count - 1, 10) at run time, enabling
-    # real parallelism.  Explicit "1" keeps the serialised in-process path for
-    # environments that can't fork (e.g. some CI runners).
-    sim_runner_workers = read_int("SIM_RUNNER_WORKERS")
-    resolved_workers = (
-        sim_runner_workers if sim_runner_workers is not None else default_max_workers()
-    )
-
-    # SIM-403b: when the engine-artifact bundle is on disk, load it ONCE here
-    # and extract the big shareable numpy arrays so BatchRunner can publish
-    # them into ``multiprocessing.shared_memory`` zero-copy. The worker-side
-    # splice happens in
-    # :func:`simulation.production_factory._build_full_pool_sampler`. If the
-    # bundle isn't present (no-DB tests, sandbox without a built artifact dir),
-    # we skip the publish; each worker then disk-loads the bundle itself and
-    # fails loudly at the first /simulate if it is absent (SIM-486: there is
-    # no fallback simulator).
-    #
-    # SIM-563: the bundle is a link to a published version. Pin the version this
-    # boot loads, BEFORE the worker pool starts (the forkserver's workers inherit
-    # the environment), so a worker that respawns after a rebuild reads the same
-    # version as the shared arrays. The pin is undone at shutdown.
-    from api.bundle_watch import PINNED_ENV, bundle_link, pin_bundle_version
-
-    app.state.bundle_pin_prev_env = os.environ.get(PINNED_ENV)
-    app.state.bundle_version = None
-    app.state.bundle_in_use_marker = None
-    if os.path.isdir(bundle_link()):
-        app.state.bundle_version, app.state.bundle_in_use_marker = pin_bundle_version()
-    shared_arrays_payload: dict | None = None
-    try:
-        from pipeline.batch.engine_artifacts import EngineArtifacts
-
-        art_dir = app.state.bundle_version or bundle_link()
-        log.info(
-            "SIM-403b: loading engine artifacts for shared-memory publish (%s) ...",
-            art_dir,
-        )
-        art = await asyncio.to_thread(EngineArtifacts.load, art_dir)
-        shared_arrays_payload = art.extract_shared_arrays()
-        total_mb = sum(a.nbytes for a in shared_arrays_payload.values()) / (1024 * 1024)
-        log.info(
-            "SIM-403b: publishing %d engine-artifact arrays (%.1f MB) into shared memory",
-            len(shared_arrays_payload),
-            total_mb,
-        )
-    except Exception as exc:  # noqa: BLE001
-        # Defensive: a missing/corrupt artifact dir must not prevent the
-        # API from starting (the health + data routes still serve). Log and
-        # move on without shared arrays.
-        log.warning(
-            "SIM-403b: engine-artifact preload failed (%s: %s); "
-            "workers will disk-load per process.",
-            type(exc).__name__,
-            exc,
-        )
-        shared_arrays_payload = None
-
-    log.info(
-        "Building persistent BatchRunner (workers=%s, SIM_RUNNER_WORKERS=%r, shared_arrays=%d) ...",
-        resolved_workers,
-        sim_runner_workers,
-        len(shared_arrays_payload) if shared_arrays_payload else 0,
-    )
-    app.state.sim_runner = BatchRunner(
-        cache=sim_cache,
-        max_workers=sim_runner_workers,
-        shared_arrays=shared_arrays_payload,
-    )
-
-    # SIM-402: pre-warm the pool so the first /simulate hits WARM workers (a fresh
-    # n-iteration request otherwise spreads its games one-per-worker, so every worker
-    # is cold on that first batch and pays the full-pool warm-up on the request path).
-    # Run it in the BACKGROUND — never block startup on it. A blocking pre-warm (even
-    # wrapped in asyncio.wait_for) was observed to hang the lifespan indefinitely:
-    # wait_for cannot interrupt a synchronous thread blocked in multiprocessing
-    # C-calls, so a stalled / OOM'd warm wedged startup. As a background task the app
-    # yields + serves immediately; workers warm behind it (in bounded-concurrency
-    # waves, see BatchRunner.prewarm) and any failure degrades to the lazy per-game
-    # warm-up.
+    # Warm the runner's workers in the background, so the first /simulate meets
+    # warm workers. The boot never waits on it: asyncio.wait_for cannot stop a
+    # thread blocked in a multiprocessing call, so a blocking warm-up could hang
+    # the boot. A failed warm-up leaves each worker to warm on its first game.
     # SIM-563: with a pinned version the workers find the bundle through the pin,
     # so the pre-warm passes no pool dir (an explicit one would bypass the pin and
     # cache the sampler under a different key than the real games use).
@@ -638,156 +194,13 @@ async def lifespan(app: FastAPI):
         _background_prewarm(app.state.sim_runner, prewarm_pool_dir)
     )
 
-    # SIM-563: restart this app when the nightly rebuild publishes a new version.
-    from api.bundle_watch import restart_enabled, watch_for_new_bundle
-
-    app.state.bundle_watch_task = None
-    if restart_enabled() and app.state.bundle_version:
-        jobs = getattr(app.state, "sim_jobs", None)
-        app.state.bundle_watch_task = asyncio.create_task(
-            watch_for_new_bundle(
-                link=bundle_link(),
-                loaded=app.state.bundle_version,
-                active_jobs=(lambda: jobs.active_count()) if jobs is not None else (lambda: 0),
-            )
-        )
-        log.info("SIM-563: watching %s for a new bundle version.", bundle_link())
+    startup.start_bundle_watch(app)
 
     yield
 
     log.info("MLB Simulation Platform shutting down.")
-
-    # SIM-563: stop the bundle watch, release this boot's version and its pin.
-    watch_task = getattr(app.state, "bundle_watch_task", None)
-    if watch_task is not None and not watch_task.done():
-        watch_task.cancel()
-        try:
-            await watch_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
-    from api.bundle_watch import PINNED_ENV as _PINNED_ENV
-    from pipeline.batch.bundle_versions import unmark_in_use
-
-    unmark_in_use(getattr(app.state, "bundle_in_use_marker", None))
-    if getattr(app.state, "bundle_version", None):
-        prev = getattr(app.state, "bundle_pin_prev_env", None)
-        if prev is None:
-            os.environ.pop(_PINNED_ENV, None)
-        else:
-            os.environ[_PINNED_ENV] = prev
-
-    # SIM-402: stop awaiting the background pre-warm if it's still running. Its worker
-    # threads are detached and finish on their own; cancelling just releases our await
-    # so shutdown isn't blocked, and close() (below) tears the pool + shm down.
-    prewarm_task = getattr(app.state, "prewarm_task", None)
-    if prewarm_task is not None and not prewarm_task.done():
-        prewarm_task.cancel()
-        try:
-            await prewarm_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001
-            pass
-
-    # Phase 5 (SIM-360): shut the persistent BatchRunner down first (reverse
-    # order of acquisition) — close() shutdown(wait=True)s its warm pool and
-    # unlinks the SIM-333 shared-mem segments. Idempotent + a no-op if no pooled
-    # run ever happened, so this never raises even on a clean (unused) boot.
-    if getattr(app.state, "sim_runner", None) is not None:
-        try:
-            app.state.sim_runner.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    # SIM-519 Part E: stop the run jobs (their rows are recovered at next boot).
-    if getattr(app.state, "sim_jobs", None) is not None:
-        try:
-            await app.state.sim_jobs.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    # SIM-519 Part C: stop the live bridge's subscriptions.
-    if getattr(app.state, "live_bridge", None) is not None:
-        try:
-            await app.state.live_bridge.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    # SIM-519: close the league reader's HTTP session.
-    if getattr(app.state, "league_feed", None) is not None:
-        try:
-            await app.state.league_feed.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    # Reverse order of acquisition for shutdown — engine has no
-    # explicit close, just drop the reference.
-    if hasattr(app.state, "redis_client"):
-        await app.state.redis_client.aclose()
-    # SIM-439: close the optional read-only SQL pool before the main pool.
-    if getattr(app.state, "pg_pool_ro", None) is not None:
-        try:
-            await app.state.pg_pool_ro.close()
-        except Exception:  # noqa: BLE001
-            pass
-    if hasattr(app.state, "pg_pool"):
-        await app.state.pg_pool.close()
-
-    # ----------------------------------------------------------------
-    # Phase 5 (SIM-354): cleanly stop the pipeline if it was started.
-    # ----------------------------------------------------------------
-    if hasattr(app.state, "pipeline"):
-        await app.state.pipeline.stop()
-
-    # Phase 5 (SIM-357) / SIM-561: close the replay store.
-    if getattr(app.state, "replay_duckdb", None) is not None:
-        try:
-            app.state.replay_duckdb.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    # SIM-453: close the read-only park-factor source. A no-op when nothing primed.
+    await startup.close_resources(app)
     close_park_factor_source()
-
-
-# ---------------------------------------------------------------------------
-# SIM-453 — make an unavailable park-factor source visible to the CALLER
-# ---------------------------------------------------------------------------
-
-
-class ParkFactorSourceMiddleware(BaseHTTPMiddleware):
-    """Stamp ``X-Park-Factor-Source`` on every response (SIM-453).
-
-    A WARNING in the container log tells the OPERATOR that the park factor is
-    unavailable. It tells the API caller nothing, and the caller is the one holding
-    the numbers. This header carries the same fact out to them:
-
-    * ``duckdb:<n>`` — the source is open and holds ``n`` rows in
-      ``derived.park_factors``. Simulations use real venue factors.
-    * ``unavailable`` — nothing answered the lookup. Every simulation in this
-      response ran at a neutral 1.0 and ``SIM_PARK_FACTOR`` did nothing.
-    * ``unknown`` — the lifespan has not run (a TestClient built without it).
-
-    A header cannot break a client that ignores it, so no route needs editing and
-    no response body changes shape.
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        # SIM-563: the module's live verdict first, so the header follows a
-        # re-read (a boot during a rebuild recovers its park factors later).
-        from simulation.sim_kwargs import park_factor_source_status
-
-        source = park_factor_source_status() or getattr(
-            request.app.state, "park_factor_source", None
-        )
-        try:
-            response.headers["X-Park-Factor-Source"] = (
-                source.header_value() if source is not None else "unknown"
-            )
-        except Exception:  # noqa: BLE001 -- a header never breaks a response
-            pass
-        return response
 
 
 # ---------------------------------------------------------------------------

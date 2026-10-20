@@ -288,7 +288,7 @@ def test_auth_me_matrix(monkeypatch):
 
 
 def test_validate_environment_requires_the_secrets_in_development(monkeypatch):
-    from api.main import validate_environment
+    from api.env_check import validate_environment
 
     _env(monkeypatch, environment="development")
     monkeypatch.delenv("SECRET_KEY")
@@ -300,7 +300,7 @@ def test_validate_environment_requires_the_secrets_in_development(monkeypatch):
 
 
 def test_validate_environment_treats_whitespace_as_missing(monkeypatch):
-    from api.main import validate_environment
+    from api.env_check import validate_environment
 
     _env(monkeypatch, environment="production")
     monkeypatch.setenv("SECRET_KEY", "   ")
@@ -311,7 +311,7 @@ def test_validate_environment_treats_whitespace_as_missing(monkeypatch):
 
 
 def test_validate_environment_warns_and_passes_when_auth_is_disabled(monkeypatch, caplog):
-    from api.main import validate_environment
+    from api.env_check import validate_environment
 
     _env(monkeypatch)
     monkeypatch.delenv("SECRET_KEY")
