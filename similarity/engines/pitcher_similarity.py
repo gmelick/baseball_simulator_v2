@@ -92,22 +92,9 @@ try:  # pragma: no cover
     import ot
 
     _POT_AVAILABLE = True
-except ImportError as _pot_err:  # pragma: no cover
+except ImportError:  # pragma: no cover
     ot = None  # type: ignore[assignment]
     _POT_AVAILABLE = False
-    _POT_IMPORT_ERROR = _pot_err
-
-
-def _require_pot() -> None:
-    """Raise a RuntimeError when POT is not installed."""
-    if not _POT_AVAILABLE:  # pragma: no cover
-        raise RuntimeError(
-            "POT (Python Optimal Transport) is required for W2 arsenal "
-            "similarity but is not installed.  On Python 3.13 it currently "
-            "has no published wheel -- install from source "
-            "(`pip install POT`) or use Python 3.11 / 3.12.  "
-            f"Original ImportError: {_POT_IMPORT_ERROR!r}"
-        )
 
 
 # ---------------------------------------------------------------------------

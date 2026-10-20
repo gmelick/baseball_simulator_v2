@@ -938,7 +938,6 @@ class FielderSimilarityEngine:
 
         for pos, partition in self._partitions.items():
             profs = profiles_by_pos.get(pos, [])
-            self._get_rbfs_for_position(pos)
             partition.build(profs, self._normalizer)
 
         elapsed = time.time() - t0

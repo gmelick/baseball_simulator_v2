@@ -302,12 +302,10 @@ class ArsenalCache:
                     )
                     futures[future] = chunk
 
-                done = 0
                 for future in as_completed(futures):
                     results = future.result()
                     for (key_a, key_b), dist in results:
                         self.put(key_a, key_b, dist)
-                    done += len(futures[future])
 
         elapsed = time.time() - t0
         log.info(
