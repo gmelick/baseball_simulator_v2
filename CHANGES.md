@@ -160,11 +160,28 @@ batter profiles; it now says the date cuts off every profile. The coach warning 
    code; the fingerprint's `bundle` mode compares the two (the new build ran after the
    nightly rebuild, from the same copy). 113 of the 114 hashes are equal. The other is
    `manager_pool/roles.parquet`: the same 2,857 rows with bit-equal values, in another row
-   order. Its writer groups without an `ORDER BY`, and the loader reads it into a
-   dictionary keyed by pitcher and season, so the order never reaches a worker (filed
-   below). Both build logs match line for line, apart from one warning's source location
-   and the output folder. The records are in `results/sim493/b2_bundle/`.
-5. **Postgres.** Each run counted `raw.pitches`, `raw.games`, `raw.play_events`,
+   order. Both build logs match line for line, apart from one warning's source location
+   and the output folder. The records are in `results/sim493/b2_bundle/`. The order
+   difference is settled three ways:
+   - **Why it differs.** The writer is a `GROUP BY` with no `ORDER BY`, and its function
+     compiles to the same bytecode on both trees. The base code's own builder, run three
+     times on the same copy (`rolesorder.py`), wrote three different role-file orders with
+     the same rows; the new code did the same. `change.meta.parquet` was byte-identical
+     across all six runs. The order is the base code's own nondeterminism, not the split.
+   - **No reader uses the order.** The loader (`load_change_pool`) builds a dictionary keyed
+     `"<pitcher>:<season>"`; the relief draw (`FullPoolSampler`, the role weight) reads it
+     only through `.get()`; the synthetic bundle has no role file; the shared-memory export
+     carries no dictionary.
+   - **Games.** The production fingerprint (the 45 balanced games x 4 seeds, the compose
+     flags, the cached inputs), new code over each of the two built bundles: 180 of 180 game hashes identical
+     (`fp_b2_prod_over_bundle_base.json`, `fp_b2_prod_over_bundle_new.json`). The first run
+     over the base bundle died partway with no output (the random crash class); the rerun
+     completed.
+5. **The production fingerprint over the pinned bundle.** The new code, over the base
+   baseline's bundle copy (`/data/sim493/bundle_pin`) and cached inputs: 180 of 180 game
+   hashes identical to `fp_base_production_cached.json`. This proves the refactored
+   `EngineArtifacts.load` loads the same bundle into the same games.
+6. **Postgres.** Each run counted `raw.pitches`, `raw.games`, `raw.play_events`,
    `raw.game_bullpen` and `raw.game_player_stats` before and after. Nothing moved across the
    two profile builds. The nightly finals load (07:00 UTC) added one game of 2026-10-19
    during the base bundle build (260 pitches, 7 play events, 25 bullpen rows, 36 box lines),
@@ -181,7 +198,10 @@ batter profiles; it now says the date cuts off every profile. The coach warning 
 - The full unit lane in the container, after the nightly rebuild: 6,540 passed and one
   failed. The failure was mine: `test_pitch_result_vocabulary.py` reads the six shared code
   sets from the computor by name, and the computor re-exported five. `NON_SWING_TYPES` is
-  now re-exported too. VOCAB_PENDING
+  now re-exported too, and the file passes in the container (56 tests, twice). Its
+  first run died at collection inside pytest's assertion rewriting (`TypeError: required
+  field "value" missing from Starred`; the file compiles on the host), the app image's
+  random crash class (CLAUDE.md §2a); the two reruns passed.
 - `ruff check .`: clean. `ruff format --check .`: 532 files formatted.
 - `mypy similarity/ pipeline/ api/`: no issues in 132 files.
 
@@ -197,9 +217,11 @@ batter profiles; it now says the date cuts off every profile. The coach warning 
   arsenal once.
 - **The pitching-change pool's role file has no fixed row order.** `roles.parquet`
   (`build_pitching_change_pool`, `pipeline/batch/artifacts/manager_pool.py`) is written from
-  a `GROUP BY` with no `ORDER BY`, so two builds from the same data write its rows in a
-  different order. The loader ignores the order, but the fingerprint's `bundle` mode reads a
-  difference on every build. The fix is `ORDER BY pitcher_id, season`.
+  a `GROUP BY` with no `ORDER BY`, so two builds of the SAME code from the same data write
+  its rows in a different order (three runs, three orders). No reader uses the order and
+  the games are identical, but the fingerprint's `bundle` mode reads a difference on every
+  build, and the brief's byte-identical bundle cannot hold. The fix is
+  `ORDER BY pitcher_id, season`; it changes no game.
 - **The live pipeline asks the schedule for game type `C`, which `raw.games` rejects.**
   `GAME_TYPES` (`pipeline/live/ingestion/constants.py`) is `R F D L W C P`; the table's CHECK
   allows `R P S A D F L W`. A game of type `C` on the slate fails its upsert.
