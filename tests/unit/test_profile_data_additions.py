@@ -26,12 +26,8 @@ from pipeline.batch.engine_artifacts import (
     build_battedball_pool_artifact,
     build_pitch_pool_artifact,
 )
-from pipeline.batch.player_profile_computor import (
-    _ASSIST_SLOTS,
-    _PUTOUT_SLOTS,
-    POOL_BUILDER_VERSION,
-    sql_credit_mask,
-)
+from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
+from pipeline.batch.profiles.sql import _ASSIST_SLOTS, _PUTOUT_SLOTS, sql_credit_mask
 
 _SEASON = 2024
 

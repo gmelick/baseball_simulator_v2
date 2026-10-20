@@ -39,7 +39,7 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from pipeline.batch import player_profile_computor as ppc
+from pipeline.batch.profiles.sql import _barrel_case_sql  # noqa: E402
 
 
 @pytest.fixture()
@@ -70,7 +70,7 @@ def _is_barrel(con, ev, la, prefix: str = "") -> bool | None:
         "INSERT INTO bbe VALUES (1, ?, ?, 'R')",
         [ev, la],
     )
-    expr = ppc._barrel_case_sql(prefix)
+    expr = _barrel_case_sql(prefix)
     row = con.execute(f"SELECT ({expr}) AS is_barrel FROM bbe").fetchone()
     return row[0]
 
@@ -144,7 +144,7 @@ def test_null_not_summed_as_barrel(con):
             (4, 100.0, 34.0, "R"),  # barrel
         ],
     )
-    expr = ppc._barrel_case_sql()
+    expr = _barrel_case_sql()
     n = con.execute(f"SELECT SUM(CASE WHEN {expr} THEN 1.0 ELSE 0 END) FROM bbe").fetchone()[0]
     assert n == 2.0
 
@@ -172,8 +172,8 @@ def test_platoon_prefix_gates_handedness(con):
     con.execute("DELETE FROM bbe")
     con.execute("INSERT INTO bbe VALUES (1, 100.0, 30.0, 'L')")
     # An ideal barrel hit off a LHP: counts for vs_l, not for vs_r.
-    expr_l = ppc._barrel_case_sql("p_throws='L' AND ")
-    expr_r = ppc._barrel_case_sql("p_throws='R' AND ")
+    expr_l = _barrel_case_sql("p_throws='L' AND ")
+    expr_r = _barrel_case_sql("p_throws='R' AND ")
     assert con.execute(f"SELECT ({expr_l}) FROM bbe").fetchone()[0] is True
     assert con.execute(f"SELECT ({expr_r}) FROM bbe").fetchone()[0] is False
 

@@ -233,7 +233,9 @@ def test_the_stamped_table_list_matches_the_schema() -> None:
 
 
 def test_every_builder_checks_before_writing_and_stamps_the_whole_table() -> None:
-    src = inspect.getsource(PlayerProfileComputor)
+    # The class and every mixin it inherits from (``getsource`` of a class
+    # returns its own body only).
+    src = "".join(inspect.getsource(k) for k in PlayerProfileComputor.__mro__ if k is not object)
     for table in PlayerProfileComputor.STAMPED_TABLES:
         assert f'self._refuse_a_mixed_cutoff("{table}", seasons, asof_date)' in src, table
         assert f'self._stamp_one_cutoff("{table}", asof_sql)' in src, table

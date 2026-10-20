@@ -37,21 +37,25 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.batch.player_profile_computor import (
+from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE, SQL_SWING, SQL_WHIFF, sql_in
+from pipeline.statcast_events import (
     BALL_TYPES,
     CALLED_STRIKE_TYPES,
     FOUL_TYPES,
+    IN_PLAY_TYPES,
     NON_SWING_TYPES,
-    SQL_OUTCOME_TYPE,
-    SQL_SWING,
-    SQL_WHIFF,
     STRIKE_THREE_FOUL_TYPES,
     WHIFF_TYPES,
-    sql_in,
 )
-from pipeline.statcast_events import IN_PLAY_TYPES
 
 _SOURCE = Path(__file__).resolve().parents[2] / "pipeline" / "batch" / "player_profile_computor.py"
+
+
+def _computor_source() -> str:
+    """The computor's whole source: the main module and its ``profiles`` package."""
+    paths = [_SOURCE, *sorted((_SOURCE.parent / "profiles").glob("*.py"))]
+    return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
 
 #: Every code ``raw.pitches`` holds in ten seasons (17 codes; re-read 2026-09-25).
 _FEED_CODES: tuple[str, ...] = (
@@ -173,11 +177,11 @@ class TestNoDefinitionSurvivesInline:
     """The point of the constants is that the sets are spelled ONCE."""
 
     def test_the_old_broken_whiff_is_gone(self):
-        src = _SOURCE.read_text(encoding="utf-8")
+        src = _computor_source()
         assert "type = 'C' THEN 1.0 ELSE 0 END) / COUNT(*) AS whiff_rate" not in src
 
     def test_no_stray_inline_whiff_set_remains(self):
-        src = _SOURCE.read_text(encoding="utf-8")
+        src = _computor_source()
         assert "type IN ('M', 'O', 'S', 'T')" not in src
 
 
@@ -194,7 +198,7 @@ class TestZSwingLegsCountSwings:
     _INVERTED = re.compile(r"zone BETWEEN 1 AND 9 AND type IN \('B', 'C', 'H', 'P', '\*B'\)")
 
     def test_no_z_swing_column_counts_the_non_swing_set(self):
-        src = _SOURCE.read_text(encoding="utf-8")
+        src = _computor_source()
         assert not self._INVERTED.search(src), (
             "a zone-swing predicate counts the NON-swing codes — that column holds a "
             "TAKE rate under a swing name (the SIM-501 / SIM-522 defect)"
@@ -202,7 +206,7 @@ class TestZSwingLegsCountSwings:
 
     @pytest.mark.parametrize("col", ["z_swing_rate", "z_swing_rate_vs_l", "z_swing_rate_vs_r"])
     def test_each_z_swing_column_is_defined_with_not_in(self, col):
-        src = _SOURCE.read_text(encoding="utf-8")
+        src = _computor_source()
         # The text between the previous column's alias and this alias is this
         # column's whole expression (numerator AND denominator). It must carry
         # the swing predicate, not the take one.

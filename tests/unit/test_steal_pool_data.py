@@ -41,7 +41,8 @@ from pipeline.batch.engine_artifacts import (
     build_steal_pool_artifact,
     steal_pitch_class_codes,
 )
-from pipeline.batch.player_profile_computor import PlayerProfileComputor, recency_weight
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from pipeline.batch.profiles.pool_meta import recency_weight
 from simulation.game_state import PITCH_OUTCOMES
 
 REPO = Path(__file__).resolve().parents[2]

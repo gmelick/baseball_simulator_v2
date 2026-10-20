@@ -24,6 +24,11 @@ import unittest
 import duckdb
 
 import pipeline.batch.player_profile_computor as ppc
+from pipeline.batch.profiles.pool_meta import (  # noqa: E402
+    _canonical_ref_season,
+    _record_pool_build,
+    _seasons_needing_rebuild,
+)
 
 MIGRATION_0007 = os.path.join(
     os.path.dirname(__file__),
@@ -248,32 +253,32 @@ class TestWatermarkRowCountGuard(unittest.TestCase):
             [[2024, dt.date(2024, 9, 15)], [2024, dt.date(2024, 9, 15)]],
         )
         c.executemany("INSERT INTO sim.pitch_pool VALUES (?, 2024, 2.0)", [[1], [2]])
-        ppc._record_pool_build(c, "pitch_pool", [2024], ref_season=2024)
+        _record_pool_build(c, "pitch_pool", [2024], ref_season=2024)
 
         # Nothing changed → fresh, skipped.
-        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [])
+        self.assertEqual(_seasons_needing_rebuild(c, "pitch_pool", [2024]), [])
 
         # A LATE doubleheader row lands on the SAME game_date (watermark does
         # NOT advance). The strict `>` watermark would have skipped this; the
         # row-count guard must catch it.
         c.execute("INSERT INTO pg.raw.pitches VALUES (2024, DATE '2024-09-15', FALSE)")
-        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [2024])
+        self.assertEqual(_seasons_needing_rebuild(c, "pitch_pool", [2024]), [2024])
 
     def test_unchanged_season_stays_fresh(self):
         c = _wm_conn()
         c.execute("INSERT INTO pg.raw.pitches VALUES (2024, DATE '2024-09-15', FALSE)")
         c.execute("INSERT INTO sim.pitch_pool VALUES (1, 2024, 2.0)")
-        ppc._record_pool_build(c, "pitch_pool", [2024], 2024)
+        _record_pool_build(c, "pitch_pool", [2024], 2024)
         # No source change at all → must NOT rebuild (guard does not over-trigger).
-        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [])
+        self.assertEqual(_seasons_needing_rebuild(c, "pitch_pool", [2024]), [])
 
     def test_advancing_date_triggers_rebuild(self):
         c = _wm_conn()
         c.execute("INSERT INTO pg.raw.pitches VALUES (2024, DATE '2024-09-15', FALSE)")
         c.execute("INSERT INTO sim.pitch_pool VALUES (1, 2024, 2.0)")
-        ppc._record_pool_build(c, "pitch_pool", [2024], 2024)
+        _record_pool_build(c, "pitch_pool", [2024], 2024)
         c.execute("INSERT INTO pg.raw.pitches VALUES (2024, DATE '2024-09-20', FALSE)")
-        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [2024])
+        self.assertEqual(_seasons_needing_rebuild(c, "pitch_pool", [2024]), [2024])
 
     def test_record_pool_build_stores_source_row_count(self):
         c = _wm_conn()
@@ -286,7 +291,7 @@ class TestWatermarkRowCountGuard(unittest.TestCase):
             ],
         )
         c.execute("INSERT INTO sim.pitch_pool VALUES (1, 2024, 2.0)")
-        ppc._record_pool_build(c, "pitch_pool", [2024], 2024)
+        _record_pool_build(c, "pitch_pool", [2024], 2024)
         row = c.execute(
             "SELECT source_max_game_date, source_row_count FROM "
             "sim.pool_build_metadata WHERE pool_name='pitch_pool' AND season=2024"
@@ -303,7 +308,7 @@ class TestWatermarkRowCountGuard(unittest.TestCase):
 class TestCanonicalRefSeason(unittest.TestCase):
     def test_max_of_requested_when_no_metadata(self):
         c = _wm_conn()
-        self.assertEqual(ppc._canonical_ref_season(c, [2022, 2023, 2024]), 2024)
+        self.assertEqual(_canonical_ref_season(c, [2022, 2023, 2024]), 2024)
 
     def test_adopts_newest_recorded_ref_across_pools(self):
         c = _wm_conn()
@@ -315,11 +320,11 @@ class TestCanonicalRefSeason(unittest.TestCase):
             "VALUES ('outcome_pool', 2025, 1, DATE '2025-09-01', 1, 2025, 'x')"
         )
         # A later pool built with only [2024] must still adopt 2025 → consistent.
-        self.assertEqual(ppc._canonical_ref_season(c, [2024]), 2025)
+        self.assertEqual(_canonical_ref_season(c, [2024]), 2025)
 
     def test_no_metadata_table_falls_back_to_max(self):
         c = duckdb.connect(":memory:")  # no sim.pool_build_metadata
-        self.assertEqual(ppc._canonical_ref_season(c, [2023, 2024]), 2024)
+        self.assertEqual(_canonical_ref_season(c, [2023, 2024]), 2024)
 
 
 # ---------------------------------------------------------------------------

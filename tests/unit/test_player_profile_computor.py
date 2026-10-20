@@ -32,6 +32,47 @@ import pandas as pd
 import pytest
 
 from pipeline.batch import player_profile_computor as ppc
+from pipeline.batch.profiles.constants import (  # noqa: E402
+    MIN_BATTER_PA,
+    MIN_FIELDER_BIP,
+    MIN_PITCHER_PITCHES,
+    PARK_PRIOR_PA,
+)
+from pipeline.batch.profiles.defense import (  # noqa: E402
+    AVG_FIELDER_POS,
+    AVG_THROW_VELO,
+    HC_SCALE,
+    _classify_direction_of,
+    _estimate_gb_travel_time,
+    _estimate_hang_time,
+    _euclidean_hc,
+    _fit_logistic_model,
+    _hc_to_feet,
+    _predict_proba,
+    _sigmoid,
+    _throw_time,
+)
+from pipeline.batch.profiles.gmm import (  # noqa: E402
+    GMM_FEATURE_NAMES,
+    GMM_MIN_K,
+    _fit_gmm_for_pitcher,
+    _label_component,
+    _quick_auc,
+)
+from pipeline.batch.profiles.league_averages import LeagueAverageProfiles  # noqa: E402
+from pipeline.batch.profiles.leverage import (  # noqa: E402
+    LI_HIGH,
+    LI_LOW,
+    RE24_APPROX,
+    build_run_expectancy_matrix,
+    compute_leverage_index,
+)
+from pipeline.batch.profiles.sql import (  # noqa: E402
+    BARREL_MAX_LA,
+    BARREL_MIN_LA,
+    BARREL_MIN_VELO,
+    HARD_HIT_MIN_VELO,
+)
 
 # ===========================================================================
 # Module constants
@@ -40,7 +81,7 @@ from pipeline.batch import player_profile_computor as ppc
 
 class TestModuleConstants:
     def test_gmm_feature_names_match_expected(self):
-        assert ppc.GMM_FEATURE_NAMES == [
+        assert GMM_FEATURE_NAMES == [
             "velo",
             "ivb",
             "hb",
@@ -52,35 +93,35 @@ class TestModuleConstants:
         ]
 
     def test_sample_thresholds_positive(self):
-        assert ppc.MIN_PITCHER_PITCHES > 0
-        assert ppc.MIN_BATTER_PA > 0
-        assert ppc.MIN_FIELDER_BIP > 0
+        assert MIN_PITCHER_PITCHES > 0
+        assert MIN_BATTER_PA > 0
+        assert MIN_FIELDER_BIP > 0
 
     def test_park_prior_pa_positive(self):
-        assert ppc.PARK_PRIOR_PA > 0
+        assert PARK_PRIOR_PA > 0
 
     def test_li_low_lt_high(self):
-        assert ppc.LI_LOW < ppc.LI_HIGH
+        assert LI_LOW < LI_HIGH
 
     def test_barrel_zone_correct_order(self):
-        assert ppc.BARREL_MIN_LA < ppc.BARREL_MAX_LA
-        assert ppc.BARREL_MIN_VELO > ppc.HARD_HIT_MIN_VELO
+        assert BARREL_MIN_LA < BARREL_MAX_LA
+        assert BARREL_MIN_VELO > HARD_HIT_MIN_VELO
 
     def test_avg_fielder_pos_keys(self):
         for pos in ("SS", "2B", "3B", "1B", "LF", "CF", "RF"):
-            assert pos in ppc.AVG_FIELDER_POS
-            assert "L" in ppc.AVG_FIELDER_POS[pos]
-            assert "R" in ppc.AVG_FIELDER_POS[pos]
+            assert pos in AVG_FIELDER_POS
+            assert "L" in AVG_FIELDER_POS[pos]
+            assert "R" in AVG_FIELDER_POS[pos]
 
     def test_avg_throw_velo_covers_positions(self):
         for pos in ("SS", "2B", "3B", "1B", "LF", "CF", "RF"):
-            assert pos in ppc.AVG_THROW_VELO
-            assert ppc.AVG_THROW_VELO[pos] > 0
+            assert pos in AVG_THROW_VELO
+            assert AVG_THROW_VELO[pos] > 0
 
     def test_re24_approx_basic_ordering(self):
         # No runners, 2 outs should be the lowest expected runs state listed.
-        assert ppc.RE24_APPROX[(2, 0b000)] < ppc.RE24_APPROX[(0, 0b000)]
-        assert ppc.RE24_APPROX[(0, 0b111)] > ppc.RE24_APPROX[(2, 0b001)]
+        assert RE24_APPROX[(2, 0b000)] < RE24_APPROX[(0, 0b000)]
+        assert RE24_APPROX[(0, 0b111)] > RE24_APPROX[(2, 0b001)]
 
 
 # ===========================================================================
@@ -90,40 +131,40 @@ class TestModuleConstants:
 
 class TestComputeLeverageIndex:
     def test_late_inning_higher_than_early(self):
-        early = ppc.compute_leverage_index(inning=2, outs=1, runners_state=0b000, score_diff=0)
-        late = ppc.compute_leverage_index(inning=9, outs=1, runners_state=0b000, score_diff=0)
+        early = compute_leverage_index(inning=2, outs=1, runners_state=0b000, score_diff=0)
+        late = compute_leverage_index(inning=9, outs=1, runners_state=0b000, score_diff=0)
         assert late > early
 
     def test_close_game_higher_than_blowout(self):
-        close = ppc.compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=0)
-        blowout = ppc.compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=10)
+        close = compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=0)
+        blowout = compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=10)
         assert close > blowout
 
     def test_runners_on_base_higher_than_empty(self):
-        empty = ppc.compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=0)
-        loaded = ppc.compute_leverage_index(inning=8, outs=1, runners_state=0b111, score_diff=0)
+        empty = compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=0)
+        loaded = compute_leverage_index(inning=8, outs=1, runners_state=0b111, score_diff=0)
         assert loaded > empty
 
     def test_two_outs_higher_than_one_out(self):
-        one = ppc.compute_leverage_index(inning=8, outs=1, runners_state=0b001, score_diff=0)
-        two = ppc.compute_leverage_index(inning=8, outs=2, runners_state=0b001, score_diff=0)
+        one = compute_leverage_index(inning=8, outs=1, runners_state=0b001, score_diff=0)
+        two = compute_leverage_index(inning=8, outs=2, runners_state=0b001, score_diff=0)
         assert two > one
 
     def test_inning_bands(self):
-        i3 = ppc.compute_leverage_index(inning=3, outs=0, runners_state=0, score_diff=0)
-        i6 = ppc.compute_leverage_index(inning=6, outs=0, runners_state=0, score_diff=0)
-        i8 = ppc.compute_leverage_index(inning=8, outs=0, runners_state=0, score_diff=0)
-        i10 = ppc.compute_leverage_index(inning=10, outs=0, runners_state=0, score_diff=0)
+        i3 = compute_leverage_index(inning=3, outs=0, runners_state=0, score_diff=0)
+        i6 = compute_leverage_index(inning=6, outs=0, runners_state=0, score_diff=0)
+        i8 = compute_leverage_index(inning=8, outs=0, runners_state=0, score_diff=0)
+        i10 = compute_leverage_index(inning=10, outs=0, runners_state=0, score_diff=0)
         assert i3 < i6 < i8 < i10
 
     def test_score_diff_clamped_to_five(self):
-        diff5 = ppc.compute_leverage_index(inning=9, outs=2, runners_state=0b111, score_diff=5)
-        diff20 = ppc.compute_leverage_index(inning=9, outs=2, runners_state=0b111, score_diff=20)
+        diff5 = compute_leverage_index(inning=9, outs=2, runners_state=0b111, score_diff=5)
+        diff20 = compute_leverage_index(inning=9, outs=2, runners_state=0b111, score_diff=20)
         # |diff| beyond 5 should produce the same factor (clamped)
         assert diff5 == diff20
 
     def test_returns_finite_float(self):
-        out = ppc.compute_leverage_index(inning=5, outs=1, runners_state=0b010, score_diff=2)
+        out = compute_leverage_index(inning=5, outs=1, runners_state=0b010, score_diff=2)
         assert isinstance(out, float)
         assert math.isfinite(out)
 
@@ -135,78 +176,78 @@ class TestComputeLeverageIndex:
 
 class TestGeometricHelpers:
     def test_hc_to_feet(self):
-        assert ppc._hc_to_feet(ppc.HC_SCALE) == pytest.approx(1.0)
-        assert ppc._hc_to_feet(0) == 0.0
+        assert _hc_to_feet(HC_SCALE) == pytest.approx(1.0)
+        assert _hc_to_feet(0) == 0.0
 
     def test_euclidean_hc(self):
-        assert ppc._euclidean_hc(0, 0, 3, 4) == pytest.approx(5.0)
-        assert ppc._euclidean_hc(1, 1, 1, 1) == 0.0
+        assert _euclidean_hc(0, 0, 3, 4) == pytest.approx(5.0)
+        assert _euclidean_hc(1, 1, 1, 1) == 0.0
 
     def test_throw_time_positive_velo(self):
-        t = ppc._throw_time(distance_ft=100.0, velo_mph=85.0)
+        t = _throw_time(distance_ft=100.0, velo_mph=85.0)
         # 85 mph = 124.69 ft/s; 100 / 124.69 ≈ 0.802
         assert t == pytest.approx(100.0 / (85.0 * 1.467), rel=0.01)
 
     def test_throw_time_zero_velo_returns_sentinel(self):
-        assert ppc._throw_time(distance_ft=50.0, velo_mph=0) == 999.0
+        assert _throw_time(distance_ft=50.0, velo_mph=0) == 999.0
 
     def test_throw_time_negative_velo_returns_sentinel(self):
-        assert ppc._throw_time(distance_ft=50.0, velo_mph=-5) == 999.0
+        assert _throw_time(distance_ft=50.0, velo_mph=-5) == 999.0
 
 
 class TestEstimateHangTime:
     def test_returns_none_for_none_inputs(self):
-        assert ppc._estimate_hang_time(None, 30.0) is None
-        assert ppc._estimate_hang_time(95.0, None) is None
+        assert _estimate_hang_time(None, 30.0) is None
+        assert _estimate_hang_time(95.0, None) is None
 
     def test_returns_none_for_zero_speed(self):
-        assert ppc._estimate_hang_time(0, 30.0) is None
+        assert _estimate_hang_time(0, 30.0) is None
 
     def test_returns_none_for_out_of_range_angle(self):
-        assert ppc._estimate_hang_time(95.0, -45) is None
-        assert ppc._estimate_hang_time(95.0, 100) is None
+        assert _estimate_hang_time(95.0, -45) is None
+        assert _estimate_hang_time(95.0, 100) is None
 
     def test_high_angle_pops_up_long_hang(self):
         # A weak popup (high angle, low speed) hangs longer than a line drive
-        popup = ppc._estimate_hang_time(80.0, 70.0)
-        line_drive = ppc._estimate_hang_time(95.0, 12.0)
+        popup = _estimate_hang_time(80.0, 70.0)
+        line_drive = _estimate_hang_time(95.0, 12.0)
         assert popup is not None and line_drive is not None
         assert popup > line_drive
 
     def test_drag_factor_branches(self):
         """Exercise each drag-factor branch (angle bands)."""
         for la in (5, 15, 30, 55):
-            out = ppc._estimate_hang_time(95.0, la)
+            out = _estimate_hang_time(95.0, la)
             assert out is not None
             assert out >= 0.5  # the min-clamp in the function
 
     def test_hang_time_minimum_clamp(self):
         # Any reasonable input should return at least 0.5 seconds
-        out = ppc._estimate_hang_time(95.0, 25.0)
+        out = _estimate_hang_time(95.0, 25.0)
         assert out >= 0.5
 
 
 class TestEstimateGbTravelTime:
     def test_returns_none_for_none_or_zero_speed(self):
-        assert ppc._estimate_gb_travel_time(None, 10, 60) is None
-        assert ppc._estimate_gb_travel_time(0, 10, 60) is None
+        assert _estimate_gb_travel_time(None, 10, 60) is None
+        assert _estimate_gb_travel_time(0, 10, 60) is None
 
     def test_returns_none_for_zero_distance(self):
-        assert ppc._estimate_gb_travel_time(85.0, 10, 0) is None
+        assert _estimate_gb_travel_time(85.0, 10, 0) is None
 
     def test_realistic_ground_ball_returns_finite(self):
         # A 95-mph ground ball travelling 80 ft to shortstop
-        t = ppc._estimate_gb_travel_time(95.0, -5, 80)
+        t = _estimate_gb_travel_time(95.0, -5, 80)
         assert t is not None
         assert t > 0
 
     def test_ball_stops_before_reaching_distance(self):
         # Soft ground ball over a long distance — discriminant could go negative
-        out = ppc._estimate_gb_travel_time(20.0, -5, 500.0)
+        out = _estimate_gb_travel_time(20.0, -5, 500.0)
         assert out is None or out > 0  # either stop or valid time
 
     def test_min_time_clamp(self):
-        t = ppc._estimate_gb_travel_time(120.0, -5, 20)
+        t = _estimate_gb_travel_time(120.0, -5, 20)
         assert t >= 0.1
 
 
@@ -218,40 +259,40 @@ class TestEstimateGbTravelTime:
 class TestClassifyDirection:
     def test_outfielder_going_back(self):
         # Ball deeper (smaller y) than fielder
-        cat, going_back = ppc._classify_direction_of(125, 80, 125, 50, "CF")
+        cat, going_back = _classify_direction_of(125, 80, 125, 50, "CF")
         assert going_back is True
         assert cat == "deep"
 
     def test_outfielder_charging(self):
         # Ball in front of fielder (larger y)
-        cat, going_back = ppc._classify_direction_of(125, 80, 125, 100, "CF")
+        cat, going_back = _classify_direction_of(125, 80, 125, 100, "CF")
         assert going_back is False
         assert cat == "charging"
 
     def test_outfielder_glove_side_lf(self):
-        cat, _ = ppc._classify_direction_of(80, 115, 90, 116, "LF")
+        cat, _ = _classify_direction_of(80, 115, 90, 116, "LF")
         assert cat in ("glove_side", "arm_side")
 
     def test_outfielder_glove_side_rf(self):
-        cat, _ = ppc._classify_direction_of(170, 115, 160, 116, "RF")
+        cat, _ = _classify_direction_of(170, 115, 160, 116, "RF")
         assert cat in ("glove_side", "arm_side")
 
     def test_infielder_charging(self):
-        cat, going_back = ppc._classify_direction_of(112, 152, 112, 170, "SS")
+        cat, going_back = _classify_direction_of(112, 152, 112, 170, "SS")
         assert cat == "charging"
         assert going_back is False
 
     def test_infielder_going_back(self):
-        cat, going_back = ppc._classify_direction_of(112, 152, 112, 130, "SS")
+        cat, going_back = _classify_direction_of(112, 152, 112, 130, "SS")
         assert cat == "deep"
         assert going_back is True
 
     def test_infielder_lateral_ss(self):
-        cat, _ = ppc._classify_direction_of(112, 152, 130, 152, "SS")
+        cat, _ = _classify_direction_of(112, 152, 130, 152, "SS")
         assert cat in ("glove_side", "arm_side")
 
     def test_infielder_lateral_2b(self):
-        cat, _ = ppc._classify_direction_of(141, 152, 120, 152, "2B")
+        cat, _ = _classify_direction_of(141, 152, 120, 152, "2B")
         assert cat in ("glove_side", "arm_side")
 
 
@@ -263,17 +304,17 @@ class TestClassifyDirection:
 class TestSigmoid:
     def test_standard_sigmoid_basic(self):
         x = np.array([0.0])
-        out = ppc._sigmoid(x, L=1.0, k=1.0, x0=0.0)
+        out = _sigmoid(x, L=1.0, k=1.0, x0=0.0)
         assert out[0] == pytest.approx(0.5)
 
     def test_sigmoid_large_negative_zero(self):
         x = np.array([-100.0])
-        out = ppc._sigmoid(x, L=1.0, k=1.0, x0=0.0)
+        out = _sigmoid(x, L=1.0, k=1.0, x0=0.0)
         assert out[0] == pytest.approx(0.0, abs=1e-3)
 
     def test_sigmoid_large_positive_one(self):
         x = np.array([100.0])
-        out = ppc._sigmoid(x, L=1.0, k=1.0, x0=0.0)
+        out = _sigmoid(x, L=1.0, k=1.0, x0=0.0)
         assert out[0] == pytest.approx(1.0, abs=1e-3)
 
 
@@ -287,19 +328,19 @@ class TestFitLogisticModel:
         rng = np.random.default_rng(0)
         X = rng.normal(size=(50, 2))
         y = np.zeros(50)
-        assert ppc._fit_logistic_model(X, y) is None
+        assert _fit_logistic_model(X, y) is None
 
     def test_all_one_class_returns_none(self):
         # 200 samples but all positive — y.sum() == 200, (1-y).sum() == 0
         X = np.random.default_rng(1).normal(size=(200, 2))
         y = np.ones(200)
-        assert ppc._fit_logistic_model(X, y) is None
+        assert _fit_logistic_model(X, y) is None
 
     def test_fits_balanced_data(self):
         rng = np.random.default_rng(42)
         X = rng.normal(size=(500, 2))
         y = (X[:, 0] + X[:, 1] > 0).astype(int)
-        model = ppc._fit_logistic_model(X, y)
+        model = _fit_logistic_model(X, y)
         assert model is not None
         # Has the attached scaler attribute
         assert hasattr(model, "_scaler")
@@ -308,9 +349,9 @@ class TestFitLogisticModel:
         rng = np.random.default_rng(42)
         X = rng.normal(size=(500, 2))
         y = (X[:, 0] + X[:, 1] > 0).astype(int)
-        model = ppc._fit_logistic_model(X, y)
+        model = _fit_logistic_model(X, y)
         assert model is not None
-        probs = ppc._predict_proba(model, X)
+        probs = _predict_proba(model, X)
         assert probs.shape == (500,)
         # Probabilities are in (0, 1)
         assert np.all((probs >= 0) & (probs <= 1))
@@ -320,14 +361,14 @@ class TestQuickAuc:
     def test_perfect_separation(self):
         y_true = np.array([0, 0, 1, 1])
         y_score = np.array([0.1, 0.2, 0.8, 0.9])
-        auc = ppc._quick_auc(y_true, y_score)
+        auc = _quick_auc(y_true, y_score)
         assert auc == pytest.approx(1.0)
 
     def test_random_around_half(self):
         rng = np.random.default_rng(0)
         y_true = rng.integers(0, 2, size=100)
         y_score = rng.uniform(size=100)
-        auc = ppc._quick_auc(y_true, y_score)
+        auc = _quick_auc(y_true, y_score)
         # AUC for random scores should be near 0.5
         assert 0.3 < auc < 0.7
 
@@ -355,16 +396,16 @@ class TestFitGmm:
 
     def test_too_few_pitches_returns_none(self):
         df = self._make_pitches_df(n=50)
-        model, components = ppc._fit_gmm_for_pitcher(df, pitcher_id=1, season=2024)
+        model, components = _fit_gmm_for_pitcher(df, pitcher_id=1, season=2024)
         assert model is None
         assert components == []
 
     def test_successful_fit_returns_model_and_components(self):
         df = self._make_pitches_df(n=600)
-        model, components = ppc._fit_gmm_for_pitcher(df, pitcher_id=1, season=2024)
+        model, components = _fit_gmm_for_pitcher(df, pitcher_id=1, season=2024)
         assert model is not None
         assert "n_components" in model
-        assert model["n_components"] >= ppc.GMM_MIN_K
+        assert model["n_components"] >= GMM_MIN_K
         assert len(components) == model["n_components"]
         assert all("pitcher_id" in c and c["pitcher_id"] == 1 for c in components)
 
@@ -372,66 +413,66 @@ class TestFitGmm:
         df = self._make_pitches_df(n=400)
         df["spin_axis"] = 200.0  # constant — std == 0
         # Must not raise; should still fit
-        model, components = ppc._fit_gmm_for_pitcher(df, pitcher_id=2, season=2024)
+        model, components = _fit_gmm_for_pitcher(df, pitcher_id=2, season=2024)
         assert model is not None
 
 
 class TestLabelComponent:
     def _fi(self) -> dict[str, int]:
-        return {name: i for i, name in enumerate(ppc.GMM_FEATURE_NAMES)}
+        return {name: i for i, name in enumerate(GMM_FEATURE_NAMES)}
 
     def test_4_seam_fastball(self):
         # high velo, high ivb, low hb
         mean = [95.0, 18.0, 4.0, 2400, 200, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "4-Seam Fastball"
+        assert _label_component(mean, self._fi()) == "4-Seam Fastball"
 
     def test_2_seam_sinker_rhp(self):
         mean = [94.0, 10.0, 12.0, 2200, 180, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "2-Seam / Sinker"
+        assert _label_component(mean, self._fi()) == "2-Seam / Sinker"
 
     def test_2_seam_sinker_lhp(self):
         mean = [94.0, 10.0, -12.0, 2200, 180, 1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "2-Seam / Sinker (LHP)"
+        assert _label_component(mean, self._fi()) == "2-Seam / Sinker (LHP)"
 
     def test_cutter(self):
         mean = [93.0, 4.0, 11.0, 2300, 200, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Cutter"
+        assert _label_component(mean, self._fi()) == "Cutter"
 
     def test_generic_fastball(self):
         mean = [94.0, 9.0, 0.0, 2300, 200, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Fastball"
+        assert _label_component(mean, self._fi()) == "Fastball"
 
     def test_12_6_curveball(self):
         mean = [85.0, -8.0, 2.0, 2500, 60, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "12-6 Curveball"
+        assert _label_component(mean, self._fi()) == "12-6 Curveball"
 
     def test_sweeping_slider(self):
         mean = [85.0, -2.0, 14.0, 2400, 100, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Sweeping Slider"
+        assert _label_component(mean, self._fi()) == "Sweeping Slider"
 
     def test_slider(self):
         mean = [85.0, 2.0, 10.0, 2300, 120, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Slider"
+        assert _label_component(mean, self._fi()) == "Slider"
 
     def test_hard_breaking_ball_generic(self):
         mean = [85.0, 6.0, 4.0, 2300, 120, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Hard Breaking Ball"
+        assert _label_component(mean, self._fi()) == "Hard Breaking Ball"
 
     def test_curveball_soft(self):
         mean = [75.0, -8.0, 4.0, 2400, 60, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Curveball"
+        assert _label_component(mean, self._fi()) == "Curveball"
 
     def test_changeup_splitter(self):
         mean = [80.0, 8.0, 6.0, 1800, 200, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Changeup / Splitter"
+        assert _label_component(mean, self._fi()) == "Changeup / Splitter"
 
     def test_offspeed_generic(self):
         mean = [80.0, 2.0, 4.0, 1800, 200, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) == "Offspeed"
+        assert _label_component(mean, self._fi()) == "Offspeed"
 
     def test_none_inputs_return_none(self):
         mean = [None, 18.0, 4.0, 2400, 200, -1.5, 6.0, 6.5]
-        assert ppc._label_component(mean, self._fi()) is None
+        assert _label_component(mean, self._fi()) is None
 
 
 # ===========================================================================
@@ -454,7 +495,7 @@ class TestBuildReMatrix:
         first = MagicMock()
         first.fetchdf.return_value = df
         mock_conn.execute.side_effect = [first] + [MagicMock() for _ in range(20)]
-        out = ppc.build_run_expectancy_matrix(mock_conn, seasons=[2023, 2024])
+        out = build_run_expectancy_matrix(mock_conn, seasons=[2023, 2024])
         assert out[(0, 0)] == pytest.approx(0.48)
         assert out[(0, 1)] == pytest.approx(0.83)
         assert (2, 0) in out
@@ -643,13 +684,13 @@ class TestComputorRunSmoke:
 
 class TestLeagueAverageProfiles:
     def test_init(self):
-        lap = ppc.LeagueAverageProfiles(duckdb_path="/tmp/y.duckdb")
+        lap = LeagueAverageProfiles(duckdb_path="/tmp/y.duckdb")
         assert lap._path == "/tmp/y.duckdb"
 
     def test_compute_runs_all_inserts(self):
         stub = _stub_mock_conn()
         with patch("pipeline.batch.player_profile_computor.duckdb.connect", return_value=stub):
-            lap = ppc.LeagueAverageProfiles(duckdb_path="/tmp/y.duckdb")
+            lap = LeagueAverageProfiles(duckdb_path="/tmp/y.duckdb")
             lap.compute(seasons=[2024, 2025])
         sqls = [call.args[0] for call in stub.execute.call_args_list]
         # Pitcher, batter, and 8 position-specific fielder inserts

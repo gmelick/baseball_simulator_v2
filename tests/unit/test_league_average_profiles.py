@@ -272,7 +272,7 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
                     os.remove(p)
 
     def _run_compute(self):
-        from pipeline.batch.player_profile_computor import LeagueAverageProfiles
+        from pipeline.batch.profiles.league_averages import LeagueAverageProfiles
 
         LeagueAverageProfiles(self._db_path).compute(SEASONS)
 

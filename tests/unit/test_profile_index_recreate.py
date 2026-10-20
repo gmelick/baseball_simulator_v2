@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import duckdb
 
-from pipeline.batch.player_profile_computor import (
-    PlayerProfileComputor,
-    _ensure_index_if_not_exists,
-)
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from pipeline.batch.profiles.pool_meta import _ensure_index_if_not_exists
 
 
 # --------------------------------------------------------------------------- helper
