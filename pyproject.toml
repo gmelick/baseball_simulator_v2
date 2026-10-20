@@ -103,8 +103,6 @@ omit = [
     "api/main.py",
     "api/state.py",
     "simulation/production_factory.py",
-    "simulation/play_pool_sampler.py",
-    "pipeline/batch/play_pool_cache.py",
     "api/routes/games.py",
     # SIM-439 Data Lab / Similarity Explorer: live-DB + engine-backed routes,
     # exercised by integration/E2E, not the unit suite (same rationale as

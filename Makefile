@@ -224,7 +224,7 @@ TESTS = tests/unit/
 test: _require_env_file
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/ -v --tb=short --timeout=60 \
-	       --cov=similarity --cov=pipeline --cov=api \
+	       --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api \
 	       --cov-report=term-missing --cov-report=xml:coverage.xml
 
 ## Unit tests only — no live DB or Redis required, fast feedback loop
@@ -233,11 +233,10 @@ test: _require_env_file
 test-unit:
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest $(TESTS) -v --tb=short --timeout=30 \
-	         --cov=similarity --cov=pipeline \
+	         --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api \
 	         --cov-report=term-missing
 
-## Integration tests — testcontainers spins up ephemeral PostgreSQL + Redis
-## Mirrors the CI weekly integration job.
+## Regression tests — the engine invariant gate (no snapshots; CLAUDE.md §7).
 test-regression:
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/regression/ -v --tb=short --timeout=60 \
