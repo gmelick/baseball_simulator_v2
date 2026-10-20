@@ -665,8 +665,16 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 
 ## 5. Repository map
 
-- `api/` — FastAPI app. `main.py` (create_app + lifespan), `routes/` (games, betting, metrics, similarity),
-  `schemas.py` (Pydantic), `serialization.py` (numpy-safe `to_jsonable`), `auth.py`, `state.py` (engine build).
+- `api/` — FastAPI app. `main.py` (create_app + lifespan; the lifespan's other steps in `startup.py`,
+  `validate_environment` in `env_check.py`, the park-factor header in `middleware.py`), `routes/`
+  (`games.py` the aggregate router and every route that runs a simulation, with `games_slate.py`,
+  `games_feed.py`, `games_runs.py` and `games_models.py`; `betting.py` /edges and /signals, with
+  `betting_pricing.py`, `betting_stored_odds.py`, `betting_lines.py` and `betting_card.py`; metrics,
+  similarity, the Data Lab routes; `_common.py` the shared helpers; each sub-router is a bare
+  `APIRouter()`, so the OpenAPI contract does not depend on a route's module), `schemas/` (the
+  Pydantic response models, a package by source), `serialization.py` (numpy-safe `to_jsonable`),
+  `auth.py`, `state.py` (engine build). SIM-493 (2026-10-20) split the four large files;
+  `docs/technical/api.md` maps every module.
 - `simulation/` — `sim_loop.py` (the simulator, biggest file; full-pool draw + engine-backed
   advancement and steal draws live here; also the reliever pick, `_pick_reliever`),
   `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
@@ -828,7 +836,7 @@ consolidates; QA cross-validates and never self-certifies its own work.
   `pipeline/odds_provider.py`, `pipeline/bettingpros_odds_provider.py`,
   `pipeline/live/live_ingestion_pipeline.py`, `pipeline/etl/opening_line_job.py`,
   `scripts/load_historical_odds.py`, `scripts/accuracy_comparison.py`, `api/routes/games.py`,
-  `api/schemas.py`, migration 0022, and any `SIM-421 fix` on a box-line credit in
+  `api/schemas/props.py`, migration 0022, and any `SIM-421 fix` on a box-line credit in
   `simulation/sim_loop.py`. Reconcile a realism tag if you touch it.
 - **Migrations (mandatory):** every Postgres schema change ships an Alembic migration in
   `db/migrations/versions/`; every DuckDB schema change ships a numbered SQL file in
