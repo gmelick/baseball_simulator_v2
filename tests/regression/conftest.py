@@ -1,15 +1,12 @@
-"""
-tests/regression/conftest.py — SIM-147
-========================================
-Pytest fixtures that build deterministic synthetic similarity engines for
-the regression gate.
+"""Fixtures that build deterministic synthetic similarity engines for the
+regression gate (the engine invariant tests).
 
-All engines are constructed via __new__ to bypass DuckDB — identical to
-the pattern used in tests/unit/test_secondary_engines.py.  Synthetic
-profiles are injected directly after construction.
+Every engine is built through ``__new__``, so no DuckDB file is needed: the
+same pattern as the unit tests of each engine (for example
+``tests/unit/test_catcher_similarity_scores.py``). The fixtures put the
+synthetic profiles in after construction.
 
-Seeded random data (seed=2026) guarantees bit-for-bit identical inputs
-on every CI run, making golden-file comparisons meaningful.
+Seeded random data (seed=2026) gives the same inputs on every run.
 
 Profile key conventions (matches internal _profiles dict keying):
   BaserunnerSteal → (player_id, season)
