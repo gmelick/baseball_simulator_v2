@@ -90,7 +90,7 @@ each code folder).
 
 | Gate | Result |
 |---|---|
-| The unit lane with coverage (container) | GATE_UNIT |
+| The unit lane with coverage (container) | 6,492 passed, 2 skipped, 0 failed (11 min 37 s); coverage 92.2% (the gate is 80%). The groundwork's lane held 6,545: the area entries list the tests deleted with their dead code. The first run of the pass failed 25 tests on leftovers of the moved names (the patches and imports above), all fixed |
 | The slow lane (container, `-m slow`) | 22 passed |
 | The regression lane (container) | 33 passed |
 | The integration lane (host Python, testcontainers) | 31 passed, 1 failed: `test_sim555_stamp_indexes_and_archives`, which fails on master `fe81d79` too, because the odds archive tables lack `last_seen_at` (filed as SIM-582) |
@@ -102,7 +102,7 @@ each code folder).
 | The fingerprint, no-database factory, 200 games, against `fe81d79` | IDENTICAL: 200 hashes |
 | The fingerprint, the in-memory bundle, 2 flag sets × 200 games | IDENTICAL: 400 hashes |
 | The fingerprint, the real bundle (the pinned copy), 45 games × 4 seeds, the production flags | IDENTICAL: 180 hashes |
-| The 45 × 130 acceptance lane on the balanced set | GATE_LANE |
+| The 45 × 130 acceptance lane on the balanced set | 97 passed, 7 failed (2 h 17 m; 5,850 game-sims). Five are the known non-passes of 2026-10-07 at like sizes: walks per plate appearance +3.4% (was +3.3%), doubles per ball in play +4.7% (+5.0%), steal attempts at second −8.6% (−11.2%) and at third −16.5% (−20.5%) — the steal-weight volume deficit, SIM-556 — and the underpowered home-win share (0.516 on 5,836 game-sims against 0.5428). Two are new. Double plays per opportunity read −5.0% (was −4.8%, a pass at the edge); the delta −0.00715 misses the 0.00712 floor by 0.00003. The park-pin check fails because the nightly rebuild moved one venue's 2026 run factor (game 824590: pinned 1.0022, now 1.0050); the pins need a re-read from `derived.park_factors`. Hit by pitch, red on 2026-10-07 at +8.4%, passes at +4.6%. **The moves since 2026-10-07 come from the data, not the clean-up:** the lane is seeded, and a paired run of master `fe81d79` and this branch on the same data and bundle (45 × 4) gives equal records in every field (per game, pool counts, fence counts, flags, park factors) |
 
 **The defects filed** (SIM-575 to SIM-623; each row carries its evidence, a definition of done
 and a proposed fix). P2, because each changes what production computes or breaks a scheduled job:
@@ -119,7 +119,8 @@ including four owner decisions (SIM-587, SIM-596, SIM-611, SIM-616).
 **Not done.** The merge into master, the push and the deploy wait for the owner's go-ahead. The
 deploy rebuilds the app image (`scripts/` is baked in) and recreates `app`, `jobs` and `live`
 outside 10:00-11:00 UTC; the live check is `/simulate` at n = 100 in 25-36 s, a game page and
-the slate. After the merge the five area branches, their worktrees, the integration and
+the slate. The balanced set's 2026 park-factor pins in `tests/acceptance/bands.py` need a re-read
+(the lane's park-pin check). After the merge the five area branches, their worktrees, the integration and
 groundwork branches, the pinned bundle copy (`/data/sim493/`, about 10 GB) and the scratch
 worktrees are deleted.
 
