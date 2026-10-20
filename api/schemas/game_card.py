@@ -90,13 +90,12 @@ class LinescoreModel(_ApiModel):
     def from_jsonable(cls, data: Mapping[str, Any]) -> LinescoreModel:
         """Build directly from a persisted ``to_jsonable(Linescore)`` dict.
 
-        The DuckDB game-card store (SIM-362) persists the linescore as the
-        ``to_jsonable`` dict -- which carries the dataclass FIELDS (``innings`` +
-        the six R/H/E totals) but NOT the derived ``n_innings`` / ``away_by_inning``
-        / ``home_by_inning`` properties (``to_jsonable`` serializes fields only).
-        This recomputes those derived views from the stored ``innings`` so the wire
-        shape is identical whether served fresh (``from_dataclass``) or from the
-        store -- no need to reconstruct the frozen dataclasses.
+        The replay store keeps the linescore as the ``to_jsonable`` dict: the
+        dataclass fields (``innings`` and the six R/H/E totals), not the derived
+        ``n_innings``, ``away_by_inning`` and ``home_by_inning`` properties
+        (``to_jsonable`` writes fields only). The method recomputes those from
+        the stored ``innings``, so the wire shape is the same fresh
+        (``from_dataclass``) or stored, with no rebuild of the dataclasses.
         """
         innings = list(data.get("innings") or [])
         inning_models: list[InningLineModel] = []
@@ -166,8 +165,8 @@ class PitcherDecisionsModel(_ApiModel):
     def from_jsonable(cls, data: Mapping[str, Any]) -> PitcherDecisionsModel:
         """Build directly from a persisted ``to_jsonable(PitcherDecisions)`` dict.
 
-        ``PitcherDecisions`` has only plain fields (no derived properties), so the
-        persisted dict round-trips 1:1; this just re-coerces types defensively.
+        ``PitcherDecisions`` has only plain fields (no derived properties), so
+        the stored dict maps one to one; the method only re-coerces the types.
         """
 
         def _oi(v: Any) -> int | None:

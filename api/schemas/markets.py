@@ -79,9 +79,9 @@ class EdgeReportModel(_ApiModel):
     clv: CLVModel | None = None
     positive_edge: bool
 
-    #: SIM-555: the stored book label of the offered price (None: injected or mock).
+    #: The stored book label of the offered price (None: injected or mock).
     price_book: str | None = None
-    #: SIM-555: that book's display name ("FanDuel").
+    #: That book's display name ("FanDuel").
     price_book_name: str | None = None
 
     #: How this side settled on the real final: "won", "lost" or "push"; None
@@ -92,8 +92,8 @@ class EdgeReportModel(_ApiModel):
     def from_dataclass(cls, report: Any, *, price_book: str | None = None) -> EdgeReportModel:
         """Build from a :class:`betting.clv_engine.EdgeReport`.
 
-        SIM-555: ``price_book`` is the stored label of the offered price's book;
-        the display name follows from it.
+        ``price_book`` is the stored label of the offered price's book; the
+        display name follows from it.
         """
         side = report.side
         side_value = side.value if hasattr(side, "value") else str(side)
@@ -141,17 +141,17 @@ class BetSignalModel(_ApiModel):
     #: The full source EdgeReport (sim_prob, market fair prob, sim_fair_american, CLV).
     report: EdgeReportModel
 
-    #: SIM-555: the stored book label of the offered price (None: injected or mock).
+    #: The stored book label of the offered price (None: injected or mock).
     price_book: str | None = None
-    #: SIM-555: that book's display name ("FanDuel").
+    #: That book's display name ("FanDuel").
     price_book_name: str | None = None
 
     @classmethod
     def from_dataclass(cls, signal: Any, *, price_book: str | None = None) -> BetSignalModel:
         """Build from a :class:`betting.bet_signal.BetSignal`.
 
-        SIM-555: ``price_book`` is the stored label of the offered price's book.
-        The nested report carries it too.
+        ``price_book`` is the stored label of the offered price's book. The
+        nested report carries it too.
         """
         side = signal.side
         side_value = side.value if hasattr(side, "value") else str(side)
@@ -189,10 +189,10 @@ class LineQuoteModel(_ApiModel):
     other_american: float | None = None
     line: float | None = None
     implied_prob: float
-    #: SIM-549: the other side's own line (run lines only). A run-line quote is
+    #: The other side's own line (run lines only). A run-line quote is
     #: a pair when it is the negative of ``line``; otherwise two separate bets.
     other_line: float | None = None
-    #: SIM-555: the book's display name ("FanDuel" for ``bp:10``).
+    #: The book's display name ("FanDuel" for ``bp:10``).
     book_name: str = ""
 
     @classmethod
@@ -212,9 +212,9 @@ class LineQuoteModel(_ApiModel):
             other_line=(
                 None if getattr(quote, "other_line", None) is None else float(quote.other_line)
             ),
-            # SIM-555: the running app imports betting/ from its image, whose
-            # LineQuote may predate book_name, so the name falls back to the
-            # vocabulary here.
+            # The app imports betting/ from its image; a LineQuote without
+            # book_name (an image built before the field) falls back to the
+            # vocabulary.
             book_name=getattr(quote, "book_name", None) or book_display_name(str(quote.book)),
         )
 
@@ -236,7 +236,7 @@ class LineMovementModel(_ApiModel):
     #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
     side: str
     book: str | None = None
-    #: SIM-555: the book's display name ("FanDuel" for ``bp:10``); the chart
+    #: The book's display name ("FanDuel" for ``bp:10``); the chart
     #: title shows it. An empty string when the series names no book.
     book_name: str = ""
 
@@ -260,7 +260,7 @@ class LineMovementModel(_ApiModel):
     clv: CLVModel | None = None
     sharp_consensus: bool | None = None
 
-    #: SIM-549, run lines only: 'pair' / 'two_bets' / 'mixed' — whether the
+    #: Run lines only: 'pair' / 'two_bets' / 'mixed' — whether the
     #: book listed the two sides of one bet or two separate bets.
     run_line_shape: str | None = None
     #: How the CLV was priced: 'pair' (one two-way bet at both ends) or
@@ -288,7 +288,7 @@ class LineMovementModel(_ApiModel):
             market_type=str(mv.market_type),
             side=str(side_value),
             book=None if mv.book is None else str(mv.book),
-            # SIM-555: the same image fallback as LineQuoteModel.book_name.
+            # The same image fallback as LineQuoteModel.book_name.
             book_name=getattr(mv, "book_name", None)
             or book_display_name(None if mv.book is None else str(mv.book)),
             quotes=[LineQuoteModel.from_dataclass(q) for q in mv.quotes],

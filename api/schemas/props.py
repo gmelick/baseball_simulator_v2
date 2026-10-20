@@ -36,15 +36,15 @@ class BoxscoreCardRowModel(_ApiModel):
     #: "OUTS": 17.0, "H_ALLOWED": 5.2}`` for a pitcher).  Whichever props the
     #: player owns in the prop set.
     means: dict[str, float] = Field(default_factory=dict)
-    #: SIM-560: the player's full name (``raw.players``); None when unknown.
+    #: The player's full name (``raw.players``); None when unknown.
     name: str | None = None
-    #: SIM-560: 'away' or 'home'; None for a player the game's kwargs do not name.
+    #: 'away' or 'home'; None for a player the game's kwargs do not name.
     side: str | None = None
-    #: SIM-560: the 1-9 batting-order slot; None for a player who does not bat.
+    #: The 1-9 batting-order slot; None for a player who does not bat.
     lineup_slot: int | None = None
-    #: SIM-560: True for each side's starting pitcher.
+    #: True for each side's starting pitcher.
     starting_pitcher: bool = False
-    #: SIM-519 Part F: True for the one summed row of a side's generic bullpen
+    #: True for the one summed row of a side's generic bullpen
     #: (the placeholder relievers a game with no listed pen runs with).
     synthetic: bool = False
 
@@ -59,8 +59,8 @@ class BoxscoreCardRowModel(_ApiModel):
     ) -> BoxscoreCardRowModel:
         """Build one row from a ``{prop_name -> PropDistribution}`` map.
 
-        ``tag`` is the player's ``{side, lineup_slot, starting_pitcher}`` map
-        (SIM-560); absent, the row carries no side.
+        ``tag`` is the player's ``{side, lineup_slot, starting_pitcher}`` map;
+        absent, the row carries no side.
         """
         tag = tag or {}
         return cls(
@@ -73,7 +73,7 @@ class BoxscoreCardRowModel(_ApiModel):
         )
 
 
-#: SIM-519 Part F: the row ids of each side's summed generic bullpen.
+#: The row ids of each side's summed generic bullpen.
 GENERIC_PEN_IDS: dict[str, int] = {"away": -1, "home": -2}
 
 
@@ -91,7 +91,7 @@ class BoxscoreCardModel(_ApiModel):
     """
 
     n_iterations: int
-    #: SIM-560: the seed the run used (None = an unseeded, fresh draw).  A
+    #: The seed the run used (None = an unseeded, fresh draw). A
     #: ``/props`` call with this seed and N reads the same run.
     base_seed: int | None = None
     #: ``str(player_id) -> BoxscoreCardRowModel`` of prop means.
@@ -108,14 +108,14 @@ class BoxscoreCardModel(_ApiModel):
     ) -> BoxscoreCardModel:
         """Build from a :class:`simulation.prop_distributions.PropDistributionSet`.
 
-        ``names`` and ``tags`` are keyed by player id (SIM-560); a player
+        ``names`` and ``tags`` are keyed by player id; a player
         missing from either gets an empty name or no side.
         """
         names = names or {}
         tags = tags or {}
         players: dict[str, BoxscoreCardRowModel] = {}
-        # SIM-519 Part F: a placeholder reliever (a negative id) is folded into
-        # its side's one "Bullpen (generic)" row: the sum of their means.
+        # A placeholder reliever (a negative id) folds into its side's one
+        # "Bullpen (generic)" row: the sum of their means.
         pen: dict[str, dict[str, float]] = {}
         for pid, props in pset.by_player.items():
             tag = tags.get(int(pid)) or {}
@@ -161,7 +161,7 @@ class PropEdgeResponse(_ApiModel):
     player_id: int
     prop: str
     n: int
-    #: SIM-519 Part F: the player's name, when known ("Gerrit Cole — K").
+    #: The player's name, when known ("Gerrit Cole — K").
     player_name: str | None = None
     #: The compact PMF support (sorted distinct integer outcomes).
     support: list[int]
@@ -172,10 +172,10 @@ class PropEdgeResponse(_ApiModel):
     std: float
     #: ``str(value) -> probability`` view of the PMF (object keys must be str).
     pmf: dict[str, float] = Field(default_factory=dict)
-    # Optional: populated when a ``line`` query param is supplied.
+    # Set when a ``line`` query param is supplied.
     line: float | None = None
     p_over: float | None = None
     p_under: float | None = None
     p_push: float | None = None
-    # Optional: populated when ``over_ml`` and ``under_ml`` are also supplied.
+    # Set when ``over_ml`` and ``under_ml`` are also supplied.
     edge_report: EdgeReportModel | None = None

@@ -114,8 +114,8 @@ class PlayByPlayEntryModel(_ApiModel):
     runs: float = 0.0
     canonical_event: str | None = None
 
-    # SIM-561: the inning, half, outs and batter BEFORE the pitch; the pitcher
-    # who threw it; the score AFTER it.  None on a stream stored without them.
+    # The inning, half, outs and batter BEFORE the pitch; the pitcher who
+    # threw it; the score AFTER it. None on a stream stored without them.
     inning: int | None = None
     half: str | None = None
     outs_before: int | None = None
@@ -172,9 +172,8 @@ class PlayByPlayModel(_ApiModel):
     #: trimmed by pagination — so a paged response still reports the true counts).
     n_pitches: int = 0
     n_plate_appearances: int = 0
-    # SIM-415 pagination — populated only when the /plays response is paged
-    # (``limit`` supplied); ``None`` on the default full-collection response so
-    # the shape is backward-compatible.
+    # The paging fields: set only when the /plays response is paged (``limit``
+    # supplied); ``None`` on the default whole-stream response.
     #: Total entries in the full game (== len of the un-paged stream).
     total_entries: int | None = None
     #: 0-based offset of the returned slice.
@@ -183,11 +182,11 @@ class PlayByPlayModel(_ApiModel):
     page_limit: int | None = None
     #: Number of entries actually returned in this page (len(entries)).
     returned_entries: int | None = None
-    #: SIM-561: the stored run these plays belong to (the newest complete run,
+    #: The stored run these plays belong to (the newest complete run,
     #: unless the request named one) and the seed it was played at.
     run_id: int | None = None
     base_seed: int | None = None
-    #: SIM-561: ``str(player_id) -> name`` for every batter and pitcher in the
+    #: ``str(player_id) -> name`` for every batter and pitcher in the
     #: returned entries; a placeholder reliever reads "Generic reliever N".
     names: dict[str, str] = Field(default_factory=dict)
 

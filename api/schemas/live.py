@@ -27,31 +27,31 @@ class LiveGameStateResponse(_ApiModel):
 
     game_pk: int
     session_id: str  # UUID of the sim.lineup_state row
-    # ---- Inning state -------------------------------------------------------
+    # The inning
     inning: int = 1
     half: str = "Top"  # "Top" | "Bottom"
     outs: int = 0
     balls: int = 0
     strikes: int = 0
-    # ---- Score --------------------------------------------------------------
+    # The score
     home_score: int = 0
     away_score: int = 0
-    # ---- Team context -------------------------------------------------------
+    # The teams
     batting_team_id: int | None = None
     fielding_team_id: int | None = None
-    # ---- Baserunners --------------------------------------------------------
+    # The runners
     on_1b: int | None = None  # player_id of runner on first, or None
     on_2b: int | None = None
     on_3b: int | None = None
-    # ---- Current participants -----------------------------------------------
+    # The batter and the pitcher
     current_batter_id: int | None = None
     current_pitcher_id: int | None = None
-    # ---- Lineups / rosters --------------------------------------------------
+    # The lineups and the rosters
     home_lineup: list[int] = Field(default_factory=list)
     away_lineup: list[int] = Field(default_factory=list)
     home_bullpen: list[int] = Field(default_factory=list)
     away_bullpen: list[int] = Field(default_factory=list)
     home_bench: list[int] = Field(default_factory=list)
     away_bench: list[int] = Field(default_factory=list)
-    # ---- Staleness ----------------------------------------------------------
+    # The pipeline's last write
     updated_at: str | None = None  # ISO-8601 timestamp of last pipeline write

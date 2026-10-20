@@ -65,8 +65,8 @@ class GameSimSummaryModel(_ApiModel):
     away_score_median: float
     total_score_median: float
 
-    # RAW per-iteration signal (length N) -- numpy arrays on the source, exposed
-    # as JSON-native int lists; optional so an endpoint can trim them.
+    # The per-iteration scores (N long): numpy arrays on the source, int lists
+    # here; optional, so a route can leave them out.
     home_scores: list[int] | None = None
     away_scores: list[int] | None = None
     total_scores: list[int] | None = None
