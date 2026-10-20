@@ -47,6 +47,7 @@ from api.state import (
     open_pg_pool,
     open_redis_cache,
 )
+from simulation.flags import read_int
 
 log = logging.getLogger("api.main")
 
@@ -547,11 +548,7 @@ async def lifespan(app: FastAPI):
     # uses default_max_workers() = min(cpu_count - 1, 10) at run time, enabling
     # real parallelism.  Explicit "1" keeps the serialised in-process path for
     # environments that can't fork (e.g. some CI runners).
-    _workers_env = os.environ.get("SIM_RUNNER_WORKERS")
-    try:
-        sim_runner_workers: int | None = int(_workers_env) if _workers_env else None
-    except (TypeError, ValueError):
-        sim_runner_workers = None
+    sim_runner_workers = read_int("SIM_RUNNER_WORKERS")
     resolved_workers = (
         sim_runner_workers if sim_runner_workers is not None else default_max_workers()
     )
@@ -609,7 +606,7 @@ async def lifespan(app: FastAPI):
     log.info(
         "Building persistent BatchRunner (workers=%s, SIM_RUNNER_WORKERS=%r, shared_arrays=%d) ...",
         resolved_workers,
-        _workers_env,
+        sim_runner_workers,
         len(shared_arrays_payload) if shared_arrays_payload else 0,
     )
     app.state.sim_runner = BatchRunner(

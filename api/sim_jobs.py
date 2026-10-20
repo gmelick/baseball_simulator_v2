@@ -31,10 +31,11 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from simulation.flags import read_int
 
 log = logging.getLogger(__name__)
 
@@ -99,10 +100,7 @@ _SQL_RECOVER = """
 
 def max_concurrent() -> int:
     """``SIM_JOB_MAX_CONCURRENT`` (default 1, decision D5)."""
-    try:
-        return max(1, int(os.environ.get("SIM_JOB_MAX_CONCURRENT", "1")))
-    except ValueError:
-        return 1
+    return max(1, read_int("SIM_JOB_MAX_CONCURRENT") or 1)
 
 
 def spec_key(runner_cache_key: str) -> str:

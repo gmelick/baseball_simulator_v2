@@ -102,12 +102,12 @@ that module's public surface.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from simulation.flags import read_str
 from simulation.game_state import GameState, Half, Team
 
 log = logging.getLogger(__name__)
@@ -892,7 +892,7 @@ def bullpen_source_enabled() -> bool:
     """SIM-427: whether the resolver reads the REAL pen (``SIM_BULLPEN_SOURCE=box``,
     the MLB box's per-game listing) or leaves the synthetic pen in place (the
     default, ``synthetic`` — production today; the flip sets ``box``)."""
-    return os.environ.get("SIM_BULLPEN_SOURCE", "synthetic").strip().lower() == "box"
+    return read_str("SIM_BULLPEN_SOURCE").strip().lower() == "box"
 
 
 async def _attach_bullpens(conn: Any, resolved: ResolvedLineup) -> None:

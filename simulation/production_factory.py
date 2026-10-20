@@ -52,13 +52,13 @@ from typing import Any
 import numpy as np
 
 from simulation.batch_runner import GameSpec
-from simulation.filter_cells import DEFAULT_MIN_CELL
+from simulation.flags import FLAGS, actor_power_overrides, read_bool, read_float, read_int
 from simulation.sim_loop import StateMachine
 
 logger = logging.getLogger(__name__)
 
 #: SIM-548: the pitch draw's situation bandwidth, the sampler's code default.
-DEFAULT_SIT_SIGMA = 2.0
+DEFAULT_SIT_SIGMA = float(FLAGS["SIM_SIT_SIGMA"].default)  # type: ignore[arg-type]
 
 
 def apply_sit_sigma_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
@@ -70,20 +70,7 @@ def apply_sit_sigma_env(sampler: Any, env: Mapping[str, str] | None = None) -> N
     that does not parse keeps the default and logs a warning. The offline
     fit ladders this value; an arm sets it here.
     """
-    src = os.environ if env is None else env
-    raw = src.get("SIM_SIT_SIGMA")
-    if raw is None:
-        sampler.sit_sigma = DEFAULT_SIT_SIGMA
-        return
-    try:
-        sampler.sit_sigma = float(raw)
-    except ValueError:
-        logger.warning(
-            "SIM-548: SIM_SIT_SIGMA=%r does not parse as a float; keeping %.1f",
-            raw,
-            DEFAULT_SIT_SIGMA,
-        )
-        sampler.sit_sigma = DEFAULT_SIT_SIGMA
+    sampler.sit_sigma = read_float("SIM_SIT_SIGMA", env)
 
 
 def _kwarg(spec: GameSpec, name: str, default: Any) -> Any:
@@ -139,17 +126,7 @@ def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -
     pitcher_steal, fielder — the last applies to every per-position fielder
     matrix). The bell-curve kernels are retired (2026-09-09).
     """
-    src = os.environ if env is None else env
-    powers: dict[str, float] = {}
-    for key, val in src.items():
-        if key.startswith("SIM_ACTOR_POWER_"):
-            name = key[len("SIM_ACTOR_POWER_") :].lower()
-            if name.startswith("fielder_"):
-                name = "fielder_" + name[len("fielder_") :].upper()  # the position names
-            try:
-                powers[name] = float(val)
-            except ValueError:
-                continue
+    powers = actor_power_overrides(env)
     if "fielder" in powers:
         for pos in ("1B", "2B", "3B", "SS", "LF", "CF", "RF"):
             powers.setdefault(f"fielder_{pos}", powers["fielder"])
@@ -172,34 +149,20 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
     ``SIM_BB_BORN_SIGMA`` (0 = off) weights the fielding draw by similarity
     to the batted ball the result row was born with.
     """
-    src = os.environ if env is None else env
     # SIM-523 part E: the catcher receiving ratio (OFF; enabling is SIM-526).
-    sampler.catcher_receiving = src.get("SIM_CATCHER_RECEIVING", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    sampler.pitch_result_split = src.get("SIM_PITCH_RESULT_SPLIT", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    for key, attr, default in (
-        ("SIM_RESULT_PITCH_SIGMA", "result_pitch_sigma", 1.0),
-        ("SIM_RESULT_DENSITY_POWER", "result_density_power", 1.0),
-        ("SIM_PITCH_PITCHER_POWER", "pitch_pitcher_power", 1.0),
-        ("SIM_RESULT_PITCHER_POWER", "result_pitcher_power", 1.0),
-        ("SIM_RESULT_BATTER_POWER", "result_batter_power", 1.0),
-        ("SIM_PITCH_BATTER_POWER", "pitch_batter_power", 1.0),
-        ("SIM_BB_BORN_SIGMA", "bb_born_sigma", 0.0),
-        ("SIM_BB_BORN_DENSITY_POWER", "bb_born_density_power", 1.0),
+    sampler.catcher_receiving = read_bool("SIM_CATCHER_RECEIVING", env)
+    sampler.pitch_result_split = read_bool("SIM_PITCH_RESULT_SPLIT", env)
+    for key, attr in (
+        ("SIM_RESULT_PITCH_SIGMA", "result_pitch_sigma"),
+        ("SIM_RESULT_DENSITY_POWER", "result_density_power"),
+        ("SIM_PITCH_PITCHER_POWER", "pitch_pitcher_power"),
+        ("SIM_RESULT_PITCHER_POWER", "result_pitcher_power"),
+        ("SIM_RESULT_BATTER_POWER", "result_batter_power"),
+        ("SIM_PITCH_BATTER_POWER", "pitch_batter_power"),
+        ("SIM_BB_BORN_SIGMA", "bb_born_sigma"),
+        ("SIM_BB_BORN_DENSITY_POWER", "bb_born_density_power"),
     ):
-        try:
-            setattr(sampler, attr, float(src.get(key, str(default))))
-        except ValueError:
-            setattr(sampler, attr, default)
+        setattr(sampler, attr, read_float(key, env))
 
 
 def apply_running_game_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
@@ -212,9 +175,7 @@ def apply_running_game_env(sampler: Any, env: Mapping[str, str] | None = None) -
     pitch's class. "0", "false", "no", "off" or "" turn it off: the single
     pre-pitch draw of SIM-474, row for row.
     """
-    src = os.environ if env is None else env
-    raw = src.get("SIM_STEAL_PITCH_CLASS", "1").strip().lower()
-    sampler.steal_pitch_class = raw not in ("", "0", "false", "no", "off")
+    sampler.steal_pitch_class = read_bool("SIM_STEAL_PITCH_CLASS", env)
 
 
 def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
@@ -235,33 +196,22 @@ def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> No
     this band of its margin to the wall, with ``SIM_BB_MARGIN_MIN_ROWS`` (20)
     the fewest rows the band may leave before the rows stay as they were.
     """
-    src = os.environ if env is None else env
-
-    def flag(name: str) -> bool:
-        return src.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
-
-    sampler.bb_class_filter = flag("SIM_BB_CLASS_FILTER")
-    sampler.park_wall_zone_only = flag("SIM_PARK_WALL_ZONE_ONLY")
+    sampler.bb_class_filter = read_bool("SIM_BB_CLASS_FILTER", env)
+    sampler.park_wall_zone_only = read_bool("SIM_PARK_WALL_ZONE_ONLY", env)
     # SIM-523 part C4: the fence stage (0/1) and its band (feet, 10).
-    sampler.fence_stage = flag("SIM_FENCE_STAGE")
+    sampler.fence_stage = read_bool("SIM_FENCE_STAGE", env)
     # SIM-478 §11 / §12: the carry offset and the born kernel's exponent per feature.
-    sampler.carry_offset = flag("SIM_CARRY_OFFSET")
-    sampler.bb_born_per_feature = flag("SIM_BB_BORN_PER_FEATURE")
-    for key, attr, default in (
-        ("SIM_BB_BATTER_POWER", "bb_batter_power", 1.0),
-        ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance", 300.0),
-        ("SIM_FENCE_MARGIN", "fence_margin", 0.0),
+    sampler.carry_offset = read_bool("SIM_CARRY_OFFSET", env)
+    sampler.bb_born_per_feature = read_bool("SIM_BB_BORN_PER_FEATURE", env)
+    for key, attr in (
+        ("SIM_BB_BATTER_POWER", "bb_batter_power"),
+        ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance"),
+        ("SIM_FENCE_MARGIN", "fence_margin"),
         # SIM-478 §12.7: the wall-margin band (feet; 0 = off).
-        ("SIM_BB_MARGIN_BAND", "bb_margin_band", 0.0),
+        ("SIM_BB_MARGIN_BAND", "bb_margin_band"),
     ):
-        try:
-            setattr(sampler, attr, float(src.get(key, str(default))))
-        except ValueError:
-            setattr(sampler, attr, default)
-    try:
-        sampler.bb_margin_min_rows = int(float(src.get("SIM_BB_MARGIN_MIN_ROWS", "20")))
-    except ValueError:
-        sampler.bb_margin_min_rows = 20
+        setattr(sampler, attr, read_float(key, env))
+    sampler.bb_margin_min_rows = read_int("SIM_BB_MARGIN_MIN_ROWS", env)
 
 
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
@@ -322,10 +272,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     # delivering the pool's own home/away differential (+0.107 R/g
     # measured, the MLB size). Soft weights in (0,1) deliver only
     # (1-w)/(1+w) of it — the 12x400 A/B in the SIM-476 fit plan.
-    try:
-        home_w = float(os.environ.get("SIM_HOME_OFF_WEIGHT", "1.0"))
-    except ValueError:
-        home_w = 1.0
+    home_w = read_float("SIM_HOME_OFF_WEIGHT")
     sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
     # SIM-563: a bundle built since SIM-563 carries the IBB rates; the worker
     # then never opens DuckDB for them (a rebuild may hold the lock).
@@ -335,10 +282,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     # default, and any unparsable value) disables it EXACTLY. When enabled,
     # load the (venue_id, season) -> regressed run-factor map read-only;
     # a load failure leaves the map None and the kernel neutral.
-    try:
-        park_sigma = float(os.environ.get("SIM_PARK_KERNEL_SIGMA", "0"))
-    except ValueError:
-        park_sigma = 0.0
+    park_sigma = read_float("SIM_PARK_KERNEL_SIGMA")
     if park_sigma > 0.0:
         sampler.venue_run_factors = (
             art.venue_run_factors
@@ -361,34 +305,20 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         ("SIM_FATIGUE_TTO_SIGMA", "fatigue_tto_sigma"),
         ("SIM_BB_PITCH_SIGMA", "bb_pitch_sigma"),
     ):
-        try:
-            setattr(sampler, attr, float(os.environ.get(env, "0")))
-        except ValueError:
-            setattr(sampler, attr, 0.0)
+        setattr(sampler, attr, read_float(env))
     # SIM-548: the pitch draw's situation bandwidth (2.0 = the code default).
     apply_sit_sigma_env(sampler)
     # SIM-518 (SIM-464's pitch half): the batting-side weight on the PITCH
     # draw. 1.0 (the default, and any unparsable value) disables it EXACTLY;
     # 0.0 is a hard match on the side (the owner's fielding-draw ruling).
-    try:
-        sampler.pitch_home_off_weight = float(os.environ.get("SIM_PITCH_HOME_OFF_WEIGHT", "1.0"))
-    except ValueError:
-        sampler.pitch_home_off_weight = 1.0
+    sampler.pitch_home_off_weight = read_float("SIM_PITCH_HOME_OFF_WEIGHT")
     # SIM-467: the pitch-draw cell index. OFF (the default) keeps the whole-pool
     # weight assembly byte for byte; ON hard-filters each plate appearance to
     # its (runners, outs, score band, side) cell with decision #19's widening
     # ladder below SIM_PITCH_MIN_CELL rows. The default flips on in the
     # certification commit (docs/audit/2026-09-04-sim467-518-plan.md §5.4).
-    sampler.pitch_cell_index = os.environ.get("SIM_PITCH_CELL_INDEX", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    try:
-        sampler.pitch_min_cell = int(os.environ.get("SIM_PITCH_MIN_CELL", str(DEFAULT_MIN_CELL)))
-    except ValueError:
-        sampler.pitch_min_cell = DEFAULT_MIN_CELL
+    sampler.pitch_cell_index = read_bool("SIM_PITCH_CELL_INDEX")
+    sampler.pitch_min_cell = read_int("SIM_PITCH_MIN_CELL")
     apply_actor_matrix_env(sampler)
     apply_result_split_env(sampler)
     apply_fielding_env(sampler)
@@ -568,16 +498,14 @@ def _manager_enabled() -> bool:
     Unset / ``0`` / ``false`` / ``no`` / ``off`` -> disabled.  Centralised so the
     factory and any test read the gate the same way.
     """
-    env = os.environ.get("SIM_MANAGER", "").strip().lower()
-    return env not in ("", "0", "false", "no", "off")
+    return read_bool("SIM_MANAGER")
 
 
 def _manager_draw_enabled() -> bool:
     """SIM-523 part D / SIM-427: whether SIM_MANAGER_DRAW makes the pitching
     change a draw from the opportunity pool (production ON since the flip of
     2026-09-13; OFF = no pitching change, the unit lane's byte-identical state)."""
-    env = os.environ.get("SIM_MANAGER_DRAW", "").strip().lower()
-    return env not in ("", "0", "false", "no", "off")
+    return read_bool("SIM_MANAGER_DRAW")
 
 
 def apply_manager_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
@@ -585,32 +513,19 @@ def apply_manager_env(sampler: Any, env: Mapping[str, str] | None = None) -> Non
     (``SIM_CHANGE_SIT_SIGMA``, 1.0), the live pitcher's power
     (``SIM_CHANGE_PITCHER_POWER``, 1.0; 0 = off) and the cell floor
     (``SIM_CHANGE_MIN_CELL``, 20)."""
-    src = os.environ if env is None else env
-    for key, attr, default in (
-        ("SIM_CHANGE_SIT_SIGMA", "change_sit_sigma", 1.0),
-        ("SIM_CHANGE_PITCHER_POWER", "change_pitcher_power", 1.0),
-    ):
-        try:
-            setattr(sampler, attr, float(src.get(key, str(default))))
-        except ValueError:
-            setattr(sampler, attr, default)
-    try:
-        sampler.change_min_cell = int(src.get("SIM_CHANGE_MIN_CELL", "20"))
-    except ValueError:
-        sampler.change_min_cell = 20
+    sampler.change_sit_sigma = read_float("SIM_CHANGE_SIT_SIGMA", env)
+    sampler.change_pitcher_power = read_float("SIM_CHANGE_PITCHER_POWER", env)
+    sampler.change_min_cell = read_int("SIM_CHANGE_MIN_CELL", env)
     # SIM-427: the reliever draw's weights (every one OFF by default).
-    for key, attr, default in (
-        ("SIM_RELIEF_ROLE_SIGMA", "relief_role_sigma", 0.0),
-        ("SIM_RELIEF_PITCHER_POWER", "relief_pitcher_power", 0.0),
-        ("SIM_RELIEF_REST_SIGMA", "relief_rest_sigma", 0.0),
-        ("SIM_RELIEF_PITCHED2D_OFF_WEIGHT", "relief_pitched2d_off_weight", 1.0),
-        ("SIM_RELIEF_PITCHES3D_SIGMA", "relief_pitches3d_sigma", 0.0),
-        ("SIM_RELIEF_HAND_OFF_WEIGHT", "relief_hand_off_weight", 1.0),
+    for key, attr in (
+        ("SIM_RELIEF_ROLE_SIGMA", "relief_role_sigma"),
+        ("SIM_RELIEF_PITCHER_POWER", "relief_pitcher_power"),
+        ("SIM_RELIEF_REST_SIGMA", "relief_rest_sigma"),
+        ("SIM_RELIEF_PITCHED2D_OFF_WEIGHT", "relief_pitched2d_off_weight"),
+        ("SIM_RELIEF_PITCHES3D_SIGMA", "relief_pitches3d_sigma"),
+        ("SIM_RELIEF_HAND_OFF_WEIGHT", "relief_hand_off_weight"),
     ):
-        try:
-            setattr(sampler, attr, float(src.get(key, str(default))))
-        except ValueError:
-            setattr(sampler, attr, default)
+        setattr(sampler, attr, read_float(key, env))
 
 
 def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:

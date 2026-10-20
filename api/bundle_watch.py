@@ -42,6 +42,7 @@ from pipeline.batch.bundle_versions import (
     mark_in_use,
     resolve_bundle_dir,
 )
+from simulation.flags import read_bool
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def bundle_link() -> str:
 
 
 def restart_enabled() -> bool:
-    return os.environ.get(RESTART_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+    return read_bool(RESTART_ENV)
 
 
 def pin_bundle_version(link: str | None = None) -> tuple[str, str | None]:

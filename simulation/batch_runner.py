@@ -93,6 +93,7 @@ from typing import Any
 import numpy as np
 
 from simulation import cache_codec
+from simulation.flags import read_int, read_str
 from simulation.prop_distributions import PropDistributionSet
 from simulation.results import BoxScore, GameSimResult, GameSimSummary
 from simulation.sim_loop import simulate_game
@@ -140,7 +141,7 @@ _PREWARM_ACQUIRE_TIMEOUT_S = 60.0
 #: parent), so warming all W at once spiked memory and OOM-killed a worker in the
 #: field; cap the simultaneous warms (the rest spawn cheaply and warm in waves).  The
 #: default is deliberately small; override via SIM_PREWARM_MAX_CONCURRENT.
-_PREWARM_MAX_CONCURRENT_WARM = max(1, int(os.environ.get("SIM_PREWARM_MAX_CONCURRENT", "2")))
+_PREWARM_MAX_CONCURRENT_WARM = max(1, read_int("SIM_PREWARM_MAX_CONCURRENT") or 1)
 
 #: SIM-402: overall deadline for the pooled prewarm gather.  Past this, prewarm
 #: returns whatever warmed and lets the remaining warm tasks finish on the
@@ -162,7 +163,7 @@ _PREWARM_TIMEOUT_S = 120.0
 #: engines — and is also safer than forking the multi-threaded uvicorn process
 #: (Python 3.14 makes forkserver the Linux default for the same reasons).
 #: Override via SIM_MP_START_METHOD (e.g. 'fork'/'spawn') if ever needed.
-_MP_START_METHOD = os.environ.get("SIM_MP_START_METHOD", "forkserver").strip().lower()
+_MP_START_METHOD = read_str("SIM_MP_START_METHOD").strip().lower()
 
 
 def _pool_mp_context() -> Any:

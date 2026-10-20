@@ -31,6 +31,8 @@ from urllib.parse import urlsplit
 import asyncpg
 import redis.asyncio as aioredis
 
+from simulation.flags import read_float
+
 log = logging.getLogger("api.state")
 
 
@@ -57,10 +59,7 @@ def _is_duckdb_lock_error(exc: BaseException) -> bool:
 
 
 def _boot_lock_wait_s() -> float:
-    try:
-        return float(os.environ.get(BOOT_LOCK_WAIT_ENV, DEFAULT_BOOT_LOCK_WAIT_S))
-    except ValueError:
-        return DEFAULT_BOOT_LOCK_WAIT_S
+    return read_float(BOOT_LOCK_WAIT_ENV)
 
 
 def retry_on_duckdb_lock[T](

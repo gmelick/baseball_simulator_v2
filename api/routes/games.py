@@ -62,7 +62,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-import os
 import secrets
 import threading
 import time
@@ -100,6 +99,7 @@ from simulation.batch_runner import (
     BatchRunner,
     GameSpec,
 )
+from simulation.flags import read_str
 from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
     LineupIncompleteError,
@@ -168,7 +168,7 @@ def resolve_factory_ref(request: Request) -> str:
     override = getattr(request.app.state, "sim_factory_ref", None)
     if override:
         return str(override)
-    env_ref = os.environ.get("SIM_MACHINE_FACTORY_REF")
+    env_ref = read_str("SIM_MACHINE_FACTORY_REF")
     if env_ref:
         return env_ref
     return PRODUCTION_FACTORY_REF

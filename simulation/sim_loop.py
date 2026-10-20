@@ -33,7 +33,6 @@ SIM-500), the transition draw (SIM-511 / SIM-512).
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -41,6 +40,7 @@ from typing import Any
 import numpy as np
 
 from simulation.constants import resolve_event_to_canonical
+from simulation.flags import read_bool
 from simulation.game_state import (
     BALLS_FOR_WALK,
     NO_PITCH,
@@ -208,20 +208,6 @@ def spawn_rng_streams(seed: int | None, n: int = _N_RNG_STREAMS) -> list[np.rand
     does not tell you how large it was.
     """
     return [np.random.default_rng(child) for child in np.random.SeedSequence(seed).spawn(n)]
-
-
-def _env_flag(name: str, *, default: bool = False) -> bool:
-    """Parse an on/off env flag the same way :mod:`simulation.production_factory`
-    parses ``SIM_MANAGER`` (SIM-434).
-
-    Unset -> ``default``; ``"0"``/``"false"``/``"no"``/``"off"`` (any case) ->
-    ``False``; anything else -> ``True``.  Centralised so the SIM_MANAGER gate is
-    read identically in the loop and the factory.
-    """
-    raw = os.environ.get(name)
-    if raw is None:
-        return bool(default)
-    return raw.strip().lower() not in ("", "0", "false", "no", "off")
 
 
 def times_through_order(batters_faced: int, lineup_size: int = 9) -> int:
@@ -501,7 +487,7 @@ class StateMachine:
         # data they read (the migration-0012 batted-ball columns / a venue park
         # factor / a per-position defense map) is absent, so turning a flag on
         # without the rebuilt artifact is still a no-op. Read once per machine.
-        self._bb_platoon = _env_flag("SIM_BB_PLATOON")  # SIM-413
+        self._bb_platoon = read_bool("SIM_BB_PLATOON")  # SIM-413
         # SIM-476 (2026-08-30): the SIM-425b fielder nudge and the SIM-411 park
         # flip are DELETED — both post-draw flips are superseded by draw weights:
         # the park kernel (SIM_PARK_KERNEL_SIGMA=0.02, fitted against the pool's
@@ -518,7 +504,7 @@ class StateMachine:
         # ball / wild pitch on THAT pitch, incl. an uncaught third strike).
         # Default OFF until the part-E fit + certifying lane land it — the
         # flag-off game is byte-identical (no rng, no reads).
-        self._got_away = _env_flag("SIM_GOT_AWAY")
+        self._got_away = read_bool("SIM_GOT_AWAY")
         #: The last drawn pitch's got-away fact (False on every other path).
         self._last_pitch_got_away = False
         # The manager GATE (SIM-323, reshaped by SIM-427 on 2026-09-13): any
