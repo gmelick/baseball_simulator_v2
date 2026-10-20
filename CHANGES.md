@@ -118,7 +118,8 @@ out moves its patch targets, so the file stays whole until those tests are re-po
   `npm run type-check`, `npm run lint` and `npm run build` pass; the Playwright e2e passes
   21 of 21 on Chromium (with `API_TARGET` at a closed port; see bug 5).
 - ruff, the format check and `mypy similarity/ pipeline/ api/`: pass.
-- The B3 share of the unit lane in the container: UNIT_LANE_RESULT.
+- The B3 share of the unit lane in the container (the 30 B3 test files and the 22 other
+  unit test files that import or read `api/`): 1,425 passed, 0 failed, in 4 min 23 s.
 
 **Bugs found (to file).**
 
