@@ -28,7 +28,7 @@ then open the printed `http://127.0.0.1:8000/` link. `mkdocs build` produces a s
 
 ## Worked example: "where is the steal-attempt sampling logic?"
 
-This is the kind of question this reference is built to answer quickly. Short answer: `FullPoolSampler.steal_draw` in [`simulation.md`](simulation.md#simulationfull_pool_samplerpy) decides whether a runner attempts a steal and whether it succeeds. It is called from `StateMachine._steal_opportunity_draw` in `simulation/sim_loop.py`, and it draws from the steal-opportunity pool built by the nightly artifact pipeline, weighted by the runner, pitcher, and catcher similarity engines. See the full entry in `simulation.md` for the exact call chain, the pool it reads, and every helper function involved.
+This is the kind of question this reference is built to answer quickly. Short answer: `FullPoolSampler.steal_draw` (`simulation/sampler/steal.py`, see [`simulation.md`](simulation.md#simulationfull_pool_samplerpy-and-simulationsampler)) decides whether a runner attempts a steal and whether it succeeds. It is called from `StateMachine._steal_opportunity_draw` in `simulation/loop/running_game.py`, one of the mixins of the `StateMachine` class in `simulation/sim_loop.py`, and it draws from the steal-opportunity pool built by the nightly artifact pipeline, weighted by the runner, pitcher, and catcher similarity engines. See the full entry in `simulation.md` for the exact call chain, the pool it reads, and every helper function involved.
 
 ## Conventions used on these pages
 

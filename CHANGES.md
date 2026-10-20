@@ -1,3 +1,129 @@
+# CLOSED — the project-wide code clean-up: no hand-written file over 2,000 lines, every script and test named by purpose, 49 defects filed, the simulator byte-identical to master — SIM-493 (Phase C, the integration), 2026-10-20
+
+**Why it matters.** The code is easier to read and change, and it behaves exactly as before. The
+eight files over 2,500 lines are now packages, each with one job per file. The review of every
+file found 49 defects. Ten of them change what production computes today: they are filed as P2
+tickets (SIM-575 to SIM-584), with the evidence, and none is fixed here. The five area entries
+below hold the detail; this entry records the merge, the integration pass and the gates. The
+plan: `docs/audit/2026-10-19-sim493-code-cleanup-plan.md`.
+
+**The merge.** Branch `sim493-integration`, off `sim493-groundwork` (`690375c`, itself off
+master `fe81d79`). The five area branches merged by full ref, in order:
+
+| Area | Branch | Head | Merge |
+|---|---|---|---|
+| B1 simulation | `claude/sim493-simulation-b6d897` | `7303eaa` | `ee080cf` |
+| B4 similarity and betting | `claude/sim493-similarity-betting-bf6dba` | `f50ac5c` | `b1a77aa` |
+| B3 API and frontend | `claude/sim493-api-frontend-41074d` | `29447c5` | `bbe67db` |
+| B2 pipeline | `claude/sim493-pipeline-3d1430` | `9ebb652` | `492ae95` |
+| B5 scripts and test harness | `claude/sim493-scripts-harness-66671b` | `949a3e3` | `f791951` |
+
+Master has not moved since `fe81d79`, so no master merge was needed. The conflicts were in
+`CHANGES.md` (rebuilt as the five entries above the groundwork's), the CLAUDE.md §5 bullets
+(each area's bullet kept), two test docstrings, and B5's split of three grab-bag test files that
+B2 had re-pointed (B2's import lines applied to B5's new files).
+
+**What the integration pass changed.**
+
+- **The temporary re-exports are gone.** During the area work, 117 moved names stayed
+  importable from their old modules through lines marked "re-export: removed in the
+  integration pass", in nine modules: the profile computor (25), the artifact builder (25), the
+  live pipeline (17), the BettingPros provider (12, and 8 names out of its `__all__`), the
+  historical loader (1), the calibrator (1), `sim_loop.py` (2), `api/routes/games.py` (13) and
+  `api/routes/betting.py` (21). Every caller in the program, the scripts and the tests now
+  imports each name from its home: 39 files' import lines were rewritten and 13 files' attribute
+  uses re-pointed. A static check of every first-party `from ... import` in the tree (each name
+  must exist in the module named) reads zero misses.
+- **The type check covers all five program packages.** `.github/workflows/ci.yml` and `make
+  type-check` run `mypy similarity/ pipeline/ api/ simulation/ betting/`: no issues in 211
+  source files.
+- **Two test files still over 2,000 lines are split by subject.** The book vocabulary's tests
+  leave `test_odds_one_book_per_row.py` for `test_odds_book_vocabulary.py`; the historical
+  loader's per-table prerequisite writers' tests leave `test_etl_historical_loader.py` for
+  `test_etl_ensure_rows.py`. The 210 tests are unchanged.
+- **Patches and lazy imports follow the moved names.** The steal-pool rebuild's tests patch
+  `POOL_BUILDER_VERSION` on `pipeline.batch.profiles.pool_meta`, the module whose global both
+  builders read. `scripts/measure_filter_cells.py` reads the recency floor through
+  `pipeline.batch.artifacts.common`. The release-speed tests import the row validator from
+  `pipeline.etl.historical.rows`.
+- **Stale prose corrected.** The API's kwargs resolver describes the unresolved park-factor
+  sentinel as it is; the middleware no longer names the deleted park-factor flag; the response
+  model of the boxscore card no longer names a deleted model. That docstring is the model's
+  public schema description, so `frontend/openapi.json` and `frontend/src/api/schema.d.ts` are
+  regenerated with it (CLAUDE.md §15): the diff is that one description. The technical docs name
+  the accuracy comparison's library modules (`scripts/accuracy/`), and the Dockerfile,
+  `.dockerignore` and four docstrings name the renamed test files.
+- **The ticket rows.** `BACKLOG.xlsx` gains SIM-575 to SIM-623 and loses the SIM-493 row; the
+  next free ID is SIM-624.
+
+**The line counts** (`.py`, `.ts`, `.tsx`; master `fe81d79` → this branch):
+
+| Area | Before | After |
+|---|---|---|
+| Program (`api/`, `simulation/`, `similarity/`, `pipeline/`, `betting/`, `db/`) | 88,567 lines in 139 files | 87,031 lines in 244 files |
+| `scripts/` | 37,978 in 51 | 38,625 in 74 |
+| `tests/` | 125,628 in 281 | 124,254 in 304 |
+| `frontend/src` + `frontend/e2e` | 15,339 in 64 | 15,056 in 64 |
+
+The program lost 1,536 lines while its file count went up by 105: each split adds a module
+docstring and imports, and the deleted dead code and history narrative paid for them. The
+scripts grew by 647 lines for the same reason (the accuracy comparison and the two pool
+rebuilds became packages); the run outputs that used to sit in `scripts/` are in `results/`.
+
+**The files over 1,500 lines, and why each stays whole.** No hand-written file is over 2,000.
+
+| File | Lines | Why it stays whole |
+|---|---|---|
+| `frontend/src/api/schema.d.ts` | 5,380 | Generated from the API snapshot (`npm run gen:api`). |
+| `tests/unit/test_odds_one_book_per_row.py` | 1,901 | One subject end to end: the per-book seam, the rows, the load guard, the first-five exclusions and their migration, all on shared provider fixtures. |
+| `scripts/probes/odds_book_census.py` | 1,872 | A probe of a closed ticket: names and comments only (plan rule 9). |
+| `pipeline/etl/etl_historical_loader.py` | 1,825 | The tests patch five names in this module's globals, so every function that calls one stays here (B2's entry). |
+| `tests/unit/test_odds_writers.py` | 1,691 | One subject: the odds writers (the historical loader's batches and guards, the live cycle, the pregame cycle, the opening-line job) on one recording connection. |
+| `tests/unit/test_etl_historical_loader.py` | 1,677 | The tests of the module above, which stays whole. |
+| `api/routes/games.py` | 1,673 | Every route that runs a simulation, with the sim seam that the call-site test counts (B3's entry). |
+| `similarity/engines/fielder_similarity.py` | 1,576 | One engine: the partition and the feature lists it indexes (B4's entry). |
+| `similarity/engines/pitcher_similarity.py` | 1,534 | The readers of the module global `ARSENAL_SCALE` (B4's entry). |
+| `tests/unit/test_lead_distance.py` | 1,525 | One subject end to end, from the migration to the calibration (B4's entry). |
+
+**The gates** (the integration branch; the containers mount the worktree over `/app` and over
+each code folder).
+
+| Gate | Result |
+|---|---|
+| The unit lane with coverage (container) | GATE_UNIT |
+| The slow lane (container, `-m slow`) | 22 passed |
+| The regression lane (container) | 33 passed |
+| The integration lane (host Python, testcontainers) | All pass except `test_sim555_stamp_indexes_and_archives`, which fails on master `fe81d79` too: the odds archive tables lack `last_seen_at` (filed as SIM-582) |
+| `ruff check .` / `ruff format --check .` | pass |
+| mypy, the five packages | no issues in 211 source files |
+| The frontend: type-check, lint, build, Playwright (chromium, `API_TARGET=http://127.0.0.1:9`) | pass; 21 passed |
+| The API snapshot test, after the one-description regeneration | pass |
+| The perf lane, `PERF_STRICT=1 PERF_STRICT_SANDBOX=1` | 7 passed. Three alternating pairs against `fe81d79`: the per-pitch step's median 13.1 µs base, 12.9 µs new (budget 1,233 µs); the one-game bench 70.2 ms base, 71.8 ms new (+2.3%, inside the base's own 68.5-71.2 ms spread; the new code read higher in all three pairs). The host ran about twice as slow as during B1's pairs, under load. |
+| The fingerprint, no-database factory, 200 games, against `fe81d79` | IDENTICAL: 200 hashes |
+| The fingerprint, the in-memory bundle, 2 flag sets × 200 games | IDENTICAL: 400 hashes |
+| The fingerprint, the real bundle (the pinned copy), 45 games × 4 seeds, the production flags | IDENTICAL: 180 hashes |
+| The 45 × 130 acceptance lane on the balanced set | GATE_LANE |
+
+**The defects filed** (SIM-575 to SIM-623; each row carries its evidence, a definition of done
+and a proposed fix). P2, because each changes what production computes or breaks a scheduled job:
+the API's runs read no manager profiles, so the steal draw's manager weight is flat (SIM-575);
+the catcher's and the extra-base runner's league-average rows carry the wrong keys, so the
+shrinkage pulls most of their features toward zero (SIM-576, SIM-577); four engines load a
+database NULL as 0.0 (SIM-578); the pitcher loader swaps the chase and zone-take rates (SIM-579);
+the arsenal fit is not reproducible (SIM-580); the nightly acceptance lane requires three tests
+that do not exist, so it reds every night (SIM-581); the odds archives lack `last_seen_at`
+(SIM-582); the calibrated win probability can read exactly 0 or 1 (SIM-583); the accuracy
+report stamps the live bundle, not the one the run read (SIM-584). The other 39 are P3,
+including four owner decisions (SIM-587, SIM-596, SIM-611, SIM-616).
+
+**Not done.** The merge into master, the push and the deploy wait for the owner's go-ahead. The
+deploy rebuilds the app image (`scripts/` is baked in) and recreates `app`, `jobs` and `live`
+outside 10:00-11:00 UTC; the live check is `/simulate` at n = 100 in 25-36 s, a game page and
+the slate. After the merge the five area branches, their worktrees, the integration and
+groundwork branches, the pinned bundle copy (`/data/sim493/`, about 10 GB) and the scratch
+worktrees are deleted.
+
+
 # THE SIMULATION AREA'S CLEAN-UP — `StateMachine` and `FullPoolSampler` split into mixins, dead code deleted, every comment to the standard — SIM-493 (B1), 2026-10-20
 
 **Why.** The code clean-up (SIM-493; the plan is

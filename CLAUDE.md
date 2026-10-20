@@ -522,13 +522,22 @@ active, `docs/audit/records/sim478_lane.txt`, reads four bands red â€” see the Â
   never a pickle. The tests' conftest sets `AUTH_DISABLED=1`; two auth test files remove it.
   Follow-ups: the Data Lab read routes on the read-only pool (SIM-566) CLOSED 2026-10-18; the bundle loads with `allow_pickle=False` (SIM-565) CLOSED 2026-10-18; the rate limiter's bucket (SIM-564) and its proxy-address follow-on (SIM-569, `TRUSTED_PROXY_HOSTS`) both CLOSED 2026-10-17; nginx re-resolves the app after a recreate (SIM-570) CLOSED 2026-10-18; the Data Lab rates on the pitch-result code (SIM-571) CLOSED 2026-10-19; the Data Lab reads the regular season alone by default, `game_type=all` adds the postseason (SIM-572) CLOSED 2026-10-19. The design and the cutover run book:
   `docs/audit/2026-10-13-sim443-security-hardening.md`; the record: `CHANGES.md` 2026-10-13.
-- **The project-wide code clean-up (SIM-493) is IN FLIGHT (2026-10-19).** The groundwork is on
-  branch `sim493-groundwork`: the behaviour fingerprint, scripts and tests named by purpose,
-  run outputs in `results/`, the flag registry and the existence probe. Five sessions then
-  clean one area each (simulation, pipeline, API and frontend, similarity and betting,
-  scripts and the test harness), and an integration pass merges them. Every change is
-  behaviour-neutral, proved by the fingerprint; a bug found is ticketed, not fixed. The rules,
-  the briefs and the rename tables: `docs/audit/2026-10-19-sim493-code-cleanup-plan.md`.
+- **The project-wide code clean-up (SIM-493, CLOSED 2026-10-20).** No hand-written file is
+  over 2,000 lines. The eight files over 2,500 lines became packages, one job per file:
+  `simulation/loop/` and `simulation/sampler/` hold the mixins of `StateMachine` and
+  `FullPoolSampler` (each class keeps its name and its module); `pipeline/batch/profiles/`,
+  `pipeline/batch/artifacts/`, `pipeline/etl/historical/`, `pipeline/live/ingestion/` and
+  `pipeline/bettingpros/` hold the five pipeline files' parts; `api/routes/games_*.py`,
+  `api/routes/betting_*.py` and `api/schemas/` the API's; `similarity/calibration/` the
+  calibrator's; `scripts/accuracy/` the accuracy comparison's. Import a name from its home:
+  the old modules re-export nothing. The scripts and tests are named by purpose; run outputs
+  go to `results/` (ignored by git and Docker); `simulation/flags.py` registers every `SIM_*`
+  flag; `db/introspect.py` is the one existence probe; mypy checks all five program packages.
+  `scripts/behaviour_fingerprint.py` proved the simulator byte-identical to master `fe81d79`
+  (400 + 200 seeded games on the in-memory bundles, 180 on the real one). The review found 49
+  defects, filed unfixed as SIM-575 to SIM-623; the ten P2 rows change what production
+  computes. The record: `CHANGES.md` 2026-10-20 (the close entry and the five area entries);
+  the plan and the rename tables: `docs/audit/2026-10-19-sim493-code-cleanup-plan.md`.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.

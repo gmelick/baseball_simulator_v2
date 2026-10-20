@@ -3,8 +3,9 @@
 *Written 2026-09-14 for the owner. Values are what production runs today (`docker-compose.yml`,
 the `app` service) after the manager-draw flip of 2026-09-13. Updated 2026-10-01 for the running
 game on the pitch (SIM-554): the pickoff draw before the pitch, the steal draw after it. Code:
-`simulation/sim_loop.py` (the loop), `simulation/full_pool_sampler.py` (the draws),
-`similarity/engines/` (the scores).*
+`simulation/sim_loop.py` (the loop) with its mixins in `simulation/loop/`,
+`simulation/full_pool_sampler.py` (the draws) with its mixins in `simulation/sampler/`
+(one file per draw since the code clean-up, SIM-493), `similarity/engines/` (the scores).*
 
 ## How to read this
 

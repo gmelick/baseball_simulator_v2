@@ -1,5 +1,10 @@
 # The project-wide code clean-up: plan, rules and session briefs (SIM-493), 2026-10-19
 
+**Status: DONE 2026-10-20.** All three phases ran. The record of each area and of the
+integration pass is in `CHANGES.md` 2026-10-20; the defects the review found are SIM-575 to
+SIM-623 in `BACKLOG.xlsx`. The rules in §2 stay useful for any later behaviour-neutral
+refactor, and `scripts/behaviour_fingerprint.py` is the tool that proves one.
+
 ## 1. What this is
 
 The code-hygiene refactor (SIM-493) asks for four things: split the oversized files, name
