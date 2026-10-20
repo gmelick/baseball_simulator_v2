@@ -4,16 +4,16 @@
 #
 # Runs the three steps in dependency order for the CURRENT season:
 #   1. refresh_seasons(YEAR)        — load games that have newly become Final
-#                                     (the SIM-405fix guard skips future/in-progress)
+#                                     (a guard skips future and in-progress games)
 #   2. player_profile_computor      — rebuild the DuckDB derived profiles + sim pools
 #   3. engine_artifacts             — rebuild the engine-artifact bundle the
-#                                     full-pool sampler reads (SIM-422/486)
+#                                     full-pool sampler reads
 #
-# SIM-519 Part D: the scheduler no longer runs this chain. It runs
-# scripts/nightly_finals.sh (step 1's job, a three-day window) nightly and
-# scripts/weekly_refresh.sh on Sunday; steps 2 and 3 are
-# scripts/nightly_rebuild.sh, the 08:00 UTC job (it runs beside the app since
-# SIM-524). This script stays as the whole chain for a by-hand run:
+# The scheduler does not run this chain. It runs scripts/nightly_finals.sh
+# (step 1's job, a three-day window) nightly and scripts/weekly_refresh.sh on
+# Sunday; steps 2 and 3 are scripts/nightly_rebuild.sh, the 08:00 UTC job (it
+# runs beside the app, which holds no DuckDB handle). This script is the whole
+# chain for a by-hand run:
 #   docker compose run --rm app sh /app/scripts/nightly_ingest.sh
 #
 # BASEBALL_DB_DSN must point at the in-container DB (db:5432). The script has no
@@ -22,7 +22,7 @@
 set -eu
 
 YEAR="$(date -u +%Y)"
-# SIM-443b: no default password. The container composes the DSN from .env.
+# No default password: the container composes the DSN from .env.
 : "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the jobs service composes it from .env (see .env.example)}"
 export BASEBALL_DB_DSN
 export BASEBALL_DUCKDB_PATH="${BASEBALL_DUCKDB_PATH:-/data/baseball_sim.duckdb}"
@@ -32,9 +32,9 @@ log() { echo "[nightly-ingest $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 log "start — season ${YEAR}"
 
 log "1/3 refresh_seasons(${YEAR}) — load newly-Final games"
-# SIM-441: refresh_seasons now returns {attempted, loaded, failed, skipped,
-# rows_written} and contains per-game failures (a single malformed feed no longer
-# aborts the run; _CONSECUTIVE_FAILURE_LIMIT successive failures still do). Exit
+# refresh_seasons returns {attempted, loaded, failed, skipped, rows_written}
+# and contains per-game failures (a single malformed feed does not abort the
+# run; _CONSECUTIVE_FAILURE_LIMIT successive failures do). Exit
 # non-zero if ANY game failed, so `set -e` stops the chain here rather than
 # rebuilding profiles and the artifact bundle on a knowingly incomplete season.
 # NOTE: the heredoc delimiter is QUOTED ('PY'), so the shell performs NO

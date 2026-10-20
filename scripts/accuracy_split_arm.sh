@@ -1,5 +1,5 @@
 #!/bin/sh
-# SIM-548 Part A4 — the pitch / pitch-result split as one paired accuracy arm.
+# The pitch / pitch-result split as one paired accuracy arm (the accuracy fit, SIM-548).
 # Runs INSIDE the app container on production as the compose file sets it
 # (the manager draw, the real pen, the fatigue weight at 0.5 since 2026-09-14):
 # the split ON at its 2026-09-09 fit — the pitcher at power 16 in the pitch

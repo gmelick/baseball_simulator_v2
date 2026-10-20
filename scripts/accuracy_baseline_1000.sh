@@ -1,5 +1,5 @@
 #!/bin/sh
-# SIM-548 — the 1,000-game accuracy baseline of production (the split ON at
+# The 1,000-game accuracy baseline of production (the accuracy fit, SIM-548; the split ON at
 # 16 / 16 / 8 and the fatigue weight at 0.5 since 2026-09-14): the simulator's
 # Brier score against the closing line's, per market, on the first 1,000 Final
 # games of 2024 by game id at 100 iterations. Runs INSIDE the app container on

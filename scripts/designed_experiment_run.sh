@@ -1,5 +1,5 @@
 #!/bin/sh
-# SIM-548 Phase 3 — the designed experiment on the full simulator (the review's §4 design):
+# The designed experiment on the full simulator (the accuracy fit, SIM-548; the review's §4 design):
 # four factors as a full 2^4 — the pitch draw's pitcher power 16 / 4, the result draw's
 # pitcher power 16 / 4, the result draw's batter power 8 / 2, the fatigue bandwidth 0.5 / 0 —
 # three baseline repeats, two centre arms at (8, 8, 4, 0.5), then two supplementary

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/nightly_closing_lines.sh — the nightly closing pass (SIM-546).
+# scripts/nightly_closing_lines.sh — the nightly closing pass.
 #
 # A closing row is the last price a book posted before first pitch. The live
 # pipeline promotes each game's closing rows at first pitch. This job is the
@@ -30,7 +30,7 @@
 # =============================================================================
 set -eu
 
-# SIM-443b: no default password. The container composes the DSN from .env.
+# No default password: the container composes the DSN from .env.
 : "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the app service composes it from .env (see .env.example)}"
 export BASEBALL_DB_DSN
 

@@ -1,13 +1,11 @@
 #!/usr/bin/env sh
 # =============================================================================
 # scripts/wait_for_ingest.sh — the nightly rebuild's first step: make sure the
-# finals load has run today before the rebuild reads Postgres (SIM-563
-# follow-up, 2026-10-11).
+# finals load has run today before the rebuild reads Postgres.
 #
 # Why: the finals load (07:00 UTC) and the rebuild (08:00 UTC) rely on the hour
-# between them. On 2026-10-11 the host slept through both times, and the
-# scheduler fired both jobs in the same second on wake. That day the finals
-# load won the race; nothing made sure it would.
+# between them. A host that sleeps through both times fires both jobs in the
+# same second on wake (seen on 2026-10-11), and nothing else orders them.
 #
 # What it does, reading the marks scripts/with_mark.sh writes:
 #   1. waits INGEST_GRACE_S (default 60 s), so a job fired in the same second

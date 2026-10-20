@@ -1,7 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/with_mark.sh — mark an ingest job as running, run it, record its exit
-# (SIM-563 follow-up, 2026-10-11).
+# scripts/with_mark.sh — mark an ingest job as running, run it, record its exit.
 #
 #   sh /app/scripts/with_mark.sh <name> <command...>
 #
@@ -12,7 +11,7 @@
 # with_retry.sh wrapper inside it. scripts/wait_for_ingest.sh reads the marks:
 # the nightly rebuild waits for the finals load before it reads Postgres.
 # The scheduler marks the profile + bundle rebuild (nightly-rebuild) and the
-# data backup (nightly-backup) too (SIM-525). The data backup waits for the
+# data backup (nightly-backup) too. The data backup waits for the
 # rebuild's mark, so it never opens the DuckDB file while the rebuild writes it.
 #
 # The marks live on the /data volume (default /data/ingest_marks). When that

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/with_retry.sh — run a command again after a crash (SIM-519 Part D).
+# scripts/with_retry.sh — run a command again after a crash.
 #
 #   sh scripts/with_retry.sh <max_attempts> <command...>
 #
