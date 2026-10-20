@@ -17,10 +17,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   cardStatus,
   fetchGamesOnDate,
-  GamesApiError,
   type GameCard as GameCardRow,
   type GamesOnDateResponse,
 } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 import { GameCard } from '@/components/games/GameCard'
 import { DatePicker } from '@/components/slate/DatePicker'
 import { SLATE_POLL_MS, sortSlate } from '@/components/slate/slate'

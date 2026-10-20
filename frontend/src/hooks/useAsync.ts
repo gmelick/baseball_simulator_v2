@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
-import { GamesApiError } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 
 export type AsyncState<T> =
   | { kind: 'loading' }

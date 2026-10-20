@@ -1,15 +1,17 @@
 /**
  * games.ts — the browser's client of the game routes (/api/games).
  *
- * Every request sends credentials:'include', so the httpOnly `sim_session`
- * cookie goes with it; the Vite dev proxy forwards /api/* to localhost:8000.
+ * The requests go through the shared helpers in http.ts, which also define
+ * GamesApiError. The game routes' POSTs put the Retry-After header on the
+ * error.
  *
  * The types here mirror the API's response models by hand: the game models
  * live in api/routes/games_models.py and api/schemas/. Keep the two in step
- * when a model changes; src/api/typed.ts holds the generated aliases.
+ * when a model changes. src/api/typed.ts names the generated types; no
+ * client imports them yet.
  */
 
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { deleteJson, getJson, postJson } from '@/api/http'
 
 /** The four card states; the server maps the league's status to one. */
 export type GameStatus = 'scheduled' | 'live' | 'final' | 'postponed'
@@ -430,56 +432,6 @@ export interface PropEdgeQuery {
   runId?: number | null
 }
 
-// ---------------------------------------------------------------------------
-// The error type and the fetch helpers
-// ---------------------------------------------------------------------------
-
-/** Raised for any non-2xx games-API response, carrying the HTTP status. */
-export class GamesApiError extends Error {
-  readonly status: number
-  /** Seconds from a Retry-After header (a 503 for an unpublished lineup). */
-  readonly retryAfter: number | null
-  constructor(status: number, message: string, retryAfter: number | null = null) {
-    super(message)
-    this.name = 'GamesApiError'
-    this.status = status
-    this.retryAfter = retryAfter
-  }
-}
-
-/** The Retry-After header in seconds, or null when absent or not a number. */
-function retryAfterOf(res: Response): number | null {
-  const v = Number(res.headers.get('Retry-After'))
-  return Number.isFinite(v) && v > 0 ? v : null
-}
-
-/** GET a JSON body; a non-2xx answer throws GamesApiError (a 401 also signals the login). */
-export async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
-
-/** POST a JSON body; a non-2xx answer throws GamesApiError with its Retry-After. */
-async function postJson<T>(url: string, payload: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`, retryAfterOf(res))
-  }
-  return res.json() as Promise<T>
-}
-
 /** GET /api/games/{date} — the slate for a YYYY-MM-DD date. */
 export function fetchGamesOnDate(date: string): Promise<GamesOnDateResponse> {
   return getJson<GamesOnDateResponse>(`/api/games/${encodeURIComponent(date)}`)
@@ -593,11 +545,11 @@ export function startWhatIf(
   changes: WhatIfChanges,
   nIterations = 100,
 ): Promise<WhatIfStarted> {
-  return postJson<WhatIfStarted>(`/api/games/${gamePk}/what-if`, {
-    at_bat: atBat,
-    changes,
-    n_iterations: nIterations,
-  })
+  return postJson<WhatIfStarted>(
+    `/api/games/${gamePk}/what-if`,
+    { at_bat: atBat, changes, n_iterations: nIterations },
+    { retryAfter: true },
+  )
 }
 
 /** GET /api/games/{game_pk}/what-if/{base}/{change} — both runs and the real final. */
@@ -645,7 +597,7 @@ export function fetchLiveState(gamePk: number): Promise<LiveState> {
  *  The linescore, decisions and play-by-play routes then serve it. */
 export function postSampleGame(gamePk: number, baseSeed?: number): Promise<SampleGame> {
   const qs = baseSeed != null ? `?base_seed=${baseSeed}` : ''
-  return postJson<SampleGame>(`/api/games/${gamePk}/sample-game${qs}`, {})
+  return postJson<SampleGame>(`/api/games/${gamePk}/sample-game${qs}`, {}, { retryAfter: true })
 }
 
 /** GET /api/games/{game_pk}/boxscore — each player's prop means over N games.
@@ -694,7 +646,11 @@ export interface SimRun {
 
 /** POST /api/games/{game_pk}/simulate — queue a run (or get the active one). */
 export function startSimRun(gamePk: number, nIterations: number): Promise<SimRun> {
-  return postJson<SimRun>(`/api/games/${gamePk}/simulate`, { n_iterations: nIterations })
+  return postJson<SimRun>(
+    `/api/games/${gamePk}/simulate`,
+    { n_iterations: nIterations },
+    { retryAfter: true },
+  )
 }
 
 /** GET /api/games/{game_pk}/simulate/runs/latest — 404 when the game has none. */
@@ -708,17 +664,8 @@ export function fetchSimRun(gamePk: number, runId: number): Promise<SimRun> {
 }
 
 /** DELETE /api/games/{game_pk}/simulate/runs/{run_id} — cancel. */
-export async function cancelSimRun(gamePk: number, runId: number): Promise<SimRun> {
-  const res = await fetch(`/api/games/${gamePk}/simulate/runs/${runId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<SimRun>
+export function cancelSimRun(gamePk: number, runId: number): Promise<SimRun> {
+  return deleteJson<SimRun>(`/api/games/${gamePk}/simulate/runs/${runId}`)
 }
 
 /** GET /api/games/{game_pk}/props/{player_id}/{prop} — the full PMF, plus the

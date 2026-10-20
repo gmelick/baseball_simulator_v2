@@ -15,7 +15,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   fetchPaState,
   fetchWhatIf,
-  GamesApiError,
   startWhatIf,
   type PaState,
   type PlayerOption,
@@ -24,6 +23,7 @@ import {
   type WhatIfResult,
   type WhatIfStarted,
 } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 import { CardField } from '@/components/slate/CardField'
 import { ordinal, shortName } from '@/components/slate/format'
 

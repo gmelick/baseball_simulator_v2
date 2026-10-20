@@ -3,40 +3,13 @@
  * data freshness, the schema tree, the read-only SQL runner and the
  * AI-assistant capability probe.
  *
- * It works like the games.ts client. `credentials: 'include'` sends the
- * httpOnly session cookie, and the Vite dev proxy forwards /api/* to the
- * backend. The response types mirror the FastAPI models in
+ * The requests go through the shared helpers in http.ts. The response types mirror the FastAPI models in
  * api/routes/{analytics,data_health,schema_introspect,sql_runner,ai_assistant}.py
  * by hand. Keep them in sync.
  */
-import { GamesApiError } from '@/api/games'
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { getJson, postJson } from '@/api/http'
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
-async function postJson<T>(url: string, payload: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal,
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
@@ -183,7 +156,7 @@ export interface SqlRunResponse {
   timeout_ms: number
 }
 export const runSql = (sql: string, maxRows = 1000, signal?: AbortSignal): Promise<SqlRunResponse> =>
-  postJson<SqlRunResponse>('/api/sql/run', { sql, max_rows: maxRows }, signal)
+  postJson<SqlRunResponse>('/api/sql/run', { sql, max_rows: maxRows }, { signal })
 
 // ---------------------------------------------------------------------------
 // Assistant capability probe
@@ -196,4 +169,3 @@ export interface AssistantStatus {
 export const fetchAssistantStatus = (): Promise<AssistantStatus> =>
   getJson<AssistantStatus>('/api/assistant/status')
 
-export { GamesApiError }

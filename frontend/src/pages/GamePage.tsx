@@ -36,7 +36,6 @@ import {
   fetchRealPlays,
   fetchPlays,
   fetchReplayCard,
-  GamesApiError,
   postSampleGame,
   type GameCardAggregate,
   type GameFeedCard,
@@ -45,6 +44,7 @@ import {
   type PlayByPlay,
   type ReplayCard,
 } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 import { LinescoreGraphic } from '@/components/graphics'
 import { ActualPlayByPlay } from '@/components/games/ActualPlayByPlay'
 import { BettingCard } from '@/components/games/BettingCard'

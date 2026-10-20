@@ -15,10 +15,10 @@ import {
   cancelSimRun,
   fetchLatestRun,
   fetchSimRun,
-  GamesApiError,
   startSimRun,
   type SimRun,
 } from '@/api/games'
+import { GamesApiError } from '@/api/http'
 import { ageLabel } from '@/components/slate/format'
 
 import styles from './SimulationCard.module.css'

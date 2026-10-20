@@ -5,32 +5,8 @@
  * the engine is warming. A 404 means the subject is not found, or a distance
  * engine was asked on a score path.
  */
-import { GamesApiError } from '@/api/games'
-import { notifyUnauthorized } from '@/api/unauthorized'
+import { getJson, postJson } from '@/api/http'
 
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
-async function postJson<T>(url: string, payload: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 function qs(params: Record<string, string | number | undefined | null>): string {
   const sp = new URLSearchParams()

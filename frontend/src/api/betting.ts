@@ -7,8 +7,8 @@
  * (api/routes/betting_card.py). The EdgeReport shape, the credentials and the
  * error type are the games client's.
  */
-import { type EdgeReport, GamesApiError } from './games'
-import { notifyUnauthorized } from './unauthorized'
+import { type EdgeReport } from './games'
+import { getJson } from './http'
 
 export type { EdgeReport }
 
@@ -99,17 +99,6 @@ export interface SignalsResponse {
   run_line_pricing_by_label?: Record<string, RunLinePricing>
 }
 
-// --- the shared GET helper ------------------------------------------------
-
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' })
-  if (!res.ok) {
-    if (res.status === 401) notifyUnauthorized()
-    const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
-  }
-  return res.json() as Promise<T>
-}
 
 // ---------------------------------------------------------------------------
 // The slate card's lines (GET /games/{pk}/card-odds — CardOddsResponse)
