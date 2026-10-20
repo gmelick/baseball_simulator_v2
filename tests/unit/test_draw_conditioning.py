@@ -617,7 +617,7 @@ def _export(tmp_path: Path, *, sim518: bool) -> str:
 
 
 class TestArtifactRoundTrip:
-    def test_a_sim518_export_loads_the_new_columns(self, tmp_path):
+    def test_an_export_with_the_conditioning_columns_loads_them(self, tmp_path):
         art = EngineArtifacts.load(_export(tmp_path, sim518=True))
         for hand in ("L", "R"):
             p = art.pools[hand]
@@ -636,7 +636,7 @@ class TestArtifactRoundTrip:
             assert all(600000 < v < 600010 for v in bb.pitcher_id.tolist())
         assert os.path.exists(os.path.join(str(tmp_path), "battedball_pool", "L.pgeom.npy"))
 
-    def test_a_pre_sim518_export_still_loads_with_the_fields_none(self, tmp_path):
+    def test_an_export_without_the_conditioning_columns_loads_them_as_none(self, tmp_path):
         art = EngineArtifacts.load(_export(tmp_path, sim518=False))
         for hand in ("L", "R"):
             p = art.pools[hand]

@@ -535,7 +535,7 @@ class TestAPartlyClassedPoolKeepsTheSingleDraw:
         assert sm._steal_order_active() is False
 
 
-class _Sim474Sampler:
+class _SinglePrePitchDrawSampler:
     """A duck-typed sampler with the SIM-474 surface only: no
     ``steal_pitch_class``, no ``has_steal_classes``, no ``pickoff_draw``.
     Every other read goes to a real sampler."""
@@ -598,7 +598,7 @@ class TestTheSinglePrePitchDrawStays:
 
     def test_a_duck_typed_sampler(self):
         inner = _machine("called_strike", **_certain_pickoff("out")).full_pool_sampler
-        sm = StateMachine(_Sim474Sampler(inner), rng=np.random.default_rng(0))
+        sm = StateMachine(_SinglePrePitchDrawSampler(inner), rng=np.random.default_rng(0))
         assert not sm._steal_order_active()
         self._assert_the_old_order(self._one_pitch(sm))
 
@@ -1056,7 +1056,7 @@ class TestTheSyntheticPool:
         assert outs / 1500 == pytest.approx(0.5, abs=0.05)
         assert _pickoff_draw(fp, balls=1) is None  # no pickoff row at 1-0
 
-    def test_by_class_false_is_the_sim474_shape(self):
+    def test_by_class_false_is_the_single_draw_shape(self):
         pool = steal_pools(0.2, 0.75, by_class=False)["2"]
         assert pool.n == 36 * 3 and pool.pitch_class is None
         art = fixed_play_artifacts("field_out", steal=(0.2, 0.75), steal_kw={"by_class": False})

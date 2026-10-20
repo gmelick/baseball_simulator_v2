@@ -234,7 +234,7 @@ class TestWalkOff(unittest.TestCase):
         self.assertEqual(d.away_score, 2)
 
 
-class TestSim414StarterMinIP(unittest.TestCase):
+class TestStarterMinimumInnings(unittest.TestCase):
     """SIM-414: MLB Rule 9.17(b) — a starter must pitch 5 IP (15 outs) to win.
 
     Below that, the win is reassigned to the most-effective reliever (we

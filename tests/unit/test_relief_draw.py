@@ -220,7 +220,7 @@ class TestManagerFactor:
         share = fp8.change_ess_stats[0] / fp8.change_ess_stats[1]
         assert 0.4 < share < 0.6
 
-    def test_the_last_row_carries_the_sim427_facts(self):
+    def test_the_last_row_carries_the_manager_and_the_arms_facts(self):
         fp = _sampler(manager_power=1.0, seed=2)
         assert _draw_share(fp, "10:2024", n=1) == 1.0  # the quick hook's rows: changed
         row = fp.last_change_row()
@@ -461,7 +461,7 @@ class TestStealAggression:
 
 
 class TestSyntheticChangePool:
-    def test_every_hard_cell_has_three_rows_and_the_sim427_columns(self):
+    def test_every_hard_cell_has_three_rows_and_the_relief_columns(self):
         pool = change_pool()
         assert pool.n == 2 * 2 * 16 * 4 * 3
         assert pool.manager_id.shape == (pool.n,) and int(pool.manager_id[0]) == 1

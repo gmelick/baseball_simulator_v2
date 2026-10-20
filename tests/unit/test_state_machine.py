@@ -305,7 +305,7 @@ class TestMiscContract:
         assert state.offense == Team.HOME
         assert state.score_diff == 3 - 1
 
-    def test_simulate_game_is_implemented_by_sim320(self):
+    def test_simulate_game_is_implemented(self):
         # SIM-320 replaced the SIM-316 guarded NotImplementedError stub with the
         # real full-game driver.  Called bare, it fails fast with a clear
         # ValueError rather than the old NotImplementedError.  The driver refuses

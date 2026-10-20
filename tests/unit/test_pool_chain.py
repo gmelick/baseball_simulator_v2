@@ -777,7 +777,7 @@ class TestTheLabelCheck:
         all_rows = _rates(0.22622, 0.08289, 0.01117, 3.90555)
         assert all(r[4] for r in pc.label_check(all_rows, real))
 
-    def test_the_sim553_coding_fails_on_the_pa_only_read(self):
+    def test_the_foul_tip_as_foul_coding_fails_on_the_pa_only_read(self):
         """The old coding, pa_only (2026-09-25): -4.29 / +2.31 / +1.12 / +0.90% — every channel fails."""
         rows = pc.label_check(
             _rates(0.2159, 0.0845, 0.0113, 3.9301), _rates(0.22554, 0.08259, 0.01118, 3.8949)
