@@ -1,27 +1,18 @@
-"""
-pipeline/odds_provider.py
-=========================
-Odds/prop provider abstraction (real-provider swap seam).
+"""The odds provider seam and the odds vocabulary.
 
-Phase 5 wired multi-book ingestion, a sharp-book flag, and a fetch cadence
- on top of :class:`MockOddsAPI` in
-``pipeline/live/live_ingestion_pipeline.py``.  This module adds the *seam* that
-lets a REAL odds/prop provider drop in behind that mock without touching any
-ingestion, CLV, or persistence code:
+The live pipeline, the opening-line job and the historical loader read odds
+through one seam, so a provider swaps in behind it without touching any
+ingestion, closing-line or persistence code:
 
   * :class:`OddsProvider` — a ``typing.Protocol`` describing the exact methods
     the live pipeline consumes (:meth:`get_odds`, :meth:`get_prop_odds`).  Any
     object that structurally matches it (the existing ``MockOddsAPI``, a real
     HTTP-backed provider, or a test fake) is a drop-in source.
   * :func:`get_odds_provider` — a factory that selects the provider by the
-    ``ODDS_PROVIDER`` environment variable, defaulting to the deterministic
-    ``MockOddsAPI`` so all existing behaviour and tests are unchanged.
-  * :class:`RealOddsAPIProvider` — a conforming STUB marking exactly where a
-    live integration (e.g. The Odds API) plugs in.  It raises a clear,
-    actionable error until it is configured and implemented; there is no real
-    odds feed in this environment.
-  * :func:`register_odds_provider` — lets tests (and future real providers)
-    register a named factory so ``ODDS_PROVIDER=<name>`` resolves to them.
+    ``ODDS_PROVIDER`` environment variable: ``bettingpros`` (or ``real``) for
+    the BettingPros provider, the deterministic ``MockOddsAPI`` by default.
+  * :func:`register_odds_provider` — lets tests (and a future provider)
+    register a named factory so ``ODDS_PROVIDER=<name>`` resolves to it.
 
 Provider contract (what a real provider MUST honour)
 ----------------------------------------------------
@@ -55,7 +46,7 @@ these tuples — none carries a private copy. The CHECK constraint on
 :data:`PROP_STAT_TO_MODEL_PROP` maps each market to the prop name the
 simulator emits (``simulation/prop_distributions.py``).
 
-The game-market vocabulary (SIM-421, owner ruling 2026-09-12)
+The game-market vocabulary (owner ruling 2026-09-12, SIM-421)
 ------------------------------------------------------------
 The owner's ruling: the odds tables carry EVERY market the book posts, because
 the simulator can price every one of them. :data:`GAME_MARKET_TYPES` is the
@@ -96,8 +87,8 @@ Multi-book / sharp-flag / line_type rules the provider MUST preserve:
     is echoed through so opening/closing-line capture stamps the right value.
   * Real providers should set ``source=<provider-name>`` and ``is_mock=False``.
 
-The book vocabulary (SIM-555, 2026-09-28)
------------------------------------------
+The book vocabulary (one row per book, SIM-555)
+-----------------------------------------------
 A row holds ONE book's prices for every side of one market, and names the book
 in ``book`` as ``'bp:<id>'`` (the id is BettingPros', from ``/v3/books``).
 :data:`BOOK_NAMES` gives each id its display name; :data:`BOOK_KIND` says what
@@ -157,7 +148,8 @@ BATTER_PROP_STATS: tuple[str, ...] = (
 )
 
 #: Every prop market, in the canonical order: the seven original markets
-#: first, then the eight SIM-421 markets. A tuple so a caller cannot
+#: first, then the eight markets of the prop-market work (SIM-421). A tuple so
+#: a caller cannot
 #: mutate the order.
 PROP_STATS: tuple[str, ...] = (
     "strikeouts",
@@ -198,17 +190,16 @@ PROP_STAT_TO_MODEL_PROP: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# SIM-421 (owner ruling 2026-09-12): the game-market vocabulary — every market
-# the book posts on a game, in one row layout (see the module docstring)
+# The game-market vocabulary: every market the book posts on a game, in one
+# row layout (see the module docstring)
 # ---------------------------------------------------------------------------
 
 #: The three full-game markets (moneyline, run line, total).
 FULL_GAME_MARKET_TYPES: tuple[str, ...] = ("moneyline", "runline", "total")
 
-#: An alias of :data:`FULL_GAME_MARKET_TYPES`, kept for the readers
-#: that name it. Before SIM-555 a row for one of these three markets carried all
-#: three markets' columns. The mock still fills all three on one row; the
-#: BettingPros provider no longer does: each market fills only its own columns.
+#: An alias of :data:`FULL_GAME_MARKET_TYPES`, for the readers that name it.
+#: The mock fills all three markets on one row; the BettingPros provider fills
+#: each market's own columns only.
 LEGACY_GAME_MARKET_TYPES: tuple[str, ...] = FULL_GAME_MARKET_TYPES
 
 #: Every ``raw.game_odds.market_type`` value, in the canonical order: the three
@@ -282,7 +273,7 @@ THREE_WAY_GAME_MARKET_TYPES: tuple[str, ...] = tuple(
     m for m in GAME_MARKET_TYPES if GAME_MARKET_KIND[m] == "three_way"
 )
 
-#: SIM-546, the fifteen markets on the betting card: market_type → the plain
+#: The fifteen markets on the betting card: market_type → the plain
 #: name a reader sees. The API serves these names, so the card and the logs
 #: say the same words.
 GAME_MARKET_NAMES: dict[str, str] = {
@@ -319,7 +310,7 @@ GAME_ODDS_FIELDS: tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
-# SIM-555 (2026-09-28): the book vocabulary — one source, as for the markets
+# The book vocabulary: one source, as for the markets
 # ---------------------------------------------------------------------------
 
 #: The books the platform names. The ids are BettingPros' (``/v3/books``).
@@ -418,11 +409,11 @@ BOOK_IDS_BY_NAME: dict[str, int] = {
 #: The prefix of every stored book label (``'bp:12'``).
 BOOK_LABEL_PREFIX = "bp:"
 
-#: The filter every reader appends. The old ``consensus`` rows were retired on 2026-10-01
-#:; the filter stays, so no other label is ever graded.
+#: The filter every reader appends, so no label but a book's is ever graded.
 STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
 
-#: SIM-555 (decision 1): the graded book, in order. A reader grades against the
+#: The graded book, in order (decision 1 of the one-book plan, SIM-555). A
+#: reader grades against the
 #: first book on the list with a valid closing row for the market, the same list
 #: on every game. Set 2026-09-29 from the sharpness read on 2024-2025
 #: (docs/audit/records/sim555_book_sharpness.txt) and its verification (the plan's §12):
@@ -437,7 +428,7 @@ STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
 #: Positions 3-11 are near-ties; re-read the order once 2023 and 2026 are loaded.
 GRADED_BOOK_PREFERENCE: tuple[int, ...] = (12, 19, 10, 33, 18, 24, 13, 49, 14, 15, 27)
 
-#: SIM-555 (decision 6): the kinds whose rows count as a price a bettor can take.
+#: The kinds whose rows count as a price a bettor can take (decision 6).
 BETTABLE_KINDS: frozenset[str] = frozenset({"sportsbook"})
 
 #: The report stamp of this odds-row scheme. The readers write it into a
@@ -677,87 +668,6 @@ def prop_rows_by_book(
 # ---------------------------------------------------------------------------
 
 
-class RealOddsAPIProvider:
-    """
-    SIM-370 TEMPLATE for a real odds/prop provider (e.g. The Odds API).
-
-    Conforms to :class:`OddsProvider` so it is a structural drop-in, but every
-    method raises until a live integration is actually wired.  This is a
-    reference template only: no ``ODDS_PROVIDER`` value resolves to it — both
-    ``ODDS_PROVIDER=bettingpros`` and ``ODDS_PROVIDER=real`` now map to the live
-    :class:`~pipeline.bettingpros_odds_provider.BettingProsOddsProvider`.
-    It marks *exactly* where the HTTP calls go and what
-    configuration they need, should a third provider ever be added.
-
-    To implement (as a new named provider):
-      1. Read the API key from ``ODDS_PROVIDER_API_KEY`` (see ``__init__``).
-      2. In ``get_odds`` issue the game-odds request and map the response onto
-         the dict shape documented in this module / produced by ``MockOddsAPI``
-         (set ``source=<name>``, ``is_mock=False``; echo book / line_type /
-         market_type / is_sharp_book through unchanged).
-      3. In ``get_prop_odds`` do the same per (book, player, prop_stat); raise
-         ``ValueError`` for an unknown ``prop_stat``.
-    """
-
-    #: env var the real integration reads its credentials from.
-    API_KEY_ENV = "ODDS_PROVIDER_API_KEY"
-
-    def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key or os.environ.get(self.API_KEY_ENV)
-
-    def _not_configured(self) -> RuntimeError:
-        return RuntimeError(
-            "RealOddsAPIProvider is a SIM-370 stub and is not yet implemented. "
-            f"To use a real odds feed: set {self.API_KEY_ENV} and implement the "
-            "fetch in RealOddsAPIProvider.get_odds()/get_prop_odds() "
-            "(map the provider response onto the MockOddsAPI dict shape; see "
-            "pipeline/odds_provider.py for the contract). Until then keep "
-            "ODDS_PROVIDER=mock (the default)."
-        )
-
-    def get_odds(
-        self,
-        game_pk: int,
-        *,
-        line_type: str = "current",
-        market_type: str = "moneyline",
-        book: str = "consensus",
-        is_sharp_book: bool = False,
-    ) -> dict[str, Any]:
-        raise self._not_configured()
-
-    def get_prop_odds(
-        self,
-        game_pk: int,
-        player_id: int,
-        prop_stat: str,
-        *,
-        line_type: str = "current",
-        book: str = "consensus",
-        is_sharp_book: bool = False,
-    ) -> dict[str, Any]:
-        raise self._not_configured()
-
-    def get_odds_by_book(
-        self,
-        game_pk: int,
-        *,
-        line_type: str = "current",
-        market_type: str = "moneyline",
-    ) -> list[dict[str, Any]]:
-        raise self._not_configured()
-
-    def get_prop_odds_by_book(
-        self,
-        game_pk: int,
-        player_id: int,
-        prop_stat: str,
-        *,
-        line_type: str = "current",
-    ) -> list[dict[str, Any]]:
-        raise self._not_configured()
-
-
 # ---------------------------------------------------------------------------
 # Provider registry + factory
 # ---------------------------------------------------------------------------
@@ -798,7 +708,7 @@ def register_odds_provider(name: str, factory: Callable[[], OddsProvider]) -> No
 
 
 def _make_bettingpros_provider() -> OddsProvider:
-    """Lazy factory for the SIM-405 BettingPros provider (stdlib-only import)."""
+    """The lazy factory of the BettingPros provider (a stdlib-only import)."""
     from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
 
     return BettingProsOddsProvider()
@@ -806,8 +716,7 @@ def _make_bettingpros_provider() -> OddsProvider:
 
 # Built-in providers.
 register_odds_provider("mock", _make_mock_provider)
-# "bettingpros" is the live BettingPros v3 integration; "real" now
-# points to it (was the unimplemented SIM-370 stub) so ODDS_PROVIDER=real works.
+# "bettingpros" is the BettingPros v3 integration; "real" is an alias of it.
 register_odds_provider("bettingpros", _make_bettingpros_provider)
 register_odds_provider("real", _make_bettingpros_provider)
 
@@ -844,7 +753,6 @@ def get_odds_provider(name: str | None = None) -> OddsProvider:
 
 __all__ = [
     "OddsProvider",
-    "RealOddsAPIProvider",
     "get_odds_provider",
     "register_odds_provider",
     "available_providers",
@@ -855,7 +763,7 @@ __all__ = [
     "PITCHER_PROP_STATS",
     "BATTER_PROP_STATS",
     "PROP_STAT_TO_MODEL_PROP",
-    # SIM-421 (2026-09-12): the game-market vocabulary
+    # The game-market vocabulary
     "GAME_MARKET_TYPES",
     "FULL_GAME_MARKET_TYPES",
     "LEGACY_GAME_MARKET_TYPES",
@@ -865,7 +773,7 @@ __all__ = [
     "THREE_WAY_GAME_MARKET_TYPES",
     "GAME_MARKET_NAMES",
     "GAME_ODDS_FIELDS",
-    # SIM-555 (2026-09-28): the book vocabulary and the by-book seam
+    # The book vocabulary and the by-book seam
     "BOOK_NAMES",
     "BOOK_KIND",
     "BOOK_IDS_BY_NAME",

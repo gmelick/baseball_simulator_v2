@@ -10,7 +10,7 @@ Verifies the provider *seam* added in ``pipeline/odds_provider.py``:
      correctly; an unknown name raises a clear error).
   2. ``MockOddsAPI`` satisfies the ``OddsProvider`` interface (runtime Protocol
      isinstance check + return-shape parity smoke).
-  3. The ``RealOddsAPIProvider`` stub raises the documented not-configured error.
+  3. ``ODDS_PROVIDER=real`` selects the BettingPros provider.
   4. A fake provider can be injected into ``LiveIngestionPipeline`` so its
      provider lookup (``_fetch_odds`` / ``_fetch_prop_odds``) is exercised
      without the mock — and a ``__new__``-built pipeline falls back to the mock.
@@ -47,7 +47,6 @@ from pipeline.odds_provider import (  # noqa: E402
     ODDS_PROVIDER_ENV,
     PROP_STATS,
     OddsProvider,
-    RealOddsAPIProvider,
     available_providers,
     get_odds_provider,
     register_odds_provider,
@@ -222,29 +221,13 @@ class TestMockConforms:
 
 
 # ===========================================================================
-# 3. RealOddsAPIProvider stub
+# 3. The "real" provider name
 # ===========================================================================
 
 
-class TestRealStub:
-    def test_conforms_to_protocol(self) -> None:
-        assert isinstance(RealOddsAPIProvider(), OddsProvider)
-
-    def test_get_odds_raises_not_configured(self) -> None:
-        with pytest.raises(RuntimeError) as exc:
-            RealOddsAPIProvider().get_odds(745000)
-        msg = str(exc.value)
-        assert "not yet implemented" in msg
-        assert RealOddsAPIProvider.API_KEY_ENV in msg
-
-    def test_get_prop_odds_raises_not_configured(self) -> None:
-        with pytest.raises(RuntimeError) as exc:
-            RealOddsAPIProvider().get_prop_odds(745000, 101, "strikeouts")
-        assert "not yet implemented" in str(exc.value)
-
+class TestRealProviderName:
     def test_selectable_via_factory(self, clean_env) -> None:
-        # SIM-405: the "real" provider name now resolves to the live BettingPros
-        # integration (was the unimplemented RealOddsAPIProvider stub).
+        # The "real" provider name resolves to the BettingPros integration.
         clean_env.setenv(ODDS_PROVIDER_ENV, "real")
         assert isinstance(get_odds_provider(), BettingProsOddsProvider)
 

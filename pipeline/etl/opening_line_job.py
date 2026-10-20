@@ -23,8 +23,8 @@ What it does
    also stores player prop lines as line_type='opening' in raw.prop_odds.
 5. Logs a raw.pipeline_run_log row with opening_line_games_captured count.
 
-SIM-555 (2026-09-28): one row per book
---------------------------------------
+One row per book (SIM-555)
+--------------------------
 The job reads the provider's by-book rows (``odds_rows_by_book`` /
 ``prop_rows_by_book``). BettingPros gives at most one opening row per market:
 the opener's, labelled ``book = 'bp:<id>'`` and stamped ``book_line_at``. The
@@ -41,8 +41,7 @@ one ``consensus`` row per market.
 The rows go to the database through the live pipeline's writers
 (``insert_game_odds_rows`` / ``insert_prop_odds_rows``): the same SQL, the
 ``odds_hash`` the live schema requires (NOT NULL on ``raw.game_odds`` since
-migration 0012; before SIM-555 this job sent none, so every game-row INSERT
-failed), and the ``ON CONFLICT ... DO NOTHING`` dedup.
+migration 0012), and the ``ON CONFLICT ... DO NOTHING`` dedup.
 
 Acceptance gate
 ---------------
@@ -70,10 +69,10 @@ import logging
 import os
 import pathlib
 
-# Odds/prop lines are fetched through the SIM-370 provider seam
-# (get_odds_provider) so ODDS_PROVIDER selects the source — the same seam
-# scripts/load_historical_odds.py uses.  The seam's default is the deterministic
-# MockOddsAPI, so behaviour is unchanged when ODDS_PROVIDER is unset.
+# The odds and prop lines come through the provider seam
+# (get_odds_provider), so ODDS_PROVIDER selects the source, as in
+# scripts/load_historical_odds.py. The seam's default is the deterministic
+# MockOddsAPI.
 import sys
 from datetime import date, timedelta
 from typing import Any
@@ -131,10 +130,9 @@ LOOKAHEAD_DAYS = 7  # how many days ahead to capture opening lines
 PITCHER_PROP_TYPES: tuple[str, ...] = PITCHER_PROP_STATS
 BATTER_PROP_TYPES: tuple[str, ...] = BATTER_PROP_STATS
 
-# Legacy _MOCK_PROP_LINES and local _mock_prop_odds() removed in SIM-134.
-# All prop generation is now delegated to the configured provider's
-# get_prop_odds() (the default mock keeps the vig model, RNG seeding, and line
-# centres in a single place) — the provider is selected via the SIM-370 seam.
+# Every prop line comes from the configured provider's get_prop_odds() (the
+# default mock keeps the vig model, the RNG seeding and the line centres in one
+# place).
 
 #: The odds fields of a prop row; a row with all three empty is not a quote.
 _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
@@ -157,7 +155,7 @@ class OpeningLineJob:
 
     Designed to be idempotent: calling it multiple times on the same date does
     not duplicate rows. The "already exists" checks skip a game or a pitcher
-    that already has an opening row; SIM-555: the writes also carry the
+    that already has an opening row, and the writes also carry the
     ``odds_hash`` dedup (INSERT … ON CONFLICT DO NOTHING) of the live writers.
 
     Parameters
@@ -240,7 +238,7 @@ class OpeningLineJob:
                     log.debug("game %s: opening line already captured", game_pk)
                     continue
 
-                # Capture the game-level opening rows (SIM-555: one per book the
+                # Capture the game-level opening rows (one per book the
                 # provider gives; none when it has no one-book opening row).
                 rows = self._fetch_opening_rows(game_pk)
                 for odds in rows:
@@ -356,11 +354,11 @@ class OpeningLineJob:
         return row is not None
 
     # ------------------------------------------------------------------
-    # Odds fetch  (via the SIM-370 provider seam; ODDS_PROVIDER selects source)
+    # The odds fetch (through the provider seam; ODDS_PROVIDER selects the source)
     # ------------------------------------------------------------------
 
     def _odds_provider(self) -> OddsProvider:
-        """The configured provider (the SIM-370 seam), built once per job."""
+        """The configured provider (the seam), built once per job."""
         if self._provider is None:
             self._provider = get_odds_provider()
         return self._provider
@@ -398,7 +396,7 @@ class OpeningLineJob:
         The moneyline's opening rows for ``game_pk`` that are worth storing.
 
         Read through ``odds_rows_by_book`` from the configured provider (the
-        SIM-370 seam; the deterministic mock when ODDS_PROVIDER is unset, which
+        seam; the deterministic mock when ODDS_PROVIDER is unset, which
         gives its one ``consensus`` row). Empty rows are dropped and the load
         guard checks the rest, so the list is empty when the provider has no
         one-book opening row.
@@ -442,14 +440,13 @@ class OpeningLineJob:
 
         Covers:
           - Pitcher props: every market in PITCHER_PROP_TYPES (strikeouts,
-            earned_runs, walks, outs_recorded, hits_allowed — SIM-421)
+            earned_runs, walks, outs_recorded, hits_allowed)
             (captured when starter is announced — known 5–7 days out)
           - Batter props deferred: lineup order not reliably known this far
             in advance; captured intraday once lineup is posted.
 
-        Prop generation is delegated to the configured provider via the SIM-370
-        seam (the default mock keeps the vig model and RNG seeding in a single
-        canonical place — SIM-134).
+        The configured provider makes the prop lines (the default mock keeps
+        the vig model and the RNG seeding in one place).
 
         Each (pitcher, market) stores every by-book opening row the
         provider gives that the load guard keeps, with its book label and
@@ -483,9 +480,9 @@ class OpeningLineJob:
                 continue
 
             for prop_stat in PITCHER_PROP_TYPES:
-                # SIM-370 seam: delegate to the configured provider (the default
-                # mock is the single source of truth for line centres, vig, and
-                # RNG seeding — SIM-134). SIM-555: every book's opening row.
+                # The configured provider's opening row of every book (the
+                # default mock is the one source of the line centres, the vig
+                # and the RNG seeding).
                 rows = prop_rows_by_book(
                     provider, game_pk, pitcher_id, prop_stat, line_type="opening"
                 )
