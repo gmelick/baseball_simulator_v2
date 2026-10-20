@@ -264,7 +264,7 @@ format:
 ## Mypy: static type checking (same config as CI Job 2)
 type-check:
 	docker compose run --rm -v "$(CURDIR):/app" app \
-	  mypy similarity/ pipeline/ api/ --ignore-missing-imports \
+	  mypy similarity/ pipeline/ api/ simulation/ betting/ --ignore-missing-imports \
 	       --python-version 3.13
 
 # ---------------------------------------------------------------------------

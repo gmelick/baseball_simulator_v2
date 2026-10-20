@@ -914,7 +914,7 @@ Raw equivalents (if running Python directly, target **Python 3.13**):
 ```
 pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api
 ruff check .   &&   ruff format --check .
-mypy similarity/ pipeline/ api/        # CI scope; config in pyproject.toml; pin mypy>=1.8,<2
+mypy similarity/ pipeline/ api/ simulation/ betting/   # CI scope; config in pyproject.toml; pin mypy>=1.8,<2
 ```
 
 ## 9. Testing & CI
