@@ -1,11 +1,11 @@
 """
 db/sim_store.py
 ===============
-SIM-356 -- durable sim-result + pitch-snapshot persistence (Phase 5, Sprint 2).
+The durable store of the sim results and the pitch snapshots (SIM-356).
 
 WHAT THIS IS
 ------------
-The single, mockable persistence layer behind the Phase-5 sim-history + replay
+The single, mockable persistence layer behind the sim-history + replay
 surface. It replaces the ephemeral Redis / ``sim.lineup_state.simulation_results``
 JSONB blob (24h TTL, overwritten per matchup) with two durable stores, split per
 the project's hybrid Postgres/DuckDB convention:
@@ -40,7 +40,7 @@ DESIGN
     ``api.serialization.to_jsonable(game_sim_summary)``); this module does not
     import numpy or the simulation dataclasses, so it stays dependency-light.
   * **Stable, documented row shapes.** The play-row schema below is the contract
-    the SIM-357 endpoints write against and read back -- it is pinned here so
+    the replay endpoints write against and read back -- it is pinned here so
     both writer and reader agree without coupling to the table DDL.
 
 ------------------------------------------------------------------------------
@@ -65,13 +65,13 @@ straight from a ``PlayByPlayEntry`` (e.g. ``dataclasses.asdict(entry)``) or a
     spray_angle     float | None   default None
     runs            float          default 0.0   RE24 / linear-weight run value
     canonical_event str | None     default None   canonical outcome key
-    inning          int | None     default None   SIM-561: inning of the pitch (1-based)
-    half            str | None     default None   SIM-561: 'top' / 'bottom'
-    outs_before     int | None     default None   SIM-561: outs before the pitch
-    batter_id       int | None     default None   SIM-561: the batter at the plate
-    pitcher_id      int | None     default None   SIM-561: the pitcher who threw it
-    away_score      int | None     default None   SIM-561: away runs after the pitch
-    home_score      int | None     default None   SIM-561: home runs after the pitch
+    inning          int | None     default None   inning of the pitch (1-based)
+    half            str | None     default None   'top' / 'bottom'
+    outs_before     int | None     default None   outs before the pitch
+    batter_id       int | None     default None   the batter at the plate
+    pitcher_id      int | None     default None   the pitcher who threw it
+    away_score      int | None     default None   away runs after the pitch
+    home_score      int | None     default None   home runs after the pitch
 
 ``load_play_stream`` returns dicts with ALL of these keys (defaults filled),
 ordered by ``sequence`` ascending. ``run_id`` / ``game_pk`` are NOT in the entry
@@ -89,7 +89,8 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 #: Ordered tuple of play-entry fields == sim.play_stream non-key columns, in DDL
-#: order. SIM-357 builds rows with these keys; load_play_stream returns them.
+#: order. The replay writer builds rows with these keys; load_play_stream
+#: returns them.
 PLAY_ROW_FIELDS: tuple[str, ...] = (
     "sequence",
     "at_bat",
@@ -105,7 +106,7 @@ PLAY_ROW_FIELDS: tuple[str, ...] = (
     "spray_angle",
     "runs",
     "canonical_event",
-    # SIM-561 (DuckDB 0032): the pitch's context, for the game page play-by-play.
+    # The pitch's context, for the game page play-by-play (DuckDB 0032).
     "inning",
     "half",
     "outs_before",
@@ -191,7 +192,7 @@ def _normalize_play_row(entry: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _fill_context(row: dict[str, Any], source: Mapping[str, Any]) -> None:
-    """Copy the SIM-561 context fields onto ``row``, each nullable and cast."""
+    """Copy the pitch-context fields onto ``row``, each nullable and cast."""
     for f in _PLAY_CONTEXT_INT_FIELDS:
         row[f] = _opt_int(source.get(f))
     _half = source.get("half")
@@ -348,7 +349,7 @@ async def load_live_game_state(conn: Any, game_pk: int) -> dict | None:
 
     Returns ``{session_id, game_pk, game_state (parsed dict), updated_at (ISO str)}``.
     The ``game_state`` dict is decoded from the JSONB blob written by
-    :class:`~pipeline.live.live_ingestion_pipeline.GameStateBuilder`; its keys
+    :class:`~pipeline.live.ingestion.game_state_builder.GameStateBuilder`; its keys
     mirror the required fields documented in that class's docstring (inning, half,
     outs, balls, strikes, home_score, away_score, home_lineup, away_lineup, etc.).
     """
@@ -501,7 +502,7 @@ def load_play_stream(
 
 
 # ===========================================================================
-# DuckDB -- sim.state_snapshots (sync duckdb)  [SIM-357]
+# DuckDB -- sim.state_snapshots (sync duckdb)
 # ===========================================================================
 #
 # The /state/{at_bat}/{pitch} endpoint needs the field/baserunner/count state AS
@@ -654,7 +655,7 @@ def load_state_snapshots(
 
 
 # ===========================================================================
-# DuckDB -- sim.game_cards (sync duckdb)  [SIM-362/364]
+# DuckDB -- sim.game_cards (sync duckdb)
 # ===========================================================================
 #
 # The /linescore + /decisions endpoints need the game-level DERIVED loop outputs

@@ -1,8 +1,8 @@
 """
 pipeline/etl/boxscore_ingest.py
 ===============================
-The official per-player box score as the prop ground truth (SIM-545, the
-sub-ticket of the unpriced-prop-markets work, SIM-421).
+The official per-player box score as the prop ground truth (SIM-545, part
+of the unpriced prop markets, SIM-421).
 
 WHY
 ---
@@ -93,7 +93,7 @@ PITCHING_FIELDS: dict[str, str] = {
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 #: Never sleep longer than this on a server's ``Retry-After`` say-so (the
-#: historical loader's cap, SIM-441).
+#: historical loader's cap).
 _MAX_RETRY_AFTER_S = 60.0
 
 
@@ -337,7 +337,7 @@ LISTED_STARTED = "started"
 
 @dataclass(frozen=True, slots=True)
 class BullpenListing:
-    """One arm the MLB box lists for a game (SIM-427, Alembic 0025).
+    """One arm the MLB box lists for a game (the real pen, SIM-427; Alembic 0025).
 
     ``listed``: ``'bullpen'`` — on the roster, did not pitch; ``'pitched'`` — a
     reliever who appeared; ``'started'`` — the side's starting pitcher (the
@@ -467,7 +467,8 @@ class StartingPosition:
 
     ``position_code`` is the starting position (``allPositions[0]``);
     ``last_position_code`` is the box's ``position``, the value the lineup
-    rows loaded before SIM-559 carry. ``batting_order`` is the slot (1-9).
+    rows loaded before the starting-position fix (SIM-559) carry.
+    ``batting_order`` is the slot (1-9).
     """
 
     game_pk: int

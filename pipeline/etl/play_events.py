@@ -187,10 +187,10 @@ def extract_play_events(
     ``home_score_before`` / ``away_score_before`` are the score ENTERING the
     play, exactly as the pitch rows record it. They cannot be read from the
     play itself: ``result.homeScore`` / ``result.awayScore`` are the score
-    AFTER the play, and the first version of this function read them — so a
-    pickoff at playEvent 4 was stamped with the runs from a home run four
-    pitches LATER, look-ahead leakage on 12.3% of rows (SIM-502b, measured:
-    676 of 5,479). The loader already proves the pre-play semantics: it uses
+    AFTER the play: read from there, a pickoff at playEvent 4 carries the
+    runs from a home run four pitches LATER, a look-ahead leak on 12.3% of
+    rows (676 of 5,479, measured; SIM-502). The loader already proves the
+    pre-play semantics: it uses
     ``result.homeScore`` to seed the NEXT play, never the current one.
     """
     rows: list[dict[str, Any]] = []

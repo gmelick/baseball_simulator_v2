@@ -27,9 +27,9 @@ labels, so a labelling defect in the pool build reads green: a faithful
 sampler of a mislabelled pool matches the mislabelled centre. Two defects in
 the pool build's class expression hid that way:
 
-  * SIM-509 (2026-08-18): hit-by-pitch pitches coded as balls, so an HBP could
+  * hit-by-pitch pitches coded as balls (SIM-509, 2026-08-18), so an HBP could
     become ball four.
-  * SIM-553 (2026-09-23): a two-strike foul tip or foul bunt coded as a foul,
+  * a two-strike foul tip or foul bunt coded as a foul (SIM-553, 2026-09-23),
     so the count machine pitched on after a real strikeout. The count chain
     lost 4.4% of its strikeouts (0.2163 per plate appearance against 0.2262
     on the corrected coding).
@@ -75,7 +75,7 @@ pitch / pitches per plate appearance, the chain's relative gap to real play):
 
   * the corrected coding, ``pa_only``:  +0.09% / -0.25% / +0.08% / +0.07%;
   * the corrected coding, all rows:     +0.30% / +0.36% / -0.13% / +0.27%;
-  * the SIM-553 coding, ``pa_only``:    -4.29% / +2.31% / +1.12% / +0.90%
+  * the foul-tip defect, ``pa_only``:   -4.29% / +2.31% / +1.12% / +0.90%
     (FAIL; all rows read -4.08% / +2.94% / +0.91% / +1.11%).
 
 Two known residuals are not label errors:
@@ -122,9 +122,9 @@ OUTCOMES: tuple[str, ...] = (
 
 #: The largest relative gap the label check accepts between the pool's chain
 #: (read with ``pa_only=True``) and real plate appearances; owner decision 5 of
-#: the SIM-553 plan. On the window 2023-2026 the corrected pool reads +0.09% /
-#: -0.25% / +0.08% / +0.07% (strikeouts / walks / hit by pitch / pitches); the
-#: SIM-553 defect reads -4.29% / +2.31% / +1.12% / +0.90%. A FAIL is a coding
+#: the foul-tip plan (SIM-553). On the window 2023-2026 the corrected pool reads
+#: +0.09% / -0.25% / +0.08% / +0.07% (strikeouts / walks / hit by pitch /
+#: pitches); the foul-tip defect reads -4.29% / +2.31% / +1.12% / +0.90%. A FAIL is a coding
 #: defect to find, never a reason to widen this.
 LABEL_CHECK_TOLERANCE = 0.005
 
@@ -258,7 +258,7 @@ def solve_chain(rates: list[list[float]]) -> dict[str, float]:
         else:
             denom = 1.0 - sh["foul"]  # the two-strike foul self-loop
             if denom <= 0.0:
-                # SIM-553 guard: a two-strike count where every pitch is a foul
+                # The guard: a two-strike count where every pitch is a foul
                 # never ends, and the closed form would divide by zero.
                 raise ValueError(
                     f"every pitch at count {b}-{s} is a foul: the count chain "
@@ -305,7 +305,7 @@ def pool_count_matrix(
 
     Raises ``ValueError`` when a row carries a class outside :data:`OUTCOMES`
     (or a NULL class) or a count outside 0-3 balls / 0-2 strikes. A new class
-    must not vanish from the chain silently; the old census skipped it. It
+    must not vanish from the chain silently. It
     also raises when a count holds no volume: :func:`solve_chain` would read
     that count as all-zero shares and lose its mass without an error. The
     window's thinnest count holds 28,056 rows, so only a broken pool or a
@@ -388,7 +388,7 @@ def attach_pg(con: Any, dsn: str | None = None) -> None:
     """Attach Postgres read-only as the catalog ``pg``; a no-op when ``pg`` is attached.
 
     ``dsn`` defaults to ``BASEBALL_DB_DSN``; with neither, the attach raises
-    ``RuntimeError`` naming the variable (SIM-443b: no default password). The
+    ``RuntimeError`` naming the variable (there is no default password). The
     attach works on a read-only DuckDB connection. An attach failure raises
     ``RuntimeError`` with the DSN's password redacted.
     """

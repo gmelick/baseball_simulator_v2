@@ -5,12 +5,12 @@ Backfill NULL venue_id rows on raw.games.
 
 Why this job exists
 -------------------
-The live ingestion pipeline (live_ingestion_pipeline.py::_upsert_game_record)
+The live ingestion pipeline (``LiveIngestionPipeline._upsert_game_record``)
 inserts ``raw.games`` rows from the schedule API as soon as a game appears on
 the slate.  For some games the schedule response does not yet include a venue
 (early international/spring training schedule entries), so the column is
-written as NULL (SIM-086 made it nullable; pre-SIM-086 the row was silently
-dropped because of an FK violation against raw.venues).
+written as NULL (the column is nullable, so the row is kept rather than
+dropped on a foreign-key violation against raw.venues).
 
 Once the MLB API publishes the venue assignment, this job picks the row up
 and fills it.

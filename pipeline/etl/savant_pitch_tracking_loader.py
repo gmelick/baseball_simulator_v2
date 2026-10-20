@@ -26,7 +26,7 @@ point the data is incomplete and there is no way to tell which rows are missing.
 
 Every returned row's date is checked against the day requested. The search
 export honours its date parameters, but the leaderboards taught us not to
-assume that (see SIM-528).
+assume that (the Savant loader, SIM-528).
 
 WHAT EXISTS WHEN (measured 2026-09-10)
 --------------------------------------

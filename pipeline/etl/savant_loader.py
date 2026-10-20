@@ -77,8 +77,8 @@ MAX_RETRIES = 3
 #: whole-run fetch does not read as a hammering client.
 PAUSE_BETWEEN_FETCHES_S = 1.5
 
-#: Columns whose target name says they hold a label, not a number.
-#: SIM-532 adds the two position labels of the outs-above-average board.
+#: Columns whose target name says they hold a label, not a number (the
+#: outs-above-average board carries the two position labels).
 _TEXT_TARGETS = frozenset({"bat_side", "split", "position", "primary_position"})
 #: Target columns that are whole numbers.
 _INT_TARGETS = frozenset(

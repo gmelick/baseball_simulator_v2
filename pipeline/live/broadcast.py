@@ -1,4 +1,4 @@
-"""The bridge between the live service and the browsers (SIM-519 Part C).
+"""The bridge between the live service and the browsers (the live slate, SIM-519).
 
 The live service runs in its own container (decision D2), but the browsers'
 WebSockets end in the app. A Redis channel carries every browser-bound message
