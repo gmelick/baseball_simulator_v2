@@ -77,7 +77,7 @@ LEAGUE_ARM_CF = np.array([88.0, 0.0, 0.05])
 
 # The six fielder columns migration 0030 appends after asof_date, in
 # OAA_JUMP_COLUMN_ORDER; added idempotently where a test needs them.
-SIM532_FIELDER_COLUMNS = (
+OAA_JUMP_FIELDER_COLUMNS = (
     ("savant_oaa", "INTEGER"),
     ("savant_oaa_per_100", "FLOAT"),
     ("jump_reaction_ft", "FLOAT"),
@@ -536,7 +536,7 @@ class TestProfileLoader:
         path = str(tmp_path / "sim532.duckdb")
         con = duckdb.connect(path)
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
-        for col, typ in SIM532_FIELDER_COLUMNS:
+        for col, typ in OAA_JUMP_FIELDER_COLUMNS:
             con.execute(
                 f"ALTER TABLE derived.fielder_season_metrics ADD COLUMN IF NOT EXISTS {col} {typ}"
             )

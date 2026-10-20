@@ -81,7 +81,7 @@ def _empirical_median_score(
 # ===========================================================================
 
 
-class TestCatcherV2CalibrationRegression(unittest.TestCase):
+class TestCatcherSigmaCalibration(unittest.TestCase):
     """The sigma fit converges and hits the target band on synthetic,
     well-separated catcher-sized data."""
 
