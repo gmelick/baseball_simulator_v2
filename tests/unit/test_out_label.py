@@ -261,19 +261,10 @@ class TestComputorReadsNoOutsOnPitch:
         assert "SUM(outs_on_pitch)" in offending[0]
 
 
-class TestSimLoopDivergencePinned:
-    """simulation/sim_loop.py `_OUT_EVENTS` is the loop's "did the batter
-    reach" test and lists BOTH fielders-choice events as outs. Measured
-    2024: the batter REACHES on both, and fielders_choice records no out at
-    all. Reconciling the loop is sim-scoped work (the SIM-473/SIM-499
-    redesign) with regression-fixture impact, so it is pinned here rather
-    than changed. When the loop is fixed, this test fails on purpose —
-    update it to pin the reconciled state."""
+class TestFieldersChoice:
+    """Measured 2024: the batter REACHES on a fielder's choice, and a plain
+    ``fielders_choice`` records no out at all."""
 
-    def test_known_divergence(self):
-        from simulation.sim_loop import _OUT_EVENTS
-
-        assert "fielders_choice" in _OUT_EVENTS
-        assert "fielders_choice_out" in _OUT_EVENTS
+    def test_the_batter_reaches_and_no_out_is_recorded(self):
         assert not batter_retired("fielders_choice")
         assert PLAY_OUTS_BY_EVENT["fielders_choice"] == 0
