@@ -1,20 +1,17 @@
-"""tests/unit/test_catcher_engine_throwing.py — SIM-072 (+ SIM-408)
-==================================================
-Unit tests covering the catcher similarity engine's throwing-split design.
+"""Tests of the catcher engine's throwing and deterrence sub-scores.
 
-SIM-072 split the v1 throwing dimension into:
-  - Throwing/Execution sub-score — pop time, CS rate, arm strength.
-    Field name `throwing_score` retained.
-  - Deterrence sub-score — single-feature, driven by
-    steal_attempt_rate_against (PA-level rate, SIM-073).
+The engine (``similarity/engines/catcher_similarity.py``) scores the arm in two
+sub-scores:
 
-SIM-408 update: the engine's 5th "Offense" sub-score (the catcher's own
-batting) was TRIMmed — a defensive-similarity engine shouldn't blend in hitting,
-and the offense columns weren't produced by the computor. The exchange-time
-execution feature was also dropped (not separable from pop time in the feed), so
-throwing_vec is now 3-dim (pop_time, cs_rate, arm_strength). The composite is now
-a 4-sub-score defensive blend (framing/blocking/throwing/deterrence) renormalized
-over 0.85.
+  - Throwing: the throw itself (pop time, caught-stealing rate, arm strength).
+    The result field is ``throwing_score``.
+  - Deterrence: one feature, the steal attempts against the catcher per plate
+    appearance with a runner on first or second.
+
+Runners rarely test a catcher with an elite arm, so his caught-stealing rate
+rests on few attempts; the deterrence sub-score shows his effect. The composite blends four
+defensive sub-scores (framing, blocking, throwing, deterrence) at the ratio
+45 : 20 : 12 : 8, divided by 0.85 so the weights sum to one.
 """
 
 from __future__ import annotations
@@ -29,8 +26,8 @@ import numpy as np
 
 
 def _make_engine_with_profiles(profiles):
-    """Construct a CatcherSimilarityEngine via __new__ with the supplied
-    profiles injected directly (no DuckDB dependency)."""
+    """Build a catcher engine through ``__new__`` over ``profiles``, with no
+    DuckDB file. The helper skips the shrinkage: the profiles stay raw."""
     from similarity.engines.catcher_similarity import (
         BLOCKING_FEATURES,
         DETERRENCE_FEATURES,
@@ -82,10 +79,10 @@ def _make_engine_with_profiles(profiles):
 
 
 class TestCatcherV2DeterrenceSplit(unittest.TestCase):
-    """SIM-072 acceptance tests (offense sub-score TRIMmed per SIM-408)."""
+    """The deterrence sub-score, the throwing split and the composite's weights."""
 
     def test_deterrence_field_present_on_results(self):
-        """AC #1: deterrence_score is a first-class field on results."""
+        """Every result carries a deterrence score inside [0, 1]."""
         from similarity.engines.catcher_similarity import (
             BLOCKING_FEATURES,
             DETERRENCE_FEATURES,
@@ -116,7 +113,7 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         engine = _make_engine_with_profiles(profiles)
         results = engine.query(1, 2024)
         self.assertGreater(len(results), 0)
-        # SimilarityResult is aliased as CatcherSimilarityResult
+        # CatcherSimilarityResult is another name for SimilarityResult.
         self.assertIsInstance(results[0], CatcherSimilarityResult)
         self.assertTrue(hasattr(results[0], "deterrence_score"))
         for r in results:
@@ -124,22 +121,19 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
             self.assertLessEqual(r.deterrence_score, 1.0 + 1e-9)
 
     def test_high_deterrence_low_execution_vs_inverse(self):
-        """AC #8: a high-deterrence/low-execution catcher and a
-        low-deterrence/high-execution catcher must score low against each other.
+        """Two catchers who are opposites on every defensive axis score low.
 
-        We construct two catchers who are opposites along *every* defensive
-        axis — the "Cannon" archetype (elite glove, elite arm, nobody runs on
-        him) versus the "Welcome Mat" archetype (poor glove, poor arm, everybody
-        runs on him and succeeds).  Both the throwing/execution and the
-        deterrence sub-scores must be low (the SIM-072 split is what makes that
-        possible — v1 collapsed both into one 20% throwing block).
+        The "Cannon" has an elite glove and an elite arm, and runners rarely
+        try him. The "Welcome Mat" has a poor glove and a poor arm, and runners
+        try him often and succeed. The throwing and the deterrence sub-scores
+        must each read low: neither one alone may hide the difference.
         """
         from similarity.engines.catcher_similarity import CatcherProfile
 
         rng = np.random.default_rng(72)
 
-        # "Cannon" — every defensive axis at the elite end of the envelope.
-        # throwing_vec = [pop_time, cs_rate, arm_strength_mph] (SIM-408: 3-dim).
+        # "Cannon": every defensive axis at the elite end of the real range.
+        # throwing_vec = [pop_time, cs_rate, arm_strength_mph].
         cannon = CatcherProfile(
             catcher_id=1001,
             season=2024,
@@ -153,7 +147,7 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
             eb_alpha=1.0,
         )
 
-        # "Welcome Mat" — every defensive axis at the replacement-level end.
+        # "Welcome Mat": every defensive axis at the replacement-level end.
         welcome_mat = CatcherProfile(
             catcher_id=1002,
             season=2024,
@@ -167,8 +161,8 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
             eb_alpha=1.0,
         )
 
-        # Population of "average" catchers spanning the realistic envelope so
-        # the normalizer fits sensible mean/std for every dimension.
+        # Thirty average catchers across the real range, so the normalizer fits
+        # a sensible mean and standard deviation for every feature.
         pool = []
         for cid in range(2000, 2030):
             pool.append(
@@ -221,8 +215,7 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         )
         self.assertLess(result.score, 0.45, msg=diag)
 
-        # Both throwing axes must independently score low — the whole point of
-        # the SIM-072 split is that *neither* alone hides the difference.
+        # Each of the two arm sub-scores must read low on its own.
         self.assertLess(
             result.throwing_score,
             0.5,
@@ -235,8 +228,13 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         )
 
     def test_deterrence_missing_sample_falls_back_gracefully(self):
-        """A catcher with deterrence_vec=None (sub-100-PA min-sample guard from
-        SIM-073) must still produce finite scores and not crash the engine."""
+        """A catcher with no deterrence vector still gets finite scores in [0, 1].
+
+        The computor writes a NULL rate below 100 plate appearances with a
+        runner on first or second. With no league row to fill it (this
+        helper loads none), the engine places the catcher at the population
+        mean, a z-score of 0.
+        """
         from similarity.engines.catcher_similarity import (
             BLOCKING_FEATURES,
             DETERRENCE_FEATURES,
@@ -275,8 +273,7 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
             self.assertLessEqual(r.score, 1.0 + 1e-9)
 
     def test_defensive_weight_constants(self):
-        """SIM-408: 4 defensive sub-scores renormalize over 0.85 (Offense
-        TRIMmed)."""
+        """The four defensive weights keep the ratio 45 : 20 : 12 : 8 and sum to one."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
@@ -292,7 +289,10 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         self.assertAlmostEqual(total, 1.0, places=9)
 
     def test_eb_n_prior_unchanged(self):
-        """AC #5: EB_N_PRIOR=15 retained for both throwing-derived sub-scores."""
+        """The empirical-Bayes prior strength is 15, the fielder engine's value.
+
+        The engine shrinks every sub-score on the catcher's called pitches.
+        """
         from similarity.engines.catcher_similarity import EB_N_PRIOR
 
         self.assertEqual(EB_N_PRIOR, 15)

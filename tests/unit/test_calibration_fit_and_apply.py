@@ -1,30 +1,31 @@
-"""
-test_calibration_fit_and_apply.py
-=========================
-SIM-406 — fit + persist a CalibrationReport over real data + APPLY it to all
-engines.
+"""Tests of how a fitted ``CalibrationReport`` reaches the engines.
 
-Before SIM-406 only the pitcher engine consumed a ``CalibrationReport`` (SIM-346,
-covered by ``test_pitcher_engine_calibration.py``).  This suite covers the new wiring:
+``make calibrate`` fits the report; the app applies it to every engine at boot.
+The pitcher engine's own apply is tested in ``test_pitcher_engine_calibration.py``.
+These tests cover:
 
-  1. **apply_calibration on every RBF engine.** batter / fielder / baserunner /
-     catcher / baserunner_steal / pitcher_steal / manager each rebuild their RBF
-     sub-score scorers from a fitted report; a 0.0 / None field falls back to the
-     engine's locked module default; reliability-weight fields (where the report
-     carries them) override the scorer weights.
+  1. **apply_calibration on every RBF engine** (an RBF is a Gaussian kernel,
+     score = exp(-distance² / 2σ²)). The batter, fielder, baserunner, catcher,
+     baserunner-steal, pitcher-steal and manager engines each rebuild their
+     sub-score kernels from the report. A 0.0 or None field keeps the current
+     value (the module default on a new engine). A reliability-weight field,
+     where the report carries one, replaces the kernel's weights.
 
-  2. **The 8 similarity engines expose the seam; the 3 distance engines don't.**
+  2. **The seven RBF engines expose the seam** (``apply_calibration``). The
+     three distance engines (situation, pitch-to-pitch, batted ball) have no
+     sigma and no seam.
 
-  3. **apply_calibration_to_engines (api.state)** applies to every engine with the
-     seam, skips engines without it, is resilient to a per-engine failure, and is a
-     no-op on a None report.
+  3. **apply_calibration_to_engines (api.state)** applies the report to every
+     engine with the seam, skips an engine without it, survives an engine that
+     raises, and does nothing with a None report.
 
-  4. **The new CalibrationReport sigma fields round-trip** through the lossless
-     JSON persistence.
+  4. **The report's sigma fields round-trip** through its JSON form.
 
-All tests construct engines via the real ``__init__`` (which builds the scorers
-from module constants and touches NO database — the DB is only read in
-``build()``), so no live DuckDB / Redis / faiss is required.
+  5. **The sigma fit's 0.0 sentinel** on a matrix with no spread.
+
+Every test builds an engine through the real ``__init__``, which builds the
+kernels from the module constants and opens no database (only ``build()``
+reads one). No DuckDB file, Redis or FAISS is needed.
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ class TestBatterApplyCalibration:
         assert eng._bb_rbf.sigma == 0.6
         assert eng._platoon_rbf.sigma == 0.7
         assert eng._power_rbf.sigma == 0.8
-        # gamma is derived from the new sigma.
+        # The kernel derives gamma from the new sigma.
         assert eng._disc_rbf.gamma == _gamma(0.5)
 
     def test_zero_fields_keep_module_defaults(self):
@@ -90,13 +91,13 @@ class TestBatterApplyCalibration:
         custom = np.arange(1, n + 1, dtype=np.float64)
         report = CalibrationReport(sigma_discipline=0.9, reliability_weights_discipline=custom)
         eng.apply_calibration(report)
-        # WeightedRBFSimilarity normalizes weights to sum to 1.
+        # The kernel normalizes the weights to sum to 1.
         np.testing.assert_allclose(eng._disc_rbf.weights, custom / custom.sum())
 
     def test_sigma_fallback_chains_off_live_instance_not_module_constant(self):
-        # Apply a non-empty report, THEN an empty one: the empty report's 0.0
-        # fallback must keep the previously-applied (live instance) sigma, proving
-        # _sig reads self._x_rbf.sigma rather than the module constant.
+        # Apply a report with a sigma, THEN an empty one. The empty report's
+        # 0.0 must keep the sigma applied before, so the fallback reads the
+        # live kernel's sigma, not the module constant.
         eng = BatterSimilarityEngine(duckdb_path=":memory:")
         eng.apply_calibration(CalibrationReport(sigma_discipline=0.5))
         assert eng._disc_rbf.sigma == 0.5
@@ -105,7 +106,7 @@ class TestBatterApplyCalibration:
 
 
 # ===========================================================================
-# 2. fielder (9 scorers incl. the DP + pivot concatenation)
+# 2. fielder (nine kernels, one of them the double-play and pivot weights joined)
 # ===========================================================================
 
 
@@ -124,7 +125,7 @@ class TestFielderApplyCalibration:
         )
         eng.apply_calibration(report)
         assert eng._if_range_rbf.sigma == 0.5
-        # Both DP scorers share sigma_if_dp.
+        # Both double-play kernels share sigma_if_dp.
         assert eng._if_dp_rbf.sigma == 0.4
         assert eng._if_dp_rbf_corner.sigma == 0.4
         assert eng._if_error_rbf.sigma == 0.6
@@ -138,7 +139,7 @@ class TestFielderApplyCalibration:
         from similarity.engines.fielder_similarity import IF_DP_FEATURES, IF_PIVOT_FEATURES
 
         eng = FielderSimilarityEngine(duckdb_path=":memory:")
-        # Use arrays matching the real schema: IF_DP_FEATURES (3) + IF_PIVOT (1).
+        # Arrays of the real lengths: IF_DP_FEATURES (3) and IF_PIVOT_FEATURES (1).
         dp = np.array([1.0, 2.0, 3.0])
         pivot = np.array([4.0])
         assert len(dp) == len(IF_DP_FEATURES)
@@ -149,29 +150,29 @@ class TestFielderApplyCalibration:
             reliability_weights_if_pivot=pivot,
         )
         eng.apply_calibration(report)
-        # Middle-IF DP scorer = DP + pivot concatenated (4); corner = DP only (3).
+        # The middle-infield kernel joins DP and pivot (4); the corner kernel takes DP (3).
         combo = np.array([1.0, 2.0, 3.0, 4.0])
         np.testing.assert_allclose(eng._if_dp_rbf.weights, combo / combo.sum())
         np.testing.assert_allclose(eng._if_dp_rbf_corner.weights, dp / dp.sum())
 
     def test_dp_one_array_present_still_feeds_fitted_dp_to_both_scorers(self):
-        # A partial report carrying only reliability_weights_if_dp (not pivot) must
-        # feed the fitted DP weights to BOTH the middle (_if_dp_rbf) and corner
-        # (_if_dp_rbf_corner) scorers — the SIM-406-review fix: independent per-array
-        # fallback, not an all-or-nothing revert of the whole concatenation.
+        # A partial report with only reliability_weights_if_dp (no pivot) must
+        # feed the fitted DP weights to BOTH the middle (_if_dp_rbf) and the
+        # corner (_if_dp_rbf_corner) kernels. Each array falls back on its own;
+        # the missing pivot never reverts the whole joined vector.
         from similarity.engines.fielder_similarity import IF_DP_FEATURES, IF_PIVOT_FEATURES
 
         eng = FielderSimilarityEngine(duckdb_path=":memory:")
         dp = np.array([5.0, 6.0, 7.0])
         report = CalibrationReport(sigma_if_dp=0.5, reliability_weights_if_dp=dp)
         eng.apply_calibration(report)
-        # Corner uses the fitted DP weights.
+        # The corner kernel takes the fitted DP weights.
         np.testing.assert_allclose(eng._if_dp_rbf_corner.weights, dp / dp.sum())
-        # Middle uses fitted DP ++ the module-default pivot (NOT a full revert).
+        # The middle kernel joins the fitted DP and the module-default pivot.
         pivot_default = np.array([w for _, w in IF_PIVOT_FEATURES])
         combo = np.concatenate([dp, pivot_default])
         np.testing.assert_allclose(eng._if_dp_rbf.weights, combo / combo.sum())
-        # The middle scorer's DP portion must reflect the fit, not the IF_DP default.
+        # The middle kernel's DP part is the fit, not the IF_DP_FEATURES default.
         dp_default = np.array([w for _, w in IF_DP_FEATURES])
         assert not np.allclose(
             eng._if_dp_rbf.weights,
@@ -180,8 +181,8 @@ class TestFielderApplyCalibration:
         )
 
     def test_reliability_weights_fallback_keeps_module_default(self):
-        # A report with a sigma but NO reliability-weight field must leave the
-        # scorer's weights at the normalized module default (the None branch of _wts).
+        # A report with a sigma but NO reliability-weight field leaves the
+        # kernel's weights at the normalized module default (the None branch of _wts).
         from similarity.engines.fielder_similarity import OF_ARM_FEATURES
 
         eng = FielderSimilarityEngine(duckdb_path=":memory:")
@@ -236,7 +237,7 @@ class TestBaserunnerApplyCalibration:
 
 
 # ===========================================================================
-# 4. catcher / baserunner_steal / pitcher_steal / manager (SIM-408-era)
+# 4. catcher, baserunner steal, pitcher steal, manager
 # ===========================================================================
 
 
@@ -280,7 +281,7 @@ class TestNewerEngineApplyCalibration:
     def test_pitcher_steal(self):
         eng = PitcherStealSimilarityEngine(duckdb_path=":memory:")
         before = eng._out_rbf.sigma
-        eng.apply_calibration(CalibrationReport())  # 0.0 -> keep default
+        eng.apply_calibration(CalibrationReport())  # 0.0 keeps the default
         assert eng._out_rbf.sigma == before
         eng.apply_calibration(CalibrationReport(sigma_pitcher_steal_outcome=0.85))
         assert eng._out_rbf.sigma == 0.85
@@ -305,17 +306,19 @@ class TestNewerEngineApplyCalibration:
 
 
 # ===========================================================================
-# 5. seam presence across the engine roster
+# 5. the seam across the engines
 # ===========================================================================
 
 
 class TestSeamPresence:
     def test_eight_similarity_engines_expose_apply_calibration(self):
-        # The 8 [0,1]-similarity engines (pitcher + the 7 RBF engines) all expose
-        # apply_calibration. The 3 distance engines (situation / pitch_pitch /
-        # batted_ball) have no RBF sigma and are intentionally without the seam;
-        # they are not constructed here (faiss/kdtree deps) — their absence is
-        # asserted indirectly via apply_calibration_to_engines below.
+        # Eight engines score in [0, 1] and expose apply_calibration: the
+        # pitcher engine and the seven RBF engines. This test builds the seven;
+        # test_pitcher_engine_calibration.py covers the pitcher. The three
+        # distance engines (situation, pitch-to-pitch, batted ball) have no
+        # sigma and no seam. They need FAISS or a KD-tree, so the test does
+        # not build them; TestApplyCalibrationToEngines covers the skip of an
+        # engine without the seam.
         engines = [
             BatterSimilarityEngine(duckdb_path=":memory:"),
             FielderSimilarityEngine(duckdb_path=":memory:"),
@@ -358,9 +361,9 @@ class TestApplyCalibrationToEngines:
         report = object()
         supports, noseam, explodes = _Supports(), _NoSeam(), _Explodes()
         applied = apply_calibration_to_engines({"a": supports, "b": noseam, "c": explodes}, report)
-        assert "a" in applied  # the seam was called
-        assert "b" not in applied  # no seam -> skipped
-        assert "c" not in applied  # raised -> caught + skipped, not fatal
+        assert "a" in applied  # the seam ran
+        assert "b" not in applied  # no seam: skipped
+        assert "c" not in applied  # raised: caught and skipped, not fatal
         assert supports.applied is report
 
     def test_none_report_is_noop(self):
@@ -376,7 +379,7 @@ class TestApplyCalibrationToEngines:
 
 
 # ===========================================================================
-# 7. new CalibrationReport sigma fields round-trip
+# 7. the report's sigma fields round-trip
 # ===========================================================================
 
 
@@ -409,23 +412,25 @@ class TestNewFieldsPersistence:
 
 
 # ===========================================================================
-# 8. SimilarityCalibrator._fit_sigma — degenerate (no-variance) -> 0.0 sentinel
+# 8. the sigma fit's 0.0 sentinel on a matrix with no spread
 # ===========================================================================
 
 
 class TestFitSigmaSentinel:
-    """The SIM-406 calibrator must return the 0.0 keep-default sentinel (NOT the
-    degenerate 1.0 fallback) when a feature matrix has no usable variance — e.g. a
-    DuckDB whose manager USAGE columns have not been repopulated (all-NULL → no
-    variance). Otherwise a literal 1.0 would be persisted and silently override the
-    engine's tuned sigma. (SIM-427 un-gated USAGE to 7 populated features, so the
-    live fit is now genuine; this sentinel remains the graceful-degradation guard.)"""
+    """The calibrator's sigma fit (``_fit_sigma``, in
+    ``similarity/calibration/base.py``) returns the 0.0 keep-the-default
+    sentinel, not ``calibrate_sigma``'s 1.0, on a matrix with no spread.
+
+    An example is a database whose manager usage columns are all NULL. A
+    literal 1.0 would persist in the report and override the engine's tuned
+    sigma.
+    """
 
     def test_zero_variance_matrix_returns_zero_sentinel(self):
         from similarity.similarity_calibration import SimilarityCalibrator
 
-        # An all-zero z-scored matrix (what an un-repopulated all-NULL column produces);
-        # width 7 mirrors the manager USAGE sub-score's feature count post-SIM-427.
+        # An all-zero z-scored matrix, what an all-NULL column produces. The
+        # width 7 is the manager usage sub-score's feature count.
         zmat = np.zeros((50, 7), dtype=np.float64)
         assert SimilarityCalibrator._fit_sigma(zmat, 0.50) == 0.0
 
@@ -443,8 +448,8 @@ class TestFitSigmaSentinel:
         assert sigma > 0.0  # a real fit, not the 0.0 sentinel
 
     def test_sentinel_makes_engine_keep_default_on_degenerate_usage(self):
-        # End-to-end: a degenerate (all-zero) usage fit -> 0.0 in the report ->
-        # the manager engine keeps RBF_SIGMA_USAGE regardless of its value.
+        # End to end: an all-zero usage matrix fits 0.0, the report carries
+        # 0.0, and the manager engine keeps RBF_SIGMA_USAGE.
         from similarity.calibration.report import CalibrationReport
         from similarity.engines import manager_similarity
         from similarity.engines.manager_similarity import ManagerSimilarityEngine
