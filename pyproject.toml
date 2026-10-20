@@ -70,10 +70,6 @@ disable_error_code     = ["union-attr", "arg-type", "no-any-return", "operator",
 exclude                = ["tests/", "db/migrations/"]
 
 [[tool.mypy.overrides]]
-module = "similarity.similarity_diagnostics"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
 module = "similarity.similarity_calibration"
 ignore_errors = true
 

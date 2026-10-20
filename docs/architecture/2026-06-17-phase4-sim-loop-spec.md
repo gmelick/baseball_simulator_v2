@@ -393,9 +393,8 @@ The loop accumulates outs across PAs within a half-inning. When `outs == 3`:
 
 ## 7. Where each engine plugs in (the 11 engines + registry)
 
-Canonical engine names are exactly the registry's (`similarity/registry.py`,
-`SimilarityEngineRegistry.list_engines()`). The loop never imports engines by module
-path — it resolves them by canonical name through the registry.
+Canonical engine names are exactly the keys of `ENGINE_REGISTRY` in `api/state.py`
+(`build_all_engines()` builds them). The loop never imports engines by module path.
 
 | # | Canonical name | Family | Step(s) it serves |
 |---|---|---|---|
@@ -408,7 +407,7 @@ path — it resolves them by canonical name through the registry.
 | 7 | `pitcher_steal` | rbf | Pre-pitch hook — pitcher hold/pickoff (allowing SB) |
 | 8 | `manager` | rbf | Pre-pitch + end-of-PA hooks — steal green-light, sub/IBB/bunt tendencies |
 | 9 | `situation` | kdtree | Steps 2, 5 — situation-conditioned neighbourhood tilt |
-| 10 | `pitch_to_pitch` | faiss | Step 3 — the pitch tile the sampler draws from (10-dim) |
+| 10 | `pitch_pitch` | faiss | Step 3 — the pitch tile the sampler draws from (10-dim) |
 | 11 | `batted_ball` | faiss | Step 5 — the batted-ball tile the sampler draws from (3-dim) |
 
 **Score discipline.** RBF/GMM engines emit bounded similarity ∈ [0,1]; KDTree/FAISS
