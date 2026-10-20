@@ -1,65 +1,52 @@
-"""
-manager_similarity.py
-=====================
-Step 2.8 — Manager-to-Manager Similarity
-MLB Baseball Simulation Platform
+"""Manager-to-manager similarity: one score in [0, 1] between two manager-seasons.
 
-Computes a composite similarity score [0, 1] between any two MLB
-manager-season profiles.  Manager behavior is a meaningful independent
-signal in game simulation: two identical teams simulated with different
-managers will produce different run distributions, win probabilities,
-and proposition bet outcomes because of differences in:
+The score mixes three sub-scores. Each sub-score is a weighted Gaussian
+kernel (an RBF: score = exp(-distance² / 2σ²)) over z-scored features. A
+z-score is a value's distance from the population mean, in standard
+deviations. The profile computor derives the features from ``raw.pitches``
+and the per-game bullpen availability table. The fielding manager owns the
+pitching decisions and the defensive changes; the batting manager owns the
+offensive ones.
 
-  - When starters are pulled (starter tolerance)
-  - How the bullpen is structured and deployed (closer usage, leverage)
-  - How aggressively the offense runs and bunts (small ball vs. three-true)
-  - How platoon matchups are exploited (pinch-hit rate vs. handed pitchers)
+  1. Pitcher usage (0.40): how long the starter goes, how often he leaves
+     before 100 pitches, the leverage when the last reliever enters, the
+     relievers' share of high-leverage pitches, short starts, long relief,
+     and the share of the available relievers the manager uses.
+  2. Offensive aggressiveness (0.35): steal attempts, sacrifice bunts in high-
+     and low-leverage spots, and bunts with a runner on third. The
+     hit-and-run rate reads 0.0 for every manager: Statcast does not flag it.
+  3. Platoon and matchups (0.25): pinch hitters, late defensive changes, and
+     the share of plate appearances with the platoon edge. The double-switch
+     rate reads 0.0 for every manager: the data cannot detect it.
 
-This engine allows the simulation to find managers with similar historical
-behavioral fingerprints and use their tendencies to parameterize manager
-decision logic in the Phase 4 simulation loop.
+The composite is the weighted sum of the three, times the pair confidence
+(a discount for a thin sample on either side), clipped to [0, 1].
 
-Sub-score dimensions:
+Where the score goes
+--------------------
+Of this engine's scores, only the usage sub-score reaches the simulator. The
+nightly actor-matrix build (``--what actors_sim``) stores ``usage_score`` for
+every pair of manager-seasons as the ``manager_usage`` matrix. The
+pitching-change draw weights each row of the change pool by the live
+manager's usage similarity to the row's manager, raised to its power (each
+team's real manager decides the pitching change, SIM-427). The usage
+sub-score carries no pair confidence; only the composite does. The build
+applies no calibration report, so the module defaults below are the values
+the draw sees. The composite and the other two sub-scores serve the
+Similarity Explorer.
 
-  1. Pitcher Usage (40%) — the single highest-impact managerial decision
-     dimension for simulation accuracy.  Includes starter tolerance (pitch
-     count threshold at which the manager pulls a starter), closer leverage
-     entry point, bulk-inning reliever usage, and opener usage rate.
-
-  2. Offensive Aggressiveness (35%) — how often the manager initiates
-     running plays (steal rate, hit-and-run rate), uses sacrifice bunts in
-     different situations, and employs squeeze plays.  Run environment
-     awareness: whether the manager adjusts small-ball tendencies in
-     high-leverage situations.
-
-  3. Platoon / Matchup Management (25%) — pinch-hit rate vs. same-handed
-     pitchers, defensive substitution frequency in late innings, and
-     double-switch usage rate.  Managers vary significantly on whether they
-     exploit platoon advantages or ride their lineup.
-
-Research-Informed Design
-------------------------
-  Manager behavioral tendencies are relatively stable season-to-season
-  after the first 100 games of a tenure.  They're noisier than player
-  metrics because every decision is situationally dependent — the same
-  manager will pull a starter in inning 5 when the team is up 8 runs and
-  leave him in during a 2-0 gem.  For this reason, all features use
-  rate-based metrics (decisions per opportunity) rather than raw counts,
-  and only situations meeting minimum context requirements are included
-  (e.g. only high-leverage plate appearances for pinch-hit rate).
-
-  EB_N_PRIOR = 30: managers require a larger sample to stabilize because
-  their decisions are opportunity-gated.  New managers in their first
-  half-season receive significant shrinkage toward the league average.
-
-Dependencies
-------------
-  pip install duckdb numpy
+Design
+------
+Manager tendencies hold steady from season to season, but they are noisier
+than player metrics: every decision depends on the game. Every feature is
+therefore a rate per opportunity or an average, never a raw count.
+Empirical-Bayes (EB) shrinkage pulls each manager-season toward the league
+mean of its season; see EB_N_PRIOR.
 
 Usage
 -----
   engine = ManagerSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
-  engine.build(seasons=[2022, 2023, 2024, 2025])
+  engine.build(seasons=[2023, 2024, 2025, 2026])
   results = engine.query(manager_id=4061, season=2025)
   results = engine.query(manager_id=4061, season=2025, n=20)
 """
@@ -96,64 +83,77 @@ log = logging.getLogger("manager_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Config — feature definitions and weights
 # ============================================================================
 
-# --- Pitcher Usage features ---
-# Rate-based metrics; all normalized per 9 innings or per opportunity.
+# Each group lists (feature, reliability weight). A reliability weight is the
+# feature's share of its group's kernel; a steadier feature gets more pull.
+#
+# The leverage below is the profile computor's three-step bucket, not the
+# leverage index: high = a margin of one run or less in the 7th inning or
+# later; low = a margin of four or more, or the 5th inning or earlier; mid =
+# the rest.
+
+# --- Pitcher usage (the fielding manager) ---
+# Averages and shares, never counts. This group alone weights the pitching-change draw.
 USAGE_FEATURES = [
     # feature_name,                             reliability_weight
-    ("starter_avg_pitch_count", 0.800),  # avg pitches before first hook; stable
-    ("starter_pull_pct_before_100", 0.700),  # % starts ended before 100 pitches
-    ("closer_entry_leverage_index", 0.600),  # avg LI when closer enters; role usage
-    ("high_leverage_reliever_rate", 0.600),  # % high-LI PA handled by top 2 relievers
-    ("opener_usage_rate", 0.500),  # openers used / total starts
-    ("bulk_innings_rate", 0.500),  # games with bulk-inning reliever after opener
-    # SIM-427 capstone: of the relievers the manager had AVAILABLE, the fraction
-    # actually used per game (opportunity-normalized; from the SIM-433-v2 full-roster
-    # availability table). An orthogonal "bullpen-depletion" axis — how aggressively a
-    # manager empties the pen relative to what's available, separating "chose to hold
-    # an arm" from "no arm could pitch". Weight 0.55: just below the 0.60 bullpen-
-    # reliance features because its availability source (rest/IL inference) is modestly
-    # noisier than the pure pitch-count anchors. 100% manager-season coverage on the
-    # 2017-2026 ingest (no NULL-coercion bias in practice).
+    ("starter_avg_pitch_count", 0.800),  # mean pitches by the starter; stable
+    ("starter_pull_pct_before_100", 0.700),  # share of starts ended under 100 pitches
+    ("closer_entry_leverage_index", 0.600),  # mean bucket (0/1/2) as the last reliever enters
+    ("high_leverage_reliever_rate", 0.600),  # share of high-bucket pitches thrown by relievers
+    ("opener_usage_rate", 0.500),  # share of starts of two innings or fewer
+    ("bulk_innings_rate", 0.500),  # share of games with a reliever in 3+ innings
+    # Of the relievers available to the manager, the share he used: used /
+    # (used + available but held), from the per-game bullpen availability
+    # table. It separates "chose to hold an arm" from "no arm could pitch".
+    # Weight 0.55, just below the 0.60 bullpen features, because its
+    # availability source (a rest and injured-list inference) is noisier than
+    # the pitch counts.
     ("available_reliever_usage_rate", 0.550),
 ]
 
-# --- Offensive Aggressiveness features ---
+# --- Offensive aggressiveness (the batting manager) ---
 AGGRESSION_FEATURES = [
-    ("steal_order_rate_per_1b_opp", 0.700),  # steal signs given / 1B opportunity
-    ("hit_and_run_rate_per_opportunity", 0.600),  # H&R per 1B+runner opportunity
-    ("sac_bunt_rate_high_leverage", 0.650),  # bunts in high-LI situations (> 1.5 LI)
-    ("sac_bunt_rate_low_leverage", 0.500),  # bunts in low-LI (small-ball vs. not)
-    ("squeeze_play_rate_per_3b_opp", 0.400),  # squeeze attempts / runner-on-3rd-<2-out
+    ("steal_order_rate_per_1b_opp", 0.700),  # steal attempts / PA with a runner on first
+    ("hit_and_run_rate_per_opportunity", 0.600),  # NULL, read as 0.0: Statcast does not flag it
+    ("sac_bunt_rate_high_leverage", 0.650),  # sac bunts / high-bucket PA
+    ("sac_bunt_rate_low_leverage", 0.500),  # sac bunts / low-bucket PA
+    ("squeeze_play_rate_per_3b_opp", 0.400),  # sac bunts / PA with a runner on third
 ]
 
-# --- Platoon / Matchup Management features ---
+# --- Platoon and matchups (pinch hits: the batting manager; defense: the fielding one) ---
 PLATOON_FEATURES = [
-    ("pinch_hit_rate_vs_same_hand", 0.700),  # PH rate when platoon disadvantage exists
-    ("pinch_hit_rate_high_leverage", 0.650),  # PH rate in high-LI at-bats
-    ("defensive_sub_rate_late_innings", 0.550),  # defensive replacement rate in 7th+ innings
-    ("double_switch_rate_per_reliever_change", 0.600),  # double switches / reliever change event
-    ("platoon_advantage_exploitation_rate", 0.700),  # matchup changes made when adv. available
+    ("pinch_hit_rate_vs_same_hand", 0.700),  # share of pinch-hit PA against a same-hand pitcher
+    ("pinch_hit_rate_high_leverage", 0.650),  # pinch-hit PA / high-bucket PA
+    ("defensive_sub_rate_late_innings", 0.550),  # late (7th+) defensive changes per game
+    ("double_switch_rate_per_reliever_change", 0.600),  # NULL, read as 0.0: not detectable
+    ("platoon_advantage_exploitation_rate", 0.700),  # share of PA with the platoon edge
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
+# Pitcher usage weighs most: of a manager's decisions, it moves a simulated game
+# the most. The weights shape only the composite, which the simulator does not read.
 WEIGHT_USAGE = 0.40
 WEIGHT_AGGRESSION = 0.35
 WEIGHT_PLATOON = 0.25
 _TOTAL = WEIGHT_USAGE + WEIGHT_AGGRESSION + WEIGHT_PLATOON
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# RBF bandwidth parameters
+# The kernel bandwidths (σ). `make calibrate` fits each one to a median
+# similarity of 0.50.
 RBF_SIGMA_USAGE = 1.0000
 RBF_SIGMA_AGGRESSION = 1.0500
 RBF_SIGMA_PLATOON = 1.0200
 
-# EB_N_PRIOR = 30: manager decisions stabilize more slowly than player stats
+# The EB prior strength, in games managed: a manager with EB_N_PRIOR games
+# keeps half of his own rates. It is larger than the players' priors because a
+# manager's decisions come only when the game offers the chance, so they
+# settle more slowly.
 EB_N_PRIOR = 30
 
-# Minimum games managed for inclusion
+# The minimum sample, in games managed. The profile computor flags a
+# manager-season under it (below_minimum_sample), and the profile load skips it.
 MIN_GAMES_MANAGED = 50
 
 
@@ -164,26 +164,32 @@ MIN_GAMES_MANAGED = 50
 
 @dataclass(slots=True)
 class ManagerProfile:
-    """Manager-season profile for similarity scoring."""
+    """One manager-season's feature vectors, sample size and EB weight."""
 
     manager_id: int
     season: int
     sample_games: int
-    sample_starter_decisions: int  # number of starts with pull decision recorded
+    sample_starter_decisions: int  # the computor writes sample_games here (~1 a game)
 
-    # Feature vectors (raw — normalized at query time)
+    # The feature vectors. ``build`` shrinks them toward the league mean in
+    # place. The normalizer z-scores them when the partition is built and when
+    # a query arrives.
     usage_vec: NDArray[np.float64]  # shape (len(USAGE_FEATURES),)
     aggression_vec: NDArray[np.float64]  # shape (len(AGGRESSION_FEATURES),)
     platoon_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
 
-    # Empirical Bayes
+    # Empirical Bayes: the weight the manager's own rates keep, n / (n + prior).
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
-    """One entry in the similarity query output."""
+    """One candidate in a query's output: the composite and its three sub-scores.
+
+    The sub-scores are the raw kernels. Only ``score`` carries the pair
+    confidence; ``usage_score``, the pitching-change draw's weight, does not.
+    """
 
     manager_id: int
     season: int
@@ -195,11 +201,18 @@ class SimilarityResult:
 
 
 # ============================================================================
-# WeightedRBFSimilarity, EmpiricalBayesShrinkage, FeatureNormalizer
+# EmpiricalBayesShrinkage, FeatureNormalizer
 # ============================================================================
 
 
 class EmpiricalBayesShrinkage:
+    """Empirical-Bayes shrinkage: pull a rate vector toward the league mean.
+
+    The manager's own values keep the weight α = n / (n + n_prior), with n in
+    games managed; the league mean takes the rest. A NaN value takes the
+    league mean.
+    """
+
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
@@ -213,6 +226,14 @@ class EmpiricalBayesShrinkage:
 
 @dataclass(slots=True)
 class FeatureNormalizer:
+    """Z-score normalizer fit on the population of manager profiles.
+
+    Each group has its own mean and standard deviation per feature. A NaN
+    z-scores to 0, the population mean. A feature with no spread (the two
+    features that read 0.0 for everyone) keeps a standard deviation of 1.
+    Before ``fit`` runs, a vector passes through unchanged.
+    """
+
     usage_mean: NDArray | None = None
     usage_std: NDArray | None = None
     aggression_mean: NDArray | None = None
@@ -256,6 +277,9 @@ class FeatureNormalizer:
 
 
 class ManagerPartition:
+    """Every manager profile, with its normalized feature matrices, for
+    vectorized scoring."""
+
     def __init__(self) -> None:
         self.profiles: list[ManagerProfile] = []
         self.keys: list[tuple[int, int]] = []
@@ -284,6 +308,11 @@ class ManagerPartition:
         agg_rbf: WeightedRBFSimilarity,
         plat_rbf: WeightedRBFSimilarity,
     ) -> list[SimilarityResult]:
+        """Score the query against every profile, its own manager-season left out.
+
+        The composite is the weighted sum of the three sub-scores, times the
+        pair confidence sqrt(min(α_query, α_candidate)), clipped to [0, 1].
+        """
         if not self.profiles:
             return []
 
@@ -320,15 +349,15 @@ class ManagerPartition:
 
 class ManagerSimilarityEngine:
     """
-    Manager-to-Manager Similarity Engine (Step 2.8).
+    The manager-to-manager similarity engine.
 
-    Scores computed exhaustively across all manager-seasons with
-    sufficient sample size.  Cross-season comparisons are included
-    (the same manager in 2022 vs. 2024 may differ after personnel changes).
+    A query scores every manager-season above the minimum sample. The
+    manager's other seasons are included: the same manager can differ from
+    one season to another as his staff changes.
 
     Usage:
         engine = ManagerSimilarityEngine(duckdb_path="path/to/db.duckdb")
-        engine.build(seasons=[2022, 2023, 2024, 2025])
+        engine.build(seasons=[2023, 2024, 2025, 2026])
         results = engine.query(manager_id=4061, season=2025)
     """
 
@@ -354,18 +383,18 @@ class ManagerSimilarityEngine:
             RBF_SIGMA_PLATOON, np.array([w for _, w in PLATOON_FEATURES])
         )
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0027 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff every loaded profile declared. None when the table has no
+        # asof_date column (a database before migration 0027) or every row's
+        # stamp is NULL.
         self._asof_date = None
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the usage / aggression / platoon RBF scorers from a report.
+        """Rebuild the usage, aggression and platoon kernels from a calibration report.
 
-        A sigma field left at its 0.0 default keeps the engine's current value, so a
-        partial report degrades gracefully (e.g. a DuckDB whose USAGE columns have not
-        been repopulated yields a degenerate, no-variance fit → the 0.0 keep-default
-        sentinel → the module-default RBF_SIGMA_USAGE).
+        Only the sigmas change; the reliability weights stay at the module
+        defaults. A sigma left at 0.0 keeps the kernel's current sigma. The
+        calibration writes 0.0 when a group has no spread to fit, so a partial
+        report changes only what it fitted.
         """
 
         def _sig(field: str, current: float) -> float:
@@ -393,6 +422,7 @@ class ManagerSimilarityEngine:
         )
 
     def build(self, seasons: list[int] | None = None) -> None:
+        """Load the profiles, shrink them, fit the normalizer and build the partition."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
@@ -413,6 +443,11 @@ class ManagerSimilarityEngine:
         )
 
     def _load_league_averages(self, conn, seasons):
+        """Read each season's league means, the shrinkage target.
+
+        A feature the league profile lacks reads 0.0. Without the table, no
+        profile is shrunk.
+        """
         try:
             sf = f"AND season IN ({', '.join(str(s) for s in seasons)})" if seasons else ""
             rows = conn.execute(f"""
@@ -437,9 +472,8 @@ class ManagerSimilarityEngine:
     def _load_profiles(self, conn, seasons):
         sf = f"AND msm.season IN ({', '.join(str(s) for s in seasons)})" if seasons else ""
 
-        # SIM-537: graceful-optional column, same pattern SIM-534 uses for the
-        # batter engine — a database that has not run migration 0027 yet still
-        # builds; asof_date just comes back NULL for every row.
+        # asof_date is optional: a database before migration 0027 still builds,
+        # and every row's stamp reads NULL.
         _present = duck_columns(conn, "derived", "manager_season_metrics")
         _asof_col = "msm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
@@ -476,7 +510,7 @@ class ManagerSimilarityEngine:
 
         log.info("Loading %d manager profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff (checked after the loop).
         asof_values: set = set()
 
         for row in rows:
@@ -508,6 +542,8 @@ class ManagerSimilarityEngine:
             asof_values.add(asof_val)
 
             def _v(*vals):
+                # A NULL becomes 0.0, not NaN, so the EB shrinkage does not
+                # treat it as missing.
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
 
             self._profiles[(mid, season)] = ManagerProfile(
@@ -524,9 +560,9 @@ class ManagerSimilarityEngine:
                 below_minimum=bool(below_min),
             )
 
-        # SIM-537: refuse a mixed set — same reasoning as the batter engine.
-        # Profiles built at two different cutoffs (or one stamped, one not)
-        # are not comparable, and nothing downstream would show it.
+        # Refuse a mixed set (the point-in-time profiles, SIM-537). Profiles
+        # built at two cutoffs, or one stamped and one not, are not comparable,
+        # and nothing downstream shows it.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "manager profiles were built at different cutoffs "
@@ -538,6 +574,10 @@ class ManagerSimilarityEngine:
             log.info("Manager profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
+        """Shrink each profile toward its season's league mean, by games managed.
+
+        A season with no league-average row is not shrunk.
+        """
         for p in self._profiles.values():
             s = p.season
             for group, attr in [
@@ -563,6 +603,11 @@ class ManagerSimilarityEngine:
         season: int,
         n: int | None = None,
     ) -> list[SimilarityResult]:
+        """Every other manager-season, sorted by the composite, descending.
+
+        ``n`` keeps the top ``n``. An unknown manager-season returns an empty
+        list.
+        """
         profile = self._profiles.get((manager_id, season))
         if profile is None:
             log.warning("Manager %d season %d not found.", manager_id, season)
@@ -583,6 +628,7 @@ class ManagerSimilarityEngine:
         mgr_a: tuple[int, int],
         mgr_b: tuple[int, int],
     ) -> SimilarityResult | None:
+        """Score one manager-season against another; None when either is missing."""
         pa = self._profiles.get(mgr_a)
         pb = self._profiles.get(mgr_b)
         if pa is None or pb is None:
@@ -625,7 +671,7 @@ class ManagerSimilarityEngine:
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff every loaded profile declared, or ``None``."""
         return self._asof_date
 
 

@@ -1,95 +1,58 @@
-"""
-batter_similarity.py
-====================
-Step 2.2 — Batter-to-Batter Similarity
-MLB Baseball Simulation Platform
+"""Batter-to-batter similarity: one score in [0, 1] between two batter-seasons.
 
-Computes a composite similarity score [0, 1] between any two MLB
-batter-season profiles by combining five sub-score dimensions:
+The score mixes five sub-scores. Each sub-score is a weighted Gaussian kernel
+(an RBF: score = exp(-distance² / 2σ²)) over z-scored features. A z-score is a
+value's distance from the population mean, in standard deviations.
 
-  1. Plate Discipline (32%)  — process-driven approach metrics that
-     stabilize fastest and most reliably signal batter identity:
-     first-pitch take rate, O-swing%, Z-swing%, whiff%, contact%,
-     walk rate, strikeout rate.
+  1. Plate discipline (0.32): first-pitch take rate, chase rate (O-swing),
+     zone swing rate (Z-swing), contact rate, whiff rate, strikeout rate and
+     walk rate.
+  2. Batted ball (0.28): ground-ball and fly-ball rates, pull and
+     opposite-field rates, average exit velocity and launch angle, hard-hit
+     rate and barrel rate.
+  3. Platoon (0.12): discipline rates plus the ground-ball and barrel rates,
+     split by pitcher hand and compared side for side.
+  4. Power (0.08): home-run rate, xBA, xSLG and maximum exit velocity.
+  5. Physical swing and stance (0.20; the batter's physical swing features,
+     SIM-529): how the batter swings and stands, not what his swings
+     produced. Statcast measures them and Baseball Savant publishes them from
+     2023 on. Six of the ten repeat from season to season better than any
+     other feature here. Each is held overall and per pitcher hand, so a
+     switch hitter's two sides stay apart.
 
-  2. Batted Ball Profile (28%) — contact quality and direction metrics
-     that characterize what happens when a batter makes contact:
-     GB%, FB%, LD%, IFFB%, pull%, center%, oppo%, avg exit velo,
-     avg launch angle, hard-hit%, barrel%.
+The composite is the weighted sum of the five, times a handedness penalty
+(the bats penalty), times the pair confidence (a discount for a thin sample on
+either side), clipped to [0, 1].
 
-  3. Platoon Profile (12%) — vs-LHP and vs-RHP splits compared
-     separately, critical for matchup-dependent simulation. The
-     simulation often queries "find batters like X when facing a RHP"
-     which shifts weight toward the relevant platoon split.
+Where the score goes
+--------------------
+The nightly actor-matrix build (``--what actors_sim``) scores every
+batter-season against every other with ``query`` and no pitcher hand. The
+pitch draw, the pitch-result draw and the fielding draw use that matrix as a
+draw weight. The build applies no calibration report, so the module defaults
+below are the values the draws see. The app applies the calibration report to
+its own copy at boot, and the Similarity Explorer reads that copy.
 
-  4. Power / Results (8%) — outcome-based metrics that are noisier
-     but add discrimination for power profiles: HR rate, xBA, xSLG,
-     max exit velo.
-
-  5. Physical swing and stance (20%, SIM-529) — how the batter SWINGS
-     and STANDS rather than what his swings produced: bat speed, swing
-     length, swing tilt, attack angle and direction, contact depth,
-     foot separation, stance angle, and where he stands in the box.
-     Measured by Statcast and published by Baseball Savant for 2023
-     onward. Five of these ten repeat season to season more reliably
-     than any other feature in this engine. Held per platoon context,
-     so a switch hitter's two sides stay apart.
-
-Research-Informed Design
-------------------------
-  Feature weighting within each sub-score is informed by metric
-  stabilization research (Carleton 2007, Pavlidis/Dolinar updates,
-  FanGraphs reliability studies):
-
-    - K%, contact%, swing% stabilize by ~100-150 PA → high weight
-    - Walk rate, GB%, FB% stabilize by ~200-250 PA → moderate weight
-    - HR rate stabilizes by ~300 PA → moderate weight
-    - LD%, BABIP, BA stabilize by 500+ PA → low weight / excluded
-
-  Process-driven metrics (what the batter *does*) are prioritized over
-  outcome metrics (what *happened*), following the PECOTA philosophy
-  and the FanGraphs PCA batter similarity approach. The simulation
-  cares about HOW a batter approaches an at-bat, not whether he got
-  lucky on BABIP this season.
-
-  Platoon splits are included because the simulation runs in the
-  context of a specific pitcher handedness (Step 3b: pitch outcome
-  determination). A batter's vs-RHP profile can differ dramatically
-  from their vs-LHP profile, and matching on the wrong split would
-  poison the outcome sampling.
-
-Handedness Design
------------------
-  Unlike pitcher similarity, batters are NOT partitioned by bat hand.
-  Switch hitters exist and need to be compared to everyone. Even L/R
-  batters can be meaningfully similar (similar approach, similar batted
-  ball profile). Instead, a mild bats-mismatch penalty is applied when
-  comparing batters with different handedness, as their spray angle
-  distributions will be mirrored.
-
-Exhaustive Scoring
-------------------
-  Like pitcher similarity, query() scores against ALL batter-season
-  profiles in the engine and returns the full list. Cross-season
-  comparisons (e.g. 2025 Soto vs. 2024 Soto) are first-class.
-
-Dependencies
-------------
-  pip install duckdb numpy scipy
+Design
+------
+- Process comes before outcome. The discipline and batted-ball groups (what
+  the batter does) outweigh the power group (what happened), because outcome
+  rates such as BABIP carry more luck.
+- Batters share one partition. A switch hitter must compare against everyone,
+  and a left-handed and a right-handed batter can share an approach. A mild
+  handedness penalty keeps the two sides apart instead.
+- The search is exhaustive. ``query`` scores every batter-season, the
+  batter's other seasons included.
+- Empirical-Bayes (EB) shrinkage pulls each rate toward the league mean. A
+  small sample moves further.
 
 Usage
 -----
   engine = BatterSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
-  engine.build(seasons=[2022, 2023, 2024, 2025])
-
-  # All similar batter-seasons (exhaustive)
-  results = engine.query(batter_id=665742, season=2025)
-
-  # Top-20 only
-  results = engine.query(batter_id=665742, season=2025, n=20)
-
-  # Platoon-aware: find batters similar to Soto when facing a RHP
-  results = engine.query(batter_id=665742, season=2025, vs_hand="R")
+  engine.build(seasons=[2023, 2024, 2025, 2026])
+  results = engine.query(batter_id=665742, season=2025)  # every batter-season
+  results = engine.query(batter_id=665742, season=2025, n=20)  # the top 20
+  results = engine.query(batter_id=665742, season=2025, vs_hand="R")  # against a RHP
 """
 
 from __future__ import annotations
@@ -124,14 +87,18 @@ log = logging.getLogger("batter_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Config — feature definitions and weights
 # ============================================================================
 
-# --- Plate Discipline features (stabilize 50-200 PA) ---
-# Ordered by reliability (fastest-stabilizing first).
-# Per-feature reliability weights within this sub-score, derived from
-# stabilization research: features that stabilize faster get higher weight
-# because they carry more true-talent signal per PA.
+# Each group lists (feature, reliability weight). A reliability weight is the
+# feature's share of its group's kernel: a feature that repeats better from
+# season to season carries more true talent and gets more pull. The values here
+# are the module defaults. `make calibrate` fits each one as the feature's
+# season-to-season correlation, and the app applies that fit at boot. The
+# "stabilizes" notes give the published sample at which each rate becomes
+# reliable (Carleton; FanGraphs).
+
+# --- Plate discipline (stabilizes in 60-200 PA) ---
 DISCIPLINE_FEATURES = [
     # feature_name,           reliability_weight
     ("first_pitch_take_rate", 0.680),  # stabilizes ~60 PA (swing% family)
@@ -143,7 +110,8 @@ DISCIPLINE_FEATURES = [
     ("walk_rate", 0.558),  # stabilizes ~200 PA
 ]
 
-# --- Batted Ball Profile features (stabilize 100-300 BIP) ---
+# --- Batted ball (stabilizes in 50-150 balls in play) ---
+# The pull and opposite-field rates read relative to the batter's own side.
 BATTED_BALL_FEATURES = [
     ("gb_rate", 0.563),  # stabilizes ~100 BIP (fastest BB metric)
     ("fb_rate", 0.544),  # stabilizes ~150 BIP
@@ -155,7 +123,9 @@ BATTED_BALL_FEATURES = [
     ("barrel_rate", 0.333),  # stabilizes ~150 BBE
 ]
 
-# --- Power / Results features (noisier, 300+ PA) ---
+# --- Power and results (noisier; 300+ PA) ---
+# The profile computor writes no xba or xslg, so both read 0.0 for every batter
+# (see the optional columns in the profile load).
 POWER_FEATURES = [
     ("hr_rate", 0.470),  # stabilizes ~300 PA
     ("xba", 0.596),  # expected stats — moderate noise
@@ -163,9 +133,9 @@ POWER_FEATURES = [
     ("max_exit_velo", 0.690),  # very stable — physical attribute
 ]
 
-# --- Platoon split features (compared per-hand: vs_L and vs_R) ---
-# Focus on approach/discipline differences by hand, not contact quality
-# which is already captured in the batted_ball sub-score.
+# --- Platoon splits (compared side for side: vs L with vs L, vs R with vs R) ---
+# Mostly approach and discipline by pitcher hand. The ground-ball and barrel
+# rates add a little contact shape; the batted-ball group holds the rest.
 PLATOON_FEATURES = [
     ("o_swing_rate", 0.649),
     ("z_swing_rate", 0.482),
@@ -176,20 +146,19 @@ PLATOON_FEATURES = [
     ("barrel_rate", 0.239),
 ]
 
-# --- Physical swing and stance features (SIM-529) ---
-# How the batter SWINGS and STANDS, rather than what his swings produced. Every
-# other group in this engine is a rate of outcomes; this one is measurement.
+# --- Physical swing and stance (the batter's physical swing features, SIM-529) ---
+# How the batter swings and stands, not what his swings produced. Every other
+# group in this engine is a rate of outcomes; this one is a measurement.
 #
-# The reliability weight of each feature IS its measured year-to-year
-# correlation, averaged over 2023->2024 and 2024->2025 (owner ruling 2026-09-10:
-# fit these reliability-proportionally). For comparison, the most stable feature
-# anywhere else in this engine is whiff rate at 0.825 — five of the ten below
-# beat it. Evidence:
+# Each reliability weight IS the feature's measured year-to-year correlation,
+# averaged over 2023->2024 and 2024->2025 (owner ruling 2026-09-10: weight these
+# in proportion to reliability). The most stable feature in the other groups is
+# whiff rate at a measured 0.825, and six of the ten below beat it. Evidence:
 # docs/audit/2026-09-10-savant-leaderboard-data-audit.md
 #
 # Each feature is stored three times: overall, against left-handed pitching and
-# against right-handed pitching. A switch hitter genuinely swings and stands
-# differently from each side, and collapsing him to one row loses that.
+# against right-handed pitching. A switch hitter swings and stands differently
+# from each side, and one row per batter would lose that.
 PHYSICAL_FEATURES = [
     # feature_name,        reliability weight = measured year-to-year r
     ("swing_tilt", 0.896),  # steepness of the swing plane
@@ -205,18 +174,16 @@ PHYSICAL_FEATURES = [
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-# SIM-529 rebalanced these. The physical group takes 0.20 and the four existing
-# groups give it up in proportion, so every judgement already encoded in their
-# RELATIVE sizes survives untouched (0.40 : 0.35 : 0.15 : 0.10 is still
-# 0.32 : 0.28 : 0.12 : 0.08).
+# The physical group takes 0.20. The other four keep their relative sizes:
+# 0.32 : 0.28 : 0.12 : 0.08 is the four-group split 0.40 : 0.35 : 0.15 : 0.10
+# scaled by 0.8.
 #
-# Why 0.20 and not more. Averaging each group's measured year-to-year
-# correlation makes the physical group the most reliable of the five — 0.824
-# against 0.779 for discipline, the next best — so a strictly proportional
-# split would hand it roughly 0.28. It is also the newest and least tested
-# group in this simulator, so it starts at a fifth of the score rather than at
-# what reliability alone would buy. This is the single number to move if the
-# certifying lane says the physical group is pulling too hard or too little.
+# Why 0.20 and not more. Averaged over its features, the physical group repeats
+# best of the five (r 0.824, against 0.779 for discipline, the next best). A
+# split in proportion to reliability gives it about 0.28. The group is the least
+# tested in this simulator, so it holds a fifth of the score instead. This is
+# the one number to move if the certifying lane shows the physical group
+# pulling too hard or too little.
 WEIGHT_DISCIPLINE = 0.32
 WEIGHT_BATTED_BALL = 0.28
 WEIGHT_PLATOON = 0.12
@@ -225,11 +192,11 @@ WEIGHT_PHYSICAL = 0.20
 _TOTAL = WEIGHT_DISCIPLINE + WEIGHT_BATTED_BALL + WEIGHT_PLATOON + WEIGHT_POWER + WEIGHT_PHYSICAL
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# When vs_hand is specified, platoon weight is boosted and discipline/BB
-# weights are partially shifted to reflect that the matchup context matters
-# more than the overall profile.
-# SIM-529: scaled by 0.8 to make room for the same 0.20 physical share, so the
-# platoon context still shifts weight in exactly the proportions it used to.
+# The platoon-context weights. A query that names a pitcher hand, for a batter
+# with a real sample against it, cares more about the matchup than about the
+# overall profile, so the platoon group takes the most weight. The physical
+# group keeps its 0.20; the other four are the four-group platoon split
+# (0.30 : 0.25 : 0.35 : 0.10) scaled by 0.8.
 WEIGHT_DISCIPLINE_PLATOON = 0.24
 WEIGHT_BATTED_BALL_PLATOON = 0.20
 WEIGHT_PLATOON_PLATOON = 0.28  # platoon becomes the dominant signal
@@ -244,24 +211,24 @@ _TOTAL_PLATOON = (
 )
 assert abs(_TOTAL_PLATOON - 1.0) < 1e-9, "Platoon-context weights must sum to 1.0"
 
-# RBF bandwidth parameters (gamma = 1 / (2σ²))
+# The kernel bandwidths (σ; gamma = 1 / (2σ²)). `make calibrate` fits each one
+# to a median similarity of 0.50.
 RBF_SIGMA_DISCIPLINE = 1.0389
 RBF_SIGMA_BATTED_BALL = 1.0828
 RBF_SIGMA_PLATOON = 1.0866
 RBF_SIGMA_POWER = 0.9591
-#: SIM-529. A starting value in line with the other four; `make calibrate` fits
-#: it against the same median-similarity target as the rest.
+#: A starting value in line with the other four.
 RBF_SIGMA_PHYSICAL = 1.0000
 
-#: The pre-SIM-529 four-way split, kept so the physical group can be INERT.
+#: The four-group split, (discipline, batted ball, platoon, power), used when no
+#: batter in the population has physical data.
 #:
-#: Why this exists. If the code ships before the batter profiles are rebuilt,
-#: every batter's physical vector is NaN, every physical sub-score is a perfect
-#: 1.0, and the composite becomes 0.8 * (the old score) + 0.20. That is not
-#: harmless: the score is a DRAW WEIGHT, and compressing its spread makes every
-#: batter look more alike, quietly weakening the batter factor in the pitch and
-#: fielding draws. Falling back to these weights makes the composite identical
-#: to the pre-SIM-529 value until the data actually lands.
+#: Why it exists. With no physical data every physical sub-score is a perfect
+#: 1.0, and a 0.20 weight would turn every composite into 0.8 × (the four-group
+#: score) + 0.20. That compresses the spread. The score is a draw weight, so a
+#: compressed spread makes every batter look more alike and weakens the batter
+#: factor in the draws. With these weights the physical group gets 0.0, and the
+#: composite is the four-group score.
 _LEGACY_WEIGHTS = (0.40, 0.35, 0.15, 0.10)
 _LEGACY_WEIGHTS_PLATOON = (0.30, 0.25, 0.35, 0.10)
 
@@ -271,10 +238,10 @@ def sub_score_weights(
 ) -> tuple[float, float, float, float, float]:
     """(discipline, batted ball, platoon, power, physical), summing to 1.0.
 
-    ``physical_available`` is False when NO batter in the population has physical
-    data — before the profiles are rebuilt, or on a database that predates
-    migration 0025. The physical weight is then 0.0 and the other four revert to
-    their pre-SIM-529 values.
+    ``physical_available`` is False when no batter in the built population has
+    physical data: a season set before 2023 (Savant publishes no swing tracking
+    earlier), or a database without the physical columns (migration 0025). The
+    physical weight is then 0.0, and the other four take the four-group split.
     """
     if not physical_available:
         legacy = _LEGACY_WEIGHTS_PLATOON if platoon_context else _LEGACY_WEIGHTS
@@ -296,23 +263,26 @@ def sub_score_weights(
     )
 
 
-# Bats-mismatch penalty: when comparing L-to-R or R-to-L batters,
-# spray angle distributions are mirrored. This multiplicative penalty
-# accounts for that. L-to-S or R-to-S gets a milder penalty.
+# The bats penalty multiplies the composite when the two batters bat from
+# different sides. The pull and opposite-field rates read relative to the
+# batter's own side, so a lefty and a righty with the same rates hit to opposite
+# fields. A switch hitter shares a side with everyone, so his penalty is milder.
 BATS_PENALTY_OPPOSITE = 0.92  # L↔R
 BATS_PENALTY_SWITCH = 0.97  # L↔S or R↔S
 BATS_PENALTY_SAME = 1.00  # L↔L, R↔R, S↔S
 
-# Empirical Bayes shrinkage prior strength
-# At EB_N_PRIOR PA, shrinkage weight α = 0.5
+# The EB prior strength, in plate appearances. A batter with EB_N_PRIOR PA keeps
+# half of his own rate (α = 0.5). At the 100-PA minimum α is already 0.95, so
+# the shrinkage is light.
 EB_N_PRIOR = 5
 
-# Minimum sample for inclusion (matches schema: below_minimum_sample when PA < 100)
+# The minimum sample, in plate appearances. The profile computor flags a
+# batter-season under it (below_minimum_sample), and the profile load skips it.
 MIN_BATTER_PA = 100
 
-#: SIM-529: how many columns the profile query returns BEFORE the physical
-#: block. Computed, not typed, so adding a feature to any group above moves the
-#: boundary instead of silently shifting the physical tail by one.
+#: How many columns the profile query returns BEFORE the physical block.
+#: Computed, not typed, so a feature added to any group above moves the boundary
+#: instead of shifting the physical tail by one column.
 #: 5 identity columns + the four feature groups + a sample count per platoon
 #: side + below_minimum_sample.
 _N_BASE_COLUMNS = (
@@ -345,7 +315,7 @@ def _no_physical() -> NDArray[np.float64]:
 
 @dataclass(slots=True)
 class BatterProfile:
-    """Complete batter-season profile for similarity scoring."""
+    """One batter-season's feature vectors, sample sizes and EB weight."""
 
     batter_id: int
     season: int
@@ -353,7 +323,9 @@ class BatterProfile:
     sample_pa: int
     sample_pitches: int
 
-    # Feature vectors (raw values — normalized at query time)
+    # The rate vectors. ``build`` shrinks them toward the league mean in place.
+    # The normalizer z-scores them when the partition is built and when a query
+    # arrives.
     discipline_vec: NDArray[np.float64]  # shape (len(DISCIPLINE_FEATURES),)
     batted_ball_vec: NDArray[np.float64]  # shape (len(BATTED_BALL_FEATURES),)
     power_vec: NDArray[np.float64]  # shape (len(POWER_FEATURES),)
@@ -362,13 +334,17 @@ class BatterProfile:
     platoon_vs_l_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
     platoon_vs_r_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
 
-    # SIM-529: physical swing and stance, held per platoon context so a switch
-    # hitter's two sides stay apart. The overall vector is used when no pitcher
-    # hand is given; otherwise the matching side is.
+    # Physical swing and stance, overall and per pitcher hand, so a switch
+    # hitter's two sides stay apart. A query with no pitcher hand reads the
+    # overall vector; otherwise it reads the matching side. These vectors are
+    # not shrunk.
     #
-    # The default is all-NaN, not all-zero, and it is load-bearing: a batter with
-    # no Savant row must score NEUTRALLY (the kernel maps NaN to zero distance).
-    # Zeros would read as the slowest swing and the flattest stance in the league.
+    # The default is all-NaN, not all-zero, and the choice matters: zeros would
+    # read as the slowest swing and the flattest stance in the league. Once the
+    # normalizer is fitted, a NaN z-scores to 0, the population mean. With no
+    # physical data in the population, the kernel reads a NaN difference as zero
+    # distance. Either way, two batters with no Savant row are a perfect physical
+    # match.
     physical_vec: NDArray[np.float64] = _no_physical()  # (len(PHYSICAL_FEATURES),)
     physical_vs_l_vec: NDArray[np.float64] = _no_physical()
     physical_vs_r_vec: NDArray[np.float64] = _no_physical()
@@ -376,14 +352,18 @@ class BatterProfile:
     sample_pa_vs_l: int = 0
     sample_pa_vs_r: int = 0
 
-    # Empirical Bayes
+    # Empirical Bayes: the weight the batter's own rates keep, n / (n + prior).
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
-    """One entry in the similarity query output."""
+    """One candidate in a query's output: the composite and its five sub-scores.
+
+    The sub-scores are the raw kernels. Only ``score`` carries the bats penalty
+    and the pair confidence.
+    """
 
     batter_id: int
     season: int
@@ -393,13 +373,8 @@ class SimilarityResult:
     batted_ball_score: float
     platoon_score: float
     power_score: float
-    physical_score: float  # SIM-529
+    physical_score: float
     sample_pa: int
-
-
-# ============================================================================
-# Reliability-Weighted RBF Kernel
-# ============================================================================
 
 
 # ============================================================================
@@ -408,7 +383,11 @@ class SimilarityResult:
 
 
 class EmpiricalBayesShrinkage:
-    """Shrinks raw feature vectors toward league average based on sample size."""
+    """Empirical-Bayes shrinkage: pull a rate vector toward the league mean.
+
+    The batter's own values keep the weight α = n / (n + n_prior); the league
+    mean takes the rest. A NaN value takes the league mean.
+    """
 
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
@@ -437,9 +416,10 @@ class FeatureNormalizer:
     """
     Z-score normalizer fit on the population of batter profiles.
 
-    Separate normalization parameters for each feature group to ensure
-    each feature has mean 0 and std 1 within its group. NaN is treated
-    as neutral (z-score of 0).
+    Each group has its own mean and standard deviation per feature. A NaN
+    z-scores to 0, the population mean. A feature with no spread keeps a
+    standard deviation of 1. Before ``fit`` runs, a vector passes through
+    unchanged.
     """
 
     discipline_mean: NDArray | None = None
@@ -452,9 +432,9 @@ class FeatureNormalizer:
     platoon_l_std: NDArray | None = None
     platoon_r_mean: NDArray | None = None
     platoon_r_std: NDArray | None = None
-    # SIM-529. One set of parameters for all three physical vectors: the overall
-    # and the two platoon sides measure the SAME quantities in the same units, so
-    # normalising them separately would make a switch hitter's left-side stance
+    # One set of parameters for all three physical vectors. The overall vector
+    # and the two sides measure the SAME quantities in the same units, so
+    # separate parameters would make a switch hitter's left-side stance
     # incomparable to a left-handed batter's stance.
     physical_mean: NDArray | None = None
     physical_std: NDArray | None = None
@@ -475,18 +455,19 @@ class FeatureNormalizer:
             [p.batted_ball_vec for p in profiles]
         )
         self.power_mean, self.power_std = _fit_group([p.power_vec for p in profiles])
-        # Platoon — fit on profiles with sufficient platoon sample
+        # The platoon groups fit only over the batters with 30 or more PA on
+        # that side.
         vs_l_vecs = [p.platoon_vs_l_vec for p in profiles if p.sample_pa_vs_l >= 30]
         vs_r_vecs = [p.platoon_vs_r_vec for p in profiles if p.sample_pa_vs_r >= 30]
         if vs_l_vecs:
             self.platoon_l_mean, self.platoon_l_std = _fit_group(vs_l_vecs)
         if vs_r_vecs:
             self.platoon_r_mean, self.platoon_r_std = _fit_group(vs_r_vecs)
-        # SIM-529: fit on the overall vectors, then reuse for both sides.
-        # Only when some batter actually HAS physical data. Fitting an all-NaN
-        # population yields a NaN mean and a numpy warning, and leaving the
-        # parameters unset is the same thing said cleanly: _normalize returns the
-        # vector untouched, so an absent group stays NaN and scores neutrally.
+        # The physical group fits on the overall vectors and serves both sides.
+        # It fits only when some batter has physical data: an all-NaN population
+        # gives a NaN mean and a numpy warning. Left unset, the parameters pass
+        # every vector through unchanged, and the kernel reads the NaNs as zero
+        # distance.
         phys_vecs = [p.physical_vec for p in profiles]
         if phys_vecs and np.isfinite(np.asarray(phys_vecs, dtype=np.float64)).any():
             self.physical_mean, self.physical_std = _fit_group(phys_vecs)
@@ -522,13 +503,11 @@ class FeatureNormalizer:
 
 
 def bats_penalty(bats_a: str, bats_b: str) -> float:
-    """
-    Multiplicative penalty for comparing batters with different handedness.
+    """The bats penalty between two batters' sides (see BATS_PENALTY_OPPOSITE).
 
-    Switch hitters (S) are compatible with both sides; the penalty is mild.
-    L↔R comparison gets a larger penalty because spray distributions are
-    mirrored (pull/oppo swap sides), though the discipline and power
-    profiles can still be very similar.
+    The same side scores 1.0. A switch hitter against anyone scores the milder
+    switch penalty. A left-handed against a right-handed batter scores the
+    full penalty, though their discipline and power can still match closely.
     """
     if bats_a == bats_b:
         return BATS_PENALTY_SAME
@@ -538,7 +517,7 @@ def bats_penalty(bats_a: str, bats_b: str) -> float:
 
 
 def bats_penalty_vector(query_bats: str, all_bats: list[str]) -> NDArray[np.float64]:
-    """Vectorized version for batch scoring."""
+    """The bats penalty of the query against each candidate."""
     penalties = np.ones(len(all_bats), dtype=np.float64)
     for i, b in enumerate(all_bats):
         penalties[i] = bats_penalty(query_bats, b)
@@ -551,13 +530,11 @@ def bats_penalty_vector(query_bats: str, all_bats: list[str]) -> NDArray[np.floa
 
 
 class BatterPartition:
-    """
-    Stores all batter profiles with pre-built normalized feature matrices
-    for vectorized batch RBF scoring.
+    """Every batter profile, with its normalized feature matrices, for
+    vectorized scoring.
 
-    Unlike pitchers, batters are NOT partitioned by handedness — all
-    batters live in a single partition. Handedness mismatch is handled
-    via a multiplicative penalty.
+    Pitchers split by hand; batters share this one partition. The bats
+    penalty keeps the sides apart.
     """
 
     def __init__(self) -> None:
@@ -571,14 +548,14 @@ class BatterPartition:
         self._power_matrix: NDArray | None = None
         self._platoon_l_matrix: NDArray | None = None
         self._platoon_r_matrix: NDArray | None = None
-        # SIM-529: one matrix per platoon context, all three normalised with the
-        # same parameters so they stay comparable to each other.
+        # One physical matrix per context (overall, vs L, vs R), all three
+        # normalized with the same parameters so they stay comparable.
         self._physical_matrix: NDArray | None = None
         self._physical_l_matrix: NDArray | None = None
         self._physical_r_matrix: NDArray | None = None
 
         self._eb_alphas: NDArray | None = None
-        self._platoon_l_valid: NDArray | None = None  # bool mask: has sufficient vs-L data
+        self._platoon_l_valid: NDArray | None = None  # bool mask: 30+ PA vs L
         self._platoon_r_valid: NDArray | None = None
 
     def build(
@@ -638,12 +615,20 @@ class BatterPartition:
         """
         Score the query against EVERY profile in this partition.
 
+        The composite is the weighted sum of the five sub-scores, times the
+        bats penalty, times the pair confidence sqrt(min(α_query, α_candidate)),
+        clipped to [0, 1]. The query's own batter-season is left out; its
+        other seasons stay in.
+
         Parameters
         ----------
         vs_hand : "L", "R", or None
-            If specified, shift weights to emphasize the relevant platoon
-            split. Used when the simulation is querying in the context of
-            a specific pitcher handedness.
+            The pitcher hand. When given, the platoon sub-score compares that
+            split alone, and the physical sub-score compares the side the
+            batter uses against that hand. If the query batter also has 30 or
+            more PA against that hand, the platoon-context weights apply. The
+            nightly actor matrix passes None; the Similarity Explorer passes a
+            hand.
         """
         if not self.profiles:
             return []
@@ -660,9 +645,9 @@ class BatterPartition:
         bb_scores = bb_rbf.score_batch(bb_q, self._bb_matrix)
         power_scores = power_rbf.score_batch(power_q, self._power_matrix)
 
-        # --- SIM-529: physical swing and stance, per platoon context ---
-        # With a pitcher hand in play, compare the side the batter would
-        # actually use against it. Without one, compare the overall swing.
+        # --- Physical swing and stance, per platoon context ---
+        # With a pitcher hand in play, compare the side the batter uses against
+        # it. Without one, compare the overall swing.
         phys_query_vec, phys_matrix = {
             "L": (query.physical_vs_l_vec, self._physical_l_matrix),
             "R": (query.physical_vs_r_vec, self._physical_r_matrix),
@@ -671,8 +656,10 @@ class BatterPartition:
         physical_scores = physical_rbf.score_batch(phys_q, phys_matrix)
 
         # --- Platoon sub-scores ---
-        # When vs_hand is specified, compare only the relevant split.
-        # When vs_hand is None, average both splits (weighted by sample size).
+        # A split counts for a candidate only with 30 or more PA on that side;
+        # otherwise the candidate takes a neutral 0.5. With vs_hand, compare
+        # that split alone. Without it, average the two splits equally when
+        # both count, take the one that counts, or take 0.5 when neither does.
         platoon_scores = np.zeros(n, dtype=np.float64)
 
         if vs_hand == "L" or vs_hand is None:
@@ -683,7 +670,7 @@ class BatterPartition:
             pr_scores = platoon_rbf.score_batch(pr_q, self._platoon_r_matrix)
 
         if vs_hand == "L":
-            # Use vs-L split only; mask candidates without sufficient vs-L data
+            # The vs-L split alone; a candidate under 30 PA vs L scores 0.5.
             platoon_scores = pl_scores
             platoon_scores[~self._platoon_l_valid] = 0.5  # neutral score
             query_platoon_valid = query.sample_pa_vs_l >= 30
@@ -692,7 +679,7 @@ class BatterPartition:
             platoon_scores[~self._platoon_r_valid] = 0.5
             query_platoon_valid = query.sample_pa_vs_r >= 30
         else:
-            # Average both splits, weighted by which ones are valid
+            # Average the splits that count for each candidate.
             both_valid = self._platoon_l_valid & self._platoon_r_valid
             l_only = self._platoon_l_valid & ~self._platoon_r_valid
             r_only = ~self._platoon_l_valid & self._platoon_r_valid
@@ -723,12 +710,12 @@ class BatterPartition:
         penalties = bats_penalty_vector(query.bats, self.bats_list)
         composite *= penalties
 
-        # Confidence discount: sqrt(min(alpha_query, alpha_candidate))
+        # The pair confidence: a thin sample on either side lowers the score.
         pair_confidence = np.minimum(query.eb_alpha, self._eb_alphas)
         composite *= np.sqrt(pair_confidence)
         composite = np.clip(composite, 0.0, 1.0)
 
-        # --- Build results (exclude exact self-match) ---
+        # --- Build results (leave out the query's own batter-season) ---
         results = []
         for i in range(n):
             if self.keys[i] == query_key:
@@ -759,21 +746,21 @@ class BatterPartition:
 
 class BatterSimilarityEngine:
     """
-    The Batter-to-Batter Similarity Engine.
+    The batter-to-batter similarity engine.
 
-    Scores are computed EXHAUSTIVELY against all batter-season profiles.
-    Cross-season comparisons are included. Platoon-aware querying
-    shifts weights to emphasize the relevant split when a pitcher
-    handedness context is provided.
+    A query scores EVERY batter-season profile, the batter's other seasons
+    included. A query that names a pitcher hand compares that platoon split
+    and, for a batter with a real sample against it, gives the platoon group
+    the most weight.
 
     Usage:
         engine = BatterSimilarityEngine(duckdb_path="path/to/db.duckdb")
-        engine.build(seasons=[2022, 2023, 2024, 2025])
+        engine.build(seasons=[2023, 2024, 2025, 2026])
 
-        # All similar batters
+        # Every similar batter-season
         results = engine.query(batter_id=665742, season=2025)
 
-        # Top-20 when facing a RHP
+        # The top 20 against a right-handed pitcher
         results = engine.query(batter_id=665742, season=2025, n=20, vs_hand="R")
     """
 
@@ -790,11 +777,11 @@ class BatterSimilarityEngine:
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = BatterPartition()
-        #: SIM-534: the date every loaded profile's data runs through. None on a
-        #: database built before the stamp existed.
+        #: The date every loaded profile's data runs through. None when the
+        #: table has no asof_date column or every row's stamp is NULL.
         self._asof_date = None
 
-        # Build weighted RBF scorers
+        # One weighted kernel per sub-score, at the module defaults.
         self._disc_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_DISCIPLINE,
             reliability_weights=np.array([w for _, w in DISCIPLINE_FEATURES]),
@@ -817,19 +804,18 @@ class BatterSimilarityEngine:
         )
 
     # ------------------------------------------------------------------
-    # Calibration wiring (SIM-406)
+    # Calibration
     # ------------------------------------------------------------------
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the five RBF sub-score scorers from a fitted report.
+        """Rebuild the five sub-score kernels from a calibration report.
 
-        Each sub-score's sigma — and its reliability weights, when the report
-        carries them — replaces the module default so the engine scores on the
-        population-fit 0.50-median curve instead of a hardcoded literal.  A field
-        left at its 0.0 / None default keeps the engine's current value, so a
-        partial report degrades gracefully.  Only the query-time scorers are
-        swapped (safe before or after ``build``); the EB prior is a build-time
-        knob and is intentionally not re-applied here.
+        The report's sigmas are fitted to a median similarity of 0.50 over the
+        population. A sigma left at 0.0 keeps the kernel's current sigma.
+        Reliability weights left at None take the module defaults. A partial
+        report therefore changes only what it fitted. Only the query-time
+        kernels change, so the call is safe before or after ``build``. The EB
+        prior acts at build time, and this method does not re-apply it.
         """
 
         def _sig(field: str, current: float) -> float:
@@ -884,7 +870,7 @@ class BatterSimilarityEngine:
     # ------------------------------------------------------------------
 
     def build(self, seasons: list[int] | None = None) -> None:
-        """Load all batter profiles, apply shrinkage, build matrices."""
+        """Load the profiles, shrink them, fit the normalizer and build the partition."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
 
@@ -947,6 +933,8 @@ class BatterSimilarityEngine:
                 [pj.get(f, 0.0) or 0.0 for f, _ in POWER_FEATURES], dtype=np.float64
             )
 
+            # Both splits shrink toward the overall league rates of the same
+            # names, not toward a mean per pitcher hand.
             platoon_avg = np.array(
                 [pj.get(f, 0.0) or 0.0 for f, _ in PLATOON_FEATURES], dtype=np.float64
             )
@@ -965,11 +953,12 @@ class BatterSimilarityEngine:
             sl = ", ".join(str(s) for s in seasons)
             season_filter = f"AND bsm.season IN ({sl})"
 
-        # SIM-408: graceful-optional feature columns. xba/xslg are expected-stats
-        # the profile computor does not yet produce; rather than hard-fail the
-        # whole engine build on a missing column, select NULL for any absent
-        # optional column (the _v() helper coerces NULL -> 0.0, so the feature is
-        # effectively dropped). Re-enabled automatically once the computor adds it.
+        # An optional column the table lacks is selected as NULL, so the build
+        # does not fail on it. The optional columns are xba, xslg, the physical
+        # block and asof_date. The profile computor writes no xba or xslg, and
+        # the _v helper turns their NULLs into 0.0 for every batter. A feature
+        # with no spread adds no distance, but it keeps its share of the power
+        # group's weights.
         _present = duck_columns(conn, "derived", "batter_season_metrics")
 
         def _opt(name: str) -> str:
@@ -1018,7 +1007,7 @@ class BatterSimilarityEngine:
 
         log.info("Loading %d batter profiles from DuckDB …", len(rows))
 
-        # SIM-534: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff (checked after the loop).
         asof_values: set = set()
 
         for row in rows:
@@ -1071,10 +1060,9 @@ class BatterSimilarityEngine:
                 below_min,
             ) = row[:_N_BASE_COLUMNS]
 
-            # SIM-529: the physical block is a fixed-width tail rather than 30
-            # more names in the unpack above. _N_BASE_COLUMNS is computed from
-            # the feature lists, so adding a feature to any group moves the
-            # boundary automatically instead of silently shifting the tail.
+            # The physical block is a fixed-width tail (3 contexts x 10
+            # features), read by position instead of by 30 more names in the
+            # unpack above. The last column is asof_date.
             phys = row[_N_BASE_COLUMNS:-1]
             asof_values.add(row[-1])
             n_phys = len(PHYSICAL_FEATURES)
@@ -1084,12 +1072,13 @@ class BatterSimilarityEngine:
                 )
 
             def _v(vals):
+                # A NULL rate becomes 0.0, not NaN, so the EB shrinkage does not
+                # treat it as missing.
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
 
             def _phys_v(vals):
-                # NaN, not 0.0: a batter Savant has no row for must score
-                # NEUTRALLY, and the kernel maps NaN to zero distance. A zero bat
-                # speed would read as the slowest swing in the league.
+                # NaN, not 0.0: a zero bat speed would read as the slowest swing
+                # in the league. A NaN reads as the league mean once z-scored.
                 return np.array([np.nan if v is None else float(v) for v in vals], dtype=np.float64)
 
             self._profiles[(batter_id, season)] = BatterProfile(
@@ -1112,10 +1101,10 @@ class BatterSimilarityEngine:
                 below_minimum=bool(below_min),
             )
 
-        # SIM-534: refuse a mixed set. Profiles built at two different cutoffs
-        # are not comparable — one batter's season truncated, another's complete
-        # — and nothing downstream would show it. This is the cheapest place to
-        # catch a half-finished rebuild.
+        # Refuse a mixed set (the point-in-time profiles, SIM-534). Profiles
+        # built at two cutoffs are not comparable: one batter's season is
+        # truncated, another's complete, and nothing downstream shows it. This
+        # load is the cheapest place to catch a half-finished rebuild.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "batter profiles were built at different cutoffs "
@@ -1127,7 +1116,11 @@ class BatterSimilarityEngine:
             log.info("Batter profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
-        """Apply EB shrinkage to all feature vectors."""
+        """Shrink each profile's rate vectors toward the season's league mean.
+
+        A season with no league-average row is not shrunk. The physical
+        vectors are not shrunk.
+        """
         for _key, p in self._profiles.items():
             s = p.season
             for group, vec_attr in [
@@ -1147,7 +1140,7 @@ class BatterSimilarityEngine:
                         ),
                     )
 
-            # Platoon vectors shrunk with their own sample sizes
+            # Each platoon vector shrinks by its own split sample.
             avg_l = self._league_avg["platoon_l"].get(s)
             avg_r = self._league_avg["platoon_r"].get(s)
             if avg_l is not None:
@@ -1186,14 +1179,14 @@ class BatterSimilarityEngine:
         n : int or None
             Top-N results (sorted by score desc). None = return all.
         vs_hand : "L", "R", or None
-            Pitcher handedness context. When specified, shifts weights to
-            emphasize the relevant platoon split. The simulation uses
-            this when querying for similar batters in the context of a
-            specific pitcher.
+            The pitcher hand (see ``BatterPartition.score_all``). The nightly
+            actor matrix passes None; the Similarity Explorer passes a hand.
 
         Returns
         -------
-        Exhaustive list of SimilarityResult sorted by score descending.
+        Every other batter-season, sorted by score, descending (the top
+        ``n`` when ``n`` is given). An empty list when the query batter-season
+        has no profile.
         """
         query_profile = self._profiles.get((batter_id, season))
         if query_profile is None:
@@ -1224,7 +1217,7 @@ class BatterSimilarityEngine:
         batter_b: tuple[int, int],
         vs_hand: str | None = None,
     ) -> SimilarityResult | None:
-        """Compute similarity between two specific batter-seasons."""
+        """Score one batter-season against another; None when either is missing."""
         pa = self._profiles.get(batter_a)
         pb = self._profiles.get(batter_b)
         if pa is None or pb is None:
@@ -1250,12 +1243,15 @@ class BatterSimilarityEngine:
         candidate: BatterProfile,
         vs_hand: str | None = None,
     ) -> tuple[float, float, float, float, float, float]:
-        """Compute sub-scores and composite between two profiles.
+        """The composite and the five sub-scores between two profiles.
 
         ⚠ This must agree with ``BatterPartition.score_all`` on every pair.
         ``score_all`` is the vectorized path the nightly actor matrix uses;
         this one serves ``query_pair``. ``test_batter_physical_features.py``
-        compares them, because the two drifting apart is silent.
+        compares them, because the two drifting apart is silent. The test's
+        batters all have 30 or more PA against each hand. Below that the two
+        paths differ: this one applies neither the neutral 0.5 platoon score
+        nor the same rule for the platoon-context weights.
         """
         disc_q = self._normalizer.normalize_discipline(query.discipline_vec)
         disc_c = self._normalizer.normalize_discipline(candidate.discipline_vec)
@@ -1269,8 +1265,8 @@ class BatterSimilarityEngine:
         power_c = self._normalizer.normalize_power(candidate.power_vec)
         power_s = self._power_rbf.score(power_q, power_c)
 
-        # SIM-529: physical swing and stance, from the side the batter would use
-        # against this pitcher hand.
+        # Physical swing and stance, from the side the batter uses against this
+        # pitcher hand.
         phys_attr = {
             "L": "physical_vs_l_vec",
             "R": "physical_vs_r_vec",
