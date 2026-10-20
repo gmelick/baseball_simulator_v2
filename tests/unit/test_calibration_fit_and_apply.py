@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from similarity.calibration.report import CalibrationReport
 from similarity.engines.baserunner_similarity import BaserunnerSimilarityEngine
 from similarity.engines.baserunner_steal_similarity import BaserunnerStealSimilarityEngine
 from similarity.engines.batter_similarity import BatterSimilarityEngine
@@ -38,7 +39,6 @@ from similarity.engines.catcher_similarity import CatcherSimilarityEngine
 from similarity.engines.fielder_similarity import FielderSimilarityEngine
 from similarity.engines.manager_similarity import ManagerSimilarityEngine
 from similarity.engines.pitcher_steal_similarity import PitcherStealSimilarityEngine
-from similarity.similarity_calibration import CalibrationReport
 
 
 def _gamma(sigma: float) -> float:
@@ -445,9 +445,10 @@ class TestFitSigmaSentinel:
     def test_sentinel_makes_engine_keep_default_on_degenerate_usage(self):
         # End-to-end: a degenerate (all-zero) usage fit -> 0.0 in the report ->
         # the manager engine keeps RBF_SIGMA_USAGE regardless of its value.
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines import manager_similarity
         from similarity.engines.manager_similarity import ManagerSimilarityEngine
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         usage_sigma = SimilarityCalibrator._fit_sigma(np.zeros((30, 7)), 0.50)
         assert usage_sigma == 0.0

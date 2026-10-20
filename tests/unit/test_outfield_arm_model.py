@@ -604,7 +604,7 @@ class TestScoring:
 
 class TestApplyCalibration:
     def test_a_stale_four_weight_arm_report_is_refused(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         stale = CalibrationReport(
@@ -623,7 +623,7 @@ class TestApplyCalibration:
         assert engine.query_pair((1, "CF", 2024), (2, "CF", 2024)) is not None
 
     def test_a_three_weight_arm_report_applies(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         fitted = np.array([0.9, 0.6, 0.3])
@@ -742,7 +742,8 @@ def _paired_of_rows(
 
 class TestCalibrator:
     def test_the_outfield_select_names_the_three_arm_columns_in_order(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         conn = _RoutingConn([], _of_calibration_rows(120, seed=11))
         cal = SimilarityCalibrator(duckdb_path=":memory:")
@@ -759,7 +760,8 @@ class TestCalibrator:
             assert "ORDER BY player_id, position, season" in sql
 
     def test_the_arm_fit_uses_measured_rows_only(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _of_calibration_rows(120, seed=12)
         cal = SimilarityCalibrator(duckdb_path=":memory:")
@@ -783,7 +785,8 @@ class TestCalibrator:
         assert again.sigma_of_arm == pytest.approx(expected)
 
     def test_the_arm_fit_keeps_the_sentinel_under_twenty_measured_rows(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _of_calibration_rows(120, seed=13, measured_every=8)  # 105 measured
         thin = [r[:15] + (None, None, None) + r[18:] for r in rows[:101]] + rows[101:]
@@ -801,7 +804,8 @@ class TestCalibrator:
         lists' lengths; the arm went from four columns to three. On a
         canonical-schema DuckDB the star and error sigmas must equal the fits
         over the columns read by NAME."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         path = str(tmp_path / "sim550_cal.duckdb")
         con = duckdb.connect(path)
@@ -908,7 +912,7 @@ class TestReliabilityPairing:
     repeat at 0.21 against 0.54 when paired properly."""
 
     def test_the_helper_pairs_every_consecutive_season_and_skips_a_gap(self) -> None:
-        from similarity.similarity_calibration import calibrate_reliability_weights
+        from similarity.calibration.fitting import calibrate_reliability_weights
 
         rng = np.random.default_rng(21)
         ids, seasons, values = [], [], []
@@ -938,7 +942,7 @@ class TestReliabilityPairing:
         assert without[0] < 0.5, "the pre-fix rule pairs the gapped rows too"
 
     def test_the_helper_pairs_both_consecutive_seasons_of_a_three_season_player(self) -> None:
-        from similarity.similarity_calibration import calibrate_reliability_weights
+        from similarity.calibration.fitting import calibrate_reliability_weights
 
         rng = np.random.default_rng(22)
         ids, seasons, values = [], [], []
@@ -963,7 +967,8 @@ class TestReliabilityPairing:
         the CF value is the LF value's negative. Paired inside one position
         the repeat is 1.0; paired across positions (the old rule's first two
         rows: 2023 CF with 2023 LF) it is -1.0, clamped to the 0.1 floor."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(23)
         prevention: dict[tuple[int, str, int], float] = {}
@@ -984,7 +989,8 @@ class TestReliabilityPairing:
         """The plan's floor (section 2.2): a pair counts when the fielder had
         ARM_ALPHA_PRIOR_CHANCES or more chances in both seasons. The thin rows
         here flip sign season to season; the full rows repeat exactly."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(24)
         full: dict[tuple[int, str, int], float] = {}
@@ -1019,7 +1025,8 @@ class TestReliabilityPairing:
         assert report_none.reliability_weights_of_arm is None
 
     def test_under_twenty_full_rows_keep_the_default_arm_weights(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(25)
         prevention = {
@@ -1039,7 +1046,8 @@ class TestReliabilityPairing:
     def test_the_range_pairs_stay_inside_one_position_too(self) -> None:
         """The same rule serves the range, error and star groups (and the
         infield groups): the fix is on the ids, not on the arm alone."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(26)
         rows = []

@@ -960,11 +960,11 @@ class TestStealRunnerModel:
         assert p.lead_vec.tolist() == pytest.approx([14.0, 5.0])
 
     def test_the_lead_sigma_applies_and_the_sentinel_keeps_the_default(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.baserunner_steal_similarity import (
             RBF_SIGMA_LEAD,
             BaserunnerStealSimilarityEngine,
         )
-        from similarity.similarity_calibration import CalibrationReport
 
         engine = BaserunnerStealSimilarityEngine(duckdb_path=":memory:")
         engine.apply_calibration(CalibrationReport())
@@ -1129,11 +1129,11 @@ class TestPitcherHoldModel:
         assert not unmeasured.has_hold and np.isnan(unmeasured.hold_vec).all()
 
     def test_the_hold_sigma_applies_and_the_sentinel_keeps_the_default(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.pitcher_steal_similarity import (
             RBF_SIGMA_HOLD,
             PitcherStealSimilarityEngine,
         )
-        from similarity.similarity_calibration import CalibrationReport
 
         engine = PitcherStealSimilarityEngine(duckdb_path=":memory:")
         engine.apply_calibration(CalibrationReport())
@@ -1212,11 +1212,11 @@ class TestAdvancementMaskedKernel:
         assert np.isfinite(norm.aggression_mean).all() and np.isfinite(norm.aggression_std).all()
 
     def test_a_stale_six_weight_calibration_is_refused(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.baserunner_similarity import (
             AGGRESSION_FEATURES,
             BaserunnerSimilarityEngine,
         )
-        from similarity.similarity_calibration import CalibrationReport
 
         eng = BaserunnerSimilarityEngine(duckdb_path=":memory:")
         stale = CalibrationReport(
@@ -1356,7 +1356,7 @@ class _FakeConn:
 
 class TestCalibrator:
     def test_the_two_sigmas_round_trip_through_json(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         r = CalibrationReport(sigma_baserunner_steal_lead=0.81, sigma_pitcher_steal_hold=0.67)
         back = CalibrationReport.from_json(r.to_json())
@@ -1365,7 +1365,8 @@ class TestCalibrator:
         assert "BR-steal lead" in r.summary() and "P-steal hold" in r.summary()
 
     def test_the_steal_fit_uses_measured_rows_only(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(5)
         rows = []
@@ -1402,7 +1403,8 @@ class TestCalibrator:
         assert again.sigma_baserunner_steal_lead == pytest.approx(expected)
 
     def test_the_steal_fit_keeps_the_sentinel_without_a_lead(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(6)
         rows = [
@@ -1425,7 +1427,8 @@ class TestCalibrator:
         assert any("NULL AS lead_primary_ft" in q for q in conn.queries)
 
     def test_the_hold_fit_mirrors_the_steal_fit(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(7)
         rows = []
@@ -1458,8 +1461,9 @@ class TestCalibrator:
         assert report.sigma_pitcher_steal_hold == 0.0
 
     def test_the_aggression_fit_drops_unmeasured_rows_and_writes_seven_weights(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.baserunner_similarity import AGGRESSION_FEATURES
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(8)
         rows = []

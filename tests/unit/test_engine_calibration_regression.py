@@ -113,7 +113,7 @@ class TestCatcherV2CalibrationRegression(unittest.TestCase):
         return _zscore(raw)
 
     def test_catcher_sigma_calibration_converges_to_target_band(self):
-        from similarity.similarity_calibration import calibrate_sigma
+        from similarity.calibration.fitting import calibrate_sigma
 
         X = self._synthetic_catcher_matrix()
         target = 0.50
@@ -219,7 +219,7 @@ class TestFaissPitchCalibrationRegression(unittest.TestCase):
             self.assertLessEqual(results[i].distance, results[i + 1].distance + 1e-9)
 
     def test_pitch_sigma_calibration_hits_target_band(self):
-        from similarity.similarity_calibration import calibrate_sigma
+        from similarity.calibration.fitting import calibrate_sigma
 
         _engine, _matrix, scaled = self._build()
         X = scaled.astype(np.float64)  # already z-scored by the engine normalizer
@@ -305,7 +305,7 @@ class TestFaissBattedBallCalibrationRegression(unittest.TestCase):
             self.assertLessEqual(results[i].distance, results[i + 1].distance + 1e-9)
 
     def test_batted_ball_sigma_calibration_hits_target_band(self):
-        from similarity.similarity_calibration import calibrate_sigma
+        from similarity.calibration.fitting import calibrate_sigma
 
         _engine, _matrix, scaled = self._build()
         X = scaled.astype(np.float64)

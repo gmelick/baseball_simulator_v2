@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from similarity.calibration.report import CalibrationReport
 from similarity.engines.batter_similarity import (
     PHYSICAL_FEATURES,
     WEIGHT_BATTED_BALL,
@@ -38,7 +39,6 @@ from similarity.engines.batter_similarity import (
     WEIGHT_POWER_PLATOON,
     BatterProfile,
 )
-from similarity.similarity_calibration import CalibrationReport
 
 REPO = Path(__file__).resolve().parents[2]
 MIGRATION = REPO / "db" / "migrations" / "duckdb" / "0025_sim529_batter_physical_features.sql"

@@ -38,7 +38,7 @@ from api.state import (
     load_calibration_map,
     load_calibration_report,
 )
-from similarity.similarity_calibration import CalibrationReport
+from similarity.calibration.report import CalibrationReport
 from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
 
 # ---------------------------------------------------------------------------

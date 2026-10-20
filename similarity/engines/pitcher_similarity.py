@@ -138,7 +138,7 @@ from db.introspect import duck_columns
 if TYPE_CHECKING:
     # SIM-346/361: annotation-only import — avoids a runtime circular import with
     # similarity_calibration (which imports engine helpers).
-    from similarity.similarity_calibration import CalibrationReport
+    from similarity.calibration.report import CalibrationReport
 
 # POT (Python Optimal Transport) provides the EMD solver used by the
 # W2 arsenal distance.  It does not yet publish cp313 wheels (as of
@@ -1243,7 +1243,7 @@ class ArsenalCache:
         squared-exponential gamma is then converted to the engine's linear
         ARSENAL_SCALE via arsenal_scale_from_gamma():
 
-            from similarity.similarity_calibration import calibrate_arsenal_gamma
+            from similarity.calibration.fitting import calibrate_arsenal_gamma
             from similarity.engines.pitcher_similarity import arsenal_scale_from_gamma
 
             import numpy as np

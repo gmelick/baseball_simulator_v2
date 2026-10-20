@@ -39,6 +39,8 @@ import unittest
 import numpy as np
 
 import similarity.engines.pitcher_similarity as ps
+from similarity.calibration.fitting import calibrate_arsenal_gamma
+from similarity.calibration.report import CalibrationReport
 from similarity.engines.pitcher_similarity import (
     DEFAULT_ARSENAL_SCALE,
     GMM_FEATURE_DIM,
@@ -55,10 +57,6 @@ from similarity.engines.pitcher_similarity import (
     PitcherSimilarityEngine,
     RBFSimilarity,
     arsenal_scale_from_gamma,
-)
-from similarity.similarity_calibration import (
-    CalibrationReport,
-    calibrate_arsenal_gamma,
 )
 
 _TOTAL_WEIGHT = WEIGHT_ARSENAL + WEIGHT_COMMAND

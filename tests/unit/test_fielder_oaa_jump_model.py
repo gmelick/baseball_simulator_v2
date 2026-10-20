@@ -682,7 +682,7 @@ class TestScoring:
 
 class TestApplyCalibration:
     def test_a_stale_five_weight_range_report_is_refused_for_both_groups(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         stale = CalibrationReport(
@@ -712,7 +712,7 @@ class TestApplyCalibration:
         assert engine.query_pair((1, "CF", 2024), (2, "CF", 2024)) is not None
 
     def test_a_nine_weight_and_a_six_weight_range_report_apply(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         nine = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.5, 0.9, 0.7, 0.8])
@@ -837,7 +837,8 @@ def _nullify_nan(rows: list[tuple]) -> list[tuple]:
 
 class TestCalibrator:
     def test_the_two_selects_name_the_range_columns_in_the_groups_order(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         conn = _RoutingConn(_if_calibration_rows(120, seed=31), _of_calibration_rows(120, seed=32))
         cal = SimilarityCalibrator(duckdb_path=":memory:")
@@ -853,7 +854,8 @@ class TestCalibrator:
         assert "jump_" not in if_sql
 
     def test_the_range_sigma_fits_over_the_rows_that_carry_every_feature(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         of_rows = _of_calibration_rows(120, seed=33)
         if_rows = _if_calibration_rows(120, seed=34)
@@ -890,7 +892,8 @@ class TestCalibrator:
         )
 
     def test_the_range_sigma_keeps_the_sentinel_under_twenty_measured_rows(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         of_rows = _of_calibration_rows(120, seed=35, jump_every=8)
         thin_of = [r[:10] + (None, None, None) + r[13:] for r in of_rows[:101]] + of_rows[101:]
@@ -945,7 +948,7 @@ class TestCalibrator:
         and exactly 0.5 — its insufficient-data default, above the 0.1
         floor — for the column that never pairs. The report layer overrides
         that 0.5 (the next test)."""
-        from similarity.similarity_calibration import calibrate_reliability_weights
+        from similarity.calibration.fitting import calibrate_reliability_weights
 
         by_key = self._range_with_a_nan_reaction(37)
         matrix = np.array(list(by_key.values()), dtype=np.float64)
@@ -963,7 +966,8 @@ class TestCalibrator:
         reaction column keeps the module default (0.775) with a warning that
         names it; the repeating route still reads near 1; the sigma has no
         measured row and keeps the sentinel."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _nullify_nan(_paired_cf_rows(self._range_with_a_nan_reaction(37)))
         with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
@@ -985,7 +989,8 @@ class TestCalibrator:
         """One season only: no pair anywhere. The infield and outfield Savant
         entries keep their module defaults with a warning each; the five
         original components are not this rule's business."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         of_rows = [r for r in _of_calibration_rows(120, seed=38) if r[2] == 2023]
         if_rows = [r for r in _if_calibration_rows(120, seed=39) if r[2] == 2023]
@@ -1005,7 +1010,8 @@ class TestCalibrator:
         on the rows at or over JUMP_ALPHA_PRIOR_PLAYS it reads near 1. The
         five original components and Savant's figure keep every pair: they
         repeat on every row here and read 1."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(40)
         by_key: dict[tuple[int, int], list[float]] = {}
@@ -1044,8 +1050,9 @@ class TestCalibrator:
         200 chances and 5 plays the arm fit runs (its floor is 50 chances);
         swapped — 5 chances and 200 plays — it does not. A trailing read
         (``r[-1]``) would give the opposite answer on both."""
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.fielder_similarity import ARM_ALPHA_PRIOR_CHANCES
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         assert ARM_ALPHA_PRIOR_CHANCES == 50
         rng = np.random.default_rng(41)

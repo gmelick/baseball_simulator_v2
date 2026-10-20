@@ -69,7 +69,7 @@ from db.introspect import duck_columns
 from similarity.similarity_diagnostics import run_baserunner_diagnostics
 
 if TYPE_CHECKING:
-    from similarity.similarity_calibration import CalibrationReport
+    from similarity.calibration.report import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
