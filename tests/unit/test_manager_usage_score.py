@@ -1,13 +1,13 @@
 """
-tests/unit/test_manager_usage_score.py
-==============================================
-SIM-427 — guard that the manager USAGE sub-score is no longer NULL-gated.
+The manager profile's USAGE columns: computed from real pitching changes, never
+NULL placeholders, and carried through the engine and the calibrator.
 
-``_compute_manager_profiles`` is a DB-heavy method (a single big SQL over
-``pg.raw.pitches``), so it has no live-DB unit test; its values are validated
-against real data on the stack. This lightweight source-level guard prevents a
-silent REGRESSION back to the ``NULL::FLOAT`` gate: it asserts the six USAGE
-columns are derived from the pitcher-stint CTEs rather than emitted NULL.
+``_compute_manager_profiles`` is one large SQL query over ``pg.raw.pitches``,
+so it has no live-database unit test; its values are checked against real data
+on the stack. These tests read the source instead. They assert that the usage
+columns come from the pitcher-stint CTEs (common table expressions, the
+``WITH`` blocks of the query) and not from a ``NULL::FLOAT`` literal, which
+would leave the usage sub-score empty and raise no error.
 """
 
 from __future__ import annotations
@@ -28,24 +28,25 @@ _USAGE_COLS = (
 
 
 def test_usage_columns_not_null_gated():
-    # The pre-SIM-427 gate emitted e.g. ``NULL::FLOAT AS starter_avg_pitch_count``.
+    # A NULL placeholder reads e.g. ``NULL::FLOAT AS starter_avg_pitch_count``.
     for col in _USAGE_COLS:
         assert f"NULL::FLOAT AS {col}" not in _SRC, f"{col} is still NULL-gated"
 
 
 def test_usage_derived_from_stint_ctes():
-    # The un-gated USAGE values come from the raw.pitches stint CTEs.
+    # The usage values come from the stint CTEs over raw.pitches.
     for cte in ("staff", "staff_ranked", "game_usage", "mgr_usage", "hi_lev"):
         assert cte in _SRC, f"missing USAGE CTE: {cte}"
-    # And the final SELECT references the usage CTEs (not literal NULLs).
+    # The final SELECT reads the usage CTEs, not literal NULLs.
     assert "u.starter_avg_pitch_count" in _SRC
     assert "h.high_leverage_reliever_rate" in _SRC
     assert "LEFT JOIN mgr_usage u" in _SRC
 
 
 def test_available_reliever_usage_rate_capstone():
-    # SIM-427 capstone: the opportunity-normalized metric joins the SIM-433-v2
-    # availability table; bounded used/(used+held) via an anti-join for held arms.
+    # The opportunity-normalised rate joins the bullpen availability table
+    # (raw.game_bullpen_availability). It is used / (used + held), so it stays
+    # inside [0, 1]; an anti-join finds the arms that were held.
     assert "bullpen_opp" in _SRC
     assert "available_reliever_usage_rate" in _SRC
     assert "game_bullpen_availability" in _SRC
@@ -54,8 +55,8 @@ def test_available_reliever_usage_rate_capstone():
 
 
 def test_available_reliever_usage_rate_wired_as_seventh_usage_feature():
-    # SIM-427 capstone: the opportunity-normalized metric is now a full USAGE
-    # FEATURE in the manager engine (the 7th), not merely a written column.
+    # The opportunity-normalised rate is the manager engine's seventh USAGE
+    # FEATURE, not only a column the profile writes.
     from similarity.engines.manager_similarity import (
         USAGE_FEATURES,
         ManagerSimilarityEngine,
@@ -70,9 +71,9 @@ def test_available_reliever_usage_rate_wired_as_seventh_usage_feature():
 
 
 def test_calibrator_fits_seven_usage_features():
-    # SIM-427: the manager calibrator must slice 7 usage columns (col(0, 7)) and
-    # shift aggression/platoon accordingly, so sigma_manager_usage is fit over the
-    # new feature rather than silently dropping it.
+    # The manager calibrator (similarity/calibration/manager.py) slices 7 usage
+    # columns (col(0, 7)) and starts the aggression and platoon slices after
+    # them, so sigma_manager_usage fits over all seven features.
     from similarity.similarity_calibration import SimilarityCalibrator
 
     src = inspect.getsource(SimilarityCalibrator._calibrate_manager_params)

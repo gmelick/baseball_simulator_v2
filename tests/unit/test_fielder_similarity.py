@@ -1,33 +1,38 @@
 """
-test_fielder_similarity.py
-===========================
-Comprehensive unit test suite for the Fielder-to-Fielder Similarity Engine.
+The fielder-to-fielder similarity engine, similarity/engines/fielder_similarity.py.
 
-Test categories:
-  1. Configuration & Constants     — weight sums, feature definitions, position groups
-  2. WeightedRBFSimilarity         — kernel math, NaN handling, batch vs scalar consistency
-  3. EmpiricalBayesShrinkage       — alpha formula, shrinkage blend, NaN fill
-  4. FeatureNormalizer              — z-score correctness, per-position isolation, missing pos
-  5. FielderProfile                 — dataclass construction, IF vs OF vector slots
-  6. PositionPartition              — build, empty partition, score_all, self-exclusion
-  7. SimilarityResult               — frozen dataclass, field access
-  8. FielderSimilarityEngine        — full integration without DuckDB:
-       a. Position gating (cross-position query_pair returns None)
-       b. Exhaustive scoring (all same-position profiles returned)
-       c. Self-exclusion (query player's own season excluded)
-       d. Cross-season inclusion (same player, different season included)
-       e. Top-N truncation
-       f. Score symmetry (A→B == B→A)
-       g. Identical profiles → score ≈ 1.0
-       h. Very different profiles → low score
-       i. Confidence discount (low-sample profiles penalized)
-       j. IF composite weight verification
-       k. OF composite weight verification
-       l. Middle IF pivot features (2B/SS have longer DP vector)
-       m. Corner IF specialty features (bunt/scoop)
-       n. Invalid position handling
-       o. Missing profile handling
-  9. Regression / stability         — fixed-seed deterministic scores
+The engine scores fielders only against fielders at the same position. Each
+sub-score is an RBF kernel (a Gaussian kernel: score = exp(-distance² / 2σ²))
+over z-scored features, and EB shrinkage (empirical-Bayes shrinkage toward the
+position's league mean) pulls a thin sample toward that mean.
+
+The test groups:
+  1. Configuration and constants — weight sums, feature lists, position groups
+  2. WeightedRBFSimilarity — the kernel the engine imports from
+     similarity/engines/rbf_kernel.py: its math, NaN handling, batch against scalar
+  3. EmpiricalBayesShrinkage — the alpha formula, the blend, the NaN fill
+  4. FeatureNormalizer — the z-score, each position on its own, an unknown position
+  5. FielderProfile — the infield and outfield vector slots
+  6. PositionPartition — build, an empty partition, self-exclusion
+  7. SimilarityResult — a frozen dataclass
+  8. FielderSimilarityEngine, built in memory with no DuckDB:
+       a. position gating (a cross-position query_pair returns None)
+       b. exhaustive scoring (every same-position profile is returned)
+       c. self-exclusion (the query's own player-season is left out)
+       d. cross-season inclusion (the same player's other season is kept)
+       e. the top-N cut
+       f. symmetry (A→B == B→A)
+       g. identical profiles score near 1.0
+       h. very different profiles score low
+       i. the confidence discount (a low-sample profile scores lower)
+       j. every score stays inside [0, 1]
+       k. the middle-infield pivot features (2B and SS have a longer DP vector)
+       l. an unknown position and a missing profile
+  9. Mixed population — infield and outfield profiles do not interfere
+ 10. Utility methods
+ 11. Determinism — the same inputs give the same scores
+ 12. Edge cases
+ 13. Score composition
 """
 
 from __future__ import annotations
@@ -141,7 +146,7 @@ def _make_of_profile(
         error_vec=error_vec if error_vec is not None else np.array([0.01, 0.005], dtype=np.float64),
         dp_vec=None,
         specialty_vec=None,
-        # SIM-550: velocity (mph), advancement prevention, thrown-out rate.
+        # The three arm features: velocity (mph), advancement prevention, thrown-out rate.
         arm_vec=arm_vec if arm_vec is not None else np.array([88.0, 0.01, 0.05], dtype=np.float64),
         star_vec=star_vec if star_vec is not None else np.array([0.1, 0.4, 0.98], dtype=np.float64),
         eb_alpha=eb_alpha if eb_alpha is not None else sample_bb / (sample_bb + EB_N_PRIOR),
@@ -153,9 +158,9 @@ def _build_test_engine(
     of_profiles: list[FielderProfile] | None = None,
 ) -> FielderSimilarityEngine:
     """
-    Assemble a FielderSimilarityEngine from in-memory profiles without DuckDB.
-    Replicates the post-build() state by fitting the normalizer and building
-    all partitions.
+    Assemble a FielderSimilarityEngine from in-memory profiles, with no DuckDB.
+    The helper reaches the state build() leaves: it fits the normalizer and
+    builds every partition.
     """
     engine = FielderSimilarityEngine.__new__(FielderSimilarityEngine)
     engine._duckdb_path = ""
@@ -263,7 +268,7 @@ def _generate_cf_population(n: int = 20, seed: int = 99) -> list[FielderProfile]
                     error_vec=np.clip(rng.beta(2, 50, len(OF_ERROR_FEATURES)), 0, 0.2).astype(
                         np.float64
                     ),
-                    # SIM-550: velocity (mph), prevention, thrown-out rate.
+                    # The three arm features: velocity (mph), prevention, thrown-out rate.
                     arm_vec=np.array(
                         [rng.normal(88.0, 3.0), rng.normal(0.0, 0.03), rng.beta(2, 30)],
                         dtype=np.float64,
@@ -354,7 +359,7 @@ class TestConfig:
 
 
 class TestWeightedRBFSimilarity:
-    """Unit tests for the RBF kernel implementation."""
+    """The weighted RBF kernel (similarity/engines/rbf_kernel.py)."""
 
     def test_identical_vectors_score_one(self):
         weights = np.array([0.5, 0.5])
@@ -401,7 +406,7 @@ class TestWeightedRBFSimilarity:
         rbf = WeightedRBFSimilarity(sigma=1.0, reliability_weights=np.ones(3))
         x = np.array([1.0, np.nan, 3.0])
         y = np.array([1.0, 2.0, 3.0])
-        # NaN diff → 0, so only non-NaN features contribute to distance
+        # A NaN difference counts as 0, so only the measured features add distance.
         s = rbf.score(x, y)
         assert np.isfinite(s)
         assert s > 0.0
@@ -429,7 +434,7 @@ class TestWeightedRBFSimilarity:
         assert result.shape == (10,)
 
     def test_higher_sigma_less_discriminating(self):
-        """Wider sigma → scores closer to 1.0 for same distance."""
+        """A wider sigma scores the same distance closer to 1.0."""
         x = np.array([0.0, 0.0])
         y = np.array([2.0, 2.0])
         w = np.ones(2)
@@ -438,13 +443,13 @@ class TestWeightedRBFSimilarity:
         assert rbf_wide.score(x, y) > rbf_tight.score(x, y)
 
     def test_weighted_features_matter_more(self):
-        """Feature with higher weight should have more impact on score."""
-        # Weights: first feature gets 90% weight
+        """A feature with a higher weight moves the score more."""
+        # The first feature gets 90% of the weight.
         rbf = WeightedRBFSimilarity(sigma=1.0, reliability_weights=np.array([9.0, 1.0]))
         base = np.array([0.0, 0.0])
-        # Diff on feature 0 (high weight)
+        # A difference on feature 0 (the high weight).
         y_diff_f0 = np.array([2.0, 0.0])
-        # Same-magnitude diff on feature 1 (low weight)
+        # The same difference on feature 1 (the low weight).
         y_diff_f1 = np.array([0.0, 2.0])
         assert rbf.score(base, y_diff_f1) > rbf.score(base, y_diff_f0)
 
@@ -471,7 +476,7 @@ class TestEmpiricalBayesShrinkage:
     def test_alpha_at_min_sample(self):
         eb = EmpiricalBayesShrinkage(n_prior=EB_N_PRIOR)
         a = eb.alpha(MIN_FIELDER_BATTED_BALLS)
-        # At 50 BB, alpha = 50/(50+15) ≈ 0.77
+        # At 50 batted balls, alpha = 50/(50+15) ≈ 0.77.
         expected = MIN_FIELDER_BATTED_BALLS / (MIN_FIELDER_BATTED_BALLS + EB_N_PRIOR)
         assert a == pytest.approx(expected)
 
@@ -494,7 +499,7 @@ class TestEmpiricalBayesShrinkage:
         raw = np.array([np.nan, 20.0])
         avg = np.array([5.0, 5.0])
         result = eb.shrink(raw, avg, n_samples=15)
-        # alpha = 0.5, NaN replaced by avg before blend
+        # alpha = 0.5; the NaN takes the average before the blend.
         assert result[0] == pytest.approx(5.0)
         assert result[1] == pytest.approx(0.5 * 20.0 + 0.5 * 5.0)
 
@@ -514,7 +519,7 @@ class TestEmpiricalBayesShrinkage:
 
 class TestFeatureNormalizer:
     def _make_profiles(self) -> dict[str, list[FielderProfile]]:
-        """Create a small population for normalization fitting."""
+        """A small population for the normalizer's fit."""
         ss_profiles = [
             _make_if_profile(
                 player_id=1, position="SS", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
@@ -550,7 +555,7 @@ class TestFeatureNormalizer:
         profiles = self._make_profiles()
         norm = FeatureNormalizer()
         norm.fit(profiles)
-        # Normalize each SS range vec and check mean across population ≈ 0
+        # Normalize each SS range vector; the population mean is about 0.
         normed = [norm.normalize_range(p.range_vec, "SS") for p in profiles["SS"]]
         mean = np.mean(normed, axis=0)
         np.testing.assert_array_almost_equal(mean, np.zeros_like(mean), decimal=10)
@@ -564,13 +569,13 @@ class TestFeatureNormalizer:
         np.testing.assert_array_almost_equal(std, np.ones_like(std), decimal=10)
 
     def test_positions_normalized_independently(self):
-        """SS and CF have different normalization parameters."""
+        """SS and CF have their own normalization parameters."""
         profiles = self._make_profiles()
         norm = FeatureNormalizer()
         norm.fit(profiles)
         ss_mean, _ = norm.range_params["SS"]
         cf_mean, _ = norm.range_params["CF"]
-        # CF means should be much larger than SS means
+        # The CF population's means are much larger than the SS population's.
         assert cf_mean[0] > ss_mean[0]
 
     def test_unknown_position_returns_raw(self):
@@ -589,7 +594,7 @@ class TestFeatureNormalizer:
         assert np.isfinite(result).all()
 
     def test_constant_feature_gets_std_one(self):
-        """If a feature is identical across all profiles, std is set to 1.0."""
+        """A feature that is identical across all profiles gets a std of 1.0."""
         profiles = {
             "SS": [
                 _make_if_profile(
@@ -603,9 +608,9 @@ class TestFeatureNormalizer:
         norm = FeatureNormalizer()
         norm.fit(profiles)
         _, std = norm.range_params["SS"]
-        # Feature 0 is constant → std forced to 1.0
+        # Feature 0 is constant, so its std is set to 1.0.
         assert std[0] == 1.0
-        # Feature 1 varies → std is the actual std
+        # Feature 1 varies, so its std is the measured one.
         assert std[1] > 0
 
     def test_if_normalizer_has_dp_and_specialty(self):
@@ -780,7 +785,7 @@ class TestEngineExhaustiveScoring:
         engine = _build_test_engine(if_profiles=profiles)
         query = profiles[0]
         results = engine.query(query.player_id, "SS", query.season)
-        # Should be all profiles minus the query itself
+        # Every profile except the query itself.
         expected_count = len(profiles) - 1
         assert len(results) == expected_count
 
@@ -805,7 +810,7 @@ class TestEngineSelfExclusion:
 
 
 class TestEngineCrossSeasonInclusion:
-    """Same player, different season should appear in results."""
+    """The same player's other season appears in the results."""
 
     def test_cross_season_included(self):
         profiles = _generate_ss_population(5, seed=1)
@@ -867,7 +872,7 @@ class TestEngineSymmetry:
 
 
 class TestEngineIdenticalProfiles:
-    """Two identical profiles (different ids) should score near 1.0."""
+    """Two identical profiles (different ids) score near 1.0."""
 
     def test_identical_if_profiles_high_score(self):
         vec_r = np.array([2.0, 1.5, -1.0, 3.0, 0.5, 1.2])
@@ -890,7 +895,7 @@ class TestEngineIdenticalProfiles:
             specialty_vec=vec_sp.copy(),
             sample_bb=500,
         )
-        # Need a third profile so normalization has variance
+        # A third profile gives the normalizer some variance.
         p3 = _make_if_profile(
             player_id=3,
             range_vec=vec_r + 5,
@@ -907,7 +912,7 @@ class TestEngineIdenticalProfiles:
     def test_identical_of_profiles_high_score(self):
         vec_r = np.array([3.0, 2.0, -1.0, 4.0, 1.0, 1.5, 0.8, -0.3, 0.4])
         vec_e = np.array([0.01, 0.005])
-        vec_arm = np.array([91.0, 0.04, 0.08])  # SIM-550: velocity, prevention, thrown-out
+        vec_arm = np.array([91.0, 0.04, 0.08])  # velocity, prevention, thrown-out rate
         vec_star = np.array([0.15, 0.45, 0.97])
         p1 = _make_of_profile(
             player_id=10,
@@ -940,7 +945,7 @@ class TestEngineIdenticalProfiles:
 
 
 class TestEngineDivergentProfiles:
-    """Very different profiles should score low."""
+    """Very different profiles score low."""
 
     def test_divergent_if_profiles_low_score(self):
         p1 = _make_if_profile(
@@ -974,7 +979,7 @@ class TestEngineDivergentProfiles:
 
 
 class TestEngineConfidenceDiscount:
-    """Low-sample profiles should be penalized."""
+    """A low-sample profile scores lower than a high-sample twin."""
 
     def test_low_sample_lower_score(self):
         base_range = np.array([2.0, 1.0, 0.0, 1.5, 0.5, 0.7])
@@ -982,7 +987,7 @@ class TestEngineConfidenceDiscount:
         base_dp = np.array([1.0, 0.6, 0.7, 0.3])
         base_spec = np.array([0.5, 0.8])
 
-        # High-sample pair
+        # A high-sample pair.
         p_high_a = _make_if_profile(
             player_id=1,
             range_vec=base_range.copy(),
@@ -999,7 +1004,7 @@ class TestEngineConfidenceDiscount:
             specialty_vec=base_spec.copy(),
             sample_bb=500,
         )
-        # Low-sample twin
+        # A low-sample twin.
         p_low = _make_if_profile(
             player_id=3,
             range_vec=base_range.copy(),
@@ -1008,7 +1013,7 @@ class TestEngineConfidenceDiscount:
             specialty_vec=base_spec.copy(),
             sample_bb=20,
         )
-        # Need divergent profile for normalization variance
+        # A divergent profile gives the normalizer some variance.
         p_diff = _make_if_profile(
             player_id=4,
             range_vec=base_range + 8,
@@ -1026,17 +1031,20 @@ class TestEngineConfidenceDiscount:
 
 
 class TestEngineCompositeWeights:
-    """Verify composite uses correct weights for IF and OF."""
+    """The composite and every sub-score stay inside [0, 1], infield and outfield.
+
+    These tests check the bounds only, not the weights of the composite.
+    """
 
     def test_if_composite_weight_formula(self):
-        """For IF: composite = 0.45*range + 0.30*dp + 0.15*error + 0.10*specialty (before confidence)."""
+        """An infield composite and its four sub-scores stay inside [0, 1]."""
         profiles = _generate_ss_population(10, seed=1)
         engine = _build_test_engine(if_profiles=profiles)
         a = (1, "SS", 2024)
         b = (2, "SS", 2024)
         r = engine.query_pair(a, b)
         assert r is not None
-        # Sub-scores are returned; verify the composite is bounded
+        # The result carries the sub-scores; each one is bounded.
         assert 0.0 <= r.score <= 1.0
         assert 0.0 <= r.range_score <= 1.0
         assert 0.0 <= r.secondary_score <= 1.0
@@ -1055,7 +1063,7 @@ class TestEngineCompositeWeights:
 
 
 class TestEngineMiddleIFPivot:
-    """2B/SS get longer DP vector with pivot features; 1B/3B do not."""
+    """2B and SS carry the pivot features in a longer DP vector; 1B and 3B do not."""
 
     def test_ss_dp_dim_includes_pivot(self):
         p = _make_if_profile(position="SS")
@@ -1094,7 +1102,7 @@ class TestEngineMissingProfile:
 
 
 # ============================================================================
-# 8h. Mixed Population — IF and OF coexist without interference
+# 9. Mixed population — infield and outfield profiles do not interfere
 # ============================================================================
 
 
@@ -1123,7 +1131,7 @@ class TestEngineMixedPopulation:
 
 
 # ============================================================================
-# 8i. Utility methods
+# 10. Utility methods
 # ============================================================================
 
 
@@ -1159,15 +1167,15 @@ class TestEngineUtilities:
 
 
 # ============================================================================
-# 9. Regression / Stability — deterministic under fixed seed
+# 11. Determinism — the same inputs give the same scores
 # ============================================================================
 
 
 class TestRegression:
-    """Ensure the engine produces deterministic, reproducible scores."""
+    """The engine gives the same scores for the same inputs."""
 
     def test_deterministic_query(self):
-        """Same inputs → same outputs across two runs."""
+        """Two engines built from the same profiles give the same results."""
         profiles = _generate_ss_population(10, seed=42)
         engine1 = _build_test_engine(if_profiles=profiles)
         engine2 = _build_test_engine(if_profiles=profiles)
@@ -1187,7 +1195,7 @@ class TestRegression:
         assert r1.score == pytest.approx(r2.score, abs=1e-15)
 
     def test_scores_finite(self):
-        """No NaN or Inf in any score."""
+        """No score is NaN or Inf."""
         profiles = _generate_ss_population(10, seed=42) + _generate_cf_population(10, seed=42)
         engine = _build_test_engine(
             if_profiles=[p for p in profiles if p.position in INFIELD_POSITIONS],
@@ -1204,13 +1212,13 @@ class TestRegression:
 
 
 # ============================================================================
-# 11. Edge cases
+# 12. Edge cases
 # ============================================================================
 
 
 class TestEdgeCases:
     def test_single_profile_query_returns_empty(self):
-        """Only one profile at a position → query returns empty (self excluded)."""
+        """With one profile at a position, query returns nothing (self is excluded)."""
         p = _make_if_profile(player_id=1, position="3B")
         engine = _build_test_engine(if_profiles=[p])
         results = engine.query(1, "3B", 2024)
@@ -1229,7 +1237,7 @@ class TestEdgeCases:
         assert results[0].player_id == 2
 
     def test_nan_in_feature_vec_no_crash(self):
-        """NaN in feature vectors should not crash — treated as neutral."""
+        """A NaN in a feature vector does not crash the query; it scores as neutral."""
         p1 = _make_of_profile(
             player_id=10, range_vec=np.array([np.nan, 2.0, 3.0, 4.0, 5.0, 6.0, 0.5, np.nan, 0.2])
         )
@@ -1246,14 +1254,14 @@ class TestEdgeCases:
             assert np.isfinite(r.score)
 
     def test_all_identical_profiles_high_scores(self):
-        """When all profiles are identical, all scores should be very high."""
-        vec = np.array([2.0, 1.0, 0.5, -1.0, 3.0, 1.1, 0.6, 0.2, -0.3])  # SIM-532: nine
+        """When all profiles are identical, every score is very high."""
+        vec = np.array([2.0, 1.0, 0.5, -1.0, 3.0, 1.1, 0.6, 0.2, -0.3])  # the nine range features
         profiles = [
             _make_of_profile(
                 player_id=i,
                 range_vec=vec.copy(),
                 error_vec=np.array([0.02, 0.01]),
-                arm_vec=np.array([87.0, 0.0, 0.04]),  # SIM-550: three arm features
+                arm_vec=np.array([87.0, 0.0, 0.04]),  # the three arm features
                 star_vec=np.array([0.1, 0.3, 0.95]),
                 sample_bb=400,
             )
@@ -1261,48 +1269,46 @@ class TestEdgeCases:
         ]
         engine = _build_test_engine(of_profiles=profiles)
         results = engine.query(10, "CF", 2024)
-        # All scores should be very high (close to 1.0)
+        # Every score is very high (close to 1.0).
         for r in results:
             assert r.score > 0.9
 
     def test_query_pair_same_player_different_season(self):
-        """Cross-season query_pair should work."""
+        """query_pair works across two seasons of one player."""
         profiles = _generate_ss_population(3, seed=1)
         engine = _build_test_engine(if_profiles=profiles)
         result = engine.query_pair((1, "SS", 2023), (1, "SS", 2024))
         assert result is not None
-        assert result.score > 0  # same player should have some similarity
+        assert result.score > 0  # the same player has some similarity
 
 
 # ============================================================================
-# 12. Score Composition Verification
+# 13. Score composition
 # ============================================================================
 
 
 class TestScoreComposition:
-    """Verify that the composite score correctly combines sub-scores."""
+    """The composite score and its sub-scores."""
 
     def test_if_composite_respects_weights(self):
-        """
-        When one sub-score dominates, the composite should reflect it
-        proportionally to its weight.
-        """
+        """The composite, a confidence-discounted weighted average of the
+        sub-scores, is no larger than the largest sub-score."""
         profiles = _generate_ss_population(15, seed=7)
         engine = _build_test_engine(if_profiles=profiles)
         a = (1, "SS", 2024)
         b = (5, "SS", 2024)
         r = engine.query_pair(a, b)
         assert r is not None
-        # The composite should be a confidence-discounted weighted average
-        # of sub-scores. Verify it's between the min and max sub-scores
-        # (after confidence discount).
+        # The discount can push the composite below the smallest sub-score,
+        # so the test checks the upper bound only. The min() line below
+        # computes a value that nothing reads.
         min(r.range_score, r.secondary_score, r.tertiary_score, r.quaternary_score)
         sub_max = max(r.range_score, r.secondary_score, r.tertiary_score, r.quaternary_score)
-        # After confidence discount, composite <= sub_max
+        # After the confidence discount, the composite <= sub_max.
         assert r.score <= sub_max + 0.01  # small tolerance for rounding
 
     def test_all_positions_produce_results(self):
-        """Build an engine with all 7 positions and verify each produces results."""
+        """An engine with all 7 positions gives results at each one."""
         all_profiles = []
         rng = np.random.default_rng(123)
         pid = 1

@@ -1,14 +1,15 @@
 """
-Unit tests for similarity/engines/situation_similarity.py
-==========================================================
-Targets the KDTree situation engine: data classes, the SituationNormalizer,
-build/_load_situations (with mocked DuckDB), query / query_batch behavior,
-and the build_coverage_report helper.
+The situation engine, similarity/engines/situation_similarity.py.
 
-Mocking strategy:
-  - DuckDB is mocked at the `duckdb.connect()` call site so build() can run
-    without a real database.  The mock returns a list of rows shaped like
-    the real SELECT in _load_situations().
+The engine finds the historical game states nearest a query state through a
+KD-tree (a tree that splits the space one feature at a time, for fast
+nearest-neighbour lookup). The tests cover the data classes, the
+SituationNormalizer, the build and its load (with a mocked DuckDB), query and
+query_batch, and the build_coverage_report helper.
+
+The mock replaces ``duckdb.connect()`` where the engine calls it, so build()
+runs with no real database. The mock returns rows in the column order of the
+SELECT in _load_situations().
 """
 
 from __future__ import annotations
@@ -125,8 +126,8 @@ class TestModuleConstants:
         assert SCORE_DIFF_CLIP > 0
 
     def test_default_k_below_min_index_size(self):
-        # Sanity: the default query K should be much smaller than the
-        # minimum we expect to have indexed.
+        # The default query K stays below the smallest index the build
+        # accepts without a warning.
         assert DEFAULT_K < MIN_INDEX_SIZE
 
 
@@ -191,14 +192,14 @@ class TestNearestSituation:
 
 class TestSituationNormalizer:
     def test_normalize_uninitialized_just_scales(self):
-        """Before fit(), normalize() should apply FEATURE_SCALE only — covers line 224."""
+        """Before fit(), normalize() applies FEATURE_SCALE only."""
         norm = SituationNormalizer()
         vec = np.ones(11, dtype=np.float64)
         out = norm.normalize(vec)
         np.testing.assert_allclose(out, FEATURE_SCALE)
 
     def test_normalize_batch_uninitialized_just_scales(self):
-        """Covers line 231 (the early-return branch in normalize_batch)."""
+        """Before fit(), normalize_batch() returns early and applies FEATURE_SCALE only."""
         norm = SituationNormalizer()
         matrix = np.ones((3, 11), dtype=np.float64)
         out = norm.normalize_batch(matrix)
@@ -209,23 +210,24 @@ class TestSituationNormalizer:
 
     def test_fit_then_normalize_zero_mean_unit_std(self):
         norm = SituationNormalizer()
-        # Build a matrix with known mean & std per column
+        # A matrix with a known mean and std per column.
         rng = np.random.default_rng(42)
         matrix = rng.normal(loc=5.0, scale=2.0, size=(500, 11))
         norm.fit(matrix)
         normed = norm.normalize_batch(matrix)
-        # After normalization with FEATURE_SCALE applied,
-        # per-column std should be approximately FEATURE_SCALE
+        # After the z-score and the FEATURE_SCALE weighting, each column's
+        # std is about its FEATURE_SCALE.
         col_stds = normed.std(axis=0)
         np.testing.assert_allclose(col_stds, FEATURE_SCALE, rtol=0.1)
 
     def test_fit_zero_variance_column_clamped(self):
-        """If a column has zero std it must be clamped to 1.0 (no NaN division)."""
+        """A column with zero std is clamped to 1.0, so the z-score never
+        divides by zero."""
         norm = SituationNormalizer()
         matrix = np.zeros((10, 11), dtype=np.float64)
         matrix[:, 0] = 5.0  # constant column
         norm.fit(matrix)
-        # No NaN/Inf produced when normalizing
+        # Normalizing produces no NaN or Inf.
         out = norm.normalize_batch(matrix)
         assert np.isfinite(out).all()
 
@@ -261,7 +263,7 @@ class TestEngineInit:
 
 class TestEngineBuild:
     def _make_synthetic_rows(self, n: int = 1500) -> list[tuple]:
-        """Generate a sensible spread of rows so the KDTree has variety."""
+        """A spread of rows, so the KD-tree has variety."""
         rows = []
         rng = np.random.default_rng(7)
         for i in range(n):
@@ -293,7 +295,7 @@ class TestEngineBuild:
         assert eng.index_size == 1500
 
     def test_build_with_seasons_filter_appends_clause(self):
-        """Pass seasons=[2024,2025]; the SQL string should contain those seasons."""
+        """With seasons=[2024, 2025], the SQL text names both seasons."""
         rows = self._make_synthetic_rows(1100)
         mock_conn = MagicMock()
         mock_conn.execute.return_value.fetchall.return_value = rows
@@ -308,7 +310,8 @@ class TestEngineBuild:
         assert "2025" in sql_called
 
     def test_build_below_min_index_size_still_builds_and_warns(self, caplog):
-        """Fewer than MIN_INDEX_SIZE rows must still build but emit a warning."""
+        """Fewer than MIN_INDEX_SIZE rows still build (the build also logs a
+        warning, which this test does not check)."""
         rows = self._make_synthetic_rows(50)
         with _patch_duckdb_with_rows(rows):
             eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
@@ -318,12 +321,12 @@ class TestEngineBuild:
         assert eng.index_size == 50
 
     def test_build_missing_catalog_raises(self):
-        """SIM-408: a missing derived.at_bat_situations now SKIPS the engine.
+        """A missing derived.at_bat_situations makes build() raise.
 
-        Previously build() swallowed the CatalogException and registered an
-        empty, NaN-normalized index. It now raises (→ build_all_engines marks
-        the engine failed and skips it, like the steal engines whose source
-        tables are likewise absent).
+        The load swallows the CatalogException and returns no rows, and an
+        empty index would z-score to NaN. The raise lets build_all_engines mark
+        the engine failed and skip it, as it does for any engine whose source
+        table is missing.
         """
         import duckdb as ddb_mod
 
@@ -339,7 +342,7 @@ class TestEngineBuild:
         assert eng.is_built() is False  # left unbuilt → registry skips it
 
     def test_build_zero_rows_raises(self):
-        """SIM-408: an empty (but present) situations table is also degenerate."""
+        """An empty situations table that exists also makes build() raise."""
         with _patch_duckdb_with_rows([]):
             eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
             with pytest.raises(RuntimeError, match="degenerate empty index"):
@@ -347,7 +350,7 @@ class TestEngineBuild:
         assert eng.is_built() is False
 
     def test_build_row_unpack_handles_null_optionals(self):
-        """A row with None values should be normalized to defaults, not raise."""
+        """A row with None values takes the defaults and does not raise."""
         rows = [
             _fake_row(play_id=None, game_pk=None, inning=None, outs=None, li=None)
             for _ in range(1200)
@@ -355,7 +358,7 @@ class TestEngineBuild:
         with _patch_duckdb_with_rows(rows):
             eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
             eng.build()
-        # Every meta entry should have an inning of 1 (the default for None)
+        # Every meta entry has an inning of 1, the default for None.
         assert all(m.inning == 1 for m in eng._index_meta)
 
     def test_build_score_diff_clipped_in_meta(self):
@@ -426,22 +429,21 @@ class TestQuery:
         assert distances == sorted(distances)
 
     def test_query_k_larger_than_index_capped(self, built_engine):
-        """If K > index_size, query returns at most index_size results."""
+        """With K > index_size, query returns index_size results."""
         out = built_engine.query(_make_vec(), k=10_000_000)
         assert len(out) == built_engine.index_size
 
     def test_query_k_equals_one(self, built_engine):
-        """k=1 hits the scalar→array normalization branch (lines 438-440)."""
+        """At k=1 the KD-tree returns scalars; query wraps them as arrays."""
         out = built_engine.query(_make_vec(), k=1)
         assert len(out) == 1
         assert isinstance(out[0].distance, float)
 
     def test_query_empty_index_returns_empty(self):
-        """An empty index → query returns [] (defensive guard).
+        """An empty index makes query return [] (a defensive guard).
 
-        build() now raises on an empty index (SIM-408), so the empty state is
-        constructed directly here to keep exercising the ``_index_size == 0``
-        early-return guard in query().
+        build() raises on an empty index, so the test sets the empty state by
+        hand to reach the ``_index_size == 0`` early return in query().
         """
         eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
         eng._kdtree = object()  # non-None so the "not built" guard passes
@@ -460,15 +462,15 @@ class TestQueryBatch:
             assert all(isinstance(r, NearestSituation) for r in row)
 
     def test_query_batch_k_equals_one(self, built_engine):
-        """Covers the k=1 reshape branch (lines 485-486)."""
+        """At k=1 the KD-tree drops the K axis; query_batch restores it."""
         out = built_engine.query_batch([_make_vec(), _make_vec(outs=2)], k=1)
         assert len(out) == 2
         assert all(len(row) == 1 for row in out)
 
     def test_query_batch_empty_index_returns_empty_rows(self):
-        """Empty index → list of [] per query (defensive guard).
+        """An empty index gives one [] per query (a defensive guard).
 
-        Constructed directly: build() raises on an empty index (SIM-408).
+        The test sets the empty state by hand: build() raises on an empty index.
         """
         eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
         eng._kdtree = object()  # non-None so the "not built" guard passes
@@ -510,7 +512,7 @@ class TestCoverageReport:
         assert "SituationSimilarityEngine Coverage Report" in report
         assert "Total indexed situations" in report
         assert "Inning" in report and "Outs=0" in report
-        # Should have at least one inning row populated
+        # At least one inning row carries data.
         lines = report.splitlines()
         data_lines = [
             line for line in lines if line and line[0].isdigit() and len(line.split()) >= 4
@@ -518,9 +520,9 @@ class TestCoverageReport:
         assert len(data_lines) >= 1
 
     def test_build_coverage_report_empty_engine(self):
-        """Empty engine still produces a report header but no per-inning rows.
+        """An empty engine still gives a report header, with no per-inning rows.
 
-        Constructed directly: build() raises on an empty index (SIM-408).
+        The test sets the empty state by hand: build() raises on an empty index.
         """
         eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
         eng._index_meta = ColumnarSituationMeta.empty()
