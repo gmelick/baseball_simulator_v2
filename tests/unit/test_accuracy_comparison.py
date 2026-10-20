@@ -281,7 +281,7 @@ def test_score_game_accuracy_moneyline_home_win():
     assert rec.market_other_price == pytest.approx(120.0)
 
 
-def test_score_game_accuracy_moneyline_carries_the_raw_share_sim548():
+def test_score_game_accuracy_moneyline_carries_the_raw_share():
     """SIM-548: the moneyline record carries the simulator's RAW decisive
     home-win share beside the mapped probability, so the calibration layer can
     be fitted on the raw value. The summary here says 62 home wins, 36 away

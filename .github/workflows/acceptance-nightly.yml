@@ -175,7 +175,7 @@ jobs:
           SIM_ACCEPTANCE: '1'
           SIM_ACCEPTANCE_GAMES: ${{ github.event.inputs.games || '12' }}
           SIM_ACCEPTANCE_ITERS: ${{ github.event.inputs.iters || '100' }}
-          # The band table is printed by test_report_every_channel_sim450 and
+          # The band table is printed by test_report_every_channel and
           # appended to the job summary, so a green run still shows its numbers.
         run: |
           pytest tests/acceptance/ \
@@ -221,29 +221,29 @@ jobs:
           # ARITHMETIC behind them is proved in ci.yml's acceptance-arithmetic
           # job, which names its own two flagship proofs.
           REQUIRED = """
-          test_runs_band_sim450
-          test_home_win_pct_band_sim450
+          test_runs_band
+          test_home_win_pct_band
 
-          test_production_flags_are_on_sim450
-          test_sample_is_large_enough_to_mean_anything_sim450
-          test_the_game_set_does_not_bias_the_run_environment_sim450
-          test_sim449_inputs_reach_the_simulator_sim450
-          test_steal_totals_reconcile_sim450
-          test_full_pool_outcome_runs_sim450
-          test_full_pool_fielding_runs_sim450
+          test_production_flags_are_on
+          test_sample_is_large_enough_to_mean_anything
+          test_the_game_set_does_not_bias_the_run_environment
+          test_the_realism_inputs_reach_the_simulator
+          test_steal_totals_reconcile
+          test_full_pool_outcome_runs
+          test_full_pool_fielding_runs
           test_full_pool_out_advancement_runs_sim450
           test_full_pool_steal_decision_runs_sim450
-          test_hits_band_sim450
-          test_home_runs_band_sim450
-          test_doubles_band_sim450
-          test_triples_band_sim450
-          test_walks_band_sim450
-          test_strikeouts_band_sim450
-          test_stolen_bases_band_sim450
-          test_caught_stealing_band_sim450
-          test_double_play_band_sim450
+          test_hits_band
+          test_home_runs_band
+          test_doubles_band
+          test_triples_band
+          test_walks_band
+          test_strikeouts_band
+          test_stolen_bases_band
+          test_caught_stealing_band
+          test_double_play_band
           test_reach_on_error_band_sim450
-          test_report_every_channel_sim450
+          test_report_every_channel
           """.split()
 
           try:

@@ -101,7 +101,7 @@ def _apply(conn, path):
     conn.execute(sql)
 
 
-class TestSim337Reconcile(unittest.TestCase):
+class TestPoolIndexReconcile(unittest.TestCase):
     def setUp(self):
         self.c = _seed_post_0005_state()
         _apply(self.c, MIGRATION_0006)

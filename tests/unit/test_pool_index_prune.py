@@ -102,7 +102,7 @@ def _seed_full_index_set():
     return c
 
 
-class TestSim115Prune(unittest.TestCase):
+class TestPoolIndexPrune(unittest.TestCase):
     def setUp(self):
         self.c = _seed_full_index_set()
         sql = open(MIGRATION_0005, encoding="utf-8").read()
