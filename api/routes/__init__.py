@@ -2,14 +2,11 @@
 api.routes
 ==========
 
-FastAPI routers for the MLB Baseball Simulation Platform.
+The API's routers.
 
-Each module in this package owns a single router. Routers are registered
-in ``api.main.create_app`` so module imports stay lazy and unit tests can
-import a single router in isolation without booting the whole app.
-
-Current routers
----------------
-- ``similarity`` — Similarity Score Explorer endpoints (v1 covers the
-  Pitcher → Pitcher engine; spec in ``docs/similarity_visualization_spec.md``).
+``api.main.create_app`` includes each router, so a unit test can import one
+router alone without booting the app. ``games`` and ``betting`` are aggregate
+routers that include sub-routers of their own (``games_slate``, ``games_feed``,
+``games_runs``; ``betting_lines``, ``betting_card``); ``_common`` holds the
+helpers several routers share, and ``sql_safety`` the one read-only SQL path.
 """

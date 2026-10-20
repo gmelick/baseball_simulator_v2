@@ -1,41 +1,34 @@
 """
-api/routes/auth.py — SIM-389
-=============================
-Browser session auth endpoints.
+api/routes/auth.py
+==================
+The browser session's login, status and logout.
 
-Routes (no prefix from the router — registered directly at /auth/*):
+The routes (the router has no prefix; they sit at /auth/*):
 
     POST /auth/login   — exchange the shared AUTH_PASSWORD for an httpOnly session cookie.
     GET  /auth/me      — probe the current session state (never raises 401; safe to call
                          on app boot to decide whether to show the login page).
     POST /auth/logout  — clear the session cookie.
 
-Design notes
-------------
-Authentication uses a stateless signed session token stored in an httpOnly;
-Secure; SameSite=strict cookie named ``sim_session``.  The token is an
-HMAC-SHA256-signed payload (see api/auth._mint_session_token).  No server-side
-session store (Redis / DB) is required — the HMAC signature proves the token
-was issued by THIS server using SECRET_KEY; the exp claim enforces expiry
-client-side on every request.
+The login issues a stateless signed session token in an httpOnly, Secure,
+SameSite=strict cookie named ``sim_session``. The token is an HMAC-SHA256
+signed payload (api/auth._mint_session_token). No session store is needed: the
+signature proves this server issued the token with SECRET_KEY, and the exp
+claim limits its life on every request.
 
-In the Vite dev setup the browser talks to localhost:5173; Vite proxies /auth/*
-to localhost:8000.  The Set-Cookie response header flows back through the proxy
-to the browser.  Subsequent requests to localhost:5173/api/* include the cookie,
-which Vite also proxies (with the Cookie header) to localhost:8000 — the server
-validates it as normal.
+In the Vite dev setup the browser talks to localhost:5173, and Vite proxies
+/auth/* and /api/* to localhost:8000. The Set-Cookie header comes back through
+the proxy, and the later requests carry the cookie through it.
 
-Auth password: the shared AUTH_PASSWORD env var (required; no default, SIM-443c).
-Signing key:   the SECRET_KEY env var (required; no default, SIM-443c).
-Session TTL:   SESSION_TTL_HOURS (default 8 h = one workday).
+The password: the shared AUTH_PASSWORD (required; no default).
+The signing key: SECRET_KEY (required; no default).
+The session's life: SESSION_TTL_HOURS (default 8 h, one workday).
 
 A server with no AUTH_PASSWORD or SECRET_KEY answers POST /auth/login with 503
 ("Login is not configured on this server"), not a 500.
 
 Programmatic API consumers (scripts, Prometheus, Grafana) use an X-API-Key or
 an Authorization: Bearer header; the require_auth dependency accepts either.
-
-Owner: Backend Developer (SIM-389).
 """
 
 from __future__ import annotations
@@ -80,7 +73,7 @@ class AuthStatusResponse(BaseModel):
     authenticated: bool
     # "cookie"   — a valid httpOnly session cookie is present
     # "api_key"  — a valid X-API-Key or Authorization: Bearer key is present
-    # "disabled" — AUTH_DISABLED=1, so the server enforces no login (SIM-443c)
+    # "disabled" — AUTH_DISABLED=1, so the server enforces no login
     # "none"     — no valid credential was found
     # ``authenticated`` is true exactly when require_auth would pass.
     mode: str
@@ -111,8 +104,8 @@ async def login(body: LoginRequest, response: Response) -> dict:
         expected = _get_auth_password()
         _get_secret_key()
     except RuntimeError:
-        # SIM-443c: no default password or key exists any more. A server
-        # without them cannot issue a session, so it says so plainly.
+        # There is no default password or key. A server without them cannot
+        # issue a session, so it says so plainly.
         log.error("Login refused: AUTH_PASSWORD or SECRET_KEY is not set.")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

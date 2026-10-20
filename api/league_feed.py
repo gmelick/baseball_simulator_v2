@@ -1,4 +1,4 @@
-"""The app's reader of the league's public endpoints (SIM-519 Parts A and I).
+"""The app's reader of the league's public endpoints.
 
 The app calls the league on the request path for two things only, and caches
 both: the schedule of a date (the slate) and one game's live feed (the card

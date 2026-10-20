@@ -1,12 +1,12 @@
 """
 api/routes/similarity.py
 ========================
-Similarity Score Explorer endpoints.
+The pitcher similarity explorer.
 
-v1 scope: Pitcher → Pitcher engine (the other 8 built engines reuse the
-same response shape and frontend component in v2).
+The route serves the pitcher engine; ``api/routes/similarity_explorer.py``
+serves every engine, and reuses this module's helpers.
 
-Design contract (full doc: ``docs/similarity_visualization_spec.md``):
+The contract (the full document: ``docs/similarity_visualization_spec.md``):
 
     GET /api/similarity/pitcher/{pitcher_id}/{season}
         ?bins=20&top_n=20
@@ -19,15 +19,9 @@ Design contract (full doc: ``docs/similarity_visualization_spec.md``):
             diagnostic: {status, median_target, median_observed},
         }
 
-The route handler is intentionally thin: it asks the engine for the
-SimilarityResult list, resolves names, and delegates everything else to
-pure helpers in this module. Those helpers are unit-tested in
-``tests/unit/test_similarity_endpoint.py`` without an HTTP layer.
-
-Agent ownership for this slice (per docs/similarity_visualization_spec.md
-§2): Backend Developer owns the route handler + caching; ML Engineer
-owns the diagnostic thresholds and bin semantics; Performance Engineer
-signed off on the cache TTL.
+The route handler is thin: it asks the engine for the SimilarityResult list,
+resolves the names, and leaves the rest to the pure helpers of this module,
+which ``tests/unit/test_similarity_endpoint.py`` tests without an HTTP layer.
 """
 
 from __future__ import annotations
@@ -64,7 +58,7 @@ except Exception:  # pragma: no cover — fallback for partial test setups
 
 log = logging.getLogger("api.routes.similarity")
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+# Every route on this router requires a login (cookie or API key).
 router = APIRouter(
     prefix="/api/similarity", tags=["similarity"], dependencies=[Depends(require_auth)]
 )

@@ -1,5 +1,7 @@
 """
-api/bundle_watch.py — the app picks up a nightly rebuild by restarting itself (SIM-563).
+api/bundle_watch.py
+===================
+The app picks up a nightly rebuild by restarting itself.
 
 The app loads the player profiles (the similarity engines, from DuckDB) and the
 engine-artifact bundle once, at boot. The nightly rebuild ends by PUBLISHING a
@@ -20,11 +22,9 @@ new bundle version: the link ``engine_artifacts`` moves to a new folder
 The restart is OFF unless ``SIM_RESTART_ON_NEW_BUNDLE`` is set (the compose app
 service sets it), so a test or a host-side run never signals PID 1.
 
-The owner chose a restart over an in-place swap (2026-10-10): about two to three
-minutes of downtime near 5 AM Eastern, against twice the memory and much harder
-code for a swap.
-
-Owner: Backend Developer (SIM-563).
+A restart, not an in-place swap, is an owner ruling (the nightly rebuild that
+reaches users, SIM-563): about two to three minutes of downtime near 5 AM
+Eastern, against twice the memory and much harder code for a swap.
 """
 
 from __future__ import annotations

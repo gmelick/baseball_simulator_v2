@@ -1,9 +1,7 @@
-"""One simulation run per game: the job registry (SIM-519 Part E).
+"""One simulation run per game: the job registry.
 
-Before this module, four endpoints each ran their own hidden batch when a panel
-asked, nothing was stored on the default stack, a reload lost the pending
-state, and a second click started a second batch. A **run** is now a row in
-``sim.sim_runs`` with a state:
+A **run** is a row in ``sim.sim_runs`` with a state (the run jobs of the live
+slate, SIM-519):
 
     queued -> running -> done | failed | cancelled
 
@@ -20,7 +18,7 @@ state, and a second click started a second batch. A **run** is now a row in
   what it played.
 * **Durable results.** A finished run stores its summary, every player's prop
   distributions and the per-game inning grids on the row, and links its
-  representative game in the replay file (``replay_run_id``, SIM-561).
+  representative game in the replay file (``replay_run_id``).
 * **Restart.** The registry is in-process; the rows outlive it. At boot a
   queued or running row is marked ``failed`` with the error ``restart``.
 """
@@ -194,7 +192,7 @@ class SimJobRegistry:
         return d
 
     def active_count(self) -> int:
-        """The run jobs queued or running in this process (SIM-563's restart waits on 0)."""
+        """The run jobs queued or running in this process; the bundle restart waits for 0."""
         return len(self._tasks)
 
     def position(self, run_id: int) -> int | None:

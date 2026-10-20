@@ -1,7 +1,7 @@
 """
 api/routes/sql_safety.py
 ========================
-SIM-439 — the single, shared, read-only SQL path for the Data Lab.
+The one read-only SQL path of the Data Lab.
 
 Both the SQL Console (``api/routes/sql_runner.py``) and the AI Assistant
 (``api/routes/ai_assistant.py``) execute ad-hoc SQL through the *same two
@@ -16,7 +16,7 @@ console can't:
     transaction** with a ``statement_timeout`` and a hard **row cap**, against
     the (very large, ~10⁷-row) ``raw.pitches`` Postgres store.
 
-Layered guarantees (see ``docs`` / the SIM-439 build spec):
+The guarantees, in layers:
   1. Validate before the DB (SELECT/WITH only, no ``;``, no write keyword even
      inside a CTE, no dangerous functions, length cap).
   2. ``conn.transaction(readonly=True)`` — any write that slips past validation
@@ -32,11 +32,11 @@ Layered guarantees (see ``docs`` / the SIM-439 build spec):
      database is touched. See :func:`validate_relation_allowlist`.
   7. The read-only role (SIM-443e): the console and the assistant run ONLY on
      the ``BASEBALL_DB_RO_DSN`` pool, a role that can read ``raw.*`` and nothing
-     else. The lifespan in ``api/main.py`` checks the role with
+     else. The lifespan (``api/startup.py``) checks the role with
      :func:`check_read_only_role` and refuses a superuser. With no such pool the
      routes answer 503; they never fall back to the main pool. The Data Lab read
      routes (schema, analytics, players, data freshness) also run only on this
-     pool (SIM-566). The 503 text, ``RO_POOL_UNAVAILABLE_DETAIL``, lives in
+     pool. The 503 text, ``RO_POOL_UNAVAILABLE_DETAIL``, lives in
      ``api/routes/_common.py``; this module re-exports it.
 
 The query must name its tables as ``raw.<table>``. An unqualified name is
@@ -57,9 +57,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-# SIM-443d: imported at module top on purpose. The relation allowlist is a
-# security control, so a missing package must fail the boot, never switch the
-# check off.
+# Imported at module top on purpose. The relation allowlist is a security
+# control, so a missing package must fail the boot, never switch the check off.
 import sqlglot
 from sqlglot import exp
 
@@ -69,7 +68,7 @@ from api.routes._common import RO_POOL_UNAVAILABLE_DETAIL
 from api.serialization import to_jsonable
 
 # ---------------------------------------------------------------------------
-# Tunables (env-overridable; documented in .env.example)
+# The tunables (the environment can set each; .env.example documents them)
 # ---------------------------------------------------------------------------
 
 #: Hard ceiling on rows returned to the client. The console + assistant may ask
@@ -146,7 +145,7 @@ _DANGEROUS_TOKENS = (
     r"pg_sleep",
     r"pg_read_file",
     r"pg_read_binary_file",
-    # SIM-443d: the whole pg_ls_* family (pg_ls_dir, pg_ls_waldir, pg_ls_logdir,
+    # The whole pg_ls_* family (pg_ls_dir, pg_ls_waldir, pg_ls_logdir,
     # pg_ls_tmpdir, pg_ls_archive_statusdir), not pg_ls_dir alone.
     r"pg_ls_",
     r"pg_stat_file",
@@ -159,8 +158,8 @@ _DANGEROUS_TOKENS = (
     r"current_setting",
     r"set_config",
     r"txid_",
-    # SIM-443d: functions that read a table or run SQL text by NAME, or that
-    # report server internals. query_to_xml / table_to_xml / cursor_to_xml
+    # Functions that read a table or run SQL text by NAME, or that report
+    # server internals. query_to_xml / table_to_xml / cursor_to_xml
     # take a table name or a query string, so they read a relation that the
     # relation allowlist never sees. None of these substrings occurs in a
     # raw.* column name.
@@ -176,7 +175,7 @@ _DANGEROUS_TOKENS = (
 )
 
 # ---------------------------------------------------------------------------
-# SIM-443d: the relation allowlist
+# The relation allowlist (the SQL console hardening, SIM-443d)
 # ---------------------------------------------------------------------------
 
 #: The one schema the console may read.
@@ -273,18 +272,17 @@ def _strip_sql_noise(sql: str, *, keep_identifiers: bool = False) -> str:
                 continue
         # Double-quoted identifier.
         #
-        # SECURITY (SIM-442): the CONTENT is preserved, not blanked. A quoted
-        # identifier is executable code, not inert text like a string literal or
-        # a comment — Postgres resolves `"pg_read_file"` to exactly the same
-        # function as bare `pg_read_file`, because unquoted identifiers fold to
-        # lower case.
+        # SECURITY: with keep_identifiers the CONTENT is preserved, not
+        # blanked. A quoted identifier is executable code, not inert text like a
+        # string literal or a comment: Postgres resolves `"pg_read_file"` to the
+        # same function as bare `pg_read_file`, because unquoted identifiers
+        # fold to lower case.
         #
-        # Blanking it let `SELECT "pg_read_file"('/etc/passwd')` through: the
-        # scanned copy became `SELECT              (            )`, which trips
-        # no rule, while `validate_read_only_sql` executes the ORIGINAL string.
-        # That bypassed EVERY entry in _DANGEROUS_TOKENS — arbitrary file read,
-        # pg_ls_dir, pg_terminate_backend, pg_sleep — as whatever role the pool
-        # connects with.
+        # A blanked copy would turn `SELECT "pg_read_file"('/etc/passwd')` into
+        # `SELECT              (            )`, which trips no rule, while
+        # `validate_read_only_sql` executes the ORIGINAL string: every entry in
+        # _DANGEROUS_TOKENS (file reads, pg_ls_dir, pg_terminate_backend,
+        # pg_sleep) would pass.
         #
         # Only the quote characters are replaced, so offsets are preserved and
         # `keep_identifiers=False` still yields the blanked form for the
@@ -362,16 +360,16 @@ def validate_read_only_sql(sql: str, *, max_len: int = MAX_SQL_LEN) -> str:
                 f"disallowed keyword '{kw.upper()}' — this console is read-only (SELECT only)"
             )
 
-    # SECURITY (SIM-442): scan for dangerous FUNCTIONS on a copy that preserves
+    # SECURITY: the scan for dangerous FUNCTIONS runs on a copy that keeps the
     # quoted-identifier text.
     #
-    # The statement-keyword scan above deliberately runs on the blanked copy:
-    # `SELECT "delete" FROM t` is a column reference, not a DELETE, and Postgres
-    # would never execute it as one. But a quoted FUNCTION name is genuinely
-    # executable — `"pg_read_file"` and `pg_read_file` are the same function,
-    # since unquoted identifiers fold to lower case. Scanning the blanked copy
-    # let `SELECT "pg_read_file"('/etc/passwd')` past every entry in
-    # _DANGEROUS_TOKENS while the ORIGINAL string went on to execute.
+    # The statement-keyword scan above runs on the blanked copy on purpose:
+    # `SELECT "delete" FROM t` is a column reference, not a DELETE, and
+    # Postgres never executes it as one. But a quoted FUNCTION name executes:
+    # `"pg_read_file"` and `pg_read_file` are the same function, since unquoted
+    # identifiers fold to lower case. A scan of the blanked copy would let
+    # `SELECT "pg_read_file"('/etc/passwd')` past every entry in
+    # _DANGEROUS_TOKENS while the ORIGINAL string executes.
     ident_core = _strip_sql_noise(raw, keep_identifiers=True).lower()
     for tok in _DANGEROUS_TOKENS:
         if re.search(tok, lowered) or re.search(tok, ident_core):
@@ -382,8 +380,8 @@ def validate_read_only_sql(sql: str, *, max_len: int = MAX_SQL_LEN) -> str:
     if executable.endswith(";"):
         executable = executable[:-1].rstrip()
 
-    # SIM-443d: the parser-backed relation check runs last, after the cheap
-    # scans, on the exact text that executes.
+    # The parser-backed relation check runs last, after the cheap scans, on
+    # the exact text that executes.
     validate_relation_allowlist(executable)
     return executable
 
@@ -458,7 +456,7 @@ def _dotted(table: exp.Table) -> str:
 
 
 def validate_relation_allowlist(sql: str) -> None:
-    """Reject a query that reads any table outside ``raw.*`` (SIM-443d).
+    """Reject a query that reads any table outside ``raw.*``.
 
     sqlglot parses ``sql`` in the Postgres dialect. The check fails closed:
 
@@ -544,7 +542,7 @@ def validate_relation_allowlist(sql: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-443e: the read-only role check
+# The read-only role check (the console's read-only pool, SIM-443e)
 # ---------------------------------------------------------------------------
 
 # One round trip. to_regnamespace / to_regclass return NULL for a missing
@@ -565,7 +563,7 @@ SELECT current_user::text AS role,
 
 @dataclass(frozen=True)
 class ReadOnlyRoleCheck:
-    """What the SQL console's database role can do (SIM-443e).
+    """What the SQL console's database role can do.
 
     ``acceptable`` is True when the role is not a superuser, cannot use the
     ``sim`` schema, and cannot insert into ``raw.pitches``. ``raw_select`` is

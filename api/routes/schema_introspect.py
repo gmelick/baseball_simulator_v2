@@ -1,20 +1,19 @@
 """
 api/routes/schema_introspect.py
 ===============================
-SIM-439 — read-only schema tree for the Data Lab SchemaBrowser + AI grounding.
+The read-only schema tree for the Data Lab's schema browser and the AI assistant.
 
     GET /api/schema   ->  SchemaResponse   (raw.* tables + columns)
 
 Lists only the ``raw`` schema — the Postgres tables reachable by the SQL Console
 and the AI assistant. ``derived.*`` / ``sim.*`` live in the in-process DuckDB and
 are NOT on this pool, so exposing them here would invite cross-database joins
-that can't run. Structure only (no row data), but it still needs a login
-(SIM-443c: the table and column names are not public); cached on
-``app.state`` for the process lifetime (the schema is static between deploys).
+that cannot run. It returns the structure only, no row data, but it still
+needs a login: the table and column names are not public. The tree is cached on
+``app.state`` for the life of the process (the schema is fixed between deploys).
 
 The route reads ``information_schema.columns`` through the read-only pool,
-``app.state.pg_pool_ro`` (SIM-566, the Data Lab read routes on the read-only
-pool). The read-only role sees every ``raw`` column there. Without the pool, the
+``app.state.pg_pool_ro``. The read-only role sees every ``raw`` column there. Without the pool, the
 route answers 503; it never falls back to the main pool.
 """
 
@@ -26,7 +25,7 @@ from pydantic import BaseModel
 from api.auth import require_auth
 from api.routes._common import _get_ro_pool, _row_get
 
-# SIM-443c: every route on this router requires a login (cookie or API key).
+# Every route on this router requires a login (cookie or API key).
 router = APIRouter(prefix="/api/schema", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 

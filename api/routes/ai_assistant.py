@@ -1,7 +1,7 @@
 """
 api/routes/ai_assistant.py
 ==========================
-SIM-439 — the Data Lab AI Assistant (optional, feature-gated).
+The Data Lab's AI assistant (optional; on only with ANTHROPIC_API_KEY).
 
     GET  /api/assistant/status   -> {configured, model}
     POST /api/assistant/ask      -> text/event-stream of typed SSE frames
@@ -9,17 +9,16 @@ SIM-439 — the Data Lab AI Assistant (optional, feature-gated).
 The assistant answers baseball-data questions in natural language by writing a
 read-only SQL query, running it through the **exact same** safe path as the SQL
 console (``api.routes.sql_safety.run_read_only_sql``), and narrating the result.
-It is physically incapable of doing anything the console can't — every query it
-runs is validated, read-only, time-limited, row-capped, and shown to the user.
+It can do nothing the console cannot: every query it runs is validated,
+read-only, time-limited, row-capped and shown to the user.
 
-Feature-gating: the Anthropic client is created in ``api/main.py``'s lifespan
-only when ``ANTHROPIC_API_KEY`` is set; otherwise ``app.state.anthropic_client``
-is ``None``. ``/status`` reports ``configured:false`` so the UI shows a friendly
-setup card instead of failing a call, and ``/ask`` returns 503. ``/ask`` also
-returns 503 when the read-only pool is not open (SIM-443e): the assistant's SQL
-runs ONLY on ``app.state.pg_pool_ro``, never on the main pool. Nothing here
-imports ``anthropic`` at module load, so the app + test suite boot without the
-package or the key.
+The lifespan (``api/startup.py``) creates the Anthropic client only when
+``ANTHROPIC_API_KEY`` is set; otherwise ``app.state.anthropic_client`` is
+``None``, ``/status`` reports ``configured:false`` (the UI shows a setup card)
+and ``/ask`` returns 503. ``/ask`` also returns 503 when the read-only pool is
+not open: the assistant's SQL runs only on ``app.state.pg_pool_ro``, never on
+the main pool. Nothing here imports ``anthropic`` at module load, so the app and
+the tests boot without the package or the key.
 
 SSE frame types (newline-delimited ``data: {json}`` events):
     {type:'text', text, step}           — the assistant's prose (plan / answer)
@@ -53,7 +52,7 @@ from pipeline.statcast_events import sql_called_strike, sql_in_play, sql_savant_
 
 log = logging.getLogger("api.routes.ai_assistant")
 
-# SIM-443c: every route on this router (including /status) requires a login.
+# Every route on this router, /status included, requires a login.
 router = APIRouter(prefix="/api/assistant", tags=["data-lab"], dependencies=[Depends(require_auth)])
 
 DEFAULT_MODEL = os.environ.get("ASSISTANT_MODEL", "claude-sonnet-5")
@@ -178,7 +177,7 @@ def _client(request: Request) -> Any:
 
 
 def _pool(request: Request) -> Any:
-    """Return the read-only pool, or None. SIM-443e: no main-pool fallback."""
+    """Return the read-only pool, or None; there is no fallback to the main pool."""
     return getattr(request.app.state, "pg_pool_ro", None)
 
 
