@@ -28,16 +28,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.etl.etl_historical_loader import (
-    _MAX_SCHEDULE_WINDOW_DAYS,
-    GAME_TYPES,
-    HistoricalDataLoader,
-    SavantScrapeError,
-    _date_chunks,
-    _fetch_game_pitches,
-    _parse_savant_embedded_json,
-    _parse_wind,
-)
+from pipeline.etl.etl_historical_loader import GAME_TYPES, HistoricalDataLoader, _fetch_game_pitches
+from pipeline.etl.historical.game_values import _parse_wind
+from pipeline.etl.historical.savant import SavantScrapeError, _parse_savant_embedded_json
+from pipeline.etl.historical.schedule import _MAX_SCHEDULE_WINDOW_DAYS, _date_chunks
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -401,9 +395,9 @@ class TestParserHygiene:
     def test_comma_stripping_is_gone(self):
         """A CSV-lineage leftover: both destinations are bound parameters, so
         stripping commas was pure lossy mutation on ~6.55M rows."""
-        src = (_REPO_ROOT / "pipeline" / "etl" / "etl_historical_loader.py").read_text(
-            encoding="utf-8"
-        )
+        etl = _REPO_ROOT / "pipeline" / "etl"
+        paths = [etl / "etl_historical_loader.py", *sorted((etl / "historical").glob("*.py"))]
+        src = "\n".join(p.read_text(encoding="utf-8") for p in paths)
         code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
         assert '.replace(",", "")' not in code
 
@@ -667,7 +661,7 @@ class TestManagerIdsAreNullable:
     def test_manager_ids_are_not_in_always_required(self):
         """They must stay out, or an empty id becomes a per-row hard error and
         the whole game is skipped — the outcome this change exists to avoid."""
-        from pipeline.etl.etl_historical_loader import ALWAYS_REQUIRED
+        from pipeline.etl.historical.rows import ALWAYS_REQUIRED
 
         assert "home_manager_id" not in ALWAYS_REQUIRED
         assert "away_manager_id" not in ALWAYS_REQUIRED

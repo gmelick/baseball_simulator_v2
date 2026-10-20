@@ -44,7 +44,7 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
-from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows, _parse_height
+from pipeline.etl.historical.game_values import _build_starting_lineup_rows, _parse_height
 from pipeline.mlb_schedule import LIVE, SCHEDULED, card_state, parse_game
 
 log = logging.getLogger(__name__)

@@ -38,11 +38,8 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.etl.etl_historical_loader import (  # noqa: E402
-    ETL_DB_POOL_MAX,
-    ETL_DB_POOL_MIN,
-    HistoricalDataLoader,
-)
+from pipeline.etl.etl_historical_loader import HistoricalDataLoader  # noqa: E402
+from pipeline.etl.historical.base import ETL_DB_POOL_MAX, ETL_DB_POOL_MIN  # noqa: E402
 
 
 def _make_pooled_conn() -> MagicMock:

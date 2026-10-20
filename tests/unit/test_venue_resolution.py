@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.etl.etl_historical_loader import (
+from pipeline.etl.historical.venues import (
     _VENUE_OVERRIDES,
     MissingVenueError,
     _first_nonblank,

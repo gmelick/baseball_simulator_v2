@@ -31,13 +31,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.etl.etl_historical_loader import (
-    _CONSECUTIVE_FAILURE_LIMIT,
-    HistoricalDataLoader,
-    ReloadShrinkError,
-    _fetch_game_pitches,
-    _validate_row,
-)
+from pipeline.etl.etl_historical_loader import HistoricalDataLoader, _fetch_game_pitches
+from pipeline.etl.historical.rows import _validate_row
+from pipeline.etl.historical.schedule import _CONSECUTIVE_FAILURE_LIMIT
+from pipeline.etl.historical.writes import ReloadShrinkError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1121,7 +1118,7 @@ class TestValidatorTriggerLockStep:
 
     @staticmethod
     def _python_bounds() -> dict[str, float]:
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         src = inspect.getsource(_validate_row)
         rs = re.search(r"not \(([\d.]+) <= rs <= ([\d.]+)\)", src)
