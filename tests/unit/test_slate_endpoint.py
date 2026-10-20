@@ -1,8 +1,8 @@
-"""SIM-519 Part A — the schedule-driven slate endpoint.
+"""The schedule-driven slate route and the /status card (``api/routes/games_slate.py``).
 
-A tiny app with the games router only (the ``test_api_games.py`` idiom). The
-league feed is a fake on ``app.state.league_feed`` that serves a recorded
-schedule response; the pool is a fake that answers the two merge queries.
+The tests build a small app with only the games router, as ``test_api_games.py``
+does. The league feed is a fake on ``app.state.league_feed`` that serves a recorded
+schedule response. The pool is a fake that answers the two merge queries.
 """
 
 from __future__ import annotations

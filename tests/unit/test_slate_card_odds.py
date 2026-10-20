@@ -1,4 +1,7 @@
-"""SIM-519 Part I — the book's pregame lines on a slate card, and how they settled."""
+"""The card-odds route (``api/routes/betting_card.py``).
+
+The route returns the book's pregame lines on a slate card and how they settled.
+"""
 
 from __future__ import annotations
 
@@ -171,7 +174,9 @@ def test_settlement(away: int, home: int, ml: str, rl: str, total: str) -> None:
 def test_total_push() -> None:
     odds = betting_card.CardOddsResponse(
         game_pk=1,
-        total=betting_card.CardTotal(book="x", line_type="closing", line=8.0, over=-110, under=-110),
+        total=betting_card.CardTotal(
+            book="x", line_type="closing", line=8.0, over=-110, under=-110
+        ),
     )
     s = betting_card._card_settlement(odds, 3, 5)  # noqa: SLF001
     assert s.total == "push"

@@ -1,13 +1,11 @@
-"""
-test_api_data_health.py
-==============================
-Unit tests for the SIM-417 data-freshness API. Builds a tiny app with only the
-data_health router and a fake asyncpg pool that returns canned aggregate +
-per-season rows — no live DB.
+"""The data-freshness route (``api/routes/data_health.py``).
 
-The route reads the read-only pool, ``app.state.pg_pool_ro`` (SIM-566: the Data
-Lab read routes run on the ``baseball_ro`` login). The main pool is a sentinel
-that fails the test on any use, so a fallback to it cannot pass.
+The tests build a small app with only the data_health router. A fake asyncpg pool
+returns canned aggregate and per-season rows, so no live database runs.
+
+The route reads the read-only pool, ``app.state.pg_pool_ro``, because the Data Lab
+read routes log in as ``baseball_ro``. The main pool is a sentinel that fails the
+test on any use, so a fallback to the main pool cannot pass.
 """
 
 from __future__ import annotations

@@ -1,15 +1,11 @@
-"""
-tests/unit/test_openapi_snapshot.py
-==========================================
-The frontend's API snapshot matches the API (SIM-573).
+"""The frontend's API snapshot matches the API (the API snapshot rule, SIM-573).
 
 ``frontend/openapi.json`` is a copy of the API's contract, its OpenAPI schema.
 ``scripts/export_openapi.py`` writes the copy from ``app.openapi()``.
 openapi-typescript (``npm run gen:api``) turns the copy into
-``frontend/src/api/schema.d.ts``, the frontend's typed API client. Nothing
-checked that anyone ran the export. From 2026-10-09 to 2026-10-19 five tickets
-changed the contract without one. The copy lacked six routes, one method,
-fourteen schemas, fourteen fields and three query parameters.
+``frontend/src/api/schema.d.ts``, the frontend's typed API client. Without a
+check, a change to the contract can land with no export, and the copy then
+drifts from the API.
 
 These tests pin the rule:
 

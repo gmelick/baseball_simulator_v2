@@ -1,10 +1,11 @@
-"""SIM-519 Part I — the card detail from the league's per-game feed.
+"""The card detail from the league's per-game feed.
 
-The fixtures in ``tests/fixtures/mlb_game_feed/`` are real feeds, trimmed by
-``record_fixtures.py`` to the subtrees the parser reads (recorded 2026-10-09).
-A live game is not on the calendar today, so the live tests flip a recorded
-final feed's status to Live; its linescore still carries the last offense and
-defense, which is the live shape.
+The tests cover the parser (``pipeline/mlb_game_feed.py``) and the feed route
+(``api/routes/games_feed.py``). The fixtures in ``tests/fixtures/mlb_game_feed/`` are
+real feeds. ``record_fixtures.py`` trims them to the subtrees that the parser reads.
+No fixture is a live game, so the live tests flip a recorded final feed's status to
+Live. The final feed's linescore still carries the last offense and defense, which
+is the live shape.
 """
 
 from __future__ import annotations

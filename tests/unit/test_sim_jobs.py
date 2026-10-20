@@ -1,8 +1,8 @@
-"""SIM-519 Part E — one simulation run per game.
+"""The simulation run jobs: the runner's chunked job, the registry and the routes.
 
 The runner's chunked job (progress, cancel) runs real games on the synthetic
-bundle. The registry runs against an in-memory stand-in for ``sim.sim_runs``
-that answers the module's own SQL constants.
+bundle. The registry (``api/sim_jobs.py``) runs against an in-memory stand-in for
+``sim.sim_runs`` that answers the module's own SQL constants.
 """
 
 from __future__ import annotations
@@ -393,7 +393,7 @@ def test_no_run_reads_404_with_a_hint(app_and_pool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Part F: the generic bullpen is one summed row per side
+# The generic bullpen is one summed row per side
 # ---------------------------------------------------------------------------
 
 

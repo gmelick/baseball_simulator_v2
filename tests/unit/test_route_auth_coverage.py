@@ -1,7 +1,4 @@
-"""
-tests/unit/test_route_auth_coverage.py — SIM-443c
-
-The API requires a login on every data route, in every environment.
+"""The API requires a login on every data route, in every environment.
 
 These tests check four things:
   - every non-exempt HTTP route of the real app carries ``require_auth`` in its
@@ -11,7 +8,7 @@ These tests check four things:
   - ``ENVIRONMENT`` plays no part: a protected route answers 401 in
     development, staging, production and with the variable unset;
   - ``AUTH_DISABLED=1`` is the one opt-out, and ``/health``, ``/auth/me`` and
-    ``validate_environment`` report it.
+    ``validate_environment`` (``api/env_check.py``) report it.
 
 tests/conftest.py sets AUTH_DISABLED=1 for the whole suite. Every test here
 deletes it with monkeypatch first, unless the test is about the opt-out.

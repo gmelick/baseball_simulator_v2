@@ -1,13 +1,10 @@
-"""
-tests/unit/test_read_only_routes.py
-==========================================
-The Data Lab read routes run ONLY on the read-only pool (SIM-566).
+"""The Data Lab read routes run only on the read-only pool.
 
-The SQL console and the assistant already run on ``app.state.pg_pool_ro``, the
-``baseball_ro`` login that can only read ``raw.*`` (SIM-443e). Before this change,
-four route groups with fixed queries read through the main pool, whose login can
-write: the schema tree, the nine analytics routes, the two player routes and the
-data-freshness route. These tests pin the new rule:
+The read-only pool, ``app.state.pg_pool_ro``, logs in as ``baseball_ro``, which
+can only read ``raw.*``. The main pool's login can write. Four route groups with
+fixed queries read through the read-only pool, as the SQL console and the
+assistant do: the schema tree, the nine analytics routes, the two player routes
+and the data-freshness route. These tests pin the rule:
 
 * with no read-only pool, every route answers 503 with the shared detail text,
   and the main pool is never touched (a sentinel pool raises on any use);

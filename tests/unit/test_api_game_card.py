@@ -1,38 +1,34 @@
-"""
-tests/unit/test_api_game_card.py
-========================================
-SIM-366 + the Sprint-4 (SIM-362/363/364) loop-output API exposure.
+"""The loop-output routes of api/routes/games.py: the game card, the fielders, the box.
 
 WHAT'S COVERED
 --------------
-  1. DuckDB game-card store (REAL in-memory ``:memory:`` duckdb, migration 0010
-     applied): store_game_card -> load_game_card round-trips the jsonable
-     linescore + decisions; the latest run wins when run_id is omitted; a missing
-     card returns None; a specific run_id is honoured.
-  2. The schema converters: LinescoreModel.from_dataclass / .from_jsonable agree;
-     PitcherDecisionsModel.from_dataclass / .from_jsonable agree; BoxscoreCardModel
-     .from_prop_set exposes per-player prop MEANS (numpy-free).
-  3. The endpoints end-to-end via a TINY FastAPI app (ONLY the games router) wired
-     with a fake pg pool, an in-memory DuckDB on app.state.sim_duckdb, and the
-     no-DB rng factory seam (mirroring test_api_games_plays.py):
-       * GET /simulate persists the game card + fielder-populated state snapshots;
+  1. The game-card store of db/sim_store.py, on a real in-memory DuckDB with the
+     replay schema. store_game_card then load_game_card returns the jsonable
+     linescore and decisions. The latest run wins when run_id is omitted. A missing
+     card returns None. A given run_id is honoured.
+  2. The schema converters: LinescoreModel.from_dataclass and .from_jsonable agree;
+     PitcherDecisionsModel.from_dataclass and .from_jsonable agree;
+     BoxscoreCardModel.from_prop_set exposes the per-player prop means (numpy-free).
+  3. The routes end to end, on a small FastAPI app with only the games router. The
+     app has a fake pg pool, an in-memory DuckDB on app.state.replay_duckdb and the
+     no-DB factory, as in test_api_games_plays.py:
+       * GET /simulate stores the game card and the state snapshots with fielders;
        * GET /linescore returns a numpy-free Linescore;
-       * GET /decisions returns the W/L/S payload;
+       * GET /decisions returns the W/L/S (win, loss, save) payload;
        * GET /card returns both;
-       * GET /state/{ab}/{pitch} returns a FieldSnapshot whose 9 positions are
-         POPULATED (not all None) -- SIM-363 fielders;
-       * GET /boxscore returns per-player prop MEANS (SIM-366);
-       * 404 (nothing persisted) + 503 (no store) paths;
-       * /simulate still 200 when no DuckDB is wired (best-effort persistence).
+       * GET /state/{ab}/{pitch} returns a FieldSnapshot whose nine positions all
+         hold a player;
+       * GET /boxscore returns the per-player prop means;
+       * the 404 path (nothing stored) and the 503 path (no store);
+       * /simulate still answers 200 with no replay store (the recording is best
+         effort).
 
 ISOLATION
 ---------
-Mirrors test_api_games_plays.py's mock-app / fake-pool / patch_resolver idiom.
-The fielder-population path resolves a lineup from raw.game_lineups, so the fake
-pool returns canned lineup rows for that query (keyed by the SQL text) so the
-defense map is non-empty in the end-to-end test.
-
-Owned by Backend Developer (SIM-366 + 362/363/364 API exposure).
+The tests follow test_api_games_plays.py: a mock app, a fake pool and the
+patch_resolver fixture. The route builds the defense map from raw.game_lineups, so
+the fake pool returns canned lineup rows for that query (matched on the SQL text).
+The defense map is then full in the end-to-end test.
 """
 
 from __future__ import annotations
@@ -65,13 +61,12 @@ NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
 def _fresh_duckdb():
-    """A real in-memory DuckDB with play-stream (0008) + state (0009) + game-card
-    (0010) migrations applied."""
+    """A real in-memory DuckDB with the replay schema applied."""
     import duckdb
 
     con = duckdb.connect(":memory:")
-    # SIM-561: the app's own schema setup for the replay file (0008, 0009,
-    # 0010 and 0032), so the test and the app read one source.
+    # The app's own schema setup for the replay file (0008, 0009, 0010 and
+    # 0032), so the test and the app read one source.
     from db.sim_store import ensure_replay_schema
 
     ensure_replay_schema(con)
@@ -86,8 +81,8 @@ def duck_con():
 
 
 # ---------------------------------------------------------------------------
-# Hand-built PlayResult streams (the no-DB rng factory produces all-zero ties,
-# so we build streams with real scores to exercise the R/H/E + W/L/S logic).
+# Hand-built PlayResult streams with known scores, so the R/H/E and W/L/S
+# checks have exact answers.
 # ---------------------------------------------------------------------------
 
 
@@ -114,12 +109,13 @@ def _play(*, event, runs_scored, is_error, next_state, canonical_event=None):
 
 
 def _scoring_stream() -> list[PlayResult]:
-    """A small finished game: away scores 1 in the top 1st off the HOME pitcher
-    (id 700), home scores 2 in the bottom 1st off the AWAY pitcher (id 800) and
-    holds the lead -> HOME wins, winning pitcher = 800's opponent... i.e. the
-    decisive lead-taking play is in the bottom 1st (home batting), defended by the
-    AWAY pitcher 800, so 800 LOSES and the HOME pitcher 700 WINS. One away hit,
-    one home hit, one error charged to the away defense (a home-half error)."""
+    """A small finished game with known R/H/E and W/L/S answers.
+
+    The away team scores 1 in the top 1st off the home pitcher (id 700). The home
+    team scores 2 in the bottom 1st off the away pitcher (id 800) and keeps the
+    lead. So the home team wins: 800 takes the loss, and 700 takes the win. The
+    stream has one away hit, one home hit and one error. The error comes in the
+    bottom half, so the away defense is charged with it."""
     plays: list[PlayResult] = []
     # Top 1st: away single, away scores 1 (home pitcher 700 on the mound).
     plays.append(
@@ -256,12 +252,12 @@ class TestSchemaConverters:
 
 
 # ---------------------------------------------------------------------------
-# Fakes (mirror test_api_games_plays.py) + canned lineup rows for SIM-363
+# Fakes (as in test_api_games_plays.py) and canned lineup rows for the defense
 # ---------------------------------------------------------------------------
 
-# Canned raw.game_lineups rows so resolve_lineup builds a non-empty defense map
-# (SIM-363). Home team 10, away team 20; each side a 9-slot order with fielding
-# position codes 1..9 so build_team_defense_map yields all 9 fielders.
+# Canned raw.game_lineups rows, so resolve_lineup builds a full defense map.
+# Home team 10, away team 20. Each side has a 9-slot order with fielding
+# position codes 1..9, so build_team_defense_map yields all 9 fielders.
 _HOME_TEAM_ID, _AWAY_TEAM_ID = 10, 20
 
 
@@ -286,10 +282,11 @@ def _lineup_rows():
 
 
 class _LineupPool:
-    """A fake asyncpg pool/conn that answers resolve_lineup's three queries by
-    SQL-text sniffing, plus the sim-run INSERT...RETURNING (fetchval). The
-    /simulate path monkeypatches resolve_game_state, so this pool only needs to
-    serve resolve_lineup (the SIM-363 defense map) + the history write."""
+    """A fake asyncpg pool and connection, matched on the SQL text.
+
+    The fake answers resolve_lineup's three queries and the run-history
+    INSERT ... RETURNING (fetchval). The tests monkeypatch resolve_game_state, so
+    the pool serves only resolve_lineup (the defense map) and the history write."""
 
     def __init__(self):
         self.store_calls: list = []
@@ -362,8 +359,7 @@ class TestCardAndBoxscoreEndpoints:
         sim = client.get("/api/games/745001/simulate?n_iterations=3&base_seed=42")
         assert sim.status_code == 200, sim.text
 
-        # /linescore -- a numpy-free Linescore (the no-DB factory produces a
-        # scoreless game, so totals are 0 but the inning grid + shape are present).
+        # /linescore -- a numpy-free Linescore with the inning grid and its shape.
         ls = client.get("/api/games/745001/linescore")
         assert ls.status_code == 200, ls.text
         lbody = ls.json()
@@ -383,7 +379,7 @@ class TestCardAndBoxscoreEndpoints:
         assert lbody["n_innings"] == len(lbody["innings"]) >= 1
         json.dumps(lbody)
 
-        # /decisions -- the W/L/S payload (a scoreless tie -> all null, scores 0).
+        # /decisions -- the W/L/S payload.
         dec = client.get("/api/games/745001/decisions")
         assert dec.status_code == 200, dec.text
         dbody = dec.json()
@@ -406,8 +402,9 @@ class TestCardAndBoxscoreEndpoints:
         assert cbody["decisions"]["home_score"] == dbody["home_score"]
 
     def test_simulate_populates_fielders_in_state(self, patch_resolver, duck_con):
-        """SIM-363: the persisted per-pitch StateAtPitch carries the 9 fielders
-        (the defense map from resolve_lineup), so /state returns them populated."""
+        """The stored per-pitch StateAtPitch carries the nine fielders, so /state returns them.
+
+        The fielders come from the defense map that resolve_lineup builds."""
         app = _build_app(pool=_LineupPool(), duck=duck_con)
         client = TestClient(app)
         client.get("/api/games/745050/simulate?n_iterations=2&base_seed=1")
@@ -417,7 +414,7 @@ class TestCardAndBoxscoreEndpoints:
         st = client.get(f"/api/games/745050/state/{e0['at_bat']}/{e0['pitch']}")
         assert st.status_code == 200, st.text
         positions = st.json()["field"]["positions"]
-        # All 9 slots present; SIM-363 means at least one is populated (not all None).
+        # All nine slots are present, and each one holds a player.
         assert set(positions.keys()) == {"P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"}
         populated = [p for p in positions.values() if p is not None]
         assert len(populated) == 9, positions
@@ -425,7 +422,7 @@ class TestCardAndBoxscoreEndpoints:
         assert all("player_id" in p for p in populated)
 
     def test_boxscore_returns_per_player_prop_means(self, patch_resolver):
-        """SIM-366: /boxscore returns each player's prop means (numpy-free)."""
+        """/boxscore returns each player's prop means (numpy-free)."""
         app = _build_app(pool=_LineupPool(), duck=None)
         client = TestClient(app)
         resp = client.get("/api/games/745001/boxscore?n_iterations=4&base_seed=7")

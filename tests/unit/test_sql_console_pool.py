@@ -1,22 +1,19 @@
-"""
-tests/unit/test_sql_console_pool.py
-==========================================
-SIM-443e — the SQL console and the assistant run ONLY on the read-only pool.
+"""The SQL console and the assistant run only on the read-only pool.
 
 The console (``POST /api/sql/run``) and the assistant (``POST
-/api/assistant/ask``) used to fall back to the main pool, whose role can write,
-when ``app.state.pg_pool_ro`` was missing. These tests pin the new rule:
+/api/assistant/ask``) never fall back to the main pool, whose role can write.
+These tests pin the rule:
 
-* with no read-only pool, both routes answer 503 and the main pool is never
-  touched (a sentinel pool raises if anything acquires it);
+* with no read-only pool, both routes answer 503, and the main pool stays
+  untouched (a sentinel pool raises if anything acquires it);
 * with a read-only pool, the console runs the query on it, inside a read-only
   transaction;
-* a query that reads a system catalog is rejected with 400 before any pool is
-  touched (the relation allowlist, SIM-443d);
+* the console rejects a query that reads outside ``raw.*``, such as a system
+  catalog, with 400 before it touches any pool (the relation allowlist);
 * ``redact_dsn`` masks the password in the one boot log line.
 
-The routers are mounted on a bare app with ``require_auth`` overridden, so no
-lifespan, database or credential is needed.
+The tests mount the routers on a bare app with ``require_auth`` overridden, so
+they need no lifespan, database or credential.
 """
 
 from __future__ import annotations

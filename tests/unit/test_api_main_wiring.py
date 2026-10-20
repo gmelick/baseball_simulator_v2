@@ -1,20 +1,14 @@
-"""
-test_api_main_wiring.py
-=======================
-Unit tests for api/main.py app wiring (SIM-354 + SIM-351 CORS/rate-limit).
+"""The app wiring of api/main.py: the routers, the lifespan, CORS and the rate limit.
 
-These tests build the app via ``create_app()`` and inspect the resulting
-routes / middleware WITHOUT entering the FastAPI lifespan. The lifespan opens
-a live asyncpg pool + Redis and builds the similarity engine, none of which
-are available in a unit-test run; route + middleware registration happens in
-``create_app()`` itself and needs no live connection, so we assert against the
-constructed app object directly.
+Most tests build the app through ``create_app()`` and inspect its routes and
+middleware without entering the FastAPI lifespan. The lifespan opens a live
+asyncpg pool and Redis and builds the similarity engine; a unit-test run has none
+of them. ``create_app()`` registers the routes and the middleware with no live
+connection, so the tests assert on the built app object. The lifespan tests stub
+every live opener.
 
-For the handful of request-level assertions (/health needs no API key, the
-rate-limit returns 429) we mount a tiny isolated app so the heavy
-similarity-engine lifespan never runs.
-
-Owned by Backend Developer (SIM-354 / SIM-351).
+The request-level tests (/health needs no API key, the rate limit answers 429)
+mount a small isolated app, so the similarity-engine lifespan never runs.
 """
 
 from __future__ import annotations
@@ -49,9 +43,9 @@ def test_create_app_builds_without_live_connections(monkeypatch):
 
 
 def test_ws_and_odds_routers_are_mounted(monkeypatch):
-    """SIM-354: ws_router (/ws/games/{game_pk}) and odds_router
-    (/api/odds/...) must be present in app.routes regardless of
-    LIVE_PIPELINE_ENABLED — they register unconditionally in create_app()."""
+    """ws_router (/ws/games/{game_pk}) and odds_router (/api/odds/...) are in app.routes.
+
+    create_app() always registers them, whatever LIVE_PIPELINE_ENABLED says."""
     monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
     from api.main import create_app
 
@@ -66,8 +60,9 @@ def test_ws_and_odds_routers_are_mounted(monkeypatch):
 
 
 def test_exact_exported_names_importable():
-    """Pin the exact symbols SIM-354 mounts so a rename in the pipeline
-    module is caught here rather than at app boot."""
+    """Pin the exact symbols that create_app() mounts.
+
+    So this test, not the app boot, catches a rename in the pipeline module."""
     from pipeline.live.live_ingestion_pipeline import (  # noqa: F401
         LiveIngestionPipeline,
         odds_router,
@@ -82,9 +77,10 @@ def test_exact_exported_names_importable():
 
 
 def test_pipeline_not_started_at_factory_time(monkeypatch):
-    """SIM-354: building the app must NOT start the live pipeline (that only
-    happens in the lifespan when LIVE_PIPELINE_ENABLED=true). app.state must
-    have no ``pipeline`` attribute before the lifespan runs."""
+    """Building the app does not start the live pipeline.
+
+    Only the lifespan starts it, when LIVE_PIPELINE_ENABLED=true. So app.state
+    has no ``pipeline`` attribute before the lifespan runs."""
     monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
     from api.main import create_app
 
@@ -93,8 +89,10 @@ def test_pipeline_not_started_at_factory_time(monkeypatch):
 
 
 def test_simulation_callback_seam_exists():
-    """SIM-354: the pipeline exposes the re-sim seam main.py wires into —
-    a simulation_callback constructor arg and _signal_resimulation method."""
+    """The pipeline exposes the re-simulation seam that api/startup.py wires into.
+
+    The seam is a simulation_callback constructor argument and a
+    _signal_resimulation method."""
     import inspect
 
     from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
@@ -105,17 +103,17 @@ def test_simulation_callback_seam_exists():
 
 
 # ---------------------------------------------------------------------------
-# SIM-360 — the lifespan attaches + closes the persistent BatchRunner
+# The lifespan attaches and closes the persistent BatchRunner
 # ---------------------------------------------------------------------------
 
 
 def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
-    """SIM-360: entering the lifespan builds ONE long-lived BatchRunner on
-    app.state.sim_runner; exiting it calls close() on that runner.
+    """Entering the lifespan builds one long-lived BatchRunner on app.state.sim_runner.
 
-    The lifespan opens a live asyncpg pool + Redis + builds the similarity
-    engine — all stubbed here (the engine build is also skipped via
-    SIMILARITY_ENGINE_ENABLED=false) so the wiring runs with no live infra.
+    Exiting the lifespan calls close() on that runner. The lifespan opens a live
+    asyncpg pool and Redis and builds the similarity engine. The test stubs the
+    openers and skips the engine build (SIMILARITY_ENGINE_ENABLED=false), so the
+    wiring runs with no live infrastructure.
     """
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
@@ -127,7 +125,7 @@ def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
     monkeypatch.setenv("SIMILARITY_ENGINE_ENABLED", "false")
     monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
     monkeypatch.setenv("REPLAY_PERSISTENCE_ENABLED", "false")
-    # SIM-443e: no read-only DSN, so the lifespan opens no console pool.
+    # No read-only DSN, so the lifespan opens no console pool.
     monkeypatch.delenv("BASEBALL_DB_RO_DSN", raising=False)
 
     # Stub the live-infra openers the lifespan calls (return AsyncMocks with the
@@ -160,12 +158,12 @@ def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
         # control returns here AFTER the lifespan exits (shutdown ran).
 
     runner = asyncio.run(_drive())
-    # Shutdown called close() on the persistent runner (SIM-360 teardown).
+    # Shutdown called close() on the persistent runner.
     assert runner.close.called
 
 
 # ---------------------------------------------------------------------------
-# SIM-443e — the lifespan opens the SQL console's pool only on a read-only role
+# The lifespan opens the SQL console's pool only on a read-only role (api/startup.py)
 # ---------------------------------------------------------------------------
 
 _MAIN_DSN = "postgresql://baseball_app:app-secret@db:5432/baseball_sim"
@@ -215,7 +213,8 @@ def _ro_lifespan_setup(monkeypatch, role_check):
 
     # These tests read only the console pool. Stub the sim runner, its pre-warm
     # and the bundle load, so no test loads the real bundle or starts workers
-    # (that raised the pytest process's peak memory past the SIM-280 cap).
+    # (that raised the pytest process's peak memory past the 2 GB single-process
+    # budget, SIM-280).
     import api.bundle_watch as bundle_watch
     import simulation.batch_runner as batch_runner
     from pipeline.batch.engine_artifacts import EngineArtifacts
@@ -329,7 +328,7 @@ def test_health_reports_the_sql_console_state():
 
 
 # ---------------------------------------------------------------------------
-# CORS policy (SIM-351)
+# The CORS policy
 # ---------------------------------------------------------------------------
 
 
@@ -341,9 +340,10 @@ def _cors_origins(app: FastAPI) -> list[str] | None:
 
 
 def test_cors_is_not_wildcard_in_non_dev(monkeypatch):
-    """SIM-351: production CORS must never be ["*"] (would be invalid with
-    allow_credentials=True). With ENVIRONMENT != development and nothing
-    configured, the allowlist falls back to a concrete origin, not "*"."""
+    """Production CORS is never ["*"], which browsers reject with allow_credentials=True.
+
+    Outside development, with nothing configured, the allowlist falls back to a
+    named origin."""
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
     monkeypatch.delenv("FRONTEND_URL", raising=False)
@@ -356,7 +356,7 @@ def test_cors_is_not_wildcard_in_non_dev(monkeypatch):
 
 
 def test_cors_uses_env_allowlist(monkeypatch):
-    """SIM-351: CORS_ORIGINS (comma-separated) drives the allowlist verbatim."""
+    """CORS_ORIGINS (comma-separated) gives the allowlist as written."""
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com, https://admin.example.com")
     from api.main import create_app
@@ -372,8 +372,9 @@ def test_cors_uses_env_allowlist(monkeypatch):
 
 
 def _tiny_app(rate_limit: int | None = None) -> FastAPI:
-    """A minimal app mirroring main.py's ops endpoints + rate-limit wiring,
-    without the similarity-engine lifespan that needs live DB/Redis."""
+    """A small app that copies main.py's ops routes and rate-limit wiring.
+
+    It has no similarity-engine lifespan, which needs a live database and Redis."""
     app = FastAPI()
     if rate_limit is not None:
         app.add_middleware(RateLimitMiddleware, limit=rate_limit, window_s=60, enabled=True)
@@ -390,7 +391,7 @@ def _tiny_app(rate_limit: int | None = None) -> FastAPI:
 
 
 def test_health_requires_no_api_key():
-    """SIM-351: /health is an unauthenticated liveness probe."""
+    """/health is a liveness probe that needs no login."""
     client = TestClient(_tiny_app())
     resp = client.get("/health")  # no X-API-Key header
     assert resp.status_code == 200
@@ -398,8 +399,7 @@ def test_health_requires_no_api_key():
 
 
 def test_rate_limit_returns_429_after_limit():
-    """SIM-351: with a tiny configured limit, the (limit+1)th request to a
-    non-exempt path returns 429."""
+    """With a small configured limit, request limit + 1 to a non-exempt path gets 429."""
     client = TestClient(_tiny_app(rate_limit=2))
     assert client.get("/data").status_code == 200
     assert client.get("/data").status_code == 200
@@ -409,16 +409,18 @@ def test_rate_limit_returns_429_after_limit():
 
 
 def test_rate_limit_exempts_health():
-    """SIM-351: /health/ /ready/ / are never throttled even over the limit —
-    an over-eager k8s probe loop must not trip the limiter."""
+    """The limiter never throttles /health, /ready or /, even over the limit.
+
+    A fast probe loop must not trip the limiter."""
     client = TestClient(_tiny_app(rate_limit=1))
     for _ in range(5):
         assert client.get("/health").status_code == 200
 
 
 def test_rate_limit_disabled_by_default(monkeypatch):
-    """SIM-351: with RATE_LIMIT_PER_MINUTE unset, the middleware is a no-op so
-    dev + the test suite are unaffected."""
+    """With RATE_LIMIT_PER_MINUTE unset, the middleware does nothing.
+
+    So dev and the test suite run unthrottled."""
     monkeypatch.delenv("RATE_LIMIT_PER_MINUTE", raising=False)
     monkeypatch.delenv("RATE_LIMIT_ENABLED", raising=False)
     app = FastAPI()
@@ -434,15 +436,15 @@ def test_rate_limit_disabled_by_default(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# SIM-564: the limiter counts a request against a key only when the key is
-# a configured API key. Every other request counts against the client address.
+# The limiter counts a request against a key only when the key is a
+# configured API key. Every other request counts against the client address.
 # ---------------------------------------------------------------------------
 
 _SIM564_REAL_KEY = "sim564-real-key-0123456789"
 
 
 def test_rate_limit_made_up_keys_count_against_client_address(monkeypatch):
-    """SIM-564: made-up keys share the client address's bucket.
+    """Made-up keys share the client address's bucket.
 
     A caller that sends a new made-up key on every request still reaches
     the limit, so the third request answers 429.
@@ -455,7 +457,7 @@ def test_rate_limit_made_up_keys_count_against_client_address(monkeypatch):
 
 
 def test_rate_limit_many_made_up_keys_reach_the_limit(monkeypatch):
-    """SIM-564: twenty requests with made-up keys at limit 5 get 429 from the sixth request on."""
+    """Twenty requests with made-up keys at limit 5 get 429 from the sixth request on."""
     monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
     client = TestClient(_tiny_app(rate_limit=5))
     codes = [
@@ -466,7 +468,7 @@ def test_rate_limit_many_made_up_keys_reach_the_limit(monkeypatch):
 
 
 def test_rate_limit_real_key_counts_under_the_key(monkeypatch):
-    """SIM-564: a configured API key has its own bucket.
+    """A configured API key has its own bucket.
 
     The test guards the key's own bucket against an over-fix that always
     uses the client address. The key's bucket fills after two requests.
@@ -483,7 +485,7 @@ def test_rate_limit_real_key_counts_under_the_key(monkeypatch):
 
 
 def test_rate_limit_no_key_does_not_consume_the_real_key(monkeypatch):
-    """SIM-564: requests with no key do not use up a configured key's bucket.
+    """Requests with no key do not use up a configured key's bucket.
 
     The test guards the key's own bucket against an over-fix that always
     uses the client address.
@@ -499,7 +501,7 @@ def test_rate_limit_no_key_does_not_consume_the_real_key(monkeypatch):
 
 
 def test_rate_limit_bearer_and_header_share_one_bucket(monkeypatch):
-    """SIM-564: one key in X-API-Key or in Authorization: Bearer counts against one bucket.
+    """One key in X-API-Key or in Authorization: Bearer counts against one bucket.
 
     The login reads both headers through ``_presented_api_key``, so the
     limiter reads them the same way.
@@ -517,7 +519,7 @@ def test_rate_limit_bearer_and_header_share_one_bucket(monkeypatch):
 
 
 def test_rate_limit_no_configured_keys_counts_against_client_address(monkeypatch):
-    """SIM-564: with no configured API keys, every key counts against the client address."""
+    """With no configured API keys, every key counts against the client address."""
     for value in (None, "", " , "):
         if value is None:
             monkeypatch.delenv("API_KEYS", raising=False)
@@ -530,7 +532,7 @@ def test_rate_limit_no_configured_keys_counts_against_client_address(monkeypatch
 
 
 def test_rate_limit_bucket_name_holds_no_key_in_clear(monkeypatch):
-    """SIM-564: no bucket name holds the text of a key.
+    """No bucket name holds the text of a key.
 
     The test wraps a tiny app in the middleware directly, so it can read
     the middleware's ``_hits`` dict.
@@ -551,7 +553,7 @@ def test_rate_limit_bucket_name_holds_no_key_in_clear(monkeypatch):
 
 
 def test_rate_limit_made_up_keys_do_not_consume_the_real_key(monkeypatch):
-    """SIM-564: made-up keys fill the client address bucket, not the real key's bucket."""
+    """Made-up keys fill the client address bucket, not the real key's bucket."""
     monkeypatch.setenv("API_KEYS", _SIM564_REAL_KEY)
     client = TestClient(_tiny_app(rate_limit=2))
     assert client.get("/data", headers={"X-API-Key": "made-up-1"}).status_code == 200
@@ -562,7 +564,7 @@ def test_rate_limit_made_up_keys_do_not_consume_the_real_key(monkeypatch):
 
 
 def test_rate_limit_two_configured_keys_keep_separate_buckets(monkeypatch):
-    """SIM-564: each configured API key has a bucket of its own.
+    """Each configured API key has a bucket of its own.
 
     A full bucket for the first key does not throttle the second key.
     """

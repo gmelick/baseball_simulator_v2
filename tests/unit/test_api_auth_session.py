@@ -1,23 +1,21 @@
-"""
-tests/unit/test_api_auth_session.py — SIM-389
+"""The browser session login (``api/auth.py`` and ``api/routes/auth.py``).
 
-Unit tests for the browser session auth layer:
-  - Session token mint / verify (api/auth._mint_session_token / _verify_session_token)
-  - POST /auth/login  — correct password → 200 + cookie; wrong password → 401
-  - GET  /auth/me     — with/without cookie
-  - POST /auth/logout — clears cookie
-  - require_auth dependency — cookie path, API-key path, 401 path
-  - CORS dev origins no longer include wildcard (SIM-389 fix)
-  - Protected route integration — GET /api/games/{game_pk}/simulate returns 401
-    when no credential is presented, in every environment
+Covers:
+  - the session token: mint and verify (``_mint_session_token``, ``_verify_session_token``)
+  - POST /auth/login: the right password gives 200 and a cookie; a wrong one gives 401
+  - GET  /auth/me: with and without the cookie
+  - POST /auth/logout: clears the cookie
+  - the require_auth dependency: the cookie, the API key and the 401
+  - the dev CORS origins: never the wildcard
+  - a protected route: GET /api/games/{game_pk}/simulate answers 401 with no
+    credential, in every environment
 
-Test environment (SIM-443c): the login is enforced in every environment.
-tests/conftest.py sets AUTH_DISABLED=1 for the whole suite; every client this
-file builds deletes it with monkeypatch, so the enforcement is what runs here.
+The login is enforced in every environment. tests/conftest.py sets AUTH_DISABLED=1
+for the whole suite. Every client in this file deletes it with monkeypatch, so the
+enforcement runs here.
 
-The TestClient is built from create_app() with the no-DB seam
-(``SIM_MACHINE_FACTORY_REF`` / rng_driven_machine_factory) so no live Postgres,
-Redis, or DuckDB is required.
+The tests build the app with create_app() and a no-op lifespan, so no live
+Postgres, Redis or DuckDB runs.
 """
 
 from __future__ import annotations
@@ -48,8 +46,8 @@ def _make_client(monkeypatch, env: str = "development") -> TestClient:
 
 def _prepare_env(monkeypatch, env: str) -> None:
     """Set the variables every client here needs; drop the suite's opt-out."""
-    # SIM-443c: tests/conftest.py opts the suite out of the login; this file
-    # tests the login itself.
+    # tests/conftest.py opts the suite out of the login; this file tests the
+    # login itself.
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
     monkeypatch.setenv("ENVIRONMENT", env)
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-unit-tests")
@@ -191,7 +189,7 @@ class TestLoginEndpoint:
         assert "HttpOnly" in set_cookie or SESSION_COOKIE_NAME in res.cookies
 
     def test_login_without_configured_password_returns_503(self, monkeypatch):
-        """SIM-443c: no default password exists; an unconfigured login says so."""
+        """No default password exists, so an unconfigured login answers 503."""
         _prepare_env(monkeypatch, "development")
         monkeypatch.delenv("AUTH_PASSWORD", raising=False)
         client = _build_client()
@@ -201,7 +199,7 @@ class TestLoginEndpoint:
         assert SESSION_COOKIE_NAME not in res.cookies
 
     def test_login_without_secret_key_returns_503(self, monkeypatch):
-        """SIM-443c: no default signing key exists either."""
+        """No default signing key exists either, so the login answers 503."""
         _prepare_env(monkeypatch, "development")
         monkeypatch.delenv("SECRET_KEY", raising=False)
         client = _build_client()
@@ -240,7 +238,7 @@ class TestMeEndpoint:
         assert body["expires_in"] > 0
 
     def test_development_without_cookie_is_not_authenticated(self, monkeypatch):
-        """SIM-443c: ENVIRONMENT=development no longer logs the caller in."""
+        """ENVIRONMENT=development does not log the caller in."""
         client = _make_client(monkeypatch, env="development")
         res = client.get("/auth/me")
         assert res.status_code == 200
@@ -289,7 +287,7 @@ class TestLogoutEndpoint:
 
 class TestRequireAuth:
     def test_development_no_credentials_returns_401(self, monkeypatch):
-        """SIM-443c: in development too, no credential means 401."""
+        """In development too, a request with no credential gets 401."""
         client = _make_client(monkeypatch, env="development")
         res = client.get("/api/games/123456/simulate")
         assert res.status_code == 401
@@ -335,7 +333,7 @@ class TestRequireAuth:
         assert res.status_code != 401
 
     def test_unconfigured_non_dev_returns_401(self, monkeypatch):
-        """SIM-443c: no AUTH_PASSWORD and no API_KEYS no longer opens the routes."""
+        """With no AUTH_PASSWORD and no API_KEYS, the routes stay closed."""
         _prepare_env(monkeypatch, "production")
         monkeypatch.delenv("AUTH_PASSWORD", raising=False)
         monkeypatch.delenv("API_KEYS", raising=False)
@@ -345,13 +343,13 @@ class TestRequireAuth:
 
 
 # ---------------------------------------------------------------------------
-# CORS dev origins — wildcard removed (SIM-389)
+# The dev CORS origins — never the wildcard
 # ---------------------------------------------------------------------------
 
 
 class TestCorsDevOrigins:
     def test_dev_origins_do_not_include_wildcard(self, monkeypatch):
-        """After SIM-389, dev CORS must NOT use ['*'] (spec violation with credentials)."""
+        """Dev CORS never uses ['*']: browsers reject the wildcard with credentials."""
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.delenv("CORS_ORIGINS", raising=False)
         monkeypatch.delenv("FRONTEND_URL", raising=False)
