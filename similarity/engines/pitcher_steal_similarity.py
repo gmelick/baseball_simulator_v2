@@ -1,69 +1,49 @@
-"""
-pitcher_steal_similarity.py
-===========================
-Step 2.7 — Pitcher Hold-Runner / Steal-Prevention Similarity
-MLB Baseball Simulation Platform
+"""The pitcher-hold engine: how alike two pitcher-seasons are at holding runners.
 
-Computes a composite similarity score [0, 1] between any two MLB
-pitcher-season profiles specifically along the stolen-base prevention
-dimension.  This engine is intentionally separate from the main pitcher
-similarity engine (Step 2.1), which focuses on arsenal quality and command.
+The engine scores a pair of pitcher-seasons from 0 (unlike) to 1 (identical).
+The steal draw weights its rows by this score (the actor matrix
+``pitcher_steal``). The engine is apart from the main pitcher engine
+(``pitcher_similarity.py``), which scores the arsenal and command. Holding
+runners is a skill of its own: some pitchers let a fast runner steal at will,
+while a quick one stops the running game whoever catches.
 
-A pitcher's ability to hold runners is a meaningful independent skill: some
-pitchers let elite base stealers succeed at will, while quick-twitch athletes
-make stealing essentially impossible regardless of the catcher.  The simulation
-needs this signal to correctly resolve stolen-base attempts.
+The score blends two sub-scores. Each weight comes from how well the group
+repeats year to year (owner decision 2026-09-16, the lead-distance work,
+SIM-531; plan §6.1 of docs/audit/2026-09-16-sim531-lead-distance-build-plan.md):
 
-SIM-408 — scope reduced to outcomes only
------------------------------------------
-  The engine was originally designed with three sub-scores: Delivery Speed
-  (50%), Pickoff / Disengagement Tendency (30%), and Steal-Prevention Outcomes
-  (20%).  The first two require data Statcast does not publish historically:
-    * Delivery — set-position / stretch / first-to-home times, quick-pitch rate
-      (biomech timings, never in the public feed).
-    * Pickoff — pickoff-attempt / disengagement / slide-step rates (raw.pitches
-      has NO pickoff or disengagement columns at all).
-  Neither can be computed for derived.pitcher_steal_metrics, so both sub-scores
-  were removed.  What remained — and IS computable from the play-by-play — is
-  the steal-prevention OUTCOME profile: stolen bases allowed per 9 IP, caught-
-  stealing rate when challenged, and how often runners even attempted against
-  this pitcher.
+  1. Outcome (35%): the stolen bases allowed per 9 innings, the
+     caught-stealing rate when runners go, and the attempts allowed per plate
+     appearance with a runner on. The group repeats at 0.35 on average; the
+     caught-stealing rate alone at 0.32 / -0.03, which is noise.
 
-SIM-531 — the Hold sub-score (owner decision 2026-09-16)
---------------------------------------------------------
-  Baseball Savant's Pitcher Running Game board publishes what the pitcher
-  ALLOWS: the runner's lead off the bag before the pitch and the extra distance
-  the runner gets on the delivery (the jump). The jump allowed repeats year to
-  year at 0.89-0.90 — the most stable number either steal model holds; the
-  lead allowed at 0.43. The outcome group repeats at 0.35 on average (the
-  caught-stealing rate at 0.32 / -0.03: noise). Two sub-scores, weighted by
-  how repeatable each is (plan §6.1 of
-  docs/audit/2026-09-16-sim531-lead-distance-build-plan.md):
+  2. Hold (65%): what the pitcher ALLOWS, in feet, from Baseball Savant's
+     Pitcher Running Game board. The runner's lead before the pitch repeats
+     at 0.43. The extra distance the runner gains on the delivery, the jump,
+     repeats at 0.89-0.90: the most stable number in either steal engine.
 
-    1. Outcome (35%) — stolen bases allowed per 9, caught-stealing rate when
-       challenged, the attempt rate allowed.
-    2. Hold (65%) — the lead allowed and the jump allowed, in feet.
+The feed publishes no delivery times. The table also holds pickoff and
+step-off rates; this engine does not read them.
 
-  A pitcher with no Savant row (a season before 2023, or a pitcher the board
-  never listed) has no hold measurement; the pair is then scored on the
-  outcome group alone, never against a lead of 0.0 ft. A NULL loads as NaN.
+A pitcher with no Savant row (a season before 2023, or a pitcher the board
+never listed) has no hold measurement. His pairs score on the outcome group
+alone, never against a lead of 0.0 ft. A NULL loads as NaN.
 
-Research-Informed Design
-------------------------
-  Steal-against outcomes are noisy (conditional on attempts, which are
-  conditional on opponent aggressiveness and catcher quality), so the EB prior
-  is kept and stabilizes by ~80 baserunner events. The hold group shrinks on
-  the same basis: a 20-event reliever's lead allowed is 56% league mean.
+Each sub-score is a Gaussian kernel (RBF, ``similarity/engines/rbf_kernel.py``):
+score = exp(-d² / 2σ²) over the group's z-scored features (a z-score is the
+value minus the population mean, over the population standard deviation).
 
-Dependencies
-------------
-  pip install duckdb numpy
+Both groups shrink toward the season's league mean by empirical-Bayes (EB)
+shrinkage: the pitcher keeps the share α = n / (n + 25) of his own value,
+where n is his count of baserunner events (plate appearances with a runner
+on). The outcomes are noisy: they rest on attempts, which rest on the
+runners' aggression and on the catcher. They stabilize by about 80 events. A
+20-event reliever's lead allowed is 56% league mean. The composite is then
+multiplied by the square root of the lower α of the pair.
 
 Usage
 -----
   engine = PitcherStealSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
   engine.build(seasons=[2022, 2023, 2024, 2025])
-  results = engine.query(pitcher_id=543037, season=2025)
   results = engine.query(pitcher_id=543037, season=2025, n=20)
 """
 
@@ -99,56 +79,53 @@ log = logging.getLogger("pitcher_steal_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Features and weights
 # ============================================================================
 
-# --- Steal Prevention Outcome features ---
-# SIM-408: the Delivery (biomech timing) and Pickoff/Disengagement sub-scores
-# were removed — neither is derivable from historical Statcast (raw.pitches has
-# no delivery-time or pickoff/disengagement columns). The outcome profile is the
-# only steal-prevention signal computable from the play-by-play.
+# --- Outcome: the play-by-play's steal results against the pitcher ---
 OUTCOME_FEATURES = [
     ("sb_against_per_9", 0.700),  # stolen bases allowed per 9 innings pitched
-    ("cs_rate_forced", 0.500),  # CS rate when runners challenged this pitcher
-    ("steal_attempt_rate_allowed", 0.600),  # how often runners even tried against this pitcher
+    ("cs_rate_forced", 0.500),  # caught-stealing rate when runners go
+    ("steal_attempt_rate_allowed", 0.600),  # attempts per PA with a runner on
 ]
 
-# --- Hold features (SIM-531) ---
+# --- Hold ---
 # What the pitcher ALLOWS, in feet, from Savant's Pitcher Running Game board
-# (derived.pitcher_steal_metrics.lead_allowed_primary_ft / lead_allowed_jump_ft).
-# The weight is the trait's year-to-year repeat on the qualified rows.
+# (derived.pitcher_steal_metrics). Each weight is the trait's year-to-year
+# repeat on the qualified rows.
 HOLD_FEATURES = [
     ("lead_allowed_primary_ft", 0.430),  # the lead he allows before the pitch
     ("lead_allowed_jump_ft", 0.895),  # the jump he gives up on the delivery
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-# SIM-531 (owner decision 2026-09-16): Outcome 0.35 / Hold 0.65 — each group's
-# share of the summed repeats (outcome 0.35, hold 0.66). The alternative not
-# taken was 0.50 / 0.50. Before this the outcome group was the sole sub-score
-# (SIM-408 removed the never-computable Delivery and Pickoff groups).
+# Each weight is the group's share of the summed year-to-year repeats, rounded:
+# outcome 0.35, hold 0.66 (owner decision 2026-09-16, the lead-distance work,
+# SIM-531).
 WEIGHT_OUTCOME = 0.35
 WEIGHT_HOLD = 0.65
 _TOTAL = WEIGHT_OUTCOME + WEIGHT_HOLD
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# RBF bandwidth parameter
+# The kernel bandwidths σ (gamma = 1 / (2σ²)).
 RBF_SIGMA_OUTCOME = 1.1000
-# SIM-531: sigma_pitcher_steal_hold as ``make calibrate`` fitted it on 2026-09-16
-# over the 2,390 qualified pitcher-seasons with a measured lead allowed
-# (2023-2026). Copied here because the matrix builder does not read the
-# calibration report (plan §3, Finding 4); refit = copy the new value.
+# sigma_pitcher_steal_hold as ``make calibrate`` fitted it on 2026-09-16 over
+# the 2,390 qualified pitcher-seasons with a measured lead allowed
+# (2023-2026). The value lives here because the actor matrix builder does not
+# read the calibration report (plan §3, Finding 4). To refit, copy the new
+# value here.
 RBF_SIGMA_HOLD = 0.9897
 
-# EB_N_PRIOR — holding runners stabilizes by ~80 baserunner events
+# The EB prior strength: at EB_N_PRIOR baserunner events, α = 0.5.
 EB_N_PRIOR = 25
 
-# Minimum innings with runners on for inclusion
+# The computor's minimum of baserunner events. The engine does not read this
+# constant: the loader filters on the table's below_minimum_sample flag.
 MIN_BASERUNNER_EVENTS = 30
 
 
 # ============================================================================
-# Data Structures
+# Data structures
 # ============================================================================
 
 
@@ -159,24 +136,24 @@ def _no_hold() -> NDArray[np.float64]:
 
 @dataclass(slots=True)
 class PitcherStealProfile:
-    """Pitcher-season profile for steal-prevention similarity scoring."""
+    """One pitcher-season's hold profile."""
 
     pitcher_id: int
     season: int
     throws: str  # "L" or "R"
-    sample_baserunner_events: int  # PA with runner on base (denominator)
+    sample_baserunner_events: int  # plate appearances with a runner on
     sample_steal_attempts_against: int  # steal attempts against this pitcher
 
-    # Feature vector (raw — normalized at query time)
+    # The feature vectors: raw at load, shrunk by ``build``, z-scored when scored.
     outcome_vec: NDArray[np.float64]  # shape (len(OUTCOME_FEATURES),)
-    # SIM-531: the hold group; NaN when the pitcher has no Savant row.
+    # The hold group; NaN when the pitcher has no Savant row.
     hold_vec: NDArray[np.float64] = field(default_factory=_no_hold)
-    # SIM-531: whether the hold was MEASURED (both features finite at load).
-    # A pitcher without one is scored on the outcome alone, and his NaN hold
-    # is never shrunk (it would otherwise enter the normalizer's statistics).
+    # Whether the hold was MEASURED (both features finite at load). A pitcher
+    # without one scores on the outcome alone, and his NaN hold is never
+    # shrunk (it would otherwise enter the normalizer's statistics).
     has_hold: bool = False
 
-    # Empirical Bayes
+    # The EB sample confidence α, over the baserunner events.
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
@@ -191,17 +168,20 @@ class SimilarityResult:
     score: float
     outcome_score: float
     sample_baserunner_events: int
-    # SIM-531: the hold kernel between the pair; None when either side has no
-    # measured hold (the pair was scored on the outcome group alone).
+    # The hold kernel between the pair; None when either side has no measured
+    # hold (the pair scored on the outcome group alone).
     hold_score: float | None = None
 
 
 # ============================================================================
-# WeightedRBFSimilarity, EmpiricalBayesShrinkage, FeatureNormalizer
+# Empirical-Bayes shrinkage and feature normalization
 # ============================================================================
 
 
 class EmpiricalBayesShrinkage:
+    """EB shrinkage toward the league mean: the pitcher keeps the share
+    α = n / (n + n_prior) of his own value."""
+
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
@@ -210,8 +190,8 @@ class EmpiricalBayesShrinkage:
 
     def shrink(self, raw: NDArray, avg: NDArray, n: int) -> NDArray:
         """Pull ``raw`` toward the league mean by ``alpha(n)``. A NaN raw value
-        becomes the league mean; SIM-531: a NaN LEAGUE value (a key the league
-        row lacks) leaves the raw value alone."""
+        becomes the league mean. A NaN league value (a key the league row
+        lacks) leaves the raw value alone."""
         a = self.alpha(n)
         avg_eff = np.where(np.isnan(avg), raw, avg)
         return a * np.where(np.isnan(raw), avg_eff, raw) + (1.0 - a) * avg_eff
@@ -219,6 +199,9 @@ class EmpiricalBayesShrinkage:
 
 @dataclass(slots=True)
 class FeatureNormalizer:
+    """The z-score of each feature, fit on the population of pitcher profiles.
+    A NaN z-score reads as 0, the population mean."""
+
     outcome_mean: NDArray | None = None
     outcome_std: NDArray | None = None
     hold_mean: NDArray | None = None
@@ -230,8 +213,8 @@ class FeatureNormalizer:
 
         def _fit(vecs):
             mat = np.array(vecs, dtype=np.float64)
-            # SIM-531: a column no profile measured (the hold on a database
-            # built before the Savant load) z-scores to 0 / 1.
+            # A column no profile measured (the hold on a database without the
+            # Savant load) gets mean 0 and standard deviation 1.
             measured = np.isfinite(mat).any(axis=0)
             m = np.zeros(mat.shape[1], dtype=np.float64)
             s = np.ones(mat.shape[1], dtype=np.float64)
@@ -257,11 +240,14 @@ class FeatureNormalizer:
 
 
 # ============================================================================
-# Scoring Partition
+# Scoring partition
 # ============================================================================
 
 
 class PitcherStealPartition:
+    """Every pitcher-hold profile, with its z-scored feature matrices for
+    scoring a query against all of them at once."""
+
     def __init__(self) -> None:
         self.profiles: list[PitcherStealProfile] = []
         self.keys: list[tuple[int, int]] = []
@@ -287,12 +273,14 @@ class PitcherStealPartition:
         out_rbf: WeightedRBFSimilarity,
         hold_rbf: WeightedRBFSimilarity | None = None,
     ) -> list[SimilarityResult]:
-        """Score ``query`` against every profile.
+        """Score ``query`` against every profile but its own.
 
-        SIM-531: a pair with a measured hold on both sides is the two-way
-        blend; a pair missing it on either side is the outcome score alone
-        (the outcome group renormalized to weight one). ``hold_rbf`` defaults
-        to the module bandwidth so a caller built without one keeps working.
+        A pair with a measured hold on both sides blends the two groups. A
+        pair missing it on either side scores on the outcome alone (the
+        outcome group's weight renormalized to one). The composite is then
+        multiplied by the square root of the pair's lower α. ``hold_rbf``
+        defaults to the module bandwidth, for an engine built without one
+        (the no-DB test fixtures).
         """
         if not self.profiles:
             return []
@@ -333,18 +321,20 @@ class PitcherStealPartition:
 
 
 def _default_hold_rbf() -> WeightedRBFSimilarity:
-    """The hold kernel at the module bandwidth (SIM-531)."""
+    """The hold kernel at the module bandwidth."""
     return WeightedRBFSimilarity(RBF_SIGMA_HOLD, np.array([w for _, w in HOLD_FEATURES]))
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class PitcherStealSimilarityEngine:
-    """
-    Pitcher Hold-Runner / Steal-Prevention Similarity Engine (Step 2.7).
+    """The pitcher-hold engine.
+
+    A query scores against every loaded pitcher-season. ``build`` loads the
+    profiles the table does not flag below its minimum sample.
 
     Usage:
         engine = PitcherStealSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -363,9 +353,8 @@ class PitcherStealSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = PitcherStealPartition()
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0028 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff (asof_date) every loaded profile declared. None when the
+        # table has no asof_date column or every row's value is NULL.
         self._asof_date = None
 
         self._out_rbf = WeightedRBFSimilarity(
@@ -374,10 +363,10 @@ class PitcherStealSimilarityEngine:
         self._hold_rbf = _default_hold_rbf()
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the outcome (and, SIM-531, the hold) RBF scorers
-        from a fitted report.
+        """Rebuild the outcome and hold kernels from a fitted report.
 
-        A sigma field left at its 0.0 default keeps the engine's current value.
+        A sigma left at its 0.0 default keeps the engine's current sigma. The
+        reliability weights stay the module's.
         """
         v = float(getattr(report, "sigma_pitcher_steal_outcome", 0.0) or 0.0)
         sigma = v if v > 0.0 else self._out_rbf.sigma
@@ -395,6 +384,8 @@ class PitcherStealSimilarityEngine:
         )
 
     def build(self, seasons: list[int] | None = None) -> None:
+        """Load the pitcher-hold profiles, shrink them and build the scoring
+        matrices."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
@@ -430,8 +421,8 @@ class PitcherStealSimilarityEngine:
             self._league_avg["outcome"][season] = np.array(
                 [pj.get(f, 0.0) or 0.0 for f, _ in OUTCOME_FEATURES], dtype=np.float64
             )
-            # SIM-531: a hold key the row lacks is NaN — never 0.0 ft — and the
-            # shrinkage then leaves the raw value alone.
+            # A hold key the row lacks is NaN, never 0.0 ft, and the shrinkage
+            # then leaves the raw value alone.
             self._league_avg["hold"][season] = np.array(
                 [np.nan if pj.get(f) is None else float(pj[f]) for f, _ in HOLD_FEATURES],
                 dtype=np.float64,
@@ -440,11 +431,12 @@ class PitcherStealSimilarityEngine:
     def _load_profiles(self, conn, seasons):
         sf = f"AND psm.season IN ({', '.join(str(s) for s in seasons)})" if seasons else ""
 
-        # SIM-537: graceful-optional column — a database that has not run
-        # migration 0028 yet still builds; asof_date comes back NULL.
+        # A table without the asof_date column (a database before DuckDB
+        # migration 0028) still builds: the cutoff reads NULL on every row.
         _present = duck_columns(conn, "derived", "pitcher_steal_metrics")
         _asof_col = "psm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
-        # SIM-531: the hold columns exist only after migration 0029.
+        # The hold columns arrive with DuckDB migration 0029; an older table
+        # reads NULL.
         _hold_cols = (
             "psm.lead_allowed_primary_ft, psm.lead_allowed_jump_ft"
             if {"lead_allowed_primary_ft", "lead_allowed_jump_ft"} <= _present
@@ -471,7 +463,7 @@ class PitcherStealSimilarityEngine:
 
         log.info("Loading %d pitcher-steal profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff.
         asof_values: set = set()
 
         for row in rows:
@@ -492,7 +484,7 @@ class PitcherStealSimilarityEngine:
             asof_values.add(asof_val)
 
             def _v(*vals):
-                # SIM-531: NULL loads as NaN (unmeasured), never 0.0.
+                # NULL loads as NaN (unmeasured), never 0.0.
                 return np.array([np.nan if v is None else float(v) for v in vals], dtype=np.float64)
 
             hold_vec = _v(hold_primary, hold_jump)
@@ -509,7 +501,7 @@ class PitcherStealSimilarityEngine:
                 below_minimum=bool(below_min),
             )
 
-        # SIM-537: refuse a mixed set.
+        # Refuse profiles built at two cutoffs, or one stamped and one not.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "pitcher-steal profiles were built at different cutoffs "
@@ -522,11 +514,12 @@ class PitcherStealSimilarityEngine:
 
     def _apply_shrinkage(self) -> None:
         """Pull both groups toward the season's league mean on the pitcher's
-        baserunner events (prior 25): a 20-event reliever's lead allowed is
-        56% league mean. A group with no league row is left raw. An
-        UNMEASURED hold (``has_hold`` False) is not shrunk at all — filling it
-        with the league mean would deflate the hold's spread inside the
-        normalizer and sharpen the kernel past its fitted bandwidth."""
+        baserunner events (prior 25). A 20-event reliever's lead allowed is
+        56% league mean. A group with no league row stays raw.
+
+        An unmeasured hold (``has_hold`` False) is not shrunk at all. The
+        league mean would cut the hold's spread inside the normalizer and
+        sharpen the kernel past its fitted bandwidth."""
         for p in self._profiles.values():
             for group, attr in (("outcome", "outcome_vec"), ("hold", "hold_vec")):
                 if group == "hold" and not getattr(p, "has_hold", False):
@@ -545,6 +538,8 @@ class PitcherStealSimilarityEngine:
         season: int,
         n: int | None = None,
     ) -> list[SimilarityResult]:
+        """Score the query pitcher against every pitcher-hold profile, best
+        first; ``n`` keeps the top n."""
         profile = self._profiles.get((pitcher_id, season))
         if profile is None:
             log.warning("Pitcher-steal %d season %d not found.", pitcher_id, season)
@@ -564,6 +559,7 @@ class PitcherStealSimilarityEngine:
         pitcher_a: tuple[int, int],
         pitcher_b: tuple[int, int],
     ) -> SimilarityResult | None:
+        """The score of pitcher-season ``pitcher_b`` against ``pitcher_a``."""
         pa = self._profiles.get(pitcher_a)
         pb = self._profiles.get(pitcher_b)
         if pa is None or pb is None:
@@ -574,7 +570,7 @@ class PitcherStealSimilarityEngine:
             norm.normalize_outcome(pa.outcome_vec), norm.normalize_outcome(pb.outcome_vec)
         )
 
-        # SIM-531: the same arithmetic as ``PitcherStealPartition.score_all``.
+        # The same arithmetic as ``PitcherStealPartition.score_all``.
         hold_s: float | None = None
         if getattr(pa, "has_hold", False) and getattr(pb, "has_hold", False):
             hold_rbf = getattr(self, "_hold_rbf", None) or _default_hold_rbf()
@@ -605,7 +601,7 @@ class PitcherStealSimilarityEngine:
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff every loaded profile declared, or ``None``."""
         return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:

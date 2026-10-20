@@ -1,55 +1,46 @@
-"""
-baserunner_similarity.py
-========================
-Step 2.4 — Baserunner-to-Baserunner Similarity (Extra Base)
-MLB Baseball Simulation Platform
+"""The extra-base runner engine: how alike two runner-seasons are on the bases.
 
-Computes a composite similarity score [0, 1] between any two MLB
-baserunner-season profiles by combining three sub-score dimensions:
+The engine scores a pair of runner-seasons from 0 (unlike) to 1 (identical).
+The advancement draws weight their rows by this score (the actor matrix
+``runner_adv``). The score blends three sub-scores:
 
-  1. Speed / Athleticism (35%) — the physical capacity to take extra
-     bases, anchored by Statcast sprint speed.  This is the most
-     reliable and stable feature — it changes very little season to
-     season and is the strongest single predictor of extra-base
-     advancement success.
+  1. Speed (35%): Statcast sprint speed. It barely moves within a season,
+     and it is the strongest single predictor of a successful extra base.
 
-  2. Aggression (40%) — how often a runner *attempts* to take an
-     extra base across the four key situations (1st→3rd on singles,
-     2nd→home on singles, 1st→home on doubles, tag-ups on fly balls).
-     Attempt rate is the process metric — it captures the runner's
-     decision-making tendencies and risk tolerance independent of
-     whether they succeeded.  Also includes stop_rate, the inverse
-     of overall attempt rate, stored explicitly for the engine.
+  2. Aggression (40%): how often the runner TRIES for the extra base. The
+     group holds the overall attempt rate, the attempt rate in each of four
+     situations (first to third on a single, second to home on a single,
+     first to home on a double, the tag-up on a fly ball), the stop rate and
+     Savant's attempt rate above expectation. An attempt rate shows the
+     runner's decisions apart from their result.
 
-  3. Success / Efficiency (25%) — given that a runner attempts,
-     how often does he succeed?  This captures execution quality
-     (reads, slides, rounding technique) and separates runners who
-     attempt aggressively and succeed from those who attempt and get
-     thrown out.
+  3. Success (25%): how often an attempt succeeds. It shows execution: the
+     read, the turn and the slide. It rests on attempts, which rest on
+     chances, so it is the noisiest group and carries the lowest weight.
 
-Research-Informed Design
-------------------------
-  Sprint speed is the fastest-stabilizing baserunning metric —
-  it's effectively a physical constant within a season. Attempt
-  rates stabilize by ~40-50 opportunities.  Success rates are
-  noisier (conditional on the attempt, which is conditional on
-  the opportunity), so they get the lowest weight.
+Each sub-score is a Gaussian kernel (RBF): score = exp(-d² / 2σ²), where d²
+is the weighted mean squared difference of the group's z-scored features (a
+z-score is the value minus the population mean, over the population standard
+deviation). Each feature's reliability weight sets its share of d².
 
-  The engine does NOT partition by speed tier or any other
-  attribute. All runners are compared to all others. The RBF
-  kernel naturally handles the fact that a 31 ft/s sprinter
-  is very dissimilar from a 25 ft/s slugger.
+Before scoring, each profile shrinks toward its season's league-average row
+by empirical-Bayes (EB) shrinkage: the runner keeps the share α = n / (n + 15)
+of his own value, where n is his count of extra-base chances. The composite
+is then multiplied by the square root of the lower α of the pair, so a thin
+profile scores low against everyone.
 
-Dependencies
-------------
-  pip install duckdb numpy
+The engine compares every runner with every other; it does not split runners
+by speed tier. The kernel already puts a 31 ft/s runner far from a 25 ft/s one.
+
+This engine keeps its own masked kernel (``WeightedRBFSimilarity`` below): a
+feature missing on either side drops out of the pair's distance. The shared
+kernel in ``similarity/engines/rbf_kernel.py`` reads a missing difference as
+zero instead.
 
 Usage
 -----
   engine = BaserunnerSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
   engine.build(seasons=[2022, 2023, 2024, 2025])
-
-  results = engine.query(player_id=660271, season=2025)
   results = engine.query(player_id=660271, season=2025, n=20)
 """
 
@@ -84,41 +75,38 @@ log = logging.getLogger("baserunner_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Features and weights
 # ============================================================================
 
-# --- Speed features ---
-# Sprint speed is dominant. One feature, extremely reliable.
+# --- Speed ---
+# One feature, so its reliability weight normalizes to 1.0.
 SPEED_FEATURES = [
     # feature_name,           reliability_weight
-    ("sprint_speed", 0.202),  # nearly constant within season
+    ("sprint_speed", 0.202),  # nearly constant within a season
 ]
 
-# --- Aggression features (attempt rates + stop rate) ---
-# How often the runner goes for it in each situation.
-# Per-situation attempt rates capture tactical tendency;
-# stop_rate is the overall inverse (stored for interpretability but
-# redundant with extra_base_attempt_rate — low weight to avoid double-counting).
+# --- Aggression: the attempt rates and the stop rate ---
+# The per-situation attempt rates show the runner's tendency in each spot.
+# stop_rate is 1 minus the overall attempt rate, so it repeats the overall
+# rate; both carry 0.202.
 AGGRESSION_FEATURES = [
-    ("extra_base_attempt_rate", 0.202),  # overall attempt rate — most stable
-    ("first_to_third_attempt_rate", 0.167),  # specific situations — moderate sample
+    ("extra_base_attempt_rate", 0.202),  # overall attempt rate: the largest sample
+    ("first_to_third_attempt_rate", 0.167),  # a common situation
     ("second_to_home_attempt_rate", 0.100),
-    ("first_to_home_attempt_rate", 0.112),  # rarer situation — noisier
-    ("tag_up_attempt_rate", 0.100),  # rarest — noisiest
-    ("stop_rate", 0.202),  # low weight — redundant with overall
-    # SIM-531: how often the runner tried for the extra base ABOVE how often a
-    # typical runner would have tried in the same chances — Savant's
-    # baserunning board supplies the expectation our data never had. The one
-    # aggression feature that carries its own denominator; it repeats year to
-    # year at 0.75-0.77 against 0.50-0.59 for the raw rate (the weight). NaN
-    # when the runner has no Savant row, and the kernel then drops it from the
-    # distance AND its normalisation (see WeightedRBFSimilarity).
+    ("first_to_home_attempt_rate", 0.112),  # a rarer situation: noisier
+    ("tag_up_attempt_rate", 0.100),  # the rarest situation: the noisiest
+    ("stop_rate", 0.202),  # 1 minus the overall attempt rate
+    # How often the runner tried for the extra base ABOVE how often a typical
+    # runner would have tried in the same chances. Savant's baserunning board
+    # supplies the expectation. It repeats year to year at 0.75-0.77, against
+    # 0.50-0.59 for the raw rate; the weight is that repeat (the lead-distance
+    # work, SIM-531). NaN when the runner has no Savant row: the masked kernel
+    # then drops it from the distance and from the weight total.
     ("xb_attempt_rate_above_expected", 0.760),
 ]
 
-# --- Success / efficiency features ---
-# Given the runner attempted, how often did he succeed?
-# Noisier because it's conditional on the attempt.
+# --- Success ---
+# How often an attempt succeeded. Noisier, because it rests on the attempts.
 SUCCESS_FEATURES = [
     ("extra_base_success_rate", 0.500),  # overall success rate
     ("first_to_third_success_rate", 0.100),
@@ -134,53 +122,54 @@ WEIGHT_SUCCESS = 0.25
 _TOTAL = WEIGHT_SPEED + WEIGHT_AGGRESSION + WEIGHT_SUCCESS
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# RBF bandwidth parameters (gamma = 1 / (2σ²))
-# Calibrated via similarity_calibration.py; these are initial values.
+# The kernel bandwidths σ (gamma = 1 / (2σ²)). ``make calibrate`` fits them for
+# the app's engine (similarity/calibration/). The actor matrix builder does not
+# read the calibration report, so the matrices use these values.
 RBF_SIGMA_SPEED = 0.8171
 RBF_SIGMA_AGGRESSION = 1.0478
 RBF_SIGMA_SUCCESS = 1.0000
 
-# Empirical Bayes shrinkage prior strength
-# At EB_N_PRIOR advancement opportunities, shrinkage weight α = 0.5
+# The EB prior strength: at EB_N_PRIOR extra-base chances, α = 0.5.
 EB_N_PRIOR = 15
 
-#: SIM-531: the features whose NULL loads as NaN (unmeasured) rather than 0.0,
-#: in the profile AND in the league-average row, and whose NaN survives the
-#: shrinkage (the masked kernel drops them from the pair).
+#: The features whose NULL loads as NaN (unmeasured), never 0.0, in the profile
+#: and in the league-average row. Their NaN survives the shrinkage, and the
+#: masked kernel drops them from the pair.
 _NAN_WHEN_MISSING = frozenset({"xb_attempt_rate_above_expected"})
 _NAN_WHEN_MISSING_MASK = np.array(
     [f in _NAN_WHEN_MISSING for f, _ in AGGRESSION_FEATURES], dtype=bool
 )
 
-# Minimum sample for inclusion (matches schema: below_minimum_sample)
+# The computor's minimum of extra-base chances. The engine does not read this
+# constant: the loader filters on the table's below_minimum_sample flag.
 MIN_ADVANCEMENT_OPPS = 20
 
 
 # ============================================================================
-# Data Structures
+# Data structures
 # ============================================================================
 
 
 @dataclass(slots=True)
 class BaserunnerProfile:
-    """Complete baserunner-season profile for extra-base similarity scoring."""
+    """One runner-season's extra-base profile."""
 
     player_id: int
     season: int
     sample_advancement_opps: int
 
-    # Feature vectors (raw values — normalized at query time)
+    # The feature vectors: raw at load, shrunk by ``build``, z-scored when scored.
     speed_vec: NDArray[np.float64]  # shape (len(SPEED_FEATURES),)
     aggression_vec: NDArray[np.float64]  # shape (len(AGGRESSION_FEATURES),)
     success_vec: NDArray[np.float64]  # shape (len(SUCCESS_FEATURES),)
 
-    # Per-situation sample sizes for confidence weighting
+    # The chances in each situation. The engine stores them; no score reads them.
     sample_first_to_third_opps: int = 0
     sample_second_to_home_opps: int = 0
     sample_first_to_home_opps: int = 0
     sample_tag_up_opps: int = 0
 
-    # Empirical Bayes
+    # The EB sample confidence α, over the extra-base chances.
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
@@ -199,30 +188,25 @@ class SimilarityResult:
 
 
 # ============================================================================
-# Reliability-Weighted RBF Kernel
+# The masked kernel
 # ============================================================================
 
 
 class WeightedRBFSimilarity:
-    """
-    Gaussian RBF kernel with per-feature reliability weights and
-    dimensionality-invariant scaling.
+    """A Gaussian kernel (RBF) with per-feature reliability weights and a mask.
 
-    K(x, y) = exp(-γ * Σ_i w_i * (x_i - y_i)²)
+        K(x, y) = exp(-γ · Σ_i w_i · (x_i − y_i)² / Σ_i w_i),   γ = 1 / (2σ²)
 
-    Weights are normalized to sum to 1.0 so the exponent computes the
-    weighted *average* per-feature squared distance, making the score
-    independent of feature count per sub-score.
+    The sums run over the features both sides have. A feature missing on
+    either side (NaN) drops out of the distance AND of the weight total, so a
+    half-measured pair is not pulled toward similarity, as it would be if a
+    missing feature read as an exact match. The weights sum to 1.0, so the
+    exponent is the weighted AVERAGE squared distance per feature: a
+    sub-score's typical score does not depend on how many features it has.
 
-    SIM-531 — the MASKED kernel. A feature missing on either side (NaN)
-    drops out of the distance AND of its normalisation: the weighted average
-    runs over the features both sides have. A fully-measured pair gets
-    exactly the number it got before (the weights already sum to one); a
-    half-measured pair is not inflated toward similarity, which is what the
-    old ``nan_to_num(diff)`` did by reading a missing feature as an exact
-    match. A pair with no feature in common scores 1.0 (an empty distance),
-    which no sub-score here can reach because every group has at least one
-    feature that is never NaN.
+    A pair with no feature in common scores 1.0 (an empty distance). No
+    sub-score here reaches that case: every group has a feature that is never
+    NaN.
     """
 
     def __init__(
@@ -260,11 +244,14 @@ class WeightedRBFSimilarity:
 
 
 # ============================================================================
-# Empirical Bayes Shrinkage
+# Empirical-Bayes shrinkage
 # ============================================================================
 
 
 class EmpiricalBayesShrinkage:
+    """EB shrinkage toward the league mean: the runner keeps the share
+    α = n / (n + n_prior) of his own value."""
+
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
@@ -279,12 +266,10 @@ class EmpiricalBayesShrinkage:
     ) -> NDArray[np.float64]:
         """Pull ``raw_vec`` toward the league mean by ``alpha(n_samples)``.
 
-        A NaN raw value becomes the league mean. SIM-531: a NaN LEAGUE value
-        (a key the league row lacks) leaves the raw value alone. The caller
-        (``_apply_shrinkage``) restores the NaN of an UNMEASURED Savant feature
-        afterwards, so a missing measurement stays NaN through shrinkage and
-        the masked kernel drops it — never a runner scored as exactly average
-        on a feature nobody measured.
+        A NaN raw value becomes the league mean. A NaN league value leaves the
+        raw value alone. ``_apply_shrinkage`` then puts back the NaN of an
+        unmeasured Savant feature, so the masked kernel drops it. A runner is
+        never scored as exactly average on a feature nobody measured.
         """
         a = self.alpha(n_samples)
         avg = np.where(np.isnan(league_avg_vec), raw_vec, league_avg_vec)
@@ -299,7 +284,7 @@ class EmpiricalBayesShrinkage:
 
 @dataclass(slots=True)
 class FeatureNormalizer:
-    """Z-score normalizer fit on the population of baserunner profiles."""
+    """The z-score of each feature, fit on the population of runner profiles."""
 
     speed_mean: NDArray | None = None
     speed_std: NDArray | None = None
@@ -314,9 +299,9 @@ class FeatureNormalizer:
 
         def _fit_group(vecs: list[NDArray]) -> tuple[NDArray, NDArray]:
             mat = np.array(vecs, dtype=np.float64)
-            # SIM-531: a column no profile measured (the Savant feature on a
-            # database built before the load) z-scores to 0 / 1, so the
-            # normalizer never emits NaN statistics.
+            # A column no profile measured (the Savant feature on a database
+            # without the Savant load) gets mean 0 and standard deviation 1,
+            # so the normalizer never emits a NaN statistic.
             measured = np.isfinite(mat).any(axis=0)
             m = np.zeros(mat.shape[1], dtype=np.float64)
             s = np.ones(mat.shape[1], dtype=np.float64)
@@ -333,8 +318,8 @@ class FeatureNormalizer:
     def _normalize(self, vec: NDArray, mean: NDArray | None, std: NDArray | None) -> NDArray:
         if mean is None:
             return vec
-        # SIM-531: a NaN survives normalisation — the masked kernel drops a
-        # missing feature from the distance rather than reading it as the mean.
+        # A NaN stays NaN: the masked kernel drops a missing feature from the
+        # distance instead of reading it as the mean.
         return (vec - mean) / std
 
     def normalize_speed(self, vec: NDArray) -> NDArray:
@@ -348,15 +333,13 @@ class FeatureNormalizer:
 
 
 # ============================================================================
-# Scoring Partition — Vectorized Batch Scoring
+# Scoring partition
 # ============================================================================
 
 
 class BaserunnerPartition:
-    """
-    Stores all baserunner profiles with pre-built normalized feature
-    matrices for vectorized batch RBF scoring.
-    """
+    """Every runner profile, with its z-scored feature matrices for scoring a
+    query against all of them at once."""
 
     def __init__(self) -> None:
         self.profiles: list[BaserunnerProfile] = []
@@ -406,29 +389,26 @@ class BaserunnerPartition:
 
         query_key = (query.player_id, query.season)
 
-        # Normalize query vectors
         q_speed = normalizer.normalize_speed(query.speed_vec)
         q_agg = normalizer.normalize_aggression(query.aggression_vec)
         q_success = normalizer.normalize_success(query.success_vec)
 
-        # Batch RBF scores
         speed_scores = speed_rbf.score_batch(q_speed, self._speed_matrix)
         agg_scores = agg_rbf.score_batch(q_agg, self._aggression_matrix)
         success_scores = success_rbf.score_batch(q_success, self._success_matrix)
 
-        # Composite
         composite = (
             WEIGHT_SPEED * speed_scores
             + WEIGHT_AGGRESSION * agg_scores
             + WEIGHT_SUCCESS * success_scores
         )
 
-        # Confidence discount
+        # The confidence discount: the square root of the pair's lower α.
         pair_confidence = np.minimum(query.eb_alpha, self._eb_alphas)
         composite *= np.sqrt(pair_confidence)
         composite = np.clip(composite, 0.0, 1.0)
 
-        # Build results (exclude exact self-match)
+        # Every profile but the query's own.
         results = []
         for i in range(n):
             if self.keys[i] == query_key:
@@ -450,16 +430,14 @@ class BaserunnerPartition:
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class BaserunnerSimilarityEngine:
-    """
-    Baserunner-to-Baserunner Extra-Base Similarity Engine.
+    """The extra-base runner engine.
 
-    Scores computed EXHAUSTIVELY against all baserunner-season profiles.
-    Cross-season comparisons are included.
+    A query scores against every loaded runner-season, other seasons included.
 
     Usage:
         engine = BaserunnerSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -479,12 +457,10 @@ class BaserunnerSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = BaserunnerPartition()
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0028 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff (asof_date) every loaded profile declared. None when the
+        # table has no asof_date column or every row's value is NULL.
         self._asof_date = None
 
-        # Build weighted RBF scorers
         self._speed_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_SPEED,
             reliability_weights=np.array([w for _, w in SPEED_FEATURES]),
@@ -499,15 +475,16 @@ class BaserunnerSimilarityEngine:
         )
 
     # ------------------------------------------------------------------
-    # Calibration wiring (SIM-406)
+    # Calibration
     # ------------------------------------------------------------------
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the speed/aggression/success RBF scorers from a report.
+        """Rebuild the speed, aggression and success kernels from a fitted report.
 
-        A sigma (or reliability-weight) field left at its 0.0 / None default keeps
-        the engine's current value, so a partial report degrades gracefully. Only
-        the query-time scorers are swapped (safe before or after ``build``).
+        A sigma left at its 0.0 default keeps the engine's current sigma. A
+        weight list left at None, or one of the wrong length, gives the module's
+        weights. The call swaps only the query-time kernels, so it is safe
+        before or after ``build``.
         """
 
         def _sig(field: str, current: float) -> float:
@@ -519,10 +496,9 @@ class BaserunnerSimilarityEngine:
             if w is None:
                 return np.array(default)
             arr = np.asarray(w, dtype=np.float64)
-            # SIM-531: a report fitted before a feature joined its group carries
-            # one weight too few; applying it would broadcast against the wider
-            # feature vector and fail on the first query. Keep the module
-            # defaults until ``make calibrate`` refits the report.
+            # A report fitted on a different feature list would fail to
+            # broadcast on the first query. Keep the module weights until
+            # ``make calibrate`` refits the report.
             if arr.shape != (len(default),):
                 log.warning(
                     "SIM-531: %s holds %d weights but the engine has %d features; "
@@ -567,12 +543,11 @@ class BaserunnerSimilarityEngine:
     def build(
         self, seasons: list[int] | None = None, *, include_below_minimum: bool = False
     ) -> None:
-        """Load all baserunner profiles, apply shrinkage, build matrices.
+        """Load the runner profiles, shrink them and build the scoring matrices.
 
-        SIM-523 (the kernel retirement): ``include_below_minimum`` loads the
-        thin profiles too. Their sample confidence (``eb_alpha``) shrinks
-        their scores, so the score matrix covers every runner-season the
-        pools hold instead of skipping half of them."""
+        ``include_below_minimum`` also loads the profiles below the minimum
+        sample; their low α shrinks their scores. The actor matrix builder
+        sets it, so the matrix covers every runner-season the pools hold."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
 
@@ -627,10 +602,10 @@ class BaserunnerSimilarityEngine:
                 [pj.get(f, 0.0) or 0.0 for f, _ in SPEED_FEATURES], dtype=np.float64
             )
 
-            # SIM-531: ``xb_attempt_rate_above_expected`` is NaN when the row
-            # lacks it (a league row written before the Savant load), so the
-            # shrinkage leaves a runner's raw value — or his NaN — alone; the
-            # other keys keep their long-standing 0.0 fallback.
+            # ``xb_attempt_rate_above_expected`` is NaN when the league row lacks
+            # it (a database without the Savant load), so the shrinkage leaves
+            # the runner's raw value, or his NaN, alone. Every other missing
+            # key reads 0.0.
             self._league_avg["aggression"][season] = np.array(
                 [
                     (np.nan if pj.get(f) is None else float(pj[f]))
@@ -659,12 +634,12 @@ class BaserunnerSimilarityEngine:
             season_filter = f"AND brm.season IN ({sl})"
         min_filter = "TRUE" if include_below_minimum else "NOT brm.below_minimum_sample"
 
-        # SIM-537: graceful-optional column, same pattern the pitcher and
-        # manager engines use — a database that has not run migration 0028
-        # yet still builds; asof_date just comes back NULL for every row.
+        # A table without the asof_date column (a database before DuckDB
+        # migration 0028) still builds: the cutoff reads NULL on every row.
         _present = duck_columns(conn, "derived", "baserunner_season_metrics")
         _asof_col = "brm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
-        # SIM-531: the Savant feature exists only after migration 0029.
+        # The Savant column arrives with DuckDB migration 0029; an older table
+        # reads NULL.
         _xb_col = (
             "brm.xb_attempt_rate_above_expected"
             if "xb_attempt_rate_above_expected" in _present
@@ -709,7 +684,7 @@ class BaserunnerSimilarityEngine:
 
         log.info("Loading %d baserunner profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff.
         asof_values: set = set()
 
         for row in rows:
@@ -742,8 +717,9 @@ class BaserunnerSimilarityEngine:
             def _v(vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
 
-            # SIM-531: THIS feature loads NULL as NaN (unmeasured), never 0.0 —
-            # 0.0 is "exactly as aggressive as expected", a real reading.
+            # ``_v`` reads NULL as 0.0. The Savant feature reads NULL as NaN
+            # (unmeasured): its 0.0 means "exactly as aggressive as
+            # expected", a real reading.
             aggression = np.append(
                 _v([eb_attempt, ftt_attempt, sth_attempt, fth_attempt, tu_attempt, stop]),
                 np.nan if xb_above is None else float(xb_above),
@@ -763,10 +739,8 @@ class BaserunnerSimilarityEngine:
                 below_minimum=bool(below_min),
             )
 
-        # SIM-537: refuse a mixed set — same reasoning as the pitcher and
-        # manager engines. Profiles built at two different cutoffs (or one
-        # stamped, one not) are not comparable, and nothing downstream
-        # would show it.
+        # Refuse profiles built at two cutoffs, or one stamped and one not.
+        # They are not comparable, and nothing downstream shows the mix.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "baserunner profiles were built at different cutoffs "
@@ -778,14 +752,14 @@ class BaserunnerSimilarityEngine:
             log.info("Baserunner profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
-        """Apply EB shrinkage to all feature vectors.
+        """Pull every profile toward its season's league-average row on the
+        runner's extra-base chances. A season with no league row stays raw.
 
-        SIM-531: an UNMEASURED ``xb_attempt_rate_above_expected`` (NaN — no
-        Savant row) stays NaN through the aggression shrink, whatever the
-        league row carries, so the masked kernel drops it from that runner's
-        pairs and the normalizer's statistics come from the measured runners
-        alone. A measured value shrinks toward the league mean like every
-        other aggression feature.
+        An unmeasured ``xb_attempt_rate_above_expected`` (NaN: no Savant row)
+        stays NaN, whatever the league row carries. The masked kernel then
+        drops it from that runner's pairs, and the normalizer's statistics
+        come from the measured runners alone. A measured value shrinks like
+        every other feature.
         """
         for _key, p in self._profiles.items():
             s = p.season
@@ -816,7 +790,7 @@ class BaserunnerSimilarityEngine:
         n: int | None = None,
     ) -> list[SimilarityResult]:
         """
-        Score the query baserunner against ALL baserunner-season profiles.
+        Score the query runner against every runner-season profile.
 
         Parameters
         ----------
@@ -852,7 +826,7 @@ class BaserunnerSimilarityEngine:
         runner_a: tuple[int, int],
         runner_b: tuple[int, int],
     ) -> SimilarityResult | None:
-        """Compute similarity between two specific baserunner-seasons."""
+        """The score of runner-season ``runner_b`` against ``runner_a``."""
         pa = self._profiles.get(runner_a)
         pb = self._profiles.get(runner_b)
         if pa is None or pb is None:
@@ -874,7 +848,7 @@ class BaserunnerSimilarityEngine:
         query: BaserunnerProfile,
         candidate: BaserunnerProfile,
     ) -> tuple[float, float, float, float]:
-        """Compute sub-scores and composite between two profiles."""
+        """The composite and the three sub-scores of one pair."""
         speed_q = self._normalizer.normalize_speed(query.speed_vec)
         speed_c = self._normalizer.normalize_speed(candidate.speed_vec)
         speed_s = self._speed_rbf.score(speed_q, speed_c)
@@ -912,7 +886,7 @@ class BaserunnerSimilarityEngine:
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff every loaded profile declared, or ``None``."""
         return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
