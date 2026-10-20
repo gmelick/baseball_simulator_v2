@@ -198,3 +198,8 @@ scripts/sim548_design_*/
 # SIM-568: the default off-site copy folder (./backups_offsite, when
 # OFFSITE_BACKUP_DIR is unset).
 /backups_offsite/
+
+# ---------------------------------------------------------------------------
+# Run outputs (SIM-493): every script writes its records under results/.
+# ---------------------------------------------------------------------------
+/results/

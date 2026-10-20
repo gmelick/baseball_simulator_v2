@@ -81,3 +81,6 @@ backups/
 # SIM-568: the default off-site copy folder (./backups_offsite, when
 # OFFSITE_BACKUP_DIR is unset).
 backups_offsite/
+
+# Run outputs (SIM-493): records written by scripts, never part of an image.
+results/
