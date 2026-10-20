@@ -1,72 +1,61 @@
-"""similarity/backtesting/backtester.py — SIM-220 probabilistic backtester.
+"""Score predicted outcome distributions: calibration, accuracy and a walk-forward ablation.
 
-The validation spine's gold-standard metrics. Where the SIM-076 harness
-(:mod:`similarity.backtesting.recency_walk_forward`) scores **scalar** outcome
-predictions with MAE / RMSE, this module generalizes the same walk-forward idea
-to **probabilistic** PA-outcome prediction: the thing being scored is a
-*probability distribution over discrete outcomes* (e.g. the dict returned by
-``PlayPoolSampler.sample_batted_ball(..., return_distribution=True)`` —
-``{"single": 0.31, "field_out": 0.55, ...}``) against the held-out *actual*
-outcome label.
+:mod:`similarity.backtesting.recency_walk_forward` scores scalar predictions
+with the mean absolute error and the root-mean-square error. This module
+scores a probability distribution over discrete outcomes, such as
+``{"single": 0.31, "field_out": 0.55, ...}``, against the outcome that
+happened.
 
-Status: DEV / OFFLINE-ONLY (the higher-level SIM-220 functions)
---------------------------------------------------------------
-The higher-level functions here (``walk_forward_ablation`` and the
-``evaluate_distributions`` ablation spine) are an offline validation library —
-there is **no live pipeline caller**. The only production import from this module
-is the two constants ``DEFAULT_N_BINS`` and ``OUTCOME_PROB_EPS``, consumed by
-:mod:`simulation.prop_validation`, which REIMPLEMENTS the binary case (a win
-probability / over-under is a binary event the multi-class confidence reliability
-does not score correctly). Production win-prob / prop calibration therefore runs
-on that binary path, not on these functions. The math here is correct and
-unit-tested — this is a label, not a deprecation.
+Offline only
+------------
+No live code calls the functions here. Production imports only the two
+constants ``DEFAULT_N_BINS`` and ``OUTCOME_PROB_EPS``, into
+:mod:`simulation.prop_validation`. That module scores the binary events (a
+home win, an over) on a binary path of its own, because the multi-class
+confidence below does not score a binary event correctly. The functions here
+are tested and correct; "offline" describes their use, not their state.
 
 What it computes
 ----------------
-Given an ``(n, c)`` matrix of predicted class probabilities and the ``(n,)``
-integer actual labels, it computes the three canonical calibration / accuracy
-scores plus a plottable reliability curve:
+The inputs are an ``(n, c)`` matrix of predicted class probabilities and the
+``(n,)`` integer labels of the actual outcomes.
 
-* **ECE** — expected calibration error (binned). Bins the predicted
-  *confidence* (the prob assigned to the predicted/argmax class) and measures
-  the gap between mean confidence and empirical accuracy inside each bin,
-  weighted by bin population. A perfectly-calibrated predictor → ~0.
-* **Brier score** — the multi-class (vector) Brier: mean squared error between
-  the predicted probability vector and the one-hot actual. Lower is better;
-  range ``[0, 2]``.
-* **log-loss** — multi-class cross-entropy with eps clipping so a confident
-  wrong prediction (``p → 0`` on the true class) yields a large-but-finite
-  penalty instead of ``+inf``.
-* **reliability curve** — the per-bin ``(mean_confidence, empirical_accuracy,
-  count)`` points underlying the ECE, suitable for a calibration / reliability
-  diagram.
+* **ECE** (expected calibration error). A row's confidence is the probability
+  of its predicted (argmax) class. The rows go into confidence bins. In each
+  bin, the gap between the mean confidence and the hit rate is weighted by the
+  bin's share of the rows. A calibrated predictor scores about 0.
+* **Brier score**: the mean squared error between the predicted probability
+  vector and the one-hot actual outcome. Lower is better; the range is
+  ``[0, 2]``.
+* **log-loss**: the multi-class cross-entropy. The probabilities are clipped at
+  ``eps``, so a confident wrong prediction (``p → 0`` on the true class) costs a
+  large but finite penalty, not ``+inf``.
+* **reliability curve**: the per-bin points behind the ECE (the mean
+  confidence, the hit rate, the count), for a reliability diagram.
 
-Ablation framework
-------------------
-The point of a backtester here is not just "how good is the full model" but
-"how much does each engine's signal *contribute*". :func:`walk_forward_ablation`
-runs the SIM-076 expanding-window folds (reusing :func:`walk_forward_folds`, no
-new splitting logic) and, on each held-out window, scores the **full** model's
-predicted distributions against a **league-average baseline** predictor — the
-floor: predict the marginal outcome frequencies of the training window for
-every test row, ignoring all features / engine signals. The metric *delta*
-(baseline − model; positive = the model beats the floor) isolates the signal
-contribution. Arbitrary additional named predictors (e.g. per-engine swaps:
-"full model but with the pitcher engine replaced by the league average") can be
-passed in the same call so each engine's marginal lift is reported side-by-side
+The ablation
+------------
+:func:`walk_forward_ablation` runs the expanding-window folds of
+:func:`walk_forward_folds`. On each held-out season it scores the model's
+distributions and a league-average baseline: the outcome frequencies of the
+training seasons, the same for every row, with no features. The delta is
+baseline − model on each lower-is-better metric, so a positive delta means the
+model beats the baseline. The caller can add named predictors, for example the
+model with one engine replaced by the league average. Each one is reported
 against the same baseline.
 
-Purity / testability
---------------------
-The metric functions are pure NumPy over arrays — no DB, no engine, no FAISS.
-The harness takes an **injectable prediction function** ``predict(train, x) ->
-prob-vector`` (exactly mirroring the SIM-076 harness's injectable predictor),
-so it is unit-tested end-to-end on synthetic distributions + labels.
+Testing
+-------
+The metric functions are pure NumPy: no database, no engine. The harness takes
+an injected prediction function ``predict(train, x) -> probability vector``, so
+the unit tests run it end to end on synthetic data.
 
 Public API
 ----------
-``OUTCOME_PROB_EPS``                                   — log-loss clip epsilon.
+``OUTCOME_PROB_EPS``                                   — the log-loss clip.
+``DEFAULT_N_BINS``                                     — the default bin count.
 ``probs_from_dicts(dicts, classes)``                  -> (n, c) ndarray
+``normalize_probs(probs)``                            -> (n, c) ndarray
 ``expected_calibration_error(probs, labels, n_bins)`` -> float
 ``brier_score(probs, labels)``                        -> float
 ``log_loss(probs, labels, eps)``                      -> float
@@ -83,7 +72,7 @@ from typing import Any
 
 import numpy as np
 
-# Reuse the SIM-076 expanding-window splitter rather than reinventing it.
+# The column names and the expanding-window folds of the recency harness.
 from similarity.backtesting.recency_walk_forward import (
     FEATURE_COL,
     OUTCOME_COL,
@@ -105,17 +94,19 @@ __all__ = [
     "walk_forward_ablation",
 ]
 
-#: Clip epsilon for log-loss so a predicted probability of exactly 0 on the
-#: true class yields ``-log(eps)`` (a large but finite penalty) instead of
-#: ``+inf``. Mirrors sklearn's ``log_loss`` default magnitude.
+#: The log-loss clip: a probability of exactly 0 on the true class costs
+#: ``-log(eps)``, about 34.5, not ``+inf``. sklearn's ``log_loss`` long used the
+#: same value as its default. The league-average baseline also uses it as its
+#: smoothing pseudo-count.
 OUTCOME_PROB_EPS = 1e-15
 
-#: Default number of equal-width confidence bins for ECE / reliability curve.
+#: The default number of equal-width confidence bins of the ECE and the
+#: reliability curve.
 DEFAULT_N_BINS = 10
 
 
 # ---------------------------------------------------------------------------
-# 1. Coercion helpers — turn predicted-distribution dicts into a prob matrix
+# 1. Conversion helpers: predicted-distribution dicts into a probability matrix
 # ---------------------------------------------------------------------------
 def probs_from_dicts(
     dists: Sequence[Mapping[str, float]],
@@ -123,11 +114,11 @@ def probs_from_dicts(
 ) -> np.ndarray:
     """Stack a sequence of outcome-probability dicts into an ``(n, c)`` matrix.
 
-    Each dict is a sampler-style prediction (``{event: prob}``, e.g. the output
-    of ``PlayPoolSampler.sample_batted_ball(..., return_distribution=True)``).
-    ``classes`` fixes the column order (the closed outcome vocabulary). Events
-    absent from a dict contribute ``0.0``; rows are renormalized to sum to 1 so
-    a sampler dict that omits zero-prob events still yields a valid p-vector.
+    Each dict is one prediction, ``{outcome: probability}``. ``classes`` fixes
+    the column order (the closed outcome vocabulary). An outcome missing from a
+    dict counts 0.0, and an outcome not in ``classes`` is ignored. Each row is
+    then scaled to add up to 1 (:func:`normalize_probs`), so a dict that leaves
+    out its zero-probability outcomes still gives a valid row.
 
     Parameters
     ----------
@@ -153,10 +144,11 @@ def probs_from_dicts(
 
 
 def normalize_probs(probs: np.ndarray) -> np.ndarray:
-    """Row-normalize a ``(n, c)`` matrix to valid probability vectors.
+    """Scale each row of an ``(n, c)`` matrix into a valid probability vector.
 
-    Rows whose mass is non-positive / non-finite fall back to a uniform
-    distribution so downstream metrics never see a degenerate (all-zero) row.
+    Negative entries become 0. A row whose total is 0 or not finite becomes
+    uniform, so the metrics never see an all-zero row. A matrix that is not 2-D
+    raises ``ValueError``.
     """
     p = np.asarray(probs, dtype=float)
     if p.ndim != 2:
@@ -171,7 +163,7 @@ def normalize_probs(probs: np.ndarray) -> np.ndarray:
 
 
 def _validate(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Common shape / range validation for the metric functions."""
+    """Check the shapes and the label range for the metric functions."""
     p = np.asarray(probs, dtype=float)
     y = np.asarray(labels).ravel().astype(int)
     if p.ndim != 2:
@@ -192,7 +184,7 @@ def _validate(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.nda
 # 2. Probabilistic metrics (pure NumPy)
 # ---------------------------------------------------------------------------
 def _confidence_and_correct(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per-row predicted-class confidence (max prob) and correctness (0/1)."""
+    """Per row: the confidence (the largest probability) and the hit (1 or 0)."""
     pred = np.argmax(probs, axis=1)
     confidence = probs[np.arange(probs.shape[0]), pred]
     correct = (pred == labels).astype(float)
@@ -210,26 +202,25 @@ def reliability_curve(
     labels: np.ndarray,
     n_bins: int = DEFAULT_N_BINS,
 ) -> list[dict]:
-    """Binned reliability-diagram points (mean confidence vs empirical accuracy).
+    """The points of a reliability diagram: the mean confidence against the hit rate.
 
-    The predicted-class confidence of each row is dropped into one of
-    ``n_bins`` equal-width bins on ``[0, 1]``. For each **non-empty** bin we
-    emit ``{bin_lo, bin_hi, count, mean_confidence, accuracy, gap}`` where
-    ``accuracy`` is the empirical fraction of correct argmax predictions in the
-    bin and ``gap = |mean_confidence - accuracy|``. A well-calibrated model lies
-    on the diagonal (``mean_confidence ≈ accuracy``); these points are exactly
-    what a reliability diagram plots and what :func:`expected_calibration_error`
-    aggregates.
+    Each row's confidence goes into one of ``n_bins`` equal-width bins on
+    ``[0, 1]``. Each NON-EMPTY bin gives
+    ``{bin_lo, bin_hi, count, mean_confidence, accuracy, gap}``. ``accuracy`` is
+    the share of the bin's rows whose argmax class was right, and
+    ``gap = |mean_confidence - accuracy|``. A calibrated model lies on the
+    diagonal (``mean_confidence ≈ accuracy``).
+    :func:`expected_calibration_error` adds up these points.
 
-    Bins are half-open ``[lo, hi)`` except the last, which includes 1.0.
+    The bins are half-open ``[lo, hi)``, except the last, which includes 1.0.
     """
     p, y = _validate(probs, labels)
     edges = _bin_edges(n_bins)
     if p.shape[0] == 0:
         return []
     confidence, correct = _confidence_and_correct(p, y)
-    # np.digitize: index in [1, n_bins]; clamp the right edge (==1.0) into the
-    # last bin so a perfect-confidence prediction is counted.
+    # np.digitize over the interior edges gives a bin index in [0, n_bins - 1];
+    # a confidence of exactly 1.0 lands in the last bin. The clip is a guard.
     idx = np.clip(np.digitize(confidence, edges[1:-1], right=False), 0, n_bins - 1)
 
     curve: list[dict] = []
@@ -258,15 +249,14 @@ def expected_calibration_error(
     labels: np.ndarray,
     n_bins: int = DEFAULT_N_BINS,
 ) -> float:
-    """Expected Calibration Error (binned, confidence-based).
+    """The expected calibration error (ECE), binned on the confidence.
 
         ECE = Σ_b (n_b / N) · |acc_b − conf_b|
 
-    over ``n_bins`` equal-width confidence bins, where ``conf_b`` is the mean
-    predicted-class confidence in bin ``b`` and ``acc_b`` its empirical
-    accuracy. A perfectly-calibrated predictor (confidence == accuracy in every
-    bin) → ~0; a systematically over/under-confident one → larger. Range
-    ``[0, 1]``.
+    over ``n_bins`` equal-width confidence bins. ``conf_b`` is the mean
+    confidence in bin ``b`` and ``acc_b`` its hit rate. A calibrated predictor
+    (confidence = hit rate in every bin) scores about 0; an over- or
+    under-confident one scores more. The range is ``[0, 1]``; no rows give NaN.
     """
     p, y = _validate(probs, labels)
     if p.shape[0] == 0:
@@ -277,15 +267,15 @@ def expected_calibration_error(
 
 
 def brier_score(probs: np.ndarray, labels: np.ndarray) -> float:
-    """Multi-class (vector) Brier score.
+    """The multi-class Brier score: the mean squared error of the probability vector.
 
         Brier = (1/N) Σ_i Σ_k (p_ik − y_ik)²
 
-    where ``y_i`` is the one-hot encoding of the actual class. This is the sum
-    of squared errors of the full probability vector (not just the true-class
-    component), so it rewards both calibration and sharpness. Lower is better;
-    range ``[0, 2]``. A predictor that always puts all mass on the correct class
-    scores 0.
+    ``y_i`` is the one-hot encoding of the actual class. The sum runs over the
+    whole probability vector, not only the true class, so the score rewards both
+    calibration and sharpness. Lower is better; the range is ``[0, 2]``. A
+    predictor that puts all its mass on the right class scores 0. No rows give
+    NaN.
     """
     p, y = _validate(probs, labels)
     if p.shape[0] == 0:
@@ -300,14 +290,14 @@ def log_loss(
     labels: np.ndarray,
     eps: float = OUTCOME_PROB_EPS,
 ) -> float:
-    """Multi-class cross-entropy (log-loss) with eps clipping.
+    """The multi-class cross-entropy (log-loss), clipped at ``eps``.
 
         log_loss = −(1/N) Σ_i log( clip(p_i,true_class) )
 
-    Probabilities are clipped to ``[eps, 1]`` *before* taking the log so a
-    confident-wrong prediction (``p → 0`` on the true class) yields the finite
-    penalty ``−log(eps)`` instead of ``+inf``. Lower is better; a predictor that
-    puts all mass on the correct class scores ~0.
+    The probabilities are clipped to ``[eps, 1]`` before the log, so a confident
+    wrong prediction (``p → 0`` on the true class) costs the finite penalty
+    ``−log(eps)``, not ``+inf``. Lower is better; a predictor that puts all its
+    mass on the right class scores about 0. No rows give NaN.
     """
     p, y = _validate(probs, labels)
     if p.shape[0] == 0:
@@ -324,12 +314,13 @@ def evaluate_distributions(
     n_bins: int = DEFAULT_N_BINS,
     eps: float = OUTCOME_PROB_EPS,
 ) -> dict:
-    """Score predicted distributions against actual labels — all metrics at once.
+    """Every metric of predicted distributions against the actual labels, at once.
 
-    Returns a dict with ``ece``, ``brier``, ``log_loss``, ``accuracy`` (argmax
-    top-1), ``reliability_curve`` (the plottable per-bin points), and ``n``.
     The inputs are an ``(n, c)`` predicted-probability matrix and the ``(n,)``
-    integer actual labels; nothing here touches a DB.
+    integer labels of the actual outcomes. Returns a dict with ``ece``,
+    ``brier``, ``log_loss``, ``accuracy`` (the argmax hit rate),
+    ``reliability_curve`` (the per-bin points) and ``n``. No rows give NaN
+    metrics and an empty curve.
     """
     p, y = _validate(probs, labels)
     if p.shape[0] == 0:
@@ -353,7 +344,7 @@ def evaluate_distributions(
 
 
 # ---------------------------------------------------------------------------
-# 3. League-average baseline (the ablation floor)
+# 3. The league-average baseline (the floor of the ablation)
 # ---------------------------------------------------------------------------
 def league_average_distribution(
     train_labels: Sequence[int],
@@ -361,14 +352,14 @@ def league_average_distribution(
     *,
     eps: float = OUTCOME_PROB_EPS,
 ) -> np.ndarray:
-    """The league-average predictor's distribution: training marginal frequencies.
+    """The league-average predictor: the outcome frequencies of the training rows.
 
-    Counts each class in ``train_labels`` and normalizes to a probability
-    vector — the empirical outcome mix of the *training* window. This is the
-    ablation **floor**: it uses no features and no engine signals, so any model
-    that beats it is demonstrating real signal. Laplace-smoothed by ``eps`` so a
-    class never seen in training still gets a tiny non-zero mass (keeps log-loss
-    finite if it appears in the held-out window).
+    It counts each class in ``train_labels`` and scales the counts to a
+    probability vector. The baseline uses no features and no engine, so a model
+    that beats it carries signal. Every class starts at a pseudo-count of
+    ``eps`` (additive smoothing), so a class never seen in training gets a tiny
+    mass and the log-loss stays finite when it appears in the held-out rows. A
+    label outside ``[0, n_classes)`` is ignored.
 
     Returns a ``(n_classes,)`` probability vector.
     """
@@ -381,14 +372,15 @@ def league_average_distribution(
 
 
 # ---------------------------------------------------------------------------
-# 4. Walk-forward ablation harness
+# 4. The walk-forward ablation harness
 # ---------------------------------------------------------------------------
 def _column(df: Any, col: str) -> list:
-    """Return a column of ``df`` as a list (DataFrame / mapping agnostic)."""
+    """A column of ``df`` as a list (``df`` is a DataFrame or a mapping)."""
     return list(df[col])
 
 
 def _subset_indices(seasons: np.ndarray, wanted) -> np.ndarray:
+    """The row indices whose season is in ``wanted``."""
     return np.where(np.isin(seasons, np.asarray(wanted)))[0]
 
 
@@ -404,53 +396,55 @@ def walk_forward_ablation(
     n_bins: int = DEFAULT_N_BINS,
     eps: float = OUTCOME_PROB_EPS,
 ) -> dict:
-    """Walk-forward probabilistic backtest with a league-average ablation.
+    """A walk-forward backtest of predicted distributions, with a league-average ablation.
 
-    Reuses the SIM-076 expanding-window splitter (:func:`walk_forward_folds`):
-    each fold trains on all strictly-prior seasons and evaluates on the next
-    held-out season. On every fold and held-out row we score three (or more)
-    predicted distributions against the actual outcome:
+    The folds come from :func:`walk_forward_folds`: each fold trains on every
+    earlier season and tests on the next season. On each held-out row the
+    harness scores two or more predicted distributions against the actual
+    outcome:
 
-    * **model** — ``predict_fn(train, feature)``: the full model under test
-      (e.g. a sampler-backed k-NN distribution). The harness only requires a
-      callable returning a probability vector over ``classes``, so it is
-      DB-free and synthetic-data testable.
-    * **baseline** — the league-average predictor
-      (:func:`league_average_distribution` over the *training* window's labels),
-      the floor.
-    * any **extra_predictors** — named callables with the same signature, e.g.
-      per-engine swaps ("model with engine X replaced by the league average"),
-      so each engine's marginal contribution is reported against the same floor.
+    * **model**: ``predict_fn(train_subset, feature)``, the model under test.
+      Any callable that returns a probability vector over ``classes`` works.
+    * **baseline**: the league-average predictor
+      (:func:`league_average_distribution` over the training rows' labels).
+    * each of **extra_predictors**: a named callable with the same signature,
+      e.g. the model with one engine replaced by the league average. Each one is
+      reported against the same baseline.
 
-    For each predictor the pooled-across-folds metrics (ECE / Brier / log-loss /
-    accuracy + reliability curve) are computed via :func:`evaluate_distributions`.
-    The ablation ``deltas`` report ``baseline − predictor`` for the
+    ``train_subset`` is a dict: ``{feature_col: [the training features],
+    "label": the training class indices (-1 for a label outside ``classes``),
+    "classes": the vocabulary}``. A held-out row whose label is outside
+    ``classes`` is skipped.
+
+    :func:`evaluate_distributions` scores each predictor over the held-out rows
+    of every fold pooled. The ablation deltas are ``baseline − predictor`` on the
     lower-is-better metrics (Brier, log-loss, ECE) and ``predictor − baseline``
-    for accuracy, so a **positive delta means the predictor beats the floor**.
+    on the accuracy, so a positive delta means the predictor beats the baseline.
 
     Parameters
     ----------
     df:
-        In-memory rows with ``season``, ``feature`` and a discrete ``outcome``
-        (string event label) column. (DataFrame or mapping of array-likes.)
+        In-memory rows with ``season``, ``feature`` and ``outcome`` (a string
+        outcome label) columns: a DataFrame or a mapping of array-likes.
     predict_fn:
-        ``(train_subset, feature) -> prob-vector`` for the full model.
+        ``(train_subset, feature) -> probability vector``: the model.
     classes:
-        Ordered, unique outcome vocabulary defining the probability columns.
+        The ordered, unique outcome vocabulary: the probability columns.
     extra_predictors:
-        Optional ``{name: predict_fn}`` for per-engine ablation arms.
+        An optional ``{name: predict_fn}`` of more predictors to score.
 
     Returns
     -------
     dict with:
-        ``classes``   — the outcome vocabulary used.
-        ``folds``     — per-fold dict: ``test_season``, ``n_train``, ``n_test``.
-        ``metrics``   — ``{predictor_name: evaluate_distributions(...)}`` pooled
-                        over all held-out rows (always includes ``"model"`` and
+        ``classes``   — the outcome vocabulary.
+        ``folds``     — one dict per fold: ``test_season``, ``n_train``,
+                        ``n_test`` (``n_test`` counts the skipped rows too).
+        ``metrics``   — ``{predictor_name: evaluate_distributions(...)}`` over
+                        all the held-out rows (always with ``"model"`` and
                         ``"baseline"``).
-        ``ablation``  — ``{predictor_name: {ece, brier, log_loss, accuracy}}``
-                        deltas vs the baseline (positive == beats the floor);
-                        ``"model"`` is always present.
+        ``ablation``  — ``{predictor_name: {ece, brier, log_loss, accuracy}}``,
+                        the deltas against the baseline (positive = beats the
+                        baseline); ``"model"`` is always present.
     """
     classes = list(classes)
     cls_idx = {c: i for i, c in enumerate(classes)}
@@ -460,13 +454,13 @@ def walk_forward_ablation(
     seasons = np.asarray(_column(df, season_col), dtype=int).ravel()
     features = _column(df, feature_col)
     raw_labels = _column(df, label_col)
-    # Map string outcome labels to class indices once.
+    # Map the string outcome labels to class indices once (-1 = not in classes).
     labels = np.array([cls_idx.get(str(lbl), -1) for lbl in raw_labels], dtype=int)
 
     folds_spec = walk_forward_folds(seasons)
 
-    # One probability list + label list accumulator per predictor, pooled across
-    # folds so every held-out row contributes equally.
+    # One probability list per predictor and one label list, pooled across the
+    # folds, so every held-out row counts the same.
     arms = ["model", "baseline", *extra_predictors.keys()]
     pooled_probs: dict[str, list] = {a: [] for a in arms}
     pooled_labels: list[int] = []
@@ -479,15 +473,15 @@ def walk_forward_ablation(
             continue
 
         train_labels = labels[tr]
-        # Only train rows with a recognized label feed the baseline marginal.
+        # Only the training rows with a known label feed the baseline frequencies.
         baseline_vec = league_average_distribution(
             [c for c in train_labels.tolist() if c >= 0],
             n_classes,
             eps=eps,
         )
 
-        # Build a lightweight train subset the injected predictors can consume:
-        # a mapping of the columns they need (feature + outcome label index).
+        # The training subset the injected predictors read: the features, the
+        # label indices and the vocabulary.
         train_subset = {
             feature_col: [features[i] for i in tr],
             "label": train_labels,
@@ -497,7 +491,7 @@ def walk_forward_ablation(
         for j in te:
             y = int(labels[j])
             if y < 0:
-                continue  # held-out outcome outside the vocabulary; skip row
+                continue  # the held-out outcome is outside the vocabulary: skip the row
             x = features[j]
             pooled_labels.append(y)
 
@@ -530,11 +524,11 @@ def walk_forward_ablation(
             continue
         m = metrics[name]
         ablation[name] = {
-            # lower-is-better metrics: baseline - model  (positive == better)
+            # the lower-is-better metrics: baseline - model (positive = better)
             "ece": base["ece"] - m["ece"],
             "brier": base["brier"] - m["brier"],
             "log_loss": base["log_loss"] - m["log_loss"],
-            # higher-is-better: model - baseline (positive == better)
+            # the higher-is-better metric: model - baseline (positive = better)
             "accuracy": m["accuracy"] - base["accuracy"],
         }
 

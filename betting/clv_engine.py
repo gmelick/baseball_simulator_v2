@@ -1,80 +1,69 @@
-"""
-clv_engine.py
-=============
-SIM-339 -- the **CLV / edge engine** (Phase 4, Sprint 4).  The gold-standard
-betting layer: it turns simulation outputs plus market odds into actionable edge.
+"""The edge engine: the simulator's probabilities against the market's prices.
 
-WHAT THIS IS
-------------
-The translation layer between the simulator and the betting market.  A simulation
-run gives us *probabilities*: SIM-330 a calibrated home/away win probability, SIM-329
-a full prop PMF (``p_over`` / ``p_under`` / ``p_at_least`` at any line), SIM-327 raw
-per-iteration score arrays (totals / spreads).  The market gives us *prices*:
-American odds (e.g. ``-110``, ``+150``) carrying a bookmaker margin (the "vig").
-This module makes the two comparable and produces, per market and per prop:
+The simulator gives probabilities: the win probability
+(:class:`~simulation.win_probability.WinProbability`), a player's prop
+distribution (:class:`~simulation.prop_distributions.PropDistribution`, with
+``p_over`` / ``p_under`` at any line) and the raw per-game scores
+(:class:`~simulation.results.GameSimSummary`, for the totals and the run
+lines). The market gives prices in American odds: ``-110`` means stake 110 to
+win 100, ``+150`` means stake 100 to win 150. Decimal odds are the total return
+per unit staked (``+150`` is 2.50). A book's prices carry the vig, its margin,
+so the implied probabilities of a market's sides add up to more than 1. This
+module makes the two comparable. Per market and per prop it gives:
 
-  * **implied probability** from American odds (and its inverse, prob -> fair odds);
-  * **de-vig / no-vig fair odds** -- the margin removed from a two-way OR multi-way
-    market so the prices sum to a true 1.0 probability;
-  * **edge** = our simulation probability minus the market's no-vig (fair) probability;
-  * **expected value (EV)** per unit stake from the sim probability and the offered
-    (vigged) odds we would actually bet into;
-  * **Closing Line Value (CLV)** -- the value of the line we ENTERED at versus the
-    CLOSING line, in both probability and odds terms, per market / prop.
+* the **implied probability** of an American price, and the fair price of a
+  probability;
+* the **no-vig probability**: the implied probabilities with the vig removed,
+  so that a market's sides add up to exactly 1 (the "de-vig");
+* the **edge**: the simulator's probability minus the no-vig probability;
+* the **expected value (EV)** per unit staked, from the simulator's probability
+  at the offered price;
+* the **closing line value (CLV)**: how the price a bet took compares with the
+  closing price, the market's last price before first pitch.
 
-DE-VIG METHODS (documented)
----------------------------
-A book quotes both sides of a market with implied probabilities that sum to MORE
-than 1.0; the excess is the overround / vig.  We remove it two ways:
+How the vig comes off
+---------------------
+A two-way market's raw implied probabilities ``(q_a, q_b)`` add up to
+``1 + m``, where ``m`` is the overround (the vig). The no-vig probabilities are
+``p_a = q_a / (q_a + q_b)`` and ``p_b = q_b / (q_a + q_b)``. They add up to
+exactly 1, and each side gives up the margin in proportion to its own implied
+probability (the proportional method). Every two-way market uses it: the
+moneyline, the run line, the total and each prop's over / under. A market of N
+outcomes uses the same rule, ``p_i = q_i / sum_j(q_j)``: the three-way
+first-inning and first-five moneylines, where the tie is the third outcome. A
+run line listed as two separate bets has no opposite side; each price is
+divided by the book's margin on another two-way market of the same game (see
+the run-line section below).
 
-  * **two-way (multiplicative / proportional, the standard):** given raw implied
-    probabilities ``(q_a, q_b)`` with ``q_a + q_b = 1 + m`` (m = overround), the
-    no-vig probabilities are ``p_a = q_a / (q_a + q_b)``, ``p_b = q_b / (q_a + q_b)``.
-    They sum to exactly 1.0 and EACH is reduced (the margin is shared in proportion
-    to each side's raw implied probability).  This is the proportional / "normalize"
-    method -- the workhorse used across moneyline, spread (run line), totals and
-    each prop's over/under pair.
-  * **multi-way (normalize the overround across N outcomes):** the same proportional
-    normalization generalised to N >= 2 raw implied probabilities ``q_i``:
-    ``p_i = q_i / sum_j(q_j)``.  Used when a market has more than two outcomes (e.g.
-    a 3-way market, or a futures field); for a two-way market it reduces to the
-    two-way formula above.
+The sign of the edge and the EV
+-------------------------------
+* ``edge = p_sim - p_fair``, against the no-vig probability: the market's
+  opinion with the margin removed. A positive edge means the simulator rates
+  the outcome more likely than the market does.
+* ``EV = p_sim * b - (1 - p_sim)`` per unit staked, where ``b`` is the decimal
+  odds of the OFFERED price minus 1 (the profit per unit on a win). The EV reads
+  the offered price, because that is the price a bet takes. A positive EV means
+  that the bet profits if ``p_sim`` is the true probability.
 
-EDGE / EV SIGN CONVENTION
--------------------------
-  * ``edge = p_sim - p_fair`` (no-vig).  POSITIVE edge means the simulator thinks
-    the outcome is MORE likely than the de-vigged market does -- a candidate +EV bet.
-  * ``EV per unit stake = p_sim * b - (1 - p_sim)`` where ``b`` is the decimal
-    payout odds minus 1 (the net profit per unit on a win) for the OFFERED price.
-    POSITIVE EV means a profitable bet at that price under the sim probability.
-    EV is computed against the *offered* (vigged) odds because that is the price
-    you actually transact at; edge is computed against the *fair* (no-vig)
-    probability because that is the market's honest opinion stripped of margin.
-
-CLV SIGN CONVENTION (the validation metric)
--------------------------------------------
-Closing Line Value compares the line you ENTERED at to the CLOSING line (the final
-market consensus before first pitch -- SIM-133 ``mark_closing_lines`` for game odds,
-SIM-340 ``mark_closing_prop_lines`` for props designate that closing row).  We
-express CLV on the SAME no-vig probability scale so it is directly comparable
-across markets and prices:
+The sign of the CLV
+-------------------
+The CLV compares the entry price with the closing price on the no-vig
+probability scale, so it compares across markets and prices:
 
     clv_prob = p_close_fair - p_entry_fair
 
-POSITIVE CLV means you BEAT THE CLOSE: the de-vigged probability of your side rose
-from entry to close (equivalently your entry odds were longer / cheaper than the
-closing odds for the same true probability), so you got a better price than the
-final market consensus.  NEGATIVE CLV means the line moved against you.  We also
-report the odds-space delta (entry decimal odds vs the implied fair decimal odds at
-the close) for display, but the PROBABILITY delta is the canonical sign-bearing
-metric -- it is symmetric, additive across a portfolio, and immune to the +/-
-American-odds discontinuity at even money.
+A positive CLV means the entry beat the close: the side's no-vig probability
+rose from entry to close, so the entry price was longer than the closing price.
+A negative CLV means the line moved against the entry. The live pipeline marks
+the closing rows (``mark_closing_lines`` for the game odds,
+``mark_closing_prop_lines`` for the props). The module also gives the
+odds-space difference (the entry fair decimal odds minus the close fair decimal
+odds) for display. The probability difference carries the sign: it adds up
+across bets, and it has no jump at even money, where American odds flip from
+``+`` to ``-``.
 
-DETERMINISM
------------
-Pure numpy / Python arithmetic.  No DB, no FAISS, no RNG.  Odds are injected by the
-caller (the live provider / mock lines feed them in elsewhere).  The same inputs
-always yield the same reports.
+The module is pure arithmetic: no database, no random numbers. The caller
+supplies the odds. The same inputs always give the same reports.
 """
 
 from __future__ import annotations
@@ -85,9 +74,8 @@ from enum import Enum
 
 import numpy as np
 
-# Consumed simulation outputs (SIM-329 / SIM-330 / SIM-327).  Imported for type
-# clarity and the convenience constructors; the core math takes plain probabilities
-# so the engine is testable with synthetic inputs and never needs a live run.
+# The simulation outputs that the report builders read. The core arithmetic
+# takes plain probabilities, so a test feeds it synthetic numbers.
 from simulation.prop_distributions import PropDistribution
 from simulation.results import GameSimSummary
 from simulation.win_probability import WinProbability
@@ -98,11 +86,11 @@ from simulation.win_probability import WinProbability
 
 
 def american_to_decimal(american: float) -> float:
-    """Convert American odds to decimal (European) odds (total return per 1 staked).
+    """Convert American odds to decimal odds (the total return per unit staked).
 
-    ``+150`` -> ``2.50`` (stake 1, win 1.5 profit, return 2.5).
+    ``+150`` -> ``2.50`` (stake 1, profit 1.5, return 2.5).
     ``-110`` -> ``1.9090...`` (stake 1.1 to win 1).
-    American odds of 0 are undefined (no such price); raise.
+    An American price of 0 does not exist and raises ``ValueError``.
     """
     a = float(american)
     if a == 0:
@@ -115,8 +103,9 @@ def american_to_decimal(american: float) -> float:
 def decimal_to_american(decimal_odds: float) -> float:
     """Convert decimal odds (>1.0) to American odds.
 
-    ``2.50`` -> ``+150``; ``1.9090...`` -> ``-110``.  At exactly even money
-    (decimal 2.0) the convention is ``+100``.  ``decimal_odds`` must be > 1.
+    ``2.50`` -> ``+150``; ``1.9090...`` -> ``-110``. At exactly even money
+    (decimal 2.0) the convention is ``+100``. A decimal price of 1.0 or less
+    raises ``ValueError``.
     """
     d = float(decimal_odds)
     if d <= 1.0:
@@ -127,13 +116,14 @@ def decimal_to_american(decimal_odds: float) -> float:
 
 
 def implied_prob_from_american(american: float) -> float:
-    """Raw implied probability from American odds (margin NOT removed).
+    """The raw implied probability of an American price (the vig NOT removed).
 
     For a favourite (negative): ``p = -a / (-a + 100)``; e.g. ``-110 -> 0.5238``.
     For an underdog (positive): ``p = 100 / (a + 100)``; e.g. ``+150 -> 0.40``.
-    This is the book's quoted probability for ONE side and INCLUDES its share of
-    the vig; sum the two sides of a market and you get ``1 + overround``.  De-vig
-    (see :func:`devig_two_way` / :func:`devig_multiway`) to recover a true prob.
+    This is the book's probability for ONE side, with its share of the vig: the
+    two sides of a market add up to ``1 + overround``. :func:`devig_two_way` and
+    :func:`devig_multiway` give the no-vig probability. A price of 0 raises
+    ``ValueError``.
     """
     a = float(american)
     if a == 0:
@@ -143,16 +133,16 @@ def implied_prob_from_american(american: float) -> float:
     return -a / (-a + 100.0)
 
 
-#: Alias matching the live-pipeline / DB vocabulary ("implied").
+#: An alias of :func:`implied_prob_from_american`.
 american_to_implied_prob = implied_prob_from_american
 
 
 def prob_to_american(prob: float) -> float:
-    """Inverse of :func:`implied_prob_from_american`: a probability -> fair American odds.
+    """The inverse of :func:`implied_prob_from_american`: a probability -> its fair American price.
 
-    "Fair" means the zero-vig price for that probability (a single side priced so
-    its implied probability EQUALS ``prob``).  ``0.5238... -> -110``, ``0.40 -> +150``.
-    ``prob`` must be strictly in (0, 1).  At exactly 0.5 the convention is ``+100``.
+    The fair price has no vig: its implied probability equals ``prob``.
+    ``0.5238... -> -110``, ``0.40 -> +150``. At exactly 0.5 the convention is
+    ``+100``. A ``prob`` outside the open interval (0, 1) raises ``ValueError``.
     """
     p = float(prob)
     if not (0.0 < p < 1.0):
@@ -162,28 +152,27 @@ def prob_to_american(prob: float) -> float:
     return -p / (1.0 - p) * 100.0
 
 
-#: Alias: "fair American odds from a probability".
+#: An alias of :func:`prob_to_american`.
 fair_american_from_prob = prob_to_american
 
 
 # ===========================================================================
-# De-vig / no-vig fair odds
+# The de-vig: the no-vig probabilities of a market
 # ===========================================================================
 
 
 def devig_multiway(
     implied_probs: Sequence[float] | np.ndarray,
 ) -> list[float]:
-    """Remove the bookmaker margin from an N-way market (N >= 2) by normalisation.
+    """Remove the vig from a market of N >= 2 outcomes (the proportional method).
 
-    Given the raw implied probabilities ``q_i`` of every outcome (each from
-    :func:`implied_prob_from_american`), which sum to ``1 + overround``, the no-vig
-    (fair) probabilities are ``p_i = q_i / sum_j q_j``.  The returned list sums to
-    exactly 1.0 and preserves the relative ordering of the inputs.  This is the
-    proportional / multiplicative de-vig generalised to any number of outcomes.
+    The raw implied probabilities ``q_i`` of the outcomes (each from
+    :func:`implied_prob_from_american`) add up to ``1 + overround``. The no-vig
+    probabilities are ``p_i = q_i / sum_j q_j``. The returned list adds up to 1
+    and keeps the order of the inputs.
 
-    Raises if there are fewer than two outcomes, any implied prob is non-positive,
-    or they sum to <= 0 (a degenerate market).
+    Fewer than two outcomes, or an implied probability of 0 or less, raises
+    ``ValueError``.
     """
     q = np.asarray(list(implied_probs), dtype=np.float64)
     if q.size < 2:
@@ -200,17 +189,17 @@ def devig_two_way(
     over_american: float,
     under_american: float,
 ) -> tuple[float, float]:
-    """De-vig a TWO-way market (the proportional / multiplicative method).
+    """De-vig a TWO-way market (the proportional method).
 
-    Takes the two sides' American odds (e.g. an over price and an under price, or a
-    home ML and an away ML), converts each to a raw implied probability, then
-    normalises so the pair sums to exactly 1.0:
+    The two sides' American prices (an over and an under, or a home and an away
+    moneyline) become raw implied probabilities, then the pair is scaled to add
+    up to exactly 1:
 
         p_a = q_a / (q_a + q_b),   p_b = q_b / (q_a + q_b)
 
-    Returns ``(p_a, p_b)`` -- the no-vig fair probabilities for (over/first side,
-    under/second side).  BOTH are reduced relative to their raw implied
-    probabilities (the shared overround is stripped in proportion to each side).
+    Returns ``(p_a, p_b)``, the no-vig probabilities of the first and the second
+    argument. Each side gives up the overround in proportion to its own implied
+    probability.
     """
     q_a = implied_prob_from_american(over_american)
     q_b = implied_prob_from_american(under_american)
@@ -219,28 +208,28 @@ def devig_two_way(
 
 
 # ===========================================================================
-# Edge and expected value
+# The edge and the expected value
 # ===========================================================================
 
 
 def edge(p_sim: float, p_fair: float) -> float:
-    """Edge = simulation probability - market FAIR (no-vig) probability.
+    """The edge: the simulator's probability minus the market's no-vig probability.
 
-    POSITIVE => the simulator is more bullish than the de-vigged market (a candidate
-    +EV side).  ``p_fair`` should be a NO-VIG probability (from a de-vig call) so
-    the comparison is against the market's honest opinion, not its vigged price.
+    A positive edge means the simulator rates the side more likely than the
+    market does. ``p_fair`` is a no-vig probability (from a de-vig call), so the
+    comparison leaves out the book's margin.
     """
     return float(p_sim) - float(p_fair)
 
 
 def expected_value(p_sim: float, offered_american: float) -> float:
-    """EV per unit stake of betting ``offered_american`` when the true win prob is ``p_sim``.
+    """The EV per unit staked on ``offered_american`` when the win probability is ``p_sim``.
 
-    ``EV = p_sim * b - (1 - p_sim) * 1`` where ``b = decimal_odds - 1`` is the net
-    profit per unit on a win.  Equivalently ``EV = p_sim * decimal_odds - 1``.
-    POSITIVE EV is a profitable bet at that price under the sim probability.  EV uses
-    the OFFERED (vigged) odds -- the price you actually transact at -- whereas
-    :func:`edge` uses the fair no-vig probability.
+    ``EV = p_sim * b - (1 - p_sim)``, where ``b = decimal_odds - 1`` is the profit
+    per unit on a win. Equivalently ``EV = p_sim * decimal_odds - 1``. A positive
+    EV means the bet profits at that price if ``p_sim`` is the true probability.
+    The EV reads the OFFERED price, the vig included, because that is the price a
+    bet takes; :func:`edge` reads the no-vig probability.
     """
     p = float(p_sim)
     b = american_to_decimal(offered_american) - 1.0
@@ -248,49 +237,48 @@ def expected_value(p_sim: float, offered_american: float) -> float:
 
 
 # ===========================================================================
-# Closing Line Value
+# The closing line value
 # ===========================================================================
 
 
 @dataclass(frozen=True, slots=True)
 class CLV:
-    """Closing Line Value for one side of one market / prop (SIM-339).
+    """The closing line value (CLV) of one side of one market or prop.
 
-    Positive :attr:`clv_prob` == you BEAT THE CLOSE (the de-vigged probability of
-    your side rose from entry to close, i.e. you locked a better price than the
-    final market consensus).  See the module docstring for the full sign convention.
+    A positive :attr:`clv_prob` means the entry beat the close: the side's no-vig
+    probability rose from entry to close, so the entry price was better than the
+    closing price. The module docstring gives the sign convention.
     """
 
-    #: No-vig fair probability of the bet side implied by the ENTRY line.
+    #: The no-vig probability of the bet side at the ENTRY price.
     entry_fair_prob: float
-    #: No-vig fair probability of the bet side implied by the CLOSING line.
+    #: The no-vig probability of the bet side at the CLOSING price.
     close_fair_prob: float
 
-    #: clv_prob = close_fair_prob - entry_fair_prob.  Positive == beat the close.
+    #: clv_prob = close_fair_prob - entry_fair_prob. Positive = the entry beat the close.
     clv_prob: float
 
-    #: Fair (no-vig) decimal odds implied by the entry line for this side.
+    #: The no-vig decimal odds of this side at the entry.
     entry_fair_decimal: float
-    #: Fair (no-vig) decimal odds implied by the closing line for this side.
+    #: The no-vig decimal odds of this side at the close.
     close_fair_decimal: float
-    #: Odds-space view: entry fair decimal - close fair decimal.  Positive == your
-    #: entry secured longer (more generous) fair odds than the close.  Reported for
-    #: display; clv_prob is the canonical sign-bearing metric.
+    #: entry_fair_decimal - close_fair_decimal. Positive means the entry had longer
+    #: no-vig odds than the close. For display; clv_prob carries the sign.
     clv_decimal: float
 
     @property
     def beat_close(self) -> bool:
-        """True iff this entry beat the closing line (clv_prob > 0)."""
+        """True when the entry beat the close (clv_prob > 0)."""
         return self.clv_prob > 0.0
 
 
 def clv_from_prob(entry_fair_prob: float, close_fair_prob: float) -> CLV:
-    """Build a :class:`CLV` directly from two NO-VIG probabilities (entry vs close).
+    """Build a :class:`CLV` from two no-vig probabilities: the entry's and the close's.
 
-    Use this when you have already de-vigged both the entry and the closing market
-    yourself (e.g. each two-way pair via :func:`devig_two_way`).  ``clv_prob`` is
-    ``close_fair_prob - entry_fair_prob`` -- positive means the bet side's fair
-    probability rose to the close, i.e. you beat the close.
+    The caller has already de-vigged both markets (e.g. each two-way pair with
+    :func:`devig_two_way`). ``clv_prob`` is ``close_fair_prob - entry_fair_prob``:
+    positive means the side's no-vig probability rose to the close. A probability
+    outside the open interval (0, 1) raises ``ValueError``.
     """
     p_entry = float(entry_fair_prob)
     p_close = float(close_fair_prob)
@@ -315,13 +303,13 @@ def clv_from_odds(
     close_side_american: float,
     close_other_american: float,
 ) -> CLV:
-    """CLV from raw TWO-way American odds at entry and at the close.
+    """The CLV from the raw American prices of a TWO-way market at entry and at the close.
 
-    Pass, for the side you bet, the American price you ENTERED at plus the OTHER
-    side's price at entry (so the entry market can be de-vigged), and the same pair
-    at the CLOSE.  Each two-way market is de-vigged (:func:`devig_two_way`) to a
-    fair probability for your side, then the two fair probabilities are compared
-    (:func:`clv_from_prob`).  Positive ``clv_prob`` == beat the close.
+    The caller passes the bet side's price at entry and the other side's price at
+    entry (the de-vig needs both), then the same pair at the close.
+    :func:`devig_two_way` turns each pair into the side's no-vig probability, and
+    :func:`clv_from_prob` compares the two. A positive ``clv_prob`` means the
+    entry beat the close.
     """
     p_entry, _ = devig_two_way(entry_side_american, entry_other_american)
     p_close, _ = devig_two_way(close_side_american, close_other_american)
@@ -329,16 +317,15 @@ def clv_from_odds(
 
 
 # ===========================================================================
-# Per-market / per-prop edge reports (consume SIM-329 / SIM-330 / SIM-327)
+# The edge reports: one per side of a market or a prop
 # ===========================================================================
 
 
 class MarketSide(Enum):
     """Which side of a market a report is about.
 
-    SIM-546, the three-way markets: ``DRAW`` is the tie of a first-inning or
-    first-five moneyline. A segment can end tied, so the book prices the tie
-    as a third outcome."""
+    ``DRAW`` is the tie of a three-way market. A first-inning or first-five
+    moneyline can end tied, so the book prices the tie as a third outcome."""
 
     HOME = "home"
     AWAY = "away"
@@ -349,13 +336,13 @@ class MarketSide(Enum):
 
 @dataclass(frozen=True, slots=True)
 class OddsQuote:
-    """An injected two-way American-odds quote (one snapshot of a market).
+    """One snapshot of a two-way market's American prices, supplied by the caller.
 
-    ``side`` and ``other`` are the two American prices of the market.  For a
-    moneyline that is (home_ml, away_ml); for a total or a prop over/under that is
-    (over_ml, under_ml).  ``line`` is the market line (None for a moneyline, a
-    float for a total / prop / spread).  Odds are INJECTED -- this engine never
-    fetches them.
+    ``side`` is the price of the side the report is about; ``other`` is the
+    opposite side's price, which the de-vig needs. For the away moneyline,
+    ``side`` is the away price and ``other`` the home price. ``line`` is the
+    market line (None for a moneyline; a float for a total, a prop or a run
+    line). The engine never fetches odds.
     """
 
     side: float
@@ -365,11 +352,12 @@ class OddsQuote:
 
 @dataclass(frozen=True, slots=True)
 class TwoWayMarket:
-    """An injected two-way market with an ENTRY quote and an optional CLOSING quote.
+    """A two-way market: an ENTRY quote and, when known, the CLOSING quote.
 
-    Bundles the prices needed to price a bet end to end: the entry quote (what you
-    can bet now) and, when known, the closing quote (the SIM-133 / SIM-340
-    closing-line reference) for CLV.  ``side`` names which leg ``quote.side`` is.
+    The entry quote is the price a bet takes now; the closing quote gives the
+    CLV. ``side`` names the side that ``entry.side`` and ``close.side`` price.
+    The report builders take the side as their own argument and do not read
+    this field.
     """
 
     side: MarketSide
@@ -379,38 +367,39 @@ class TwoWayMarket:
 
 @dataclass(frozen=True, slots=True)
 class EdgeReport:
-    """The full edge / EV / CLV report for one side of one market or prop (SIM-339).
+    """The edge, the EV and the CLV of one side of one market or prop.
 
-    Self-describing: it records the sim probability, the de-vigged market fair
-    probability, the resulting edge and EV (vs the entry/offered price), and -- when
-    a closing quote was supplied -- the :class:`CLV` of the entry versus the close.
+    It holds the simulator's probability, the market's no-vig probability, the
+    edge and the EV at the entry price and, when the caller supplied a closing
+    quote, the :class:`CLV` of the entry against the close.
     """
 
     label: str
     side: MarketSide
     line: float | None
 
-    #: Our simulation probability of the bet side (SIM-329 / SIM-330 / SIM-327).
+    #: The simulator's probability of the bet side.
     sim_prob: float
-    #: No-vig fair probability of the bet side from the de-vigged ENTRY market.
+    #: The no-vig probability of the bet side at the entry.
     market_fair_prob: float
 
-    #: edge = sim_prob - market_fair_prob.  Positive == sim more bullish than market.
+    #: edge = sim_prob - market_fair_prob. Positive = the simulator rates the side
+    #: above the market.
     edge: float
-    #: EV per unit stake at the OFFERED (entry) American price under sim_prob.
+    #: The EV per unit staked at the offered (entry) American price, under sim_prob.
     ev: float
 
-    #: American price of the bet side we would transact at (the entry side price).
+    #: The American price of the bet side at the entry (the offered price).
     offered_american: float
-    #: Fair American odds for sim_prob (the price our model would post, zero-vig).
+    #: The fair American price of sim_prob: the price with no vig.
     sim_fair_american: float
 
-    #: CLV of the entry vs the close, if a closing quote was supplied (else None).
+    #: The CLV of the entry against the close; None without a closing quote.
     clv: CLV | None = None
 
     @property
     def positive_edge(self) -> bool:
-        """True iff the simulator beats the de-vigged market (edge > 0)."""
+        """True when the edge is above zero."""
         return self.edge > 0.0
 
 
@@ -422,11 +411,11 @@ def _build_edge_report(
     sim_prob: float,
     market: TwoWayMarket,
 ) -> EdgeReport:
-    """Shared assembly: de-vig the entry market, compute edge/EV, and CLV if a close
-    is supplied.  ``market.entry.side`` is the bet side's price; ``market.entry.other``
-    the opposite side (needed to de-vig).  All market arithmetic is two-way."""
+    """Build a two-way report: de-vig the entry market, then the edge, the EV and
+    (when ``market.close`` is set) the CLV. ``market.entry.side`` is the bet
+    side's price and ``market.entry.other`` the opposite side's."""
     p = float(sim_prob)
-    # De-vig the ENTRY market to a fair probability for the bet side.
+    # The entry market's no-vig probability of the bet side.
     entry_fair, _ = devig_two_way(market.entry.side, market.entry.other)
     ev = expected_value(p, market.entry.side)
     clv: CLV | None = None
@@ -457,12 +446,14 @@ def moneyline_edge_report(
     *,
     side: MarketSide = MarketSide.HOME,
 ) -> EdgeReport:
-    """Edge / EV / CLV for a MONEYLINE side, consuming a SIM-330 :class:`WinProbability`.
+    """The edge, EV and CLV of a MONEYLINE side, from a :class:`WinProbability`.
 
-    The sim probability is ``win_prob.home_win_prob`` for :data:`MarketSide.HOME` and
-    ``win_prob.away_win_prob`` for :data:`MarketSide.AWAY` (these sum to 1.0 -- ties
-    have already been folded in by SIM-330).  ``market.entry.side`` must be the
-    chosen side's American moneyline; ``market.entry.other`` the opposite side's.
+    The simulator's probability is ``win_prob.home_win_prob`` for
+    :data:`MarketSide.HOME` and ``win_prob.away_win_prob`` for
+    :data:`MarketSide.AWAY`. The two add up to 1: the win probability has
+    already split or dropped the simulated ties. ``market.entry.side`` is the
+    chosen side's American moneyline and ``market.entry.other`` the opposite
+    side's. Any other side raises ``ValueError``.
     """
     if side is MarketSide.HOME:
         sim_p = win_prob.home_win_prob
@@ -485,15 +476,15 @@ def prop_edge_report(
     *,
     side: MarketSide = MarketSide.OVER,
 ) -> EdgeReport:
-    """Edge / EV / CLV for a PLAYER PROP side, consuming a SIM-329 :class:`PropDistribution`.
+    """The edge, EV and CLV of a PLAYER PROP side, from a :class:`PropDistribution`.
 
-    The sim probability is ``dist.p_over(line)`` for :data:`MarketSide.OVER` and
-    ``dist.p_under(line)`` for :data:`MarketSide.UNDER`, using the betting over/under
-    convention SIM-329 documents (half-integer line: over + under == 1; integer
-    line: a push mass is excluded from both).  The line comes from
-    ``market.entry.line`` (the book's prop line).  ``market.entry.side`` is the
-    chosen side's price (over_ml for OVER, under_ml for UNDER); ``.other`` the
-    opposite price.
+    The simulator's probability is ``dist.p_over(line)`` for :data:`MarketSide.OVER`
+    and ``dist.p_under(line)`` for :data:`MarketSide.UNDER`, by the sportsbook
+    convention: on a half-integer line the over and the under add up to 1; on a
+    whole-number line a value on the line is a push and counts for neither. The
+    line is ``market.entry.line``, the book's prop line. ``market.entry.side`` is
+    the chosen side's price (over_ml for OVER, under_ml for UNDER) and ``.other``
+    the opposite price. A missing line or another side raises ``ValueError``.
     """
     line = market.entry.line
     if line is None:
@@ -519,21 +510,18 @@ def total_over_under_edge_report(
     *,
     side: MarketSide = MarketSide.OVER,
 ) -> EdgeReport:
-    """Edge / EV / CLV for a game TOTAL (over/under), consuming SIM-327 raw arrays.
+    """The edge, EV and CLV of a game TOTAL side (over / under), from the raw scores.
 
-    The sim probability is computed from the RAW per-iteration ``total_scores``
-    array on the :class:`GameSimSummary` (SIM-327 preserves it precisely so the
-    betting layer can build distributions).  We use the sportsbook over/under
-    convention: at a HALF-integer line there is no push (over == P(total > line),
-    under == P(total < line), they sum to 1); at an INTEGER line a total ON the line
-    pushes, so over is strict ``P(total > line)``, under strict ``P(total < line)``,
-    and the push mass is excluded from both -- mirroring SIM-329's prop convention.
+    The simulator's probability comes from the per-game ``total_scores`` of the
+    :class:`GameSimSummary`, by the sportsbook convention. On a half-integer line
+    there is no push: the over is ``P(total > line)``, the under
+    ``P(total < line)``, and they add up to 1. On a whole-number line a total on
+    the line is a push and counts for neither side, as on a prop.
 
-    ``market.entry.line`` is the total line; ``market.entry.side`` the chosen side's
-    price (over_ml for OVER, under_ml for UNDER); ``.other`` the opposite price.
-
-    SIM-546: the arithmetic lives in :func:`samples_over_under_edge_report`; this
-    function hands it ``summary.total_scores`` and the label ``"total"``.
+    ``market.entry.line`` is the total line; ``market.entry.side`` is the chosen
+    side's price (over_ml for OVER, under_ml for UNDER) and ``.other`` the
+    opposite price. The arithmetic is :func:`samples_over_under_edge_report`; this
+    function passes it ``summary.total_scores`` and the label ``"total"``.
     """
     if market.entry.line is not None and np.asarray(summary.total_scores).size == 0:
         raise ValueError("GameSimSummary has no total_scores to price a total")
@@ -547,17 +535,18 @@ def samples_over_under_edge_report(
     side: MarketSide = MarketSide.OVER,
     label: str,
 ) -> EdgeReport:
-    """Edge / EV / CLV for one side of any over / under market, from raw samples.
+    """The edge, EV and CLV of one side of any over / under market, from raw samples.
 
-    SIM-546, the segment and team totals: ``samples`` holds one number per
-    simulated game, the number the market settles on (the first-five runs, one
-    team's runs, the first-inning runs). The over is the strict
-    ``P(sample > line)`` and the under the strict ``P(sample < line)``; a sample
-    on a whole-number line is a push and counts for neither side, as on the
-    full-game total. ``label`` names the market on the report (``"f5_total"``).
+    ``samples`` holds one number per simulated game: the number the market
+    settles on (the full-game runs, the first-five runs, one team's runs, the
+    first-inning runs). The over is the strict ``P(sample > line)`` and the under
+    the strict ``P(sample < line)``. A sample on a whole-number line is a push and
+    counts for neither side. ``label`` names the market on the report
+    (``"f5_total"``).
 
-    ``market.entry.line`` is the line; ``market.entry.side`` the chosen side's
-    price and ``.other`` the opposite price.
+    ``market.entry.line`` is the line; ``market.entry.side`` is the chosen side's
+    price and ``.other`` the opposite price. A missing line, no samples or a side
+    other than OVER / UNDER raises ``ValueError``.
     """
     line = market.entry.line
     if line is None:
@@ -592,16 +581,16 @@ def three_way_edge_report(
     away_ml: float,
     draw_ml: float,
 ) -> EdgeReport:
-    """Edge / EV for one side of a THREE-way market (home, away or the tie).
+    """The edge and EV of one side of a THREE-way market (home, away or the tie).
 
-    SIM-546: the first-inning and first-five moneylines can end tied, so the
-    book prices three outcomes. The fair probability of the chosen side is its
-    entry of :func:`devig_multiway` over the three implied probabilities: the
-    book's margin is shared across all three. ``p_home`` / ``p_away`` /
-    ``p_draw`` are the simulator's probabilities of the three outcomes. The EV
-    reads the side's own price. There is no CLV (no closing quote on this
-    path). Like every report, a simulator probability of exactly 0 or 1 raises
-    ``ValueError`` (it has no fair price).
+    The first-inning and first-five moneylines can end tied, so the book prices
+    three outcomes. The no-vig probability of the chosen side comes from
+    :func:`devig_multiway` over the three implied probabilities, so the book's
+    margin is shared across all three. ``p_home`` / ``p_away`` / ``p_draw`` are
+    the simulator's probabilities of the three outcomes. The EV reads the side's
+    own price. There is no CLV: this path takes no closing quote. Like every
+    report, a simulator probability of exactly 0 or 1 raises ``ValueError`` (it
+    has no fair price).
     """
     order = (MarketSide.HOME, MarketSide.AWAY, MarketSide.DRAW)
     if side not in order:
@@ -626,19 +615,17 @@ def three_way_edge_report(
 
 
 # ---------------------------------------------------------------------------
-# Run line / spread (SIM-367) -- cover probability from raw score margins
+# The run line (spread): the cover probability from the raw score margins
 # ---------------------------------------------------------------------------
 
 
 def _as_margin_array(
     summary_or_margin: GameSimSummary | Sequence[float] | np.ndarray,
 ) -> np.ndarray:
-    """Coerce the input to a 1-D float64 SCORE-MARGIN array (``home - away``).
+    """The per-game score margin (``home - away``) as a 1-D float64 array.
 
-    Accepts either a SIM-327 :class:`GameSimSummary` -- in which case the margin is
-    computed as ``home_scores - away_scores`` per iteration -- or a raw margin array
-    (any sequence / ndarray of ``home - away`` values).  The returned array is the
-    per-iteration home-minus-away run differential the spread is priced against.
+    A :class:`GameSimSummary` gives ``home_scores - away_scores``. Any other
+    input is already a sequence of ``home - away`` margins.
     """
     if isinstance(summary_or_margin, GameSimSummary):
         home = np.asarray(summary_or_margin.home_scores, dtype=np.float64)
@@ -652,46 +639,44 @@ def spread_cover_prob(
     line: float,
     side: MarketSide = MarketSide.HOME,
 ) -> float:
-    """Sim cover probability of a SPREAD (run line) side at ``line`` from raw margins.
+    """The simulator's cover probability of a RUN LINE (spread) side at ``line``.
 
-    The score margin is ``margin = home - away`` per iteration (from a SIM-327
-    :class:`GameSimSummary` or a raw margin array).  ``line`` is the spread of the
-    **HOME** side under the standard convention: a home favourite is laying runs at a
-    NEGATIVE line (e.g. ``-1.5``), a home underdog is getting runs at a POSITIVE line.
-    The away line is the NEGATION of the home line (home ``-1.5`` <=> away ``+1.5``).
+    ``margin = home - away`` per simulated game (from a :class:`GameSimSummary`
+    or a raw margin array). ``line`` is the HOME side's spread: a home favourite
+    gives runs at a NEGATIVE line (e.g. ``-1.5``), a home underdog gets runs at a
+    POSITIVE line. The away line is the negative of the home line (home ``-1.5``
+    = away ``+1.5``).
 
-    Cover definitions (``L`` == the home line):
+    The cover rules (``L`` = the home line):
 
-      * **HOME** covers iff the margin plus the line is positive::
+      * **HOME** covers when the margin plus the line is positive::
 
             (home - away) + L > 0   <=>   margin > -L
 
-        e.g. at ``L = -1.5`` the home favourite covers iff ``margin > 1.5`` (win by
-        2+).  At ``L = +1.5`` the home underdog covers iff ``margin > -1.5`` (lose by
-        at most 1, or win).
+        At ``L = -1.5`` the home favourite covers when ``margin > 1.5`` (a win by
+        2 or more). At ``L = +1.5`` the home underdog covers when
+        ``margin > -1.5`` (a win, or a loss by 1).
 
-      * **AWAY** covers iff the away margin plus the away line is positive.  With the
-        away line ``= -L``::
+      * **AWAY** covers when the away margin plus the away line (``-L``) is
+        positive::
 
             (away - home) + (-L) > 0   <=>   -margin - L > 0   <=>   margin < -L
 
-        i.e. AWAY covers iff ``margin < -L`` -- the exact complement of HOME's strict
-        ``margin > -L``, with the boundary ``margin == -L`` belonging to NEITHER (the
-        push, see below).
+        So AWAY covers when ``margin < -L``. A margin of exactly ``-L`` belongs to
+        neither side: it is the push.
 
-    Push handling.  The cover boundary is ``margin == -L``.  Baseball margins are
-    integers, so:
+    The push. Baseball margins are whole numbers, so:
 
-      * a HALF-integer line (e.g. ``-1.5`` / ``+1.5``) can NEVER push -- ``-L`` is not
-        an integer, no margin lands on it, and ``P(home covers) + P(away covers) == 1``;
-      * an INTEGER line (e.g. ``-1`` / ``+1``, or ``0`` a "draw no bet" pick'em) CAN
-        push -- iterations with ``margin == -L`` are pushes that count toward NEITHER
-        side, so ``P(home covers) + P(away covers) + P(push) == 1`` and the push mass
-        is excluded from both probabilities (mirrors the SIM-329 / total push rule).
+      * a HALF-integer line (``-1.5`` / ``+1.5``) never pushes: no margin lands on
+        ``-L``, and ``P(home covers) + P(away covers) == 1``;
+      * a WHOLE-number line (``-1`` / ``+1``, or the pick'em ``0``) can push: a
+        game with ``margin == -L`` counts for neither side, so
+        ``P(home covers) + P(away covers) + P(push) == 1``. The totals and the
+        props use the same push rule.
 
-    Both HOME and AWAY use STRICT inequalities, which is exactly what splits the push
-    out at an integer line and is harmless at a half-integer line (nothing sits on the
-    boundary).  Returns a probability in ``[0, 1]``.
+    Both sides use strict inequalities, which is what leaves the push out on a
+    whole-number line. Returns a probability in ``[0, 1]``. No margins, or a side
+    other than HOME / AWAY, raises ``ValueError``.
     """
     margin = _as_margin_array(summary_or_margin)
     n = margin.size
@@ -712,33 +697,26 @@ def run_line_edge_report(
     side: MarketSide = MarketSide.HOME,
     line: float = -1.5,
 ) -> EdgeReport:
-    """Edge / EV / CLV for a RUN LINE / spread side, consuming SIM-327 raw margins.
+    """The edge, EV and CLV of a RUN LINE (spread) side that is one half of a pair.
 
-    The sim probability is the spread COVER probability (:func:`spread_cover_prob`)
-    computed from the per-iteration score margin ``home - away`` -- taken from a
-    SIM-327 :class:`GameSimSummary` (``home_scores - away_scores``) or a raw margin
-    array.  Baseball's standard run line is ``+/-1.5``; this is the default (home
-    favourite ``-1.5`` / home underdog or away ``+1.5``).
+    The simulator's probability is the cover probability
+    (:func:`spread_cover_prob`) over the per-game margin ``home - away``, from a
+    :class:`GameSimSummary` or a raw margin array. Baseball's standard run line
+    is ``+/-1.5``, the default.
 
-    Line / side conventions (see :func:`spread_cover_prob` for the cover math):
+      * ``line`` is the HOME line (negative = home gives runs). The away line is
+        its negative. A set ``market.entry.line`` overrides the ``line``
+        argument. The SAME home line serves both sides: AWAY is priced at
+        ``-line``. So the caller passes the home line, in ``line`` or in
+        ``market.entry.line``, whichever side it reports.
+      * ``side`` picks HOME or AWAY. ``market.entry.side`` is that side's American
+        price and ``market.entry.other`` the opposite side's, as on the moneyline.
+      * A push (only on a whole-number line) counts for neither side. At ``+/-1.5``
+        the HOME and AWAY cover probabilities add up to 1.
 
-      * ``line`` is the HOME line under the home convention (negative == home laying
-        runs, positive == home getting runs).  The away line is its NEGATION.  When
-        ``market.entry.line`` is set it OVERRIDES the ``line`` argument (the injected
-        market line is authoritative, mirroring :func:`total_over_under_edge_report`);
-        otherwise the ``line`` keyword (default ``-1.5``) is used.  The SAME home line
-        is used for both sides -- AWAY is priced as the complement at ``-line`` -- so
-        callers pass the home line regardless of which side they are reporting.
-      * ``side`` selects HOME or AWAY; ``market.entry.side`` must be that side's
-        American price and ``market.entry.other`` the opposite side's (needed to
-        de-vig), exactly as for the moneyline / total reports.
-      * Pushes (only possible at an integer line) are excluded from both sides; at the
-        ``+/-1.5`` default no push is possible and HOME / AWAY cover probabilities are
-        complementary.
-
-    Returns an :class:`EdgeReport` labelled ``"run_line"`` carrying the cover
-    ``sim_prob``, the de-vigged ``market_fair_prob``, ``edge``, ``ev`` (vs the offered
-    entry price), and the :class:`CLV` when a closing quote is supplied.
+    Returns an :class:`EdgeReport` labelled ``"run_line"``, with the CLV when the
+    caller supplied a closing quote. A run line listed as two separate bets goes
+    through :func:`one_sided_edge_report` instead.
     """
     eff_line = market.entry.line if market.entry.line is not None else float(line)
     sim_p = spread_cover_prob(summary_or_margin, eff_line, side)
@@ -752,26 +730,28 @@ def run_line_edge_report(
 
 
 # ===========================================================================
-# SIM-549: a run line is a PAIR, or TWO SEPARATE BETS
+# A run line: one bet with two sides (a pair), or two separate bets
 # ===========================================================================
 #
-# raw.game_odds keeps each team's run line under its own spread, as the book
-# lists it. A PAIR is one bet with two sides (home −0.5 / away +0.5): exactly one
-# side wins, so the two prices de-vig against each other. TWO SEPARATE BETS
-# share a sign or carry two different lines. Home −1.5 / away −1.5 both lose on
-# a tie. Home +1.5 / away +1.5 both win on a one-run game. Pairing their prices
-# mis-prices each side, up or down. Each bet is then priced from its OWN price
-# over the book's margin on the same game's two-way markets. Here "margin" means a two-way market's two implied probabilities
-# added up: about 1.05, never below 1. The accuracy comparison
-# (scripts/accuracy_comparison.py), the /edges route and the line-movement / CLV
-# reads share these functions.
+# raw.game_odds keeps each team's run line at its own spread, as the book lists
+# it. A PAIR is one bet with two sides (home −0.5 / away +0.5): exactly one side
+# wins, so the two prices de-vig against each other. TWO SEPARATE BETS share a
+# sign or carry two different lines. Home −1.5 / away −1.5 both lose when the
+# margin is one run or less. Home +1.5 / away +1.5 both win then. De-vigging
+# their prices against each other mis-prices each side, up or down. So each
+# separate bet is priced from its OWN price over the book's margin on another
+# two-way market of the same game. Here the margin is a two-way market's two
+# implied probabilities added up: about 1.05, never below 1. The accuracy
+# comparison (scripts/accuracy_comparison.py), the /edges route and the
+# line-movement CLV share these functions.
 
-#: The last-resort margin for a one-sided price: the league mean of the
-#: closing two-way margin (the full-game total 1.048, the first-five total 1.059).
+#: The margin of last resort for a one-sided price: the league mean of the
+#: closing two-way margin (the full-game total 1.048, the first-five total 1.059;
+#: measured for the run-line pricing, SIM-549).
 DEFAULT_ONE_SIDED_MARGIN = 1.05
 
 #: A reference market's margin must fall in this band, or the next market is
-#: tried. A stored "two-way" row outside it is not a pair.
+#: tried. A stored "two-way" row outside the band is not a pair.
 REFERENCE_MARGIN_BAND: tuple[float, float] = (1.0, 1.15)
 
 
@@ -788,10 +768,11 @@ def reference_margin_from_prices(
     candidates: Sequence[tuple[str, float | None, float | None]],
 ) -> tuple[float, str]:
     """``(margin, source)``: the first candidate ``(name, price_a, price_b)`` whose
-    two implied probabilities add to a margin inside :data:`REFERENCE_MARGIN_BAND`,
-    else ``(DEFAULT_ONE_SIDED_MARGIN, "flat")``. The caller orders the candidates
-    (the same segment's total first) and never passes a three-way market: its
-    margin prices the tie."""
+    two implied probabilities add up to a margin inside
+    :data:`REFERENCE_MARGIN_BAND`, else ``(DEFAULT_ONE_SIDED_MARGIN, "flat")``. A
+    candidate with a missing or invalid price is skipped. The caller orders the
+    candidates (the same segment's total first) and never passes a three-way
+    market: its margin also prices the tie."""
     for name, a, b in candidates:
         if a is None or b is None:
             continue
@@ -884,12 +865,12 @@ __all__ = [
     "moneyline_edge_report",
     "prop_edge_report",
     "total_over_under_edge_report",
-    # SIM-546: the segment and team markets
+    # the segment and team markets, and the run line
     "samples_over_under_edge_report",
     "three_way_edge_report",
     "spread_cover_prob",
     "run_line_edge_report",
-    # SIM-549: run lines as a pair or two separate bets
+    # a run line as a pair or as two separate bets
     "DEFAULT_ONE_SIDED_MARGIN",
     "REFERENCE_MARGIN_BAND",
     "run_line_is_pair",

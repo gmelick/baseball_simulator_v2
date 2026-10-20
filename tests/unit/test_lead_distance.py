@@ -1,35 +1,36 @@
-"""
-SIM-531 — lead distance in the stolen-base and baserunning models.
+"""Tests of lead distance in the stolen-base and baserunning models.
 
-Plan: docs/audit/2026-09-16-sim531-lead-distance-build-plan.md (§7 lists these).
+The lead distance work (SIM-531) adds Savant's lead and hold measures. Its plan
+is docs/audit/2026-09-16-sim531-lead-distance-build-plan.md; §7 lists these
+tests. What they hold:
 
-What the ticket adds, and what these tests hold:
-
-* the loader registry: two new Savant boards (the runner's Basestealing Run
-  Value, the Pitcher Running Game), both at ``n=1`` (every player with one
-  chance) and in ``RUNNING_BOARDS``; the count columns coerce to whole numbers;
+* the loader registry: two Savant boards (the runner's Basestealing Run Value,
+  the Pitcher Running Game), both at ``n=1`` (every player with one chance)
+  and in ``RUNNING_BOARDS``; the count columns coerce to whole numbers;
 * the migrations: DuckDB 0029 adds twelve columns (the baserunner table's four
-  stay LAST, in the builder's order — a positional INSERT), the canonical DDL
-  mirrors them, the version file reads 29; Alembic 0026 creates and drops the
-  two raw tables;
+  stay LAST, in the builder's order, for a positional INSERT); the canonical
+  DDL mirrors them; the version file reads at least 29; Alembic 0026 creates
+  and drops the two raw tables;
 * the profile builders, EXECUTED on an in-memory DuckDB with a fake ``pg``
   catalog: the steal driver covers every runner with a chance (a runner who
-  never went has attempt rate 0.0 and a NULL success rate), the lead columns
-  land, the four positional-tail columns land in the right slots, and under a
-  cutoff every Savant join season-shifts (the SIM-537 rule) while a live build
-  does not; the league-average writer emits the two rows the engines always
-  read;
+  never went has attempt rate 0.0 and a NULL success rate); the lead columns
+  land; the four positional-tail columns land in the right slots; under a
+  cutoff every Savant join shifts back one season (the point-in-time rule,
+  SIM-537) while a live build does not; the league-average writer emits the
+  two rows the engines read;
 * the steal-runner model: the weights sum to one at 0.45 / 0.45 / 0.10; a pair
   missing the lead on either side scores over tendency and success alone (no
-  phantom match); ``score_all`` and ``query_pair`` agree; the confidence basis
-  is first-base opportunities; a thin runner's lead shrinks toward the league
-  mean; NULL loads as NaN and stays neutral; the calibration sigma applies;
+  phantom match); ``score_all`` and ``query_pair`` agree; the confidence
+  counts the runner's chances on first and on second, never fewer than his
+  attempts; a thin runner's lead shrinks toward the league mean; NULL loads
+  as NaN and stays neutral; the calibration sigma applies;
 * the pitcher-hold model: the mirror set at 0.35 / 0.65;
 * the advancement model: the masked kernel drops a missing feature from the
-  distance AND its normalisation; a fully-measured pair is unchanged; a
-  half-measured pair is not inflated; a stale six-weight calibration is refused;
-* the calibrator: the two sigmas round-trip, the fits use measured rows, and the
-  sentinel stays 0.0 with none.
+  distance AND its normalisation; a fully measured pair is unchanged; a
+  half-measured pair is not inflated; an aggression report with six weights
+  is refused;
+* the calibrator: the two sigmas round-trip, the fits use measured rows, and
+  the sentinel stays 0.0 with none.
 """
 
 from __future__ import annotations
@@ -169,9 +170,9 @@ class TestMigrations:
         assert by_table["baserunner_season_metrics"] == list(XB_COLUMNS)
 
     def test_the_version_file_reads_at_least_29(self) -> None:
-        """The lead-distance migration is 0029. A later ticket moves the file
-        on (SIM-532 took it to 30); ``test_docs_duckdb_version.py`` holds the
-        file to the newest migration."""
+        """The lead-distance migration is 0029, and every later migration
+        moves the file on. ``test_docs_duckdb_version.py`` holds the file to
+        the newest migration."""
         assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 29
 
     def test_the_canonical_duckdb_schema_mirrors_the_columns(self) -> None:
@@ -181,8 +182,8 @@ class TestMigrations:
 
     def test_the_baserunner_tail_is_the_builders_order_in_the_canonical_ddl(self) -> None:
         """The baserunner INSERT is positional: the DDL's trailing columns must
-        be exactly ``BASERUNNER_TAIL_COLUMNS`` — the schema and the SELECT can
-        never desync."""
+        be exactly ``BASERUNNER_TAIL_COLUMNS``, so the schema and the SELECT
+        stay in step."""
         from pipeline.batch.player_profile_computor import BASERUNNER_TAIL_COLUMNS
 
         con = duckdb.connect(":memory:")
@@ -333,17 +334,21 @@ def _pitch(
 
 
 def _seed(con: duckdb.DuckDBPyConnection, *, savant_season: int = 2024) -> None:
-    """Runner 11: 20 attempts (15 safe) in 40 chances against pitcher 500, plus
-    four extra-base chances on singles (two taken). Runner 12: 30 chances,
-    never goes, against pitcher 501. Runner 13: six chances on second only,
-    never goes. Savant rows for runner 11 and pitcher 500 in ``savant_season``."""
+    """Seed the fake catalog with three runners and two pitchers.
+
+    Runner 11: 20 attempts (15 safe) in 40 chances against pitcher 500, plus
+    four extra-base chances on singles (two taken). Runner 12: 30 chances
+    against pitcher 501; he never goes. Runner 13: six chances on second
+    only; he never goes. Savant rows for runner 11 and pitcher 500 land in
+    ``savant_season``.
+    """
     rows = []
     for i in range(40):
         rows.append(_pitch(i + 1, on_1b=11, attempt=i < 20, safe=(i < 20 and i % 4 != 0)))
     for i in range(30):
         rows.append(_pitch(100 + i, pitcher=501, on_1b=12, type_code="B"))
-    # Runner 13: six chances that all began on SECOND (the automatic runner),
-    # never went — a row with no first-base chance at all.
+    # Runner 13: six chances that all begin on SECOND (the automatic runner),
+    # and he never goes: a row with no first-base chance at all.
     for i in range(6):
         rows.append(_pitch(300 + i, pitcher=501, on_2b=13, type_code="B"))
     for i in range(4):
@@ -397,7 +402,7 @@ class TestBuildersExecuted:
         r11, r12, r13 = rows[11], rows[12], rows[13]
         assert (r11[10], r12[10]) == (0, 0)
         # The second-base-only runner: no first-base chance, six on second, a
-        # measured 0.0 rate from second — and a chance count the model can use.
+        # measured 0.0 rate from second, and a chance count the model can use.
         assert r13[1] == 0 and r13[2] == 0 and r13[10] == 6
         assert r13[3] is None and r13[11] == 0.0
         assert r11[1] == 20 and r11[2] == 44
@@ -445,9 +450,9 @@ class TestBuildersExecuted:
         assert row[6] == pytest.approx(0.3947 - 0.346, rel=1e-4)
 
     def test_under_a_cutoff_every_savant_join_season_shifts(self) -> None:
-        """The season containing the cutoff joins the PRIOR season's Savant row
-        (the SIM-537 rule); with the row filed under the cutoff season it is
-        not read, and with it filed under the prior season it is."""
+        """The season that holds the cutoff joins the PRIOR season's Savant row
+        (the point-in-time rule, SIM-537). A row filed under the cutoff season
+        is not read; a row filed under the prior season is."""
         for savant_season, expect_lead in ((2024, False), (2023, True)):
             con = _fake_catalog()
             _seed(con, savant_season=savant_season)
@@ -518,13 +523,14 @@ class TestBuildersExecuted:
         hold = rows["pitcher_steal"]
         assert hold["lead_allowed_primary_ft"] == pytest.approx(11.4)
         assert hold["lead_allowed_jump_ft"] == pytest.approx(4.2)  # AVG skips the NULL
-        # The advancement row gains the new key (AVG skips the runner with no row).
+        # The advancement row carries the key (AVG skips the runner with no row).
         assert rows["baserunner"]["xb_attempt_rate_above_expected"] == pytest.approx(0.05)
 
     def test_the_league_average_writer_tolerates_a_pre_0029_database(self, tmp_path: Path) -> None:
-        """A database without the 0029 columns (or without the two steal tables
-        at all) still gets its league averages — the writer probes, never
-        assumes (the SIM-162 fixture builds only a few narrow tables)."""
+        """A database without the 0029 columns, or without the two steal
+        tables, still gets its league averages: the writer probes, never
+        assumes. The fixture of ``test_league_average_profiles.py`` builds
+        only a few narrow tables."""
         from pipeline.batch.player_profile_computor import LeagueAverageProfiles
 
         path = str(tmp_path / "old.duckdb")
@@ -604,8 +610,8 @@ class TestBuildersExecuted:
 
 
 class TestBuilderSource:
-    """The SIM-537 style: the cutoff rule read off the source, so the check
-    needs no database."""
+    """The cutoff rule read off the builders' source, so the check needs no
+    database."""
 
     @staticmethod
     def _body(name: str, next_marker: str) -> str:
@@ -626,7 +632,7 @@ class TestBuilderSource:
             r"asof_date,\s*\n\s*lead_primary_ft, lead_secondary_ft, lead_jump_ft, savant_steal_opps",
             body,
         )
-        assert "SELECT player_id, season FROM opp_1b" in body  # the widened driver
+        assert "SELECT player_id, season FROM opp_1b" in body  # every runner with a chance
 
     def test_the_pitcher_builder_shifts_the_savant_season_under_a_cutoff(self) -> None:
         body = self._body(
@@ -683,8 +689,8 @@ def _steal_engine(profiles):
     engine._succ_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])
     )
-    # No ``_lead_rbf`` on purpose: the no-DB fixtures built before SIM-531 do not
-    # set one, and ``query`` must fall back to the module bandwidth.
+    # No ``_lead_rbf`` on purpose: an engine built through ``__new__`` may lack
+    # one, and ``query`` must fall back to the module bandwidth.
     engine._normalizer.fit(profiles)
     engine._partition.build(profiles, engine._normalizer)
     return engine
@@ -727,9 +733,9 @@ class TestStealRunnerModel:
         assert np.isnan(p.lead_vec).all()
 
     def test_no_lead_pairs_score_over_tendency_and_success_only(self) -> None:
-        """Two runners identical on tendency and success and without a lead score
-        1.0 — the renormalized two-way blend — never a phantom lead match, and
-        never a penalty for the missing group."""
+        """Two runners identical on tendency and success, with no lead, score
+        1.0: the blend of the two groups, renormalized. The missing group
+        gives neither a phantom lead match nor a penalty."""
         engine = _steal_engine(
             [
                 _steal_profile(1, [0.10, 0.02], [0.80, 0.50]),
@@ -807,10 +813,13 @@ class TestStealRunnerModel:
         assert chances(None, None, None) == 0
 
     def test_no_row_the_driver_admits_reads_confidence_zero(self) -> None:
-        """The review of 2026-09-16: a first-base-only basis gave a runner whose
-        chances were all on second (or whose only attempts were of third) a
-        confidence of 0 — a zero score against every row, an all-zero matrix
-        row, and a steal draw with no weight at all."""
+        """No row the steal driver admits has a confidence of 0.
+
+        A runner whose chances are all on second, or whose only attempts are
+        of third, still scores above 0 against every row. A confidence of 0
+        gives a zero score against every row, an all-zero matrix row and a
+        steal draw with no weight at all.
+        """
         from similarity.engines.baserunner_steal_similarity import BaserunnerStealProfile
 
         second_only = BaserunnerStealProfile(
@@ -907,10 +916,13 @@ class TestStealRunnerModel:
         assert not unmeasured.has_lead and np.isnan(unmeasured.lead_vec).all()
 
     def test_unmeasured_leads_do_not_move_the_normalizers_statistics(self) -> None:
-        """The review of 2026-09-16: filling an unmeasured lead with the league
-        mean put every such runner at the exact mean inside the normalizer,
-        deflated the lead's spread (-24 to -27%) and sharpened the kernel
-        past the fitted bandwidth. The NaN must survive shrinkage."""
+        """An unmeasured lead stays NaN through the shrinkage, so it moves
+        neither the normalizer's mean nor its spread.
+
+        Filling it with the league mean puts every such runner at the exact
+        mean. On the live table that deflates the lead's spread by 24 to 27%
+        and sharpens the kernel past the fitted bandwidth.
+        """
         from similarity.engines.baserunner_steal_similarity import (
             BaserunnerStealSimilarityEngine,
             FeatureNormalizer,
@@ -938,8 +950,8 @@ class TestStealRunnerModel:
         norm_all.fit(measured + unmeasured)
         assert norm_all.lead_std == pytest.approx(norm_measured.lead_std)
         assert norm_all.lead_mean == pytest.approx(norm_measured.lead_mean)
-        # The old behaviour, for contrast: 200 runners parked at the exact mean
-        # would have deflated the spread by roughly a quarter.
+        # For contrast: 200 runners parked at the exact mean deflate the
+        # spread by about a quarter.
         parked = list(measured) + [
             _steal_profile(pid, [0.1, 0.02], [0.8, 0.5], lead=[11.6, 3.4])
             for pid in range(2001, 2201)
@@ -960,11 +972,11 @@ class TestStealRunnerModel:
         assert p.lead_vec.tolist() == pytest.approx([14.0, 5.0])
 
     def test_the_lead_sigma_applies_and_the_sentinel_keeps_the_default(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.baserunner_steal_similarity import (
             RBF_SIGMA_LEAD,
             BaserunnerStealSimilarityEngine,
         )
-        from similarity.similarity_calibration import CalibrationReport
 
         engine = BaserunnerStealSimilarityEngine(duckdb_path=":memory:")
         engine.apply_calibration(CalibrationReport())
@@ -1129,11 +1141,11 @@ class TestPitcherHoldModel:
         assert not unmeasured.has_hold and np.isnan(unmeasured.hold_vec).all()
 
     def test_the_hold_sigma_applies_and_the_sentinel_keeps_the_default(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.pitcher_steal_similarity import (
             RBF_SIGMA_HOLD,
             PitcherStealSimilarityEngine,
         )
-        from similarity.similarity_calibration import CalibrationReport
 
         engine = PitcherStealSimilarityEngine(duckdb_path=":memory:")
         engine.apply_calibration(CalibrationReport())
@@ -1177,8 +1189,9 @@ class TestAdvancementMaskedKernel:
         expected = float(np.exp(-k.gamma * d2))
         assert k.score(x, y) == pytest.approx(expected)
         assert k.score_batch(x, np.array([y, y]))[1] == pytest.approx(expected)
-        # The old kernel read the missing feature as an exact match and inflated
-        # the score; the masked kernel does not.
+        # The shared kernel (similarity/engines/rbf_kernel.py) reads a missing
+        # feature as an exact match and inflates the score; the masked kernel
+        # does not.
         inflated = float(np.exp(-k.gamma * (0.2 * 0.25 + 0.3 * 1.0)))
         assert k.score(x, y) < inflated
 
@@ -1212,11 +1225,11 @@ class TestAdvancementMaskedKernel:
         assert np.isfinite(norm.aggression_mean).all() and np.isfinite(norm.aggression_std).all()
 
     def test_a_stale_six_weight_calibration_is_refused(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.baserunner_similarity import (
             AGGRESSION_FEATURES,
             BaserunnerSimilarityEngine,
         )
-        from similarity.similarity_calibration import CalibrationReport
 
         eng = BaserunnerSimilarityEngine(duckdb_path=":memory:")
         stale = CalibrationReport(
@@ -1277,11 +1290,13 @@ class TestAdvancementMaskedKernel:
         assert len(engine._profiles[(2, 2024)].aggression_vec) == 7
 
     def test_an_unmeasured_feature_survives_shrinkage_whatever_the_league_row(self) -> None:
-        """The review of 2026-09-16: the shrinkage used to fill the unmeasured
-        Savant feature with the league mean whenever the league row carried the
-        key — every in-window season after the recompute — so the masked kernel
-        never ran in production. The NaN must survive; a MEASURED value shrinks
-        like every other aggression feature."""
+        """An unmeasured Savant feature stays NaN through the shrinkage,
+        whether or not the league row carries the key; a MEASURED value
+        shrinks like every other aggression feature.
+
+        Every recomputed league row carries the key. Filling the NaN with the
+        league mean there keeps the masked kernel from ever running.
+        """
         from similarity.engines.baserunner_similarity import (
             AGGRESSION_FEATURES,
             BaserunnerProfile,
@@ -1310,14 +1325,14 @@ class TestAdvancementMaskedKernel:
         )
         eng._profiles = {(1, 2024): p, (2, 2024): measured}
         league = np.full(n_agg, 0.25)
-        league[-1] = np.nan  # a league row written before the Savant load
+        league[-1] = np.nan  # an older league row, without the key
         eng._league_avg["aggression"][2024] = league
         eng._apply_shrinkage()
         assert np.isnan(p.aggression_vec[-1]), "no league key: the NaN survives (masked)"
         assert p.aggression_vec[0] == pytest.approx(0.25 + (0.3 - 0.25) * 5 / 20)
         p.aggression_vec = agg.copy()
         measured.aggression_vec = np.full(n_agg, 0.3)
-        league[-1] = 0.02  # the row after the recompute carries the key
+        league[-1] = 0.02  # a recomputed league row carries the key
         eng._apply_shrinkage()
         assert np.isnan(p.aggression_vec[-1]), "the NaN still survives: the kernel drops it"
         assert measured.aggression_vec[-1] == pytest.approx(0.02 + (0.3 - 0.02) * 5 / 20)
@@ -1356,7 +1371,7 @@ class _FakeConn:
 
 class TestCalibrator:
     def test_the_two_sigmas_round_trip_through_json(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         r = CalibrationReport(sigma_baserunner_steal_lead=0.81, sigma_pitcher_steal_hold=0.67)
         back = CalibrationReport.from_json(r.to_json())
@@ -1365,7 +1380,8 @@ class TestCalibrator:
         assert "BR-steal lead" in r.summary() and "P-steal hold" in r.summary()
 
     def test_the_steal_fit_uses_measured_rows_only(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(5)
         rows = []
@@ -1402,7 +1418,8 @@ class TestCalibrator:
         assert again.sigma_baserunner_steal_lead == pytest.approx(expected)
 
     def test_the_steal_fit_keeps_the_sentinel_without_a_lead(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(6)
         rows = [
@@ -1416,7 +1433,7 @@ class TestCalibrator:
             )
             for _ in range(60)
         ]
-        conn = _FakeConn([], rows)  # a pre-0029 database
+        conn = _FakeConn([], rows)  # a database without the 0029 columns
         report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_baserunner_steal_params(
             conn, [2024], 0.5, CalibrationReport()
         )
@@ -1425,7 +1442,8 @@ class TestCalibrator:
         assert any("NULL AS lead_primary_ft" in q for q in conn.queries)
 
     def test_the_hold_fit_mirrors_the_steal_fit(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(7)
         rows = []
@@ -1458,8 +1476,9 @@ class TestCalibrator:
         assert report.sigma_pitcher_steal_hold == 0.0
 
     def test_the_aggression_fit_drops_unmeasured_rows_and_writes_seven_weights(self) -> None:
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.baserunner_similarity import AGGRESSION_FEATURES
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(8)
         rows = []

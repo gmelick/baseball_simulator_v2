@@ -1,28 +1,24 @@
-"""tests/unit/test_arsenal_cache_vectorized.py — SIM-075
-==================================================
-Regression tests for the vectorized arsenal W2 cache lookup.
+"""The matrix row lookup of the arsenal distance cache.
 
-SIM-075 replaced the O(N) per-candidate Python dict loop in
-``HandednessPartition.score_all`` (which called
-``ArsenalCache.get_or_compute`` once per candidate) with a single NumPy
-matrix **row slice**.  ``ArsenalCache`` now carries a dense symmetric
-``(n_pitchers, n_pitchers)`` distance matrix plus an ``id -> row index``
-map alongside the existing sparse dict store.  This is a pure layout
-optimization: the returned distances/scores MUST be numerically identical
-to the old per-pair computation.
+``ArsenalCache`` (``similarity/engines/arsenal_cache.py``) keeps each arsenal
+distance, the W₂ (Wasserstein-2) distance between two pitchers' pitch
+mixtures, in a sparse dict. It can also hold a dense symmetric
+``(n_pitchers, n_pitchers)`` matrix with an ``id -> row index`` map.
+``HandednessPartition.score_all`` reads a query's distances as one matrix row
+slice. The matrix is a layout choice only: its distances and scores must
+equal the per-pair computation exactly.
 
-These tests build a small synthetic pitcher engine via the
-``__new__``-bypass pattern (see ``tests/unit/test_pitcher_similarity.py``)
-and assert:
+These tests build a small synthetic pitcher engine with the ``__new__``
+bypass (see ``tests/unit/test_pitcher_similarity.py``) and check that:
 
-  (a) the vectorized all-vs-one lookup returns the SAME W2 values as
-      computing each pair directly with ``ArsenalSimilarity.distance``;
-  (b) self-distance is 0.0 (matrix diagonal);
-  (c) symmetry  d[i, j] == d[j, i];
-  (d) NaN / missing-GMM handling is preserved (matrix stores NaN; the
-      public lookup maps it back to inf, exactly as the old loop did);
-  (e) (perf) the precomputed row-slice path is no slower than — and in
-      practice faster than — re-running the per-pair loop.
+  (a) the row lookup returns the same W₂ values as
+      ``ArsenalSimilarity.distance`` on each pair;
+  (b) the self-distance is 0.0 (the matrix diagonal);
+  (c) the matrix is symmetric: d[i, j] == d[j, i];
+  (d) a pitcher without a GMM (a Gaussian mixture model of his pitch mix)
+      stores NaN in the matrix, and the public lookup reads it as inf, as
+      ``get_or_compute`` does;
+  (e) the row slice of a precomputed matrix beats the per-pair dict loop.
 
 Run with:
     pytest tests/unit/test_arsenal_cache_vectorized.py -v
@@ -35,11 +31,11 @@ import unittest
 
 import numpy as np
 
+from similarity.engines.arsenal_cache import ArsenalCache
 from similarity.engines.pitcher_similarity import (
     ARSENAL_SCALE,
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
-    ArsenalCache,
     ArsenalSimilarity,
     EmpiricalBayesShrinkage,
     FeatureNormalizer,
@@ -167,7 +163,7 @@ def _build_engine(profiles: list[PitcherProfile]) -> PitcherSimilarityEngine:
 
 
 class TestVectorizedArsenalLookup(unittest.TestCase):
-    """SIM-075 — the matrix-backed lookup matches the per-pair computation."""
+    """The matrix-backed lookup matches the per-pair computation."""
 
     def setUp(self):
         self.engine = _build_engine(_build_rhp_profiles())
@@ -224,8 +220,8 @@ class TestVectorizedArsenalLookup(unittest.TestCase):
         np.testing.assert_allclose(fast_row, lazy_row, rtol=0, atol=1e-12)
 
     def test_score_all_identical_to_per_pair_get_or_compute(self):
-        """End-to-end: composite/arsenal scores from the vectorized score_all
-        match a manual per-pair recomputation (the legacy code path)."""
+        """End to end: the arsenal scores from score_all match a per-pair
+        recomputation through ``get_or_compute`` on a fresh cache."""
         query = self.by_key[(100, 2024)]
         results = self.partition.score_all(
             query_profile=query,
@@ -235,7 +231,7 @@ class TestVectorizedArsenalLookup(unittest.TestCase):
         )
         res_by_key = {(r.pitcher_id, r.season): r for r in results}
 
-        # Recompute each pair's arsenal score the old way.
+        # Recompute each pair's arsenal score one pair at a time.
         fresh = ArsenalCache()
         for cand in self.profiles:
             ckey = (cand.pitcher_id, cand.season)
@@ -290,8 +286,8 @@ class TestVectorizedArsenalLookup(unittest.TestCase):
                 self.assertTrue(np.isnan(mat[missing_row, j]))
                 self.assertTrue(np.isnan(mat[j, missing_row]))
 
-        # The public lookup maps NaN -> inf (parity with the old loop, which
-        # returned float('inf') when a GMM was None).
+        # The public lookup maps NaN to inf, as get_or_compute returns inf
+        # when a GMM is None.
         missing_profile = self.by_key[(999, 2024)]
         row = self.cache.row_distances(missing_profile, self.profiles)
         for k, j in idx.items():

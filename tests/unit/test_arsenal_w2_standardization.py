@@ -1,35 +1,26 @@
-"""
-test_arsenal_w2_standardization.py
-=========================
-SIM-322 (P0/P1 LIVE BUG) -- GMM arsenal-similarity covariance
-double-standardization in the Wasserstein-2 (Bures) distance.
+"""The arsenal W₂ distance reads a GMM's mean and covariance on one scale.
 
-ROOT CAUSE
-----------
+A GMM is a Gaussian mixture model, here a pitcher's pitch mix. W₂ is the
+Wasserstein-2 distance; between two Gaussians it takes the Bures form.
+
 The nightly computor (``player_profile_computor._fit_gmm_for_pitcher``) stores
-each GMM component's ``mean`` in ORIGINAL feature units but its ``covariance``
-in PER-PITCHER STANDARDIZED space::
+each GMM component's ``mean`` in ORIGINAL feature units, but its
+``covariance`` in the pitcher's own STANDARDIZED space::
 
     cov_std = D_feat^-1 @ cov_orig @ D_feat^-1,   D_feat = diag(feature_stds)
 
-``GMMModel.from_json`` used to load ``mean`` (original) alongside ``covariance``
-(standardized), leaving the two on inconsistent scales.  Then
-``standardize_gmm`` standardizes BOTH from ORIGINAL units (``z_mean`` and
-``z_cov = D^-1 Sigma D^-1``), so the covariance got standardized TWICE while the
-mean got standardized ONCE -- corrupting every arsenal W2 distance.
-
-FIX (engine-side, no nightly recompute)
----------------------------------------
-``from_json`` now de-standardizes the stored covariance back to ORIGINAL units::
+``GMMModel.from_json`` restores the stored covariance to ORIGINAL units::
 
     cov_orig = D_feat @ cov_std @ D_feat
 
-so the in-memory component is internally consistent (mean and cov both in
-original units) and ``standardize_gmm`` applies ONE consistent standardization
-to both.
+So a loaded component holds its mean and covariance in the same units, and
+``standardize_gmm`` standardizes both once (``z_mean`` and
+``z_cov = D^-1 Sigma D^-1``). A load that kept the stored covariance would
+standardize the covariance TWICE and the mean ONCE. That defect corrupts every
+arsenal W₂ distance; these tests guard against it.
 
-These tests use the in-memory ``__new__``-bypass / direct-dataclass-construction
-idioms used by the existing pitcher-engine tests (no live DuckDB).
+The tests build the dataclasses directly, as the other pitcher-engine tests
+do (no live DuckDB).
 """
 
 from __future__ import annotations
@@ -150,8 +141,9 @@ class TestFromJsonDeStandardizesCovariance(unittest.TestCase):
         np.testing.assert_allclose(gmm.components[0].mean, mean_orig, rtol=1e-12)
 
     def test_identity_stds_round_trip(self):
-        """With feature_stds == 1, de-standardization is the identity, so the
-        stored covariance round-trips unchanged (back-compat with old fixtures)."""
+        """With feature_stds == 1, the restore is the identity, so the stored
+        covariance round-trips unchanged. A fixture with unit stds therefore
+        loads as written."""
         cov = np.diag([2.0, 1.5, 1.0, 3.0, 0.5, 0.8, 0.9, 1.1])
         mean = np.arange(GMM_FEATURE_DIM, dtype=np.float64)
         model_json = _build_model_json(mean, cov, np.ones(GMM_FEATURE_DIM))
@@ -229,17 +221,17 @@ class TestAnalyticBuresClosedForm(unittest.TestCase):
 
 
 class TestNoDoubleStandardization(unittest.TestCase):
-    """The crux of SIM-322.
+    """The full engine path matches a W2 computed on one consistent scale.
 
     Two pitchers' GMMs are stored exactly as the nightly computor stores them
-    (mean original, covariance standardized).  The W2 distance produced by the
+    (the mean original, the covariance standardized). The W2 distance of the
     full engine path (from_json -> standardize_gmm -> distance) must equal the
-    W2 computed entirely in a single, self-consistent ORIGINAL-units space.
+    W2 computed entirely in one self-consistent ORIGINAL-units space.
 
-    Under the OLD buggy code, from_json kept the standardized covariance and
-    standardize_gmm re-divided it by pop_std, so the W2 was computed on an
-    inconsistent (cov scaled by feature_stds * pop_std, mean scaled only by
-    pop_std) basis -- a strictly different number.
+    A load that kept the standardized covariance would let standardize_gmm
+    divide it by pop_std again. The covariance would then carry the scale
+    feature_stds * pop_std while the mean carries pop_std alone, and the W2
+    would be a strictly different number.
     """
 
     def _full_engine_w2(self, mj_a, mj_b, pop_mean, pop_std):
@@ -278,8 +270,8 @@ class TestNoDoubleStandardization(unittest.TestCase):
         self.assertAlmostEqual(got_w2, ref_w2, places=6)
 
     def test_buggy_double_standardization_would_differ(self):
-        """Sanity guard: the (now-removed) double-standardized covariance gives
-        a DIFFERENT W2, proving this test would catch a regression to the bug."""
+        """Sanity guard: a double-standardized covariance gives a DIFFERENT W2,
+        so the test above catches a load that skips the restore."""
         stds_a = np.array([2.0, 3.0, 1.5, 118.0, 40.0, 0.5, 0.4, 0.3])
         mean_a = np.array([96.0, 16.0, -8.0, 2400.0, 210.0, -1.5, 6.2, 6.5])
         mean_b = np.array([88.0, 8.0, -14.0, 1800.0, 220.0, -1.6, 6.1, 5.9])
@@ -294,9 +286,9 @@ class TestNoDoubleStandardization(unittest.TestCase):
 
         fixed_w2 = self._full_engine_w2(mj_a, mj_b, pop_mean, pop_std)
 
-        # Reconstruct the OLD buggy behavior by hand: keep the STORED
-        # standardized covariance, then standardize_gmm divides by pop_std once
-        # more -> covariance double-standardized; mean standardized once.
+        # Build the defect by hand: keep the STORED standardized covariance,
+        # then divide by pop_std once more. The covariance is standardized
+        # twice; the mean once.
         d_pop_inv = np.diag(1.0 / pop_std)
         d_feat_inv_a = np.diag(1.0 / stds_a)
         cov_a_std = d_feat_inv_a @ cov_a @ d_feat_inv_a  # stored
@@ -317,7 +309,7 @@ class TestNoDoubleStandardization(unittest.TestCase):
         )
         buggy_w2 = ArsenalSimilarity.distance(buggy_a, buggy_b)
 
-        # The two must be materially different (the bug actually changed the answer).
+        # The two must differ materially: the defect changes the answer.
         self.assertGreater(abs(fixed_w2 - buggy_w2), 1e-3)
 
 

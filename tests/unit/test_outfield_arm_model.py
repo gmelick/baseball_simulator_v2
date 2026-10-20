@@ -1,39 +1,38 @@
-"""
-test_outfield_arm_model.py
-========================
-The outfield arm block rebuilt from our own advancement pool (SIM-550): the
-MODEL and CALIBRATION half of the plan's section 7. This file is the sibling
-of ``test_outfield_arm_block.py``, which holds the profile computor's half (the
-fill step, the aggregator, the point-in-time checks). The plan names one test
-file; the two halves were built by two agents at once, so they live apart.
+"""Tests of the fielder engine's outfield arm group and its calibration.
+
+The arm group reads three features, two of them built from our own
+advancement pool (the outfield arm block, SIM-550). ``test_outfield_arm_block.py``
+tests the profile computor's side: the fill step, the aggregator and the
+point-in-time checks.
 
 What this file pins:
 
-* the arm group is the three features at the repeats `make calibrate` fitted
-  on 2026-09-17 — the throw velocity 0.844, the advancement prevention 0.137,
-  the thrown-out rate 0.240 (the plan's 0.60 for the prevention pooled the
-  three positions; within a position it repeats at 0.1 to 0.3) — and the
-  engine and the computor share the 50-chance prior;
-* the arm's confidence is chances-based (25 chances -> alpha 0.33, two
-  thirds of the way to the league mean; 200 -> 0.80) and the range, error and
+* the arm group is three features, each weighted by the year-to-year repeat
+  `make calibrate` fitted: the throw velocity 0.844, the advancement
+  prevention 0.137, the thrown-out rate 0.240. Within one position the
+  prevention repeats at 0.1 to 0.3. The engine and the computor share the
+  50-chance prior;
+* the arm's confidence counts its own chances (alpha 0.33 at 25 chances, two
+  thirds of the way to the league mean; 0.80 at 200); the range, error and
   star groups keep the batted-ball confidence;
 * a missing velocity becomes the league mean, never 0 mph; a missing
   prevention on a zero-chance profile becomes the league mean;
 * a league row without an arm key loads NaN, not 0.0, and a NaN league value
   leaves the raw rate alone;
-* the loader reads the three columns plus the chance count, tolerates a table
-  without them, and builds end to end on a canonical-schema DuckDB;
+* the loader reads the three columns and the chance count, loads a table
+  without them, and builds end to end on a DuckDB file with the canonical
+  schema;
 * ``score_all`` and ``query_pair`` agree on an outfield pair;
-* a stale four-weight arm calibration is refused;
+* an arm report with four weights (fitted on another feature list) is
+  refused, and the engine keeps its default weights;
 * the calibrator's outfield SELECT names the three columns in the group's
-  order, its arm fit uses measured rows only, the sentinel stays under 20
-  measured rows, and every block after the arm in the SELECT still reads its
-  own columns (the off-by-one guard);
+  order; its arm fit uses measured rows only; the sentinel holds under 20
+  measured rows; every block after the arm still reads its own columns (the
+  off-by-one guard);
 * the reliability fit pairs a fielder's rows inside ONE position, season to
-  season, and the arm's pairs need 50 chances in both seasons (the review
-  findings engine-1 / calib-1: a player-only pairing in scan order put half
-  the live pairs across positions and read the prevention's repeat at 0.21
-  against its measured 0.54).
+  season, and an arm pair needs 50 chances in both seasons. On the live
+  table a pairing by player alone, in scan order, puts half the pairs across
+  positions and reads the prevention's repeat at 0.21 against 0.54.
 """
 
 from __future__ import annotations
@@ -66,10 +65,11 @@ SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 # The league row's arm vector: velocity (mph), prevention, thrown-out rate.
 LEAGUE_ARM = np.array([88.0, 0.0, 0.05])
 
-# SIM-532: the six fielder columns migration 0030 appends after asof_date, in
-# OAA_JUMP_COLUMN_ORDER. The canonical-schema tests add them when the schema
-# file does not carry them yet, the way 0030 does (idempotent).
-SIM532_FIELDER_COLUMNS = (
+# The six fielder columns DuckDB migration 0030 appends after asof_date, in the
+# computor's OAA_JUMP_COLUMN_ORDER (the Savant fielding data, SIM-532). The
+# calibrator's canonical-schema test adds them the way 0030 does (ADD COLUMN IF
+# NOT EXISTS), so it holds whether or not the schema file carries them.
+OAA_JUMP_FIELDER_COLUMNS = (
     ("savant_oaa", "INTEGER"),
     ("savant_oaa_per_100", "FLOAT"),
     ("jump_reaction_ft", "FLOAT"),
@@ -102,9 +102,9 @@ def _of_profile(
         season=season,
         innings_played=900.0,
         sample_batted_balls=bb,
-        # SIM-532: nine range entries — our five, Savant's figure, the three
-        # jump parts. The jump plays default to 0, so with a zero league row
-        # the jump entries shrink to 0 and the arm reads alone.
+        # Nine range entries: our five, Savant's figure, the three jump parts.
+        # The jump plays default to 0, so with a zero league row the jump
+        # entries shrink to 0 and a test can watch the arm alone.
         range_vec=np.array(
             range_vec or [3.0, 1.0, 0.5, 2.0, 0.01, 1.2, 0.5, 0.3, 0.2], dtype=np.float64
         ),
@@ -233,8 +233,9 @@ class TestArmShrinkage:
         assert p.arm_vec[2] == pytest.approx(0.05 + 0.06 * alpha)
 
     def test_the_batted_balls_never_set_the_arm_confidence(self) -> None:
-        """An everyday outfielder: 600 batted balls, 25 arm chances. On the
-        batted balls his arm was read at face value (alpha 0.976)."""
+        """An everyday outfielder has 600 batted balls and 25 arm chances.
+        Shrunk on the batted balls, his arm would read at face value (alpha
+        0.976); it shrinks on its own chances instead."""
         p = _of_profile(1, [90.0, 0.06, 0.11], chances=25, bb=600)
         engine = _engine_with([p])
         engine._apply_shrinkage()
@@ -252,7 +253,7 @@ class TestArmShrinkage:
         assert thin_arm.range_vec[0] == pytest.approx(3.0 * bb_alpha)
         assert thin_arm.error_vec[0] == pytest.approx(0.02 * bb_alpha)
         assert thin_arm.star_vec[2] == pytest.approx(0.97 * bb_alpha)
-        # … while the arm's rates went all the way to the league mean.
+        # … while the arm's rates go all the way to the league mean.
         assert thin_arm.arm_vec[1] == pytest.approx(LEAGUE_ARM[1])
         assert thin_arm.arm_vec[2] == pytest.approx(LEAGUE_ARM[2])
 
@@ -295,7 +296,7 @@ class TestArmShrinkage:
             season=2024,
             innings_played=800.0,
             sample_batted_balls=300,
-            range_vec=np.array([1.0, 1.0, 1.0, 1.0, 0.0, 0.5]),  # SIM-532: six
+            range_vec=np.array([1.0, 1.0, 1.0, 1.0, 0.0, 0.5]),  # our five and Savant's figure
             error_vec=np.array([0.02, 0.01]),
             dp_vec=np.array([0.5, 0.3, 0.6, 0.1]),
             specialty_vec=np.array([0.5, 0.5]),
@@ -320,9 +321,9 @@ class TestLeagueRow:
         return engine
 
     def test_an_absent_arm_key_loads_nan_not_zero(self) -> None:
-        # A league row written before the arm block was rebuilt carries only
-        # the hold rate. A 0.0 thrown-out rate would be the weakest arm in
-        # the league; a 0.0 mph velocity is no throw at all.
+        # An older league row carries only the hold rate. A 0.0 thrown-out
+        # rate would be the weakest arm in the league; a 0.0 mph velocity is
+        # no throw at all.
         engine = self._load({"arm_hold_rate": 0.62, "oaa_deep": 1.5})
         arm = engine._pos_avg["arm"]["CF"][2024]
         assert arm.shape == (3,)
@@ -365,9 +366,9 @@ def _row(
     stars: tuple = (4, 1, 10, 4, 100, 98),
     oaa_jump: tuple = (None, None, None, None, None),
 ) -> tuple:
-    """One row in the loader's SELECT order (35 columns since SIM-532: the
-    Savant figure, the three jump parts and the jump's play count sit right
-    after catch_pct_added)."""
+    """One row in the loader's SELECT order, 35 columns. Savant's figure, the
+    three jump parts and the jump's play count sit right after
+    catch_pct_added."""
     return (
         pid,
         position,
@@ -380,7 +381,7 @@ def _row(
         0.2,
         1.5,
         0.01,
-        # range, continued (SIM-532: savant_oaa_per_100, reaction, burst, route, jump_plays)
+        # range, continued (savant_oaa_per_100, reaction, burst, route, jump_plays)
         *oaa_jump,
         # errors (2)
         0.02,
@@ -461,7 +462,7 @@ class TestProfileLoader:
 
     def test_build_end_to_end_on_the_canonical_schema(self, tmp_path: Path) -> None:
         """The real SELECT against the real columns, the league keys, the
-        shrinkage and the scorers in one pass — the loader can never name a
+        shrinkage and the scorers in one pass, so the loader never names a
         column the canonical schema lacks."""
         path = str(tmp_path / "sim550.duckdb")
         con = duckdb.connect(path)
@@ -503,9 +504,9 @@ class TestProfileLoader:
                         "arm_advancement_prevention": 0.0,
                         "arm_thrown_out_rate": 0.05,
                         "arm_strength": 88.0,
-                        # SIM-532: the four range keys a post-recompute league
-                        # row carries; the rows above have no jump, so each
-                        # reads the league's.
+                        # The four range keys a recomputed league row carries.
+                        # The rows above have no jump, so each reads the
+                        # league's value.
                         "savant_oaa_per_100": 0.2,
                         "jump_reaction_ft": 0.5,
                         "jump_burst_ft": 1.0,
@@ -604,7 +605,7 @@ class TestScoring:
 
 class TestApplyCalibration:
     def test_a_stale_four_weight_arm_report_is_refused(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         stale = CalibrationReport(
@@ -623,7 +624,7 @@ class TestApplyCalibration:
         assert engine.query_pair((1, "CF", 2024), (2, "CF", 2024)) is not None
 
     def test_a_three_weight_arm_report_applies(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         fitted = np.array([0.9, 0.6, 0.3])
@@ -654,10 +655,9 @@ class _RoutingConn:
 
 def _of_calibration_rows(n: int, seed: int, measured_every: int = 3) -> list[tuple]:
     """Outfield rows in the calibrator's SELECT order: 4 meta, 9 range (our
-    five, Savant's figure, the three jump parts — SIM-532), 2 errors, 3 arm,
-    6 star counts, then the arm's chance count, then the jump's play count
-    (SIM-532, appended last). The arm is NULL on every ``measured_every``-th
-    row."""
+    five, Savant's figure, the three jump parts), 2 errors, 3 arm, 6 star
+    counts, the arm's chance count, then the jump's play count. The arm and
+    its chance count are NULL on every ``measured_every``-th row."""
     rng = np.random.default_rng(seed)
     rows = []
     for i in range(n):
@@ -703,7 +703,7 @@ def _paired_of_rows(
     thrown-out rate follow it so every arm feature carries the same signal.
     Everything else is deterministic filler. ``chances`` is the arm's chance
     count and ``plays`` the jump's play count, the two trailing columns in
-    that order (SIM-532 appended the second)."""
+    that order."""
     rows = []
     for k, ((pid, pos, season), prev) in enumerate(prevention.items()):
         rows.append(
@@ -717,7 +717,7 @@ def _paired_of_rows(
                 0.2,
                 0.3,
                 0.4,
-                # SIM-532: Savant's figure and the three jump parts
+                # Savant's figure and the three jump parts
                 0.5,
                 0.6,
                 0.7,
@@ -742,7 +742,8 @@ def _paired_of_rows(
 
 class TestCalibrator:
     def test_the_outfield_select_names_the_three_arm_columns_in_order(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         conn = _RoutingConn([], _of_calibration_rows(120, seed=11))
         cal = SimilarityCalibrator(duckdb_path=":memory:")
@@ -750,16 +751,17 @@ class TestCalibrator:
         of_sql = [q for q in conn.queries if "'LF'" in q][0]
         assert "arm_strength, arm_advancement_prevention, arm_thrown_out_rate," in of_sql
         assert "of_arm_runs" not in of_sql and "arm_hold_rate" not in of_sql
-        # The two count columns ride after the blocks — the arm's chances,
-        # then the jump's plays (SIM-532) — and both SELECTs come back in
-        # (player, position, season) order.
+        # The two count columns ride after the blocks: the arm's chances, then
+        # the jump's plays. Both SELECTs come back in (player, position,
+        # season) order.
         assert of_sql.rstrip().split("FROM")[0].rstrip().endswith("arm_opportunities, jump_plays")
         if_sql = [q for q in conn.queries if "'1B'" in q][0]
         for sql in (of_sql, if_sql):
             assert "ORDER BY player_id, position, season" in sql
 
     def test_the_arm_fit_uses_measured_rows_only(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _of_calibration_rows(120, seed=12)
         cal = SimilarityCalibrator(duckdb_path=":memory:")
@@ -770,8 +772,8 @@ class TestCalibrator:
         assert report.reliability_weights_of_arm is not None
         assert len(report.reliability_weights_of_arm) == len(OF_ARM_FEATURES) == 3
         # The sigma is the one fitted on the MEASURED rows alone …
-        # The arm block sits at columns 15 to 17 (four meta, nine range, two
-        # errors precede it — SIM-532 widened the range block to nine).
+        # The arm block sits at columns 15 to 17: four meta, nine range and
+        # two error columns precede it.
         measured = np.array([r[15:18] for r in rows if r[15] is not None], dtype=np.float64)
         expected = cal._fit_sigma(cal._zscore_matrix(measured), 0.5)
         assert report.sigma_of_arm == pytest.approx(expected)
@@ -783,7 +785,8 @@ class TestCalibrator:
         assert again.sigma_of_arm == pytest.approx(expected)
 
     def test_the_arm_fit_keeps_the_sentinel_under_twenty_measured_rows(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _of_calibration_rows(120, seed=13, measured_every=8)  # 105 measured
         thin = [r[:15] + (None, None, None) + r[18:] for r in rows[:101]] + rows[101:]
@@ -798,19 +801,19 @@ class TestCalibrator:
 
     def test_every_block_after_the_arm_still_reads_its_own_columns(self, tmp_path: Path) -> None:
         """The off-by-one guard. The calibrator walks the SELECT by the feature
-        lists' lengths; the arm went from four columns to three. On a
-        canonical-schema DuckDB the star and error sigmas must equal the fits
-        over the columns read by NAME."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        lists' lengths, so a list one entry off shifts every later block. On
+        a DuckDB file with the canonical schema, the error, star and arm sigmas
+        must equal the fits over the columns read by NAME."""
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         path = str(tmp_path / "sim550_cal.duckdb")
         con = duckdb.connect(path)
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
-        # SIM-532: the calibrator names the Savant and jump columns directly
-        # (the recompute applies migration 0030 before `make calibrate`).
-        # Add them here the way 0030 does, so this test holds whether or not
-        # the canonical schema already carries them.
-        for col, typ in SIM532_FIELDER_COLUMNS:
+        # The calibrator names the Savant and jump columns directly. Add them
+        # the way DuckDB migration 0030 does, so the test holds whether or not
+        # the schema file carries them.
+        for col, typ in OAA_JUMP_FIELDER_COLUMNS:
             con.execute(
                 f"ALTER TABLE derived.fielder_season_metrics ADD COLUMN IF NOT EXISTS {col} {typ}"
             )
@@ -842,8 +845,8 @@ class TestCalibrator:
                     5000 + i % 30,
                     2023 + i // 30,
                     int(rng.integers(200, 600)),
-                    # SIM-532: nine range values — our five, Savant's figure,
-                    # the three jump parts
+                    # nine range values: our five, Savant's figure, the three
+                    # jump parts
                     *rng.normal(0, 2, 9).tolist(),
                     *rng.beta(2, 60, 2).tolist(),
                     *arm,
@@ -871,8 +874,8 @@ class TestCalibrator:
             "routine_catches * 1.0 / routine_opps, "
             "arm_strength, arm_advancement_prevention, arm_thrown_out_rate "
             "FROM derived.fielder_season_metrics WHERE position = 'RF' "
-            # the calibrator reads its rows in this order (SIM-550); the sigma
-            # fit samples pairs by seed, so the by-name read must match it
+            # the calibrator reads its rows in this order; the sigma fit
+            # samples pairs by seed, so the by-name read must match it
             "ORDER BY player_id, position, season"
         ).fetchall()
         con.close()
@@ -895,7 +898,7 @@ class TestCalibrator:
 
 
 # ===========================================================================
-# The reliability pairing (engine-1 / calib-1)
+# 8. The reliability pairing
 # ===========================================================================
 
 
@@ -903,12 +906,12 @@ class TestReliabilityPairing:
     """The fielder table holds one row per (player, position, season). The
     reliability weight is a season-to-season repeat, so a pair must sit inside
     one player AND one position and join consecutive seasons. On the live
-    table the player-only pairing in scan order formed 225 arm pairs, 112 of
-    them across positions and 46 inside one season, and read the prevention's
-    repeat at 0.21 against 0.54 when paired properly."""
+    table a pairing by player alone, in scan order, forms 225 arm pairs: 112
+    cross positions and 46 sit inside one season. It reads the prevention's
+    repeat at 0.21, against 0.54 when paired properly."""
 
     def test_the_helper_pairs_every_consecutive_season_and_skips_a_gap(self) -> None:
-        from similarity.similarity_calibration import calibrate_reliability_weights
+        from similarity.calibration.fitting import calibrate_reliability_weights
 
         rng = np.random.default_rng(21)
         ids, seasons, values = [], [], []
@@ -938,14 +941,15 @@ class TestReliabilityPairing:
         assert without[0] < 0.5, "the pre-fix rule pairs the gapped rows too"
 
     def test_the_helper_pairs_both_consecutive_seasons_of_a_three_season_player(self) -> None:
-        from similarity.similarity_calibration import calibrate_reliability_weights
+        from similarity.calibration.fitting import calibrate_reliability_weights
 
         rng = np.random.default_rng(22)
         ids, seasons, values = [], [], []
         for pid in range(30):
             # 2023 and 2024 repeat; 2025 flips. Two pairs per player: one
             # repeating, one flipping, so the correlation lands near 0 only
-            # when BOTH pairs are formed (the first-two-rows rule reads 1.0).
+            # when BOTH pairs form. The rule without seasons pairs the first
+            # two rows alone and reads 1.0.
             v = float(rng.normal())
             for season, value in ((2023, v), (2024, v), (2025, -v)):
                 ids.append(pid)
@@ -961,9 +965,11 @@ class TestReliabilityPairing:
         """One player at LF and CF in the same seasons. His LF prevention
         repeats exactly from 2023 to 2024 and so does his CF prevention, but
         the CF value is the LF value's negative. Paired inside one position
-        the repeat is 1.0; paired across positions (the old rule's first two
-        rows: 2023 CF with 2023 LF) it is -1.0, clamped to the 0.1 floor."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        the repeat is 1.0. Paired across positions (a player-only id's first
+        two rows here: 2023 CF with 2023 LF) it is -1.0, clamped to the 0.1
+        floor."""
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(23)
         prevention: dict[tuple[int, str, int], float] = {}
@@ -981,10 +987,11 @@ class TestReliabilityPairing:
         assert report.reliability_weights_of_arm[2] == pytest.approx(1.0)
 
     def test_the_arm_pairs_need_fifty_chances_in_both_seasons(self) -> None:
-        """The plan's floor (section 2.2): a pair counts when the fielder had
-        ARM_ALPHA_PRIOR_CHANCES or more chances in both seasons. The thin rows
-        here flip sign season to season; the full rows repeat exactly."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        """A pair counts when the fielder has ARM_ALPHA_PRIOR_CHANCES or more
+        chances in both seasons. The thin rows here flip sign season to
+        season; the full rows repeat exactly."""
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(24)
         full: dict[tuple[int, str, int], float] = {}
@@ -1011,7 +1018,7 @@ class TestReliabilityPairing:
         )
         # A NULL chance count is no chance: the row never pairs. The chance
         # count is the second-to-last column; the jump's play count rides
-        # after it (SIM-532).
+        # after it.
         no_count = [r[:-2] + (None, r[-1]) for r in rows]
         report_none = cal._calibrate_fielder_params(
             _RoutingConn([], no_count), [2023, 2024], 0.5, CalibrationReport()
@@ -1019,7 +1026,8 @@ class TestReliabilityPairing:
         assert report_none.reliability_weights_of_arm is None
 
     def test_under_twenty_full_rows_keep_the_default_arm_weights(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(25)
         prevention = {
@@ -1028,7 +1036,7 @@ class TestReliabilityPairing:
             for season in (2023, 2024)
         }
         rows = _paired_of_rows(prevention, chances=10)
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn([], rows), [2023, 2024], 0.5, CalibrationReport()
             )
@@ -1038,13 +1046,14 @@ class TestReliabilityPairing:
 
     def test_the_range_pairs_stay_inside_one_position_too(self) -> None:
         """The same rule serves the range, error and star groups (and the
-        infield groups): the fix is on the ids, not on the arm alone."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        infield groups): the pair id carries the position for every group."""
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(26)
         rows = []
         for pid in range(6000, 6030):
-            v = rng.normal(0.0, 2.0, 9)  # SIM-532: the nine range features
+            v = rng.normal(0.0, 2.0, 9)  # the nine range features
             for season in (2023, 2024):
                 for pos, sign in (("CF", 1.0), ("RF", -1.0)):
                     rows.append(

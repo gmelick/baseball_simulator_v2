@@ -69,14 +69,6 @@ explicit_package_bases = true
 disable_error_code     = ["union-attr", "arg-type", "no-any-return", "operator", "index", "assignment"]
 exclude                = ["tests/", "db/migrations/"]
 
-[[tool.mypy.overrides]]
-module = "similarity.similarity_diagnostics"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "similarity.similarity_calibration"
-ignore_errors = true
-
 
 # ---------------------------------------------------------------------------
 # Coverage scope (pytest-cov / coverage.py)
@@ -93,6 +85,7 @@ ignore_errors = true
 source = ["similarity", "pipeline", "simulation", "betting", "api"]
 omit = [
     "similarity/similarity_calibration.py",
+    "similarity/calibration/*",
     "similarity/similarity_diagnostics.py",
     "pipeline/etl/venue_backfill_job.py",
     "pipeline/etl/etl_sprint_speed_loader.py",

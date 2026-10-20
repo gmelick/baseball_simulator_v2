@@ -1,17 +1,16 @@
 """
-SIM-529 — physical swing and stance features on the batter model.
-SIM-530 — the two empty measurement blocks the same build fills.
+The batter model's physical group (the swing and stance features), and the
+fielder and catcher arm measurements that the same profile build fills.
 
-Three of these tests guard failures that are SILENT in production, and they are
-the reason this file exists:
+Three of these tests guard failures that are SILENT in production:
 
   * the positional-insert contract. ``_compute_batter_profiles`` inserts with no
     column list, so DuckDB matches the SELECT to the table by POSITION. If the
-    migration and the SELECT tail ever disagree, every batter's bat speed lands
-    in the stance-angle column and nothing errors.
-  * a missing measurement scoring as an extreme instead of as neutral. A batter
-    Savant has no row for must be draw-neutral; a zero bat speed would make him
-    the slowest swinger in the league.
+    migration and the SELECT tail disagree, every batter's bat speed lands in
+    the stance-angle column and nothing errors.
+  * a missing measurement that scores as an extreme instead of as neutral. A
+    batter Savant has no row for must be draw-neutral; a zero bat speed would
+    make him the slowest swinger in the league.
   * the two scoring paths drifting apart. ``score_all`` feeds the nightly actor
     matrix and ``_score_pair`` feeds ``query_pair``; nothing else compares them.
 """
@@ -24,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from similarity.calibration.report import CalibrationReport
 from similarity.engines.batter_similarity import (
     PHYSICAL_FEATURES,
     WEIGHT_BATTED_BALL,
@@ -38,7 +38,6 @@ from similarity.engines.batter_similarity import (
     WEIGHT_POWER_PLATOON,
     BatterProfile,
 )
-from similarity.similarity_calibration import CalibrationReport
 
 REPO = Path(__file__).resolve().parents[2]
 MIGRATION = REPO / "db" / "migrations" / "duckdb" / "0025_sim529_batter_physical_features.sql"
@@ -81,7 +80,7 @@ def test_the_canonical_schema_carries_the_same_columns_in_the_same_order() -> No
 
 
 def test_the_schema_version_was_bumped_with_the_migration() -> None:
-    # 25 was this ticket; SIM-534 then added the cutoff stamp as 26.
+    # The physical-feature migration is 0025; later migrations only raise the version.
     assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 25
 
 
@@ -166,8 +165,8 @@ def test_the_platoon_context_weights_sum_to_one() -> None:
 
 
 def test_the_existing_groups_kept_their_relative_sizes() -> None:
-    """SIM-529 took 0.20 for the physical group proportionally, so every
-    judgement encoded in the other four's RELATIVE weights survives."""
+    """The physical group takes its 0.20 from the other four in proportion, so
+    their RELATIVE weights keep every judgement they encode."""
     disc_to_bb = WEIGHT_DISCIPLINE / WEIGHT_BATTED_BALL
     plat_to_pow = WEIGHT_PLATOON / WEIGHT_POWER
     assert disc_to_bb == pytest.approx(0.40 / 0.35, rel=1e-6)
@@ -175,8 +174,8 @@ def test_the_existing_groups_kept_their_relative_sizes() -> None:
 
 
 def test_each_feature_weight_is_its_measured_reliability() -> None:
-    """Owner ruling 2026-09-10: fit these reliability-proportionally. Every
-    weight is a measured year-to-year correlation, so all sit inside (0, 1)."""
+    """Each weight is the feature's measured year-to-year correlation (the
+    reliability rule, owner ruling 2026-09-10), so all sit inside (0, 1)."""
     for name, w in PHYSICAL_FEATURES:
         assert 0.0 < w < 1.0, name
 
@@ -270,14 +269,14 @@ def test_a_fitted_physical_sigma_is_applied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-530 / SIM-550 — the outfield arm block is filled, not a placeholder
+# The outfield arm block and the catcher's arm are measured, not placeholders
 #
-# SIM-530 filled the block from Savant's baserunning board. SIM-550 found the
-# loader had pulled that board's RUNNER view, so the block held how the
-# outfielder runs the bases. The block now comes from our own advancement
-# pool: the aggregator writes the six advancement columns NULL BY DESIGN and
-# `_fill_outfield_arm_block` fills them after the pools are built. The throw
-# velocity keeps its source, the arm-strength board.
+# The outfield arm block comes from our own advancement pool. The aggregator
+# writes the six advancement columns NULL BY DESIGN, and
+# `_fill_outfield_arm_block` fills them after the pools are built. Savant's
+# baserunning board is not a source: its rows describe how the outfielder RUNS
+# the bases (the outfield arm block, SIM-550). The throw velocity comes from
+# the arm-strength board.
 # ---------------------------------------------------------------------------
 
 
@@ -317,7 +316,7 @@ def test_the_fill_step_writes_every_arm_block_column_and_nulls_the_run_value() -
 
 def test_the_aggregator_writes_the_arm_block_null_for_the_fill_step() -> None:
     """An outfielder who fielded no chance keeps NULL, never 0, and the
-    aggregator no longer reads Savant's baserunning board for the block."""
+    aggregator does not read Savant's baserunning board for the block."""
     body = _aggregator_body()
     for col in (*_ARM_BLOCK_COLUMNS, "of_arm_runs"):
         assert re.search(rf"NULL::\w+\s+AS {col}\b", body), f"{col} is not written NULL"
@@ -347,8 +346,9 @@ def test_the_advancement_block_stays_outfield_only() -> None:
 
 
 def test_pop_time_prefers_the_measurement_over_the_old_proxy() -> None:
-    """The old value was 2.0 + (0.25 - cs_rate) * 2.0 — a function of the
-    caught-stealing rate, which the same sub-score already weights."""
+    """The measured pop time comes first. The proxy 2.0 + (0.25 - cs_rate) * 2.0
+    is only the fallback: it is a function of the caught-stealing rate, which
+    the same sub-score already weights."""
     src = COMPUTOR.read_text(encoding="utf-8")
     m = re.search(r"COALESCE\(\s*spt\.pop_time_2b,\s*sct\.pop_time,", src)
     assert m is not None, "pop time no longer prefers the measured sources"
@@ -361,12 +361,14 @@ def test_pop_time_prefers_the_measurement_over_the_old_proxy() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_with_no_physical_data_the_weights_revert_to_the_pre_sim529_split() -> None:
-    """Shipping the code before the profile rebuild must not change any score.
+def test_with_no_physical_data_the_weights_give_physical_no_share() -> None:
+    """With no physical data, the physical group gets no weight and the other
+    four keep their four-group split.
 
-    Without this, every physical sub-score is a perfect 1.0 and the composite
-    becomes 0.8 * (the old score) + 0.20 — which compresses the spread of a
-    number used as a DRAW WEIGHT, quietly weakening the batter factor.
+    Otherwise every physical sub-score is a perfect 1.0 (NaN is zero distance),
+    and the composite becomes 0.8 × (the four-group score) + 0.20. That
+    compresses the spread of a number used as a DRAW WEIGHT and quietly weakens
+    the batter factor.
     """
     from similarity.engines.batter_similarity import sub_score_weights
 
@@ -386,7 +388,7 @@ def test_with_no_physical_data_the_weights_revert_to_the_pre_sim529_split() -> N
     )
 
 
-def test_with_physical_data_the_weights_are_the_sim529_split() -> None:
+def test_with_physical_data_the_weights_give_physical_its_share() -> None:
     from similarity.engines.batter_similarity import sub_score_weights
 
     w = sub_score_weights(platoon_context=False, physical_available=True)
@@ -415,7 +417,7 @@ def sub_score_weights_for(platoon_context: bool, available: bool):
 
 def test_a_population_with_no_physical_data_scores_exactly_as_before() -> None:
     """End to end: the synthetic engine has no physical data, so its composite
-    must match a hand-computed pre-SIM-529 weighting."""
+    must match the four-group weighting computed by hand."""
     from tests.unit.test_batter_similarity import _build_synthetic_engine
 
     engine = _build_synthetic_engine()

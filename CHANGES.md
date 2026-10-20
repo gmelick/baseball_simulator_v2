@@ -183,6 +183,226 @@ including the `SIM-486:` / `SIM-511:` error texts and both dotted factory string
 scores and pitch counts of ten seeds (`OUTCOMES_AT_80E3F46`), which works like the golden
 snapshots the owner ruled out on 2026-09-10; it was kept.
 
+# SIMILARITY AND BETTING — the calibration split into one mixin per engine, one shared kernel, the pitcher's distance cache in its own module, dead code out, every comment to the standard — SIM-493 session B4, 2026-10-20
+
+**Why.** The project-wide clean-up (SIM-493, plan `docs/audit/2026-10-19-sim493-code-cleanup-plan.md`
+§10) gives each area one session. B4 owns `similarity/`, `betting/` and their 29 test files. Every
+change is behaviour-neutral; the checks below prove it. Branch
+`claude/sim493-similarity-betting-bf6dba`, off `sim493-groundwork` (690375c).
+
+**What changed.**
+
+- **The calibration is a package of parts.** `similarity/similarity_calibration.py` (2,139 lines)
+  keeps `SimilarityCalibrator` and its `calibrate_from_population` (130 lines). The rest moved to
+  `similarity/calibration/`: `fitting.py` (the population fits), `report.py` (`CalibrationReport`;
+  its `summary()` prints its sixteen reliability blocks from one table), `base.py`
+  (`CalibratorBase`: the column probe, the z-scoring, the sigma fit) and one mixin per engine
+  (`batter.py`, `pitcher.py`, `fielder.py`, `baserunner.py`, `catcher.py`,
+  `baserunner_steal.py`, `pitcher_steal.py`, `manager.py`). Every `_calibrate_*_params` method
+  stays on the instance. Every module logs as `"similarity_calibration"`, and the report still
+  imports the fielder engine at import time (its `logging.basicConfig`). The package passes mypy,
+  so its `ignore_errors` override is gone; the coverage omit list covers the package.
+- **The diagnostics lose their dead self-tests.** The four synthetic self-tests had no caller (the
+  module has no `__main__` block), and the pitcher one imported names the pitcher engine no longer
+  has. `run_pitcher_diagnostics` and `_check_symmetry_pitcher` had no other caller.
+  `_check_symmetry_batter` is now `_check_symmetry` (it serves every `(player_id, season)` engine).
+  The module passes mypy, so its `ignore_errors` override is gone too. 1,430 → 821 lines.
+- **One weighted RBF kernel.** Six engines (batter, fielder, catcher, manager, both steal engines)
+  carried the same `WeightedRBFSimilarity`: the same arithmetic in the same order. It lives in
+  `similarity/engines/rbf_kernel.py`; each engine imports it, so the name still resolves from every
+  engine module. The baserunner engine keeps its own masked kernel, which differs.
+- **The pitcher engine's distance cache has its own module.** `ArsenalCache`, its key, the GMM
+  serialization and the process-pool worker `_compute_w2_chunk` moved to
+  `similarity/engines/arsenal_cache.py`. The cache looks the arsenal model up at call time (the
+  engine imports the cache) and logs as `"pitcher_similarity"`. The engine stays one file (1,534
+  lines): `ArsenalSimilarity.score`, `HandednessPartition.score_all` and `_score_pair` read the
+  module global `ARSENAL_SCALE`, which `apply_calibration` rewrites, and the arm-angle decision
+  test pins `GMM_FEATURE_NAMES` and its comment block in the engine file.
+- **Every comment and docstring to the standard** (CLAUDE.md §14, plan rule 3): the eleven
+  engines, the kernel, the cache, the diagnostics, the calibration, the backtesting library, the
+  four `betting/` modules and the 29 test files. History goes; the reason for each weight, prior and
+  rule stays, with a ticket only where it names a ruling or a measurement. About 90 comments in
+  the code, and about 40 in the tests, were wrong about the code; each now matches it. A sample:
+  the pitcher engine's shrinkage prior is 5 (α 0.976 at 200 pitches, not 0.80); the situation
+  engine is the Data Lab's Situation Finder, not the simulator's play-pool lookup, and its
+  KD-tree query is exact; the catcher has four sub-scores at about 52.9 / 23.5 / 14.1 / 9.4%, not
+  five; the manager features' real definitions (a leverage
+  bucket, not a leverage index; attempts, not signs); the betting package reads the database in
+  `fetch_line_movement`; a stored odds row is a new payload hash, not a new moment. Each comment
+  pass was checked with an AST guard: the file's AST with its docstrings removed equals the
+  previous commit's.
+- **Test names by subject.** `test_falls_back_to_raw_spray_angle_without_the_pull_relative_column`,
+  `test_uses_pull_relative_spray_angle_when_the_column_exists`,
+  `test_with_no_physical_data_the_weights_give_physical_no_share`,
+  `test_with_physical_data_the_weights_give_physical_its_share`, `TestCatcherSigmaCalibration`,
+  `TestCatcherDeterrenceSplit`, `TestCatcherStealManagerApplyCalibration`,
+  `test_seven_rbf_engines_expose_apply_calibration` (it builds seven), `TestSigmaFieldsRoundTrip`,
+  `TestBattedBallSprayColumnChoice`, and the constant `OAA_JUMP_FIELDER_COLUMNS` (two files). No CI
+  list names any of them. Four `caplog.at_level` calls named the logger
+  `"similarity.similarity_calibration"`; they now name the real one, `"similarity_calibration"`.
+- **Docs.** `docs/technical/similarity.md` is rewritten for the code as it stands (the manager
+  engine does weight the pitching-change draw; the nightly matrices apply no calibration report).
+  The four `betting/` sections of `docs/technical/pipeline-betting-db.md` lose their ticket
+  lead-ins. CLAUDE.md §5 and the README tree name the new modules; the phase-4 spec names
+  `api/state.py`'s `ENGINE_REGISTRY` in place of the deleted registry.
+
+**Deleted (rule 7).**
+
+| What | Why |
+|---|---|
+| `similarity/registry.py` and `tests/unit/test_engine_registry.py` | No caller: `api/state.py`'s `ENGINE_REGISTRY` builds the engines. |
+| The diagnostics' four `_run_synthetic_*_test`, `run_pitcher_diagnostics`, `_check_symmetry_pitcher` | No caller; the pitcher self-test could not import. |
+| The eight engines' `build_similarity_matrix`, and the tests that tested only them (`TestSimilarityMatrix` in `test_batter_similarity.py`, `TestBuildSimilarityMatrix` in `test_fielder_similarity.py`, `test_similarity_matrix` in `test_pitcher_similarity.py`) | No caller outside those tests; the bundle builder scores the matrices itself. |
+| Five copies of `WeightedRBFSimilarity` | One shared copy remains. |
+| `pitcher_similarity._require_pot` and `_POT_IMPORT_ERROR` | No caller; its error text (no Python 3.13 wheel) was also wrong. |
+| A no-op `self._get_rbfs_for_position(pos)` call in `FielderSimilarityEngine.build`, an unread counter in `ArsenalCache.precompute`, four bare `len(...)` lines in `test_batter_similarity.py` | They computed nothing. |
+
+**Kept on purpose.** The backtesting library (`similarity/backtesting/`) has no caller outside
+its tests, but its docstring records that it is an offline validation library on purpose; the
+owner decides. A shared `_load_profiles` helper was not built: each engine's SQL differs, and the
+one-cutoff tests read each engine's `_load_profiles` body for its exact tokens. The engines'
+unused `MIN_*` constants mirror the profile computor's thresholds, which the computor's comments
+cite. `test_doctests_in_pitcher_similarity_module` finds no doctest today but guards any example
+a docstring adds.
+
+**For the integration pass.** Outside callers still import `CalibrationReport` and
+`calibrate_sigma` from `similarity.similarity_calibration`: `api/state.py`,
+`simulation/prop_validation.py`, `scripts/fit_calibration.py`,
+`tests/unit/test_calibration_reconciliation.py` and `tests/unit/test_validate_props.py`.
+`calibrate_sigma` is a marked re-export; `CalibrationReport` stays imported there because
+`calibrate_from_population` builds one, so re-point the callers to
+`similarity.calibration.report` and keep that import. `tests/performance/bench_simulation.py` and
+`tests/unit/test_backend_assorted_guards.py` import `ArsenalCache` from the pitcher engine, which
+still imports it. Four docs outside this area name `similarity.similarity_calibration.CalibrationReport`
+(`api.md`, `scripts-frontend.md`, `simulation.md`, `pipeline-betting-db.md`'s `db/introspect.py`
+row). B5 splits `test_secondary_engines.py` and `test_backend_assorted_guards.py`; nothing here
+forced a re-point in either.
+
+**Behaviour changes on purpose.** None. No logger name, log text or other runtime string changed.
+
+**Bugs found (to file).** Each needs a behaviour change, so the clean-up did not fix it. The first
+four reach the simulator through the nightly actor matrices.
+
+1. **The catcher's league-average row carries the wrong keys** (`pipeline/batch/player_profile_computor.py`,
+   the `'catcher'` row of `derived.league_averages`; `similarity/engines/catcher_similarity.py`
+   `_load_league_averages`). The computor writes `framing_runs`, `blocking_runs` and `cs_rate`; the
+   engine reads its eleven feature names with `pj.get(f, 0.0) or 0.0`, and only `cs_rate` matches.
+   Evidence: the 2026 row on a copy of the live file lacks 10 of the 11 features, so the shrinkage
+   pulls them toward 0.0 (a constructed 300-pitch catcher: pop time 1.95 → 1.857 s, arm strength
+   81 → 77.1 mph). This reaches the `catcher` and `catcher_throwing` matrices (the steal and pickoff
+   draws). Done when the league row carries every engine feature and a missing key reads as NaN, as
+   the steal engines do. Fix: write the engine's feature keys in the computor's catcher row.
+2. **The extra-base runner's league-average row lacks nine of its thirteen features** (the
+   `'baserunner'` row; `similarity/engines/baserunner_similarity.py`). The row holds
+   `extra_base_attempt_rate`, `extra_base_success_rate`, `sb_success_rate`, `sprint_speed` and the
+   Savant rate; the four per-situation attempt rates, `stop_rate` and the four per-situation success
+   rates shrink toward 0.0. The matrix build loads the thin profiles, so the effect is large there (a
+   5-chance runner's first-to-third attempt rate 0.35 → 0.088). This reaches `runner_adv` (the
+   advancement draws). Done and fix as item 1.
+3. **Four engines load a database NULL as 0.0, not NaN** (the `_v` helpers of the baserunner,
+   catcher, batter and manager engines, `v or 0.0`). A runner with no Savant row gets sprint speed
+   0 ft/s (still 20 ft/s after a 5-chance shrink, many deviations below the league's 27), so his speed
+   score is about 0 against every measured runner; a runner who never tried reads 0% success; a NULL
+   arm strength reads 0 mph; a manager-season with no bullpen-availability rows reads
+   `available_reliever_usage_rate` near 0. The steal engines already load NaN (the running-game work,
+   SIM-531). Done when each engine loads NULL as NaN and its kernel or shrink handles it. Fix: map
+   None to NaN and add the features to each engine's NaN set.
+4. **The pitcher engine swaps the chase and zone-take rates in its loader**
+   (`similarity/engines/pitcher_similarity.py`, `_load_profiles`). The SELECT returns `chase_rate,
+   zone_take_rate`; the unpack names them `zone_take_rate, chase_rate`, so `command_vec` holds them in
+   the opposite order to `COMMAND_FEATURES` and the league-average vector. The shrinkage then pulls
+   each pitcher's chase rate toward the league's zone-take rate and back (weight 1 − α, at most 2.4% at
+   200 pitches). The kernel itself ignores the order. This reaches `pitcher_sim`. Done when the
+   SELECT order matches `COMMAND_FEATURES`. Fix: select `zone_take_rate` before `chase_rate`.
+5. **The fielder engine's `query_pair` swaps two infield sub-scores**
+   (`similarity/engines/fielder_similarity.py`, `query_pair`). For an infielder it returns the
+   specialty score in `tertiary_score` and the error score in `quaternary_score`; `query` returns them
+   the other way round, as the Similarity Explorer's labels expect. Evidence: two shortstops with
+   different error rates and equal specialty values: `query` gives tertiary 0.0710, quaternary 1.0000;
+   `query_pair` gives 1.0000 and 0.0710. The composite and the matrices are right. Fix: map the
+   infield tuple in `SimilarityResult` order.
+6. **The batter engine's `_score_pair` disagrees with `score_all` on a thin platoon split**
+   (`similarity/engines/batter_similarity.py`). A query with 30+ PA against either hand turns on the
+   platoon weights for any `vs_hand` (10 PA vs L and 200 vs R with `vs_hand="L"`: 0.8642 against
+   0.8900), and a candidate under 30 PA never gets the neutral 0.5. It serves `query_pair` (the
+   Explorer's pair view, the diagnostics); the matrix is unaffected. Fix: the per-hand 30-PA rule of
+   `score_all` in `_score_pair`.
+7. **The fitted pitcher command sigma and prior never reach the engine.**
+   `similarity/calibration/pitcher.py` fits `sigma_command` and `eb_n_prior_pitcher`; no code reads
+   either, so the engine keeps `RBF_SIGMA_COMMAND` 1.0453 and `EB_N_PRIOR` 5. More broadly the nightly
+   actor matrices apply no calibration report at all (`build_actor_sim_matrices`): `make calibrate`
+   changes only the API's engines. Done when the owner decides which values the draws use and the code
+   follows. Fix: read both fields in `apply_calibration`; apply `/data/calibration.json` in the
+   matrix build, or document the module defaults as the draws' values.
+8. **One pitcher engine's calibration rewrites every pitcher engine in the process**
+   (`PitcherSimilarityEngine.apply_calibration` sets the module global `ARSENAL_SCALE`; a report with
+   no gamma resets it to 4.10). Latent: no production path calls the pitcher engine's
+   `apply_calibration` today, though the API builds two instances. Fix: pass the instance's scale into
+   the three readers.
+9. **The small-GMM-component merge picks its target in raw units** (`enforce_min_cluster_size`, run
+   before the standardization in `build`), so spin rate (hundreds of rpm) decides the merge over
+   velocity and movement. Fix: measure the gap over the GMM's `feature_stds`.
+10. **The line-movement direction pools every book** (`betting/line_movement.py`, `_net_direction`).
+    The first and last quotes can come from two books: (t1, bp:1, −110/−110) and (t2, bp:2, −130/+110)
+    give direction 'toward' and a CLV, though neither book moved. Fix: each book's own direction, then
+    aggregate.
+11. **A price that returns to an earlier value is never stored** (the odds writer dedups on a hash
+    with no time, `ON CONFLICT (game_pk, source, odds_hash)`; read from the code, not checked against
+    stored data). −110 at t0, −120 at t1, −110 at t2: the series closes at −120. Fix: dedup only
+    against the latest row of the same game, source, book, market and line type.
+12. **A wrong market or side gives a silent empty line-movement series**
+    (`line_movement_from_quotes` swallows `_side_columns`' ValueError). Fix: call it once before the
+    loop.
+13. **Smaller ones.** `SituationSimilarityEngine.query_batch([])` raises instead of returning `[]`.
+    The engines' and the calibrator's `__main__` blocks read a DuckDB path that does not exist
+    (`../../db/schemas/baseball_simulator.duckdb`); the pitcher engine's block builds and prints
+    nothing. `CalibrationReport.summary()` prints no row for the batter's physical weights. The
+    Similarity Explorer's batter panel (`api/routes/similarity_explorer.py`, runtime text) shows the
+    four-way weights 0.40/0.35/0.15/0.10. A runtime log line in `batted_ball_similarity.py` still says
+    "until SIM-051 ships". `tests/regression/conftest.py` scales the situation fixture's index twice
+    (B5's file). No writer sets `is_sharp_book`, so `sharp_consensus` is always None.
+
+**For the owner (design, not defects).** The catcher's shrinkage prior is 15 called pitches, so α is
+at least 0.95 for every kept catcher (framing stabilizes near 1,500). `stop_rate` is exactly one
+minus the overall attempt rate, so that rate counts twice in the runner's aggression distance. The
+batter's xba / xslg and the manager's hit-and-run and double-switch rates read 0.0 for everyone and
+still hold their share of the kernel weight. CLAUDE.md §1 calls CLV "the gold-standard metric";
+the owner ruled on 2026-09-28 that the model is not judged by it.
+
+**Files over 1,500 lines.**
+
+| File | Lines | Why it stays whole |
+|---|---|---|
+| `similarity/engines/fielder_similarity.py` | 1,576 | One engine: two position groups (infield, outfield) of four sub-scores each, their feature lists, normalizer, partition and loader. A split would separate the partition from the feature lists it indexes. |
+| `similarity/engines/pitcher_similarity.py` | 1,534 | The `ARSENAL_SCALE` readers and the arm-angle decision block (above). |
+| `tests/unit/test_lead_distance.py` | 1,518 | One subject end to end: the lead-distance data from the migration through the loader, the computor, the two steal engines and the calibration. |
+
+**Line counts.** `similarity/` and `betting/`: 18,030 lines in 21 files on `fe81d79`; 16,388 lines in
+34 files now. The B4 test files: 15,195 → 14,981.
+
+**The neutral checks.** Each compares the base code (a scratch worktree of `fe81d79`) with this
+branch, both reading one frozen copy of the live DuckDB file (`/data/sim493/b4_actor_check.duckdb`,
+copied read-only at 03:57 UTC; the live file was never written).
+
+| Check | Result |
+|---|---|
+| The actor score matrices (`--what actors_sim`: 16 matrices, the manifest, the concentration report), by content, after every code slice and on the final code | `RESULT: EQUAL` |
+| The pitcher similarity matrix (`--what pitcher_sim --pitcher-sim-limit 60`: 60 query pitchers against all 2,545 profiles), member by member | `RESULT: EQUAL` |
+| `calibrate_from_population`, seasons 2017-2026, synthetic arsenal distances: the report JSON and the 162-line summary | `json equal: True`, `summary equal: True` |
+| `ArsenalCache.precompute`, a process pool of 3 against the serial fill, 300 pairs | equal |
+| Every moved function against its original (AST, docstrings removed) | identical, except `summary()` (covered by the report check) |
+| Every comment pass (AST guard against the previous commit) | `SAME` on every file |
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| The full unit lane (container, the worktree mounted and the mount proved; `-m "not slow"`, after the last code and test commit) | `6527 passed, 2 skipped, 22 deselected, 10 warnings in 331.44s`: the groundwork's 6,545 less the 18 deleted tests (10 of the registry, 8 of the matrix helpers) |
+| The regression lane (container) | `33 passed` |
+| The B4 test files, their 16 outside callers and the regression lane (host Python 3.13.7) | `1232 passed, 1 skipped`; the one failure imports `api.main`, which needs `sqlglot`, absent on the host; it passes in the container lane |
+| `ruff check .` / `ruff format --check .` (ruff 0.16.7) | pass; 489 files formatted |
+| `mypy similarity/ pipeline/ api/ betting/` (the project settings, no override left for `similarity/`) | `Success: no issues found in 94 source files` |
+
 # GROUNDWORK — the code clean-up's shared steps: a behaviour fingerprint, scripts and tests named by purpose, run outputs out of `scripts/`, one flag registry and one existence probe — SIM-493, 2026-10-19
 
 **Why.** The owner widened the code-hygiene refactor (SIM-493) on 2026-10-19: review and clean

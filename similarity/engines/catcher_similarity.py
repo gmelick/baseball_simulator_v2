@@ -1,70 +1,56 @@
-"""
-catcher_similarity.py
-=====================
-Step 2.6 — Catcher-to-Catcher Similarity
-MLB Baseball Simulation Platform
+"""The catcher engine: how alike two catcher-seasons are behind the plate.
 
-Computes a composite similarity score [0, 1] between any two MLB
-catcher-season profiles across five dimensions (SIM-072 v2 split):
+The engine scores a pair of catcher-seasons from 0 (unlike) to 1 (identical).
+The actor matrix ``catcher`` holds the composite. The steal and pickoff draws
+weight their rows by the throwing sub-score (the matrix ``catcher_throwing``).
+The composite blends four defensive sub-scores:
 
-  1. Framing (45%) — the most impactful and most measurable catcher skill.
-     Pitch framing is worth multiple wins per season for elite framers.
-     Anchored by Statcast strike rate vs. expected strike rate (the cleanest
-     signal), supplemented by raw runs_saved_framing for magnitude.
+  1. Framing (≈52.9%): the catcher skill with the largest effect and the best
+     measure. Pitch framing is worth several wins a season to an elite
+     framer. The group holds the called strikes above the framing model's
+     expectation per called pitch (the cleanest signal), the framing runs
+     (the size of the effect), and the strike rates in the shadow zone (the
+     border of the zone) and in the heart of the zone.
 
-  2. Blocking (20%) — dirt-ball pass-through prevention. Measured by
-     block success rate (blocked balls / total block opportunities) and
-     passed ball rate.  Less discriminating than framing but critical for
-     simulation accuracy in wild-pitch-heavy situations.
+  2. Blocking (≈23.5%): the passed balls and wild pitches the catcher
+     prevents. The group holds his blocks above average per expected passed
+     ball or wild pitch, the same on bounced pitches alone, and his passed
+     balls plus wild pitches per called pitch.
 
-  3. Throwing — Execution — pure mechanics of the throw to 2B/3B
-     once the runner has decided to go.  Includes pop time, caught
-     stealing rate (conditional on attempts), and arm strength (mph).
-     These are all execution-side signals: how good a catcher is at
-     converting attempts into outs.  Field name `throwing_score` retained
-     for backward compatibility.  (SIM-408: exchange_time dropped — not
-     separable from pop time in the feed.)
+  3. Throwing execution (≈14.1%): the throw once the runner goes. The group
+     holds pop time, the caught-stealing rate and arm strength. The result
+     field is ``throwing_score``.
 
-  4. Throwing — Deterrence (8%) — how *often* runners attempt against
-     this catcher per opportunity.  Single-feature sub-score driven by
-     `steal_attempt_rate_against` (PA-level rate, SIM-073).  Carries the
-     reputational signal: elite-arm catchers rarely get challenged, and
-     the execution sub-score alone hides that effect because their CS
-     rate denominator collapses with attempts.  Per BA pushback memo
-     (sprint 2026-05-06), the v1 throwing dimension over-weighted
-     execution mechanics for catchers nobody runs on.
+  4. Deterrence (≈9.4%): how often runners try against him, as steal
+     attempts per plate appearance with a runner on first or second. Runners
+     rarely test an elite arm, so his caught-stealing rate rests on few
+     attempts, and the execution sub-score alone hides his effect.
 
-  (SIM-408: a 5th "Offensive Profile" sub-score — k_rate / walk_rate /
-  avg_exit_velo / hard_hit_rate — was removed.  A catcher's own batting doesn't
-  belong in a defensive-similarity engine, and the offense columns weren't being
-  produced by the computor.  The four defensive sub-score weights renormalize
-  over 0.85: framing ≈0.529, blocking ≈0.235, execution ≈0.141, deterrence ≈0.094.)
+The weights keep the ratio 45 : 20 : 12 : 8, divided by 0.85 so they sum to
+one. Framing leads because it is the largest and best-measured skill. The
+catcher's own batting is not a feature: it does not belong in a defensive
+score.
 
-Research-Informed Design
-------------------------
-  Statcast framing data (strike_rate_vs_expected) has been available since
-  2015 and stabilizes meaningfully by ~1500 pitches received.  Block data
-  is sparser — meaningful by ~50 block opportunities.  Pop time stabilizes
-  quickly (~20 steal attempts against).  CS rate requires 40+ attempts
-  to be reliable.
+Each sub-score is a Gaussian kernel (RBF, ``similarity/engines/rbf_kernel.py``):
+score = exp(-d² / 2σ²) over the group's z-scored features (a z-score is the
+value minus the population mean, over the population standard deviation).
+The reliability weights follow how fast each measure stabilizes: framing by
+about 1,500 pitches received, blocking by about 50 chances, pop time by about
+20 steal attempts against, the caught-stealing rate by 40 or more attempts.
 
-  EB_N_PRIOR is set to 15 (same as fielder engine) because defensive metrics
-  require more sample than offensive ones to stabilize, as established in
-  the ML Engineer spec.
+Before scoring, each profile shrinks toward its season's league-average row
+by empirical-Bayes (EB) shrinkage: the catcher keeps the share
+α = n / (n + 15) of his own value, where n is his count of called pitches.
+The composite is then multiplied by the square root of the lower α of the
+pair.
 
-  Catchers are NOT partitioned by throws-hand.  All catchers are compared
-  across the full population.  The framing and blocking dimensions are
-  purely skill-based, not handedness-dependent.
-
-Dependencies
-------------
-  pip install duckdb numpy
+The engine compares every catcher with every other; it does not split
+catchers by throwing hand. Framing and blocking do not depend on the hand.
 
 Usage
 -----
   engine = CatcherSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
   engine.build(seasons=[2022, 2023, 2024, 2025])
-  results = engine.query(catcher_id=572816, season=2025)
   results = engine.query(catcher_id=572816, season=2025, n=20)
 """
 
@@ -81,10 +67,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from db.introspect import duck_columns
+from similarity.engines.rbf_kernel import WeightedRBFSimilarity
 from similarity.similarity_diagnostics import run_generic_diagnostics
 
 if TYPE_CHECKING:
-    from similarity.similarity_calibration import CalibrationReport
+    from similarity.calibration.report import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -99,97 +86,95 @@ log = logging.getLogger("catcher_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Features and weights
 # ============================================================================
 
-# --- Framing features ---
-# Statcast strike rate vs. expected is the primary framing signal.
-# runs_saved_framing adds magnitude (elite framers have high strike_vs_exp
-# AND high volume, giving large runs saved).
+# --- Framing ---
+# The called strikes above expectation lead. The framing runs add the size of
+# the effect: an elite framer has a high rate AND a large volume.
 FRAMING_FEATURES = [
     # feature_name,                   reliability_weight
-    ("strike_rate_vs_expected", 0.900),  # called strike rate - xCSR; strongest signal
-    ("runs_saved_framing", 0.600),  # runs above average; volume-adjusted
-    ("shadow_zone_strike_rate", 0.700),  # border-pitch framing; most discriminating zone
-    ("heart_zone_strike_rate", 0.400),  # heart zone: everyone frames these (less signal)
+    ("strike_rate_vs_expected", 0.900),  # called strikes above the model, per called pitch
+    ("runs_saved_framing", 0.600),  # the framing runs
+    ("shadow_zone_strike_rate", 0.700),  # the zone's border: the most telling area
+    ("heart_zone_strike_rate", 0.400),  # the heart: every catcher gets these (less signal)
 ]
 
-# --- Blocking features ---
+# --- Blocking ---
+# PB is a passed ball, WP a wild pitch. A block above average is one expected
+# PB or WP that did not happen.
 BLOCKING_FEATURES = [
-    ("block_success_rate", 0.700),  # blocked / total block opps
-    ("passed_ball_rate_per_9", 0.600),  # PB per 9 innings caught
-    ("wild_pitch_prevention_rate", 0.500),  # WPs saved vs. expected
+    ("block_success_rate", 0.700),  # blocks above average per expected PB + WP
+    ("passed_ball_rate_per_9", 0.600),  # PB + WP per called pitch (not per 9 innings)
+    ("wild_pitch_prevention_rate", 0.500),  # blocks above average on bounced pitches; same divisor
 ]
 
-# --- Throwing — Execution features (mechanics of the throw itself) ---
-# These four features stay together as the v2 "execution" sub-score
-# (field name `throwing_score` retained per SIM-072 acceptance criteria).
+# --- Throwing execution: the throw itself ---
+# The result field of this sub-score is ``throwing_score``. Exchange time is
+# not a feature: the feed does not separate it from pop time.
 THROWING_FEATURES = [
-    ("pop_time_avg", 0.900),  # avg seconds release → glove at 2B; most stable
-    ("cs_rate", 0.600),  # caught stealing rate; conditional on attempts
-    ("arm_strength_mph", 0.800),  # Statcast throw velocity; very stable (physical)
-    # SIM-408: exchange_time_avg dropped — not separable from pop_time in the feed.
+    ("pop_time_avg", 0.900),  # seconds from the catch to the glove at second; the most stable
+    ("cs_rate", 0.600),  # caught-stealing rate; rests on the attempts
+    ("arm_strength_mph", 0.800),  # throw speed; very stable (physical)
 ]
 
-# --- Throwing — Deterrence features (do runners even try?) ---
-# Single-feature sub-score (acceptable for v1 per SIM-072 AC #3).  The
-# reliability weight is 1.0 because there is no other feature in the
-# group to balance against.  Magnitude calibration is handled by
-# RBF_SIGMA_DETERRENCE below.
+# --- Deterrence: do runners even try? ---
+# One feature, so its reliability weight normalizes to 1.0. The bandwidth
+# RBF_SIGMA_DETERRENCE sets the scale.
 DETERRENCE_FEATURES = [
-    ("steal_attempt_rate_against", 1.000),  # PA-level steal-attempt rate (SIM-073)
+    ("steal_attempt_rate_against", 1.000),  # attempts per PA with a runner on first or second
 ]
 
 # --- Sub-score weights ---
-# SIM-408: the Offense sub-score (the catcher's own batting — k_rate / walk_rate
-# / avg_exit_velo / hard_hit_rate) was TRIMmed; a defensive-similarity engine
-# shouldn't blend in hitting. The original SIM-072 v2 split (Framing 45 /
-# Blocking 20 / Execution 12 / Deterrence 8 / Offense 15) renormalizes over the
-# 4 surviving defensive sub-scores (÷0.85).
+# The ratio 45 : 20 : 12 : 8, divided by 0.85 so the four sum to one.
 WEIGHT_FRAMING = 0.45 / 0.85  # ≈ 0.5294
 WEIGHT_BLOCKING = 0.20 / 0.85  # ≈ 0.2353
-WEIGHT_THROWING = 0.12 / 0.85  # ≈ 0.1412 (execution mechanics)
-WEIGHT_DETERRENCE = 0.08 / 0.85  # ≈ 0.0941 (runners' willingness to challenge)
+WEIGHT_THROWING = 0.12 / 0.85  # ≈ 0.1412 (the throw itself)
+WEIGHT_DETERRENCE = 0.08 / 0.85  # ≈ 0.0941 (how often runners try)
 _TOTAL = WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# RBF bandwidth parameters
+# The kernel bandwidths σ (gamma = 1 / (2σ²)).
 RBF_SIGMA_FRAMING = 0.9200
 RBF_SIGMA_BLOCKING = 1.0500
 RBF_SIGMA_THROWING = 0.9800
-RBF_SIGMA_DETERRENCE = 1.0000  # 1σ ≈ ~1 SD of standardized steal_attempt_rate_against
+RBF_SIGMA_DETERRENCE = 1.0000  # one standard deviation in z-score units
 
-# EB_N_PRIOR = 15: defensive metrics stabilize more slowly than offensive ones.
-# This is the established value for fielder/catcher engines per the ML Engineer spec.
+# The EB prior strength: at EB_N_PRIOR called pitches, α = 0.5. The value is
+# the fielder engine's prior. Over called pitches it shrinks little: α is
+# already 0.95 at 300.
 EB_N_PRIOR = 15
 
-# Minimum pitches received for inclusion
+# The engine does not read this constant. The loader keeps the rows the table
+# does not flag below_minimum_sample; the computor flags a catcher who faced
+# fewer than 10 steal attempts.
 MIN_PITCHES_RECEIVED = 300
 
 
 # ============================================================================
-# Data Structures
+# Data structures
 # ============================================================================
 
 
 @dataclass(slots=True)
 class CatcherProfile:
-    """Complete catcher-season profile for similarity scoring."""
+    """One catcher-season's defensive profile."""
 
     catcher_id: int
     season: int
-    sample_pitches_received: int
-    sample_block_opps: int
+    sample_pitches_received: int  # the table's count of called pitches
+    sample_block_opps: int  # the loader fills it with the same count
     sample_steal_attempts_against: int
 
-    # Feature vectors (raw — normalized at query time)
+    # The feature vectors: raw at load, shrunk by ``build``, z-scored when scored.
     framing_vec: NDArray[np.float64]  # shape (len(FRAMING_FEATURES),)
     blocking_vec: NDArray[np.float64]  # shape (len(BLOCKING_FEATURES),)
     throwing_vec: NDArray[np.float64]  # shape (len(THROWING_FEATURES),)
-    # SIM-072 v2: deterrence sub-score (single-feature for v1)
+    # None when the table's deterrence rate is NULL, until ``_apply_shrinkage``
+    # fills it from the league row.
     deterrence_vec: NDArray[np.float64] | None = None  # shape (len(DETERRENCE_FEATURES),)
 
-    # Empirical Bayes — gated on pitches received (defensive volume)
+    # The EB sample confidence α, over the called pitches.
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
@@ -203,42 +188,24 @@ class SimilarityResult:
     score: float
     framing_score: float
     blocking_score: float
-    throwing_score: float  # execution mechanics
-    deterrence_score: float  # runners' willingness to challenge
+    throwing_score: float  # the throw itself
+    deterrence_score: float  # how often runners try
     sample_pitches_received: int
 
 
-# Backward-compat alias: SIM-072 spec references CatcherSimilarityResult.
+# Another name for SimilarityResult; the tests import it.
 CatcherSimilarityResult = SimilarityResult
 
 
 # ============================================================================
-# WeightedRBFSimilarity, EmpiricalBayesShrinkage, FeatureNormalizer
-# (Same structure as other RBF engines — reproduced for module self-containment)
+# Empirical-Bayes shrinkage and feature normalization
 # ============================================================================
 
 
-class WeightedRBFSimilarity:
-    def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
-        self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma**2)
-        total = reliability_weights.sum()
-        self.weights = (
-            reliability_weights / total
-            if total > 0
-            else (np.ones_like(reliability_weights) / len(reliability_weights))
-        )
-
-    def score(self, x: NDArray, y: NDArray) -> float:
-        diff = np.nan_to_num(x - y, nan=0.0)
-        return float(np.exp(-self.gamma * np.dot(self.weights * diff, diff)))
-
-    def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
-        diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff**2, axis=1))
-
-
 class EmpiricalBayesShrinkage:
+    """EB shrinkage toward the league mean: the catcher keeps the share
+    α = n / (n + n_prior) of his own value."""
+
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
@@ -246,19 +213,24 @@ class EmpiricalBayesShrinkage:
         return n_samples / (n_samples + self.n_prior)
 
     def shrink(self, raw: NDArray, avg: NDArray, n: int) -> NDArray:
+        """Pull ``raw`` toward ``avg`` by ``alpha(n)``. A NaN raw value
+        becomes the league mean."""
         a = self.alpha(n)
         return a * np.where(np.isnan(raw), avg, raw) + (1.0 - a) * avg
 
 
 @dataclass(slots=True)
 class FeatureNormalizer:
+    """The z-score of each feature, fit on the population of catcher profiles.
+    A NaN z-score reads as 0, the population mean."""
+
     framing_mean: NDArray | None = None
     framing_std: NDArray | None = None
     blocking_mean: NDArray | None = None
     blocking_std: NDArray | None = None
     throwing_mean: NDArray | None = None
     throwing_std: NDArray | None = None
-    deterrence_mean: NDArray | None = None  # SIM-072
+    deterrence_mean: NDArray | None = None
     deterrence_std: NDArray | None = None
 
     def fit(self, profiles: list[CatcherProfile]) -> None:
@@ -276,8 +248,8 @@ class FeatureNormalizer:
         self.blocking_mean, self.blocking_std = _fit([p.blocking_vec for p in profiles])
         self.throwing_mean, self.throwing_std = _fit([p.throwing_vec for p in profiles])
 
-        # SIM-072: deterrence may be missing on legacy profiles loaded from
-        # pre-SIM-073 builds.  Fit only when at least one profile carries it.
+        # A deterrence vector can be None (see ``_apply_shrinkage``). The fit
+        # uses the profiles that carry one, and runs only when one does.
         det_vecs = [p.deterrence_vec for p in profiles if p.deterrence_vec is not None]
         if det_vecs:
             self.deterrence_mean, self.deterrence_std = _fit(det_vecs)
@@ -301,18 +273,21 @@ class FeatureNormalizer:
 
 
 # ============================================================================
-# Scoring Partition
+# Scoring partition
 # ============================================================================
 
 
 class CatcherPartition:
+    """Every catcher profile, with its z-scored feature matrices for scoring a
+    query against all of them at once."""
+
     def __init__(self) -> None:
         self.profiles: list[CatcherProfile] = []
         self.keys: list[tuple[int, int]] = []
         self._framing_mat: NDArray | None = None
         self._blocking_mat: NDArray | None = None
         self._throwing_mat: NDArray | None = None
-        self._deterrence_mat: NDArray | None = None  # SIM-072
+        self._deterrence_mat: NDArray | None = None
         self._eb_alphas: NDArray | None = None
 
     @staticmethod
@@ -327,9 +302,8 @@ class CatcherPartition:
         self._framing_mat = np.array([norm.normalize_framing(p.framing_vec) for p in profiles])
         self._blocking_mat = np.array([norm.normalize_blocking(p.blocking_vec) for p in profiles])
         self._throwing_mat = np.array([norm.normalize_throwing(p.throwing_vec) for p in profiles])
-        # SIM-072 deterrence matrix.  Profiles missing the signal contribute a
-        # zero-vector in standardized space (i.e. league average) so they
-        # neither help nor hurt their matches.
+        # A profile with no deterrence vector sits at 0 in z-score units: the
+        # population mean.
         det_dim = len(DETERRENCE_FEATURES)
         self._deterrence_mat = np.array(
             [
@@ -400,16 +374,15 @@ class CatcherPartition:
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class CatcherSimilarityEngine:
-    """
-    Catcher-to-Catcher Similarity Engine (Step 2.6).
+    """The catcher engine.
 
-    Scores computed exhaustively against all catcher-season profiles
-    with sufficient pitches-received sample.
+    A query scores against every loaded catcher-season. ``build`` loads the
+    profiles the table does not flag below its minimum sample.
 
     Usage:
         engine = CatcherSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -430,9 +403,8 @@ class CatcherSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = CatcherPartition()
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0028 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff (asof_date) every loaded profile declared. None when the
+        # table has no asof_date column or every row's value is NULL.
         self._asof_date = None
 
         self._framing_rbf = WeightedRBFSimilarity(
@@ -449,11 +421,11 @@ class CatcherSimilarityEngine:
         )
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the four defensive RBF scorers from a fitted report.
+        """Rebuild the four kernels from a fitted report.
 
-        A sigma field left at its 0.0 default keeps the engine's current value, so
-        a partial report degrades gracefully. Reliability weights for this engine
-        stay the stabilization-research priors (the report fits only the sigmas).
+        A sigma left at its 0.0 default keeps the engine's current sigma. The
+        reliability weights stay the module's stabilization priors: the report
+        fits only the sigmas.
         """
 
         def _sig(field: str, current: float) -> float:
@@ -486,7 +458,7 @@ class CatcherSimilarityEngine:
         )
 
     def build(self, seasons: list[int] | None = None) -> None:
-        """Load all catcher profiles, apply shrinkage, build scoring matrices."""
+        """Load the catcher profiles, shrink them and build the scoring matrices."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
@@ -532,16 +504,14 @@ class CatcherSimilarityEngine:
     def _load_profiles(self, conn, seasons):
         sf = f"AND csm.season IN ({', '.join(str(s) for s in seasons)})" if seasons else ""
 
-        # SIM-537: graceful-optional column — a database that has not run
-        # migration 0028 yet still builds; asof_date comes back NULL.
+        # A table without the asof_date column (a database before DuckDB
+        # migration 0028) still builds: the cutoff reads NULL on every row.
         _present = duck_columns(conn, "derived", "catcher_season_metrics")
         _asof_col = "csm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
-        # SIM-408: the engine's rate features are DERIVED here from the counts the
-        # computor produces (catcher_season_metrics), except shadow/heart zone
-        # strike rates which the framing pass now emits directly. Offense + the
-        # exchange-time execution feature were TRIMmed (offense doesn't belong in
-        # a defensive engine; exchange_time isn't separable from pop_time).
+        # The query derives the strike rate above expectation and the three
+        # blocking rates from the table's counts. It reads every other feature
+        # as stored.
         rows = conn.execute(f"""
             SELECT
                 csm.player_id                                                 AS catcher_id,
@@ -577,7 +547,7 @@ class CatcherSimilarityEngine:
 
         log.info("Loading %d catcher profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff.
         asof_values: set = set()
 
         for row in rows:
@@ -603,12 +573,13 @@ class CatcherSimilarityEngine:
             ) = row
             asof_values.add(asof_val)
 
+            # NULL reads as 0.0.
             def _v(*vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
 
-            # SIM-072: deterrence vector is None when the underlying column is
-            # NULL (sub-100-PA min-sample guard from SIM-073) so the engine
-            # falls back to league-average behavior in standardized space.
+            # The deterrence vector is None when the rate is NULL: the computor
+            # writes NULL below 100 plate appearances with a runner on first
+            # or second. ``_apply_shrinkage`` then fills it from the league row.
             deterrence_vec = (
                 _v(steal_attempt_rate_against) if steal_attempt_rate_against is not None else None
             )
@@ -627,7 +598,7 @@ class CatcherSimilarityEngine:
                 below_minimum=bool(below_min),
             )
 
-        # SIM-537: refuse a mixed set.
+        # Refuse profiles built at two cutoffs, or one stamped and one not.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "catcher profiles were built at different cutoffs "
@@ -639,6 +610,8 @@ class CatcherSimilarityEngine:
             log.info("Catcher profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
+        """Pull every profile toward its season's league-average row on the
+        catcher's called pitches. A season with no league row stays raw."""
         for p in self._profiles.values():
             s = p.season
             for group, attr in [
@@ -651,9 +624,7 @@ class CatcherSimilarityEngine:
                 if avg is None:
                     continue
                 current = getattr(p, attr)
-                # SIM-072: deterrence may be missing when the column was NULL
-                # (sub-100-PA sample).  Fall back to league average — no
-                # shrinkage math needed since `current` would be undefined.
+                # A missing deterrence vector takes the league row's value.
                 if current is None:
                     setattr(p, attr, avg.copy())
                     continue
@@ -673,7 +644,7 @@ class CatcherSimilarityEngine:
         season: int,
         n: int | None = None,
     ) -> list[SimilarityResult]:
-        """Score query catcher against ALL catcher profiles."""
+        """Score the query catcher against every catcher profile."""
         profile = self._profiles.get((catcher_id, season))
         if profile is None:
             log.warning("Catcher %d season %d not found.", catcher_id, season)
@@ -695,6 +666,7 @@ class CatcherSimilarityEngine:
         catcher_a: tuple[int, int],
         catcher_b: tuple[int, int],
     ) -> SimilarityResult | None:
+        """The score of catcher-season ``catcher_b`` against ``catcher_a``."""
         pa = self._profiles.get(catcher_a)
         pb = self._profiles.get(catcher_b)
         if pa is None or pb is None:
@@ -711,9 +683,8 @@ class CatcherSimilarityEngine:
             norm.normalize_throwing(pa.throwing_vec), norm.normalize_throwing(pb.throwing_vec)
         )
 
-        # SIM-072 deterrence sub-score.  Profiles missing the signal contribute
-        # the league-average vector (zero in standardized space), so the pair
-        # scores as deterrence-similar without injecting noise.
+        # A profile with no deterrence vector sits at 0 in z-score units: the
+        # population mean.
         det_dim = len(DETERRENCE_FEATURES)
         a_det = (
             norm.normalize_deterrence(pa.deterrence_vec)
@@ -755,31 +726,11 @@ class CatcherSimilarityEngine:
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff every loaded profile declared, or ``None``."""
         return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())
-
-
-# ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: CatcherSimilarityEngine,
-    catcher_ids: list[tuple[int, int]],
-) -> NDArray[np.float64]:
-    n = len(catcher_ids)
-    matrix = np.eye(n, dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(catcher_ids[i], catcher_ids[j])
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-    return matrix
 
 
 # ============================================================================

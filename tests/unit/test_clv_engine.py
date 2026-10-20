@@ -1,24 +1,27 @@
 """
-test_clv_engine.py
-======================
-Unit tests for SIM-339 -- the **CLV / edge engine** :mod:`betting.clv_engine`
-(Phase 4, Sprint 4).
+The closing-line-value and edge engine, :mod:`betting.clv_engine`.
 
-These tests build SYNTHETIC sim outputs (a hand-made prop PMF, a hand-made
-``WinProbability``, a hand-made ``GameSimSummary``) and INJECT American odds (no
-live provider, no DB, no RNG), then assert the CLV framework's contract:
+The closing line value (CLV) is how far a bet's price beat the market's final
+price. The edge is the simulator's probability minus the market's no-vig
+probability. The EV (expected value) is the profit per unit staked at the
+offered price. To de-vig is to remove the book's margin from a market's prices.
 
-  * implied-probability math on known American odds (-110 -> 0.5238, +150 -> 0.40,
-    +100 -> 0.50) and its inverse (prob -> fair American odds);
-  * American <-> decimal round-trips;
-  * two-way de-vig sums to exactly 1.0 and REDUCES both sides; multi-way de-vig
-    normalises N outcomes to 1.0;
-  * edge / EV signs: a sim prob ABOVE the no-vig prob => positive edge AND positive
-    EV at the offered price; below => negative;
-  * CLV is positive when the entry line beats the close, negative otherwise, zero
-    when entry == close;
-  * the report builders consume SIM-329 prop PMFs, SIM-330 win-prob, and SIM-327
-    raw total arrays.
+The tests build SYNTHETIC simulator outputs by hand (a prop PMF, that is a
+probability mass function over a stat's values; a ``WinProbability``; a
+``GameSimSummary``) and pass American odds in directly: no live provider, no
+database, no random draw. They check:
+
+  * the implied probability of known American odds (-110 -> 0.5238,
+    +150 -> 0.40, +100 -> 0.50) and its inverse, the fair American odds;
+  * the round trip between American and decimal odds;
+  * a two-way de-vig sums to exactly 1.0 and LOWERS both sides; a multi-way
+    de-vig scales N outcomes to a sum of 1.0;
+  * the signs: a simulator probability ABOVE the no-vig probability gives a
+    positive edge; the EV sign reads the offered price, vig included;
+  * the CLV is positive when the entry price beats the close, negative when it
+    does not, and zero when entry and close are equal;
+  * the report builders read the prop PMFs, the win probability and the raw
+    total-score arrays.
 """
 
 from __future__ import annotations
@@ -56,7 +59,7 @@ from simulation.win_probability import TieHandling, WinProbability
 
 
 def test_implied_prob_known_american_odds():
-    # -110 -> 0.5238...  (favourite juice)
+    # -110 -> 0.5238...  (the standard price with the vig)
     assert implied_prob_from_american(-110) == pytest.approx(0.5238095238, abs=1e-9)
     # +150 -> 0.40       (underdog)
     assert implied_prob_from_american(+150) == pytest.approx(0.40, abs=1e-12)
@@ -120,7 +123,7 @@ def test_two_way_devig_sums_to_one_and_reduces_both_sides():
     # Symmetric market -> 0.5 each
     assert p_over == pytest.approx(0.5, abs=1e-12)
     assert p_under == pytest.approx(0.5, abs=1e-12)
-    # Each fair prob is REDUCED relative to its raw implied prob
+    # Each fair prob is LOWER than its raw implied prob
     assert p_over < q_over
     assert p_under < q_under
 
@@ -190,9 +193,10 @@ def test_ev_sign_at_offered_price():
 
 
 def test_edge_and_ev_agree_in_sign_vs_fair():
-    # If sim prob beats the FAIR (no-vig) prob, edge > 0.  EV at the OFFERED price
-    # can still be negative because the offered price carries vig -- this documents
-    # that edge (vs fair) and EV (vs offered) are distinct and intentionally so.
+    # A sim prob above the FAIR (no-vig) prob gives edge > 0. The EV at the OFFERED
+    # price can still be negative, because the offered price carries the vig. The
+    # edge (against the fair price) and the EV (against the offered price) differ
+    # on purpose.
     p_over, _ = devig_two_way(-110, -110)  # fair 0.50
     sim = 0.52
     assert edge(sim, p_over) > 0.0  # beats the no-vig market
@@ -261,12 +265,12 @@ def test_clv_from_prob_rejects_degenerate():
 
 
 # ===========================================================================
-# Report builders (consume SIM-329 / SIM-330 / SIM-327)
+# Report builders (they read the prop PMFs, the win probability, the totals)
 # ===========================================================================
 
 
 def _win_prob(p_home: float) -> WinProbability:
-    """A synthetic SIM-330 WinProbability with an injected home win prob."""
+    """A synthetic WinProbability with a given home win probability."""
     return WinProbability(
         home_win_prob=p_home,
         away_win_prob=1.0 - p_home,
@@ -282,7 +286,7 @@ def _win_prob(p_home: float) -> WinProbability:
 
 
 def _prop_dist(prop: str, support, probs) -> PropDistribution:
-    """A synthetic SIM-329 PropDistribution from an explicit PMF."""
+    """A synthetic PropDistribution from an explicit PMF."""
     support = np.asarray(support, dtype=np.int64)
     probs = np.asarray(probs, dtype=np.float64)
     mean = float((support * probs).sum())
@@ -299,11 +303,11 @@ def _prop_dist(prop: str, support, probs) -> PropDistribution:
 
 
 def _summary_from_totals(totals) -> GameSimSummary:
-    """A synthetic SIM-327 GameSimSummary carrying an injected total_scores array.
+    """A synthetic GameSimSummary that carries the given ``total_scores``.
 
-    We only need ``total_scores`` for the totals pricing, so split each total into a
-    home/away pair and let from_results-style construction be bypassed by building
-    the dataclass directly with the raw arrays."""
+    The totals pricing reads only ``total_scores``. The helper splits each total
+    into a home and an away score and builds the dataclass directly from the raw
+    arrays, with no ``from_results`` call."""
     totals = np.asarray(totals, dtype=np.int64)
     home = totals // 2
     away = totals - home
@@ -332,7 +336,7 @@ def _summary_from_totals(totals) -> GameSimSummary:
 
 def test_moneyline_edge_report_consumes_win_prob():
     wp = _win_prob(0.60)  # sim says home 60%
-    # Market: home -130 (fair ~0.55 after de-vig), away +110.
+    # Market: home -130 (fair ~0.54 after de-vig), away +110.
     market = TwoWayMarket(
         side=MarketSide.HOME,
         entry=OddsQuote(side=-130, other=+110),
@@ -341,7 +345,7 @@ def test_moneyline_edge_report_consumes_win_prob():
     assert rep.sim_prob == pytest.approx(0.60, abs=1e-12)
     fair, _ = devig_two_way(-130, +110)
     assert rep.market_fair_prob == pytest.approx(fair, abs=1e-12)
-    # Sim 0.60 > fair ~0.55 -> positive edge.
+    # Sim 0.60 > fair ~0.54 -> positive edge.
     assert rep.positive_edge is True
     assert rep.edge == pytest.approx(0.60 - fair, abs=1e-12)
     # EV at the offered -130 under p=0.60.
@@ -354,11 +358,11 @@ def test_moneyline_away_side_uses_away_prob():
     wp = _win_prob(0.60)  # away is 0.40
     market = TwoWayMarket(
         side=MarketSide.AWAY,
-        entry=OddsQuote(side=+150, other=-170),  # away dog priced +150 (fair 0.40)
+        entry=OddsQuote(side=+150, other=-170),  # away dog +150 (raw implied 0.40)
     )
     rep = moneyline_edge_report(wp, market, side=MarketSide.AWAY)
     assert rep.sim_prob == pytest.approx(0.40, abs=1e-12)
-    # away fair ~ devig(+150, -170)[0]; sim 0.40 close to it -> small edge
+    # away fair = devig(+150, -170)[0] ~0.39; sim 0.40 is close to it -> small edge
     fair, _ = devig_two_way(+150, -170)
     assert rep.edge == pytest.approx(0.40 - fair, abs=1e-12)
 

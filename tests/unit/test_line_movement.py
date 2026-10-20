@@ -1,22 +1,20 @@
-"""
-test_line_movement.py
-============================
-Unit tests for SIM-368 -- the **CLV / line-movement time-series surface**
-(:mod:`betting.line_movement`, Phase 5, Sprint 5, Wave 2).
+"""The line-movement time series and its CLV (closing line value).
 
-Two paths, mirroring the repo's pure-logic + mockable-DB split:
+The subject is :mod:`betting.line_movement`. The tests take two paths, the
+repo's split of pure logic and a mockable DB:
 
   * **Pure** (:func:`betting.line_movement.line_movement_from_quotes`): a
-    synthetic ORDERED quote sequence (opening -120 -> ... -> closing -150) builds
-    a :class:`LineMovement` whose running implied-prob series, per-step + net
-    deltas, steam ``direction`` and entry-vs-close :class:`CLV` are hand-checked
-    against :mod:`betting.clv_engine`; a SINGLE quote yields no movement; an
-    OUT-OF-ORDER input is sorted by ``fetched_at`` before deriving.
-  * **DB** (:func:`betting.line_movement.fetch_line_movement`): a fake asyncpg
-    connection (canned ``raw.game_odds`` rows, ``_StubConn`` mirroring
-    test_sim_store.py) is read, grouped per (side, book), and built into the
-    series; the expected query (``raw.game_odds`` ordered by ``fetched_at``) is
-    asserted.
+    synthetic ORDERED quote sequence (opening -120 -> ... -> closing -150)
+    builds a :class:`LineMovement`. The tests hand-check its running
+    implied-probability series, its per-step and net deltas, its steam
+    ``direction`` (which way the price moved) and its entry-vs-close
+    :class:`CLV` against :mod:`betting.clv_engine`. A SINGLE quote yields no
+    movement; an OUT-OF-ORDER input is sorted by ``fetched_at`` first.
+  * **DB** (:func:`betting.line_movement.fetch_line_movement`): the function
+    reads a fake asyncpg connection (canned ``raw.game_odds`` rows; the
+    ``_StubConn`` follows test_sim_store.py), groups the rows per (side,
+    book) and builds each series. The tests check the query
+    (``raw.game_odds`` ordered by ``fetched_at``).
 
 Owned by Betting / Markets Analyst.
 """

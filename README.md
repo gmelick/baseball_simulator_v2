@@ -141,7 +141,7 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 | 10 | **Pitch → Pitch** | FAISS flat index | Pitch type, velocity, pfx_x, IVB, release position, spin axis, extension, plate location | ✅ Complete (SIM-041) |
 | 11 | **Batted Ball → Batted Ball** | FAISS flat index | Exit velocity, launch angle, spray angle, batted ball type, venue | ✅ Complete (SIM-042) |
 
-**`SimilarityEngineRegistry`** (`similarity/registry.py`) — instantiates and caches all 11 engines with unified query interface. *(✅ Shipped, SIM-048.)*
+**`ENGINE_REGISTRY`** (`api/state.py`) — maps each engine's stable name to its module and class; `build_all_engines()` builds all 11 at boot.
 
 **Key modeling decisions:**
 - GMM covariances stored in **standardized space** with saved `feature_means` / `feature_stds` — prevents dominant features (spin rate) from corrupting arsenal distances
@@ -358,10 +358,10 @@ baseball_simulator/
 │   ├── live/                 # MLB Stats API live ingestion
 │   └── batch/                # Nightly profile + defensive metrics computation
 ├── similarity/
-│   ├── registry.py           # SimilarityEngineRegistry [✅ SIM-048]
 │   ├── engines/              # 11 engines (pitcher, batter, fielder, situation, ...)
 │   ├── backtesting/          # recency walk-forward + backtester (ECE/Brier/log-loss) [✅ SIM-076/220]
-│   └── similarity_calibration.py  # sigma / gamma / EB calibration [✅]
+│   ├── calibration/          # the per-engine calibration fits + CalibrationReport
+│   └── similarity_calibration.py  # SimilarityCalibrator: the sigma / gamma / EB fit [✅]
 ├── simulation/               # [✅ Phase 4 — the simulation loop lives HERE, not simulator/]
 │   ├── sim_loop.py           # StateMachine + simulate_game() (8-step loop + manager hooks)
 │   ├── game_state.py         # GameState / PlayResult / ManagerContext dataclasses

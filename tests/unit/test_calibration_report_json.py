@@ -1,31 +1,29 @@
-"""
-test_calibration_report_json.py
-=========================
-SIM-361 (Phase 5, Sprint 3) — CalibrationReport JSON persistence, the
-win-probability CalibrationMap-from-report factory, and build_all_engines.
+"""The calibration report's JSON form, the win-probability map and the engine build.
 
-Covers the three deliverables of the ticket, all without a live DuckDB:
+The subjects are ``CalibrationReport`` (``similarity/calibration/report.py``),
+``CalibrationMap.from_report`` and ``api.state.build_all_engines``. The tests
+check three things, all without a live DuckDB:
 
-  1. **CalibrationReport.to_json/from_json round-trip is lossless.** A
-     representative report (scalars + numpy reliability-weight arrays + sub-score
-     arrays + a fitted reliability curve + metadata) survives a JSON round-trip
-     equal to the original (via ``report.equals(...)``, which handles the NDArray
-     fields ``@dataclass.__eq__`` cannot).
+  1. **The CalibrationReport.to_json/from_json round-trip is lossless.** A
+     representative report (scalars, NumPy reliability-weight arrays,
+     sub-score arrays, a fitted reliability curve and metadata) survives a
+     JSON round-trip equal to the original. ``report.equals(...)`` compares
+     them, since ``@dataclass.__eq__`` cannot compare the NDArray fields.
 
-  2. **CalibrationMap.from_report.** A report carrying a fitted reliability curve
-     yields a monotone ``CalibrationMap`` whose ``apply(p)`` differs from
-     identity at a test point; a report with no curve yields the
-     ``IDENTITY_CALIBRATION`` singleton. Also exercises the api.state
-     ``load_calibration_report`` / ``load_calibration_map`` loaders against a
-     written JSON file and a missing path.
+  2. **CalibrationMap.from_report.** A report with a fitted reliability curve
+     yields a monotone ``CalibrationMap`` whose ``apply(p)`` differs from the
+     identity at a test point. A report with no curve yields the
+     ``IDENTITY_CALIBRATION`` singleton. The tests also run the api.state
+     loaders ``load_calibration_report`` / ``load_calibration_map`` on a
+     written JSON file and on a missing path.
 
   3. **build_all_engines.** With the engine loader monkeypatched to fakes (no
-     DuckDB, no faiss), it returns all 11 keyed entries; a fake engine that
-     raises in ``build()`` (or in construction) is logged + skipped without
-     failing the others.
+     DuckDB, no FAISS), it returns all 11 keyed entries. An engine whose
+     ``build()`` raises, or whose loader raises, is skipped, and the others
+     still build.
 
-These tests use only the public persistence/factory/builder API plus injectable
-seams (``registry`` / ``loader``) — no live DuckDB, Postgres, or Redis.
+The tests use only the public persistence, factory and builder API plus its
+injectable seams (``registry`` / ``loader``): no live DuckDB, Postgres or Redis.
 """
 
 from __future__ import annotations
@@ -38,7 +36,7 @@ from api.state import (
     load_calibration_map,
     load_calibration_report,
 )
-from similarity.similarity_calibration import CalibrationReport
+from similarity.calibration.report import CalibrationReport
 from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
 
 # ---------------------------------------------------------------------------
@@ -272,7 +270,7 @@ class TestBuildAllEngines:
         # All 11 registry entries built.
         assert set(engines.keys()) == set(ENGINE_REGISTRY.keys())
         assert len(engines) == 11
-        # Every one got the duckdb_path and was build()-ed.
+        # Every one got the duckdb_path and ran build().
         for _name, eng in engines.items():
             assert eng.duckdb_path == "/fake/db.duckdb"
             assert eng.built is True

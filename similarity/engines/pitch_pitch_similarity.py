@@ -1,62 +1,44 @@
-"""
-pitch_pitch_similarity.py
-=========================
-Step 2.10 — Pitch-to-Pitch Similarity (FAISS)
-MLB Baseball Simulation Platform
+"""The pitch-to-pitch similarity engine: the nearest real pitches to a pitch.
 
-Indexes every pitch in `sim.pitch_pool` into a FAISS index and supports
-fast K-nearest-neighbor lookup.  Each query returns the `pitch_id` plus
-sufficient metadata to look up the pitch's *outcome* in the play pool —
-this is the foundational play-pool sampler for Phase 4 pitch-outcome
-determination (Step 3a / 3b).
+The engine indexes every pitch of ``sim.pitch_pool`` in a FAISS index (a
+library for fast nearest-neighbour search over dense vectors). A query takes
+one pitch vector and returns its K nearest pitches, each with its
+``pitch_id`` and the class of its result. The engine compares pitches, not
+players.
 
-Why FAISS (and not KDTree like SIM-070)
----------------------------------------
-The pitch pool is much larger than the situation pool — every clean
-pitch from every loaded season, typically 2–3 M rows per season.  KDTree
-query time degrades on high-dimensional dense vectors and the search
-becomes the simulation loop's hot path.  FAISS's L2 / inner-product
-indexes (Flat, IVF, HNSW) all amortize lookup cost across batches and
-support GPU offload if we ever need it.
+The API builds the engine at boot (``api/state.build_all_engines``). No
+simulation path calls it: the simulator draws from the full pool through
+``simulation/full_pool_sampler.py``.
 
-This engine ships with `IndexFlatL2` (exact search) by default — the
-right starting point for correctness.  Performance Engineer (Agent 6,
-SIM-041 collaborator) can swap in `IndexIVFFlat` or `IndexHNSWFlat` once
-the index size + query budget are both measured against real hardware.
+Why FAISS, not a KD-tree. The pitch pool holds every clean pitch of every
+loaded season: hundreds of thousands a season, millions in all. A KD-tree (a
+space-splitting search tree) slows down on dense vectors at this size. FAISS
+searches a whole batch of queries in one call. The default index is
+``IndexFlatL2`` (exact search); ``index_kind="hnsw"`` builds an HNSW index
+instead (a layered graph of near neighbours, an approximate search).
 
-Feature vector
---------------
+The feature vector (10 dimensions)::
+
     [ velo, ivb, hb, spin_rate, spin_axis,
       release_x, release_z, release_ext,
       plate_x, plate_z ]
 
-(10 dims.)  Categorical features (count, outs, runners, zone) are
-intentionally NOT in the FAISS distance — they're filtered at SQL fetch
-time so the FAISS index stays a pure pitch-physics distance.  Mixing
-categorical and continuous features in a single L2 distance distorts
-the metric without proper one-hot encoding.
+The vector holds pitch physics only. The count, the outs, the runners and the
+zone are categories, and one L2 distance over categories and measurements
+together distorts the metric; the engine reads none of them. The engine
+z-scores each feature (the gap from the pool mean, in standard deviations) on
+the loaded pool, then multiplies it by the square root of its weight, so the
+L2 distance weights each feature by its importance. The situation engine uses
+the same pattern.
 
-Z-score normalization is fit on the loaded pool and applied at index
-time and at query time.  Per-feature importance weights scale each
-normalized dimension by sqrt(weight) so L2 distance reflects relative
-feature importance — same pattern as SIM-070 (situation engine).
+The recency boost. With ``recency_boost=True`` and a season list, the build
+adds a second copy of each pitch of the last RECENCY_BOOST_SEASONS seasons.
+The copies tilt the K nearest neighbours toward recent pitches, and the
+distance metric stays the same. The boost is off by default, and the
+API's boot build leaves it off.
 
-Recency weighting
------------------
-Per the ML Engineer "established calibration" rules, the engine
-applies 2× weight to the last 2 seasons of indexed pitches by replicating
-those rows in the index.  This is FAISS's idiomatic way of biasing
-nearest-neighbor results toward recent data — true Bayesian recency
-shrinkage is not available with raw distance metrics.  Replication is
-disabled by default (`recency_boost=False`) so unit tests remain
-deterministic; production builds turn it on.
+Usage::
 
-Dependencies
-------------
-    pip install duckdb numpy faiss-cpu
-
-Usage
------
     engine = PitchPitchSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
     engine.build(seasons=[2022, 2023, 2024])
 
@@ -76,10 +58,9 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
-# FAISS is an optional runtime dependency (in requirements.txt; the unit
-# tests for this engine deliberately avoid importing the engine module
-# without a fixture-installed FAISS).  We re-export the import error so
-# callers can detect it cleanly without crashing on import.
+# requirements.txt installs faiss-cpu, but the import stays optional: the module
+# imports without FAISS, and the engine's constructor raises with the original
+# import error.
 try:  # pragma: no cover — import-time concern
     import faiss
 
@@ -102,25 +83,24 @@ log = logging.getLogger("pitch_pitch_similarity")
 
 
 # ============================================================================
-# Config — Pitch Feature Definitions & Weights
+# Config: the pitch features and their weights
 # ============================================================================
 
-# Feature names + relative importance weights.  Weights are applied via
-# sqrt-scale before FAISS indexing so L2 distance reflects feature priority.
-# Calibration of these weights is the Baseball Analyst's deliverable; values
-# here are reasonable starting points consistent with the GMM W₂ feature set
-# used in SIM-001 (pitcher engine).
+# The features and their importance weights. The build multiplies each z-scored
+# feature by the square root of its weight, so the L2 distance follows the
+# weights. The weights are hand-set starting points, not fitted. The first
+# eight features are the pitcher engine's arsenal dimensions.
 PITCH_FEATURES = [
-    # feature_name,      weight   description
-    ("velo", 1.20),  # release_speed (mph)
-    ("ivb", 1.10),  # induced vertical break (gravity-removed)
+    # (feature_name, weight)
+    ("velo", 1.20),  # release speed (mph)
+    ("ivb", 1.10),  # induced vertical break (gravity removed)
     ("hb", 1.00),  # horizontal break
     ("spin_rate", 0.70),  # rpm
-    ("spin_axis", 0.50),  # degrees, 0–360 (handled w/ wrap-around offset)
+    ("spin_axis", 0.50),  # degrees, 0-360, read as a plain number: 359 and 1 are 358 apart
     ("release_x", 0.60),  # release_pos_x (ft)
     ("release_z", 0.60),  # release_pos_z (ft)
-    ("release_ext", 0.40),  # release_extension (ft)
-    ("plate_x", 0.90),  # location at plate
+    ("release_ext", 0.40),  # release extension (ft)
+    ("plate_x", 0.90),  # the location at the plate
     ("plate_z", 0.90),
 ]
 
@@ -129,13 +109,14 @@ FEATURE_WEIGHTS = np.array([w for _, w in PITCH_FEATURES], dtype=np.float64)
 FEATURE_SCALE = np.sqrt(FEATURE_WEIGHTS)
 FEATURE_DIM = len(PITCH_FEATURES)
 
-# Default K for nearest-neighbor query
+# The default K of a nearest-neighbour query.
 DEFAULT_K = 50
 
-# Minimum indexed pitches for the engine to be considered usable
+# Below this many pitches, the build logs a warning that the index may not be
+# reliable.
 MIN_INDEX_SIZE = 1_000
 
-# How many recent seasons get the recency boost (2× replication)
+# The number of recent seasons that the recency boost copies once.
 RECENCY_BOOST_SEASONS = 2
 
 
@@ -146,7 +127,7 @@ RECENCY_BOOST_SEASONS = 2
 
 @dataclass(frozen=True, slots=True)
 class PitchVector:
-    """Query vector for the pitch-to-pitch FAISS index."""
+    """One pitch, as a query vector for the index."""
 
     velo: float
     ivb: float
@@ -160,6 +141,7 @@ class PitchVector:
     plate_z: float
 
     def to_array(self) -> NDArray[np.float64]:
+        """The ten features as a float array, in PITCH_FEATURES order."""
         return np.array(
             [
                 float(self.velo),
@@ -179,44 +161,54 @@ class PitchVector:
 
 @dataclass(frozen=True, slots=True)
 class NearestPitch:
-    """One entry in the pitch-to-pitch K-nearest-neighbor query output."""
+    """One pitch in a query's K nearest neighbours."""
 
-    pitch_id: int  # FK into sim.pitch_pool
+    pitch_id: int  # the row's key in sim.pitch_pool
     game_pk: int
     season: int
     pitcher_id: int
     batter_id: int
-    distance: float  # L2 distance in normalized + weighted space
-    outcome_type: str  # ball / called_strike / swinging_strike / foul / in_play
+    distance: float  # the L2 distance in the z-scored, weighted space
+    # The result class: ball, called_strike, swinging_strike, foul, in_play or
+    # hit_by_pitch.
+    outcome_type: str
 
 
 # ============================================================================
-# Feature Normalization
+# The feature normalizer
 # ============================================================================
 
 
 @dataclass(slots=True)
 class PitchNormalizer:
-    """Z-score normalizer for pitch feature vectors."""
+    """The z-score normalizer of the pitch vectors.
+
+    The normalizer z-scores each feature, multiplies it by FEATURE_SCALE and
+    casts the result to float32 for FAISS. A NaN feature becomes 0 (the pool
+    mean).
+    """
 
     mean: NDArray | None = None
     std: NDArray | None = None
 
     def fit(self, matrix: NDArray[np.float64]) -> None:
-        # NaN-aware so missing features (e.g. spin_axis on bunt-foul rows)
-        # don't poison the mean/std.
+        """Fit each feature's mean and standard deviation on the pool."""
+        # NaN-aware, so a missing feature (spin_axis on a bunted foul, for
+        # example) does not spoil the mean or the standard deviation.
         self.mean = np.nanmean(matrix, axis=0)
         self.std = np.nanstd(matrix, axis=0)
-        # Guard zero-variance features (constant column in the pool).
+        # A constant column gets a standard deviation of 1.
         self.std[self.std == 0] = 1.0
 
     def normalize(self, vec: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Scale one vector. Before ``fit``, the method only applies the weights."""
         if self.mean is None:
             return (vec * FEATURE_SCALE).astype(np.float32)
         normed = (vec - self.mean) / self.std
         return (np.nan_to_num(normed, nan=0.0) * FEATURE_SCALE).astype(np.float32)
 
     def normalize_batch(self, matrix: NDArray[np.float64]) -> NDArray[np.float32]:
+        """Scale each row of a matrix, as ``normalize`` scales one vector."""
         if self.mean is None:
             return (matrix * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
         normed = (matrix - self.mean[np.newaxis, :]) / self.std[np.newaxis, :]
@@ -224,19 +216,20 @@ class PitchNormalizer:
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class PitchPitchSimilarityEngine:
-    """
-    Pitch-to-Pitch FAISS Engine (Step 2.10).
+    """The pitch-to-pitch engine over a FAISS index.
 
-    Loads `sim.pitch_pool` into memory, fits a normalizer on the pool,
-    standardizes + weights the features, and indexes the result in a
-    FAISS IndexFlatL2.  Query returns K nearest neighbors with metadata.
+    The build loads ``sim.pitch_pool`` into memory, fits the normalizer on the
+    pool, scales the features and indexes them (``IndexFlatL2``, or
+    ``IndexHNSWFlat`` when ``index_kind="hnsw"``). A query returns the K
+    nearest pitches with their metadata.
 
-    Usage:
+    Usage::
+
         engine = PitchPitchSimilarityEngine(duckdb_path="...")
         engine.build(seasons=[2022, 2023, 2024])
         results = engine.query(PitchVector(...), k=50)
@@ -261,7 +254,7 @@ class PitchPitchSimilarityEngine:
         self._index_kind = index_kind
         self._normalizer = PitchNormalizer()
         self._index: faiss.Index | None = None
-        self._index_meta: list[NearestPitch] = []  # parallel to FAISS row order
+        self._index_meta: list[NearestPitch] = []  # one per FAISS row, in row order
         self._index_size = 0
 
     # ------------------------------------------------------------------
@@ -274,7 +267,12 @@ class PitchPitchSimilarityEngine:
         *,
         recency_boost: bool = False,
     ) -> None:
-        """Load the pitch pool, fit the normalizer, build the FAISS index."""
+        """Load the pitch pool, fit the normalizer and build the FAISS index.
+
+        ``recency_boost`` copies the pitches of the last RECENCY_BOOST_SEASONS
+        seasons once; it needs ``seasons``. The normalizer fits after the copies, so
+        the copied pitches count twice in the mean and the standard deviation.
+        """
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
@@ -313,6 +311,8 @@ class PitchPitchSimilarityEngine:
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
     ) -> tuple[NDArray[np.float64], list[NearestPitch]]:
+        """Read the pool's feature matrix and one NearestPitch per row
+        (distance 0.0). A NULL feature reads as NaN."""
         sf = ""
         if seasons:
             sf = f"WHERE season IN ({', '.join(str(s) for s in seasons)})"
@@ -382,9 +382,9 @@ class PitchPitchSimilarityEngine:
         meta: list[NearestPitch],
         seasons: list[int],
     ) -> tuple[NDArray[np.float64], list[NearestPitch]]:
-        """Replicate the most recent N seasons of pitches once so they show
-        up twice in the FAISS index.  This biases nearest-neighbor results
-        toward recent data without changing FAISS's distance metric."""
+        """Copy each pitch of the last RECENCY_BOOST_SEASONS seasons once, so
+        it appears twice in the index. The copies tilt the nearest neighbours
+        toward recent pitches, and the distance metric stays the same."""
         recent_cutoff = max(seasons) - (RECENCY_BOOST_SEASONS - 1)
         recent_mask = np.array(
             [m.season >= recent_cutoff for m in meta],
@@ -397,8 +397,9 @@ class PitchPitchSimilarityEngine:
         return boosted_matrix, boosted_meta
 
     def _build_faiss_index(self, scaled: NDArray[np.float32]) -> faiss.Index:
+        """Build the FAISS index of the kind the engine holds, and add the rows."""
         if self._index_kind == self.INDEX_KIND_HNSW:
-            # 32 neighbors per node is FAISS's default for HNSW.
+            # 32 neighbours per node, FAISS's default for HNSW.
             index = faiss.IndexHNSWFlat(FEATURE_DIM, 32)
         else:
             index = faiss.IndexFlatL2(FEATURE_DIM)
@@ -415,7 +416,8 @@ class PitchPitchSimilarityEngine:
         vector: PitchVector | NDArray[np.float64],
         k: int = DEFAULT_K,
     ) -> list[NearestPitch]:
-        """Return the K nearest pitches to ``vector`` (closest first)."""
+        """The K nearest pitches to ``vector``, closest first. An empty or
+        unbuilt index returns an empty list."""
         if self._index is None or self._index_size == 0:
             return []
 
@@ -433,7 +435,7 @@ class PitchPitchSimilarityEngine:
             if idx < 0:
                 continue
             base = self._index_meta[idx]
-            # FAISS returns squared L2 distance for IndexFlatL2; emit Euclidean.
+            # Both index kinds return the squared L2 distance; report its root.
             results.append(
                 NearestPitch(
                     pitch_id=base.pitch_id,
@@ -452,7 +454,7 @@ class PitchPitchSimilarityEngine:
         vectors: list[PitchVector] | NDArray[np.float64],
         k: int = DEFAULT_K,
     ) -> list[list[NearestPitch]]:
-        """Batched query path — saves FAISS round-trips during simulation."""
+        """The K nearest pitches for each of several vectors, in one FAISS search."""
         if self._index is None or self._index_size == 0:
             return [[] for _ in vectors]
 
@@ -492,10 +494,12 @@ class PitchPitchSimilarityEngine:
 
     @property
     def index_size(self) -> int:
+        """The number of indexed rows, the recency copies included."""
         return self._index_size
 
     @property
     def is_built(self) -> bool:
+        """True when the index holds at least one row."""
         return self._index is not None and self._index_size > 0
 
 
@@ -505,8 +509,7 @@ class PitchPitchSimilarityEngine:
 
 
 def _f(value) -> float:
-    """DuckDB returns Decimals or None for some numeric columns — coerce to
-    a NaN-friendly float once at load time so the matrix stays numeric."""
+    """A DuckDB value as a float: a Decimal converts, and None becomes NaN."""
     if value is None:
         return float("nan")
     return float(value)

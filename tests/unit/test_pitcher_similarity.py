@@ -1,25 +1,22 @@
-"""
-test_pitcher_similarity.py
-===========================
-Unit and integration tests for Step 2.1 — Pitcher-to-Pitcher Similarity Engine.
+"""Tests of the pitcher engine (``similarity/engines/pitcher_similarity.py``)
+and its arsenal cache (``similarity/engines/arsenal_cache.py``).
 
-Tests cover:
-  1. Bures–Wasserstein distance (individual Gaussian components)
-  2. GMM-to-GMM optimal transport distance
-  3. RBF kernel scoring
-  4. Empirical Bayes shrinkage
-  5. Minimum cluster size enforcement
-  6. Feature normalization
-  7. Arsenal distance cache (lazy + batch)
-  8. Full engine integration with synthetic profiles
-  9. Exhaustive scoring (all profiles in partition returned)
-  10. Cross-season same-pitcher comparisons
-  11. Edge cases (missing GMMs, single-component models, self-similarity)
-  12. Cache persistence (save/load round-trip)
+A pitcher's arsenal is a GMM (a Gaussian mixture model, here his pitch mix:
+about one Gaussian per pitch type). Two arsenals compare by W₂, the
+Wasserstein-2 distance between the two mixtures.
 
-Run with:
-    pytest test_pitcher_similarity.py -v
-    python test_pitcher_similarity.py   (standalone)
+The tests cover:
+  1. the Bures–Wasserstein distance between two single Gaussians;
+  2. the arsenal score between two GMMs;
+  3. the RBF kernel (a Gaussian kernel, score = exp(-distance² / 2σ²));
+  4. the empirical-Bayes shrinkage toward the league mean;
+  5. the merge of GMM components below the minimum cluster size;
+  6. the command features' z-scores;
+  7. the arsenal cache: lookups, the batch fill, save and load;
+  8. the whole engine over synthetic profiles: every same-hand profile
+     scored, two seasons of one pitcher, the hand partitions, the score
+     ranges and the cache's reuse across queries;
+  9. the GMM's JSON round trip.
 """
 
 from __future__ import annotations
@@ -30,11 +27,11 @@ from pathlib import Path
 
 import numpy as np
 
+from similarity.engines.arsenal_cache import ArsenalCache
 from similarity.engines.pitcher_similarity import (
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
     MIN_CLUSTER_SIZE,
-    ArsenalCache,
     ArsenalSimilarity,
     EmpiricalBayesShrinkage,
     FeatureNormalizer,
@@ -45,7 +42,6 @@ from similarity.engines.pitcher_similarity import (
     PitcherSimilarityEngine,
     RBFSimilarity,
     SimilarityResult,
-    build_similarity_matrix,
     enforce_min_cluster_size,
     standardize_gmm,
 )
@@ -94,8 +90,9 @@ def _make_profile(
     release: list[float] | None = None,  # noqa: ARG001
     sample_pitches: int = 500,
 ) -> PitcherProfile:
-    # NOTE: result_vec / release_vec were removed from PitcherProfile during
-    # the SIM-148 refactor; older tests still pass them but they are ignored.
+    # The profile carries no results or release vector: the GMM holds the
+    # release point. The helper accepts ``results`` and ``release`` and ignores
+    # them.
     return PitcherProfile(
         pitcher_id=pitcher_id,
         season=season,
@@ -120,9 +117,9 @@ TINY_OUTLIER = _make_component(
     3, 0.02, [72.0, -20.0, 2.0, 3000, 300, -1.0, 5.5, 5.0], var_diag=0.5, n_pitches=15
 )
 
-# Population statistics computed from the reusable components above.
-# Used to standardize GMMs in unit tests so ArsenalSimilarity.score()
-# operates in the same z-scored space as the production engine.
+# The population mean and standard deviation of the components above. The
+# tests standardize a GMM with them, so ArsenalSimilarity.score() works in
+# the same z-scored space as the engine.
 _ALL_TEST_MEANS = np.array([c.mean for c in [POWER_FB, SLIDER, CHANGEUP, TINY_OUTLIER]])
 _ALL_TEST_WEIGHTS = np.array([c.weight for c in [POWER_FB, SLIDER, CHANGEUP, TINY_OUTLIER]])
 _ALL_TEST_WEIGHTS = _ALL_TEST_WEIGHTS / _ALL_TEST_WEIGHTS.sum()
@@ -134,7 +131,7 @@ _POP_STD[_POP_STD == 0] = 1.0
 
 
 def _std_gmm(gmm: GMMModel) -> GMMModel:
-    """Standardize a test GMM using the population of test components."""
+    """Standardize a test GMM over the population of test components."""
     return standardize_gmm(gmm, _POP_MEAN, _POP_STD)
 
 
@@ -181,15 +178,15 @@ class TestBuresWasserstein(unittest.TestCase):
 
 
 # ============================================================================
-# Tests: GMM-to-GMM Optimal Transport
+# Tests: the arsenal score between two GMMs
 # ============================================================================
 
 
 class TestArsenalSimilarity(unittest.TestCase):
-    """Test the full GMM-to-GMM arsenal similarity.
+    """The arsenal score between two GMMs.
 
-    All GMMs are standardized before scoring, matching the production
-    pipeline where _standardize_arsenals() runs during build().
+    Every GMM is standardized before scoring, as ``build()`` does through
+    ``_standardize_arsenals()``.
     """
 
     def test_identical_gmms_perfect_score(self):
@@ -213,8 +210,8 @@ class TestArsenalSimilarity(unittest.TestCase):
         self.assertAlmostEqual(s_ab, s_ba, places=6)
 
     def test_different_component_counts(self):
-        """GMMs with 2 and 3 components that share structure should
-        produce a positive, non-trivial similarity."""
+        """A 2-component and a 3-component GMM that share two pitches score
+        inside (0, 1]."""
         gmm_2 = _std_gmm(_make_gmm([POWER_FB, SLIDER]))
         gmm_3 = _std_gmm(_make_gmm([POWER_FB, SLIDER, CHANGEUP]))
         score = ArsenalSimilarity.score(gmm_2, gmm_3)
@@ -228,9 +225,9 @@ class TestArsenalSimilarity(unittest.TestCase):
         self.assertEqual(score, 0.0)
 
     def test_score_range(self):
-        """Scores should always be in [0, 1], even for random GMMs.
-        Random components are generated in already-standardized space
-        (mean ~0, std ~1) so no additional standardization is needed."""
+        """Every score lies in [0, 1], even for random GMMs. The random
+        components start in z-scores (mean about 0, standard deviation about
+        1), so they need no standardization."""
         rng = np.random.default_rng(42)
         for _ in range(10):
             comps_a = [_make_component(i, 1 / 3, rng.standard_normal(8).tolist()) for i in range(3)]
@@ -361,7 +358,7 @@ class TestArsenalCache(unittest.TestCase):
         self.assertAlmostEqual(cache.get((100, 2024), (200, 2024)), 5.5)
 
     def test_symmetric_keys(self):
-        """Cache should be symmetric: (A, B) and (B, A) return the same value."""
+        """The cache is symmetric: (A, B) and (B, A) return the same value."""
         cache = ArsenalCache()
         cache.put((100, 2024), (200, 2024), 5.5)
         self.assertAlmostEqual(cache.get((200, 2024), (100, 2024)), 5.5)
@@ -376,7 +373,7 @@ class TestArsenalCache(unittest.TestCase):
         dist = cache.get_or_compute((100, 2024), (200, 2024), gmm, gmm)
         self.assertAlmostEqual(dist, 0.0, places=4)
 
-        # Second call should hit cache
+        # The pair is now in the cache.
         cached = cache.get((100, 2024), (200, 2024))
         self.assertIsNotNone(cached)
 
@@ -410,7 +407,7 @@ class TestArsenalCache(unittest.TestCase):
             Path(path).unlink()
 
     def test_precompute_serial(self):
-        """Batch precompute should fill the cache for all pairs."""
+        """The batch fill caches every pair of the profiles."""
         gmm_a = _make_gmm([POWER_FB, SLIDER])
         gmm_b = _make_gmm([POWER_FB, CHANGEUP])
         gmm_c = _make_gmm([SLIDER, CHANGEUP])
@@ -428,12 +425,12 @@ class TestArsenalCache(unittest.TestCase):
 
 
 # ============================================================================
-# Tests: Full Engine Integration (Synthetic Data)
+# Tests: the whole engine over synthetic profiles
 # ============================================================================
 
 
 def _build_synthetic_engine():
-    """Create an engine with synthetic profiles — no DuckDB needed."""
+    """An engine over six synthetic profiles, with no DuckDB file."""
     engine = PitcherSimilarityEngine.__new__(PitcherSimilarityEngine)
     engine._duckdb_path = ""
     engine._profiles = {}
@@ -449,7 +446,7 @@ def _build_synthetic_engine():
     engine._partition_r = HandednessPartition("R")
     engine._arsenal_cache = ArsenalCache()
 
-    # Pitcher A: Power righty 2024
+    # Pitcher A: a power righty, 2024
     gmm_a = _make_gmm([POWER_FB, SLIDER])
     prof_a_2024 = _make_profile(
         100,
@@ -461,7 +458,7 @@ def _build_synthetic_engine():
         release=[-1.5, 6.2],
     )
 
-    # Pitcher A: same pitcher, 2025 season (slightly different profile)
+    # Pitcher A in 2025: a slightly different profile and a third pitch
     gmm_a_25 = _make_gmm(
         [
             _make_component(0, 0.50, [95.0, 15.0, -9.0, 2350, 215, -1.5, 6.2, 6.5]),
@@ -479,7 +476,7 @@ def _build_synthetic_engine():
         release=[-1.5, 6.1],
     )
 
-    # Pitcher B: Similar power righty 2024
+    # Pitcher B: a similar power righty, 2024
     gmm_b = _make_gmm(
         [
             _make_component(0, 0.50, [95.5, 15.5, -7.5, 2380, 212, -1.4, 6.1, 6.4]),
@@ -497,7 +494,7 @@ def _build_synthetic_engine():
         release=[-1.4, 6.1],
     )
 
-    # Pitcher C: Very different RHP (finesse)
+    # Pitcher C: a very different righty (finesse)
     finesse_fb = _make_component(0, 0.4, [89.0, 11.0, -5.0, 2100, 200, -1.8, 5.9, 6.0])
     big_curve = _make_component(1, 0.35, [77.0, -18.0, 3.0, 2700, 340, -1.6, 5.7, 5.6])
     slow_change = _make_component(2, 0.25, [82.0, 6.0, -10.0, 1700, 230, -1.7, 5.8, 5.7])
@@ -512,7 +509,7 @@ def _build_synthetic_engine():
         release=[-1.8, 5.9],
     )
 
-    # Pitcher D: Soft-tossing lefty
+    # Pitcher D: a soft-tossing lefty
     soft_fb = _make_component(0, 0.5, [87.0, 10.0, 14.0, 2000, 190, 1.5, 5.8, 5.5])
     curve = _make_component(1, 0.5, [77.0, -16.0, 5.0, 2600, 320, 1.3, 5.6, 5.3])
     gmm_d = _make_gmm([soft_fb, curve])
@@ -526,7 +523,7 @@ def _build_synthetic_engine():
         release=[1.5, 5.8],
     )
 
-    # Another lefty for partition
+    # A second lefty, so the left-hand partition has a pair
     prof_e = _make_profile(
         500,
         2024,
@@ -541,10 +538,9 @@ def _build_synthetic_engine():
     for p in all_profiles:
         engine._profiles[(p.pitcher_id, p.season)] = p
 
-    # Replicate the build() pipeline:
-    # 1. enforce_min_cluster_size (already clean in these fixtures)
-    # 2. standardize arsenals into z-score space
-    # 3. fit normalizer + build partitions
+    # Run the tail of build(). The fixtures skip the shrinkage (no league
+    # rows) and the cluster merge (every component is large enough). Move the
+    # arsenals into z-scores, then fit the normalizer and build the partitions.
     engine._standardize_arsenals()
 
     all_profiles = list(engine._profiles.values())
@@ -558,31 +554,31 @@ def _build_synthetic_engine():
 
 
 class TestExhaustiveScoring(unittest.TestCase):
-    """Tests that query() returns ALL profiles in the partition."""
+    """``query()`` returns EVERY other profile in the partition."""
 
     def setUp(self):
         self.engine = _build_synthetic_engine()
 
     def test_query_returns_all_rhp(self):
-        """Query for RHP should return ALL other RHP pitcher-seasons."""
+        """A righty's query returns every other right-handed pitcher-season."""
         results = self.engine.query(100, 2024)
-        # There are 4 RHP profiles: (100,2024), (100,2025), (200,2024), (300,2024)
-        # Exclude self → 3 results
+        # Four righty profiles: (100,2024), (100,2025), (200,2024), (300,2024).
+        # Less the query itself: three results.
         self.assertEqual(len(results), 3)
 
     def test_query_n_none_returns_all(self):
-        """n=None should return all results."""
+        """n=None returns every result; n=1 returns the top one."""
         results_all = self.engine.query(100, 2024, n=None)
         results_top1 = self.engine.query(100, 2024, n=1)
         self.assertEqual(len(results_all), 3)
         self.assertEqual(len(results_top1), 1)
-        # Top-1 should match the highest-scored in all
+        # The top one is the highest score of the full list.
         self.assertEqual(results_top1[0].pitcher_id, results_all[0].pitcher_id)
 
     def test_query_returns_all_lhp(self):
-        """Query for LHP should return all other LHP pitcher-seasons."""
+        """A lefty's query returns every other left-handed pitcher-season."""
         results = self.engine.query(400, 2024)
-        # 2 LHP profiles, exclude self → 1
+        # Two lefty profiles, less the query itself: one result.
         self.assertEqual(len(results), 1)
 
     def test_results_sorted_by_score_descending(self):
@@ -592,26 +588,24 @@ class TestExhaustiveScoring(unittest.TestCase):
 
 
 class TestCrossSeasonComparisons(unittest.TestCase):
-    """Tests that same-pitcher cross-season profiles are properly compared."""
+    """Two seasons of one pitcher score against each other."""
 
     def setUp(self):
         self.engine = _build_synthetic_engine()
 
     def test_cross_season_included_in_results(self):
-        """Querying pitcher 100 season 2024 should include pitcher 100 season 2025."""
+        """The query for pitcher 100 in 2024 returns pitcher 100 in 2025."""
         results = self.engine.query(100, 2024)
         pitcher_100_results = [r for r in results if r.pitcher_id == 100]
         self.assertEqual(len(pitcher_100_results), 1)
         self.assertEqual(pitcher_100_results[0].season, 2025)
 
     def test_cross_season_high_similarity(self):
-        """Same pitcher across seasons should be highly similar
-        (the profiles are intentionally close in the test fixture)."""
+        """The same pitcher in the next season scores above 0.1."""
         results = self.engine.query(100, 2024)
         cross_season = [r for r in results if r.pitcher_id == 100 and r.season == 2025][0]
-        # With synthetic data the cross-season score won't be super high
-        # because the arsenal changed (2→3 components). The key assertion
-        # is that it IS included in results and has a positive score.
+        # The 2025 arsenal adds a third pitch (two components become three),
+        # so the score is not high. The test asks only for a clear positive.
         self.assertGreater(
             cross_season.score,
             0.1,
@@ -619,8 +613,8 @@ class TestCrossSeasonComparisons(unittest.TestCase):
         )
 
     def test_cross_season_ranked_above_dissimilar(self):
-        """Same pitcher across seasons should be more similar than a
-        completely different pitcher archetype (finesse vs power)."""
+        """The same pitcher in the next season scores above a pitcher of
+        another type (finesse against power)."""
         results = self.engine.query(100, 2024)
         scores = {(r.pitcher_id, r.season): r.score for r in results}
         cross_season_score = scores.get((100, 2025), 0.0)
@@ -628,13 +622,13 @@ class TestCrossSeasonComparisons(unittest.TestCase):
         self.assertGreater(cross_season_score, finesse_score)
 
     def test_exact_self_excluded(self):
-        """The exact (pitcher_id, season) tuple should NOT appear in results."""
+        """The query's own (pitcher_id, season) is NOT in the results."""
         results = self.engine.query(100, 2024)
         exact_self = [r for r in results if r.pitcher_id == 100 and r.season == 2024]
         self.assertEqual(len(exact_self), 0)
 
     def test_query_pair_cross_season(self):
-        """query_pair should work for same pitcher across seasons."""
+        """``query_pair`` scores two seasons of one pitcher."""
         result = self.engine.query_pair((100, 2024), (100, 2025))
         self.assertIsNotNone(result)
         self.assertEqual(result.pitcher_id, 100)
@@ -657,8 +651,8 @@ class TestHandednessPartition(unittest.TestCase):
             self.assertEqual(r.p_throws, "L")
 
     def test_cross_hand_query_pair_works(self):
-        """query_pair between LHP and RHP should still return a result
-        (it computes ad-hoc, not from partitions)."""
+        """``query_pair`` scores a lefty against a righty: it scores the pair
+        directly, outside the hand partitions."""
         result = self.engine.query_pair((100, 2024), (400, 2024))
         self.assertIsNotNone(result)
         self.assertGreater(result.score, 0.0)
@@ -669,16 +663,7 @@ class TestScoreProperties(unittest.TestCase):
         self.engine = _build_synthetic_engine()
 
     def test_all_scores_in_range(self):
-        """SIM-148: removed vacuous release_score / results_score asserts.
-
-        Pre-SIM-148 this method asserted ``r.release_score >= 0.0`` and
-        ``r.results_score >= 0.0`` against fields that had been removed
-        from SimilarityResult by SIM-067.  Either path was useless:
-          * If a stale field default was still 0.0 → assertion passes vacuously.
-          * If the field was actually removed → AttributeError, false negative.
-        Real coverage of engine correctness now lives below in
-        ``test_score_pair_returns_three_subscores``.
-        """
+        """The composite and both sub-scores of every result lie in [0, 1]."""
         results = self.engine.query(100, 2024)
         for r in results:
             self.assertGreaterEqual(r.score, 0.0)
@@ -689,11 +674,9 @@ class TestScoreProperties(unittest.TestCase):
             self.assertLessEqual(r.command_score, 1.0)
 
     def test_similarity_result_has_no_release_score_field(self):
-        """SIM-148 / SIM-067 regression: ``release_score`` removed from the
-        SimilarityResult dataclass (release-point info is captured inside
-        the GMM components).  Re-introducing the field would silently
-        re-double-count the signal."""
-        # Use dataclasses.fields if available; fall back to __annotations__
+        """The result carries no release-point sub-score. The GMM components
+        hold the release point, so a separate sub-score counts it twice."""
+        # Read dataclasses.fields; fall back to __annotations__.
         try:
             from dataclasses import fields
 
@@ -708,11 +691,10 @@ class TestScoreProperties(unittest.TestCase):
         )
 
     def test_score_pair_returns_three_subscores(self):
-        """SIM-148 / SIM-067 regression: ``_score_pair`` returns
-        ``(composite, arsenal, command)`` — a 3-tuple.  Restoring the old
-        5-tuple (with separate release / results sub-scores) would break
-        every caller that unpacks the result."""
-        # Build two synthetic profiles that the engine already loaded.
+        """``_score_pair`` returns ``(composite, arsenal, command)``, each in
+        [0, 1]. Every caller unpacks three values. A release or a results
+        sub-score counts signal the GMM already holds."""
+        # Take two of the profiles the synthetic engine holds.
         ids = self.engine.profile_ids()
         self.assertGreaterEqual(len(ids), 2, "synthetic engine needs >=2 profiles")
         pa = self.engine.get_profile(*ids[0])
@@ -731,11 +713,10 @@ class TestScoreProperties(unittest.TestCase):
             self.assertLessEqual(v, 1.0, f"{name} must be in [0, 1]")
 
     def test_similar_pitcher_ranked_above_dissimilar(self):
-        """Pitcher B (similar power righty) should rank above Pitcher C
-        (finesse righty) when querying for Pitcher A."""
+        """On pitcher A's query, pitcher B (a similar power righty) ranks
+        above pitcher C (a finesse righty)."""
         results = self.engine.query(100, 2024)
         scores_by_id = {(r.pitcher_id, r.season): r.score for r in results}
-        # B should have higher score than C
         self.assertGreater(
             scores_by_id.get((200, 2024), 0),
             scores_by_id.get((300, 2024), 0),
@@ -746,69 +727,53 @@ class TestScoreProperties(unittest.TestCase):
         self.assertEqual(len(results), 0)
 
     def test_query_pair_symmetry(self):
-        """query_pair(A, B) score should equal query_pair(B, A) score."""
+        """``query_pair(A, B)`` and ``query_pair(B, A)`` give one score."""
         r_ab = self.engine.query_pair((100, 2024), (200, 2024))
         r_ba = self.engine.query_pair((200, 2024), (100, 2024))
         self.assertAlmostEqual(r_ab.score, r_ba.score, places=6)
-
-    def test_similarity_matrix(self):
-        ids = [(100, 2024), (100, 2025), (200, 2024)]
-        matrix = build_similarity_matrix(self.engine, ids)
-
-        self.assertEqual(matrix.shape, (3, 3))
-        # Diagonal = 1.0
-        for i in range(3):
-            self.assertAlmostEqual(matrix[i, i], 1.0)
-        # Symmetric
-        self.assertAlmostEqual(matrix[0, 1], matrix[1, 0], places=6)
-        self.assertAlmostEqual(matrix[0, 2], matrix[2, 0], places=6)
 
     def test_profile_count(self):
         self.assertEqual(self.engine.profile_count, 6)
 
 
 class TestArsenalCacheIntegration(unittest.TestCase):
-    """Tests that the arsenal cache is populated correctly by queries."""
+    """A query fills the arsenal cache, and later queries reuse it."""
 
     def setUp(self):
         self.engine = _build_synthetic_engine()
 
     def test_cache_populated_after_query(self):
-        """After a query, the arsenal cache should contain entries."""
+        """A query leaves entries in the arsenal cache."""
         self.assertEqual(self.engine.arsenal_cache_size, 0)
         self.engine.query(100, 2024)
-        # Should have cached W2 distances for (100,2024) vs 3 other RHP
+        # The W₂ distances of (100,2024) against the three other righties.
         self.assertGreater(self.engine.arsenal_cache_size, 0)
 
     def test_second_query_uses_cache(self):
-        """The second query should be faster (cache hits)."""
+        """A repeat query adds no cache entry: every distance is a cache hit."""
         self.engine.query(100, 2024)
         initial_cache_size = self.engine.arsenal_cache_size
 
-        # Query again — should not add new cache entries
         self.engine.query(100, 2024)
         self.assertEqual(self.engine.arsenal_cache_size, initial_cache_size)
 
     def test_different_query_benefits_from_overlap(self):
-        """Querying pitcher 200 should partially reuse cache from pitcher 100's query."""
-        self.engine.query(100, 2024)  # caches (100,2024)↔(200,2024), (100,2024)↔(300,2024), etc.
+        """Pitcher 200's query reuses the pair that pitcher 100's query cached."""
+        # Caches (100,2024) against (100,2025), (200,2024) and (300,2024).
+        self.engine.query(100, 2024)
         cache_after_first = self.engine.arsenal_cache_size
 
-        self.engine.query(
-            200, 2024
-        )  # needs (200,2024)↔(300,2024) but (200,2024)↔(100,2024) is cached
+        # Needs (200,2024) against (100,2024), (100,2025) and (300,2024); the
+        # first of the three is cached already.
+        self.engine.query(200, 2024)
         cache_after_second = self.engine.arsenal_cache_size
 
-        # Some entries should have been reused (cache grew by less than
-        # the full number of new pairs needed)
         new_entries = cache_after_second - cache_after_first
-        # (200,2024) needs pairs with: (100,2024), (100,2025), (300,2024)
-        # (100,2024) was already cached from the first query
         self.assertLess(new_entries, 3)
 
 
 # ============================================================================
-# Tests: GMM Serialization Round-Trip
+# Tests: the GMM's JSON round trip
 # ============================================================================
 
 
@@ -844,17 +809,17 @@ class TestGMMSerialization(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# SIM-148 — Doctest sentinel for pitcher_similarity.py
+# The doctests of pitcher_similarity.py
 # ---------------------------------------------------------------------------
 
 
 class TestPitcherSimilarityDoctests(unittest.TestCase):
-    """SIM-148: catch docstring drift in pitcher_similarity.py automatically.
+    """Runs every doctest in ``similarity/engines/pitcher_similarity.py``, so
+    a docstring example that drifts from the code fails.
 
-    Per ticket AC #5, runs every doctest in similarity/engines/pitcher_similarity.py.
-    Implemented as a unittest.TestCase wrapper so it integrates into the existing
-    suite without needing the global ``--doctest-modules`` pytest flag (which
-    would scan the whole repo)."""
+    The unittest wrapper runs them without pytest's global
+    ``--doctest-modules`` flag, which would scan the whole repo.
+    """
 
     def test_doctests_in_pitcher_similarity_module(self):
         import doctest

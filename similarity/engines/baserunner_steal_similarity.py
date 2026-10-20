@@ -1,77 +1,70 @@
-"""
-baserunner_steal_similarity.py
-==============================
-Step 2.5 — Baserunner-to-Baserunner Similarity (Stolen Base)
-MLB Baseball Simulation Platform
+"""The steal-runner engine: how alike two runner-seasons are as base stealers.
 
-Computes a composite similarity score [0, 1] between any two MLB
-baserunner-season profiles specifically along the stolen-base dimension.
-This engine is intentionally separate from the extra-base engine (Step 2.4)
-because the skill sets involved are meaningfully different:
+The engine scores a pair of runner-seasons from 0 (unlike) to 1 (identical).
+The steal draw weights its rows by this score (the actor matrix
+``runner_steal``). The engine is apart from the extra-base engine
+(``baserunner_similarity.py``) because the skills differ:
 
-  * Extra-base advancement is primarily about reading fly balls and line
-    drives in real time, then making go/no-go decisions mid-play.
-  * Stolen base attempts are pre-meditated: the runner reads pitcher
-    tendencies before the pitch, takes a lead, and commits on first
-    movement.  The dominant skills here are jump quality and lead size,
-    not just raw sprint speed.
+  * An extra base is a read made during the play: a fly ball or a line
+    drive, then a go or a stop.
+  * A steal is planned before the pitch: the runner reads the pitcher, takes
+    a lead and goes on the first move. The lead and the jump matter more
+    than raw sprint speed.
 
-Sub-score dimensions (SIM-531, owner decision 2026-09-16; the weights are
-set from how well each trait repeats year to year on the qualified rows —
-plan §6.1 of docs/audit/2026-09-16-sim531-lead-distance-build-plan.md):
+The score blends three sub-scores. Each weight comes from how well the
+group's traits repeat year to year on the qualified rows (owner decision
+2026-09-16, the lead-distance work, SIM-531; plan §6.1 of
+docs/audit/2026-09-16-sim531-lead-distance-build-plan.md):
 
-  1. Steal Tendency (45%) — how often does the runner attempt to steal?
-     Measured as attempt rate per first-base opportunity, plus the 2B→3B
-     attempt rate. Repeats at 0.78.
+  1. Tendency (45%): how often the runner tries to steal. The attempt rate
+     per plate appearance begun on first, and the attempt rate at third per
+     plate appearance begun on second. Repeats at 0.78.
 
-  2. Lead (45%) — the runner's lead off the bag in feet before the pitch
-     (repeats at 0.73-0.74) and the extra distance he gets on the pitcher's
-     delivery, the "jump" (0.80-0.85). Both come from Baseball Savant's
-     Basestealing Run Value board; they are close to independent of each
-     other (r = 0.02) and of the attempt rate. This group fills the hole the
-     removed Jump / First-Step sub-score (SIM-408) left: reaction time, burst
-     and break angle were never published, but the lead and the jump are.
+  2. Lead (45%): the runner's lead off the bag in feet before the pitch
+     (repeats at 0.73-0.74), and the extra distance he gains on the
+     delivery, the jump (0.80-0.85). Both come from Baseball Savant's
+     Basestealing Run Value board. They are close to independent of each
+     other (r = 0.02) and of the attempt rate. Reaction time, burst and the
+     break angle are not published; the lead and the jump are.
 
-  3. Success Efficiency (10%) — given the runner attempted, how often did
-     he arrive safe?  Repeats at only 0.13-0.26: noise carrying a large
-     weight until 2026-09-16, when it carried 38%.
+  3. Success (10%): how often an attempt arrives safe. It repeats at only
+     0.13-0.26, close to noise, so it carries the smallest weight.
+
+Each sub-score is a Gaussian kernel (RBF, ``similarity/engines/rbf_kernel.py``):
+score = exp(-d² / 2σ²) over the group's z-scored features (a z-score is the
+value minus the population mean, over the population standard deviation).
 
 The missing-value rule
 ----------------------
   A runner with no Savant row (a season before 2023, or a runner the board
-  never listed) has no lead. The pair is then scored over the groups BOTH
-  sides have — tendency and success, renormalized — never against a lead of
-  0.0 ft, which would sit twelve standard deviations below the league. A NULL
-  loads as NaN, and the normalizer treats NaN as neutral.
+  never listed) has no lead. His pairs score over the groups BOTH sides have,
+  tendency and success with their weights renormalized to sum to one. He is
+  never scored against a lead of 0.0 ft, which sits twelve standard
+  deviations below the league. A NULL loads as NaN, and the normalizer reads
+  a NaN as the population mean.
 
 The confidence basis
 --------------------
-  Every runner who HAD a chance carries a profile (SIM-531 widened the
-  builder's driver), including the ones who never went. The confidence that
-  multiplies the whole score is therefore ``chances / (chances + 50)`` over
-  his CHANCES — plate appearances begun on first plus those begun on second,
-  and never below his attempts (an attempt is a chance by definition). An
-  attempt-based confidence would score a zero-attempt runner 0.0 against
-  every row; a first-base-only basis would do the same to a runner whose
-  chances were all on second (the extra-innings automatic runner) or whose
-  only attempts were of third or home. Either way the steal draw would then
-  have no weight at all — the trap the review of 2026-09-16 caught. The
-  tendency and the lead shrink toward the league mean on the same basis (the
-  rate's own denominator); the success rate shrinks on attempts, its own
-  denominator. A runner with no measured lead is not shrunk on the lead at
-  all: his NaN stays NaN, so the normalizer's statistics come from the
-  measured runners alone and the fitted bandwidth applies as fitted.
+  Every runner who had a chance carries a profile, including the runners who
+  never went. The confidence that multiplies the whole score is the
+  empirical-Bayes (EB) share α = chances / (chances + 50). The chances are the
+  plate appearances begun on first plus those begun on second, never fewer
+  than his attempts (an attempt is a chance). An attempt basis would score a
+  zero-attempt runner 0.0 against every row. A first-base basis would do the
+  same to a runner whose chances were all on second (the extra-innings
+  automatic runner), or whose only attempts were of third or home. Either
+  way the steal draw would give that runner no weight at all.
 
-Dependencies
-------------
-  pip install duckdb numpy scipy
+  EB shrinkage pulls each group toward the season's league mean on its own
+  denominator: the tendency and the lead on the chances, the success rate
+  on the attempts. A runner with no measured lead is not shrunk on the lead:
+  his NaN stays NaN. The normalizer's statistics then come from the measured
+  runners alone, and the bandwidth applies as fitted.
 
 Usage
 -----
   engine = BaserunnerStealSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
   engine.build(seasons=[2022, 2023, 2024, 2025])
-
-  results = engine.query(player_id=660271, season=2025)
   results = engine.query(player_id=660271, season=2025, n=20)
 """
 
@@ -87,10 +80,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from db.introspect import duck_columns
+from similarity.engines.rbf_kernel import WeightedRBFSimilarity
 from similarity.similarity_diagnostics import run_generic_diagnostics
 
 if TYPE_CHECKING:
-    from similarity.similarity_calibration import CalibrationReport
+    from similarity.calibration.report import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -105,76 +99,69 @@ log = logging.getLogger("baserunner_steal_similarity")
 
 
 # ============================================================================
-# Config — Feature Definitions & Weights
+# Features and weights
 # ============================================================================
 
-# --- Steal Tendency features ---
-# How frequently and aggressively the runner initiates steal attempts.
-# SIM-408: lead_distance_tendency + disengagement_response_rate were dropped —
-# neither is derivable from historical Statcast (lead distance / disengagement-
-# response are tracking/biomech signals the feed does not publish per
-# runner-season), so derived.baserunner_steal_metrics can't supply them.
+# --- Tendency ---
+# How often the runner starts a steal attempt.
 TENDENCY_FEATURES = [
     # feature_name,                 reliability_weight
-    ("steal_attempt_rate", 0.800),  # attempts / first_base_opps; stabilizes ~50 opps
-    ("steal_attempt_rate_2b", 0.500),  # 2B→3B steal attempt rate; sparser
+    ("steal_attempt_rate", 0.800),  # attempts per PA begun on first; stable by ~50 chances
+    ("steal_attempt_rate_2b", 0.500),  # attempts at third per PA begun on second; sparser
 ]
 
-# --- Lead features (SIM-531) ---
+# --- Lead ---
 # The runner's lead off the bag in feet, from Savant's Basestealing Run Value
-# board (derived.baserunner_steal_metrics.lead_primary_ft / lead_jump_ft). The
-# weight is the trait's year-to-year repeat on the qualified rows (plan §2.2).
+# board (derived.baserunner_steal_metrics). Each weight is the trait's
+# year-to-year repeat on the qualified rows (plan §2.2).
 LEAD_FEATURES = [
     ("lead_primary_ft", 0.735),  # the lead before the pitch
-    ("lead_jump_ft", 0.823),  # the extra distance on the pitcher's delivery
+    ("lead_jump_ft", 0.823),  # the extra distance gained on the delivery
 ]
 
-# --- Success / Efficiency features ---
-# Given the runner attempted, how often did he arrive safe?
+# --- Success ---
+# How often an attempt arrives safe.
 SUCCESS_FEATURES = [
-    ("steal_success_rate", 0.700),  # overall success rate
-    ("steal_success_rate_2b", 0.400),  # 2B→3B success; sparser, noisier
+    ("steal_success_rate", 0.700),  # over every attempt
+    ("steal_success_rate_2b", 0.400),  # attempts at third: sparser, noisier
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-# SIM-531 (owner decision 2026-09-16): the measured split. Each weight is the
-# group's share of the summed year-to-year repeats on the qualified rows —
-# tendency 0.78, lead 0.78 (primary 0.735, jump 0.823), success 0.19. The
-# 2026-05 renormalization (0.6154 / 0.3846, after SIM-408 removed the
-# never-computable Jump sub-score) is superseded; the alternative not taken was
-# the original 0.40 / 0.35 / 0.25.
+# Each weight is the group's share of the summed year-to-year repeats on the
+# qualified rows, rounded: tendency 0.78, lead 0.78 (primary 0.735, jump
+# 0.823), success 0.19 (owner decision 2026-09-16, the lead-distance work,
+# SIM-531).
 WEIGHT_TENDENCY = 0.45
 WEIGHT_LEAD = 0.45
 WEIGHT_SUCCESS = 0.10
 _TOTAL = WEIGHT_TENDENCY + WEIGHT_LEAD + WEIGHT_SUCCESS
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
-# RBF bandwidth parameters (gamma = 1 / (2σ²))
-# Calibrated to keep median similarity score near 0.50 across the population.
+# The kernel bandwidths σ (gamma = 1 / (2σ²)). The target of each is a median
+# score near 0.50 across the population.
 RBF_SIGMA_TENDENCY = 1.0500
 RBF_SIGMA_SUCCESS = 1.0200
-# SIM-531: sigma_baserunner_steal_lead as ``make calibrate`` fitted it on
-# 2026-09-16 over the 481 qualified runner-seasons with a measured lead
-# (2023-2026). Copied here because the matrix builder does not read the
-# calibration report (plan §3, Finding 4); refit = copy the new value.
+# sigma_baserunner_steal_lead as ``make calibrate`` fitted it on 2026-09-16
+# over the 481 qualified runner-seasons with a measured lead (2023-2026). The
+# value lives here because the actor matrix builder does not read the
+# calibration report (plan §3, Finding 4). To refit, copy the new value here.
 RBF_SIGMA_LEAD = 0.9836
 
-# Empirical Bayes shrinkage: at EB_N_PRIOR steal attempts, α = 0.5 — the
-# success group's basis (its denominator is attempts).
+# The EB prior of the success group, whose denominator is attempts: at
+# EB_N_PRIOR attempts, α = 0.5.
 EB_N_PRIOR = 20
-# SIM-531: the confidence basis, and the tendency and lead groups' shrinkage
-# basis — the runner's chances (first-base plus second-base plate-appearance
-# starts, never below his attempts; the attempt rate stabilizes by ~50 of
-# them). At 5 chances a runner's lead is 91% league mean; at 300 it is 86%
-# his own.
+# The EB prior of the confidence and of the tendency and lead groups, over the
+# runner's chances (the attempt rate stabilizes by about 50 of them). At 5
+# chances a runner's lead is 91% league mean; at 300 it is 86% his own.
 EB_N_PRIOR_OPPS = 50
 
-# Minimum steal attempts for inclusion in the index
+# The computor's minimum of steal attempts. The engine does not read this
+# constant: the loader filters on the table's below_minimum_sample flag.
 MIN_STEAL_ATTEMPTS = 10
 
 
 # ============================================================================
-# Data Structures
+# Data structures
 # ============================================================================
 
 
@@ -185,27 +172,27 @@ def _no_lead() -> NDArray[np.float64]:
 
 @dataclass(slots=True)
 class BaserunnerStealProfile:
-    """Complete baserunner-season profile for stolen-base similarity scoring."""
+    """One runner-season's stolen-base profile."""
 
     player_id: int
     season: int
-    sample_steal_attempts: int  # total steal attempts (1B→2B + 2B→3B)
-    sample_first_base_opps: int  # first-base opportunities (denominator for tendency)
+    sample_steal_attempts: int  # every steal attempt (of second, third or home)
+    sample_first_base_opps: int  # plate appearances begun on first
 
-    # Feature vectors (raw — normalized at query time)
+    # The feature vectors: raw at load, shrunk by ``build``, z-scored when scored.
     tendency_vec: NDArray[np.float64]  # shape (len(TENDENCY_FEATURES),)
     success_vec: NDArray[np.float64]  # shape (len(SUCCESS_FEATURES),)
-    # SIM-531: the lead group; NaN when the runner has no Savant row.
+    # The lead group; NaN when the runner has no Savant row.
     lead_vec: NDArray[np.float64] = field(default_factory=_no_lead)
-    # SIM-531: whether the lead was MEASURED (both features finite at load).
-    # A runner without one is scored over the groups he has, and his NaN lead
-    # is never shrunk (it would otherwise enter the normalizer's statistics).
+    # Whether the lead was MEASURED (both features finite at load). A runner
+    # without one scores over the groups he has, and his NaN lead is never
+    # shrunk (it would otherwise enter the normalizer's statistics).
     has_lead: bool = False
-    # SIM-531: plate appearances begun on second — with the first-base count
-    # and the attempts, the runner's CHANCES (the confidence basis).
+    # Plate appearances begun on second. With the first-base count and the
+    # attempts, they give the runner's chances (the confidence basis).
     sample_second_base_opps: int = 0
 
-    # Empirical Bayes
+    # The EB sample confidence α, over the runner's chances.
     eb_alpha: float = 1.0
     below_minimum: bool = False
 
@@ -220,51 +207,20 @@ class SimilarityResult:
     tendency_score: float
     success_score: float
     sample_steal_attempts: int
-    # SIM-531: the lead kernel between the pair; None when either side has no
-    # measured lead (the pair was scored over tendency and success alone).
+    # The lead kernel between the pair; None when either side has no measured
+    # lead (the pair scored over tendency and success alone).
     lead_score: float | None = None
 
 
 # ============================================================================
-# Reliability-Weighted RBF Kernel
-# ============================================================================
-
-
-class WeightedRBFSimilarity:
-    """
-    Gaussian RBF kernel with per-feature reliability weights.
-
-    K(x, y) = exp(-γ * Σ_i w_i * (x_i - y_i)²)
-
-    Weights normalized to sum to 1.0 for dimensionality invariance.
-    """
-
-    def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
-        self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma**2)
-        total = reliability_weights.sum()
-        self.weights = (
-            reliability_weights / total
-            if total > 0
-            else (np.ones_like(reliability_weights) / len(reliability_weights))
-        )
-
-    def score(self, x: NDArray, y: NDArray) -> float:
-        diff = np.nan_to_num(x - y, nan=0.0)
-        return float(np.exp(-self.gamma * np.dot(self.weights * diff, diff)))
-
-    def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
-        diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
-        return np.exp(-self.gamma * dist_sq)
-
-
-# ============================================================================
-# Empirical Bayes Shrinkage
+# Empirical-Bayes shrinkage
 # ============================================================================
 
 
 class EmpiricalBayesShrinkage:
+    """EB shrinkage toward the league mean: the runner keeps the share
+    α = n / (n + n_prior) of his own value."""
+
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
@@ -279,9 +235,9 @@ class EmpiricalBayesShrinkage:
     ) -> NDArray[np.float64]:
         """Pull ``raw_vec`` toward the league mean by ``alpha(n_samples)``.
 
-        A NaN raw value becomes the league mean. SIM-531: a NaN LEAGUE value
-        (a key the league row lacks) leaves the raw value alone — a feature
-        can be shrunk only toward a mean that exists.
+        A NaN raw value becomes the league mean. A NaN league value (a key the
+        league row lacks) leaves the raw value alone: a feature shrinks only
+        toward a mean that exists.
         """
         a = self.alpha(n_samples)
         avg = np.where(np.isnan(league_avg_vec), raw_vec, league_avg_vec)
@@ -296,6 +252,9 @@ class EmpiricalBayesShrinkage:
 
 @dataclass(slots=True)
 class FeatureNormalizer:
+    """The z-score of each feature, fit on the population of runner profiles.
+    A NaN z-score reads as 0, the population mean."""
+
     tendency_mean: NDArray | None = None
     tendency_std: NDArray | None = None
     success_mean: NDArray | None = None
@@ -309,9 +268,9 @@ class FeatureNormalizer:
 
         def _fit(vecs: list[NDArray]) -> tuple[NDArray, NDArray]:
             mat = np.array(vecs, dtype=np.float64)
-            # SIM-531: a column no profile measured (the lead on a database
-            # built before the Savant load) has no mean; z-score it to 0 / 1
-            # so the normalizer never emits NaN statistics.
+            # A column no profile measured (the lead on a database without the
+            # Savant load) gets mean 0 and standard deviation 1, so the
+            # normalizer never emits a NaN statistic.
             measured = np.isfinite(mat).any(axis=0)
             m = np.zeros(mat.shape[1], dtype=np.float64)
             s = np.ones(mat.shape[1], dtype=np.float64)
@@ -341,12 +300,13 @@ class FeatureNormalizer:
 
 
 # ============================================================================
-# Scoring Partition
+# Scoring partition
 # ============================================================================
 
 
 class StealPartition:
-    """Vectorized batch scoring across all steal profiles."""
+    """Every steal profile, with its z-scored feature matrices for scoring a
+    query against all of them at once."""
 
     def __init__(self) -> None:
         self.profiles: list[BaserunnerStealProfile] = []
@@ -376,13 +336,14 @@ class StealPartition:
         succ_rbf: WeightedRBFSimilarity,
         lead_rbf: WeightedRBFSimilarity | None = None,
     ) -> list[SimilarityResult]:
-        """Score ``query`` against every profile.
+        """Score ``query`` against every profile but its own.
 
-        SIM-531: a pair scores over the groups BOTH sides have. With a lead
-        on both sides the composite is the three-way blend; without one it is
-        the tendency + success blend renormalized to sum to one. ``lead_rbf``
-        defaults to the module bandwidth so a caller built without one (the
-        no-DB fixtures) keeps working.
+        A pair scores over the groups BOTH sides have. With a lead on both
+        sides the composite blends all three groups. Without one it blends
+        tendency and success, their weights renormalized to sum to one. The
+        composite is then multiplied by the square root of the pair's lower α.
+        ``lead_rbf`` defaults to the module bandwidth, for an engine built
+        without one (the no-DB test fixtures).
         """
         if not self.profiles:
             return []
@@ -437,21 +398,21 @@ class StealPartition:
 
 
 def _default_lead_rbf() -> WeightedRBFSimilarity:
-    """The lead kernel at the module bandwidth (SIM-531)."""
+    """The lead kernel at the module bandwidth."""
     return WeightedRBFSimilarity(RBF_SIGMA_LEAD, np.array([w for _, w in LEAD_FEATURES]))
 
 
 # ============================================================================
-# Main Engine
+# The engine
 # ============================================================================
 
 
 class BaserunnerStealSimilarityEngine:
-    """
-    Baserunner Stolen-Base Similarity Engine (Step 2.5).
+    """The steal-runner engine.
 
-    Scores computed exhaustively against all baserunner-season profiles
-    with sufficient steal attempt sample size.
+    A query scores against every loaded runner-season. ``build`` loads the
+    profiles at or above the table's minimum sample, or every profile with
+    ``include_below_minimum``.
 
     Usage:
         engine = BaserunnerStealSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -469,16 +430,15 @@ class BaserunnerStealSimilarityEngine:
             "lead": {},
         }
         self._normalizer = FeatureNormalizer()
-        # The success group's shrinkage (attempts, prior 20).
+        # The success group's shrinkage: over attempts, prior 20.
         self._shrinkage = EmpiricalBayesShrinkage()
-        # SIM-531: the confidence basis and the tendency / lead groups'
-        # shrinkage — first-base opportunities, prior 50.
+        # The confidence and the tendency and lead groups' shrinkage: over
+        # the runner's chances (``chances``), prior 50.
         self._opps_shrinkage = EmpiricalBayesShrinkage(EB_N_PRIOR_OPPS)
         self._partition = StealPartition()
 
-        # SIM-537: the cutoff every loaded profile declared, or None when the
-        # source has no asof_date column yet (a pre-migration-0028 database)
-        # or every row's column is NULL (built before the cutoff was tracked).
+        # The cutoff (asof_date) every loaded profile declared. None when the
+        # table has no asof_date column or every row's value is NULL.
         self._asof_date = None
 
         self._tend_rbf = WeightedRBFSimilarity(
@@ -493,23 +453,25 @@ class BaserunnerStealSimilarityEngine:
 
     @staticmethod
     def chances(first_base_opps: int, second_base_opps: int = 0, attempts: int = 0) -> int:
-        """SIM-531: the runner's chances — the confidence basis and the
-        tendency / lead shrinkage basis. First-base plus second-base
-        plate-appearance starts, never below his attempts: every row the
-        builder's driver admits carries at least one of the three, so no
-        profile reads confidence 0 (a zero score against every row would give
-        the steal draw no weight at all)."""
+        """The runner's chances: the basis of the confidence and of the
+        tendency and lead shrinkage.
+
+        The chances are the plate appearances begun on first plus those begun
+        on second, never fewer than his attempts. Every row the computor
+        writes carries at least one of the three, so no profile reads
+        confidence 0. A zero confidence would score the runner 0 against
+        every row and give the steal draw no weight for him."""
         return max(int(first_base_opps or 0) + int(second_base_opps or 0), int(attempts or 0))
 
     # ------------------------------------------------------------------
-    # Calibration wiring (SIM-406)
+    # Calibration
     # ------------------------------------------------------------------
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the tendency + success RBF scorers from a fitted report.
+        """Rebuild the tendency, success and lead kernels from a fitted report.
 
-        A sigma field left at its 0.0 default keeps the engine's current value, so
-        a partial report degrades gracefully.
+        A sigma left at its 0.0 default keeps the engine's current sigma. The
+        reliability weights stay the module's.
         """
 
         def _sig(field: str, current: float) -> float:
@@ -544,11 +506,11 @@ class BaserunnerStealSimilarityEngine:
     def build(
         self, seasons: list[int] | None = None, *, include_below_minimum: bool = False
     ) -> None:
-        """Load all steal profiles, apply shrinkage, build scoring matrices.
+        """Load the steal profiles, shrink them and build the scoring matrices.
 
-        SIM-523 (the kernel retirement): ``include_below_minimum`` loads the
-        thin profiles too (their sample confidence shrinks their scores), so
-        the score matrix covers every runner-season in the steal pool."""
+        ``include_below_minimum`` also loads the profiles below the minimum
+        sample; their low α shrinks their scores. The actor matrix builder
+        sets it, so the matrix covers every runner-season in the steal pool."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
@@ -597,9 +559,9 @@ class BaserunnerStealSimilarityEngine:
             self._league_avg["success"][season] = np.array(
                 [pj.get(f, 0.0) or 0.0 for f, _ in SUCCESS_FEATURES], dtype=np.float64
             )
-            # SIM-531: a lead key the row lacks (a league row written before
-            # the Savant load) is NaN — never 0.0 ft — and the shrinkage then
-            # leaves the raw lead alone.
+            # A lead key the row lacks (a database without the Savant load) is
+            # NaN, never 0.0 ft, and the shrinkage then leaves the raw lead
+            # alone.
             self._league_avg["lead"][season] = np.array(
                 [np.nan if pj.get(f) is None else float(pj[f]) for f, _ in LEAD_FEATURES],
                 dtype=np.float64,
@@ -617,11 +579,12 @@ class BaserunnerStealSimilarityEngine:
             sf = f"AND bss.season IN ({', '.join(str(s) for s in seasons)})"
         min_filter = "TRUE" if include_below_minimum else "NOT bss.below_minimum_sample"
 
-        # SIM-537: graceful-optional column — a database that has not run
-        # migration 0028 yet still builds; asof_date comes back NULL.
+        # A table without the asof_date column (a database before DuckDB
+        # migration 0028) still builds: the cutoff reads NULL on every row.
         _present = duck_columns(conn, "derived", "baserunner_steal_metrics")
         _asof_col = "bss.asof_date" if "asof_date" in _present else "NULL AS asof_date"
-        # SIM-531: the lead columns exist only after migration 0029.
+        # The lead columns and the second-base count arrive with DuckDB
+        # migration 0029; an older table reads NULL.
         _lead_cols = (
             "bss.lead_primary_ft, bss.lead_jump_ft"
             if {"lead_primary_ft", "lead_jump_ft"} <= _present
@@ -657,7 +620,7 @@ class BaserunnerStealSimilarityEngine:
 
         log.info("Loading %d steal profiles from DuckDB …", len(rows))
 
-        # SIM-537: every profile must declare the same cutoff.
+        # Every profile must declare the same cutoff.
         asof_values: set = set()
 
         for row in rows:
@@ -679,9 +642,9 @@ class BaserunnerStealSimilarityEngine:
             asof_values.add(asof_val)
 
             def _v(*vals):
-                # SIM-531: NULL loads as NaN (unmeasured), never 0.0 — a
-                # success rate of 0.0 for a runner who never went, or a lead
-                # of 0.0 ft, would be a measurement he never produced.
+                # NULL loads as NaN (unmeasured), never 0.0. A success rate of
+                # 0.0 for a runner who never went, or a lead of 0.0 ft, is a
+                # measurement he never produced.
                 return np.array([np.nan if v is None else float(v) for v in vals], dtype=np.float64)
 
             lead_vec = _v(lead_primary, lead_jump)
@@ -695,14 +658,14 @@ class BaserunnerStealSimilarityEngine:
                 lead_vec=lead_vec,
                 has_lead=bool(np.isfinite(lead_vec).all()),
                 sample_second_base_opps=n_opps_2b or 0,
-                # SIM-531: the confidence basis is the runner's chances.
+                # The confidence basis is the runner's chances.
                 eb_alpha=self._opps_shrinkage.alpha(
                     self.chances(n_opps or 0, n_opps_2b or 0, n_attempts or 0)
                 ),
                 below_minimum=bool(below_min),
             )
 
-        # SIM-537: refuse a mixed set.
+        # Refuse profiles built at two cutoffs, or one stamped and one not.
         if len(asof_values) > 1:
             raise RuntimeError(
                 "baserunner-steal profiles were built at different cutoffs "
@@ -716,16 +679,17 @@ class BaserunnerStealSimilarityEngine:
     def _apply_shrinkage(self) -> None:
         """Pull every profile toward its season's league mean.
 
-        Each group shrinks on the denominator its features are measured
-        over: the tendency (attempts per chance) and the lead (measured on
-        the runner's chances) on his chances, prior 50; the success rate
-        (safe per attempt) on attempts, prior 20. A group with no league row
-        is left raw; a NaN tendency or success feature becomes the league
-        mean. An UNMEASURED lead (``has_lead`` False) is not shrunk at all:
-        filling it with the league mean would put every such runner at the
-        exact mean inside the normalizer's statistics, deflate the lead's
-        spread and sharpen the kernel past its fitted bandwidth (the review
-        of 2026-09-16 measured −24 to −27% on the standard deviation).
+        Each group shrinks on its own denominator. The tendency (attempts per
+        plate appearance begun on base) and the lead shrink on the runner's
+        chances, prior 50. The success rate (safe per attempt) shrinks on
+        attempts, prior 20. A group with no league row stays raw. A NaN
+        tendency or success feature becomes the league mean.
+
+        An unmeasured lead (``has_lead`` False) is not shrunk at all. The
+        league mean would put every such runner at the exact mean inside the
+        normalizer's statistics. That cuts the lead's standard deviation
+        (by 24-27% in the lead-distance review, SIM-531) and sharpens the
+        kernel past its fitted bandwidth.
         """
         for p in self._profiles.values():
             s = p.season
@@ -756,7 +720,7 @@ class BaserunnerStealSimilarityEngine:
         n: int | None = None,
     ) -> list[SimilarityResult]:
         """
-        Score the query runner against ALL steal profiles.
+        Score the query runner against every steal profile.
 
         Parameters
         ----------
@@ -788,7 +752,7 @@ class BaserunnerStealSimilarityEngine:
         runner_a: tuple[int, int],
         runner_b: tuple[int, int],
     ) -> SimilarityResult | None:
-        """Compute similarity between two specific baserunner-steal-seasons."""
+        """The score of runner-season ``runner_b`` against ``runner_a``."""
         pa = self._profiles.get(runner_a)
         pb = self._profiles.get(runner_b)
         if pa is None or pb is None:
@@ -803,9 +767,9 @@ class BaserunnerStealSimilarityEngine:
             norm.normalize_success(pa.success_vec),
             norm.normalize_success(pb.success_vec),
         )
-        # SIM-531: the same arithmetic as ``StealPartition.score_all`` — the
-        # three-way blend when both sides carry a lead, else the two-way blend
-        # renormalized (a test holds the two paths equal).
+        # The same arithmetic as ``StealPartition.score_all``: the three-group
+        # blend when both sides carry a lead, else the two-group blend
+        # renormalized. A test holds the two paths equal.
         lead_s: float | None = None
         if getattr(pa, "has_lead", False) and getattr(pb, "has_lead", False):
             lead_rbf = getattr(self, "_lead_rbf", None) or _default_lead_rbf()
@@ -843,32 +807,11 @@ class BaserunnerStealSimilarityEngine:
 
     @property
     def asof_date(self):
-        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        """The cutoff every loaded profile declared, or ``None``."""
         return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())
-
-
-# ============================================================================
-# Convenience: Batch Similarity Matrix
-# ============================================================================
-
-
-def build_similarity_matrix(
-    engine: BaserunnerStealSimilarityEngine,
-    runner_ids: list[tuple[int, int]],
-) -> NDArray[np.float64]:
-    """Build a symmetric N×N similarity matrix for the given runner-seasons."""
-    n = len(runner_ids)
-    matrix = np.eye(n, dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            result = engine.query_pair(runner_ids[i], runner_ids[j])
-            score = result.score if result else 0.0
-            matrix[i, j] = score
-            matrix[j, i] = score
-    return matrix
 
 
 # ============================================================================

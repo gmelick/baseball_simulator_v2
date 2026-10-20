@@ -1,15 +1,16 @@
-"""similarity.backtesting -- out-of-sample validation harnesses.
+"""Offline validation harnesses: walk-forward backtests on in-memory data.
 
-SIM-076 contributes the recency-specific walk-forward harness
-(:mod:`similarity.backtesting.recency_walk_forward`). It is intentionally
-small, dependency-light, and operates on plain in-memory data so the broader
-backtesting framework (SIM-220) can compose / reuse it with real pooled rows.
+:mod:`similarity.backtesting.recency_walk_forward` checks whether the recency
+weight improves an out-of-sample k-nearest-neighbour prediction of a scalar
+outcome. It is small and reads plain in-memory data.
 
-SIM-220 adds the probabilistic backtester
-(:mod:`similarity.backtesting.backtester`): ECE / Brier / log-loss + reliability
-curves and a walk-forward ablation vs a league-average baseline. It reuses the
-SIM-076 :func:`walk_forward_folds` splitter and is likewise DB-free / injectable
-so it unit-tests on synthetic distributions.
+:mod:`similarity.backtesting.backtester` scores probability distributions over
+discrete outcomes: the expected calibration error (ECE, the gap between the
+stated confidence and the hit rate), the Brier score (the mean squared error
+of the probability vector), the log-loss and the reliability curve. It also
+runs a walk-forward ablation against a league-average baseline, on the folds
+of :func:`walk_forward_folds`. Neither module reads a database, so the unit
+tests run both on synthetic data.
 """
 
 from __future__ import annotations

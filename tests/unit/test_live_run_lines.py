@@ -1,10 +1,10 @@
-"""SIM-549 — the live betting pages price a run line by its shape.
+"""The live betting pages price a run line by its shape.
 
 A run line is ONE bet with two sides only when the away spread is the negative
 of the home spread (home −1.5 / away +1.5). The book also lists two SEPARATE bets
 (home −1.5 / away −1.5, or home +1.5 / away +1.5); pairing their prices
-mis-prices each side. The accuracy comparison learned this first; these tests
-pin the same rule on the live surface:
+mis-prices each side (the run lines scored by shape, SIM-549). The accuracy
+comparison applies the same rule; these tests pin it on the live surface:
 
   * the shared primitives in ``betting.clv_engine``;
   * the line-movement series and its CLV (``betting.line_movement``): each quote

@@ -1,34 +1,31 @@
-"""tests/unit/test_engine_calibration_regression.py — SIM-150
-==================================================
-ML calibration regression tests.
+"""The sigma fit of the RBF kernel on three engines' feature matrices, and the
+FAISS lookup of the two nearest-neighbour engines.
 
-Three regression tests that lock in the calibrated behaviour of three
-engines whose tuning is the project's core IP:
+An RBF kernel is a Gaussian kernel: score = exp(-distance² / 2σ²). Its sigma
+(σ) sets how fast the score falls with distance. FAISS is a library for fast
+nearest-neighbour lookup over a vector index.
 
-  1. Catcher v2 (RBF) — population sigma calibration on synthetic,
-     well-separated catcher features converges (finite, positive sigma)
-     and reproduces a median similarity near the project target of
-     ~0.50, with NO collapse / no-spread degeneracy.
+  1. The catcher — ``calibrate_sigma`` on a synthetic, well-separated matrix
+     the size of the catcher engine's four feature groups. The fit gives a
+     finite, positive sigma that puts the median random pair near the project
+     target of 0.50, with no collapse.
 
-  2. FAISS pitch-to-pitch — the engine builds a real FAISS index and
-     returns *self* as the nearest neighbour at ~zero L2 distance, and
-     the population sigma calibrated from the index's normalized feature
-     matrix lands the median neighbour similarity near ~0.50.
+  2. The pitch-to-pitch engine — its FAISS index returns the query pitch
+     itself as the nearest neighbour at about zero L2 (straight-line)
+     distance, and the sigma fitted on the engine's normalised matrix puts
+     the median random pair near 0.50.
 
-  3. FAISS batted-ball — same FAISS self-NN + calibration regression for
-     the 3-feature batted-ball engine.
+  3. The batted-ball engine — the same two checks on its three features.
 
-These run for real — ``faiss`` and ``ot`` are installed in the test
-environment.
+The tests run the real ``faiss`` library; the test environment installs it.
 
-Calibration / collapse semantics (from ``similarity_calibration.py``):
-  * ``calibrate_sigma`` solves ``target = exp(-gamma * median_dist_sq)``
-    for sigma.  A *collapsed* population (all profiles identical →
-    ``median_dist_sq <= 0``) makes calibration impossible and the
-    function returns the sentinel default ``1.0`` after warning.  A
-    healthy, well-separated population therefore returns a finite,
-    positive sigma *different from* that fallback and reproduces the
-    requested median.
+What ``calibrate_sigma`` does (``similarity/calibration/fitting.py``):
+  * It solves ``target = exp(-gamma * median_dist_sq)`` for sigma. A collapsed
+    population (every profile identical, so ``median_dist_sq <= 0``) cannot
+    give a sigma: the function logs a warning and returns its degenerate value,
+    ``1.0`` by default. A healthy, well-separated population therefore gives a
+    finite, positive sigma that differs from 1.0 and reproduces the requested
+    median.
 
 Run with:
     pytest tests/unit/test_engine_calibration_regression.py -v
@@ -46,8 +43,10 @@ import numpy as np
 
 
 def _zscore(mat: np.ndarray) -> np.ndarray:
-    """Z-score normalize columns; zero-variance columns get std=1 (the
-    same guard the calibrator's internal _zscore uses)."""
+    """Z-score each column (subtract its mean, divide by its standard
+    deviation); a column with no spread divides by 1. The calibrator's
+    ``CalibratorBase._zscore_matrix`` (similarity/calibration/base.py) uses
+    the same guard."""
     m = np.nanmean(mat, axis=0)
     s = np.nanstd(mat, axis=0)
     s[s == 0] = 1.0
@@ -61,8 +60,8 @@ def _empirical_median_score(
     n_pairs: int = 40_000,
     seed: int = 7,
 ) -> float:
-    """Reproduce the median RBF similarity over random pairs at a given
-    sigma — used to assert the calibration actually hit its target."""
+    """The median RBF score over random pairs at a given sigma, with a seed of
+    its own. The tests use it to check that the fit hit its target."""
     n, d = feature_matrix.shape
     if weights is None:
         weights = np.ones(d) / d
@@ -78,19 +77,18 @@ def _empirical_median_score(
 
 
 # ===========================================================================
-# 1. Catcher v2 — population sigma calibration regression
+# 1. The catcher — the sigma fit on a catcher-sized matrix
 # ===========================================================================
 
 
-class TestCatcherV2CalibrationRegression(unittest.TestCase):
-    """SIM-150 #1 — calibration converges and hits the target band on
-    synthetic, well-separated catcher feature data."""
+class TestCatcherSigmaCalibration(unittest.TestCase):
+    """The sigma fit converges and hits the target band on synthetic,
+    well-separated catcher-sized data."""
 
     def _synthetic_catcher_matrix(self, n: int = 600, seed: int = 150) -> np.ndarray:
-        """A realistic, well-separated synthetic catcher feature matrix
-        spanning every catcher sub-score group (framing/blocking/
-        throwing/deterrence), z-scored as the calibrator expects.
-        SIM-408: the Offense sub-score was TRIMmed from the engine."""
+        """A well-separated synthetic matrix with one column per feature of the
+        catcher engine's four sub-score groups (framing, blocking, throwing,
+        deterrence), z-scored as the calibrator expects."""
         from similarity.engines.catcher_similarity import (
             BLOCKING_FEATURES,
             DETERRENCE_FEATURES,
@@ -113,7 +111,7 @@ class TestCatcherV2CalibrationRegression(unittest.TestCase):
         return _zscore(raw)
 
     def test_catcher_sigma_calibration_converges_to_target_band(self):
-        from similarity.similarity_calibration import calibrate_sigma
+        from similarity.calibration.fitting import calibrate_sigma
 
         X = self._synthetic_catcher_matrix()
         target = 0.50
@@ -146,13 +144,13 @@ class TestCatcherV2CalibrationRegression(unittest.TestCase):
 
 
 # ===========================================================================
-# 2. FAISS pitch-to-pitch — self-NN + calibration regression
+# 2. The pitch-to-pitch engine — the nearest neighbour and the sigma fit
 # ===========================================================================
 
 
 class TestFaissPitchCalibrationRegression(unittest.TestCase):
-    """SIM-150 #2 — the pitch FAISS index returns self at ~zero distance
-    and its normalized feature matrix calibrates to the target band."""
+    """The pitch engine's FAISS index returns the query itself at about zero
+    distance, and the sigma fit on its normalised matrix hits the target band."""
 
     def _build(self, n: int = 800, seed: int = 41):
         import faiss
@@ -219,10 +217,10 @@ class TestFaissPitchCalibrationRegression(unittest.TestCase):
             self.assertLessEqual(results[i].distance, results[i + 1].distance + 1e-9)
 
     def test_pitch_sigma_calibration_hits_target_band(self):
-        from similarity.similarity_calibration import calibrate_sigma
+        from similarity.calibration.fitting import calibrate_sigma
 
         _engine, _matrix, scaled = self._build()
-        X = scaled.astype(np.float64)  # already z-scored by the engine normalizer
+        X = scaled.astype(np.float64)  # z-scored and weighted by the engine's normalizer
         target = 0.50
         sigma = calibrate_sigma(X, target_median_score=target, seed=42)
         self.assertTrue(np.isfinite(sigma))
@@ -238,13 +236,13 @@ class TestFaissPitchCalibrationRegression(unittest.TestCase):
 
 
 # ===========================================================================
-# 3. FAISS batted-ball — self-NN + calibration regression
+# 3. The batted-ball engine — the nearest neighbour and the sigma fit
 # ===========================================================================
 
 
 class TestFaissBattedBallCalibrationRegression(unittest.TestCase):
-    """SIM-150 #3 — the batted-ball FAISS index returns self at ~zero
-    distance and its normalized feature matrix calibrates to target."""
+    """The batted-ball engine's FAISS index returns the query itself at about
+    zero distance, and the sigma fit on its normalised matrix hits the target."""
 
     def _build(self, n: int = 800, seed: int = 42):
         import faiss
@@ -305,7 +303,7 @@ class TestFaissBattedBallCalibrationRegression(unittest.TestCase):
             self.assertLessEqual(results[i].distance, results[i + 1].distance + 1e-9)
 
     def test_batted_ball_sigma_calibration_hits_target_band(self):
-        from similarity.similarity_calibration import calibrate_sigma
+        from similarity.calibration.fitting import calibrate_sigma
 
         _engine, _matrix, scaled = self._build()
         X = scaled.astype(np.float64)

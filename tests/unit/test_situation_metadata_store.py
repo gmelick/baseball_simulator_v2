@@ -1,20 +1,21 @@
-"""
-Unit tests for SIM-334 — columnar situation metadata store.
-============================================================
-Verifies that replacing the situation engine's ``list[NearestSituation]``
-metadata with parallel NumPy column arrays (``ColumnarSituationMeta``):
+"""The columnar metadata store of the situation engine.
 
-  1. Keeps the public ``query`` / ``query_batch`` API byte-for-byte
-     equivalent: every returned ``NearestSituation`` carries the same field
-     values (play_id, game_pk, inning, outs, runners, leverage_index,
+The situation engine keeps each indexed situation's metadata in parallel
+NumPy column arrays (``ColumnarSituationMeta``), one array per field. These
+tests check that the store:
+
+  1. Gives the public ``query`` / ``query_batch`` results their exact values:
+     every returned ``NearestSituation`` carries the same field values
+     (play_id, game_pk, inning, outs, runners, leverage_index,
      score_differential) and the same query-time distance as a reference
-     reconstructed straight from the columnar arrays.
-  2. Stores metadata as NumPy arrays (one per field, correct dtypes), NOT a
-     ``list`` of Python objects, and the arrays are read-only.
-  3. Handles edge cases: empty index, single row, k=1, k > index_size.
+     built straight from the column arrays.
+  2. Holds the metadata as NumPy arrays (one per field, the right dtypes),
+     NOT a ``list`` of Python objects, and the arrays are read-only.
+  3. Handles the edge cases: an empty index, a single row, k=1,
+     k > index_size.
 
-Mocking strategy mirrors test_situation_similarity.py: DuckDB is patched at
-``duckdb.connect`` so build() runs without a real database.
+The mocks follow ``test_situation_similarity.py``: the tests patch
+``duckdb.connect``, so build() runs without a real database.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from similarity.engines.situation_similarity import (
 )
 
 # ---------------------------------------------------------------------------
-# Helpers (shared shape with the existing situation tests)
+# Helpers (the same shapes as the other situation tests)
 # ---------------------------------------------------------------------------
 
 
@@ -180,7 +181,7 @@ class TestColumnarStorage:
         assert meta.score_differential.dtype == np.float64
 
     def test_columns_are_read_only(self, built_engine):
-        """Read-only/lazy store: the underlying arrays must not be writeable."""
+        """The store is read-only: its arrays must not be writeable."""
         meta = built_engine._index_meta
         assert meta.game_pk.flags.writeable is False
         assert meta.play_id.flags.writeable is False
@@ -189,7 +190,7 @@ class TestColumnarStorage:
             meta.game_pk[0] = 12345
 
     def test_no_python_object_dtype_columns(self, built_engine):
-        """Guards against a regression to dtype=object (i.e. boxed Python objs)."""
+        """Guards against a column of dtype=object (boxed Python objects)."""
         meta = built_engine._index_meta
         for field in (
             "play_id",
@@ -210,8 +211,9 @@ class TestColumnarStorage:
 
 class TestQueryEquivalence:
     def test_query_results_match_columnar_reference(self, built_engine):
-        """Every returned NearestSituation must equal a reference reconstructed
-        directly from the columnar arrays at the same KDTree index."""
+        """Every returned NearestSituation must equal a reference built
+        directly from the column arrays at the same KD-tree index (the
+        tree that finds the nearest situations)."""
         meta = built_engine._index_meta
         vec = _make_vec(inning=7, outs=2, leverage_index=2.3)
 
@@ -232,8 +234,8 @@ class TestQueryEquivalence:
             assert type(r.distance) is float
 
     def test_query_fields_have_native_python_types(self, built_engine):
-        """Reconstructed fields must be plain Python scalars, not numpy types,
-        so results are byte-for-byte equivalent to the old object path."""
+        """The rebuilt fields must be plain Python scalars, not NumPy types,
+        so a result equals a NearestSituation built from plain values."""
         r = built_engine.query(_make_vec(), k=1)[0]
         assert type(r.play_id) is str
         assert type(r.game_pk) is int
@@ -285,12 +287,10 @@ class TestQueryBatchEquivalence:
 
 class TestEdgeCases:
     def test_empty_index_build_raises(self):
-        # SIM-408: the situation engine deliberately REFUSES to build a degenerate
-        # empty index (an empty matrix normalizes to NaN, which would silently
-        # poison every situation similarity). build() raises so
-        # api.state.build_all_engines SKIPS the engine instead of registering a
-        # NaN-poisoned one. The empty-but-queryable state these tests previously
-        # asserted is therefore unreachable by design — assert the guard instead.
+        # The situation engine REFUSES to build an empty index: an empty matrix
+        # normalizes to NaN, which would silently poison every situation
+        # similarity. build() raises, so api.state.build_all_engines SKIPS the
+        # engine instead of registering a NaN-poisoned one.
         with pytest.raises(RuntimeError, match="degenerate empty index"):
             _build_engine([])
 

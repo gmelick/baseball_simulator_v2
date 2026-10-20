@@ -1,35 +1,32 @@
-"""
-test_pitcher_engine_calibration.py
-=========================
-SIM-346 (ML calibration fixes) — pitcher similarity engine.
+"""The pitcher engine's arsenal calibration and its no-arsenal path.
 
-Covers the three audited bugs plus a drift-regression guard:
+The tests guard three rules and one drift check:
 
-  1. **No-arsenal fallback was a ×1.0 no-op.** When a pitcher (or pair) has
-     no GMM arsenal, the old code rescaled command by
-     ``WEIGHT_COMMAND / WEIGHT_COMMAND`` (== 1.0), so a GMM-less composite was
-     capped at ``WEIGHT_COMMAND`` (0.35) instead of being redistributed onto
-     the full [0, 1] scale. The fix rescales by
-     ``_TOTAL_WEIGHT / WEIGHT_COMMAND`` (== 1/0.35 ≈ 2.857) so a command-only
-     pitcher is comparable to a full-arsenal one.
+  1. **A pitcher without an arsenal scores on the full [0, 1] scale.** When
+     a pitcher (or a pair) has no GMM arsenal (a Gaussian mixture model of
+     the pitch mix), the engine rescales the command score by
+     ``_TOTAL_WEIGHT / WEIGHT_COMMAND`` (1 / 0.35, about 2.857). A factor of
+     1.0 would cap a command-only composite at ``WEIGHT_COMMAND`` (0.35), so
+     a command-only pitcher could never compare with a full-arsenal one.
 
-  2. **``arsenal_gamma`` (squared exp) vs ``ARSENAL_SCALE`` (linear exp) were
-     inconsistent.** The engine now uses ONE canonical linear form
-     ``exp(-W₂ / ARSENAL_SCALE)`` with the locked calibrated scale 4.10, and
-     ``arsenal_scale_from_gamma`` converts the calibrator's squared-form gamma
-     into that linear scale (same median/target anchor, no divergent path).
+  2. **One arsenal transform.** The engine scores the arsenal by the linear
+     form ``exp(-W₂ / ARSENAL_SCALE)`` (W₂: the Wasserstein-2 distance), at
+     the calibrated default scale 4.10. ``arsenal_scale_from_gamma`` converts
+     the calibrator's squared-form gamma (``exp(-gamma · W₂²)``) into that
+     linear scale at the same median, so no second form diverges.
 
-  3. **``CalibrationReport`` was computed but never applied.**
-     ``PitcherSimilarityEngine.apply_calibration(report)`` now wires
-     ``CalibrationReport.arsenal_gamma`` (+ median) into the module-level
-     ``ARSENAL_SCALE`` so the engine reads the calibrated value, not a literal.
+  3. **The calibration report reaches the engine.**
+     ``PitcherSimilarityEngine.apply_calibration(report)`` turns
+     ``CalibrationReport.arsenal_gamma`` (and the median) into the
+     module-level ``ARSENAL_SCALE``, so the engine reads the calibrated value,
+     not a literal.
 
-  4. **Drift regression.** On a controlled W₂ fixture, the calibrated arsenal
-     transform keeps the MEDIAN arsenal similarity ~0.50, and the no-arsenal
-     composite is on the same scale as the full-arsenal composite.
+  4. **Drift check.** On a controlled W₂ fixture, the calibrated arsenal
+     transform keeps the MEDIAN arsenal similarity near 0.50, and the
+     no-arsenal composite sits on the same scale as the full-arsenal one.
 
-These tests use the in-memory ``__new__``-bypass / direct-dataclass idioms of
-the existing pitcher-engine tests — no live DuckDB.
+These tests build the engine in memory with the ``__new__`` bypass, as the
+other pitcher-engine tests do (no live DuckDB).
 """
 
 from __future__ import annotations
@@ -39,13 +36,15 @@ import unittest
 import numpy as np
 
 import similarity.engines.pitcher_similarity as ps
+from similarity.calibration.fitting import calibrate_arsenal_gamma
+from similarity.calibration.report import CalibrationReport
+from similarity.engines.arsenal_cache import ArsenalCache
 from similarity.engines.pitcher_similarity import (
     DEFAULT_ARSENAL_SCALE,
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
     WEIGHT_ARSENAL,
     WEIGHT_COMMAND,
-    ArsenalCache,
     ArsenalSimilarity,
     FeatureNormalizer,
     GMMComponent,
@@ -55,10 +54,6 @@ from similarity.engines.pitcher_similarity import (
     PitcherSimilarityEngine,
     RBFSimilarity,
     arsenal_scale_from_gamma,
-)
-from similarity.similarity_calibration import (
-    CalibrationReport,
-    calibrate_arsenal_gamma,
 )
 
 _TOTAL_WEIGHT = WEIGHT_ARSENAL + WEIGHT_COMMAND
@@ -117,7 +112,7 @@ def _single_component_gmm(mean) -> GMMModel:
 
 
 def _new_engine() -> PitcherSimilarityEngine:
-    """Construct an engine without touching DuckDB (mirrors existing tests)."""
+    """Construct an engine without touching DuckDB (as the other pitcher tests do)."""
     eng = PitcherSimilarityEngine.__new__(PitcherSimilarityEngine)
     eng._profiles = {}
     eng._normalizer = FeatureNormalizer()
@@ -128,7 +123,7 @@ def _new_engine() -> PitcherSimilarityEngine:
 
 
 # ============================================================================
-# 1. No-arsenal redistribution is no longer a ×1.0 no-op
+# 1. A pitcher without an arsenal: the arsenal weight moves onto command
 # ============================================================================
 
 
@@ -162,7 +157,7 @@ class TestNoArsenalRedistribution(unittest.TestCase):
 
         self.assertAlmostEqual(r.score, expected, places=10)
 
-        # The OLD buggy no-op would have produced WEIGHT_COMMAND * cmd_score.
+        # A factor of 1.0 would give WEIGHT_COMMAND * cmd_score.
         buggy = WEIGHT_COMMAND * cmd_score
         self.assertNotAlmostEqual(r.score, buggy, places=6)
         # And the redistributed score must be strictly larger (×2.857 factor).
@@ -190,7 +185,7 @@ class TestNoArsenalRedistribution(unittest.TestCase):
         # The redistribution multiplier must be 1 / WEIGHT_COMMAND, NOT 1.0.
         factor = _TOTAL_WEIGHT / WEIGHT_COMMAND
         self.assertAlmostEqual(factor, 1.0 / WEIGHT_COMMAND, places=12)
-        self.assertGreater(factor, 1.0)  # explicitly not the old no-op
+        self.assertGreater(factor, 1.0)  # never the 1.0 no-op
 
     def test_identical_command_no_arsenal_scores_near_one(self):
         # Two GMM-less pitchers with IDENTICAL command → command_s == 1.0 →
@@ -210,14 +205,14 @@ class TestNoArsenalRedistribution(unittest.TestCase):
 
 
 # ============================================================================
-# 2. gamma (squared) vs scale (linear) reconciled into ONE form
+# 2. One arsenal transform: the squared gamma converts to the linear scale
 # ============================================================================
 
 
 class TestGammaScaleReconciliation(unittest.TestCase):
     def test_default_scale_is_locked_linear_value(self):
         self.assertAlmostEqual(DEFAULT_ARSENAL_SCALE, 4.10, places=10)
-        # Module default starts on the locked value.
+        # The module constant starts on the default.
         self.assertAlmostEqual(ps.ARSENAL_SCALE, 4.10, places=10)
 
     def test_arsenal_score_uses_linear_form(self):
@@ -284,8 +279,8 @@ class TestCalibrationWiring(unittest.TestCase):
         self.assertNotAlmostEqual(ps.ARSENAL_SCALE, DEFAULT_ARSENAL_SCALE, places=6)
 
     def test_apply_calibration_changes_engine_scoring(self):
-        # After wiring, _score_pair's arsenal sub-score must reflect the new
-        # scale (not the old default literal).
+        # After apply_calibration, _score_pair's arsenal sub-score must read
+        # the new scale, not the default.
         eng = _new_engine()
         g_a = _single_component_gmm([0.0] * GMM_FEATURE_DIM)
         g_b = _single_component_gmm([2.0] * GMM_FEATURE_DIM)
@@ -326,7 +321,7 @@ class TestCalibrationWiring(unittest.TestCase):
 
 
 # ============================================================================
-# 4. Drift regression — calibrated composite stays on target
+# 4. Drift check: the calibrated composite stays on target
 # ============================================================================
 
 
@@ -354,13 +349,12 @@ class TestCalibrationDriftRegression(unittest.TestCase):
         self.assertAlmostEqual(float(np.median(scores)), 0.50, delta=0.01)
 
     def test_default_scale_already_near_target_on_canonical_median(self):
-        # Even with NO report applied, the locked default 4.10 keeps the
-        # canonical median (~2.84) near the 0.50 target — guards against the
-        # old 4.25 literal silently drifting the median off target.
+        # With NO report applied, the default 4.10 keeps the canonical
+        # median (~2.84) near the 0.50 target.
         median = 2.84
         at_default = float(np.exp(-median / DEFAULT_ARSENAL_SCALE))
         self.assertAlmostEqual(at_default, 0.50, delta=0.02)
-        # The OLD 4.25 literal drifted the median high (proving why we moved).
+        # A larger scale (4.25) puts the median score above the target.
         at_old = float(np.exp(-median / 4.25))
         self.assertGreater(at_old, at_default)
 
@@ -393,8 +387,8 @@ class TestCalibrationDriftRegression(unittest.TestCase):
         self.assertGreater(full_score, 0.90)
         self.assertAlmostEqual(no_arsenal_score, full_score, delta=0.10)
 
-        # Under the OLD no-op, no_arsenal_score would have been ≤ WEIGHT_COMMAND
-        # (0.35) — far below the full-arsenal clone. Guard against regression.
+        # A factor of 1.0 would cap no_arsenal_score at WEIGHT_COMMAND (0.35),
+        # far below the full-arsenal clone.
         self.assertGreater(no_arsenal_score, WEIGHT_COMMAND + 0.1)
 
 

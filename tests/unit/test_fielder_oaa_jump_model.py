@@ -1,18 +1,17 @@
 """
-test_fielder_oaa_jump_model.py
-===============================
-Savant's per-position outs above average and the outfield jump in the fielder
-model (SIM-532): the MODEL and CALIBRATION half of the plan's section 7. The
-loader, the migrations and the profile builder have their own files (the
-SIM-528, SIM-537 and SIM-542 files); the "finding stays honest" test on the
-hand split lives with the profile builder's tests.
+Savant's per-position outs above average (OAA) and the outfield jump in the
+fielder model and its calibration. The plan is
+docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md (§7). The
+loader's tests are in ``test_savant_oaa_jump_boards.py``; the migration's and
+the profile builder's are in ``test_fielder_oaa_jump_profile.py``. Both files
+also hold a test that keeps the OAA hand split unread.
 
 What this file pins:
 
 * the outfield range group is nine features in the contract's order — our
   five, Savant's figure, reaction, burst, route — and the infield group is six
-  (decision 4 adds Savant's figure); the engine and the computor share the
-  25-play prior;
+  (the plan's decision 4 adds Savant's figure); the engine and the profile
+  computor share the 25-play prior;
 * the jump's confidence is plays-based (10 plays -> alpha 0.29, two thirds of
   the way to the league mean; 64 -> 0.72) and the first six range entries keep
   the batted-ball confidence;
@@ -34,8 +33,8 @@ What this file pins:
   (and reads 0.5 for a column with no pairs); the report then keeps the
   module default for a new entry with fewer than 20 reliable pairs, and the
   three jump parts pair only on rows with 25 or more plays in both seasons;
-* the arm's chance count still reads its own column after the jump's play
-  count was appended after it.
+* the arm's chance count reads its own column, with the jump's play count in
+  the column after it.
 """
 
 from __future__ import annotations
@@ -78,7 +77,7 @@ LEAGUE_ARM_CF = np.array([88.0, 0.0, 0.05])
 
 # The six fielder columns migration 0030 appends after asof_date, in
 # OAA_JUMP_COLUMN_ORDER; added idempotently where a test needs them.
-SIM532_FIELDER_COLUMNS = (
+OAA_JUMP_FIELDER_COLUMNS = (
     ("savant_oaa", "INTEGER"),
     ("savant_oaa_per_100", "FLOAT"),
     ("jump_reaction_ft", "FLOAT"),
@@ -203,9 +202,9 @@ class TestRangeFeatureLists:
             "savant_oaa_per_100",
             *JUMP_PARTS,
         ]
-        # Every weight is the repeat `make calibrate` fitted on 2026-09-17 after
-        # the fielder recompute (the run book copies the fitted values into the
-        # module). The plan's starting values were 0.50 / 0.81 / 0.69 / 0.77.
+        # Every weight is the year-to-year repeat that `make calibrate` fitted
+        # after the fielder recompute of 2026-09-17; the run book copies the
+        # fitted values into the module.
         assert [w for _, w in OF_RANGE_FEATURES[:5]] == pytest.approx(
             [0.344, 0.373, 0.677, 0.594, 0.203]
         )
@@ -214,9 +213,9 @@ class TestRangeFeatureLists:
         assert len(OF_RANGE_FEATURES) - OF_RANGE_BASE_COUNT == len(JUMP_PARTS)
 
     def test_the_infield_range_group_is_the_six_and_names_savants_figure(self) -> None:
-        """Decision 4: Savant's per-position figure joins the infield group
-        as its sixth entry (the plan started it at 0.45; the fit of
-        2026-09-17 reads 0.356)."""
+        """Savant's per-position figure is the infield group's sixth entry
+        (the plan's decision 4). Its weight, 0.356, is the fitted repeat of
+        2026-09-17."""
         assert [f for f, _ in IF_RANGE_FEATURES] == [*OUR_FIVE, "savant_oaa_per_100"]
         assert IF_RANGE_FEATURES[5][1] == pytest.approx(0.356)
         assert not any(f in JUMP_PARTS for f, _ in IF_RANGE_FEATURES)
@@ -271,8 +270,9 @@ class TestJumpShrinkage:
         assert thin.range_vec[5] == pytest.approx(0.4 + (1.2 - 0.4) * bb_alpha)
 
     def test_the_batted_balls_never_set_the_jump_confidence(self) -> None:
-        """An everyday outfielder: 600 batted balls, ten jump plays. On the
-        batted balls his reaction was read at face value (alpha 0.976)."""
+        """An everyday outfielder: 600 batted balls, ten jump plays. A
+        confidence from the batted balls (alpha 0.976) would read his reaction
+        at face value; the plays-based confidence pulls it toward the league."""
         p = _cf_profile(1, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0, 5.0], plays=10, bb=600)
         engine = _engine_with([p])
         engine._apply_shrinkage()
@@ -300,9 +300,9 @@ class TestJumpShrinkage:
         assert p.range_vec[5] == pytest.approx(0.4)
 
     def test_a_missing_jump_with_a_nan_league_stays_nan_and_scores_finite(self) -> None:
-        """No jump anywhere (a league row written before the SIM-532
-        recompute): the value stays unmeasured. The normalizer maps it to the
-        position mean in z-space, and every score is finite."""
+        """No jump anywhere (a league row with no jump keys): the value stays
+        unmeasured. The normalizer maps it to the position mean in z-space,
+        and every score is finite."""
         league = LEAGUE_RANGE_CF.copy()
         league[6:] = np.nan
         p = _cf_profile(1, [1.0, 0.0, 0.0, 0.0, 0.0, 0.5, np.nan, np.nan, np.nan], plays=0)
@@ -358,10 +358,10 @@ class TestLeagueRow:
         return engine
 
     def test_an_absent_new_key_loads_nan_and_an_absent_old_key_loads_zero(self) -> None:
-        # A league row written before the SIM-532 recompute carries neither
-        # Savant's figure nor the jump. The five original components have
-        # never had a key and are centred on 0; the four new ones are real
-        # measurements the row lacks.
+        # A league row without the new keys carries neither Savant's figure
+        # nor the jump. An absent original component loads 0.0: the five are
+        # centred on 0 by construction. An absent new key loads NaN: the four
+        # new ones are real measurements the row lacks.
         engine = self._load("fielder_CF", {"oaa_deep": 1.5, "arm_strength": 88.0})
         rng = engine._pos_avg["range"]["CF"][2024]
         assert rng.shape == (9,)
@@ -419,9 +419,9 @@ def _row(
     *,
     below: bool = False,
 ) -> tuple:
-    """One row in the loader's SELECT order (35 columns): the SIM-532 block —
-    Savant's figure, reaction, burst, route, the jump's play count — sits
-    right after catch_pct_added."""
+    """One row in the loader's SELECT order (35 columns). The OAA-and-jump
+    block — Savant's figure, reaction, burst, route, the jump's play count —
+    sits right after catch_pct_added."""
     return (
         pid,
         position,
@@ -434,7 +434,7 @@ def _row(
         0.2,
         1.5,
         0.01,
-        # range, continued (5)
+        # Savant's figure, reaction, burst, route, the jump's play count (5)
         *oaa_jump,
         # errors (2)
         0.02,
@@ -536,7 +536,7 @@ class TestProfileLoader:
         path = str(tmp_path / "sim532.duckdb")
         con = duckdb.connect(path)
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
-        for col, typ in SIM532_FIELDER_COLUMNS:
+        for col, typ in OAA_JUMP_FIELDER_COLUMNS:
             con.execute(
                 f"ALTER TABLE derived.fielder_season_metrics ADD COLUMN IF NOT EXISTS {col} {typ}"
             )
@@ -682,7 +682,7 @@ class TestScoring:
 
 class TestApplyCalibration:
     def test_a_stale_five_weight_range_report_is_refused_for_both_groups(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         stale = CalibrationReport(
@@ -712,7 +712,7 @@ class TestApplyCalibration:
         assert engine.query_pair((1, "CF", 2024), (2, "CF", 2024)) is not None
 
     def test_a_nine_weight_and_a_six_weight_range_report_apply(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         engine = FielderSimilarityEngine(duckdb_path=":memory:")
         nine = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.5, 0.9, 0.7, 0.8])
@@ -837,7 +837,8 @@ def _nullify_nan(rows: list[tuple]) -> list[tuple]:
 
 class TestCalibrator:
     def test_the_two_selects_name_the_range_columns_in_the_groups_order(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         conn = _RoutingConn(_if_calibration_rows(120, seed=31), _of_calibration_rows(120, seed=32))
         cal = SimilarityCalibrator(duckdb_path=":memory:")
@@ -853,7 +854,8 @@ class TestCalibrator:
         assert "jump_" not in if_sql
 
     def test_the_range_sigma_fits_over_the_rows_that_carry_every_feature(self) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         of_rows = _of_calibration_rows(120, seed=33)
         if_rows = _if_calibration_rows(120, seed=34)
@@ -890,7 +892,8 @@ class TestCalibrator:
         )
 
     def test_the_range_sigma_keeps_the_sentinel_under_twenty_measured_rows(self, caplog) -> None:
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         of_rows = _of_calibration_rows(120, seed=35, jump_every=8)
         thin_of = [r[:10] + (None, None, None) + r[13:] for r in of_rows[:101]] + of_rows[101:]
@@ -898,7 +901,7 @@ class TestCalibrator:
         if_rows = _if_calibration_rows(120, seed=36, savant_every=8)
         thin_if = [r[:9] + (None,) + r[10:] for r in if_rows[:101]] + if_rows[101:]
         assert sum(r[9] is not None for r in thin_if) < 20
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn(thin_if, thin_of), [2023, 2024, 2025], 0.5, CalibrationReport()
             )
@@ -945,7 +948,7 @@ class TestCalibrator:
         and exactly 0.5 — its insufficient-data default, above the 0.1
         floor — for the column that never pairs. The report layer overrides
         that 0.5 (the next test)."""
-        from similarity.similarity_calibration import calibrate_reliability_weights
+        from similarity.calibration.fitting import calibrate_reliability_weights
 
         by_key = self._range_with_a_nan_reaction(37)
         matrix = np.array(list(by_key.values()), dtype=np.float64)
@@ -963,10 +966,11 @@ class TestCalibrator:
         reaction column keeps the module default (0.775) with a warning that
         names it; the repeating route still reads near 1; the sigma has no
         measured row and keeps the sentinel."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rows = _nullify_nan(_paired_cf_rows(self._range_with_a_nan_reaction(37)))
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn([], rows), [2023, 2024], 0.5, CalibrationReport()
             )
@@ -985,11 +989,12 @@ class TestCalibrator:
         """One season only: no pair anywhere. The infield and outfield Savant
         entries keep their module defaults with a warning each; the five
         original components are not this rule's business."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         of_rows = [r for r in _of_calibration_rows(120, seed=38) if r[2] == 2023]
         if_rows = [r for r in _if_calibration_rows(120, seed=39) if r[2] == 2023]
-        with caplog.at_level(logging.WARNING, logger="similarity.similarity_calibration"):
+        with caplog.at_level(logging.WARNING, logger="similarity_calibration"):
             report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
                 _RoutingConn(if_rows, of_rows), [2023], 0.5, CalibrationReport()
             )
@@ -1005,7 +1010,8 @@ class TestCalibrator:
         on the rows at or over JUMP_ALPHA_PRIOR_PLAYS it reads near 1. The
         five original components and Savant's figure keep every pair: they
         repeat on every row here and read 1."""
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.calibration.report import CalibrationReport
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         rng = np.random.default_rng(40)
         by_key: dict[tuple[int, int], list[float]] = {}
@@ -1044,8 +1050,9 @@ class TestCalibrator:
         200 chances and 5 plays the arm fit runs (its floor is 50 chances);
         swapped — 5 chances and 200 plays — it does not. A trailing read
         (``r[-1]``) would give the opposite answer on both."""
+        from similarity.calibration.report import CalibrationReport
         from similarity.engines.fielder_similarity import ARM_ALPHA_PRIOR_CHANCES
-        from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
+        from similarity.similarity_calibration import SimilarityCalibrator
 
         assert ARM_ALPHA_PRIOR_CHANCES == 50
         rng = np.random.default_rng(41)

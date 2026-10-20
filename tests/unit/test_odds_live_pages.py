@@ -1,8 +1,8 @@
-"""SIM-555 — the live pages read one book per row and name the book.
+"""The live betting pages read one book per odds row and name the book.
 
-Every new ``raw.game_odds`` row holds one book's prices and says which book
-(``bp:<id>``). The old ``consensus`` rows can mix two books inside one row.
-These tests pin the live surface's side of the change:
+A ``raw.game_odds`` row labelled ``bp:<id>`` holds one book's prices. A
+``consensus`` row can mix two books inside one row, so the pages never read
+one (one book per odds row, SIM-555). These tests pin three rules:
 
   * the line-movement reads keep only the one-book rows (the three SQL
     statements carry the label filter), and every quote and series names its
@@ -11,7 +11,7 @@ These tests pin the live surface's side of the change:
     price is injected: the fair probability from ONE book's row (the graded
     book, first on the preference list), the offered price of each side from
     the best stored price at that line, with both books named. No pool, no
-    stored row or a failed read gives the mock, as before;
+    stored row or a failed read gives the mock;
   * the stored lines are each book's closing row, plus its latest ``current``
     row while the game is in ``Preview`` (not started). A current row of a game
     in any other state (an in-play price, or one taken after the game) is
@@ -190,8 +190,9 @@ class TestBookName:
         assert [q.book_name for q in model.quotes] == ["Caesars", "Caesars"]
 
     def test_the_api_models_name_the_book_for_an_old_image(self):
-        """The app imports betting/ from its image; a LineQuote / LineMovement
-        from before SIM-555 has no book_name, and the models fill it in."""
+        """The app imports ``betting/`` from its image, which can be older than
+        the mounted ``api/``. A LineQuote or LineMovement without
+        ``book_name`` still gets the book's name from the API models."""
         quote = SimpleNamespace(
             fetched_at=None,
             line_type="closing",
@@ -277,7 +278,7 @@ class TestStoredRows:
             _stored_ml("bp:0", -140, 145),  # the blend: nobody can bet it
             _stored_ml("bp:68", -130, 150),  # a prediction market
             _stored_ml("bp:37", -130, 150),  # a daily-fantasy app
-            _stored_ml("consensus", -150, 130),  # an old mixed row
+            _stored_ml("consensus", -150, 130),  # can mix two books in one row
             _stored_ml("bp:19", -150, None),  # a side missing
             _stored_ml("bp:13", 0, 120),  # no such American price
             _stored_rl("bp:49", 1.0, -400, 1.0, 260),  # the guard refuses it
@@ -290,8 +291,8 @@ class TestStoredRows:
         assert [r["book"] for r in by_market["moneyline"]] == ["bp:12", "bp:10"]
 
     def test_a_book_off_the_list_sorts_after_the_list_by_id(self, monkeypatch):
-        # Two sportsbooks off the preference list, classified for the test (since
-        # 2026-09-29 every sportsbook the vocabulary lists is on the list).
+        # Two sportsbooks off the preference list, classified for the test:
+        # every sportsbook the vocabulary lists is on the list.
         monkeypatch.setitem(BOOK_KIND, 77, "sportsbook")
         monkeypatch.setitem(BOOK_KIND, 50, "sportsbook")
         rows = [_stored_ml("bp:77", -150, 130), _stored_ml("bp:50", -150, 130)]
@@ -300,9 +301,9 @@ class TestStoredRows:
         assert [r["book"] for r in by_market["moneyline"]] == ["bp:24", "bp:50", "bp:77"]
 
     def test_a_book_the_vocabulary_does_not_list_is_never_offered(self):
-        """Review fix (2026-09-28, VOCAB-1): an unlisted id (Bet105, 77; BetMGM
-        Casino, 50), a prediction market (DraftKings Predictions, 74) or a
-        pick'em app (Betr, 45) used to count as a sportsbook."""
+        """Only a sportsbook the vocabulary lists is offered. An unlisted id
+        (Bet105, 77; BetMGM Casino, 50), a prediction market (DraftKings
+        Predictions, 74) and a pick'em app (Betr, 45) never count as one."""
         rows = [
             _stored_ml("bp:77", 300, -150),
             _stored_ml("bp:50", 300, -150),
@@ -619,11 +620,12 @@ class TestStoredEdges:
         # not in Preview (here: no raw.games row), a closing row first.
         assert "line_type = ANY($4::varchar[])" in sql
         assert "'current'" not in sql
-        # SIM-519 Part G: a book's rows sort by when the price was last seen.
+        # A book's closing row sorts first, then its rows by when the price
+        # was last seen.
         assert "(line_type = 'closing') DESC," in sql
         assert "COALESCE(last_seen_at, fetched_at) DESC" in sql
         assert "book LIKE 'bp:%'" in sql
-        # Review fix (VOCAB-1): a list of the books a bettor can use, never a blacklist.
+        # The book filter lists the books a bettor can use; it is never a blacklist.
         assert "AND book = ANY($3::varchar[])" in sql and "NOT (book = ANY(" not in sql
         assert args == (
             745001,
@@ -800,10 +802,10 @@ class TestStoredEdges:
 
     @pytest.mark.parametrize("status", ["Live", "Final", None])
     def test_in_play_current_rows_never_price_a_game_not_in_preview(self, make_client, status):
-        # The review's case: two in-play current rows (the home side far
-        # ahead) used to give a stored price and a +EV away bet at +1200. A
-        # live or finished game, or one with no raw.games row, reads no
-        # current row, even from a stub that returns them.
+        # Two in-play current rows (the home side far ahead) must not give a
+        # stored price and a false +EV away bet at +1200. A live or finished
+        # game, or one with no raw.games row, reads no current row, even from
+        # a stub that returns them.
         rows = [
             _stored_ml("bp:12", -2500, 1100, line_type="current", fetched_at=2),
             _stored_ml("bp:10", -2200, 1200, line_type="current", fetched_at=2),

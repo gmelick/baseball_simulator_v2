@@ -1,57 +1,47 @@
-"""
-batted_ball_similarity.py
-=========================
-Step 2.11 — Batted-Ball-to-Batted-Ball Similarity (FAISS)
-MLB Baseball Simulation Platform
+"""Batted-ball-to-batted-ball similarity: a nearest-neighbor search over FAISS.
 
-Indexes every in-play pitch in `sim.outcome_pool` into a FAISS index
-keyed by the batted ball's physical fingerprint, and supports fast
-K-nearest-neighbor lookup.  Each query returns metadata plus the result
-(0-out / 1B / 2B / 3B / HR) so the simulator can sample a realistic
-outcome distribution conditional on launch conditions.
+The engine indexes the batted balls of ``sim.outcome_pool`` that carry all
+three launch measures in FAISS (a library for fast nearest-neighbor search),
+and
+answers K-nearest-neighbor queries. Each neighbor carries its real outcome
+(``result_hits``: 0 = no hit, 1 = single, 2 = double, 3 = triple, 4 = home
+run), so ``outcome_distribution`` gives the outcome mix of the batted balls
+most like a given one.
 
-This engine is the second of the two FAISS engines in Phase 2 (the
-first being SIM-041, pitch-to-pitch).  Together they back the play-pool
-sampling architecture for Phase 3.
+The simulator does not call this engine. Its fielding draw lives in the
+full-pool sampler, over the engine-artifact bundle. The app builds this
+engine at boot with the other ten, and the Similarity Explorer lists it as a
+distance engine.
 
 Feature vector
 --------------
     [ exit_velo, launch_angle, spray_angle ]
 
-(3 dims.)  These are the three features that drive ~95 % of the
-launch-condition variance in batted-ball outcomes (per Statcast
-research and the Baseball Analyst's feature-set sign-off).  Categorical
-features (bb_type, fielded_by_position) are intentionally *not* in the
-FAISS distance — they're the *labels* we want to recover from
-nearest-neighbor results, not the features used to find neighbors.
+Each feature is z-scored over the indexed population (a z-score is the
+distance from the mean in standard deviations), then scaled by the square
+root of its weight. The index measures plain Euclidean (L2) distance, so the
+squared distance is the weighted sum of squared z-differences. The batted-ball
+type and the fielder are not features: they are the labels a neighbor
+carries, not the measures that find it.
 
-SIM-051 dependency: pull_relative_spray_angle
----------------------------------------------
-Per the BACKLOG sprint plan (2026-05-13), this engine is *supposed* to
-use the handedness-corrected `pull_relative_spray_angle` column instead
-of raw `spray_angle`.  That column is owned by SIM-051 (Data Engineer)
-and was open at sprint kickoff.  The engine ships now using raw
-`spray_angle` and falls forward automatically: if the
-`pull_relative_spray_angle` column exists in `sim.outcome_pool` at
-build time, the loader uses it; otherwise it falls back to raw
-`spray_angle` and emits an INFO-level warning so operators know they're
-on the unstable feature.
-
-When SIM-051 ships, no engine code change is needed — the next nightly
-rebuild picks up the better feature automatically and regression
-fixtures should be regenerated.
+The spray angle
+---------------
+The engine reads ``pull_relative_spray_angle``: the spray angle with its
+sign flipped for a left-handed batter, so a pull ball has the same sign from
+either side (negative = pull). A left-handed and a right-handed pull ball then
+sit together. A table without that column falls back to the raw ``spray_angle``,
+and the build logs that the outcomes then mix the two sides.
 
 Recency weighting
 -----------------
-Same pattern as SIM-041 (pitch-to-pitch): replicate the most-recent
-``RECENCY_BOOST_SEASONS`` of pitches once when ``recency_boost=True``
-is passed to ``build()``.  Disabled by default for deterministic
-testing.
+``build(recency_boost=True)`` adds a second copy of every batted ball from
+the last ``RECENCY_BOOST_SEASONS`` seasons, so recent play counts twice. It is
+off by default, which keeps the tests deterministic.
 
 Usage
 -----
     engine = BattedBallSimilarityEngine(duckdb_path="/data/baseball_sim.duckdb")
-    engine.build(seasons=[2022, 2023, 2024])
+    engine.build(seasons=[2023, 2024, 2025])
 
     query = BattedBallVector(exit_velo=104.0, launch_angle=22.0, spray_angle=8.0)
     results = engine.query(query, k=50)
@@ -95,8 +85,9 @@ log = logging.getLogger("batted_ball_similarity")
 # Config
 # ============================================================================
 
-# Feature names + per-feature importance weights for sqrt-scaling before
-# FAISS L2 indexing.  Calibration of these weights is BA-owned territory.
+# The features and their weights. Each z-scored feature is multiplied by the
+# square root of its weight before indexing, so the L2 distance squared is the
+# weighted sum of squared differences. The Baseball Analyst owns these values.
 BATTED_BALL_FEATURES = [
     # name,         weight   notes
     ("exit_velo", 1.30),  # mph; primary driver of HR/extra-base outcome
@@ -113,9 +104,8 @@ DEFAULT_K = 50
 MIN_INDEX_SIZE = 1_000
 RECENCY_BOOST_SEASONS = 2
 
-# When SIM-051 ships, the column name on sim.outcome_pool changes from
-# `spray_angle` (raw) to `pull_relative_spray_angle` (handedness-corrected).
-# The build loader detects which exists and selects accordingly.
+# The build reads the handedness-corrected spray angle when sim.outcome_pool has
+# it, and the raw one otherwise.
 PREFERRED_SPRAY_COLUMN = "pull_relative_spray_angle"
 FALLBACK_SPRAY_COLUMN = "spray_angle"
 
@@ -127,7 +117,11 @@ FALLBACK_SPRAY_COLUMN = "spray_angle"
 
 @dataclass(frozen=True, slots=True)
 class BattedBallVector:
-    """Query vector for the batted-ball FAISS index."""
+    """A query for the index.
+
+    ``spray_angle`` must follow the convention of the column the engine built
+    on (``spray_column_used``): pull-relative or raw.
+    """
 
     exit_velo: float
     launch_angle: float
@@ -142,16 +136,16 @@ class BattedBallVector:
 
 @dataclass(frozen=True, slots=True)
 class NearestBattedBall:
-    """One entry in the batted-ball K-nearest-neighbor query output."""
+    """One neighbor in a query's output, with its real outcome."""
 
     pitch_id: int  # FK into sim.outcome_pool / sim.pitch_pool
     game_pk: int
     season: int
     batter_id: int
     pitcher_id: int
-    distance: float  # Euclidean distance in normalized + weighted space
+    distance: float  # Euclidean distance in the z-scored, weighted space
     bb_type: str | None  # ground_ball / fly_ball / line_drive / popup
-    result_hits: int  # 0 / 1 / 2 / 3 / 4 — the labeled outcome
+    result_hits: int  # 0 = no hit, 1-4 = single to home run (NULL reads 0)
 
 
 # ============================================================================
@@ -161,7 +155,11 @@ class NearestBattedBall:
 
 @dataclass(slots=True)
 class BattedBallNormalizer:
-    """Z-score normalizer for batted-ball feature vectors."""
+    """Z-score normalizer for the batted-ball features; it also applies the weights.
+
+    A NaN z-scores to 0, the mean. A feature with no spread keeps a standard
+    deviation of 1. Before ``fit`` runs, a vector is only weighted.
+    """
 
     mean: NDArray | None = None
     std: NDArray | None = None
@@ -191,17 +189,16 @@ class BattedBallNormalizer:
 
 class BattedBallSimilarityEngine:
     """
-    Batted-Ball-to-Batted-Ball FAISS Engine (Step 2.11).
+    The batted-ball-to-batted-ball FAISS engine.
 
-    Loads `sim.outcome_pool` rows into memory, fits a normalizer, builds a
-    FAISS index over the [exit_velo, launch_angle, spray_angle] vector,
-    and answers K-nearest-neighbor queries.  Result entries carry the
-    historical outcome (`result_hits` ∈ {0,1,2,3,4}) so the simulation
-    loop can sample from a true conditional distribution.
+    ``build`` loads the ``sim.outcome_pool`` rows into memory, fits the
+    normalizer and builds a FAISS index over [exit_velo, launch_angle,
+    spray_angle]. ``query`` answers K-nearest-neighbor queries; each neighbor
+    carries its real outcome (``result_hits``).
 
-    SIM-051 readiness: at build time the loader picks
-    `pull_relative_spray_angle` if it exists on `sim.outcome_pool`,
-    otherwise falls back to raw `spray_angle`.
+    The index is exact (``flat``) by default. ``hnsw`` builds an approximate
+    graph index (HNSW, a hierarchical small-world graph) that answers faster
+    and can miss a true neighbor.
     """
 
     INDEX_KIND_FLAT = "flat"
@@ -225,8 +222,7 @@ class BattedBallSimilarityEngine:
         self._index: faiss.Index | None = None
         self._index_meta: list[NearestBattedBall] = []
         self._index_size = 0
-        # Recorded after build() so introspection shows whether the
-        # SIM-051 column was used.
+        # The spray column the last build read, for a reader to check.
         self._spray_column_used: str | None = None
 
     # ------------------------------------------------------------------
@@ -239,6 +235,11 @@ class BattedBallSimilarityEngine:
         *,
         recency_boost: bool = False,
     ) -> None:
+        """Load the batted balls of ``seasons`` (every season when None) and index them.
+
+        ``recency_boost`` works only with an explicit season list; it runs
+        before the normalizer fit, so the copies count in the mean and spread.
+        """
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
@@ -278,8 +279,10 @@ class BattedBallSimilarityEngine:
 
     @staticmethod
     def _select_spray_column(conn: duckdb.DuckDBPyConnection) -> str:
-        """Pick `pull_relative_spray_angle` if SIM-051 has shipped, else
-        fall back to raw `spray_angle` and warn."""
+        """The pull-relative spray column when the table has it, else the raw one.
+
+        The fallback logs a line at INFO level.
+        """
         try:
             cols = duck_columns(conn, "sim", "outcome_pool")
         except Exception:  # pragma: no cover — non-DuckDB connection
@@ -356,6 +359,11 @@ class BattedBallSimilarityEngine:
         meta: list[NearestBattedBall],
         seasons: list[int],
     ) -> tuple[NDArray[np.float64], list[NearestBattedBall]]:
+        """Append a copy of every row from the last RECENCY_BOOST_SEASONS seasons.
+
+        A query can then return a recent ball twice, so it counts twice in
+        ``outcome_distribution``.
+        """
         recent_cutoff = max(seasons) - (RECENCY_BOOST_SEASONS - 1)
         recent_mask = np.array(
             [m.season >= recent_cutoff for m in meta],
@@ -385,6 +393,11 @@ class BattedBallSimilarityEngine:
         vector: BattedBallVector | NDArray[np.float64],
         k: int = DEFAULT_K,
     ) -> list[NearestBattedBall]:
+        """The ``k`` nearest batted balls, nearest first.
+
+        ``k`` is capped at the index size. An unbuilt or empty index returns
+        an empty list.
+        """
         if self._index is None or self._index_size == 0:
             return []
 
@@ -421,6 +434,7 @@ class BattedBallSimilarityEngine:
         vectors: list[BattedBallVector] | NDArray[np.float64],
         k: int = DEFAULT_K,
     ) -> list[list[NearestBattedBall]]:
+        """``query`` for each vector, in one FAISS search."""
         if self._index is None or self._index_size == 0:
             return [[] for _ in vectors]
 
@@ -456,7 +470,7 @@ class BattedBallSimilarityEngine:
         return out
 
     # ------------------------------------------------------------------
-    # Outcome aggregation helpers (the *reason* the engine exists)
+    # Outcome mix
     # ------------------------------------------------------------------
 
     def outcome_distribution(
@@ -464,9 +478,9 @@ class BattedBallSimilarityEngine:
         vector: BattedBallVector | NDArray[np.float64],
         k: int = DEFAULT_K,
     ) -> dict[int, float]:
-        """Return a probability distribution over {0,1,2,3,4} hits drawn
-        from the K nearest neighbors.  This is the function the
-        simulation loop will actually call."""
+        """The share of each ``result_hits`` value among the ``k`` nearest
+        neighbors; an outcome no neighbor had is absent. Empty when the index
+        is empty."""
         results = self.query(vector, k=k)
         if not results:
             return {}
@@ -490,8 +504,7 @@ class BattedBallSimilarityEngine:
 
     @property
     def spray_column_used(self) -> str | None:
-        """Which spray column was selected by the loader.  Useful for
-        operators verifying that SIM-051 has actually shipped."""
+        """The spray column the last build read, or None before a build."""
         return self._spray_column_used
 
 
@@ -501,6 +514,7 @@ class BattedBallSimilarityEngine:
 
 
 def _f(value) -> float:
+    """A float, with NULL read as NaN."""
     if value is None:
         return float("nan")
     return float(value)
