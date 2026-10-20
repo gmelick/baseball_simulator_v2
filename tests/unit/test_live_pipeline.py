@@ -49,16 +49,15 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from pipeline.live.ingestion.constants import RESIM_COOLDOWN_S  # noqa: E402
+from pipeline.live.ingestion.game_state_builder import GameStateBuilder  # noqa: E402
+from pipeline.live.ingestion.mlb_websocket import ConnectionManager  # noqa: E402
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    PITCHER_PROP_STATS,
-    PROP_STATS,
-    RESIM_COOLDOWN_S,
-    ConnectionManager,
-    GameStateBuilder,
     LiveIngestionPipeline,
-    MockOddsAPI,
     create_app,
 )
+from pipeline.odds_provider import PITCHER_PROP_STATS, PROP_STATS  # noqa: E402
 
 # ===========================================================================
 # Helpers

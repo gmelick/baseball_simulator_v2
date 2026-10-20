@@ -40,14 +40,12 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    PROP_STATS,
-    LiveIngestionPipeline,
-    MockOddsAPI,
-)
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 from pipeline.odds_provider import (  # noqa: E402
     DEFAULT_PROVIDER,
     ODDS_PROVIDER_ENV,
+    PROP_STATS,
     OddsProvider,
     RealOddsAPIProvider,
     available_providers,

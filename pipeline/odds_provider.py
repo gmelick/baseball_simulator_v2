@@ -781,7 +781,7 @@ def _make_mock_provider() -> OddsProvider:
     are unavailable, and to avoid a circular import once the pipeline imports
     this module.
     """
-    from pipeline.live.live_ingestion_pipeline import MockOddsAPI
+    from pipeline.live.ingestion.mock_odds import MockOddsAPI
 
     return MockOddsAPI()
 

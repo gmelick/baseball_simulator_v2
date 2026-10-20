@@ -86,7 +86,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # SIM-555: the live pipeline's writers: the one INSERT, the odds_hash, the dedup.
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+from pipeline.live.ingestion.odds_rows import (  # noqa: E402
     insert_game_odds_rows,
     insert_prop_odds_rows,
 )

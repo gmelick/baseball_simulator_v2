@@ -42,7 +42,7 @@ from pipeline.bettingpros_odds_provider import (
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from pipeline.live.live_ingestion_pipeline import MockOddsAPI
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.odds_provider import (
     BETTABLE_KINDS,
     BOOK_IDS_BY_NAME,

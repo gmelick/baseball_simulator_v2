@@ -33,11 +33,9 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    GameStateBuilder,
-    LiveIngestionPipeline,
-    MockOddsAPI,
-)
+from pipeline.live.ingestion.game_state_builder import GameStateBuilder  # noqa: E402
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 # ===========================================================================
 # Helpers
