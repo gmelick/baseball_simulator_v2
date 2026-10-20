@@ -105,15 +105,13 @@ async def _summary_and_winprob(
 ) -> tuple[Any, WinProbability]:
     """Resolve the lineup, run (or reuse) a sim, and return (summary, win_prob).
 
-    REUSES the SIM-355 sim seam: resolve the GameState (404 on a bad game),
-    build a GameSpec under the request's factory ref, and run the BatchRunner
-    (cache-memoized). The :class:`WinProbability` is derived from the summary's
-    raw arrays so the moneyline report consumes a calibrated SIM-330 probability
-    (here uncalibrated -- identity -- since this is a best-effort edge surface).
-
-    SIM-452: the kwargs come from ``_resolved_sim_kwargs``, which looks the venue
-    park factor up first. This surface used to call the bare builder, so every
-    edge and CLV number it produced came from a park-blind simulation.
+    The function uses the game routes' seam: it resolves the GameState (404 on
+    an unknown game), builds a GameSpec under the request's factory ref with
+    the kwargs of ``_resolved_sim_kwargs`` (the venue's park factor looked up
+    first), and runs the BatchRunner, whose cache memoizes the summary. The
+    :class:`WinProbability` comes from the summary's raw arrays through the
+    app's calibration map (:data:`IDENTITY_CALIBRATION` when the app loaded
+    none).
     """
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
@@ -134,17 +132,15 @@ async def _summary_and_winprob(
         use_cache=use_cache,
     )
     summary = batch.summary
-    # SIM-330 / SIM-387: thread the loaded CalibrationMap from app.state so CLV and
-    # edge reports are computed off a *calibrated* win probability, not the identity
-    # fallback.  Falls back to IDENTITY_CALIBRATION when the app was started without
-    # a fitted CalibrationReport (e.g. in tests / early staging).
+    # The edge reports read a calibrated win probability: the map the lifespan
+    # loaded, else the identity map (no fitted report, as in the unit tests).
     cal_map = getattr(request.app.state, "calibration_map", IDENTITY_CALIBRATION)
     win_prob = win_probability(summary, calibration_map=cal_map)
     return summary, win_prob
 
 
 # ---------------------------------------------------------------------------
-# Response envelopes
+# The response models of /edges and /signals
 # ---------------------------------------------------------------------------
 
 
@@ -186,17 +182,17 @@ class EdgesResponse(BaseModel):
     final: dict[str, int] | None = None
     odds_source: dict[str, str] = Field(default_factory=dict)
     edges: list[EdgeReportModel] = Field(default_factory=list)
-    #: SIM-549: how the run line was priced (None when it was not requested).
+    #: How the full-game run line was priced (None when it was not requested).
     run_line_pricing: RunLinePricingModel | None = None
-    #: SIM-555: market -> the stored label of the graded book (stored markets only).
+    #: market -> the stored label of the graded book (stored markets only).
     fair_book: dict[str, str] = Field(default_factory=dict)
-    #: SIM-555: market -> that book's display name ("DraftKings").
+    #: market -> that book's display name ("DraftKings").
     fair_book_name: dict[str, str] = Field(default_factory=dict)
-    #: SIM-546: report label -> the market's plain name ("First five total"); the
+    #: report label -> the market's plain name ("First five total"); the
     #: card titles its sections from it.
     market_names: dict[str, str] = Field(default_factory=dict)
-    #: SIM-546: report label -> how that run line was priced, for every priced
-    #: run line ("run_line", "f1_runline", "f5_runline").
+    #: report label -> how that run line was priced, for every priced run
+    #: line ("run_line", "f1_runline", "f5_runline").
     run_line_pricing_by_label: dict[str, RunLinePricingModel] = Field(default_factory=dict)
 
 
@@ -216,25 +212,25 @@ class SignalsResponse(BaseModel):
     config: dict[str, float] = Field(default_factory=dict)
     odds_source: dict[str, str] = Field(default_factory=dict)
     signals: list[BetSignalModel] = Field(default_factory=list)
-    #: SIM-549: how the run line was priced (None when it was not requested).
+    #: How the full-game run line was priced (None when it was not requested).
     run_line_pricing: RunLinePricingModel | None = None
-    #: SIM-555: market -> the stored label of the graded book (stored markets only).
+    #: market -> the stored label of the graded book (stored markets only).
     fair_book: dict[str, str] = Field(default_factory=dict)
-    #: SIM-555: market -> that book's display name ("DraftKings").
+    #: market -> that book's display name ("DraftKings").
     fair_book_name: dict[str, str] = Field(default_factory=dict)
-    #: SIM-546: report label -> the market's plain name, so a signal on a
-    #: first-five total or a tie can be labelled.
+    #: report label -> the market's plain name, so a signal on a first-five
+    #: total or a tie can be labelled.
     market_names: dict[str, str] = Field(default_factory=dict)
-    #: SIM-546: report label -> how that run line was priced (every priced run line).
+    #: report label -> how that run line was priced (every priced run line).
     run_line_pricing_by_label: dict[str, RunLinePricingModel] = Field(default_factory=dict)
 
 
 # ===========================================================================
-# SIM-367/SIM-339 -- GET /api/betting/games/{game_pk}/edges
+# The shared query params of /edges and /signals
 # ===========================================================================
 
 
-#: SIM-546: the description of the ``prices`` query param, shared by both routes.
+#: The description of the ``prices`` query param, shared by both routes.
 _PRICES_PARAM_DESCRIPTION = (
     "A JSON document of injected prices keyed by market type, e.g. "
     '{"f5_total": {"over_ml": -110, "under_ml": -110, "line": 4.5}}. A moneyline-kind '
@@ -245,7 +241,7 @@ _PRICES_PARAM_DESCRIPTION = (
     "non-numeric field, or a market also given by the named params"
 )
 
-#: SIM-546: the description of the ``markets`` query param, shared by both routes.
+#: The description of the ``markets`` query param, shared by both routes.
 _MARKETS_PARAM_DESCRIPTION = (
     "Comma-separated subset of the fifteen game markets (moneyline, runline, total, "
     "f1_moneyline, f5_moneyline, f1_total, f5_total, f1_runline, f5_runline, "
@@ -289,7 +285,7 @@ def _pricing_models(built: _EdgeBuild) -> dict[str, RunLinePricingModel]:
 
 
 # ===========================================================================
-# The game page: how each bet settled
+# The real final: how each bet settled
 # ===========================================================================
 
 #: The real final's grid (``raw.games.inning_scores``) of a final game.
@@ -441,7 +437,7 @@ async def get_game_edges(
         run_line=run_line,
         away_run_line=away_run_line,
     )
-    # SIM-546: a bad prices document fails before the simulation runs.
+    # A bad prices document fails before the simulation runs.
     doc = _parse_prices(prices, named)
     summary, win_prob = await _summary_and_winprob(
         request,
@@ -462,7 +458,7 @@ async def get_game_edges(
     )
     priced = _priced_markets(requested, built)
 
-    # The game page: each side graded once the game is final.
+    # Each side is graded once the game is final.
     actual = await _actual_result(request, int(game_pk))
     edges = []
     for r in built.reports:
@@ -494,7 +490,7 @@ async def get_game_edges(
 
 
 # ===========================================================================
-# SIM-369 -- GET /api/betting/games/{game_pk}/signals
+# GET /signals
 # ===========================================================================
 
 
@@ -587,8 +583,8 @@ async def get_game_signals(
         kelly_fraction=float(kelly_fraction),
         max_stake_fraction=float(max_stake_fraction),
     )
-    # SIM-546 (owner decision 4, 2026-10-09): the signals fire on all fifteen
-    # markets, the uncalibrated segment and team markets included.
+    # The signals fire on all fifteen markets, the uncalibrated segment and
+    # team markets included (an owner ruling on the segment markets, SIM-546).
     signals = bet_signals_from_edges(built.reports, config=config)
 
     return SignalsResponse(

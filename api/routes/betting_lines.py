@@ -61,7 +61,7 @@ class ClvSnapshotResponse(BaseModel):
 
 
 # ===========================================================================
-# SIM-368 -- GET /api/betting/games/{game_pk}/line-movement
+# GET /line-movement
 # ===========================================================================
 
 
@@ -80,11 +80,10 @@ def _validate_market_type(market_type: str) -> str:
 async def _fetch_movements(
     request: Request, *, game_pk: int, market_type: str, book: str | None
 ) -> list[Any]:
-    """Acquire a conn from the pool and run fetch_line_movement (503 if no pool).
+    """Run ``fetch_line_movement`` on a connection from the pool (503 with no pool).
 
-    Handles both an asyncpg pool (``async with pool.acquire()``) and a pool that IS
-    a connection exposing ``fetch`` (the mock-pool test idiom), mirroring
-    ``api.routes.games._resolve_state_or_error``'s acquire-or-direct pattern.
+    The pool is an asyncpg pool (``async with pool.acquire()``) or a connection
+    that exposes ``fetch`` (the mock-pool test idiom).
     """
     pool = _get_pool(request)
     acquire = getattr(pool, "acquire", None)
@@ -134,7 +133,7 @@ async def get_game_line_movement(
 
 
 # ===========================================================================
-# SIM-339/SIM-368 -- GET /api/betting/games/{game_pk}/clv (snapshot projection)
+# GET /clv: the series of /line-movement that carry a CLV
 # ===========================================================================
 
 
@@ -162,7 +161,7 @@ async def get_game_clv(
 ) -> ClvSnapshotResponse:
     mt = _validate_market_type(market_type)
     movements = await _fetch_movements(request, game_pk=int(game_pk), market_type=mt, book=book)
-    # Only the series that actually have a computed CLV (the snapshot's point).
+    # Only the series that carry a CLV.
     with_clv = [m for m in movements if m.clv is not None]
     return ClvSnapshotResponse(
         game_pk=int(game_pk),

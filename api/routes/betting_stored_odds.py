@@ -72,16 +72,16 @@ from pipeline.odds_row_guard import check_row
 log = logging.getLogger("api.routes.betting")
 
 
-#: The valid market_type values line-movement understands (mirrors the
-#: betting.line_movement _MARKET_SIDES set / the Alembic-0003 CHECK). SIM-546:
-#: the line-movement and CLV reads keep these three; /edges and /signals price
-#: every game market (:data:`_EDGE_MARKET_TYPES`).
+#: The three full-game markets: the market types the line-movement and CLV
+#: reads understand (``betting.line_movement``'s ``_MARKET_SIDES``), and the
+#: default market list of the stored read. /edges and /signals price every
+#: game market (``betting_pricing._EDGE_MARKET_TYPES``).
 _VALID_MARKET_TYPES = ("moneyline", "runline", "total")
 
 
-#: SIM-546: each segment's total of both teams (``game`` -> ``total``,
-#: ``f5`` -> ``f5_total``). A run line listed as two separate bets reads its
-#: reference margin from its own segment's total first.
+#: Each segment's total of both teams (``game`` -> ``total``, ``f5`` ->
+#: ``f5_total``). A run line listed as two separate bets reads its reference
+#: margin from its own segment's total first.
 _SEGMENT_TOTAL_OF: dict[str, str] = {
     GAME_MARKET_SEGMENT[m]: m
     for m in GAME_MARKET_TYPES
@@ -90,34 +90,34 @@ _SEGMENT_TOTAL_OF: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# SIM-555: the stored price source -- every book's stored line for the game
+# The line types, the reads and the side table
 # ---------------------------------------------------------------------------
 
-#: SIM-555: the game status whose stored ``current`` rows are pre-game prices.
-#: The live pipeline writes ``raw.games.status`` from the schedule's abstract
-#: game state (``Preview`` / ``Live`` / ``Final``); ``Preview`` = not started.
+#: The game status whose stored ``current`` rows are pre-game prices. The live
+#: pipeline writes ``raw.games.status`` from the schedule's abstract game state
+#: (``Preview`` / ``Live`` / ``Final``); ``Preview`` means not started.
 _PREGAME_STATUS = "Preview"
 
-#: SIM-555: the stored line types a game not yet started may be priced from.
+#: The stored line types a game not yet started may be priced from.
 _PREGAME_LINE_TYPES: tuple[str, ...] = ("closing", "current")
 
-#: SIM-555: the stored line types every other game is priced from: the closing
-#: line, the last pre-game price. Its ``current`` rows are in-play prices (or
-#: prices taken after the game). See the module docstring, source 2.
+#: The stored line types every other game is priced from: the closing line,
+#: the last pre-game price. Its ``current`` rows are in-play prices, or prices
+#: taken after the game (the module docstring).
 _STARTED_LINE_TYPES: tuple[str, ...] = ("closing",)
 
-#: SIM-555: the game's status (``$1`` = game_pk). No row = not in ``Preview``.
+#: The game's status (``$1`` = game_pk). No row means not in ``Preview``.
 _SQL_GAME_STATUS = "SELECT status FROM raw.games WHERE game_pk = $1"
 
-#: SIM-555: the latest usable row of each book for each requested game market
-#: of a game: one-book rows only (``bp:<id>``), the listed sportsbooks only
-#: (never the blend, a daily-fantasy app, an exchange, a prediction market or a
-#: book the vocabulary does not list), the allowed line types only. ``$2`` is
-#: the market list (:func:`_stored_read_markets`), ``$3`` the sportsbook labels
+#: The latest usable row of each book for each requested game market of a
+#: game: one-book rows only (``bp:<id>``), the listed sportsbooks only (never
+#: the blend, a daily-fantasy app, an exchange, a prediction market or a book
+#: the vocabulary does not list), the allowed line types only. ``$2`` is the
+#: market list (:func:`_stored_read_markets`), ``$3`` the sportsbook labels
 #: (:func:`pipeline.odds_provider.bettable_labels`), ``$4`` the allowed line
 #: types (:func:`_usable_line_types`). A closing row sorts before any current
-#: row of the same book. SIM-546: the read selects ``draw_ml``, the tie price
-#: of a three-way market.
+#: row of the same book. ``draw_ml`` is the tie price of a three-way market.
+#: This read serves a database before Alembic 0029, which has no ``last_seen_at``.
 _SQL_STORED_GAME_ODDS = f"""
     SELECT DISTINCT ON (market_type, book)
            market_type, book, line_type, fetched_at,
@@ -133,9 +133,9 @@ _SQL_STORED_GAME_ODDS = f"""
     ORDER BY market_type, book, (line_type = 'closing') DESC, fetched_at DESC
 """
 
-#: SIM-519 Part G: the same read with ``last_seen_at`` (Alembic 0029). A book's
-#: rows of one line type sort by when the price was last SEEN, so a price that
-#: moves A -> B -> A reads A (the third pass re-stamps A's row).
+#: The same read with ``last_seen_at`` (Alembic 0029). A book's rows of one
+#: line type sort by when the price was last SEEN, so a price that moves
+#: A -> B -> A reads A (the third pass re-stamps A's row).
 _SQL_STORED_GAME_ODDS_SEEN = f"""
     SELECT DISTINCT ON (market_type, book)
            market_type, book, line_type, fetched_at, last_seen_at,
@@ -152,16 +152,16 @@ _SQL_STORED_GAME_ODDS_SEEN = f"""
              COALESCE(last_seen_at, fetched_at) DESC
 """
 
-#: SIM-519 Part G: a book's current row counts only while it was seen within
-#: two pre-game cadences (20 minutes) of the game's newest pass. A withdrawn
-#: price stops being re-stamped and falls out; a closing row always counts.
+#: A book's current row counts only while it was seen within two pre-game
+#: cadences (20 minutes) of the game's newest pass. A withdrawn price stops
+#: being re-stamped and falls out; a closing row always counts.
 CURRENT_ROW_MAX_AGE_S = 1200
 
 #: A market's sides as (side, price column, line column); a side with no line
 #: column has ``None`` there.
 SideColumns = tuple[tuple[MarketSide, str, str | None], ...]
 
-#: SIM-546: each market KIND's sides (``pipeline.odds_provider.GAME_MARKET_KIND``).
+#: Each market KIND's sides (``pipeline.odds_provider.GAME_MARKET_KIND``).
 #: A three-way market prices the tie as a third side. The yes / no market ("a
 #: run in the first inning") is stored as over / under at line 0.5.
 _KIND_SIDE_COLUMNS: dict[str, SideColumns] = {
@@ -185,21 +185,21 @@ _KIND_SIDE_COLUMNS: dict[str, SideColumns] = {
     ),
 }
 
-#: SIM-555 / SIM-546: every game market's sides, generated from its kind. The
-#: stored rows, the offered prices and the usability rule all read this one table.
+#: Every game market's sides, built from its kind. The stored rows, the offered
+#: prices and the usability rule all read this one table.
 _STORED_SIDE_COLUMNS: dict[str, SideColumns] = {
     m: _KIND_SIDE_COLUMNS[GAME_MARKET_KIND[m]] for m in GAME_MARKET_TYPES
 }
 
 
-#: SIM-555: stored rows by market, each list in the graded order (see
-#: :func:`_stored_rows_by_market`).
+#: Stored rows by market, each list in the graded order
+#: (:func:`_stored_rows_by_market`).
 StoredRows = Mapping[str, Sequence[Mapping[str, Any]]]
 
 
 @dataclass(frozen=True, slots=True)
 class _StoredMarket:
-    """SIM-555: one market's stored prices, ready for the edge math.
+    """One market's stored prices, ready for the edge math.
 
     ``graded`` is ONE book's row. The fair probability de-vigs that row alone.
     ``offered`` gives each side the best price at the graded row's line across
@@ -224,7 +224,7 @@ def _graded_order(label: str) -> tuple[int, int]:
 
 
 def _usable_line_types(status: str | None) -> tuple[str, ...]:
-    """SIM-555 (pure): the stored line types a game in ``status`` may be priced from.
+    """The stored line types a game in ``status`` may be priced from (pure).
 
     ``Preview`` (not started): the closing and current rows. Any other status,
     or none (no ``raw.games`` row): the closing rows only."""
@@ -232,15 +232,16 @@ def _usable_line_types(status: str | None) -> tuple[str, ...]:
 
 
 def _latest_pregame_rows(rows: Sequence[Any], line_types: Sequence[str]) -> list[dict[str, Any]]:
-    """SIM-555 (pure): each book's latest usable row of each market.
+    """Each book's latest usable row of each market (pure).
 
     ``line_types`` is :func:`_usable_line_types`' answer for the game. The SQL
-    already returns one such row per (market, book). This repeats the rules in
-    Python, so a caller that passes other rows still gets only the allowed
-    line types (no ``current`` row for a game that is not in ``Preview``) and
-    one row per book. A closing row beats any current row of the same book;
-    between two rows of one line type, the one with the greatest
-    ``fetched_at`` wins, and a row without one sorts first."""
+    already returns one such row per (market, book). The function repeats the
+    rules in Python, so a caller that passes other rows still gets only the
+    allowed line types (no ``current`` row for a game that is not in
+    ``Preview``) and one row per book. A closing row beats any current row of
+    the same book; between two rows of one line type, the newest sighting wins
+    (:func:`_pregame_order`). Then :func:`_drop_withdrawn` drops the withdrawn
+    current rows."""
     allowed = set(line_types)
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for raw in rows:
@@ -256,15 +257,15 @@ def _latest_pregame_rows(rows: Sequence[Any], line_types: Sequence[str]) -> list
 
 def _pregame_order(row: Mapping[str, Any]) -> tuple[bool, tuple[bool, Any]]:
     """The sort key of one book's rows: a closing row first, then the newest
-    sighting (SIM-519: ``last_seen_at`` when stored, else ``fetched_at``)."""
+    sighting (``last_seen_at`` when stored, else ``fetched_at``)."""
     if row.get("last_seen_at") is not None:
         return row.get("line_type") == "closing", (True, row["last_seen_at"])
     return row.get("line_type") == "closing", _fetched_order(row)
 
 
 def _drop_withdrawn(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """SIM-519 Part G (pure): drop each current row not seen within
-    :data:`CURRENT_ROW_MAX_AGE_S` of the game's newest sighting.
+    """Drop each current row not seen within :data:`CURRENT_ROW_MAX_AGE_S` of
+    the game's newest sighting (pure).
 
     Rows without ``last_seen_at`` (before Alembic 0029) are all kept."""
     seen = [
@@ -294,7 +295,7 @@ def _fetched_order(row: Mapping[str, Any]) -> tuple[bool, Any]:
 def _stored_rows_by_market(
     rows: Sequence[Any], line_types: Sequence[str] = _STARTED_LINE_TYPES
 ) -> dict[str, list[dict[str, Any]]]:
-    """SIM-555 (pure): the stored rows the edge math may use, by market.
+    """The stored rows the edge math may use, by market (pure).
 
     ``line_types`` is :func:`_usable_line_types`' answer for the game; the
     default is the closing line only. Only each book's latest usable row
@@ -305,8 +306,7 @@ def _stored_rows_by_market(
     market's list is sorted by :func:`_graded_order`: the first row is the
     graded book's.
 
-    SIM-546: the columns come from the market's kind
-    (:data:`_STORED_SIDE_COLUMNS`). A three-way row needs its tie price too: a
+    The columns come from the market's kind (:data:`_STORED_SIDE_COLUMNS`). A three-way row needs its tie price too: a
     row with no ``draw_ml`` is not usable, so the graded row is the first book
     with a complete row, and with none the market falls to the mock."""
     by_market: dict[str, list[dict[str, Any]]] = {}
@@ -330,7 +330,7 @@ def _stored_rows_by_market(
 
 
 def _stored_market(stored: StoredRows | None, market: str) -> _StoredMarket | None:
-    """SIM-555 (pure): the graded row and each side's best offered price.
+    """The graded row and each side's best offered price (pure).
 
     ``stored`` is :func:`_stored_rows_by_market`'s output. The graded row is the
     market's first row. For each side, the offered price is the highest payout
@@ -359,11 +359,13 @@ def _stored_market(stored: StoredRows | None, market: str) -> _StoredMarket | No
 
 
 def _reference_order(segment: str) -> tuple[tuple[str, str, str], ...]:
-    """SIM-546 (pure): the two-way markets a run line listed as two separate
-    bets reads its margin from, in order, as (market, price column, price
-    column): the segment's own total, then the full-game total, then the
-    moneyline. The full-game run line reads the total, then the moneyline. The
-    accuracy comparison uses the same order (SIM-549)."""
+    """The two-way markets that a run line listed as two separate bets reads
+    its margin from, in order, as (market, price column, price column) (pure).
+
+    A segment run line reads the segment's own total, then the full-game
+    total, then the moneyline; the full-game run line reads the total, then
+    the moneyline. The accuracy comparison uses the same order (the run lines
+    scored by shape, SIM-549)."""
     order: list[tuple[str, str, str]] = []
     if segment != "game":
         order.append((_SEGMENT_TOTAL_OF[segment], "over_ml", "under_ml"))
@@ -375,11 +377,11 @@ def _reference_order(segment: str) -> tuple[tuple[str, str, str], ...]:
 def _stored_reference_margin(
     stored: StoredRows | None, book: str, segment: str = "game"
 ) -> tuple[float, str]:
-    """SIM-555 (pure): one book's two-way margin on the game: its total, then its
+    """One book's two-way margin on the game (pure): its total, then its
     moneyline, then the flat 1.05 (``reference_margin_from_prices``).
 
-    SIM-546: a segment run line (``segment`` ``f1`` or ``f5``) reads the book's
-    own segment total first (:func:`_reference_order`)."""
+    A segment run line (``segment`` ``f1`` or ``f5``) reads the book's own
+    segment total first (:func:`_reference_order`)."""
 
     def own(market: str) -> Mapping[str, Any] | None:
         rows = (stored or {}).get(market) or []
@@ -395,8 +397,7 @@ def _stored_reference_margin(
 
 
 def _stored_read_markets(markets: Sequence[str]) -> list[str]:
-    """SIM-546 (pure): the market types the stored read asks for, in the
-    vocabulary's order.
+    """The market types the stored read asks for, in the vocabulary's order (pure).
 
     The three full-game markets always (a run line listed as two separate
     bets reads the total and the moneyline for its margin), every requested
@@ -412,7 +413,7 @@ def _stored_read_markets(markets: Sequence[str]) -> list[str]:
 async def _read_stored_rows(
     request: Request, game_pk: int, markets: Sequence[str] = _VALID_MARKET_TYPES
 ) -> dict[str, list[dict[str, Any]]]:
-    """SIM-555: the game's usable stored rows by market (see :func:`_stored_rows_by_market`).
+    """The game's usable stored rows by market (:func:`_stored_rows_by_market`).
 
     Two reads on one connection: the game's status (:data:`_SQL_GAME_STATUS`),
     which sets the usable line types (:func:`_usable_line_types`), then each
@@ -429,7 +430,7 @@ async def _read_stored_rows(
         else:
             line_types, rows = await _fetch_stored_rows(pool, game_pk, markets)
         return _stored_rows_by_market(rows, line_types)
-    except Exception as exc:  # the mock is the fallback; the route must not fail
+    except Exception as exc:  # noqa: BLE001 -- the mock is the fallback
         log.warning(
             "SIM-555: the stored odds read failed for game %s; the markets use the mock: %s",
             game_pk,
@@ -441,7 +442,7 @@ async def _read_stored_rows(
 async def _fetch_stored_rows(
     conn: Any, game_pk: int, markets: Sequence[str] = _VALID_MARKET_TYPES
 ) -> tuple[tuple[str, ...], list[Any]]:
-    """SIM-555: (the usable line types, the stored rows) of one game, from ``conn``.
+    """(The usable line types, the stored rows) of one game, from ``conn``.
 
     Both reads go through ``fetch``, so a direct-connection pool and a
     connection work alike."""
@@ -458,7 +459,7 @@ async def _fetch_stored_rows(
 
 
 def _status_of(rows: Sequence[Any] | None) -> str | None:
-    """SIM-555 (pure): the ``status`` of the first row, or None (no row, no status)."""
+    """The ``status`` of the first row, or None for no row or no status (pure)."""
     for raw in rows or []:
         row = raw if isinstance(raw, Mapping) else dict(raw)
         status = row.get("status")

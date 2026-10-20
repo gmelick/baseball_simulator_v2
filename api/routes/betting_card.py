@@ -30,10 +30,6 @@ log = logging.getLogger("api.routes.betting")
 router = APIRouter()
 
 
-# ===========================================================================
-# SIM-519 Part I -- GET /api/betting/games/{game_pk}/card-odds
-# ===========================================================================
-
 #: The three full-game markets the slate card shows.
 _CARD_MARKETS: tuple[str, ...] = ("moneyline", "runline", "total")
 
