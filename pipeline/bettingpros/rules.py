@@ -17,7 +17,7 @@ F5_TWIN_MARKETS: dict[int, int] = {283: 282, 281: 280, 279: 278}
 #: finds any other book.
 F5_EXCLUDED_BOOKS: dict[int, date] = {12: date(2025, 3, 1)}
 
-#: SIM-555 (census fix 2026-09-28): the first-five markets each dated
+#: The first-five markets each dated
 #: exclusion applies to. A book on F5_EXCLUDED_BOOKS with no entry here is
 #: excluded on all three F5_TWIN_MARKETS keys. The 300-game census read
 #: DraftKings' dated rows per market: 43 of its 54 first-five run-line rows
@@ -55,7 +55,7 @@ def is_f5_dated_excluded(book_id: int, market_id: int, game_date: date | None) -
 #: the same book's first-inning line.
 TWIN_PRICE_TOLERANCE = 0.03
 
-#: SIM-555 (review fix 2026-09-28): the gap for the moneyline pair (279 → 278).
+#: The gap for the moneyline pair (279 → 278).
 #: Both moneylines carry the line 1 on every side, so the line test cannot
 #: tell them apart, and on a near-even game a book's real two-way first-five
 #: price sits within 0.03 of its first-inning price (Caesars −120 / +100

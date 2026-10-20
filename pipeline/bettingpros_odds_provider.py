@@ -1,8 +1,10 @@
-"""
-pipeline/bettingpros_odds_provider.py
-=====================================
-A real :class:`~pipeline.odds_provider.OddsProvider` backed by the
-BettingPros v3 API (https://api.bettingpros.com/v3), replacing the SIM-370 stub.
+"""The real odds provider: an :class:`~pipeline.odds_provider.OddsProvider`
+backed by the BettingPros v3 API (https://api.bettingpros.com/v3).
+
+The class lives here with its settings, its public reads and the graded-book
+choice; its parts live in ``pipeline/bettingpros/`` (the vendor-data rules, the
+offer parsing, the schedule facts, the market ids, and the transport, event
+match and row mixins).
 
 Conforms to the structural ``OddsProvider`` protocol (``get_odds`` /
 ``get_prop_odds`` returning the ``MockOddsAPI`` dict shapes) so it is a drop-in:
@@ -21,9 +23,9 @@ How it bridges identifiers (the provider only receives ``game_pk`` / MLB
     people endpoint, then match the BettingPros prop offer participant by
     normalized first+last name.
 
-Markets (discovered from /v3/markets?sport=MLB; the eight SIM-421 prop ids
-were verified against the owner's scraper, the twelve segment ids against a
-live event on 2026-09-12):
+Markets (discovered from /v3/markets?sport=MLB; the eight newer prop ids were
+verified against the owner's scraper, the twelve segment ids against a live
+event on 2026-09-12; the prop-market work, SIM-421):
   game:    moneyline 122, total 175, run-line 176
   segment: f1_moneyline 278, f5_moneyline 279 (three-way: home / away / draw),
            f1_total 280, f5_total 281, f1_runline 282, f5_runline 283,
@@ -38,8 +40,8 @@ live event on 2026-09-12):
 ``hits`` (287) is the batter market and ``hits_allowed`` (404) the pitcher
 market; the vocabulary itself lives in ``pipeline/odds_provider.py``.
 
-One row per book (SIM-555, 2026-09-28)
---------------------------------------
+One row per book (SIM-555)
+--------------------------
 One ``/offers`` payload lists every book's line on every side of a market. The
 provider returns one row per book: :meth:`get_odds_by_book` /
 :meth:`get_prop_odds_by_book`. Each row holds ONE book's prices for every side,
@@ -57,8 +59,8 @@ row's line in ``book_line_at`` (a timezone-aware UTC datetime).
     inactive, or without a price, is not a quote. The stamp is the newest
     ``updated`` of the row's sides. Since 2025 the vendor stamps a snapshot at
     game time, so a closing stamp sits 0-5 minutes after the scheduled start.
-  * Each market fills only its own columns (the three full-game markets no
-    longer share one row). A total-kind or yes / no row also carries
+  * Each market fills only its own columns (the three full-game markets do
+    not share one row). A total-kind or yes / no row also carries
     ``over_line`` / ``under_line``, the two sides' own lines, for the load
     guard (``pipeline/odds_row_guard.py``); ``scheduled_start``,
     ``game_date`` and ``postponed_start`` (a made-up game's original start,
@@ -90,16 +92,15 @@ default, with or without a pin. ``prefer_book_id`` pins every call to that one
 book; a pinned non-sportsbook is readable only by naming it (``book='bp:0'``).
 
 The offers cache
---------------------------
+----------------
 One ``/offers`` response for an (event_id, market_id) pair carries EVERY
 player's offer for that market, and the same response serves every book and
 both the opening and the closing line (each line type is a different field of
-the same selection). Before SIM-421 the provider fetched it again for every
-(player, market, book, line type) — several hundred HTTP calls per game where
-15 would do. The provider now keeps a per-instance cache keyed
+the same selection). Without a cache the provider would fetch it again for
+every (player, market, book, line type): several hundred HTTP calls a game
+where 15 do. The provider keeps a per-instance cache keyed
 ``(event_id, market_id)`` with a time-to-live, plus a per-date cache of the
-``/events`` list (``_resolve_event`` used to re-fetch the whole day's slate for
-every game on that date).
+``/events`` list (every game of a date shares one).
 
 The time-to-live matters because the live pipeline keeps ONE provider for the
 process lifetime and fetches props every ``PROP_FETCH_CADENCE_S`` (60) seconds:
@@ -131,8 +132,8 @@ the process lifetime. So the live pipeline finds a game that BettingPros lists
 later, and one failed lookup costs one read per time-to-live, not one read per
 market and player (the loader asks about 410 times per game).
 
-Postponed, made-up and suspended games (SIM-555, 2026-10-01)
--------------------------------------------------------------
+Postponed, made-up and suspended games
+--------------------------------------
 MLB lists a game once per date it touched. A game postponed and made up later
 has a postponed entry (its ``gameDate`` the original start) and a played
 entry. A suspended game has two "Final" entries: the original first pitch and
@@ -142,10 +143,10 @@ the vendor may move a suspended game to its resumption date. An event's gap
 is its distance to the nearest start of the game. A gap of 2 hours or less
 matches. The single-event rule takes a larger gap, up to 12 hours, when the
 event is the two teams' only event on the played date and the game is not a
-double-header: the vendor kept another start time. Before this, the matcher
-compared the vendor's events with a made-up game's ORIGINAL start and declined
-them. The loader's logs show a same-team event declined on about 350 games of
-2019-2026, the main cause of a game with no odds at all. Every row of a
+double-header: the vendor kept another start time. Measured against a
+made-up game's ORIGINAL start, the vendor's events would be declined (about
+350 games of 2019-2026 in the loader's logs, the main cause of a game with no
+odds at all). Every row of a
 made-up game carries ``postponed_start``; the load guard refuses a price
 stamped at or before it (bet365 kept the price of the unplayed game).
 
@@ -153,15 +154,16 @@ Game 2 of a straight double-header has no listed start: MLB sets
 ``startTimeTBD`` and a placeholder start 5 minutes after game 1's, which sits
 nearer game 1's event than game 2's. The matcher takes the later of the two
 teams' two events on the played date, and the rows measure their stamps from
-that event's start. Before this, game 2 got game 1's event and game 1's prices.
+that event's start; matched by its start alone, game 2 would get game 1's
+event and game 1's prices.
 
 HTTP is stdlib ``urllib`` (sync — the protocol methods are sync; the module
 stays importable without aiohttp). The two ``_bp_get`` / ``_mlb_get`` seams are
 the only network surface and are stubbed in unit tests (fixtures captured under
 ``tests/fixtures/bettingpros/``); no live call is made in tests.
 
-Retries and failed reads (SIM-555, 2026-10-01)
-----------------------------------------------
+Retries and failed reads
+------------------------
 Every vendor and MLB read goes through :meth:`BettingProsOddsProvider._http_get_json`.
 That method retries a transient failure: an HTTP 429 or 5xx, a time-out, a
 refused or dropped connection, an unreachable network, a TLS error. The wait
@@ -390,7 +392,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         vendor's blend (``bp:0``) included, the excluded first-five books left
         out. Each row carries every ``get_odds`` key plus ``book_id``,
         ``book_line_at``, ``scheduled_start``, ``game_date`` and
-        ``postponed_start`` (SIM-555: a made-up game's original start, else
+        ``postponed_start`` (a made-up game's original start, else
         ``None``), and ``over_line`` / ``under_line`` on a total-kind or
         yes / no market. An unresolvable game gives an empty list.
         """
@@ -406,7 +408,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         book: str = "consensus",
         is_sharp_book: bool = False,
     ) -> dict[str, Any]:
-        """One row for ``game_pk`` in the MockOddsAPI dict shape (SIM-405; SIM-555).
+        """One row for ``game_pk`` in the MockOddsAPI dict shape.
 
         ``book`` names a book (``'draftkings'``, ``'DraftKings'``, ``'bp:12'``):
         that book's row from :meth:`get_odds_by_book`, or an empty row (every
@@ -457,7 +459,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         book: str = "consensus",
         is_sharp_book: bool = False,
     ) -> dict[str, Any]:
-        """One player-prop quote in the MockOddsAPI shape (SIM-405; SIM-555).
+        """One player-prop quote in the MockOddsAPI shape.
 
         ``book`` picks the row as in :meth:`get_odds`. Raises ``ValueError`` for
         an unknown ``prop_stat`` (mirrors the mock). ``line`` / ``over_ml`` /

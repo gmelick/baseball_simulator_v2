@@ -538,7 +538,7 @@ class OfferRowsMixin(EventMatchMixin):
             offers = self._offers(event_id, market_id)  # Cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: offers fetch failed (market %s): %s", market_id, exc)
-            self.read_failures += 1  # SIM-555
+            self.read_failures += 1
             return []
         return offers[0].get("selections", []) if offers else []
 
@@ -556,7 +556,7 @@ class OfferRowsMixin(EventMatchMixin):
             offers = self._offers(event_id, market_id)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: team offers fetch failed (market %s): %s", market_id, exc)
-            self.read_failures += 1  # SIM-555
+            self.read_failures += 1
             return []
         if not team_abbrev:
             return []
@@ -576,7 +576,7 @@ class OfferRowsMixin(EventMatchMixin):
             offers = self._offers(event_id, market_id)  # Cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: prop offers fetch failed (market %s): %s", market_id, exc)
-            self.read_failures += 1  # SIM-555
+            self.read_failures += 1
             return None
         for offer in offers:
             for part in offer.get("participants", []):

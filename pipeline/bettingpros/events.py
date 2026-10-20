@@ -60,11 +60,11 @@ class EventMatchMixin(TransportMixin):
         schedule again. A read that raised counts in ``read_failures``; a
         schedule answer without the game does not (the game is absent).
 
-        SIM-555 (2026-10-01): the meta comes from the PLAYED schedule entry,
-        not the first one (see :func:`_read_schedule`). A game postponed and
-        made up later used to resolve to its postponed entry, whose start is
-        the original one, so the matcher declined the vendor's event at the
-        real start. The same read fills ``_game_schedule_cache`` with the
+        The meta comes from the PLAYED schedule entry, not the first one (see
+        :func:`_read_schedule`): a made-up game's postponed entry carries the
+        original start, against which the matcher would decline the vendor's
+        event at the real start. The same read fills ``_game_schedule_cache``
+        with the
         facts the matcher and the rows need (:class:`_ScheduleInfo`).
         """
         if game_pk in self._game_meta_cache:
@@ -115,7 +115,7 @@ class EventMatchMixin(TransportMixin):
         counts in ``read_failures``; no match does not, nor does a slate the
         matcher cannot read (a retry would read the same answer).
 
-        SIM-555 (2026-10-01): with a known start, :meth:`_match_by_start`
+        With a known start, :meth:`_match_by_start`
         picks the event. It searches the slate of a suspended game's
         resumption too, measures each event against every start of the game,
         and adds the single-event rule for a start the vendor did not move.
@@ -145,8 +145,7 @@ class EventMatchMixin(TransportMixin):
                     )
                 elif len(candidates) == 1:
                     # No usable start time to sanity-check against (gameDate was
-                    # missing/unparseable) but only one name match anyway — accept it,
-                    # matching the pre-SIM-536 behaviour for the common case.
+                    # missing or unparseable) but only one name match anyway: accept it.
                     event = candidates[0]
                 elif len(candidates) > 1:
                     # Multiple candidates and no start time to tell them apart by —
@@ -196,7 +195,7 @@ class EventMatchMixin(TransportMixin):
         home_n: str,
         away_n: str,
     ) -> dict[str, Any] | None:
-        """The vendor event of a game with a known start, or ``None`` (SIM-536; SIM-555).
+        """The vendor event of a game with a known start, or ``None``.
 
         ``played`` holds the same-team events of the played date's slate. The
         method adds the same-team events of every other slate of
@@ -389,7 +388,7 @@ class EventMatchMixin(TransportMixin):
         )
         return event
 
-    # ------------------------------------------------------- SIM-421 caches
+    # ------------------------------------------------------- the caches
     def _is_fresh(self, stored_at: float) -> bool:
         """True while a cache entry stored at ``stored_at`` is inside the time-to-live."""
         return self._clock() - stored_at < self._offers_cache_ttl_s
@@ -405,7 +404,7 @@ class EventMatchMixin(TransportMixin):
         return hit is not None and self._is_fresh(hit[0])
 
     def _note_failed_lookup(self, kind: str, key: int) -> None:
-        """Keep a failed lookup for one time-to-live (SIM-555; see :meth:`_failed_recently`)."""
+        """Keep a failed lookup for one time-to-live (see :meth:`_failed_recently`)."""
         self._store(self._failed_lookups, (kind, int(key)), None)
 
     def forget_failed_lookups(self) -> None:
@@ -457,8 +456,8 @@ class EventMatchMixin(TransportMixin):
     def _events_for_date(self, date_str: str) -> list[dict[str, Any]]:
         """The BettingPros events of one date, served from the per-date cache while fresh.
 
-        Every game on a date shares one ``/events`` response; before SIM-421
-        each game_pk fetched the whole slate again. A fetch failure raises to
+        Every game on a date shares one ``/events`` response. A fetch failure
+        raises to
         the caller (``_resolve_event`` logs it) and is not cached, so the next
         game retries.
         """
@@ -536,11 +535,10 @@ class EventMatchMixin(TransportMixin):
     def _resolve_player_name(self, player_id: int) -> str | None:
         """MLB ``player_id`` → normalized full name.
 
-        SIM-555 (review fix 2026-09-28): a found name is cached for the process
-        lifetime. A failed lookup is kept for one time-to-live only
-        (:meth:`_failed_recently`); it used to be cached as ``None`` for the
-        process lifetime, so one timeout cost the player every prop for the
-        rest of a season's load or of the live pipeline's day. A read that
+        A found name is cached for the process lifetime. A failed lookup is
+        kept for one time-to-live only (:meth:`_failed_recently`), so one
+        timeout does not cost the player every prop for the rest of a season's
+        load or of the live pipeline's day. A read that
         raised counts in ``read_failures``; an answer without the player does
         not.
         """
@@ -565,7 +563,7 @@ class EventMatchMixin(TransportMixin):
             self._player_name_cache[player_id] = name
         return name
 
-    # ------------------------------------------------ SIM-555: one row per book
+    # ------------------------------------------------ one row per book
     def _game_meta_fields(
         self, game_pk: int, event: Mapping[str, Any] | None = None
     ) -> tuple[datetime | None, date | None, str | None]:
