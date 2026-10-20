@@ -1,12 +1,15 @@
-"""SIM-509 — hit-by-pitch is its own pitch outcome, never a walk.
+"""Tests that a hit by pitch (HBP) is its own pitch outcome, never a walk.
 
-The pool builder's outcome classification collapsed an HBP pitch (a ball-class
-Gameday type code) into ``ball``, so every simulated HBP became ball four and a
-WALK. Measured 2025: 1,928 HBP = 0.397/team-game — ~82% of the BB band's
-+0.481 surplus. The fix labels the pool row ``hit_by_pitch``, the count
-machine terminates on it at any count, and the walk resolver applies the same
-force mechanics under its own canonical event, which the BB probes (canonical
-``walk``/``intentional_walk``) never count.
+An HBP pitch carries a ball-class Gameday type code. A builder that read the
+code alone would label the row ``ball``, and every simulated HBP would become
+ball four and a WALK: in 2025, 1,928 HBP, 0.397 a team-game, about 82% of the
+walk band's +0.481 surplus (the hit-by-pitch fix, SIM-509). So the pool
+builder labels the row ``hit_by_pitch``, the count machine ends the plate
+appearance on it at any count, and the walk resolver applies the same force
+rules under its own canonical event, which the walk probes (canonical
+``walk`` / ``intentional_walk``) never count. The tests run the count machine
+and the state machine in memory, and the builder's SQL expression on an
+in-memory DuckDB.
 """
 
 from __future__ import annotations
@@ -102,9 +105,9 @@ class TestTheBuilderMapping:
         Gameday type-code branches — an HBP pitch carries a ball-class code,
         so a later branch would swallow it back into 'ball'.
 
-        SIM-553 moved the expression into the module constant
-        ``SQL_OUTCOME_TYPE``, so this test runs it: the same ball code reads
-        ``hit_by_pitch`` with the HBP event and ``ball`` without it."""
+        The expression is the module constant ``SQL_OUTCOME_TYPE``, so this
+        test runs it: the same ball code reads ``hit_by_pitch`` with the HBP
+        event and ``ball`` without it."""
         got = self._classify(
             [
                 ("B ", "hit_by_pitch"),
@@ -120,18 +123,8 @@ class TestTheBuilderMapping:
         assert "{SQL_OUTCOME_TYPE}" in src
 
     def test_the_builder_version_is_current(self):
-        """The watermark guard skips unchanged builders — a formula change
-        that forgets the version bump never lands (the SIM-501 lesson).
-        SIM-510 superseded the sim509 stamp when the transition columns
-        landed; SIM-491 superseded sim510 when bat_home landed; SIM-515
-        superseded sim491 when the IBB rate table joined the chain; SIM-517
-        superseded sim515 when the pitch pool gained catcher_id + got_away;
-        SIM-518 superseded sim517 when the pitch pool gained bat_home +
-        pitcher_pitch_count + times_through_order (migration 0023);
-        bump this assertion with every pool-formula change. SIM-523 part G
-        superseded sim518 when the outcome pool gained the fielding chain
-        (migration 0024). SIM-553 superseded sim523g when the pitch pool coded
-        a two-strike foul tip or foul bunt as strike three. SIM-554 superseded
-        sim553 when the steal opportunity pool gained the pitch class and the
-        pickoff rows (migration 0031)."""
+        """The watermark guard skips unchanged builders: a formula change
+        that forgets the version bump never lands. Bump this assertion with
+        every pool-formula change. The current stamp, sim554, marks the steal
+        opportunity pool's pitch class and pickoff rows (migration 0031)."""
         assert "sim554" in ppc.POOL_BUILDER_VERSION

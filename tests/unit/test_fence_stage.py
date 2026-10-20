@@ -1,20 +1,17 @@
-"""
-tests/unit/test_fence_stage.py
-=====================================
-SIM-523 parts C2-C4 — the PARK GEOMETRY (SIM-478), the CARRY model (SIM-479)
-and the FENCE STAGE (SIM-480) — the loop's step 5 (plan:
-docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part C).
+"""Tests of the PARK GEOMETRY, the CARRY model and the FENCE STAGE.
 
+The three are the fence certification's work (SIM-478, SIM-479, SIM-480).
 The bundle carries the fence line of every park per spray sector, as the
 pool's own home runs and kept balls reveal it, plus a carry model fitted on
 home runs. Before the fielding draw, the born ball's carry meets the live
 park's fence at its direction: over it, a certain home run; short of it, no
-home run; in the band, the draw decides. What these tests pin:
+home run; in the band, the draw decides. The tests build toy pools (in memory
+or in a temporary directory) and need no database. What they pin:
 
   * the builder writes the per-venue lines from the home-run and kept-ball
     quantiles, the league line where a sector lacks support, the hand-curated
     overrides on top, and the carry model with its home-run validation;
-  * the loader reads the document (None on an older bundle);
+  * the loader reads the document (None on a bundle without one);
   * ``fence_at`` (venue, league and missing), ``carry_of`` (the own distance,
     the model, None) and ``fence_decision`` (over / short / band / passed;
     a ground ball never leaves the park);
@@ -358,7 +355,7 @@ class TestTheGeometryReads:
         fp = _sampler(_bb_pool(_MIXED))
         assert fp.fence_at(7, -40.0) == 330.0  # the venue's own sector 0
         assert fp.fence_at(7, 0.0) == 410.0
-        # SIM-478: an old document's plain list is the one group for every season.
+        # A version-1 document's plain list is the one group for every season.
         assert fp.fence_at(7, 0.0, 2024) == 410.0 and fp.fence_at(7, 0.0, 2031) == 410.0
         assert fp.fence_at(7, 44.0) == 340.0  # the venue's sector 8 is None -> league
         assert fp.fence_at(99, 0.0) == 400.0  # an unknown venue -> league

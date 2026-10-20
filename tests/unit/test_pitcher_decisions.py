@@ -1,8 +1,9 @@
-"""SIM-364 tests: winning / losing / save pitcher attribution.
+"""Tests of the winning / losing / save pitcher attribution.
 
-Builds small synthetic ``PlayResult`` streams whose ``next_state`` carries the
-committed inning/half/scores and the fielding-side ``pitcher_id`` (the pitcher of
-record for the defending team), then asserts the derived W/L/Save decisions.
+The tests build small synthetic ``PlayResult`` streams whose ``next_state``
+carries the committed inning/half/scores and the fielding side's ``pitcher_id``
+(the pitcher of record for the defending team), then assert the derived W/L/Save
+decisions.
 
 Pitcher-id convention used by these fixtures (purely for readability):
   * HOME pitchers: 100 (starter), 101 (reliever/closer)
@@ -48,8 +49,8 @@ def _play(
 ) -> PlayResult:
     """A PlayResult carrying only the committed next_state we care about.
 
-    ``outs_recorded`` defaults to 0 (the SIM-364 test pattern); SIM-414 tests
-    set it to drive the starter-5-IP rule.
+    ``outs_recorded`` defaults to 0; the starter-five-innings tests set it to
+    drive that rule.
     """
     return PlayResult(
         pitch_outcome="in_play",
@@ -235,10 +236,10 @@ class TestWalkOff(unittest.TestCase):
 
 
 class TestStarterMinimumInnings(unittest.TestCase):
-    """SIM-414: MLB Rule 9.17(b) — a starter must pitch 5 IP (15 outs) to win.
+    """MLB Rule 9.17(b): a starter must pitch 5 IP (15 outs) to win.
 
-    Below that, the win is reassigned to the most-effective reliever (we
-    approximate "most effective" by outs recorded; ties break by first
+    Below that, the win goes to the most effective reliever (the code
+    approximates "most effective" by outs recorded; ties break by first
     appearance).  The starter still loses (the symmetric rule does not apply
     to the losing pitcher), and the save chain runs against the REASSIGNED
     winner.

@@ -6,14 +6,14 @@ The extended per-player box score: the batting fields ``b2`` (doubles), ``b3``
 ``h_allowed`` and ``r_allowed``, and the exact total-bases formula of
 ``prop_distributions._total_bases``.
 
-No live DuckDB or FAISS: ``_accumulate_pa`` runs on synthetic
+No database: ``_accumulate_pa`` runs on synthetic
 :class:`PlayResult`s, the steal credit runs through ``_resolve_steal_outcome``
 (the one steal-commit site, which also credits a steal on a NON-terminal
 pitch), and one double runs end to end through a fixed-play bundle, so the
 production in-play path runs.
 
 Coverage:
-  * the new PlayerStatLine fields default to 0;
+  * the extra PlayerStatLine fields default to 0;
   * a double increments b2 (and h); a triple increments b3 (and h);
   * a scoring runner (baserunner_advances end_base == 0) increments that runner's r;
   * a successful steal increments the runner's sb; a steal of home also scores;
@@ -46,8 +46,8 @@ HOME_LINEUP = list(range(201, 210))
 
 
 def _machine(play: str | None = None) -> StateMachine:
-    """A machine whose every batted ball is ``play`` (SIM-486: the production
-    in-play path over a fixed-play bundle), or count-machine-only when None."""
+    """A machine whose every batted ball is ``play`` (the production in-play
+    path over a fixed-play bundle), or the count machine alone when None."""
     fp = synthetic_sampler(fixed_play_artifacts(play), 0) if play else None
     return StateMachine(fp, rng=np.random.default_rng(0))
 
@@ -83,7 +83,7 @@ def _pa(
 
 
 # ===========================================================================
-# PlayerStatLine: the new fields default to 0 (additive / back-compat)
+# PlayerStatLine: the extra fields default to 0
 # ===========================================================================
 
 
@@ -98,16 +98,16 @@ class TestPlayerStatLineDefaults:
         assert ln.r_allowed == 0
 
     def test_existing_positional_keyword_constructions_still_work(self):
-        # A SIM-328-style construction (no new fields) is unaffected.
+        # A construction without the extra fields still works.
         ln = PlayerStatLine(player_id=1, ab=4, h=2, hr=1, rbi=3, outs_recorded=21, k=8, bb=2, er=3)
         assert (ln.ab, ln.h, ln.hr, ln.rbi) == (4, 2, 1, 3)
         assert (ln.outs_recorded, ln.k, ln.bb, ln.er) == (21, 8, 2, 3)
-        # And the new fields are still 0.
+        # And the extra fields are 0.
         assert (ln.b2, ln.b3, ln.r, ln.sb, ln.h_allowed, ln.r_allowed) == (0, 0, 0, 0, 0, 0)
 
 
 # ===========================================================================
-# Doubles / triples: a subset of H, with the new b2 / b3 fields
+# Doubles / triples: a subset of H, in the b2 / b3 fields
 # ===========================================================================
 
 
@@ -265,8 +265,8 @@ class TestPitcherHitsAndRunsAllowed:
         )
 
         pit = sm.boxscore.line(PITCHER)
-        assert pit.er == 0  # unearned -> ER excludes it (SIM-328)
-        assert pit.r_allowed == 1  # R counts it (SIM-365)
+        assert pit.er == 0  # unearned -> ER excludes it
+        assert pit.r_allowed == 1  # R counts it
         assert pit.r_allowed >= pit.er
 
     def test_clean_run_counts_for_both_er_and_r_allowed(self):
@@ -287,7 +287,7 @@ class TestPitcherHitsAndRunsAllowed:
 
 
 # ===========================================================================
-# SIM-414 — Inning-reconstruction unearned runs (Rule 9.16(b))
+# Unearned runs by the inning reconstruction (Rule 9.16(b))
 # A run that scores AFTER the inning "should have ended" (an earlier
 # reach-on-error prevented an out) is UNEARNED even when its play is clean.
 # ===========================================================================
@@ -398,8 +398,8 @@ class TestUnearnedRunInningReconstruction:
         sm = _machine()
         state = _fresh_state()
         sm._half_inning_error_outs_lost = 2
-        # Half-inning advances when state.outs has reached 3.  Force it via the
-        # state setter (we just need the precondition the method asserts).
+        # The half-inning advances when state.outs has reached 3. Set the outs
+        # directly: the test needs only the precondition the method asserts.
         state.outs = 3
         sm.advance_half_inning(state)
         assert sm._half_inning_error_outs_lost == 0
@@ -471,18 +471,18 @@ class TestStolenBases:
             assert ln.sb == 0
             assert ln.r == 0
         assert result.steal_outcome == STEAL_CAUGHT
-        # SIM-421: the caught runner has NO baserunner_advances entry. An
-        # entry of 0 means "scored" to _accumulate_pa, which credits every
-        # scorer on a steal pitch; a retired runner is simply absent.
+        # The caught runner has NO baserunner_advances entry. An entry of 0
+        # means "scored" to _accumulate_pa, which credits every scorer on a
+        # steal pitch; a retired runner is absent.
         assert 803 not in result.baserunner_advances
         assert result.box_run_credited == set()
 
 
 class TestStealRunAttributionDoesNotDoubleCount:
     def test_accumulate_pa_skips_the_credited_steal_of_home_runner(self):
-        # SIM-421: _resolve_steal_outcome credits the steal-of-home runner's R
-        # itself and records him in ``box_run_credited``. On a terminal pitch
-        # his advances entry reads 0, so _accumulate_pa must skip exactly him.
+        # _resolve_steal_outcome credits the steal-of-home runner's R itself
+        # and records him in ``box_run_credited``. On a terminal pitch his
+        # advances entry reads 0, so _accumulate_pa must skip exactly him.
         sm = _machine()
         state = _fresh_state()
         result = _pa("strikeout", outs_recorded=1, advances={902: 0})
@@ -492,9 +492,9 @@ class TestStealRunAttributionDoesNotDoubleCount:
         assert sm.boxscore.line(902).r == 0
 
     def test_accumulate_pa_credits_the_other_scorers_on_a_steal_play(self):
-        # SIM-421: the old guard skipped the whole loop on any steal pitch, so
-        # a safe steal to 2B plus a scoring play credited nobody a run. Only
-        # the marked steal-of-home runner is skipped; every other 0 is a run.
+        # A steal pitch must not skip the whole credit loop: a safe steal to
+        # 2B plus a scoring play still credits the scorers. Only the marked
+        # steal-of-home runner is skipped; every other 0 is a run.
         sm = _machine()
         state = _fresh_state()
         result = _pa("home_run", runs_scored=2, advances={902: 0, state.batter_id: 0})

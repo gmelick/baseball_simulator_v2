@@ -1,20 +1,18 @@
-"""
-test_replay_chi_squared.py
-=================
-SIM-325 -- tests for the **E2E historical-replay + chi-squared goodness-of-fit**
-harness (:mod:`simulation.validation.replay_chi_squared`), the validation
+"""Tests of the historical-replay harness and its chi-squared goodness-of-fit.
+
+The harness is :mod:`simulation.validation.replay_chi_squared`: the validation
 spine's end-to-end check.
 
-WHAT THESE TESTS COVER (the SIM-325 acceptance criteria)
---------------------------------------------------------
-  1. The harness replays games through the SIM-320 ``simulate_game()`` loop and
-     runs a chi-squared GOF of the simulated vs a reference per-team-game run
-     distribution, reporting (chi2, dof, p) and asserting **p > 0.05**.  Because
-     the real Statcast DB is not loadable here, the reference is a *calibrated
-     league-average* distribution (the SIM-324 idiom) and the simulated draw is
-     from the SAME calibrated model -- a self-consistency check that is
-     meaningful and passes without the DB, with a documented real-data seam
-     (:class:`HistoricalGame` / :func:`replay_and_test`) to plug real games.
+WHAT THESE TESTS COVER
+----------------------
+  1. The harness replays games through the ``simulate_game()`` loop and runs a
+     chi-squared goodness-of-fit (GOF) test of the simulated against a
+     reference per-team-game run distribution. It reports (chi2, dof, p) and
+     asserts **p > 0.05**. The tests have no Statcast database, so the
+     reference is a league distribution, and the simulated draw comes from the
+     SAME league model over the synthetic bundle: a self-consistency check
+     that passes without the database. The real-data seam
+     (:class:`HistoricalGame` / :func:`replay_and_test`) takes real games.
   2. A **negative control**: a deliberately WRONG reference distribution is
      REJECTED (p < 0.05), proving the test has power.
   3. The **binning / pooling helper** is correct (histogram + low-expected-count
@@ -25,7 +23,7 @@ WHAT THESE TESTS COVER (the SIM-325 acceptance criteria)
 NOISE-ROBUSTNESS
 ----------------
 Fixed seeds throughout; the simulated distribution is built from enough games
-(150 team-pairs -> 300 team-games always-on) that the GOF is stable, the
+(150 games -> 300 team-games in the unit lane) that the GOF is stable, the
 reference distribution is a high-resolution constant baked from a 1500-game
 calibrated draw (so the test is deterministic and does not re-pay for the
 reference), and the gate is a p-value, not a brittle point tolerance.  The heavy
@@ -55,10 +53,9 @@ from simulation.validation.replay_chi_squared import (
 # The reference per-team-game run distribution (bins 0,1,...,9,10+)
 # ===========================================================================
 #
-# Baked from a 1500-game (3000 team-game) draw of the SIM-324 calibrated
-# league-average model (mean ~4.4 R/team/G).  Using a FIXED probability vector
-# (rather than re-simulating a reference every run) makes the always-on test
-# deterministic and fast.  This is the "published / reference league
+# Baked from a 1500-game (3000 team-game) draw of the league model (mean ~4.4
+# runs a team-game). A FIXED probability vector (instead of simulating a
+# reference on every run) makes the unit-lane test deterministic and fast.  This is the "published / reference league
 # run-per-game distribution" path of :func:`chi_squared_gof`; the real-data path
 # (compare against ACTUAL historical run totals) is exercised by the
 # HistoricalGame test below.
@@ -77,7 +74,7 @@ REFERENCE_RUN_DISTRIBUTION = [
 ]
 MAX_BIN = 10
 
-# Always-on sample size: 150 games == 300 team-games. With the fixed reference
+# The unit-lane sample size: 150 games == 300 team-games. With the fixed reference
 # this gives a stable, comfortably-passing p-value (~0.3-0.6) in ~1s.
 ALWAYS_ON_GAMES = 150
 
@@ -151,7 +148,7 @@ class TestChiSquaredReplayPasses:
     def test_calibrated_replay_matches_reference_distribution(self):
         # Replay 150 calibrated games through simulate_game(), then chi-squared
         # the simulated per-team-game run distribution against the reference
-        # league distribution.  p MUST exceed 0.05 (the spec gate).
+        # league distribution. p MUST exceed 0.05 (the gate).
         sim = simulate_run_distribution(ALWAYS_ON_GAMES, base_seed=0)
         assert len(sim) == 2 * ALWAYS_ON_GAMES  # home + away per game
         res = chi_squared_gof(
@@ -277,9 +274,8 @@ class TestRealDataSeam:
         # totals.  With real data the reference is the games' true historical run
         # totals and replay_and_test's one-sample GOF is exactly right.
         #
-        # SIM-421: in the NO-DB self-consistency mode (reference itself generated
-        # from the model) two corrections are required, both surfaced by the
-        # run-environment change:
+        # In the NO-DB self-consistency mode (the reference itself generated
+        # from the model) two corrections are required:
         #   1. ``replay_historical_games`` scores the HOME half of each game, which
         #      runs ~0.3 R below the both-teams mean (the home team skips the
         #      bottom 9th when leading / walk-off truncation) -- so the reference
@@ -310,7 +306,7 @@ class TestRealDataSeam:
         # The replay_and_test wrapper (the real-data entry point) still runs and
         # returns a sane result; give it realistic per-game actual totals (its
         # small coupled reference is only statistically valid against TRUE totals,
-        # so we smoke the path, not its p-value here).
+        # so the test runs the path, not its p-value).
         wrapped_games = [HistoricalGame(runs=int(r)) for r in reference_totals[:300]]
         wrapped = replay_and_test(wrapped_games, base_seed=0, max_bin=MAX_BIN, min_expected=5.0)
         assert isinstance(wrapped, ChiSquaredResult)

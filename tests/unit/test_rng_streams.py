@@ -1,31 +1,27 @@
-"""
-tests/unit/test_rng_streams.py
-=====================================
-SIM-498 — the loop rng and the full-pool rng must be INDEPENDENT streams.
+"""Tests that the loop rng and the full-pool rng are INDEPENDENT streams.
 
-The defect
-----------
-``simulate_game`` built every generator from the SAME integer::
+The defect this module guards against
+-------------------------------------
+Two generators seeded with one integer emit IDENTICAL sequences::
 
     state_machine.rng   = np.random.default_rng(seed)   # loop draws
     fp.rng              = np.random.default_rng(seed)   # pitch + batted-ball draws
 
-Two generators seeded with one integer emit IDENTICAL sequences. The loop rng
-draws advancement, steal outcomes, manager decisions and the framing nudge; the
+The loop rng draws advancement, steal outcomes and manager decisions; the
 full-pool rng draws the pitch and the batted ball. The model treats those as
-independent events. They came off one sequence.
+independent events, so ``simulate_game`` spawns two child streams from the one
+per-game seed (the independent random streams, SIM-498).
 
-Honest scope note, restated from the ticket: the two streams emitted identical
-SEQUENCES, but the loop and the sampler CONSUME them at different rates, so the
-alignment drifts across a game and the dependence is not one-to-one. These tests
-prove the streams are no longer built from one integer and that reproducibility
-survives. They do NOT claim a magnitude for the old dependence — nobody measured
-it.
+The scope: one-integer seeding emits identical SEQUENCES, but the loop and the
+sampler CONSUME them at different rates, so the alignment drifts across a game
+and the dependence is not one-to-one. These tests prove the streams are not
+built from one integer and that reproducibility survives. They do NOT claim a
+magnitude for the dependence — nobody measured it.
 
 What each test must be able to detect
 -------------------------------------
 * :class:`TestSimulateGameBindsIndependentStreams` FAILS when the two generators
-  are seeded from the same integer. That is the pre-fix code, and it is the whole
+  are seeded from the same integer. That is the defect, and it is the whole
   point of the module.
 * :class:`TestPerGameSeedReproducibility` pins that a fixed (game, seed) replays
   byte-identically, and — so the pin is not vacuous — that a DIFFERENT seed
@@ -140,13 +136,13 @@ def _spy_game(seed: int) -> tuple[_SpyMachine, _SpyPool, object]:
 
 class TestSpawnRngStreams:
     def test_two_streams_from_one_integer_are_not_identical(self):
-        """The fix: one seed -> two streams that do NOT emit the same numbers."""
+        """One seed -> two streams that do NOT emit the same numbers."""
         loop, pool = spawn_rng_streams(1234)
         assert [loop.random() for _ in range(8)] != [pool.random() for _ in range(8)]
 
     def test_the_defect_control_two_default_rngs_ARE_identical(self):
-        """The pre-fix construction, pinned so the defect is not re-introduced by
-        someone who believes two ``default_rng(seed)`` calls differ. They do not."""
+        """The one-integer construction, pinned so nobody brings the defect back
+        believing two ``default_rng(seed)`` calls differ. They do not."""
         a, b = np.random.default_rng(1234), np.random.default_rng(1234)
         assert [a.random() for _ in range(8)] == [b.random() for _ in range(8)]
 
@@ -164,14 +160,14 @@ class TestSpawnRngStreams:
         ]
 
     def test_seed_none_draws_fresh_entropy(self):
-        """``default_rng(None)`` drew OS entropy; the spawn path must keep that."""
+        """``default_rng(None)`` draws OS entropy; the spawn path must keep that."""
         assert [g.random() for g in spawn_rng_streams(None)] != [
             g.random() for g in spawn_rng_streams(None)
         ]
 
 
 # ===========================================================================
-# 2. THE DETECTOR — this class goes RED against the pre-fix code
+# 2. THE DETECTOR — this class goes RED against one-integer seeding
 # ===========================================================================
 
 
@@ -187,8 +183,8 @@ class TestSimulateGameBindsIndependentStreams:
         machine, fp, _ = _spy_game(seed=4242)
         loop_state = machine.__dict__["rng_states"][-1]
         pool_state = fp.__dict__["rng_states"][-1]
-        # Pre-fix these are two ``default_rng(4242)`` objects: identical state,
-        # identical draws, and this assertion fails.
+        # With one-integer seeding these are two ``default_rng(4242)`` objects:
+        # identical state, identical draws, and this assertion fails.
         assert _draws_from(loop_state) != _draws_from(pool_state)
 
     def test_neither_stream_equals_a_plain_default_rng_of_the_seed(self):
@@ -217,7 +213,7 @@ class TestSimulateGameBindsIndependentStreams:
 
 
 # ===========================================================================
-# 3. Per-(game, seed) reproducibility must survive the change
+# 3. Per-(game, seed) reproducibility holds with two streams
 # ===========================================================================
 
 

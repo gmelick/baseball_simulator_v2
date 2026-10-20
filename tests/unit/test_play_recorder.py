@@ -1,23 +1,17 @@
-"""
-test_play_recorder.py
-=====================
-Unit tests for simulation/play_recorder.py — the non-invasive capture of the
-ordered PlayResult stream of ONE game (SIM-355 deliverable for the SIM-357
-agent).
+"""Tests of simulation/play_recorder.py: the capture of ONE game's ordered
+PlayResult stream, without changing the loop.
 
-Covers:
+What the tests cover:
   * record_game_plays returns a non-empty ORDERED list[PlayResult];
-  * the captured list feeds PlayByPlay.from_play_results (SIM-331) and yields
-    terminal-flagged entries (so PAs are inferable);
+  * the captured list feeds PlayByPlay.from_play_results and yields
+    terminal-flagged entries (so the plate appearances can be told apart);
   * determinism — same seed/factory/sim_kwargs => identical ordered plays;
   * the RecordingMachine wrapper delegates attribute access to the inner machine
     (so simulate_game's rng re-seed / boxscore harvest reach the real machine);
   * the RecordingStateMachine subclass records when built directly.
 
-All paths use the no-DB rng factory (the module default) so the whole game runs
-with no live sampler / DuckDB / Postgres.
-
-Owned by Backend Developer (SIM-355).
+Every path uses the no-DB factory (the module default), so the whole game runs
+over the synthetic bundle with no DuckDB and no Postgres.
 """
 
 from __future__ import annotations
@@ -53,16 +47,16 @@ def test_record_game_plays_returns_ordered_play_results():
     assert len(plays) > 0
     assert all(isinstance(p, PlayResult) for p in plays)
     # The recorded count matches the game's pitch tally (the wrapper saw every
-    # step_pitch the loop drove). SIM-554: a no-pitch result (a pickoff that
-    # made the third out before the pitch) is a step but no pitch thrown, so
-    # the tally counts the thrown pitches.
+    # step_pitch the loop drove). A no-pitch result (a pickoff that made the
+    # third out before the pitch) is a step but no pitch thrown, so the tally
+    # counts the thrown pitches.
     assert sum(not p.no_pitch for p in plays) == result.total_pitches
 
 
 def test_recorded_plays_feed_playbyplay_with_terminals():
     _result, plays = record_game_plays(seed=7, sim_kwargs=dict(SIM_KWARGS))
     pbp = PlayByPlay.from_play_results(plays)
-    # SIM-554: one entry per THROWN pitch (a no-pitch result makes none).
+    # One entry per THROWN pitch (a no-pitch result makes none).
     assert pbp.n_pitches == sum(not p.no_pitch for p in plays)
     # At least one PA resolved (a terminal pitch), so PAs are inferable.
     assert pbp.n_plate_appearances > 0
@@ -137,7 +131,7 @@ def test_recording_machine_records_and_returns_verbatim():
     # ...and recorded them in order.
     assert rec.recorded_plays == [r1, r2]
     assert inner._calls == 2
-    # SIM-561: one state-before-the-pitch per recorded play.
+    # One state-before-the-pitch per recorded play.
     assert rec.recorded_contexts == [PitchContext(1, "top", 0, 7)] * 2
 
 

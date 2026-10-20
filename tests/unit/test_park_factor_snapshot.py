@@ -1,10 +1,11 @@
-"""SIM-524 — the app holds no handle on the statistics DuckDB file.
+"""Tests that the app holds no handle on the statistics DuckDB file.
 
 DuckDB lets a WRITER open a file only when no other process holds it, read-only
-handles included. The park-factor prime kept a read-only connection open for the
-life of the app, so every rebuild (a profile recompute, a pool rebuild, the
-nightly job) failed with "Conflicting lock is held" until somebody stopped the
-app. The prime now reads the run factors into memory and closes the file.
+handles included. A park-factor prime that kept a read-only connection open for
+the life of the app would make every rebuild (a profile recompute, a pool
+rebuild, the nightly job) fail with "Conflicting lock is held" (the rebuild
+while the app serves, SIM-524). So the prime reads the run factors into memory
+and closes the file.
 
 These tests use a real DuckDB file. The lock test opens the writer in a second
 PROCESS, because DuckDB's lock is per process: a writer in the same process

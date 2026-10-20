@@ -1,19 +1,17 @@
-"""
-test_starter_resolution.py
-=================================
-Each side's starting pitcher comes from the official box, and a game with a
-missing starter is refused (SIM-558).
+"""Tests that each side's starting pitcher comes from the official box, and
+that a game with a missing starter is refused (the real starter on both
+sides, SIM-558).
 
-Why this exists.  Game 823372 (2026-06-10) resolved with no away starter.  The
-away starter was a two-way player: he pitched and batted as the designated
-hitter.  A player holds one row in ``raw.game_lineups``, and that row carried
-his batting position ('DH'), so his side had no pitcher row.  The resolver
-checked only the side that pitches first, and the loop then kept the home
-starter on the mound for both halves.  A count over the 22,742 Final games of
-2017-2026 found the lineup's pitcher row missing in 80 team-games and wrong in
-317 more.
+Why: a two-way starter pitches and bats as the designated hitter. A player
+holds one row in ``raw.game_lineups``, and that row carries his batting
+position ('DH'), so his side has no pitcher row (game 823372, 2026-06-10).
+Without a starter on one side, the loop keeps the other side's starter on the
+mound for both halves. A count over the 22,742 Final games of 2017-2026 found
+the lineup's pitcher row missing in 80 team-games and wrong in 317 more.
 
-Coverage:
+The tests use plain-dict lineup rows and a fake asyncpg connection; the
+``simulate_game`` tests run the production machine over the in-memory league
+bundle. What they cover:
   * the pure assembly reads the box starter in each of the three real cases
     (a two-way starter, a position player who finished on the mound, an
     announced starter who was scratched);
@@ -144,7 +142,7 @@ class TestTheBoxNamesTheStarter:
         assert state.away_defense["P"] == TWO_WAY
 
     def test_a_position_player_who_finished_on_the_mound_is_not_the_starter(self):
-        # The loader stores a player's LAST position.  The home third baseman
+        # A row coded with the player's LAST position: the home third baseman
         # pitched the ninth, so his batting row carries the pitcher code and
         # comes before the real starter's row.
         positions = list(_FIELD)
@@ -203,8 +201,8 @@ class TestTheBoxNamesTheStarter:
 
 class TestBuildGameStateNeedsBothPitchers:
     def test_a_missing_away_pitcher_is_refused_in_the_top_half(self):
-        # The old check read only the side that pitches first (home in the top)
-        # and let this game through with ``away_pitcher_id = None``.
+        # A check of only the side that pitches first (home in the top) would
+        # let this game through with ``away_pitcher_id = None``.
         resolved = _resolve(_two_way_rows())
         with pytest.raises(LineupResolutionError, match="no resolvable pitcher") as info:
             build_game_state(resolved, half=Half.TOP)
@@ -333,7 +331,7 @@ class TestResolveLineupReadsTheBox:
 
 
 def _machine(seed: int = 0) -> StateMachine:
-    """The production machine over the in-memory league bundle (SIM-486)."""
+    """The production machine over the in-memory league bundle."""
     return StateMachine(
         synthetic_sampler(league_artifacts(), seed), rng=np.random.default_rng(seed)
     )

@@ -1,21 +1,20 @@
-"""
-tests/unit/test_fence_carry_and_margin.py
-=================================================
-SIM-478 — the fence certification's three amendments on the fielding draw
-(plan: docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §11,
-§12 and §12.7):
+"""Tests of the fence certification's three amendments on the fielding draw.
 
-  * THE CARRY OFFSET (§11): the born ball's carry re-expressed in the LIVE
-    park's air — its own distance + offset[live park] - offset[the row's
-    park], the offsets read from the document's ``carry_offset_ft``. One
-    working copy carries that number to the fence check, the kernel and
-    the wall margin; the candidate rows keep their own distance. Off, a
-    document without the table, a park absent from it: no shift.
+The plan is docs/audit/2026-09-20-sim478-480-fence-certification-plan.md
+(SIM-478), sections §11, §12 and §12.7. The tests run on small in-memory
+batted-ball pools and an in-memory park document, with no database:
+
+  * THE CARRY OFFSET (§11): the born ball's carry, read in the LIVE park's
+    air — its own distance + offset[live park] - offset[the row's park], the
+    offsets read from the document's ``carry_offset_ft``. One working copy
+    carries that number to the fence check, the kernel and the wall margin;
+    the candidate rows keep their own distance. Off, a document without the
+    table, a park absent from it: no shift.
   * THE CLASS RULER (§12): the born kernel's mean and spread come from the
     pool's rows of the born ball's class; the exponent per feature
     (``bb_born_per_feature``) divides by 2 sigma^2 instead of 2 sigma^2 x 4.
-    A row 60 ft short keeps 0.976 of an exact match today, 0.896 with the
-    ruler alone, 0.644 with both.
+    A row 60 ft short keeps 0.976 of an exact match with both off, 0.896
+    with the ruler alone, 0.644 with both.
   * THE WALL-MARGIN BAND (§12.7): every row's margin to its OWN wall (its
     distance minus its park's fence at its spray and season, from the
     document), and a born air ball the fence did not call over draws only
@@ -407,7 +406,7 @@ class TestTheClassRuler:
             f = fp._f_born_similarity("R", rows, born)
             return float(f[1] / f[0])
 
-        # Today: the pool ruler, the exponent over the four features.
+        # Both off: the pool ruler, the exponent over the four features.
         assert ratio() == pytest.approx(0.976, abs=0.002)
         # The class ruler alone.
         born["cls"] = _FLY
