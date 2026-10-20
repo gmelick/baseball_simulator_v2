@@ -1,119 +1,89 @@
-"""
-betting/line_movement.py
-========================
-SIM-368 -- the **CLV / line-movement time-series surface** (Phase 5, Sprint 5,
-Wave 2).  It lifts the SIM-339 :mod:`betting.clv_engine` from a SINGLE
-entry-vs-close snapshot to the FULL opening -> ... -> closing line history.
+"""The line-movement series: one side's price at one book, from the opening to the close.
 
-WHAT THIS IS
-------------
-SIM-339's :func:`betting.clv_engine.clv_from_odds` answers ONE question: did the
-price I ENTERED at beat the CLOSE?  It compares exactly two points -- a single
-entry quote and a single closing quote.  But a market is not two points: a book
-re-quotes a game many times between when the line OPENS and when it CLOSES (the
-SIM-092 dedup keeps only the moments the price actually MOVED).  That ordered
-sequence of quotes for one ``(game_pk, market, side, book)`` IS the
-**line-movement time-series**.  This module reads that sequence and derives:
+:func:`betting.clv_engine.clv_from_odds` compares two quotes: the entry and the
+close. A book re-quotes a game many times between the opening line and the
+closing line. The ordered quotes of one ``(game_pk, market, side, book)`` are
+the line-movement series. From the series this module derives:
 
-  * the **running implied-probability series** -- the de-vig-FREE single-side
-    implied probability (:func:`~betting.clv_engine.implied_prob_from_american`)
-    at every quote, so the caller can plot how the market's opinion drifted;
-  * the **per-step deltas** -- the American-odds and implied-probability change
-    between each consecutive pair of quotes (where the movement happened);
-  * the **opening -> closing summary** -- total American move, total implied-prob
-    move, total ``line`` move (for spread / total markets), and the DIRECTION
-    (did the price steam TOWARD this side -- shorter odds / higher implied prob --
-    or AWAY from it);
-  * the **entry-vs-close** :class:`~betting.clv_engine.CLV` -- reusing the exact
-    SIM-339 two-way de-vig + CLV math, but with "entry" defined as the FIRST
-    (opening) quote and "close" the LAST (closing) quote of the series, so the
-    snapshot CLV falls out of the time-series for free;
-  * a **sharp-consensus** flag -- whether the SHARP books (Pinnacle / Circa,
-    flagged ``is_sharp_book``) moved this side the same direction the whole
-    market did, the classic "sharp money agrees" tell.
+* the **implied-probability series**: the raw implied probability of each
+  quote's American price (the book's probability for this one side, the vig,
+  its margin, included), for a chart of how the market's opinion drifted;
+* the **step deltas**: the change in American odds and in implied probability
+  between each pair of consecutive quotes;
+* the **opening-to-closing summary**: the total move in American odds, in
+  implied probability and in the line (the spread or the total), and the
+  direction: 'toward' this side when its implied probability rose, 'away'
+  when it fell;
+* the **closing line value (CLV)** of a bet at the opening price, by the
+  :mod:`betting.clv_engine` arithmetic: the first quote is the entry and the
+  last quote is the close;
+* a **sharp-consensus** flag: whether the rows flagged ``is_sharp_book`` moved
+  this side the same way as all the books together.
 
-WHAT "MOVEMENT" AND "CLV OVER TIME" MEAN (the contract the API exposes)
-----------------------------------------------------------------------
-A quote's **implied probability** is the book's quoted single-side probability,
-margin INCLUDED (one leg of a two-way market -- de-vig is a two-way operation, so
-a lone series of one side cannot be de-vigged; the per-quote ``implied_prob`` is
-therefore the RAW implied prob, and the de-vigged CLV is computed separately from
-the two-way opening / closing pairs).  **Movement** is the change in that quote
-sequence over time: positive implied-prob movement (odds shortening -- e.g.
--120 -> -150) means the market grew MORE confident in this side ("steam toward");
-negative movement (odds lengthening -- e.g. -150 -> -120) means it cooled on this
-side ("steam away").  **CLV over time** is that whole running implied-prob series
-PLUS the canonical SIM-339 entry-vs-close CLV taken across the series endpoints:
-the single CLV number is the opening->closing special case of the surface, and
-the surface lets you see HOW the price got there (steady drift vs. a late steam
-move) rather than just the endpoints.
+Movement and the CLV
+--------------------
+The de-vig (the removal of the vig) needs both sides of a market, so a series
+of one side's prices cannot be de-vigged. Each quote's ``implied_prob``
+therefore keeps the vig. The CLV de-vigs the two-way pairs at the opening and
+at the closing quote. An implied probability that rises (the odds shorten,
+e.g. -120 -> -150) means the market grew more confident in this side. A
+positive ``clv_prob`` means a bet at the opening price beat the close. The raw
+delta and the CLV can disagree in sign: the raw probability keeps the vig and
+the CLV removes it. The CLV compares prices; the raw series shows the path.
+The CLV here describes the market; the model is not judged by it (owner
+ruling, 2026-09-28).
 
-SIGN CONVENTION (inherits SIM-339)
-----------------------------------
-We measure movement on this SIDE's implied probability.  ``implied_prob_delta``
-> 0 means this side's implied probability ROSE from opening to closing (odds got
-SHORTER / less generous for a backer) -- the market moved TOWARD this side.  The
-embedded :class:`CLV` keeps SIM-339's sign: positive ``clv_prob`` means a bet at
-the OPENING price BEAT THE CLOSE (the de-vigged probability of the side rose to
-the close, i.e. opening odds were the better price).  Note these two can DISAGREE
-in sign for the same series -- raw implied prob includes vig and is single-side,
-de-vigged CLV strips the two-way margin -- which is exactly why the CLV is the
-canonical value-bearing metric and the implied-prob series is the descriptive
-surface.
+Design
+------
+* :func:`line_movement_from_quotes` is pure. It takes quotes (mappings or
+  :class:`LineQuote`), sorts them, derives the series and returns a
+  :class:`LineMovement`: no database, no random numbers.
+* :func:`fetch_line_movement` is the only function that reads the database. It
+  takes an asyncpg connection or a test stub, reads ``raw.game_odds`` in
+  ``fetched_at`` order, groups the rows per (side, book) and calls the pure
+  builder.
+* Every odds conversion and every CLV goes through :mod:`betting.clv_engine`.
+  This module only shapes the series.
 
-DESIGN (mirrors db/sim_store.py + simulation/lineup_resolver.py)
-----------------------------------------------------------------
-  * **Pure derivation, isolated DB read.** :func:`line_movement_from_quotes` is
-    pure: feed it a list of quotes (mappings or :class:`LineQuote`) and it sorts,
-    derives, and returns a :class:`LineMovement` -- no DB, no RNG, deterministic.
-    :func:`fetch_line_movement` is the ONLY DB-touching function; it takes a
-    duck-typed asyncpg-or-mock ``conn``, reads ``raw.game_odds`` ordered by
-    ``fetched_at``, groups the rows into per-(side, book) series, and calls the
-    pure builder.  Unit-testable against a stub connection exactly like
-    :mod:`db.sim_store`.
-  * **Reuse clv_engine for all odds math.** Every American<->probability<->CLV
-    computation goes through :mod:`betting.clv_engine`; this module owns only the
-    time-series shaping.  numpy-light (plain Python arithmetic).
+The time axis of raw.game_odds
+------------------------------
+The series orders on ``fetched_at``, the time the writer stored the row. The
+writer skips a row whose book, line type and prices match an earlier row of
+the same game and source (a hash of the payload); the live writer re-stamps
+that row's ``last_seen_at`` instead. So each stored row is a price set new to
+the game, and a price that returns to an earlier value writes no new row. Each
+row carries both sides of its market in paired columns (moneyline ``home_ml`` /
+``away_ml``; run line ``home_spread_ml`` / ``away_spread_ml`` with
+``home_spread`` / ``away_spread``; total ``over_ml`` / ``under_ml`` with
+``total_line``), so one row de-vigs as a two-way market. This module reads
+these three full-game markets only.
 
-THE raw.game_odds TIMESTAMP COLUMN
-----------------------------------
-The ordering / time axis is **``fetched_at``** (``TIMESTAMPTZ NOT NULL DEFAULT
-NOW()`` -- the column created in Alembic 0003).  There is no ``captured_at`` /
-``updated_at`` on this table; ``fetched_at`` is the moment the snapshot was
-pulled, and the SIM-092 dedup means each distinct ``fetched_at`` is a moment the
-line actually moved.  Each row carries BOTH sides of its market in paired
-columns (moneyline ``home_ml`` / ``away_ml``; runline ``home_spread_ml`` /
-``away_spread_ml`` with ``home_spread`` / ``away_spread``; total ``over_ml`` /
-``under_ml`` with ``total_line``), so a single row de-vigs as a two-way market.
-
-A RUN LINE IS A PAIR, OR TWO SEPARATE BETS (SIM-549)
----------------------------------------------------
-A run-line row is a two-way market only when the away spread is the negative of
-the home spread (home −1.5 / away +1.5). The book also lists two SEPARATE bets,
+A run line: one pair, or two separate bets
+------------------------------------------
+A run-line row is one two-way bet only when the away spread is the negative of
+the home spread (home −1.5 / away +1.5). The book also lists two separate bets,
 such as home −1.5 / away −1.5 or home +1.5 / away +1.5. Their prices must not
 be de-vigged against each other. So on a run line:
 
-  * each quote carries the other side's own spread (``other_line``);
-  * the series says whether its rows were pairs, two separate bets, or a mix
-    (:attr:`LineMovement.run_line_shape`);
-  * the CLV compares only the SAME bet. When the side's spread moved between
-    the opening and the closing quote, the series carries no CLV. The note
-    says why (:attr:`LineMovement.clv_note`);
-  * when either endpoint is two separate bets, BOTH endpoints are priced the
-    same way: each price over the book's margin on the game's total, then its
-    moneyline, at that time (:func:`betting.clv_engine.devig_one_sided`).
-    :attr:`LineMovement.clv_basis` says which way the CLV was priced.
+* each quote carries the other side's own spread (``other_line``);
+* the series says whether its rows were pairs, two separate bets, or a mix
+  (:attr:`LineMovement.run_line_shape`);
+* the CLV compares only the same bet. When the side's spread moved between the
+  opening and the closing quote, the series has no CLV, and
+  :attr:`LineMovement.clv_note` says why;
+* when either end is two separate bets, both ends are priced the same way:
+  each price over the book's margin on the game's total, then its moneyline,
+  at that time (:func:`betting.clv_engine.devig_one_sided`).
+  :attr:`LineMovement.clv_basis` names the method.
 
-ONE BOOK PER ROW (SIM-555)
---------------------------
-Every new ``raw.game_odds`` row holds one book's prices for all its sides and
-names the book as ``bp:<id>`` (the vendor's book id). The old rows say
-``consensus`` and can mix two books inside one row, so every read here keeps
-only the ``bp:`` rows (:data:`pipeline.odds_provider.STORED_BOOK_FILTER_SQL`).
-Each quote and each series also carries the book's display name
-(``book_name``, e.g. "FanDuel") for the chart title. Nothing else on this
-surface changed: closing line value is not a metric the model is judged by
-(owner ruling, 2026-09-28).
+One book per row
+----------------
+A ``bp:<id>`` row holds one book's prices for all its sides (``<id>`` is the
+vendor's book id). A ``consensus`` row can mix two books in one row, so every
+read here keeps only the ``bp:`` rows
+(:data:`pipeline.odds_provider.STORED_BOOK_FILTER_SQL`). Each quote and each
+series carries the book's display name (``book_name``, e.g. "FanDuel") for the
+chart title.
 """
 
 from __future__ import annotations
@@ -135,14 +105,14 @@ from betting.clv_engine import (
 from pipeline.odds_provider import STORED_BOOK_FILTER_SQL, book_display_name
 
 # ===========================================================================
-# Market -> (this-side column, other-side column, line column) mapping
+# Market and side -> (this side's column, the other side's column, the line column)
 # ===========================================================================
 #
-# raw.game_odds stores BOTH sides of every market in one row.  To build a
-# one-SIDE series we need, per (market_type, side): which American-odds column is
-# THIS side, which is the OTHER side (needed to de-vig the two-way pair), and the
-# market's line column (None for moneyline).  market_type values are the
-# Alembic-0003 CHECK set: 'moneyline' | 'runline' | 'total'.
+# raw.game_odds stores both sides of a market in one row. A one-side series
+# needs, per (market_type, side): this side's American-odds column, the other
+# side's column (the de-vig needs the pair) and the line column (None for the
+# moneyline). This module reads the three full-game markets; the table also
+# holds the segment and team markets.
 
 #: (this_american_col, other_american_col, line_col_or_None) per (market, side).
 _MARKET_COLUMNS: dict[tuple[str, MarketSide], tuple[str, str, str | None]] = {
@@ -154,8 +124,8 @@ _MARKET_COLUMNS: dict[tuple[str, MarketSide], tuple[str, str, str | None]] = {
     ("total", MarketSide.UNDER): ("under_ml", "over_ml", "total_line"),
 }
 
-#: SIM-549: the OTHER side's own line column on a run line (the away spread for
-#: the home series and the reverse). It tells a pair from two separate bets.
+#: The OTHER side's own line column on a run line (the away spread for the home
+#: series, and the reverse). It tells a pair from two separate bets.
 _OTHER_LINE_COLUMN: dict[tuple[str, MarketSide], str] = {
     ("runline", MarketSide.HOME): "away_spread",
     ("runline", MarketSide.AWAY): "home_spread",
@@ -165,8 +135,8 @@ _OTHER_LINE_COLUMN: dict[tuple[str, MarketSide], str] = {
 #: same game's two-way markets as of a quote (see :func:`fetch_line_movement`).
 ReferenceMarginAt = Callable[["LineQuote"], tuple[float, str]]
 
-#: Valid (market_type, side) side-pairings, so callers (and the API) can
-#: enumerate what a market exposes without hard-coding the table layout.
+#: The two sides of each market this module reads. An unknown market_type is
+#: an error in :func:`fetch_line_movement` and :func:`_side_columns`.
 _MARKET_SIDES: dict[str, tuple[MarketSide, MarketSide]] = {
     "moneyline": (MarketSide.HOME, MarketSide.AWAY),
     "runline": (MarketSide.HOME, MarketSide.AWAY),
@@ -175,7 +145,7 @@ _MARKET_SIDES: dict[str, tuple[MarketSide, MarketSide]] = {
 
 
 def _side_columns(market_type: str, side: MarketSide) -> tuple[str, str, str | None]:
-    """The (this-side, other-side, line) game_odds columns for a market + side.
+    """The (this side, other side, line) raw.game_odds columns of a market and side.
 
     Raises ``ValueError`` for an unknown ``market_type`` or a ``side`` that does
     not belong to it (e.g. OVER on a moneyline).
@@ -195,47 +165,47 @@ def _side_columns(market_type: str, side: MarketSide) -> tuple[str, str, str | N
 
 
 # ===========================================================================
-# LineQuote -- one timestamped snapshot of one side of a market
+# LineQuote: one stamped snapshot of one side of a market
 # ===========================================================================
 
 
 @dataclass(frozen=True, slots=True)
 class LineQuote:
-    """One timestamped quote for a single side of one market at one book.
+    """One stamped quote of one side of one market at one book: a point of the series.
 
-    A single point on the line-movement time-series.  ``american`` is THIS side's
-    American price at ``fetched_at``; ``other_american`` is the opposite side's
-    price at the SAME snapshot (kept so the opening / closing pair can be
-    de-vigged into a fair :class:`CLV`).  ``implied_prob`` is the RAW single-side
-    implied probability (margin INCLUDED) from
-    :func:`~betting.clv_engine.implied_prob_from_american` -- de-vig is a two-way
-    operation and a one-side series cannot be de-vigged, so the per-quote prob is
-    the book's quoted (vigged) single-side probability; the de-vigged value lives
-    on the :class:`CLV`.
+    ``american`` is this side's American price at ``fetched_at``.
+    ``other_american`` is the opposite side's price in the same snapshot, so the
+    opening and the closing pair can be de-vigged into a :class:`CLV`.
+    ``implied_prob`` is the raw implied probability of this one side
+    (:func:`~betting.clv_engine.implied_prob_from_american`), the vig included:
+    one side alone cannot be de-vigged. The no-vig value lives on the
+    :class:`CLV`.
     """
 
-    #: When the snapshot was pulled (the raw.game_odds ``fetched_at`` column).
-    #: Any ordered/comparable type (datetime, ISO str, int) -- used only to sort.
+    #: The time the writer stored the row (raw.game_odds ``fetched_at``). The sort
+    #: takes any ordered type; the run-line margin reader also subtracts two
+    #: stamps, so it needs a datetime or a number.
     fetched_at: Any
     #: 'opening' | 'current' | 'closing' | 'bet_placement' (the line_type CHECK).
     line_type: str
-    #: The sportsbook this quote is from (raw.game_odds ``book``).
+    #: The book label (raw.game_odds ``book``): ``bp:<id>``, or ``consensus`` on a
+    #: row that names no book.
     book: str
-    #: Whether ``book`` is a sharp book (Pinnacle / Circa) -- the SIM-133 flag.
+    #: The row's ``is_sharp_book`` column; the sharp-consensus flag reads it.
     is_sharp_book: bool
-    #: THIS side's American odds at this snapshot.
+    #: THIS side's American odds in this snapshot.
     american: float
-    #: The OPPOSITE side's American odds at the SAME snapshot (for de-vig). May be
-    #: None if the row stored only this side (then the CLV cannot be computed).
+    #: The OPPOSITE side's American odds in the same snapshot (for the de-vig).
+    #: None when the row stored only this side; then there is no CLV.
     other_american: float | None = None
-    #: The market line at this snapshot (spread / total). None for a moneyline.
+    #: The market line in this snapshot (the spread or the total). None for a moneyline.
     line: float | None = None
-    #: RAW single-side implied probability of ``american`` (margin included).
+    #: The raw implied probability of ``american`` for this one side (the vig included).
     implied_prob: float = 0.0
-    #: SIM-549: the OTHER side's own line at the same snapshot (run lines only).
+    #: The OTHER side's own line in the same snapshot (run lines only).
     other_line: float | None = None
-    #: SIM-555: the book's display name ("FanDuel" for ``bp:10``). A label the
-    #: vocabulary does not name keeps the label (``consensus``, ``bp:999``).
+    #: The book's display name ("FanDuel" for ``bp:10``). A label the vocabulary
+    #: does not name stays as it is (``consensus``, ``bp:999``).
     book_name: str = ""
 
     @property
@@ -256,12 +226,10 @@ class LineQuote:
         line: float | None = None,
         other_line: float | None = None,
     ) -> LineQuote:
-        """Build a :class:`LineQuote`, computing ``implied_prob`` from ``american``.
+        """Build a :class:`LineQuote`; it fills ``implied_prob`` from ``american``
+        and ``book_name`` from the book label.
 
-        The convenience constructor used everywhere internally: it fills
-        ``implied_prob`` via :func:`~betting.clv_engine.implied_prob_from_american`
-        so callers never have to. SIM-555: it also fills ``book_name`` from the
-        book vocabulary.
+        An American price of 0 raises ``ValueError``.
         """
         return LineQuote(
             fetched_at=fetched_at,
@@ -278,19 +246,18 @@ class LineQuote:
 
 
 # ===========================================================================
-# LineMovement -- the ordered series + derived opening->closing summary
+# LineMovement: the ordered series and its opening-to-closing summary
 # ===========================================================================
 
 
 @dataclass(frozen=True, slots=True)
 class LineMovement:
-    """The line-movement time-series for one (game_pk, market, side, book).
+    """The line-movement series of one (game_pk, market, side, book).
 
-    ``quotes`` is the chronologically ORDERED list of :class:`LineQuote` from the
-    opening through the closing line (every moment the price moved -- SIM-092
-    dedup).  The remaining fields are the derived opening -> closing SUMMARY and
-    the entry-vs-close :class:`CLV`.  See the module docstring for what
-    "movement" / "CLV over time" mean.
+    ``quotes`` holds the :class:`LineQuote` objects in time order, from the
+    opening to the closing quote: one per stored row. The other fields are the
+    opening-to-closing summary and the :class:`CLV` of a bet at the opening
+    price. The module docstring says what the movement and the CLV mean.
     """
 
     game_pk: int
@@ -298,78 +265,78 @@ class LineMovement:
     side: MarketSide
     book: str | None
 
-    #: The ordered series, oldest (opening) -> newest (closing).
+    #: The ordered series, oldest (the opening) first, newest (the close) last.
     quotes: tuple[LineQuote, ...]
 
-    #: Opening / closing American odds for THIS side (first / last quote).
+    #: The opening / closing American odds of THIS side (the first / last quote).
     opening_american: float | None = None
     closing_american: float | None = None
-    #: Opening / closing RAW implied probability (first / last quote).
+    #: The opening / closing raw implied probability (the first / last quote).
     opening_implied_prob: float | None = None
     closing_implied_prob: float | None = None
 
-    #: closing_american - opening_american (American-points move; sign per the
-    #: American convention, so prefer implied_prob_delta for monotone reasoning).
+    #: closing_american - opening_american. American odds jump from + to - at even
+    #: money, so implied_prob_delta is the better measure of the move.
     american_delta: float | None = None
-    #: closing_implied_prob - opening_implied_prob.  > 0 => odds shortened, the
-    #: market moved TOWARD this side ("steam toward"); < 0 => moved away.
+    #: closing_implied_prob - opening_implied_prob. Above 0: the odds shortened and
+    #: the market moved TOWARD this side; below 0: it moved away.
     implied_prob_delta: float | None = None
-    #: closing line - opening line (spread / total markets; None for moneyline).
+    #: The closing line minus the opening line (the spread or the total; None for
+    #: a moneyline).
     line_delta: float | None = None
 
-    #: Per-step implied-prob changes between consecutive quotes.  Length ==
-    #: len(quotes) - 1 (empty for a single quote -- no movement).
+    #: The implied-probability change between each pair of consecutive quotes.
+    #: Its length is len(quotes) - 1 (empty for a single quote).
     step_implied_prob_deltas: tuple[float, ...] = ()
-    #: Per-step American-odds changes between consecutive quotes (same length).
+    #: The American-odds change between each pair of consecutive quotes (same length).
     step_american_deltas: tuple[float, ...] = ()
-    #: The running RAW implied-probability series == [q.implied_prob for q in
-    #: quotes]; the plottable "CLV over time" surface.
+    #: The raw implied probability of each quote, in order: the series to chart.
     implied_prob_series: tuple[float, ...] = ()
 
-    #: 'toward' | 'away' | 'flat' -- direction the line steamed for THIS side over
-    #: the whole opening->closing window (sign of implied_prob_delta).
+    #: 'toward' | 'away' | 'flat': the sign of implied_prob_delta, the direction
+    #: the line moved for THIS side from the opening to the close.
     direction: str = "flat"
 
-    #: The SIM-339 entry-vs-close CLV with entry == opening quote, close ==
-    #: closing quote.  None when the series has < 2 quotes or an endpoint cannot
-    #: be priced. On a run line it is also None when the side's spread moved
-    #: (see ``clv_note``).
+    #: The CLV of a bet at the opening quote against the closing quote. None when
+    #: the series has fewer than 2 quotes or an end cannot be priced. On a run
+    #: line it is also None when the side's spread moved (see ``clv_note``).
     clv: CLV | None = None
 
-    #: True iff the SHARP books in this game's wider market moved this side the
-    #: SAME direction as the overall movement (sharp money agrees).  Only set by
-    #: :func:`fetch_line_movement` (which sees every book); None on a pure single-
-    #: book series built directly via :func:`line_movement_from_quotes`.
+    #: True when the rows flagged ``is_sharp_book`` moved this side the SAME way as
+    #: all the books together. None when either direction is flat (a game with no
+    #: flagged row reads flat), and on a series that
+    #: :func:`line_movement_from_quotes` builds directly: only
+    #: :func:`fetch_line_movement` sees every book.
     sharp_consensus: bool | None = None
 
-    #: SIM-549, run lines only: 'pair' (every row the two sides of one bet),
-    #: 'two_bets' (every row two separate bets) or 'mixed'. A row with a
-    #: missing spread does not count. None elsewhere.
+    #: Run lines only: 'pair' (every row the two sides of one bet), 'two_bets'
+    #: (every row two separate bets) or 'mixed'. A row with a missing spread does
+    #: not count. None on the other markets.
     run_line_shape: str | None = None
-    #: How the CLV was priced. 'pair': both endpoints de-vigged as one two-way
-    #: bet. 'two_bets': an endpoint was two separate bets, so both endpoints
-    #: are priced on their own price over the game's two-way margin. None when
-    #: there is no CLV.
+    #: How the CLV was priced. 'pair': both ends de-vigged as one two-way bet.
+    #: 'two_bets': an end was two separate bets, so both ends are priced on their
+    #: own price over the game's two-way margin. None when there is no CLV.
     clv_basis: str | None = None
     #: Run lines only: why there is no CLV, or a caveat on it, in plain words.
     clv_note: str | None = None
-    #: SIM-555: the display name of ``book`` ("FanDuel" for ``bp:10``); an
-    #: empty string when the series names no book.
+    #: The display name of ``book`` ("FanDuel" for ``bp:10``); an empty string
+    #: when the series names no book.
     book_name: str = ""
 
     @property
     def has_movement(self) -> bool:
-        """True iff the line moved at all (>= 2 quotes and a non-zero net delta)."""
+        """True when the series has 2 or more quotes and a non-zero net implied-
+        probability delta. A price that moved and came back reads as no movement."""
         return len(self.quotes) >= 2 and bool(self.implied_prob_delta)
 
     @property
     def beat_close(self) -> bool:
-        """True iff a bet at the OPENING price beat the close (clv.beat_close)."""
+        """True when a bet at the OPENING price beat the close (clv.beat_close)."""
         return self.clv is not None and self.clv.beat_close
 
 
 # ===========================================================================
-# Pure derivation
+# The pure derivation
 # ===========================================================================
 
 
@@ -379,13 +346,14 @@ def _coerce_quote(
     market_type: str,
     side: MarketSide,
 ) -> LineQuote:
-    """Coerce one raw row (mapping) or a :class:`LineQuote` into a LineQuote.
+    """Turn one raw row (a mapping) or a :class:`LineQuote` into a LineQuote.
 
-    A :class:`LineQuote` is returned as-is.  A mapping is read against the
-    ``raw.game_odds`` column layout for ``(market_type, side)``: the this-side /
-    other-side American columns + the line column, plus ``fetched_at`` /
-    ``line_type`` / ``book`` / ``is_sharp_book``.  Rows whose THIS-side American
-    price is NULL are signalled by raising ``ValueError`` (the caller skips them).
+    A :class:`LineQuote` comes back as it is. A mapping is read by the
+    ``raw.game_odds`` column layout of ``(market_type, side)``: this side's and
+    the other side's American columns and the line column, plus ``fetched_at``,
+    ``line_type``, ``book`` and ``is_sharp_book``. A row whose THIS-side price is
+    NULL raises ``ValueError``, and the caller skips it. So does an unknown
+    ``(market_type, side)`` or a price of 0.
     """
     if isinstance(row, LineQuote):
         return row
@@ -410,11 +378,11 @@ def _coerce_quote(
 
 
 def _sort_key(q: LineQuote) -> tuple[int, Any]:
-    """Order quotes by ``fetched_at``, with None timestamps sorted first.
+    """The sort key of a quote: ``fetched_at``, with a missing stamp first.
 
-    Returns a (has-timestamp, value) tuple so ``None`` fetched_at values (e.g. a
-    hand-built quote that omitted the time) sort BEFORE timestamped ones rather
-    than raising on a None-vs-datetime comparison.
+    The (has-stamp, value) tuple puts a quote with no ``fetched_at`` (e.g. a
+    hand-built quote) before the stamped ones. Comparing None with a datetime
+    would raise.
     """
     return (0, "") if q.fetched_at is None else (1, q.fetched_at)
 
@@ -429,45 +397,43 @@ def line_movement_from_quotes(
     sharp_consensus: bool | None = None,
     reference_margin_at: ReferenceMarginAt | None = None,
 ) -> LineMovement:
-    """PURE: build a :class:`LineMovement` from an (unordered) quote sequence.
+    """Build a :class:`LineMovement` from quotes in any order. Pure.
 
-    ``rows`` is a sequence of either :class:`LineQuote` objects or raw
-    ``raw.game_odds`` row mappings (read against the ``(market_type, side)``
-    column layout).  The steps:
+    ``rows`` holds :class:`LineQuote` objects or ``raw.game_odds`` row mappings
+    (read by the ``(market_type, side)`` column layout). The steps:
 
-      1. coerce + drop rows with a NULL this-side price;
-      2. SORT chronologically by ``fetched_at`` (None-time quotes first);
-      3. compute the running RAW implied-prob series + the per-step American /
-         implied-prob deltas (length == n-1; empty for a single quote);
-      4. summarise opening vs closing (American / implied-prob / line deltas +
-         the steam ``direction``);
-      5. build the SIM-339 entry-vs-close :class:`CLV` from the opening and
-         closing quotes' two-way pairs (via
-         :func:`~betting.clv_engine.clv_from_odds`) when both endpoints carry the
-         opposite-side price; otherwise ``clv`` is None.
+      1. turn each row into a quote, and drop a row that raises ``ValueError``
+         (a NULL this-side price);
+      2. sort by ``fetched_at`` (a quote with no stamp first);
+      3. the raw implied-probability series and the step deltas in American odds
+         and in implied probability (n - 1 of each; none for a single quote);
+      4. the opening-to-closing summary: the American, implied-probability and
+         line deltas, and the ``direction``;
+      5. the :class:`CLV` of the opening against the closing two-way pair
+         (:func:`~betting.clv_engine.clv_from_odds`), when both ends carry the
+         other side's price; else ``clv`` is None.
 
-    Edge cases handled: an EMPTY input -> an empty movement (no deltas, no CLV); a
-    SINGLE quote -> no movement (empty deltas, opening == closing, ``direction``
-    "flat", ``clv`` None); a missing opening or closing opposite-side price ->
-    ``clv`` None but the series / deltas are still computed.
+    No rows give an empty movement. A single quote gives no movement: no deltas,
+    the opening equals the close, ``direction`` "flat", no CLV. A missing other
+    side's price at either end gives no CLV, but the series and the deltas are
+    still there.
 
-    ``game_pk`` / ``book`` / ``sharp_consensus`` are carried onto the result for
-    provenance; :func:`fetch_line_movement` supplies real values, direct callers
-    may leave the defaults.
+    ``game_pk``, ``book`` and ``sharp_consensus`` go onto the result as given.
+    :func:`fetch_line_movement` supplies real values; a direct caller may keep
+    the defaults.
 
-    SIM-549, a run line: the CLV needs the SAME bet at both endpoints. A side
-    whose spread moved between them gets no CLV. When either endpoint is two
-    separate bets, both endpoints are priced over ``reference_margin_at`` (the
-    game's two-way margin at that quote). Without it, there is no CLV. The
-    result carries :attr:`LineMovement.run_line_shape`, ``clv_basis`` and
-    ``clv_note``.
+    On a run line the CLV needs the SAME bet at both ends, so a side whose spread
+    moved gets no CLV. When either end is two separate bets, both ends are priced
+    over ``reference_margin_at`` (the game's two-way margin at that quote).
+    Without it there is no CLV. The result carries
+    :attr:`LineMovement.run_line_shape`, ``clv_basis`` and ``clv_note``.
     """
     quotes: list[LineQuote] = []
     for r in rows:
         try:
             quotes.append(_coerce_quote(r, market_type=market_type, side=side))
         except ValueError:
-            # NULL this-side price for this market/side -- not part of the series.
+            # No this-side price for this market and side: not part of the series.
             continue
     quotes.sort(key=_sort_key)
 
@@ -560,13 +526,13 @@ def _quote_shape(q: LineQuote) -> str | None:
 def _run_line_clv(
     opening: LineQuote, closing: LineQuote, reference_margin_at: ReferenceMarginAt | None
 ) -> tuple[CLV | None, str | None, str | None]:
-    """SIM-549: the run line's entry-vs-close CLV, its basis and its note.
+    """The run line's CLV (opening against close), its basis and its note.
 
     The CLV compares one bet at two times, so the side's spread must be the same
-    at both. Two pairs de-vig as before. When either endpoint is two separate
-    bets, both endpoints are priced the same way: each price over the game's
-    two-way margin at that time. So the CLV moves only when the price or the
-    margin moves, never because the method changed."""
+    at both. When both ends are pairs, each end de-vigs as one two-way bet. When
+    either end is two separate bets, both ends are priced the same way: each
+    price over the game's two-way margin at that time. So the CLV moves only when
+    the price or the margin moves, never because the method changed."""
     if _quote_shape(opening) is None or _quote_shape(closing) is None:
         return None, None, "a spread is missing, so the bet is not known"
     if opening.line != closing.line:
@@ -611,13 +577,12 @@ def _run_line_clv(
 
 
 # ===========================================================================
-# DB reader (duck-typed asyncpg-or-mock conn) -- isolated, mockable
+# The database reader (an asyncpg connection or a test stub)
 # ===========================================================================
 
-#: All columns a line-movement series needs, ordered by the time axis. We pull
-#: every market's side columns in one read and let the pure builder slice per
-#: (market, side). ORDER BY fetched_at ASC == opening -> closing. SIM-555: only
-#: the one-book rows (``bp:<id>``); an old ``consensus`` row can mix two books.
+#: Every column a series needs, for one game and one market, in ``fetched_at``
+#: order (the opening first). The pure builder picks each side's columns. Only
+#: the one-book ``bp:<id>`` rows: a ``consensus`` row can mix two books.
 _SQL_FETCH_GAME_ODDS = f"""
     SELECT fetched_at, line_type, book, is_sharp_book, market_type,
            home_ml, away_ml,
@@ -628,7 +593,7 @@ _SQL_FETCH_GAME_ODDS = f"""
     ORDER BY fetched_at ASC
 """
 
-#: Same, restricted to a single book (book filter appended).
+#: The same read, narrowed to one book.
 _SQL_FETCH_GAME_ODDS_BOOK = f"""
     SELECT fetched_at, line_type, book, is_sharp_book, market_type,
            home_ml, away_ml,
@@ -640,8 +605,8 @@ _SQL_FETCH_GAME_ODDS_BOOK = f"""
 """
 
 
-#: SIM-549: the same game's two-way reference markets, for a run line whose
-#: rows are two separate bets. SIM-555: the one-book rows only.
+#: The same game's two-way reference markets (the total and the moneyline), for
+#: a run line whose rows are two separate bets. The one-book rows only.
 _SQL_FETCH_REFERENCE_ODDS = f"""
     SELECT fetched_at, line_type, book, market_type, home_ml, away_ml, over_ml, under_ml
     FROM raw.game_odds
@@ -659,19 +624,21 @@ def _gap_seconds(a: Any, b: Any) -> float:
 
 
 def _reference_margin_reader(reference_rows: Sequence[Mapping[str, Any]]) -> ReferenceMarginAt:
-    """``reference_margin_at(quote)``: the book's margin on the game's total,
-    then its moneyline, from the quote's own snapshot — the quote's own book
-    first, any book second, the flat margin last.
+    """Build ``reference_margin_at(quote)``: the book's margin on the game's total,
+    then on its moneyline, from the quote's own snapshot. The quote's own book
+    comes first, any book second, the flat margin last.
 
-    The snapshot is the reference row of the quote's line type nearest the
-    quote in time. The loader writes one snapshot's markets milliseconds apart
+    The snapshot is the reference row of the quote's line type nearest the quote
+    in time. The loader writes one snapshot's markets milliseconds apart
     (moneyline, run line, total), so the same snapshot's total is stamped just
     AFTER its run line; an "at or before" rule would read the previous
-    snapshot's total. This matches the accuracy comparison, which reads the
-    closing total for a closing run line. A reference market with no row of the
-    quote's line type falls back to its latest row at or before the quote."""
+    snapshot's total. The accuracy comparison reads the same way: the closing
+    total for a closing run line. A reference market with no row of the quote's
+    line type falls back to its latest row at or before the quote."""
 
     def latest(market_type: str, quote: LineQuote, same_book: bool) -> Mapping[str, Any] | None:
+        # The reference row for ``quote``: the nearest row of its line type, else
+        # the latest row at or before it.
         rows = [
             r
             for r in reference_rows
@@ -715,10 +682,9 @@ def _reference_margin_reader(reference_rows: Sequence[Mapping[str, Any]]) -> Ref
 
 
 def _row_to_mapping(row: Any) -> dict[str, Any]:
-    """Normalize an asyncpg Record (or a plain dict from a stub) to a dict.
+    """An asyncpg ``Record`` (or a stub's dict) as a dict the pure builder can read.
 
-    asyncpg ``Record`` objects support ``dict(row)``; a stub may already hand
-    back a dict.  Either way we return a real dict the pure coercer can ``.get``.
+    ``dict(row)`` converts a ``Record``; a dict comes back as it is.
     """
     if isinstance(row, dict):
         return row
@@ -732,21 +698,22 @@ async def fetch_line_movement(
     market_type: str,
     book: str | None = None,
 ) -> list[LineMovement]:
-    """Read ``raw.game_odds`` and build the per-side line-movement series.
+    """Read ``raw.game_odds`` and build the line-movement series per side and book.
 
-    Duck-typed ``conn`` (a real asyncpg connection or a test stub exposing an
-    async ``fetch(sql, *args)``), exactly like the :mod:`db.sim_store` readers.
-    Issues ONE query: every one-book ``raw.game_odds`` row (``bp:<id>``,
-    SIM-555) for ``(game_pk, market_type)`` (optionally narrowed to one
-    ``book``), ordered by ``fetched_at`` ascending (opening -> closing).  The rows are then grouped per (side, book) and each
-    group is handed to the pure :func:`line_movement_from_quotes`.
+    ``conn`` is an asyncpg connection or a test stub with an async
+    ``fetch(sql, *args)``. The first query reads every one-book row
+    (``bp:<id>``) of ``(game_pk, market_type)``, narrowed to ``book`` when one is
+    given, in ``fetched_at`` order. On a run line with a row of two separate
+    bets, a second query reads the game's total and moneyline rows for the
+    margin. The rows are grouped per (side, book), and each group goes to the
+    pure :func:`line_movement_from_quotes`.
 
-    Returns one :class:`LineMovement` per (side, book) present in the data
-    (markets expose two sides -- moneyline HOME/AWAY, runline HOME/AWAY, total
-    OVER/UNDER -- across one or many books).  An empty result for a game/market
-    with no stored odds.  Each result's :attr:`~LineMovement.sharp_consensus` is
-    set from whether the SHARP books moved that side the same way the whole
-    market did.
+    Returns one :class:`LineMovement` per (side, book) with quotes: the two sides
+    of the market (HOME / AWAY on the moneyline and the run line, OVER / UNDER on
+    the total) at each book. A game and market with no stored odds give ``[]``.
+    Each series' :attr:`~LineMovement.sharp_consensus` says whether the flagged
+    sharp rows moved that side the same way as all the rows. An unknown
+    ``market_type`` raises ``ValueError``.
     """
     sides = _MARKET_SIDES.get(market_type)
     if sides is None:
@@ -760,8 +727,8 @@ async def fetch_line_movement(
         rows = await conn.fetch(_SQL_FETCH_GAME_ODDS_BOOK, int(game_pk), market_type, str(book))
     mappings = [_row_to_mapping(r) for r in (rows or [])]
 
-    # SIM-549: a run line listed as two separate bets needs the game's two-way
-    # margin to price each bet on its own. One more read, only then.
+    # A run line listed as two separate bets needs the game's two-way margin to
+    # price each bet on its own. One more read, only then.
     reference_margin_at: ReferenceMarginAt | None = None
     if market_type == "runline" and any(
         (m.get("home_spread_ml") is not None or m.get("away_spread_ml") is not None)
@@ -782,8 +749,8 @@ async def fetch_line_movement(
 
     results: list[LineMovement] = []
     for side in sides:
-        # Sharp consensus for this side: did the sharp books move it the SAME way
-        # the whole market (all books pooled) did?  Computed once per side.
+        # The sharp consensus of this side: did the sharp rows move it the SAME
+        # way as all the rows pooled? Computed once per side.
         sharp_dir = _net_direction(mappings, market_type, side, sharp_only=True)
         overall_dir = _net_direction(mappings, market_type, side, sharp_only=False)
         if sharp_dir == "flat" or overall_dir == "flat":
@@ -801,7 +768,7 @@ async def fetch_line_movement(
                 sharp_consensus=sharp_flag,
                 reference_margin_at=reference_margin_at,
             )
-            # Only emit a series that actually has quotes for this side.
+            # Keep only a series with quotes for this side.
             if movement.quotes:
                 results.append(movement)
     return results
@@ -814,11 +781,12 @@ def _net_direction(
     *,
     sharp_only: bool,
 ) -> str:
-    """Net opening->closing steam direction for a side across the pooled rows.
+    """The net direction of a side over the pooled rows: 'toward', 'away' or 'flat'.
 
-    Builds a temporary movement over ALL books (or only the sharp ones) so we can
-    read its ``direction``.  Used to derive the :attr:`LineMovement.sharp_consensus`
-    flag: 'toward' / 'away' / 'flat'.
+    It builds one series over the rows of ALL books (or of the flagged sharp
+    rows only) and reads its ``direction``, so the first and the last quote can
+    come from different books. No rows read 'flat'. The
+    :attr:`LineMovement.sharp_consensus` flag compares the two directions.
     """
     pool = [r for r in rows if (r.get("is_sharp_book") if sharp_only else True)]
     if not pool:

@@ -1,15 +1,22 @@
-"""
-betting
-=======
-The betting / markets layer (Agent 8).  Turns simulation outputs (SIM-329 prop
-PMFs, SIM-330 win probability, SIM-327 ``GameSimSummary`` raw score arrays) into
-actionable betting edge: implied probability, de-vig / no-vig fair odds, edge
-(sim vs market), expected value, and **Closing Line Value (CLV)** -- the
-gold-standard validation metric for this platform.
+"""The betting layer: it compares the simulator's probabilities with the market's prices.
 
-The first inhabitant is :mod:`betting.clv_engine` (SIM-339).  Everything here is
-deterministic, pure numpy / Python, RNG-free and DB-free; odds are INJECTED by
-the caller (no live provider needed).
+The simulator gives probabilities: a player's prop distribution (the
+probability of each value of his stat), the win probability and the raw
+per-game scores (``GameSimSummary``). The market gives prices in American odds:
+``-110`` means stake 110 to win 100, ``+150`` means stake 100 to win 150. Each
+price carries the vig, the book's margin, so the implied probabilities of a
+market's sides add up to more than 1.
+
+The package turns the two into numbers that compare: the implied probability,
+the no-vig probability (the implied probability with the vig removed), the edge
+(the simulator's probability minus the no-vig probability), the expected value
+(EV) and the closing line value (CLV: how the price a bet took compares with
+the market's last price before first pitch).
+
+The arithmetic is deterministic: no random numbers, and the caller supplies the
+odds. Only :func:`betting.line_movement.fetch_line_movement` reads the
+database, through a connection the caller passes in. The package re-exports
+the main names of :mod:`betting.clv_engine`.
 """
 
 from __future__ import annotations

@@ -1,41 +1,37 @@
-"""similarity/backtesting/recency_walk_forward.py — SIM-076 walk-forward harness.
+"""A walk-forward check of the recency weight on a k-nearest-neighbour prediction.
 
-Validates that the SIM-076 ``recency_weight`` column actually improves the
-**out-of-sample** fit of similarity-based outcome prediction. The companion
-materialized column is produced by
-``pipeline.batch.player_profile_computor.recency_weight`` (2.0 for the most
-recent two seasons, x0.75/season decay, floor 0.25, relative to the build's
-reference season); this module does *not* recompute weights — it consumes
-whatever ``recency_weight`` is already attached to each pooled row, exactly as
-SIM-220's broader backtester will feed it real data.
+The harness tests whether the ``recency_weight`` column improves the
+out-of-sample fit of a similarity-based prediction of a scalar outcome. The
+pool builders write the column by the rule of
+``pipeline.batch.player_profile_computor.recency_weight``: 2.0 for the two most
+recent seasons, then ×0.75 for each older season, with a floor of 0.25,
+relative to the build's reference season. This module does not compute the
+weights; it reads the ``recency_weight`` already on each row.
 
-Status: DEV / OFFLINE-ONLY (whole module)
------------------------------------------
-This whole module is an offline validation library — there is **no live pipeline
-caller**. Production win-prob / prop calibration uses the binary path in
-:mod:`simulation.prop_validation` (which imports only the constants
-``DEFAULT_N_BINS`` and ``OUTCOME_PROB_EPS`` from the SIM-220 backtester). The math
-here is correct and unit-tested — this is a label, not a deprecation.
-
-Design goals
+Offline only
 ------------
-* **In-memory only.** Inputs are a pandas ``DataFrame`` (or anything with the
-  required columns) — never a live DB — so the harness is trivially
-  unit-testable and reusable.
-* **Composable.** Each piece (fold generation, single prediction, full eval)
-  is a standalone, importable function with no hidden global state.
-* **Simple, documented math.** The predictor is a deliberately plain k-NN over
-  the training rows. The contribution of SIM-076 is the *recency weighting*,
-  not a state-of-the-art model, so the comparison stays interpretable: the only
-  thing that changes between the "weighted" and "baseline" arms is whether
-  ``recency_weight`` participates in the neighbour averaging.
+No live code calls this module. The production calibration of the win
+probability and the props runs on the binary path of
+:mod:`simulation.prop_validation`. The functions here are tested and correct;
+"offline" describes their use, not their state.
 
-Required columns / fields per row
----------------------------------
+Design
+------
+* In memory only. The input is a pandas ``DataFrame``, or anything with the
+  required columns, never a database.
+* Each piece (the folds, one prediction, the full evaluation) is a standalone
+  function with no global state.
+* The predictor is a plain k-nearest-neighbour (k-NN) average over the
+  training rows. The weighted arm and the baseline arm differ only in whether
+  ``recency_weight`` joins the neighbour weights, so any difference in error
+  comes from the recency weight.
+
+Required columns per row
+------------------------
 ``season``         int   — the season the row came from.
-``feature``        array — the feature vector (1-D, fixed length per call).
-``outcome``        float — the scalar outcome being predicted.
-``recency_weight`` float — SIM-076 sampling weight (peak 2.0 ... floor 0.25).
+``feature``        array — the feature vector (1-D, one length per call).
+``outcome``        float — the scalar outcome to predict.
+``recency_weight`` float — the sampling weight (peak 2.0 ... floor 0.25).
 
 Public API
 ----------
@@ -57,37 +53,35 @@ __all__ = [
     "walk_forward_recency_eval",
 ]
 
-# Column names the harness reads. Centralized so SIM-220 can adapt if the
-# pooled-row schema is renamed without hunting through the body.
+# The column names the harness reads. The backtester imports them too.
 SEASON_COL = "season"
 FEATURE_COL = "feature"
 OUTCOME_COL = "outcome"
 WEIGHT_COL = "recency_weight"
 
-# Default neighbourhood size for the k-NN predictor. Small by design: the point
-# is a transparent, weightable average, not a tuned model.
+# The default neighbourhood size of the k-NN predictor. It is small on purpose:
+# the point is a plain average that a weight can change, not a tuned model.
 DEFAULT_K = 8
 
 
 # ---------------------------------------------------------------------------
-# 1. Fold generation
+# 1. The folds
 # ---------------------------------------------------------------------------
 def walk_forward_folds(
     seasons: Iterable[int],
 ) -> list[tuple[tuple[int, ...], int]]:
-    """Expanding-window walk-forward folds over distinct ``seasons``.
+    """The expanding-window walk-forward folds over the distinct ``seasons``.
 
-    For each season (after the first) we emit a fold whose **train** set is all
-    *strictly prior* seasons and whose **test** is that single season. This is
-    the classic time-series expanding window: no future information ever leaks
-    into the training set, so it is a faithful proxy for "what could we have
-    known when this season was the present?".
+    Each season after the first gives one fold: the training set is every
+    earlier season and the test is that one season. No later information
+    reaches the training set, so each fold asks "what could we have known when
+    this season was the present?".
 
     Parameters
     ----------
     seasons:
-        Any iterable of season ints. Duplicates are collapsed and the result is
-        sorted ascending, so callers may pass a raw column.
+        Any iterable of season ints. The duplicates collapse and the result is
+        sorted ascending, so a caller may pass a raw column.
 
     Returns
     -------
@@ -110,12 +104,12 @@ def walk_forward_folds(
 
 
 # ---------------------------------------------------------------------------
-# 2. Single prediction (k-NN, optionally recency-weighted)
+# 2. One prediction (k-NN, with or without the recency weight)
 # ---------------------------------------------------------------------------
 def _stack_features(rows: Any) -> np.ndarray:
-    """Return an ``(n, d)`` float array from a frame's / mapping's feature col."""
+    """The feature column of a frame or a mapping as an ``(n, d)`` float array."""
     feats = rows[FEATURE_COL]
-    # Works for a pandas Series of array-likes, a list, or an ndarray of arrays.
+    # A pandas Series of array-likes, a list and an ndarray of arrays all work.
     return np.asarray([np.asarray(f, dtype=float).ravel() for f in feats], dtype=float)
 
 
@@ -126,42 +120,41 @@ def recency_weighted_prediction(
     weighted: bool,
     k: int = DEFAULT_K,
 ) -> float:
-    """Predict an outcome for ``query`` via a (recency-)weighted k-NN average.
+    """Predict the outcome of ``query`` by a weighted k-NN average.
 
-    The predictor finds the ``k`` nearest training rows to ``query`` in
-    Euclidean feature space and returns a weighted average of their outcomes.
+    The predictor finds the ``k`` training rows nearest to ``query`` (Euclidean
+    distance on the features) and returns a weighted average of their outcomes.
+    Two weights:
 
-    The weighting scheme is where SIM-076 enters:
+    * **The similarity weight**, always: each neighbour gets
+      ``1 / (eps + distance)``, so a closer row counts more. Both arms of the
+      comparison use it.
+    * **The recency weight**, only when ``weighted=True``: the similarity weight
+      is multiplied by the neighbour's ``recency_weight``, so a recent row counts
+      more, as the pool's sampling column intends. With ``weighted=False`` the
+      column is ignored: the baseline prediction.
 
-    * **Similarity weight** — always applied. Each neighbour gets
-      ``1 / (eps + distance)`` so closer comparables count more. This is the
-      "k-NN" part and is identical across both arms of the comparison.
-    * **Recency weight** — applied only when ``weighted=True``. The neighbour's
-      similarity weight is *multiplied* by its SIM-076 ``recency_weight``, so
-      recent comparables are up-weighted exactly as the materialized sampling
-      column intends. When ``weighted=False`` the recency column is ignored
-      entirely, giving the baseline (recency-agnostic) prediction.
-
-    Holding the similarity term fixed and toggling only the recency term means
-    any error difference between the two arms is attributable to recency
-    weighting alone — which is precisely what the eval is trying to measure.
+    Only the recency term changes between the two arms, so any difference in
+    error comes from the recency weight alone. That is what the evaluation
+    measures.
 
     Parameters
     ----------
     train_df:
-        In-memory training rows exposing ``feature``, ``outcome`` and
-        ``recency_weight`` columns/keys.
+        In-memory training rows with ``feature``, ``outcome`` and
+        ``recency_weight`` columns or keys.
     query:
         The feature vector to predict an outcome for.
     weighted:
-        If True, fold ``recency_weight`` into the neighbour weights; if False,
-        ignore it (uniform-recency baseline).
+        True multiplies the neighbour weights by ``recency_weight``; False
+        ignores it (the baseline).
     k:
-        Neighbourhood size (capped at the number of training rows).
+        The neighbourhood size (capped at the number of training rows).
 
     Returns
     -------
-    float — the predicted outcome. ``nan`` if there are no training rows.
+    float — the predicted outcome; ``nan`` when there are no training rows. When
+    the weights add up to 0 or are not finite, the plain mean of the neighbours.
     """
     feats = _stack_features(train_df)
     if feats.shape[0] == 0:
@@ -171,28 +164,28 @@ def recency_weighted_prediction(
     rec_w = np.asarray(train_df[WEIGHT_COL], dtype=float).ravel()
     q = np.asarray(query, dtype=float).ravel()
 
-    # Euclidean distance from the query to every training row.
+    # The Euclidean distance from the query to every training row.
     dists = np.linalg.norm(feats - q[None, :], axis=1)
 
-    # Nearest-k indices (argpartition is O(n); ties broken arbitrarily but
-    # deterministically for a fixed input).
+    # The k nearest rows. argpartition is O(n); it breaks a tie in a way that is
+    # arbitrary but fixed for a given input.
     kk = int(min(k, dists.shape[0]))
     nn = np.argpartition(dists, kk - 1)[:kk]
 
     eps = 1e-9
     sim_w = 1.0 / (eps + dists[nn])  # closer => larger weight
     if weighted:
-        sim_w = sim_w * rec_w[nn]  # SIM-076 recency up-weighting
+        sim_w = sim_w * rec_w[nn]  # the recency weight
 
     total = sim_w.sum()
     if total <= 0 or not np.isfinite(total):
-        # Degenerate weights -> fall back to a plain mean of the neighbours.
+        # The weights are unusable: fall back to the plain mean of the neighbours.
         return float(np.mean(outcomes[nn]))
     return float(np.dot(sim_w, outcomes[nn]) / total)
 
 
 # ---------------------------------------------------------------------------
-# 3. Metrics
+# 3. The metrics: the mean absolute error and the root-mean-square error
 # ---------------------------------------------------------------------------
 def _mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs(y_true - y_pred)))
@@ -209,7 +202,7 @@ _METRICS: dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
 
 
 # ---------------------------------------------------------------------------
-# 4. Full walk-forward evaluation
+# 4. The full walk-forward evaluation
 # ---------------------------------------------------------------------------
 def walk_forward_recency_eval(
     df: Any,
@@ -217,19 +210,19 @@ def walk_forward_recency_eval(
     metric: str = "mae",
     k: int = DEFAULT_K,
 ) -> dict:
-    """Run the expanding-window folds and compare weighted vs unweighted error.
+    """Run the expanding-window folds and compare the weighted with the unweighted error.
 
     For each fold (see :func:`walk_forward_folds`) the harness:
 
-    1. Trains on every row from the strictly-prior seasons.
-    2. For each test-season row, predicts its outcome twice — once with
-       recency weighting on (``weighted=True``) and once off — using
-       :func:`recency_weighted_prediction`.
-    3. Scores both prediction vectors against the true test outcomes with the
-       chosen ``metric``.
+    1. trains on every row of the earlier seasons;
+    2. predicts each test-season row twice with
+       :func:`recency_weighted_prediction`: once with the recency weight
+       (``weighted=True``) and once without;
+    3. scores both predictions against the true test outcomes with ``metric``.
 
-    Lower error is better, so the per-fold and aggregate ``improvement`` is
-    ``unweighted_error - weighted_error`` (positive => recency helped).
+    Lower error is better, so the per-fold and the pooled ``improvement`` is
+    ``unweighted_error - weighted_error``: positive means the recency weight
+    helped.
 
     Parameters
     ----------
@@ -237,9 +230,10 @@ def walk_forward_recency_eval(
         In-memory pooled rows with ``season``, ``feature``, ``outcome`` and
         ``recency_weight`` columns.
     metric:
-        ``"mae"`` (default) or ``"rmse"``.
+        ``"mae"`` (the mean absolute error, the default) or ``"rmse"`` (the
+        root-mean-square error). Any other name raises ``ValueError``.
     k:
-        k-NN neighbourhood size, passed through to the predictor.
+        The k-NN neighbourhood size, passed to the predictor.
 
     Returns
     -------
@@ -248,10 +242,10 @@ def walk_forward_recency_eval(
         ``folds``      — list of per-fold dicts: ``test_season``,
                          ``n_train``, ``n_test``, ``weighted_error``,
                          ``unweighted_error``, ``improvement``.
-        ``aggregate``  — dict of pooled-across-all-test-rows
-                         ``weighted_error``, ``unweighted_error``,
-                         ``improvement`` plus ``n_test_total``.
-        ``improvement``— convenience copy of the aggregate improvement.
+        ``aggregate``  — over all the test rows pooled: ``weighted_error``,
+                         ``unweighted_error``, ``improvement`` and
+                         ``n_test_total``.
+        ``improvement``— a copy of the pooled improvement.
     """
     if metric not in _METRICS:
         raise ValueError(f"unknown metric {metric!r}; choose from {sorted(_METRICS)}")
@@ -261,8 +255,8 @@ def walk_forward_recency_eval(
     folds = walk_forward_folds(seasons_all)
 
     per_fold: list[dict] = []
-    # Pooled (concatenated) predictions across folds for the aggregate metric so
-    # every test row contributes equally regardless of season size.
+    # The predictions of every fold, pooled for the aggregate metric, so every
+    # test row counts the same whatever the size of its season.
     pooled_true: list[float] = []
     pooled_w_pred: list[float] = []
     pooled_u_pred: list[float] = []
@@ -327,15 +321,14 @@ def walk_forward_recency_eval(
 # Internal helpers
 # ---------------------------------------------------------------------------
 def _subset(df: Any, mask: np.ndarray) -> dict:
-    """Boolean-mask ``df`` into a column dict the predictor can consume.
+    """The rows of ``df`` where ``mask`` is true, as a dict of column lists.
 
-    We return a plain dict-of-columns rather than depending on pandas indexing,
-    so the harness works whether ``df`` is a DataFrame or a mapping of
-    array-likes (keeping SIM-220's call site flexible).
+    A plain dict of columns, not pandas indexing, so the harness works whether
+    ``df`` is a DataFrame or a mapping of array-likes.
     """
     out: dict[str, Any] = {}
     for col in (SEASON_COL, FEATURE_COL, OUTCOME_COL, WEIGHT_COL):
         values = df[col]
-        seq = list(values)  # array-likes, Series, and lists all iterate fine
+        seq = list(values)  # an array-like, a Series and a list all iterate
         out[col] = [seq[i] for i in range(len(seq)) if mask[i]]
     return out
