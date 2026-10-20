@@ -2,18 +2,19 @@
 """
 scripts/validate_props.py
 =========================
-SIM-407 — validate the simulator's win probabilities + prop PMFs against REAL
-completed-game outcomes, write a validation report, and (optionally) fit the
-win-probability reliability curve back into the SIM-406 CalibrationReport.
+Validate the simulator's win probabilities + prop PMFs (probability mass
+functions: the probability of each count) against REAL completed-game
+outcomes, write a validation report, and (optionally) fit the win-probability
+reliability curve back into the CalibrationReport.
 
 WHAT IT DOES
 ------------
 For each completed ("Final") game in the requested seasons:
-  1. resolve the game's lineup into a GameState (the SIM-353 path),
+  1. resolve the game's lineup into a GameState (the lineup resolver),
   2. replay N iterations via ``record_game_plays`` (the SAME factory the API /
      batch runner use), collecting one :class:`GameSimResult` per iteration,
-  3. take the simulator's home win probability (SIM-330) + per-player prop PMFs
-     (SIM-329, built from the per-iteration boxscores), and
+  3. take the simulator's home win probability + per-player prop PMFs
+     (built from the per-iteration boxscores), and
   4. pair each against what ACTUALLY happened — the real home/away score from
      ``raw.games`` (win prob), and the real per-player prop totals from the
      official box score (``raw.game_player_stats``, every priced market), or
@@ -21,7 +22,8 @@ For each completed ("Final") game in the requested seasons:
      H/HR/TB, pitcher K/BB only).
 
 It then scores those (prediction, actual) pairs with
-``simulation.prop_validation`` — win-prob ECE/Brier/log-loss + the fitted
+``simulation.prop_validation`` — win-prob ECE (expected calibration error: the
+mean gap between the predicted and the observed rate)/Brier/log-loss + the fitted
 reliability curve + per-prop over/under calibration + PMF coverage — writes a
 ``PropValidationReport`` JSON, and, when ``--write-calibration`` is set, writes the
 fitted reliability curve into the CalibrationReport at ``CALIBRATION_REPORT_PATH``
@@ -29,7 +31,8 @@ so the next API boot applies the empirical win-prob correction.
 
 WHAT PROPS ARE VALIDATED
 ------------------------
-Two ground-truth sources, chosen per game (SIM-545):
+Two ground-truth sources, chosen per game (grade props on the box score,
+never the derivation: owner decision 2026-09-12, SIM-545):
 
   * **The official box score** (``raw.game_player_stats``, one row per player
     who appeared; ``--official-boxscore``, the default). It pairs EVERY market
@@ -62,12 +65,12 @@ USAGE
     # Via the Makefile wrapper:
     make validate-props FLAGS="--seasons 2024 --write-calibration"
 
-PARK FACTORS (SIM-452)
-----------------------
+PARK FACTORS
+------------
 Each replay resolves the game's venue run park factor from the sim DuckDB before it
-simulates, through ``simulation.sim_kwargs.build_sim_kwargs``. This script used to
-skip that step, so it fitted the win-probability reliability curve on a park-blind
-simulator. The job now REFUSES to start when the sim DuckDB will not open (exit
+simulates, through ``simulation.sim_kwargs.build_sim_kwargs``. A park-blind replay
+fits the win-probability reliability curve on a simulator production does not
+serve. The job therefore REFUSES to start when the sim DuckDB will not open (exit
 code 2), because a neutral 1.0 is indistinguishable from a real neutral park. Pass
 ``--allow-neutral-parks`` to override it for a plumbing smoke test.
 
@@ -105,12 +108,12 @@ from simulation.prop_validation import (  # noqa: E402
 
 log = logging.getLogger("validate_props")
 
-#: SIM-443b: no default password. A blank value is resolved in main() through
+#: No default password. main() resolves a blank value through
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_CALIBRATION_PATH = os.environ.get("CALIBRATION_REPORT_PATH", "/data/calibration.json")
 DEFAULT_OUTPUT = os.environ.get("PROP_VALIDATION_PATH", "/data/prop_validation.json")
-#: SIM-452: the sim DuckDB that holds ``derived.park_factors``. The replay resolves
+#: The sim DuckDB that holds ``derived.park_factors``. The replay resolves
 #: each game's venue run park factor from it before simulating.
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 
@@ -125,11 +128,10 @@ async def _fetch_final_games(dsn: str, seasons: list[int], max_games: int | None
     Reads ``raw.games`` (status='Final'); the real final score is the win-prob
     validation's ground truth. ``max_games`` caps the count for a smoke run.
 
-    SIM-432: the live ``raw.games`` schema stores the final score in
-    ``home_score_final`` / ``away_score_final`` (not the bare ``home_score`` /
-    ``away_score`` the original query assumed — those columns don't exist, so the
-    query failed with an ``UndefinedColumnError`` against the real Postgres). We
-    select the real columns and alias them back to the names the caller consumes.
+    The ``raw.games`` schema stores the final score in ``home_score_final`` /
+    ``away_score_final``; it has no bare ``home_score`` / ``away_score`` column.
+    The query selects the real columns and aliases them to the names the caller
+    reads.
     """
     import asyncpg
 
@@ -179,14 +181,14 @@ async def _fetch_pa_events(pool, game_pk: int) -> list[tuple]:
     return [(r["batter"], r["pitcher"], r["events"]) for r in rows]
 
 
-#: SIM-545: which ground truth paired a game's props.
+#: Which ground truth paired a game's props.
 GROUND_TRUTH_OFFICIAL = "official_boxscore"
 GROUND_TRUTH_EVENT_LABEL = "event_label"
 
-#: SIM-545: every column of ``raw.game_player_stats`` (migration 0023) — the
-#: SAME reader ``scripts/accuracy_comparison.py`` uses (``scripts/`` is not a package,
-#: so each script carries its own copy, as they already do for
-#: ``_fetch_pa_events``).
+#: Every column of ``raw.game_player_stats`` (migration 0023): the SAME reader
+#: the accuracy comparison uses (``scripts/accuracy/grading.py``). ``scripts/``
+#: is not a package, so each script carries its own copy, as it does for
+#: ``_fetch_pa_events``.
 _OFFICIAL_BOXSCORE_SQL = """
     SELECT game_pk, player_id, team_id, side, season, game_date,
            batting_order, position_code, played_bat, played_pitch,
@@ -197,13 +199,13 @@ _OFFICIAL_BOXSCORE_SQL = """
     WHERE game_pk = $1
 """
 
-#: SIM-545: warn ONCE when the box-score table is missing (migration 0023 not
+#: Warn ONCE when the box-score table is missing (migration 0023 not
 #: applied); the run then falls back to the event label for every game.
 _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED: bool = False
 
 
 async def _fetch_official_boxscore(pool, game_pk: int) -> list[dict]:
-    """SIM-545: every ``raw.game_player_stats`` row for one game — the official
+    """Every ``raw.game_player_stats`` row for one game — the official
     per-player box score, one row per player who appeared.
 
     Returns plain dicts keyed by the table's column names (the shape
@@ -237,7 +239,7 @@ async def _pair_game_props(
     *,
     official_boxscore: bool,
 ) -> tuple[int, str]:
-    """SIM-545: pair one game's prop PMFs against the best ground truth the
+    """Pair one game's prop PMFs against the best ground truth the
     database holds; return ``(pairs_added, source)``.
 
     The official box score wins when ``official_boxscore`` is set and the
@@ -277,22 +279,21 @@ async def _pair_game_props(
 def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     """Replay one already-resolved game N times; return the per-iteration results.
 
-    Uses the SIM-356 ``record_game_plays`` seam (``/api/.../boxscore`` used it too
-    until SIM-560 moved that route onto ``BatchRunner.run_prop_set``; this script
-    still needs each game's score next to its boxscore, so it replays the games):
+    Uses the ``record_game_plays`` seam (this script needs each game's score
+    next to its boxscore, so it replays the games itself):
     builds the live machine from the production ``factory_ref`` + the resolved
     GameState's sim_kwargs, runs ``simulate_game`` at each derived seed, and
     collects the :class:`GameSimResult` (carrying ``.boxscore`` + the score) per
     iteration. The list feeds BOTH the win-probability aggregation AND the prop-PMF
     set. Sync + CPU-bound, so the async caller offloads it via ``asyncio.to_thread``.
 
-    SIM-452: ``state`` must arrive with its venue park factor ALREADY resolved.
+    ``state`` must arrive with its venue park factor ALREADY resolved.
     :func:`run` resolves it, because the lookup is async and this body runs in a
     worker thread with no event loop. The builder enforces the ordering: a state
     that skipped the lookup still carries ``UNRESOLVED_PARK_FACTOR`` and
-    ``sim_kwargs_from_state`` raises on it rather than replaying park-blind. That
-    is what this script did on every run before SIM-452, so the reliability curve
-    it fitted described a simulator production does not serve.
+    ``sim_kwargs_from_state`` raises on it rather than replaying park-blind. A
+    park-blind replay fits the reliability curve on a simulator production does
+    not serve.
     """
     from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
@@ -327,8 +328,8 @@ async def run(args: argparse.Namespace) -> int:
     seasons = sorted({int(s) for s in args.seasons}, reverse=True)
     log.info("SIM-407 validation over seasons %s (iterations=%d).", seasons, args.iterations)
 
-    # SIM-452 PRECONDITION. The venue park factor lives in this DuckDB. Without it
-    # every replay runs at a neutral 1.0, SIM_PARK_FACTOR does nothing, and the
+    # PRECONDITION. The venue park factor lives in this DuckDB. Without it every
+    # replay runs at a neutral 1.0, the park factor does nothing, and the
     # reliability curve this job writes back into the CalibrationReport is fitted on
     # a simulator production does not serve. Check it BEFORE replaying anything.
     duck = open_sim_duckdb(args.duckdb)
@@ -361,7 +362,7 @@ async def run(args: argparse.Namespace) -> int:
     n_done = 0
     n_props = 0
     n_park_nonneutral = 0
-    # SIM-545: games paired per prop ground-truth source.
+    # The games paired per prop ground-truth source.
     n_official_boxscore = 0
     n_event_label = 0
     # Pool created INSIDE the try so a construction failure still hits the finally.
@@ -376,7 +377,7 @@ async def run(args: argparse.Namespace) -> int:
                 log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
                 continue
 
-            # SIM-452: resolve the park factor HERE, where the connections live. The
+            # Resolve the park factor HERE, where the connections live. The
             # replay below runs in a worker thread with no event loop, and the
             # builder rejects an unresolved state, so an edit that drops this line
             # fails loudly instead of replaying park-blind.
@@ -391,16 +392,16 @@ async def run(args: argparse.Namespace) -> int:
             if not results:
                 continue
 
-            # Win prob (identity map here — we are FITTING the map, so we validate
+            # Win prob (identity map here — this job FITS the map, so it validates
             # the RAW smoothed probability). win_probability accepts the per-
-            # iteration results list and aggregates it (SIM-330).
+            # iteration results list and aggregates it.
             wp = win_probability(results)
             home_won = 1 if g["home_score"] > g["away_score"] else 0
             winprob_pairs.append((float(wp.home_win_prob), home_won))
 
             # Prop PMFs (from the per-iteration boxscores) paired against the REAL
             # per-player outcomes for this game: the official box score when the
-            # game has rows, else raw.pitches.events (SIM-545).
+            # game has rows, else raw.pitches.events.
             if not args.no_props:
                 pset = PropDistributionSet.from_results(results)
                 added, source = await _pair_game_props(
@@ -424,7 +425,7 @@ async def run(args: argparse.Namespace) -> int:
             await pool.close()
         _close_quietly(duck)
 
-    # SIM-452: say out loud how many replays actually used a non-neutral park factor.
+    # Say out loud how many replays actually used a non-neutral park factor.
     if n_done and not n_park_nonneutral:
         log.warning(
             "SIM-452: %d games validated and NOT ONE used a non-neutral park factor. "
@@ -438,7 +439,7 @@ async def run(args: argparse.Namespace) -> int:
             n_done,
         )
 
-    # SIM-545: say which record paired the props. A run with zero games on the
+    # Say which record paired the props. A run with zero games on the
     # official box score paired only five props per game, not every market.
     # A --no-props run paired nothing, so it carries no counts at all.
     ground_truth_counts: dict[str, int] | None = None
@@ -495,7 +496,7 @@ def _summary_text(
 ) -> str:
     """Render the report for the console.
 
-    ``ground_truth_counts`` (SIM-545) maps :data:`GROUND_TRUTH_OFFICIAL` /
+    ``ground_truth_counts`` maps :data:`GROUND_TRUTH_OFFICIAL` /
     :data:`GROUND_TRUTH_EVENT_LABEL` to the games each source paired; when
     given, the header prints both counts.
     """
@@ -602,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
-    args.dsn = args.dsn or require_dsn()  # SIM-443b: fail loudly with no DSN
+    args.dsn = args.dsn or require_dsn()  # Fail loudly with no DSN
     return asyncio.run(run(args))
 
 

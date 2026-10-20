@@ -2,8 +2,8 @@
 """
 scripts/fit_calibration.py
 ==========================
-SIM-406 — fit + persist a ``CalibrationReport`` over the real DuckDB profiles and
-(optionally) validate that it lands every engine's median similarity near the
+Fit + persist a ``CalibrationReport`` over the real DuckDB profiles and
+(optionally) check that it lands every engine's median similarity near the
 0.50 target.
 
 WHAT THIS PRODUCES
@@ -12,23 +12,31 @@ A single JSON file (``CalibrationReport.to_json``) at ``--output`` (default
 ``CALIBRATION_REPORT_PATH`` env, else ``/data/calibration.json``).  The serving
 API loads it at boot (``api.main`` lifespan) and:
 
-  * applies the per-engine RBF / arsenal sigmas to EVERY similarity engine that
-    exposes ``apply_calibration`` (the 8 similarity-score engines), so similarity
-    is scored on the population-fit 0.50-median curve instead of hardcoded
-    literals — the SIM-406 "apply to all engines" deliverable; and
+  * applies the per-engine RBF (a similarity that falls off with distance) /
+    arsenal sigmas to EVERY similarity engine that exposes ``apply_calibration``
+    (the 8 similarity-score engines), so each engine scores similarity on the
+    population-fit 0.50-median curve, not on hardcoded literals; and
   * derives the win-probability ``CalibrationMap`` from any fitted reliability
-    curve (SIM-361 — left empty here; the sim-vs-actual reliability fit is SIM-407).
+    curve. This script leaves the curve empty; ``scripts/validate_props.py``
+    fits the sim-vs-actual reliability curve.
+
+The script writes the whole file, so a run DROPS any reliability curve the
+file held. Write the curve back (``validate_props.py --write-calibration``, or
+``write_reliability_curve_to_calibration_report`` from
+``/data/prop_validation.json``), or the app boots uncalibrated.
 
 WHAT IS FIT
 -----------
-``SimilarityCalibrator.calibrate_from_population`` does the Tier-1 population fit
+``SimilarityCalibrator.calibrate_from_population`` does the population fit
 for batter / pitcher / fielder / baserunner (sigmas + reliability weights + EB
-priors) and — SIM-406 — the four SIM-408-era engines (catcher / baserunner-steal
-/ pitcher-steal / manager) sigmas.  The pitcher *arsenal* W₂→score anchor needs
-the GMM W₂ distance distribution, which lives on the built pitcher engine (not in
-DuckDB), so we build the pitcher engine and SAMPLE a representative set of
-same-hand pairwise W₂ distances to anchor ``arsenal_gamma`` (skip with
-``--no-arsenal`` to keep the locked 4.10 default).
+(empirical-Bayes shrinkage) priors) and the sigmas of four more engines
+(catcher / baserunner-steal / pitcher-steal / manager).  The pitcher *arsenal*
+W₂→score anchor needs the distribution of the W₂ (Wasserstein-2) distance
+between two pitchers' GMMs (Gaussian mixture models of their pitch mix). That
+distribution lives on the built pitcher engine (not in DuckDB), so the script
+builds the pitcher engine and SAMPLES a representative set of same-hand
+pairwise W₂ distances to anchor ``arsenal_gamma`` (skip with ``--no-arsenal``
+to keep the locked 4.10 default).
 
 USAGE
 -----
@@ -109,8 +117,8 @@ def sample_arsenal_distances(
     """Build the pitcher engine and SAMPLE same-hand pairwise arsenal W₂ distances.
 
     The full pairwise W₂ cache is O(N²) (~20 min for one hand); the calibration
-    only needs the W₂ *distribution* to anchor the 0.50-median, so we sample
-    ``n_pairs`` random same-hand pairs and compute their W₂ directly — seconds,
+    only needs the W₂ *distribution* to anchor the 0.50-median, so this samples
+    ``n_pairs`` random same-hand pairs and computes their W₂ directly — seconds,
     not minutes.  Returns the finite distances (empty array if the engine has no
     GMM-bearing profiles).
     """

@@ -2,34 +2,35 @@
 """
 scripts/load_historical_odds.py
 ===============================
-SIM-435 — historical odds loader: backfill OPENING + CLOSING betting lines for
-completed games into ``raw.game_odds`` / ``raw.prop_odds`` so the CLV backtest
-(SIM-429 sub-4) has entry+closing lines to score against.
+The historical odds loader. It backfills the OPENING and CLOSING betting lines
+of completed games into ``raw.game_odds`` / ``raw.prop_odds``, so the
+closing-line-value (CLV) measurements have an entry line and a closing line to
+score against.
 
 WHY
 ---
-``raw.game_odds`` and ``raw.prop_odds`` are EMPTY (0 rows). The CLV engine
-(SIM-339) needs, per completed game, an entry (opening) line and a closing line.
-The live pipeline captures these forward (SIM-340 marking) but there is no
-history. This script walks the Final games already in ``raw.games`` and pulls
-their opening + closing lines from the configured odds provider (BettingPros by
-default — set ``ODDS_PROVIDER=bettingpros`` + ``ODDS_API_KEY``) and persists them
-through the SAME write path the live pipeline uses, so the odds_hash ON CONFLICT
-dedup keeps re-runs idempotent.
+The CLV engine needs, per completed game, an entry (opening) line and a closing
+line. The live pipeline captures these lines going forward (the live closing
+marker), but it holds no history. This script walks the Final games already in
+``raw.games`` and pulls their opening + closing lines from the configured odds
+provider (BettingPros by default — set ``ODDS_PROVIDER=bettingpros`` +
+``ODDS_API_KEY``). It persists them through the SAME write path the live
+pipeline uses, so the odds_hash ON CONFLICT dedup keeps re-runs idempotent.
 
 WHAT IT WRITES
 --------------
-SIM-555 (2026-09-28): ONE ROW PER BOOK. The provider's payload lists every
-book's line on every side; the loader stores each book's prices as its own row,
-labelled ``book = 'bp:<id>'`` (the BettingPros id; ``bp:0`` is the vendor's
-blended line, stored and never graded) and stamped ``book_line_at`` (the
-vendor's stamp on the line; migration 0028). A row never mixes two books.
+ONE ROW PER BOOK. The provider's payload lists every book's line on every
+side; the loader stores each book's prices as its own row, labelled
+``book = 'bp:<id>'`` (the BettingPros id; ``bp:0`` is the vendor's blended
+line, stored and never graded) and stamped ``book_line_at`` (the vendor's
+stamp on the line; migration 0028). A row never mixes two books.
 
 Per Final game (ordered by game_pk for reproducibility), for each line type
 (``opening`` and ``closing`` by default):
   * game odds: every game market the book posts (the three full-game markets
-    plus the twelve segment and team markets — SIM-421). ``closing``: one
-    ``raw.game_odds`` row per book that quotes every side of the market.
+    plus the twelve segment and team markets; owner ruling 2026-09-12,
+    SIM-421). ``closing``: one ``raw.game_odds`` row per book that quotes
+    every side of the market.
     ``opening``: at most one row, the opener's (none when the sides name two
     openers). Each market fills only its own columns.
   * prop odds: the same per (player, prop_stat) for every player in the game's
@@ -38,7 +39,7 @@ Per Final game (ordered by game_pk for reproducibility), for each line type
     pitchers; the batter markets (``BATTER_PROP_STATS``: hits / home_runs /
     total_bases / rbis / singles / doubles / triples / runs / stolen_bases /
     hits_runs_rbis) only for non-pitchers. Both tuples come from
-    ``pipeline/odds_provider.py`` (the single source — SIM-421).
+    ``pipeline/odds_provider.py`` (the one source of the vocabulary).
 
 Before a row is written, the load guard (``pipeline/odds_row_guard.py``)
 checks it. A row with no price at all is skipped silently. A row that cannot
@@ -57,12 +58,11 @@ stops the run before any fetch.
 
 RETRIES AND INCOMPLETE GAMES
 ----------------------------
-SIM-555 (2026-10-01). A vendor read can fail for a passing reason: a time-out,
-or a burst of HTTP 502 / 503 answers. The BettingPros provider catches such a
-failure, logs a WARNING and goes on with an empty or partial result. The loader
-used to list that game in its done-file anyway, so the gap was silent and
-permanent (game 717171 lost every row to one schedule time-out). Two defences
-now close the gap:
+A vendor read can fail for a passing reason: a time-out, or a burst of HTTP
+502 / 503 answers. The BettingPros provider catches such a failure, logs a
+WARNING and goes on with an empty or partial result. A game listed in the
+done-file after such a failure would keep a silent, permanent gap. Two
+defences close the gap:
 
   * The loader hands the provider a retry policy. ``--retries`` (default 3)
     sets the retries per read; ``--retry-wait`` (default 5 s) sets the wait
@@ -80,12 +80,12 @@ now close the gap:
     Before each game the loader calls the provider's
     ``forget_failed_lookups``. A failed player lookup is stored for the cache
     time-to-live (600 s here) and counted once; without the call, a later game
-    with the same player got the stored failure with no count.
+    with the same player gets the stored failure with no count.
 
 Exit codes: 0 = every game loaded; 1 = at least one game is incomplete
 (``EXIT_INCOMPLETE``; an uncaught exception also exits 1); 2 = a usage error
-(a bad flag, or the mock without ``--provider mock``). The SIM-555 re-load ran
-the loader inside a crash-safe shell loop, one per season, with
+(a bad flag, or the mock without ``--provider mock``). The crash-safe form
+runs the loader inside a shell loop, one loop per season, with
 ``--done-file``. The loop runs the loader at most 30 times in all, a minute
 apart, and stops on exit 0 or 2. Each later run skips the finished games, so
 it loads only the incomplete ones again. A game whose read fails on every run
@@ -95,25 +95,25 @@ rows before the done-file is read, so it skips an incomplete game with rows
 too; resume with ``--done-file`` alone to load those again.
 
 Persistence reuses ``LiveIngestionPipeline._persist_odds_many`` /
-``_persist_prop_odds_many`` (so the SIM-092/SIM-340 ``odds_hash`` dedup + the
-``raw.prop_odds`` CHECK constraint apply unchanged). The pipeline is constructed
-WITHOUT starting it (no Redis / WS / HTTP loop) — we attach our own asyncpg pool
-to ``pipeline._db`` and call the two persist coroutines directly.
+``_persist_prop_odds_many`` (so the ``odds_hash`` dedup and the
+``raw.prop_odds`` CHECK constraint apply unchanged). The loader builds the
+pipeline WITHOUT starting it (no Redis / WS / HTTP loop). It attaches its own
+asyncpg pool to ``pipeline._db`` and calls the two persist coroutines directly.
 
 USAGE
 -----
-    # SIM-555: from the host, with this checkout's scripts/ mounted over the
+    # From the host, with this checkout's scripts/ mounted over the
     # image's copy (scripts/ is not bind-mounted) and the provider named:
-    MSYS_NO_PATHCONV=1 docker compose run -d --name sim555_load_2024 \
+    MSYS_NO_PATHCONV=1 docker compose run -d --name odds_load_2024 \
         -v "$PWD:/app" app \
         python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
 
-    # SIM-555: the crash-safe form the wrapper runs. --done-file skips the
+    # The crash-safe form the shell loop runs. --done-file skips the
     # games the file lists and appends each game once it is complete;
     # --retries / --retry-wait set the vendor-read retry policy (the values
     # shown are the defaults). Exit 1 = some game is incomplete (see above).
     python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
-        --done-file results/sim555/sim555_load_2024.done --retries 3 --retry-wait 5
+        --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
 
     # In the app container, with a real provider configured:
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=… \
@@ -121,8 +121,8 @@ USAGE
     python scripts/load_historical_odds.py --seasons 2023 2024            # game + prop
     python scripts/load_historical_odds.py --seasons 2024 --no-props      # game odds only
 
-    # SIM-421 follow-up pass: fetch ONLY the eight new markets for a season whose
-    # seven original markets are already loaded. The game lines are skipped
+    # A follow-up pass: fetch ONLY these eight prop markets for a season whose
+    # other seven markets are already loaded. The game lines are skipped
     # (--no-game-odds); a re-run is idempotent through the odds_hash dedup.
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
         --seasons 2024 --no-game-odds
@@ -132,21 +132,21 @@ USAGE
     # --prop-stats takes any subset of the 15-market vocabulary (an unknown value
     # stops the run before any fetch); --line-types defaults to "opening closing".
 
-    # SIM-555: one book only (a smoke run, or a top-up of one book's rows):
+    # One book only (a smoke run, or a top-up of one book's rows):
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
         --seasons 2024 --max-games 20 --book draftkings
 
-    # SIM-546: the nightly closing pass (scripts/nightly_closing_lines.sh) loads
+    # The nightly closing pass (scripts/nightly_closing_lines.sh) loads
     # the closing rows of two official dates only, after the live marker ran:
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
         --seasons 2026 --line-types closing --game-dates 2026-10-08 2026-10-07
 
-    # SIM-421 (owner ruling 2026-09-12): every game market the book posts is
-    # loaded by default — the three full-game markets plus the twelve segment
+    # Every game market the book posts loads by default (owner ruling
+    # 2026-09-12, SIM-421): the three full-game markets plus the twelve segment
     # and team markets (first-inning / first-five moneyline, total, run line;
     # each side's full-game and first-five team total; first team to score;
     # a run in the first inning). --game-markets narrows the set the same way
-    # --prop-stats does, e.g. a follow-up pass for the twelve new markets only:
+    # --prop-stats does, e.g. a pass for the twelve segment and team markets:
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
         --seasons 2024 --no-props
         --game-markets f1_moneyline f5_moneyline f1_total f5_total f1_runline
@@ -158,18 +158,17 @@ USAGE
     make load-historical-odds FLAGS="--seasons 2024 --max-games 200"
 
 This is an OFFLINE backfill job. It is network-bound; cap a smoke run with
-``--max-games``. SIM-555 (review fix 2026-09-28): the job refuses the
-deterministic MockOddsAPI unless ``--provider mock`` is on the command line.
-The registry's default is the mock. A run with no ``--provider`` used to
-write made-up ``consensus`` prices into a real season. The app container
-reads ``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's ``.env``
-(bettingpros since 2026-10-09). The unit-test lane pins the mock in
-``tests/conftest.py`` (the test lane's odds provider pin, SIM-567).
-``--provider mock`` still gives the no-network synthetic-line smoke / wiring
+``--max-games``. The job refuses the deterministic MockOddsAPI unless
+``--provider mock`` is on the command line. The registry's default is the
+mock, and the mock writes made-up prices: without the refusal, a run with no
+``--provider`` would write them into a real season. The app container reads
+``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's ``.env``
+(bettingpros). The unit-test lane pins the mock in ``tests/conftest.py``.
+``--provider mock`` gives the no-network synthetic-line smoke / wiring
 check.
 
 The BettingPros provider caches one ``/offers`` response per (event, market)
-for a time-to-live (SIM-421). The live pipeline needs a short one (30 s) so a
+for a time-to-live. The live pipeline needs a short one (30 s) so a
 60-second cycle never re-uses a stale line. This job does not: its games are
 over, their lines are final, and every player x market x line type of one game
 is requested back-to-back. The job therefore sets ``ODDS_OFFERS_CACHE_TTL_S``
@@ -196,9 +195,9 @@ if _REPO_ROOT not in sys.path:
 
 from pipeline.db_dsn import require_dsn  # noqa: E402
 
-# SIM-421: the prop-market vocabulary is imported, never copied — the pitcher /
-# batter split routes which markets a player is asked for.
-# SIM-555: the book vocabulary and the by-book seam come from the same source.
+# The prop-market vocabulary is imported, never copied: the pitcher / batter
+# split routes which markets a player is asked for. The book vocabulary and the
+# by-book seam come from the same source.
 from pipeline.odds_provider import (  # noqa: E402
     BATTER_PROP_STATS,
     BOOK_IDS_BY_NAME,
@@ -217,12 +216,12 @@ from pipeline.odds_provider import (  # noqa: E402
     resolve_book,
 )
 
-# SIM-555: the load guard (pure; no I/O).
+# The load guard (pure; no I/O).
 from pipeline.odds_row_guard import RefusalTally, check_row  # noqa: E402
 
 log = logging.getLogger("load_historical_odds")
 
-#: SIM-443b: no default password. A blank value is resolved in main() through
+#: No default password. main() resolves a blank value through
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
@@ -231,13 +230,13 @@ DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 LINE_TYPES: tuple[str, ...] = ("opening", "closing")
 KNOWN_LINE_TYPES: tuple[str, ...] = ("opening", "current", "closing")
 
-#: SIM-421 (owner ruling 2026-09-12): every game market the book posts is
-#: persisted per line_type (one row each) — the three full-game markets plus
-#: the twelve segment and team markets. The vocabulary is imported from
+#: Every game market the book posts is persisted per line_type (one row each;
+#: owner ruling 2026-09-12, SIM-421): the three full-game markets plus the
+#: twelve segment and team markets. The vocabulary is imported from
 #: ``pipeline/odds_provider.py`` (``GAME_MARKET_TYPES``); ``--game-markets``
 #: narrows it for a follow-up pass.
 
-#: SIM-421: the offers-cache time-to-live this OFFLINE job applies when
+#: The offers-cache time-to-live this OFFLINE job applies when
 #: ODDS_OFFERS_CACHE_TTL_S is unset (see the module docstring for why a long
 #: value is safe here and not in the live pipeline).
 OFFLINE_OFFERS_CACHE_TTL_S = 600
@@ -247,30 +246,30 @@ _OFFERS_CACHE_TTL_ENV = "ODDS_OFFERS_CACHE_TTL_S"
 #: use SP/RP). Everyone else is treated as a position player for prop routing.
 _PITCHER_POSITIONS = frozenset({"P", "SP", "RP", "1"})
 
-#: SIM-555: the loader warns when the guard refuses more than this share of the
+#: The loader warns when the guard refuses more than this share of the
 #: rows it saw.
 REFUSAL_WARN_SHARE = 0.05
 
-#: SIM-555: the odds fields of a prop row; a row with all three empty is not a quote.
+#: The odds fields of a prop row; a row with all three empty is not a quote.
 _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
 
-#: SIM-555: the vendor-read retry policy this job hands the provider
+#: The vendor-read retry policy this job hands the provider
 #: (``--retries`` / ``--retry-wait``). The provider's own default is one
 #: attempt, so the live pipeline keeps it; this offline job can afford to wait.
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_WAIT_S = 5.0
 
-#: SIM-555: the exit code of a run that left a game incomplete (a vendor read
-#: failed after its retries). Before SIM-555, 1 meant only an uncaught
-#: exception (Python's exit status after a traceback). The crash-safe wrapper
-#: runs the loader again a minute later on both. 0 = every game loaded;
+#: The exit code of a run that left a game incomplete (a vendor read
+#: failed after its retries). An uncaught exception also exits 1 (Python's
+#: exit status after a traceback). The crash-safe shell loop runs the loader
+#: again a minute later on both. 0 = every game loaded;
 #: 2 = a usage error (the parser's, or the refused mock), never run again.
 EXIT_INCOMPLETE = 1
 
-#: SIM-555: the end-of-run summary names at most this many incomplete games.
+#: The end-of-run summary names at most this many incomplete games.
 INCOMPLETE_LIST_MAX = 20
 
-#: SIM-555: the writers the load functions take. A game writer gets
+#: The writers the load functions take. A game writer gets
 #: ``(game_pk, rows)``, a prop writer ``(rows)``; both persist one offer's rows
 #: in one batch and return the number of rows sent.
 GameWriter = Callable[[int, list[dict[str, Any]]], Awaitable[Any]]
@@ -331,7 +330,7 @@ def _select_line_types(requested: list[str] | None) -> tuple[str, ...]:
 
 
 def _select_book(requested: str | None) -> int | None:
-    """SIM-555: the book id ``--book`` names, or ``None`` for every book.
+    """The book id ``--book`` names, or ``None`` for every book.
 
     ``resolve_book`` reads a short name (``draftkings``, ``DraftKings``) or a
     label (``bp:12``). A name it does not know raises ``ValueError`` naming the
@@ -349,7 +348,7 @@ def _select_book(requested: str | None) -> int | None:
 
 
 def _select_retry_policy(retries: int, retry_wait_s: float) -> tuple[int, float]:
-    """SIM-555: the ``(retries, first wait)`` pair this run hands the provider.
+    """The ``(retries, first wait)`` pair this run hands the provider.
 
     ``retries`` must be 0 or more (0 = one attempt per read). The wait must be
     a positive, finite number of seconds. A bad value raises ``ValueError``,
@@ -364,7 +363,7 @@ def _select_retry_policy(retries: int, retry_wait_s: float) -> tuple[int, float]
 
 
 def _hand_over_retry_policy(provider: Any, retries: int, retry_wait_s: float) -> None:
-    """SIM-555: give the provider this run's retry policy, when it takes one.
+    """Give the provider this run's retry policy, when it takes one.
 
     The BettingPros provider takes it through ``set_retry_policy``. The mock
     and the test fakes have no such method; the loader logs that once and
@@ -386,7 +385,7 @@ def _hand_over_retry_policy(provider: Any, retries: int, retry_wait_s: float) ->
 
 
 def _read_failures(provider: Any) -> int:
-    """SIM-555: the provider's count of the failed reads it caught (0 if it keeps none).
+    """The provider's count of the failed reads it caught (0 if it keeps none).
 
     The BettingPros provider adds 1 to ``read_failures`` each time it catches a
     failed read and goes on with an empty or partial result. The mock keeps no
@@ -400,7 +399,7 @@ def _read_failures(provider: Any) -> int:
 
 
 def _forget_failed_lookups(provider: Any) -> None:
-    """SIM-555: drop the provider's stored failed lookups before a game.
+    """Drop the provider's stored failed lookups before a game.
 
     The BettingPros provider stores a failed player lookup for one cache
     time-to-live (600 s here) and counts it once. A later game that names the
@@ -414,13 +413,13 @@ def _forget_failed_lookups(provider: Any) -> None:
 
 
 def _count_failure(failures: Counter[str] | None, step: str) -> None:
-    """SIM-555: count one fetch or write the loader caught (``None`` counts nothing)."""
+    """Count one fetch or write the loader caught (``None`` counts nothing)."""
     if failures is not None:
         failures[step] += 1
 
 
 def _incomplete_reasons(failed_reads: int, caught: Mapping[str, int]) -> str:
-    """SIM-555: why a game is incomplete, or ``""`` when it is complete.
+    """Why a game is incomplete, or ``""`` when it is complete.
 
     ``failed_reads`` is the growth of the provider's ``read_failures`` over
     the game. ``caught`` holds the fetches and the writes the loader itself
@@ -439,7 +438,7 @@ def _incomplete_reasons(failed_reads: int, caught: Mapping[str, int]) -> str:
 def _incomplete_summary(
     incomplete: list[int], *, done_file: str | None, skip_loaded_since: bool = False
 ) -> str:
-    """SIM-555: one line that counts the incomplete games and names up to 20 of them.
+    """One line that counts the incomplete games and names up to 20 of them.
 
     A run with ``--skip-loaded-since`` drops a game that holds rows before the
     done-file is read, so its next run skips an incomplete game with rows; the
@@ -466,12 +465,12 @@ def _incomplete_summary(
     )
 
 
-#: SIM-555: the registry name of the deterministic mock provider.
+#: The registry name of the deterministic mock provider.
 MOCK_PROVIDER = "mock"
 
 
 def _select_provider(requested: str | None) -> str:
-    """SIM-555: the odds provider this run reads; never the mock unless asked.
+    """The odds provider this run reads; never the mock unless asked.
 
     ``--provider`` wins, then the ``ODDS_PROVIDER`` environment variable, then
     the registry's default (the mock). The mock writes made-up prices. A run
@@ -504,7 +503,7 @@ def _configure_offline_cache() -> float:
 
 
 def parse_game_date(value: str) -> date:
-    """SIM-546: parse one ``--game-dates`` value (``YYYY-MM-DD``) into a date.
+    """Parse one ``--game-dates`` value (``YYYY-MM-DD``) into a date.
 
     The parser reports a bad value as a usage error (exit 2) before any work.
     """
@@ -517,7 +516,7 @@ def parse_game_date(value: str) -> date:
 
 
 def parse_skip_loaded_since(value: str | None) -> datetime | None:
-    """SIM-421 resume: parse ``--skip-loaded-since`` into an aware datetime.
+    """Parse ``--skip-loaded-since`` (the resume instant) into an aware datetime.
 
     ISO-8601 (``2026-09-12T23:40:00`` or with an offset). A value with no offset
     is read in the machine's local time zone — the same clock the loader logs
@@ -531,11 +530,11 @@ def parse_skip_loaded_since(value: str | None) -> datetime | None:
     return dt
 
 
-#: SIM-555: the resume query's table, by the kind of rows the run writes last.
+#: The resume query's table, by the kind of rows the run writes last.
 _RESUME_TABLE_PROPS = "raw.prop_odds"
 _RESUME_TABLE_GAME_ODDS = "raw.game_odds"
 
-#: SIM-555: on an every-book run, a game counts as loaded when its rows since
+#: On an every-book run, a game counts as loaded when its rows since
 #: the resume instant name at least this many books. One book's rows alone are
 #: a ``--book`` smoke's, not a full load's (a full load stores the blend,
 #: ``bp:0``, beside every sportsbook).
@@ -543,7 +542,7 @@ RESUME_MIN_BOOKS = 2
 
 
 def _resume_clause(*, table: str, book_id: int | None) -> str:
-    """SIM-555: the resume filter's SQL (an ``AND NOT EXISTS (...)`` clause).
+    """The resume filter's SQL (an ``AND NOT EXISTS (...)`` clause).
 
     The clause binds ``$1`` = the resume instant, ``$2`` = the run's line
     types, and on a ``--book`` run ``$3`` = the book's label. It drops a game
@@ -571,7 +570,7 @@ def _resume_clause(*, table: str, book_id: int | None) -> str:
 
 
 def read_done_file(path: str | None) -> set[int]:
-    """SIM-555: the game_pks a crash-safe run has finished (``--done-file``).
+    """The game_pks a crash-safe run has finished (``--done-file``).
 
     One game_pk per line. A missing file is an empty set; a line that is not
     a whole number is ignored (a line cut short by a crash is harmless: its
@@ -589,7 +588,7 @@ def read_done_file(path: str | None) -> set[int]:
 
 
 def append_done(path: str, game_pk: int) -> None:
-    """SIM-555: record one finished game in the ``--done-file``, forced to disk.
+    """Record one finished game in the ``--done-file``, forced to disk.
 
     The loader calls this only after the game's last row is written, so a
     game that a crash cuts off is never recorded and the next run loads it
@@ -617,26 +616,26 @@ async def _fetch_final_games(
 ) -> list[dict]:
     """Return completed-game rows ``{game_pk}`` for the requested seasons.
 
-    Reads ``raw.games`` (status='Final'); we only need the game_pk — the odds
-    provider resolves teams/date itself from the MLB schedule. SIM-432: the live
-    schema stores the final score in ``home_score_final`` / ``away_score_final``
-    (not ``home_score``), so we gate on those being present (a real Final game).
+    Reads ``raw.games`` (status='Final'). The loader needs only the game_pk: the
+    odds provider resolves teams/date itself from the MLB schedule. The schema
+    stores the final score in ``home_score_final`` / ``away_score_final`` (not
+    ``home_score``), so the query requires both (a real Final game).
 
-    SIM-421 resume: ``skip_loaded_since`` drops every game that already holds a
+    Resume: ``skip_loaded_since`` drops every game that already holds a
     ``raw.prop_odds`` row fetched at or after that instant — the games a run
     that died mid-season had finished. A game the book listed no event for has
     no rows and is retried (cheap: no event, no offers calls). The one game in
     flight when the run died may hold a partial set of rows and is skipped too;
     a later full pass fills it through the dedup.
 
-    SIM-555: the rows that count are the run's own kind (see
+    The rows that count are the run's own kind (see
     :func:`_resume_clause`): one-row-per-book rows (``p.book LIKE 'bp:%'``) at
     the run's ``line_types``, from at least two books; with ``book_id`` (a
     ``--book`` run) that book's rows. ``resume_on_game_odds`` reads
     ``raw.game_odds`` instead of ``raw.prop_odds``: a ``--no-props`` run writes
     no prop rows, so its resume has to look at the game rows.
 
-    SIM-546: ``game_dates`` keeps only the games of those official dates
+    ``game_dates`` keeps only the games of those official dates
     (``AND game_date = ANY($n::date[])``, bound after the resume parameters).
     The nightly closing pass loads yesterday's and the day before's games.
     """
@@ -680,7 +679,7 @@ async def _fetch_final_games(
 async def _fetch_lineup_players(pool, game_pk: int) -> list[tuple[int, bool]]:
     """Return ``(player_id, is_pitcher)`` for every player in ``game_pk``'s lineup.
 
-    Reads ``raw.game_lineups`` (the SIM-353 lineup table). ``is_pitcher`` routes
+    Reads ``raw.game_lineups`` (the lineup table). ``is_pitcher`` routes
     which prop markets are requested for the player. DISTINCT so a player who
     changed slots (sequence > 1) is fetched once.
     """
@@ -705,7 +704,7 @@ def _has_line(odds: Mapping[str, Any]) -> bool:
 
 
 def _prop_has_line(quote: Mapping[str, Any]) -> bool:
-    """SIM-555: True if a prop dict carries a line or a price."""
+    """True if a prop dict carries a line or a price."""
     return any(quote.get(k) is not None for k in _PROP_ODDS_FIELDS)
 
 
@@ -716,7 +715,7 @@ def _keep_rows(
     tally: RefusalTally | None,
     book_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """SIM-555: the rows of one offer that go to the database.
+    """The rows of one offer that go to the database.
 
     In order: a ``--book`` run drops every other book's row; a row with no
     price or line at all is skipped silently (it is not a quote); the load
@@ -754,7 +753,7 @@ def _keep_rows(
 
 
 def _count_by_book(rows: list[dict[str, Any]], written_by_book: Counter[str] | None) -> None:
-    """SIM-555: add each written row to the per-book count (``None`` counts nothing)."""
+    """Add each written row to the per-book count (``None`` counts nothing)."""
     if written_by_book is None:
         return
     for row in rows:
@@ -775,7 +774,7 @@ async def _load_game_odds(
 ) -> int:
     """Fetch + persist the game lines (opening & closing by default) for one game.
 
-    SIM-555: each (line type, market) is one offer. The provider gives every
+    Each (line type, market) is one offer. The provider gives every
     book's row (``odds_rows_by_book``); ``_keep_rows`` applies ``--book``, skips
     the empty rows and runs the load guard; the kept rows go to
     ``persist_many(game_pk, rows)`` in ONE call. ``tally`` counts the guard's
@@ -826,7 +825,7 @@ async def _load_game_odds(
 
 
 def _prop_stats_for_player(is_pitcher: bool, prop_stats: tuple[str, ...]) -> tuple[str, ...]:
-    """SIM-421: the markets of ``prop_stats`` a pitcher (or a hitter) is asked for.
+    """The markets of ``prop_stats`` a pitcher (or a hitter) is asked for.
 
     A pitcher gets the pitcher markets only, a hitter the batter markets only,
     so ``hits`` (batter) and ``hits_allowed`` (pitcher) never cross.
@@ -850,7 +849,7 @@ async def _load_prop_odds(
 ) -> int:
     """Fetch + persist the prop lines (opening & closing by default) for one game.
 
-    SIM-555: each (player, prop_stat, line type) is one offer: every book's row
+    Each (player, prop_stat, line type) is one offer: every book's row
     (``prop_rows_by_book``), filtered and guarded as in :func:`_load_game_odds`,
     persisted in ONE ``persist_many(rows)`` call. ``failures`` counts the
     skipped fetches and writes, as in :func:`_load_game_odds`.
@@ -905,12 +904,12 @@ async def _load_prop_odds(
 def _build_persisters(dsn: str, pool):
     """Return ``(persist_game_many, persist_prop_many)`` bound to the live pipeline write path.
 
-    SIM-555: the batch writers ``LiveIngestionPipeline._persist_odds_many`` /
-    ``_persist_prop_odds_many`` (one ``executemany`` per offer; the
-    SIM-092/SIM-340 odds_hash dedup + INSERT … ON CONFLICT DO NOTHING
-    unchanged). The pipeline is built without starting it: a dummy redis_url
-    satisfies the __init__ guard — start() is never called so Redis is
-    untouched — and our own asyncpg pool is attached to ``_db``.
+    The writers are the batch writers ``LiveIngestionPipeline._persist_odds_many``
+    / ``_persist_prop_odds_many`` (one ``executemany`` per offer; the odds_hash
+    dedup and INSERT … ON CONFLICT DO NOTHING apply unchanged). The pipeline is
+    built without starting it: a dummy redis_url satisfies the __init__ guard,
+    and start() is never called, so Redis is untouched. This job's own asyncpg
+    pool is attached to ``_db``.
     """
     from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 
@@ -923,7 +922,7 @@ def _build_persisters(dsn: str, pool):
 
 
 def _written_by_book_summary(written_by_book: Mapping[str, int]) -> str:
-    """SIM-555: the rows written per book, most first, with each book's name."""
+    """The rows written per book, most first, with each book's name."""
     if not written_by_book:
         return "rows written by book: none"
     lines = ["rows written by book:"]
@@ -940,20 +939,20 @@ async def run(args: argparse.Namespace) -> int:
     from pipeline.odds_provider import get_odds_provider
 
     seasons = sorted({int(s) for s in args.seasons})
-    # SIM-421: the market subset and line types are validated here so a bad
+    # The market subset and line types are validated here so a bad
     # value stops the run before any provider request.
     prop_stats = _select_prop_stats(getattr(args, "prop_stats", None))
     game_markets = _select_game_markets(getattr(args, "game_markets", None))
     line_types = _select_line_types(getattr(args, "line_types", None))
     no_game_odds = bool(getattr(args, "no_game_odds", False))
-    # SIM-555: --book restricts the run to one book's rows.
+    # --book restricts the run to one book's rows.
     book_id = _select_book(getattr(args, "book", None))
-    # SIM-555: the vendor-read retry policy (--retries / --retry-wait).
+    # The vendor-read retry policy (--retries / --retry-wait).
     retries, retry_wait_s = _select_retry_policy(
         getattr(args, "retries", DEFAULT_RETRIES),
         getattr(args, "retry_wait", DEFAULT_RETRY_WAIT_S),
     )
-    # SIM-421: the long offline time-to-live must be in the environment BEFORE
+    # The long offline time-to-live must be in the environment BEFORE
     # the provider is built — it reads the variable in its constructor.
     try:
         provider_name = _select_provider(args.provider)
@@ -978,9 +977,9 @@ async def run(args: argparse.Namespace) -> int:
     _hand_over_retry_policy(provider, retries, retry_wait_s)
 
     skip_since = parse_skip_loaded_since(getattr(args, "skip_loaded_since", None))
-    # SIM-546: --game-dates narrows the run to those official dates.
+    # --game-dates narrows the run to those official dates.
     game_dates = sorted(set(getattr(args, "game_dates", None) or []))
-    # SIM-555: a --no-props run writes no prop rows; its resume reads the game rows.
+    # A --no-props run writes no prop rows; its resume reads the game rows.
     resume_on_game_odds = bool(args.no_props)
     games = await _fetch_final_games(
         args.dsn,
@@ -1004,13 +1003,13 @@ async def run(args: argparse.Namespace) -> int:
             ", ".join(line_types),
             skip_since.isoformat(),
         )
-        # SIM-555: the SQL drops a game with rows before the done-file is read,
+        # The SQL drops a game with rows before the done-file is read,
         # so a game an earlier run left incomplete is skipped when it holds rows.
         log.warning(
             "resume: --skip-loaded-since also skips a game an earlier run left "
             "incomplete if it holds rows; resume with --done-file alone to load it again"
         )
-    # SIM-555: a crash-safe run skips the games its done-file lists.
+    # A crash-safe run skips the games its done-file lists.
     done_file = getattr(args, "done_file", None)
     if done_file:
         done = read_done_file(done_file)
@@ -1031,10 +1030,10 @@ async def run(args: argparse.Namespace) -> int:
     n_game_rows = 0
     n_prop_rows = 0
     n_done = 0
-    # SIM-555: the guard's refusals and the rows written, per book, for the run.
+    # The guard's refusals and the rows written, per book, for the run.
     tally = RefusalTally()
     written_by_book: Counter[str] = Counter()
-    # SIM-555: the games a failed vendor read, fetch or write left incomplete,
+    # The games a failed vendor read, fetch or write left incomplete,
     # in load order, and the fetches and writes the loader itself caught.
     incomplete: list[int] = []
     load_failures: Counter[str] = Counter()
@@ -1044,7 +1043,7 @@ async def run(args: argparse.Namespace) -> int:
 
         for g in games:
             game_pk = g["game_pk"]
-            # SIM-555: a lookup that failed in an earlier game is read again in
+            # A lookup that failed in an earlier game is read again in
             # this one, so it counts here too; then the counts before this game.
             _forget_failed_lookups(provider)
             failures_before = _read_failures(provider)
@@ -1081,7 +1080,7 @@ async def run(args: argparse.Namespace) -> int:
                     )
 
             n_done += 1
-            # SIM-555: a read the provider gave up on, or a fetch or a write the
+            # A read the provider gave up on, or a fetch or a write the
             # loader caught, leaves the game incomplete. Its rows so far stay
             # written; the done-file does not list it, so the next run loads it
             # again in full.
@@ -1127,11 +1126,11 @@ async def run(args: argparse.Namespace) -> int:
         n_game_rows,
         n_prop_rows,
     )
-    # SIM-555: the guard's summary, the rows per book, and a warning past 5%.
+    # The guard's summary, the rows per book, and a warning past 5%.
     log.info("%s", tally.summary())
     log.info("%s", _written_by_book_summary(written_by_book))
     tally.warn_if_share_above(REFUSAL_WARN_SHARE, log)
-    # SIM-555: the incomplete games, and the exit code the wrapper reads.
+    # The incomplete games, and the exit code the wrapper reads.
     summary = _incomplete_summary(
         incomplete, done_file=done_file, skip_loaded_since=skip_since is not None
     )
@@ -1241,7 +1240,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "or a label such as bp:12). Default: every book.",
     )
     args = p.parse_args(argv)
-    # SIM-421 / SIM-555: fail loudly on an unknown market, line type or book,
+    # Fail loudly on an unknown market, line type or book,
     # or a bad retry policy, before any work.
     try:
         _select_prop_stats(args.prop_stats)
@@ -1261,7 +1260,7 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
-    args.dsn = args.dsn or require_dsn()  # SIM-443b: fail loudly with no DSN
+    args.dsn = args.dsn or require_dsn()  # Fail loudly with no DSN
     return asyncio.run(run(args))
 
 

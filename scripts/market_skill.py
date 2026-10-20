@@ -58,13 +58,12 @@ import numpy as np
 BINS = [0.0, 0.2, 0.35, 0.5, 0.65, 0.8, 1.0001]
 #: A real two-way pair's implied probabilities add to about 1.03-1.10 (the
 #: book's margin). Outside this band the two prices are not two sides of one
-#: bet, and the market probability is not trustworthy. The guard found the
-#: first-five run line, whose closing row is often two separate bets (home
-#: -1.5 and away -1.5) that the comparison priced as a pair. Since SIM-549 the
-#: comparison scores such a row as two bets, each record with no fade price,
-#: so the mean reads the pairs only and the run line enters on its own.
+#: bet, and the market probability is not trustworthy. A first-five run line's
+#: closing row is often two separate bets (home -1.5 and away -1.5), not a
+#: pair. The comparison scores such a row as two bets, each record with no
+#: fade price, so the mean reads the pairs only and the run line enters on its own.
 OVERROUND_OK = (1.0, 1.15)
-#: SIM-549: the guard above reads only records that carry both prices. A
+#: The guard above reads only records that carry both prices. A
 #: run-line bet the book listed on its own carries no fade price, so it needs
 #: its own check: its line's mean probability against its own outcome rate.
 #: A gap over ONE_SIDED_LINE_Z standard errors, on at least ONE_SIDED_LINE_MIN_N
@@ -78,7 +77,7 @@ DEFAULT_BOOTSTRAP = 1000
 GAME_MARKET_ORDER = [
     "moneyline",
     "runline",
-    "runline_away",  # SIM-549: the away bet of a run line listed as two bets
+    "runline_away",  # the away bet of a run line listed as two bets
     "total",
     "f5_moneyline",
     "f5_runline",
@@ -102,7 +101,7 @@ GAME_MARKET_ORDER = [
 # ---------------------------------------------------------------------------
 
 
-#: SIM-555: the three report stamps that say which odds rows a report was
+#: The three report stamps that say which odds rows a report was
 #: graded against (``scripts/accuracy_comparison.py`` writes them into ``params``).
 ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")
 
@@ -134,25 +133,25 @@ def _provenance_key(report: dict[str, Any]) -> dict[str, Any]:
         "fatigue_tto_sigma": prov.get("fatigue_tto_sigma"),
         "manager": prov.get("manager"),
         "split": prov.get("split"),
-        # SIM-554: the order of the running game (the flag and whether the
+        # The order of the running game (the flag and whether the
         # steal pool carries the pitch class). Chunks run in two orders on one
         # bundle carry the same manifest times; never merge them.
         "running_game": prov.get("running_game"),
-        # SIM-549: a run line scored as two bets and one scored as a pair are
+        # A run line scored as two bets and one scored as a pair are
         # two different market probabilities; never merge them unknowingly.
         "run_line_scoring": p.get("run_line_scoring"),
         # A re-scored report holds the run lines' home bets only; a fresh run
         # holds the away bets too. Merged, the away rows would cover some
         # games and the home rows all of them.
         "run_line_rescored": bool(p.get("rescored")),
-        # SIM-555: the odds rows a report was graded against. A report graded
-        # against another book, another preference list or the old mixed rows
-        # (no stamp: before SIM-555) prices other lines; never merge them.
+        # The odds rows a report was graded against. A report graded against
+        # another book, another preference list or the mixed-book rows (a
+        # report with no stamp) prices other lines; never merge them.
         **odds_row_key(p),
         # A report re-scored onto the graded book (scripts/probes/rescore_graded_book.py,
         # which writes ``rescored_from``) re-prices its fixed-line records only;
-        # its totals, run lines and props keep the old rows' prices. A fresh run
-        # prices every record from the graded book.
+        # its totals, run lines and props keep the prices of the rows it was
+        # first graded on. A fresh run prices every record from the graded book.
         "odds_rows_rescored": bool(p.get("rescored_from")),
     }
 
@@ -602,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
     out: dict[str, Any] = {"provenance": prov, "records": len(records), "markets": rows}
     if args.compare:
         arm, prov_b = load_reports(args.compare, args.force)
-        # SIM-555: two reads graded against different odds rows score other
+        # Two reads graded against different odds rows score other
         # lines on the same game; their paired difference measures the rows,
         # not the configuration.
         diffs = odds_row_mismatches(prov, prov_b)

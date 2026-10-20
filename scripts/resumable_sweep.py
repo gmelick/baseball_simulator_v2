@@ -235,15 +235,14 @@ def main() -> int:
                 break
 
             if complete:
-                # SIM-447: a season can reach the end of its schedule while
+                # A season can reach the end of its schedule while
                 # individual games failed -- _dispatch_game contains those by
                 # design. Those games are deliberately absent from the progress
                 # file, so ANOTHER attempt retries exactly them and nothing else.
-                # Breaking here (the old behaviour) is how game 824014 was left on
-                # pre-fix data: the 2026 run reported COMPLETE with 1 failure and
-                # never went back for it. Transient faults are the common case and
-                # succeed on retry; a deterministic one gains nothing and trips the
-                # zero-progress guard below.
+                # A break here would report the season COMPLETE and leave each
+                # failed game on its old rows. Transient faults are the common case
+                # and succeed on retry; a deterministic one gains nothing and trips
+                # the zero-progress guard below.
                 print(
                     f"  attempt {attempt}: reached the end of the season but "
                     f"{failed} game(s) FAILED (+{gained} loaded, {mins:.1f} min) — "
