@@ -12,11 +12,7 @@ import re
 import pytest
 from tests.script_loader import PROBES, load_script
 
-from pipeline.bettingpros_odds_provider import (
-    F5_EXCLUDED_BOOKS,
-    F5_TWIN_MARKETS,
-    f5_excluded_markets,
-)
+from pipeline.bettingpros.rules import F5_EXCLUDED_BOOKS, F5_TWIN_MARKETS, f5_excluded_markets
 from pipeline.odds_provider import (
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,

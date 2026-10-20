@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from api.routes.games import _sim_summary_lite_from_stored, _with_half_width
+from api.routes.games_models import _sim_summary_lite_from_stored, _with_half_width
 from api.schemas import GameSimSummaryLite
 from api.serialization import to_jsonable
 from simulation.game_market_distributions import SegmentRuns, segment_runs_from_summary

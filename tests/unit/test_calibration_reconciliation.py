@@ -36,11 +36,9 @@ import numpy as np
 import pytest
 from tests.script_loader import load_script
 
-from similarity.similarity_calibration import (
-    CalibrationReport,
-    SimilarityCalibrator,
-    calibrate_sigma,
-)
+from similarity.calibration.fitting import calibrate_sigma
+from similarity.calibration.report import CalibrationReport
+from similarity.similarity_calibration import SimilarityCalibrator
 
 
 # ---------------------------------------------------------------------------

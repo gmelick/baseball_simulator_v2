@@ -11,10 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import (
-    carry_predict,
-    parse_group_key,
-)
+from pipeline.batch.artifacts.park_geometry import carry_predict, parse_group_key
 from simulation.sampler.base import BaseMixin
 
 

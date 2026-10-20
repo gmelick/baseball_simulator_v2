@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-import pipeline.batch.player_profile_computor as ppc
+import pipeline.batch.profiles.pool_meta as pool_meta
 
 #: The repository root (this file is scripts/<package>/<module>.py).
 _ROOT = Path(__file__).resolve().parents[2]
@@ -104,7 +104,7 @@ def _season_list(seasons: list[int]) -> str:
 
 def _builder() -> str:
     """The builder the computor writes. Read at call time, so a test can set it."""
-    return str(ppc.POOL_BUILDER_VERSION)
+    return str(pool_meta.POOL_BUILDER_VERSION)
 
 
 def _sha256(path: str) -> str:

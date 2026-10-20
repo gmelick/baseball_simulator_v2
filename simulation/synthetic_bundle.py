@@ -44,9 +44,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASS_CODE, STEAL_PITCH_CLASSES
 from pipeline.batch.engine_artifacts import (
-    STEAL_PITCH_CLASS_CODE,
-    STEAL_PITCH_CLASSES,
     AdvancementPool,
     BattedBallPool,
     ChangePool,

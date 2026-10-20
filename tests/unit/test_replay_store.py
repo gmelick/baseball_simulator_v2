@@ -419,10 +419,9 @@ class TestTheSampleGameRoute:
         """The API process never records a game itself: it asks the runner,
         whose workers hold the sim bundle warm."""
 
-        def _boom(**_kwargs):
-            raise AssertionError("the route recorded the game in the API process")
+        from simulation import play_recorder
 
-        monkeypatch.setattr(games_mod, "record_game", _boom)
+        assert getattr(games_mod, "record_game", None) is not play_recorder.record_game
         seen: list[tuple] = []
         real = BatchRunner.record_game
 

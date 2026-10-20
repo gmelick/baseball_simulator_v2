@@ -162,7 +162,7 @@ class TestFitReliabilityCurve:
         assert fit_reliability_curve([0.5], [1], min_bin_count=5) == []
 
     def test_fitted_curve_makes_calibration_map_nonidentity_and_corrective(self):
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         p, y = _overconfident_winprob()
         curve = fit_reliability_curve(p, y, n_bins=10)
@@ -332,7 +332,7 @@ class TestBuildAndWriteBack:
         assert rep.prop_calibrations == []
 
     def test_write_curve_back_into_calibration_report(self, tmp_path):
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         calib_path = tmp_path / "calibration.json"
         calib_path.write_text(CalibrationReport(sigma_discipline=0.9).to_json(), encoding="utf-8")
@@ -349,7 +349,7 @@ class TestBuildAndWriteBack:
         assert cmap is not IDENTITY_CALIBRATION
 
     def test_write_curve_back_empty_curve_is_noop(self, tmp_path):
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         calib_path = tmp_path / "calibration.json"
         calib_path.write_text(CalibrationReport().to_json(), encoding="utf-8")

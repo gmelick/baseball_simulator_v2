@@ -41,6 +41,8 @@ import duckdb
 import numpy as np
 import pytest
 
+import pipeline.batch.profiles.pool_meta as pool_meta
+import pipeline.batch.profiles.sql as profile_sql
 from pipeline.batch import player_profile_computor as ppc
 from pipeline.batch.engine_artifacts import (
     BattedBallPool,
@@ -493,7 +495,7 @@ class TestBuilderWindowExpressions:
             con.executemany("INSERT INTO pitches VALUES (?,?,?,?)", rows)
             got = con.execute(
                 f"SELECT pitcher, at_bat_number, pitch_number, "
-                f"{ppc.SQL_PITCHER_PITCH_COUNT} AS pc, {ppc.SQL_TIMES_THROUGH_ORDER} AS tto "
+                f"{profile_sql.SQL_PITCHER_PITCH_COUNT} AS pc, {profile_sql.SQL_TIMES_THROUGH_ORDER} AS tto "
                 "FROM pitches ORDER BY pitcher, at_bat_number, pitch_number"
             ).fetchall()
         finally:
@@ -514,7 +516,7 @@ class TestBuilderWindowExpressions:
         # The builder version names the newest pool change: sim554.1 adds the steal
         # pool's pitch class and pickoff rows. The fatigue columns (sim518.1) stay
         # in the SELECT, in order.
-        assert ppc.POOL_BUILDER_VERSION == "sim554.1"
+        assert pool_meta.POOL_BUILDER_VERSION == "sim554.1"
         # The pitch pool's SELECT lives in the pool builder's mixin.
         src = inspect.getsource(ppc.PlayerProfileComputor._build_pitch_pool)
         i_got = src.index("AS got_away,")

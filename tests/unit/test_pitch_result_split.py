@@ -33,14 +33,13 @@ import duckdb
 import numpy as np
 import pytest
 
+from pipeline.batch.artifacts.common import _GEOM_COLS, join_rows
 from pipeline.batch.engine_artifacts import (
-    _GEOM_COLS,
     BattedBallPool,
     EngineArtifacts,
     HandPool,
     build_battedball_pool_artifact,
     build_pitch_pool_artifact,
-    join_rows,
 )
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team

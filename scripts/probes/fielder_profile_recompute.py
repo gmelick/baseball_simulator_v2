@@ -92,12 +92,12 @@ if str(_ROOT) not in sys.path:
 import duckdb  # noqa: E402
 
 from db.introspect import duck_table_exists
-from pipeline.batch.player_profile_computor import (  # noqa: E402
-    FIELDER_TAIL_COLUMNS,
+from pipeline.batch.player_profile_computor import (
     LeagueAverageProfiles,
     PlayerProfileComputor,
     build_run_expectancy_matrix,
 )
+from pipeline.batch.profiles.constants import FIELDER_TAIL_COLUMNS
 
 log = logging.getLogger("fielder_profile_recompute")
 

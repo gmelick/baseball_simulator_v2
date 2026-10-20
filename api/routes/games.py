@@ -87,8 +87,6 @@ from api.routes.games_models import (
     WhatIfRequest,
     WhatIfStarted,
     WithOverrideResponse,
-    _sim_summary_lite_from_stored,  # noqa: F401 # re-export: removed in the integration pass
-    _with_half_width,  # noqa: F401 # re-export: removed in the integration pass
 )
 from api.routes.games_runs import _get_sim_jobs, _run_model, _stored_prop_set
 from api.schemas import (
@@ -118,7 +116,7 @@ from simulation.lineup_resolver import (
     resolve_lineup,
 )
 from simulation.pitcher_decisions import decisions_from_plays
-from simulation.play_recorder import RecordedGame, record_game
+from simulation.play_recorder import RecordedGame
 from simulation.production_factory import (
     _default_bullpen_for_spec,
     placeholder_reliever_number,
@@ -129,12 +127,6 @@ from simulation.sim_kwargs import (
 )
 from simulation.sim_kwargs import (
     mark_park_factor_unresolved,
-)
-from simulation.sim_kwargs import (
-    resolve_park_run_factor as _resolve_park_run_factor,  # noqa: F401 # re-export: removed in the integration pass
-)
-from simulation.sim_kwargs import (
-    sim_kwargs_from_state as _sim_kwargs_from_state,  # noqa: F401 # re-export: removed in the integration pass
 )
 from simulation.snapshots import (
     FieldSnapshot,
@@ -457,29 +449,6 @@ class ReplayArtifacts(NamedTuple):
     linescore: dict
     decisions: dict
     result: Any  # the recorded GameSimResult
-
-
-def _record_and_build(
-    *,
-    factory_ref: str,
-    base_seed: int | None,
-    sim_kwargs: dict[str, Any],
-    resolved: Any = None,
-) -> ReplayArtifacts:
-    """Record one game in this process and build its replay artifacts (sync).
-
-    No route calls this: the routes record on the worker pool
-    (``BatchRunner.record_game``) and call :func:`_build_replay_artifacts`. A
-    test drives the builder through it with ``record_game`` patched, and two
-    tests patch ``record_game`` here to prove no route records in the API
-    process.
-    """
-    recorded = record_game(
-        factory_ref=factory_ref,
-        seed=base_seed,
-        sim_kwargs=sim_kwargs,
-    )
-    return _build_replay_artifacts(recorded, resolved=resolved)
 
 
 def _build_replay_artifacts(recorded: RecordedGame, *, resolved: Any = None) -> ReplayArtifacts:

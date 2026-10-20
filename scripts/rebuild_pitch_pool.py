@@ -184,12 +184,10 @@ from pitch_pool_rebuild.export import (  # noqa: E402
 from pitch_pool_rebuild.preflight import _preflight  # noqa: E402
 
 from pipeline.batch.engine_artifacts import last_n_seasons  # noqa: E402
-from pipeline.batch.player_profile_computor import (  # noqa: E402
-    POOL_BUILDER_VERSION,
-    STRIKE_THREE_FOUL_TYPES,
-    PlayerProfileComputor,
-)
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
 from pipeline.batch.pool_chain import attach_pg  # noqa: E402
+from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
+from pipeline.statcast_events import STRIKE_THREE_FOUL_TYPES
 
 # ---------------------------------------------------------------------------
 # The two modes

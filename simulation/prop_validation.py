@@ -806,7 +806,7 @@ def write_reliability_curve_to_calibration_report(
     if not os.path.exists(calibration_path):
         return False
     try:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         with open(calibration_path, encoding="utf-8") as fh:
             calib = CalibrationReport.from_json(fh.read())

@@ -49,6 +49,7 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
+import pipeline.batch.profiles.constants as profile_constants
 from similarity.engines.fielder_similarity import (  # noqa: E402
     ALL_POSITIONS,
     EB_N_PRIOR,
@@ -221,10 +222,9 @@ class TestRangeFeatureLists:
         assert not any(f in JUMP_PARTS for f, _ in IF_RANGE_FEATURES)
 
     def test_the_engine_and_the_computor_share_the_jump_prior(self) -> None:
-        from pipeline.batch import player_profile_computor as computor
 
         assert JUMP_ALPHA_PRIOR_PLAYS == 25
-        assert computor.JUMP_ALPHA_PRIOR_PLAYS == JUMP_ALPHA_PRIOR_PLAYS
+        assert profile_constants.JUMP_ALPHA_PRIOR_PLAYS == JUMP_ALPHA_PRIOR_PLAYS
 
     def test_the_range_scorers_carry_nine_and_six_normalised_weights(self) -> None:
         engine = FielderSimilarityEngine(duckdb_path=":memory:")

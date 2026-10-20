@@ -42,15 +42,15 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.live import live_ingestion_pipeline as live  # noqa: E402
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    LiveIngestionPipeline,
+import pipeline.live.ingestion.constants as live_constants
+import pipeline.odds_row_guard as odds_row_guard
+from pipeline.live.ingestion.closing_rows import (
     closing_candidates,
     closing_hash,
-    pregame_odds_cadence_s,
     promote_closing_game_rows,
     promote_closing_prop_rows,
 )
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline, pregame_odds_cadence_s
 from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_TYPES  # noqa: E402
 
 GAME_PK = 776465
@@ -442,7 +442,7 @@ class TestLateStamp:
         latest = _latest_per_key(
             [early, late],
             ("market_type", "book"),
-            stamp_bound=SCHEDULED_START + live.CLOSING_STAMP_GRACE,
+            stamp_bound=SCHEDULED_START + odds_row_guard.CLOSING_STAMP_GRACE,
         )
         assert [r["id"] for r in latest] == [1]
         assert [i for i, _ in closing_candidates(latest, scheduled_start=SCHEDULED_START)] == [1]
@@ -469,7 +469,7 @@ class TestLateStamp:
         assert game_args[1:] == (
             GAME_PK,
             FIRST_PITCH,
-            SCHEDULED_START + live.CLOSING_STAMP_GRACE,
+            SCHEDULED_START + odds_row_guard.CLOSING_STAMP_GRACE,
         )
         assert prop_args[1:] == (GAME_PK, FIRST_PITCH, None)
         for sql in (game_args[0], prop_args[0]):
@@ -754,8 +754,10 @@ class TestPregameCadence:
         two_hours_out = {"gameDate": "2026-10-10T00:55:00Z"}
         assert pregame_odds_cadence_s(ten_minutes_out, now) == 60
         assert pregame_odds_cadence_s(two_hours_out, now) == 600
-        assert live.PREGAME_NEAR_START_CADENCE_S == live.PROP_FETCH_CADENCE_S == 60
-        assert live.PREGAME_NEAR_START_WINDOW_S == 15 * 60
+        assert (
+            live_constants.PREGAME_NEAR_START_CADENCE_S == live_constants.PROP_FETCH_CADENCE_S == 60
+        )
+        assert live_constants.PREGAME_NEAR_START_WINDOW_S == 15 * 60
 
     def test_the_window_edges_and_a_delayed_start(self) -> None:
         start = datetime(2026, 10, 9, 23, 5, tzinfo=UTC)

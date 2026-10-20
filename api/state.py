@@ -266,7 +266,7 @@ def load_calibration_report(path: str | None = None):
         )
         return None
     try:
-        from similarity.similarity_calibration import CalibrationReport
+        from similarity.calibration.report import CalibrationReport
 
         with open(report_path, encoding="utf-8") as fh:
             report = CalibrationReport.from_json(fh.read())

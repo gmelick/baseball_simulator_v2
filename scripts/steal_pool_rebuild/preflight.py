@@ -7,8 +7,8 @@ import os
 import shutil
 from typing import Any
 
-import pipeline.batch.player_profile_computor as ppc
-from pipeline.batch.engine_artifacts import RECENCY_FLOOR_SEASONS
+import pipeline.batch.profiles.pool_meta as pool_meta
+from pipeline.batch.artifacts.common import RECENCY_FLOOR_SEASONS
 
 from .bundle import _export_replaces, _strays, backup_plan, steal_pool_problem
 from .common import (
@@ -94,7 +94,7 @@ def watermark_problems(con: Any, seasons: list[int]) -> list[str]:
     }
     problems: list[str] = []
     for s in seasons:
-        src_max, src_n = ppc._source_state(con, s)
+        src_max, src_n = pool_meta._source_state(con, s)
         prev = meta.get(s)
         good = prev is not None and prev[0] == src_max and prev[1] == src_n
         _log(

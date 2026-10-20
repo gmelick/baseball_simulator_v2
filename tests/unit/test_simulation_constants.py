@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import unittest
 
+import pipeline.batch.profiles.defense as profile_defense
 from simulation.constants import CANONICAL_OUTCOME_KEYS, DEFENSIVE_RUN_VALUES
 
 # The defensible canonical outcome set: the 12 standard PA outcomes plus
@@ -101,22 +102,21 @@ class TestConstantsAreReferencedInPipeline(unittest.TestCase):
     """The pipeline computor must source its defensive constants from here."""
 
     def test_player_profile_computor_uses_centralized_values(self) -> None:
-        import pipeline.batch.player_profile_computor as computor
 
         self.assertEqual(
-            computor.RUNS_PER_OAA_INFIELD,
+            profile_defense.RUNS_PER_OAA_INFIELD,
             DEFENSIVE_RUN_VALUES["runs_per_oaa_infield"],
         )
         self.assertEqual(
-            computor.RUNS_PER_OAA_OUTFIELD,
+            profile_defense.RUNS_PER_OAA_OUTFIELD,
             DEFENSIVE_RUN_VALUES["runs_per_oaa_outfield"],
         )
         self.assertEqual(
-            computor.RUNS_PER_BLOCK_SAVED,
+            profile_defense.RUNS_PER_BLOCK_SAVED,
             DEFENSIVE_RUN_VALUES["runs_per_block_saved"],
         )
         self.assertEqual(
-            computor.RUNS_PER_STRIKE_ABOVE_AVG,
+            profile_defense.RUNS_PER_STRIKE_ABOVE_AVG,
             DEFENSIVE_RUN_VALUES["runs_per_strike_above_avg"],
         )
 

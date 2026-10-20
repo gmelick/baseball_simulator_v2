@@ -21,8 +21,10 @@ from unittest.mock import AsyncMock
 import pytest
 from tests.script_loader import load_script
 
-from pipeline.bettingpros_odds_provider import _GAME_MARKET_IDS, BettingProsOddsProvider
-from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline, MockOddsAPI
+from pipeline.bettingpros.markets import _GAME_MARKET_IDS
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 from pipeline.odds_provider import (
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
@@ -154,7 +156,7 @@ class TestProviderSegmentMarkets:
 
     @staticmethod
     def _book_cost(market_id: int, book_id: int, *, participant=None, selection=None):
-        from pipeline.bettingpros_odds_provider import _book_line
+        from pipeline.bettingpros.parsing import _book_line
 
         sel_list = _load(_FIXTURE_BY_MARKET[market_id])["offers"][0]["selections"]
         for sel in sel_list:

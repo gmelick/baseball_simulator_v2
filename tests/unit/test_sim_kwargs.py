@@ -119,15 +119,17 @@ def test_builder_defaults_neutral_when_state_bare():
 
 
 def test_api_route_reuses_the_shared_builder():
+    """The API builds its kwargs with the shared builder, never a copy of its own.
+
+    ``build_sim_kwargs`` resolves the park factor (``resolve_park_run_factor``)
+    and then calls ``sim_kwargs_from_state``, so the route reaches both shared
+    functions through this one import.
+    """
     import api.routes.games as g
 
-    assert g._sim_kwargs_from_state is sim_kwargs_from_state
-
-
-def test_api_route_reuses_the_shared_resolver():
-    import api.routes.games as g
-
-    assert g._resolve_park_run_factor is resolve_park_run_factor
+    assert g._build_sim_kwargs is build_sim_kwargs
+    assert not hasattr(g, "_sim_kwargs_from_state")
+    assert not hasattr(g, "_resolve_park_run_factor")
 
 
 # --- the park-factor resolver (two-source venue -> factor lookup) ------------
@@ -469,7 +471,7 @@ async def test_PRE_FIX_boxscore_pattern_now_goes_RED(monkeypatch):
 
     state = await g._resolve_state_or_error(_FakePool(15), 777)
     with pytest.raises(UnresolvedParkFactorError):
-        g._sim_kwargs_from_state(state)  # <-- the bare builder call
+        sim_kwargs_from_state(state)  # <-- the bare builder call
 
 
 async def test_POST_FIX_boxscore_pattern_resolves_the_real_factor(monkeypatch):
@@ -496,7 +498,7 @@ async def test_the_pre_fix_and_post_fix_kwargs_actually_differ(monkeypatch):
 
     pre_fix_state = await g._resolve_state_or_error(pool, 777)
     pre_fix_state.park_run_factor = 1.0  # what the bare path sends: the default
-    pre_fix = g._sim_kwargs_from_state(pre_fix_state)
+    pre_fix = sim_kwargs_from_state(pre_fix_state)
 
     post_fix_state = await g._resolve_state_or_error(pool, 777)
     post_fix = await g._resolved_sim_kwargs(_StubRequest(_FakeCon(1.18)), pool, post_fix_state, 777)

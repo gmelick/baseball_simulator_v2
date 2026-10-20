@@ -12,10 +12,8 @@ import logging
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import (
-    STEAL_PITCH_CLASS_CODE,
-    StealPool,
-)
+from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASS_CODE
+from pipeline.batch.engine_artifacts import StealPool
 from simulation.sampler.base import BaseMixin
 from simulation.sampler.kernels import (
     _count_cell,

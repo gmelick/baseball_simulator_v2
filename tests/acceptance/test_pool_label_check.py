@@ -104,7 +104,8 @@ from typing import Any, NoReturn
 import pytest
 
 from pipeline.batch import pool_chain
-from pipeline.batch.engine_artifacts import RECENCY_FLOOR_SEASONS, last_n_seasons
+from pipeline.batch.artifacts.common import RECENCY_FLOOR_SEASONS
+from pipeline.batch.engine_artifacts import last_n_seasons
 from tests.acceptance import bands
 from tests.acceptance.conftest import opted_in
 

@@ -33,9 +33,6 @@ from similarity.calibration.baserunner_steal import BaserunnerStealCalibratorMix
 from similarity.calibration.batter import BatterCalibratorMixin
 from similarity.calibration.catcher import CatcherCalibratorMixin
 from similarity.calibration.fielder import FielderCalibratorMixin
-from similarity.calibration.fitting import (
-    calibrate_sigma as calibrate_sigma,  # re-export: removed in the integration pass
-)
 from similarity.calibration.manager import ManagerCalibratorMixin
 from similarity.calibration.pitcher import PitcherCalibratorMixin
 from similarity.calibration.pitcher_steal import PitcherStealCalibratorMixin

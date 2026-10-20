@@ -43,30 +43,6 @@ from pipeline.batch.profiles.base import ComputorBase
 from pipeline.batch.profiles.baserunner import BaserunnerProfilesMixin
 from pipeline.batch.profiles.batter import BatterProfilesMixin
 from pipeline.batch.profiles.catcher import CatcherProfilesMixin
-from pipeline.batch.profiles.constants import (
-    ARM_ALPHA_PRIOR_CHANCES as ARM_ALPHA_PRIOR_CHANCES,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.constants import (
-    BASERUNNER_TAIL_COLUMNS as BASERUNNER_TAIL_COLUMNS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.constants import (
-    FIELDER_TAIL_COLUMNS as FIELDER_TAIL_COLUMNS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.constants import (
-    JUMP_ALPHA_PRIOR_PLAYS as JUMP_ALPHA_PRIOR_PLAYS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.defense import (
-    RUNS_PER_BLOCK_SAVED as RUNS_PER_BLOCK_SAVED,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.defense import (
-    RUNS_PER_OAA_INFIELD as RUNS_PER_OAA_INFIELD,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.defense import (
-    RUNS_PER_OAA_OUTFIELD as RUNS_PER_OAA_OUTFIELD,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.defense import (
-    RUNS_PER_STRIKE_ABOVE_AVG as RUNS_PER_STRIKE_ABOVE_AVG,  # re-export: removed in the integration pass
-)
 from pipeline.batch.profiles.fielder import FielderProfilesMixin
 from pipeline.batch.profiles.fielder_plays import FielderPlayMetricsMixin
 from pipeline.batch.profiles.league_averages import LeagueAverageProfiles
@@ -74,59 +50,8 @@ from pipeline.batch.profiles.leverage import build_run_expectancy_matrix
 from pipeline.batch.profiles.manager import ManagerProfilesMixin
 from pipeline.batch.profiles.park import ParkFactorsMixin
 from pipeline.batch.profiles.pitcher import PitcherProfilesMixin
-from pipeline.batch.profiles.pool_meta import (
-    POOL_BUILDER_VERSION as POOL_BUILDER_VERSION,  # re-export: removed in the integration pass
-)
 from pipeline.batch.profiles.pool_meta import _ensure_index_if_not_exists
-from pipeline.batch.profiles.pool_meta import (
-    _source_state as _source_state,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.pool_meta import (
-    recency_weight as recency_weight,  # re-export: removed in the integration pass
-)
 from pipeline.batch.profiles.pools import SimPoolsMixin
-from pipeline.batch.profiles.sql import (
-    PHYSICAL_COLUMN_ORDER as PHYSICAL_COLUMN_ORDER,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    SQL_OUTCOME_TYPE as SQL_OUTCOME_TYPE,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    SQL_PITCHER_PITCH_COUNT as SQL_PITCHER_PITCH_COUNT,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    SQL_SWING as SQL_SWING,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    SQL_TIMES_THROUGH_ORDER as SQL_TIMES_THROUGH_ORDER,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    SQL_WHIFF as SQL_WHIFF,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    _sql_stance_select as _sql_stance_select,  # re-export: removed in the integration pass
-)
-from pipeline.batch.profiles.sql import (
-    _sql_swing_select as _sql_swing_select,  # re-export: removed in the integration pass
-)
-from pipeline.statcast_events import (
-    BALL_TYPES as BALL_TYPES,  # re-export: removed in the integration pass
-)
-from pipeline.statcast_events import (
-    CALLED_STRIKE_TYPES as CALLED_STRIKE_TYPES,  # re-export: removed in the integration pass
-)
-from pipeline.statcast_events import (
-    FOUL_TYPES as FOUL_TYPES,  # re-export: removed in the integration pass
-)
-from pipeline.statcast_events import (
-    NON_SWING_TYPES as NON_SWING_TYPES,  # re-export: removed in the integration pass
-)
-from pipeline.statcast_events import (
-    STRIKE_THREE_FOUL_TYPES as STRIKE_THREE_FOUL_TYPES,  # re-export: removed in the integration pass
-)
-from pipeline.statcast_events import (
-    WHIFF_TYPES as WHIFF_TYPES,  # re-export: removed in the integration pass
-)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -320,7 +245,7 @@ class PlayerProfileComputor(
         Every table is listed by name. A new ``derived.*`` table with a
         ``season`` column goes on this list, or on
         ``_EXCLUDED_FROM_DELETE_SEASONS`` in
-        ``tests/unit/test_profile_indexes_and_etl_fallbacks.py`` with its
+        ``tests/unit/test_delete_seasons_coverage.py`` with its
         reason; that test fails otherwise.
 
         Left out on purpose:

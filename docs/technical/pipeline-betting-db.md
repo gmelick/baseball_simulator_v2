@@ -48,7 +48,7 @@ SIM-086 idempotent job that finds raw.games rows with a NULL venue_id (early sch
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `VenueBackfillJob.run()` | Fetches every NULL-venue game, looks up its venue via the schedule API, updates the row, and writes a raw.pipeline_run_log summary. | `module __main__ (_main)`<br>`tests/unit/test_profile_indexes_and_etl_fallbacks.py` | `_fetch_null_venue_games`<br>`_fetch_venue_id`<br>`_update_venue`<br>`_start_log_row`<br>`_finish_log_row` |
+| `VenueBackfillJob.run()` | Fetches every NULL-venue game, looks up its venue via the schedule API, updates the row, and writes a raw.pipeline_run_log summary. | `module __main__ (_main)`<br>`tests/unit/test_venue_id_fallback.py` | `_fetch_null_venue_games`<br>`_fetch_venue_id`<br>`_update_venue`<br>`_start_log_row`<br>`_finish_log_row` |
 | `VenueBackfillJob._fetch_venue_id(session, game_pk, game_date)` | GETs /api/v1/schedule?gamePk=...&hydrate=venue and returns the venue id if present. | `VenueBackfillJob.run` | — |
 | `VenueBackfillJob._update_venue(game_pk, venue_id)` | Pre-checks raw.venues for the venue id (to avoid a raw FK exception) then UPDATEs raw.games.venue_id. | `VenueBackfillJob.run` | — |
 | `schedule_venue_backfill_job(dsn, scheduler, interval_hours=6)` | Registers this job on an APScheduler instance every 6 hours by default. | — | — |

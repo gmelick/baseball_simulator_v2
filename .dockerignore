@@ -5,14 +5,14 @@
 
 # Secrets — never bake into image.
 # NOTE: `.env.example` is a sample file (no secrets) — kept in the image
-# because tests/unit/test_backend_assorted_guards.py asserts it ships.
+# because tests/unit/test_secrets_baseline.py asserts it ships.
 .env
 .env.local
 .env.production
 .env.staging
 
 # Version control: .git/ is excluded (large, unnecessary), but .gitignore
-# is kept because tests/unit/test_backend_assorted_guards.py reads it
+# is kept because tests/unit/test_secrets_baseline.py reads it
 # to verify the SIM-153 secrets-baseline excludes .env.
 .git/
 

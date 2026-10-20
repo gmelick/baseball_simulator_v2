@@ -32,7 +32,7 @@
 -- the listed sportsbooks (bettable_labels(): a list of what may be graded, so a
 -- book the vocabulary does not list is never graded), the graded-book preference
 -- (graded_book_labels()) and the three-way markets (the first-inning and
--- first-five moneylines). tests/unit/test_odds_reload_scripts.py checks them, the
+-- first-five moneylines). tests/unit/test_odds_census_sql.py checks them, the
 -- dated first-five exclusion against pipeline/bettingpros_odds_provider.py, and
 -- the limits of sections 4b and 5b against pipeline/odds_row_guard.py.
 -- =============================================================================

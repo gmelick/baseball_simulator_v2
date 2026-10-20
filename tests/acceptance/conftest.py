@@ -524,7 +524,7 @@ def _install_probes(
     production resolution of a ball in play (the transition draw, SIM-511).
     """
     from simulation.constants import resolve_event_to_canonical
-    from simulation.sim_loop import _DOUBLE_PLAY_EVENTS
+    from simulation.loop.values import _DOUBLE_PLAY_EVENTS
 
     # The pool-band counters (lane-global, never reset per game).
     pc = pool_counts if pool_counts is not None else {}

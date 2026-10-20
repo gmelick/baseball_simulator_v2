@@ -148,7 +148,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt \
 COPY tests/        /app/tests/
 COPY pyproject.toml /app/pyproject.toml
 
-# Files that test_backend_assorted_guards.py::TestSim153SecretsBaseline
+# Files that test_secrets_baseline.py
 # asserts ship with the image (SIM-153 secrets-baseline acceptance gates).
 # These were previously stripped by `.dockerignore` (`.env.*`, `*.md`) or
 # never COPY'd by this stage — now restored so `make test` is self-contained.

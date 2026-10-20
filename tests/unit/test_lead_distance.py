@@ -191,7 +191,7 @@ class TestMigrations:
         """The baserunner INSERT is positional: the DDL's trailing columns must
         be exactly ``BASERUNNER_TAIL_COLUMNS``, so the schema and the SELECT
         stay in step."""
-        from pipeline.batch.player_profile_computor import BASERUNNER_TAIL_COLUMNS
+        from pipeline.batch.profiles.constants import BASERUNNER_TAIL_COLUMNS
 
         con = duckdb.connect(":memory:")
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))

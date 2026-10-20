@@ -49,6 +49,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import pipeline.batch.profiles.sql as profile_sql
 from api.auth import require_auth
 from api.routes import analytics
 from api.routes.ai_assistant import _SYSTEM_PROMPT
@@ -329,13 +330,14 @@ def test_the_route_fragments_render_from_the_shared_sets(
     assert rendered == text
 
 
-def test_the_computor_reexports_the_shared_sets() -> None:
-    """The profile computor binds the six sets from the vocabulary module.
+def test_the_profile_sql_binds_the_shared_sets() -> None:
+    """The profile SQL binds the six sets from the vocabulary module.
 
-    The names stay importable from the computor, and each one is the same
-    object. So the computor holds no copy that could drift.
+    ``pipeline/batch/profiles/sql.py`` builds the profiles' pitch-result SQL,
+    and each of its six sets is the vocabulary module's own object. So the
+    profiles hold no copy that could drift.
     """
-    from pipeline.batch import player_profile_computor as computor
+    from pipeline.batch.profiles import sql as computor
 
     for name in (
         "BALL_TYPES",
@@ -354,11 +356,10 @@ def test_the_api_and_the_profiles_render_the_same_swing() -> None:
     The Data Lab's whiff is the profiles' whiff plus the foul tips 'T' and
     'O', in that order, and nothing else.
     """
-    from pipeline.batch import player_profile_computor as computor
 
-    assert analytics._SWING == computor.SQL_SWING
-    assert computor.SQL_WHIFF == "type IN ('S', 'W', 'M', 'Q')"
-    model_codes = _codes_in(computor.SQL_WHIFF)
+    assert analytics._SWING == profile_sql.SQL_SWING
+    assert profile_sql.SQL_WHIFF == "type IN ('S', 'W', 'M', 'Q')"
+    model_codes = _codes_in(profile_sql.SQL_WHIFF)
     assert _codes_in(analytics._WHIFF) == model_codes + list(FOUL_TIP_TYPES)
 
 

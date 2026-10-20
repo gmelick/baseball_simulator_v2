@@ -13,7 +13,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from api.routes import betting as b
+import api.routes.betting_stored_odds as stored_odds
 from pipeline.live.ingestion.odds_rows import (
     _GAME_ODDS_INSERT_SQL,
     _GAME_ODDS_RESTAMP_SQL,
@@ -49,34 +49,34 @@ def test_a_b_a_reads_a() -> None:
     b_row = _ml(
         "bp:12", -140, 120, fetched=T0 + timedelta(minutes=10), seen=T0 + timedelta(minutes=10)
     )
-    rows = b._latest_pregame_rows([a, b_row], ("current", "closing"))
+    rows = stored_odds._latest_pregame_rows([a, b_row], ("current", "closing"))
     assert [r["home_ml"] for r in rows] == [-150]
 
 
 def test_a_withdrawn_price_ages_out() -> None:
     fresh = _ml("bp:12", -150, 130, fetched=T0, seen=T0 + timedelta(minutes=40))
     withdrawn = _ml("bp:10", -160, 140, fetched=T0, seen=T0 + timedelta(minutes=10))
-    rows = b._latest_pregame_rows([fresh, withdrawn], ("current", "closing"))
+    rows = stored_odds._latest_pregame_rows([fresh, withdrawn], ("current", "closing"))
     assert {r["book"] for r in rows} == {"bp:12"}
 
 
 def test_within_twenty_minutes_both_stay() -> None:
     one = _ml("bp:12", -150, 130, fetched=T0, seen=T0 + timedelta(minutes=30))
     two = _ml("bp:10", -160, 140, fetched=T0, seen=T0 + timedelta(minutes=15))
-    assert len(b._latest_pregame_rows([one, two], ("current", "closing"))) == 2
+    assert len(stored_odds._latest_pregame_rows([one, two], ("current", "closing"))) == 2
 
 
 def test_a_closing_row_always_counts() -> None:
     fresh = _ml("bp:12", -150, 130, fetched=T0, seen=T0 + timedelta(hours=3))
     closing = _ml("bp:10", -160, 140, fetched=T0, seen=T0, line_type="closing")
-    rows = b._latest_pregame_rows([fresh, closing], ("current", "closing"))
+    rows = stored_odds._latest_pregame_rows([fresh, closing], ("current", "closing"))
     assert {r["book"] for r in rows} == {"bp:12", "bp:10"}
 
 
 def test_rows_without_the_stamp_are_all_kept() -> None:
     one = _ml("bp:12", -150, 130, fetched=T0, seen=None)
     two = _ml("bp:10", -160, 140, fetched=T0 - timedelta(days=2), seen=None)
-    assert len(b._latest_pregame_rows([one, two], ("current", "closing"))) == 2
+    assert len(stored_odds._latest_pregame_rows([one, two], ("current", "closing"))) == 2
 
 
 def test_the_restamp_sql_updates_last_seen() -> None:
@@ -111,12 +111,12 @@ def test_the_read_falls_back_before_0029() -> None:
     class _Conn:
         async def fetch(self, sql: str, *args):
             calls.append(sql)
-            if sql is b._SQL_GAME_STATUS:
+            if sql is stored_odds._SQL_GAME_STATUS:
                 return [{"status": "Preview"}]
-            if sql is b._SQL_STORED_GAME_ODDS_SEEN:
+            if sql is stored_odds._SQL_STORED_GAME_ODDS_SEEN:
                 raise RuntimeError('column "last_seen_at" does not exist')
             return []
 
-    line_types, rows = asyncio.run(b._fetch_stored_rows(_Conn(), 1, ("moneyline",)))
+    line_types, rows = asyncio.run(stored_odds._fetch_stored_rows(_Conn(), 1, ("moneyline",)))
     assert rows == []
-    assert calls[-1] is b._SQL_STORED_GAME_ODDS
+    assert calls[-1] is stored_odds._SQL_STORED_GAME_ODDS

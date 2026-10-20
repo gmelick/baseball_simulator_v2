@@ -58,6 +58,8 @@ import numpy as np
 import pytest
 from tests.script_loader import REPO, load_script, script_path
 
+import pipeline.batch.artifacts.common as artifacts_common
+
 measure_filter_cells = load_script("measure_filter_cells")
 _MODULE_PATH = str(script_path("measure_filter_cells"))
 _REPO_ROOT = str(REPO)
@@ -1055,6 +1057,5 @@ def test_duckdb_is_absent_from_a_clean_import() -> None:
 
 def test_recency_floor_is_read_from_the_artifact_builder() -> None:
     """The lazy wrapper returns the builder's own constant, never a copy."""
-    from pipeline.batch import engine_artifacts
 
-    assert mfc.recency_floor_seasons() == engine_artifacts.RECENCY_FLOOR_SEASONS
+    assert mfc.recency_floor_seasons() == artifacts_common.RECENCY_FLOOR_SEASONS

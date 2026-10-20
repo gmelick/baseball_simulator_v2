@@ -19,6 +19,8 @@ import inspect
 import duckdb
 import numpy as np
 
+import pipeline.batch.profiles.pool_meta as pool_meta
+import pipeline.batch.profiles.sql as profile_sql
 from pipeline.batch import player_profile_computor as ppc
 from simulation.game_state import PITCH_OUTCOMES, Bases, GameState, PlayResult
 from simulation.loop.values import EVENT_HIT_BY_PITCH, advance_count
@@ -95,7 +97,7 @@ class TestTheBuilderMapping:
                 "INSERT INTO p VALUES (?, ?, 0, ?)",
                 [(i, code, events) for i, (code, events) in enumerate(rows)],
             )
-            got = con.execute(f"SELECT {ppc.SQL_OUTCOME_TYPE} FROM p ORDER BY i").fetchall()
+            got = con.execute(f"SELECT {profile_sql.SQL_OUTCOME_TYPE} FROM p ORDER BY i").fetchall()
         finally:
             con.close()
         return [r[0] for r in got]
@@ -127,4 +129,4 @@ class TestTheBuilderMapping:
         that forgets the version bump never lands. Bump this assertion with
         every pool-formula change. The current stamp, sim554, marks the steal
         opportunity pool's pitch class and pickoff rows (migration 0031)."""
-        assert "sim554" in ppc.POOL_BUILDER_VERSION
+        assert "sim554" in pool_meta.POOL_BUILDER_VERSION

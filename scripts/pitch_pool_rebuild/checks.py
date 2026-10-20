@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.batch.player_profile_computor import POOL_BUILDER_VERSION, STRIKE_THREE_FOUL_TYPES
 from pipeline.batch.pool_chain import (
     LABEL_CHECK_TOLERANCE,
     OUTCOMES,
@@ -16,6 +15,8 @@ from pipeline.batch.pool_chain import (
     pa_group_count,
     real_pa_rates,
 )
+from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
+from pipeline.statcast_events import STRIKE_THREE_FOUL_TYPES
 
 from .common import (
     ALL_SEASONS_EXPECTED_MOVES,

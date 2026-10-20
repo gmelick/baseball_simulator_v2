@@ -63,11 +63,8 @@ if str(_ROOT) not in sys.path:
 
 import duckdb  # noqa: E402
 
-from pipeline.batch.player_profile_computor import (  # noqa: E402
-    BASERUNNER_TAIL_COLUMNS,
-    LeagueAverageProfiles,
-    PlayerProfileComputor,
-)
+from pipeline.batch.player_profile_computor import LeagueAverageProfiles, PlayerProfileComputor
+from pipeline.batch.profiles.constants import BASERUNNER_TAIL_COLUMNS
 
 log = logging.getLogger("runner_profile_recompute")
 

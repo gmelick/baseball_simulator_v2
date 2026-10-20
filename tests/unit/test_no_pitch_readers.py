@@ -14,7 +14,7 @@ common, and pin one reader each:
   * the play-by-play (``simulation/snapshots.py``) skips the result and keeps
     its sequence contiguous; it also starts a new at-bat after a thrown pitch
     that ends the half (a two-out caught stealing on a ball);
-  * the replay builder (``api/routes/games.py`` ``_record_and_build``) keeps
+  * the replay builder (``api/routes/games.py`` ``_build_replay_artifacts``) keeps
     each per-pitch snapshot on its own pitch;
   * the linescore puts the pickoff's play in the half it ended, with no run
     and no hit;
@@ -364,7 +364,7 @@ class TestThePlayByPlay:
 
 
 # ---------------------------------------------------------------------------
-# The replay builder (api/routes/games.py _record_and_build)
+# The replay builder (api/routes/games.py _build_replay_artifacts)
 # ---------------------------------------------------------------------------
 
 
@@ -376,12 +376,10 @@ class TestTheReplayBuilder:
         from simulation.play_recorder import RecordedGame
         from simulation.snapshots import PitchContext
 
-        # The builder reads record_game, which adds the state before each
-        # step; one context per result, no-pitch results included.
+        # A recorded game carries the state before each step: one context per
+        # result, no-pitch results included.
         contexts = [PitchContext(inning=1, half="top", outs=0, batter_id=None) for _ in plays]
-        monkeypatch.setattr(
-            games_mod, "record_game", lambda **_kw: RecordedGame(game, plays, contexts)
-        )
+        recorded = RecordedGame(game, plays, contexts)
         seen: dict[str, int] = {}
         real_ls, real_dec = games_mod.linescore_from_plays, games_mod.decisions_from_plays
 
@@ -395,7 +393,7 @@ class TestTheReplayBuilder:
 
         monkeypatch.setattr(games_mod, "linescore_from_plays", ls)
         monkeypatch.setattr(games_mod, "decisions_from_plays", dec)
-        built = games_mod._record_and_build(factory_ref="unused:unused", base_seed=1, sim_kwargs={})
+        built = games_mod._build_replay_artifacts(recorded)
         return plays, seen, built
 
     def test_the_play_by_play_holds_thrown_pitches_only(self, monkeypatch):

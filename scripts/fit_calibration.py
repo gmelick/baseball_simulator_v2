@@ -67,10 +67,8 @@ if _REPO_ROOT not in sys.path:
 
 import numpy as np  # noqa: E402
 
-from similarity.similarity_calibration import (  # noqa: E402
-    CalibrationReport,
-    SimilarityCalibrator,
-)
+from similarity.calibration.report import CalibrationReport  # noqa: E402
+from similarity.similarity_calibration import SimilarityCalibrator  # noqa: E402
 
 log = logging.getLogger("fit_calibration")
 

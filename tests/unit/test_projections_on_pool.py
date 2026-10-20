@@ -289,13 +289,22 @@ def patch_resolver(monkeypatch):
 
 
 @pytest.fixture()
-def no_serial_replay(monkeypatch):
-    """Fail the test if a route still replays the games through the recorder."""
+def no_serial_replay():
+    """Fail the test if a route module can still replay games through the recorder.
 
-    def _boom(**_kwargs):
-        raise AssertionError("the projections must not replay games one by one")
+    The projections run on the worker pool (``BatchRunner.run_prop_set``). No
+    route module imports the in-process recorder, so none can replay a game
+    one by one in the API process.
+    """
+    import importlib
+    import pkgutil
 
-    monkeypatch.setattr(games_mod, "record_game", _boom)
+    import api.routes
+    from simulation import play_recorder
+
+    for info in pkgutil.iter_modules(api.routes.__path__):
+        mod = importlib.import_module(f"api.routes.{info.name}")
+        assert getattr(mod, "record_game", None) is not play_recorder.record_game, info.name
 
 
 class TestBoxscoreRoute:

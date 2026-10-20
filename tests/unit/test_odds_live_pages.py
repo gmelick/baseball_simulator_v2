@@ -27,8 +27,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import api.routes.betting_pricing as pricing
+import api.routes.betting_stored_odds as stored_odds
 import api.routes.games as games_mod
-from api.routes import betting as betting_routes
 from api.routes.betting import router as betting_router
 from api.schemas import LineMovementModel, LineQuoteModel
 from betting import line_movement as lm
@@ -285,7 +286,7 @@ class TestStoredRows:
             _stored_ml("bp:12", -150, 130),
             {"market_type": "f5_total", "book": "bp:12", "over_ml": -110},  # not a full-game market
         ]
-        by_market = betting_routes._stored_rows_by_market(rows)
+        by_market = stored_odds._stored_rows_by_market(rows)
         assert set(by_market) == {"moneyline"}
         # In the graded order: DraftKings (first on the list), then FanDuel.
         assert [r["book"] for r in by_market["moneyline"]] == ["bp:12", "bp:10"]
@@ -297,7 +298,7 @@ class TestStoredRows:
         monkeypatch.setitem(BOOK_KIND, 50, "sportsbook")
         rows = [_stored_ml("bp:77", -150, 130), _stored_ml("bp:50", -150, 130)]
         rows.append(_stored_ml("bp:24", -150, 130))
-        by_market = betting_routes._stored_rows_by_market(rows)
+        by_market = stored_odds._stored_rows_by_market(rows)
         assert [r["book"] for r in by_market["moneyline"]] == ["bp:24", "bp:50", "bp:77"]
 
     def test_a_book_the_vocabulary_does_not_list_is_never_offered(self):
@@ -311,9 +312,9 @@ class TestStoredRows:
             _stored_ml("bp:45", 300, -150),
             _stored_ml("bp:27", -150, 130),
         ]
-        by_market = betting_routes._stored_rows_by_market(rows)
+        by_market = stored_odds._stored_rows_by_market(rows)
         assert [r["book"] for r in by_market["moneyline"]] == ["bp:27"]
-        market = betting_routes._stored_market(by_market, "moneyline")
+        market = stored_odds._stored_market(by_market, "moneyline")
         assert market is not None and market.fair_book == "bp:27"
         assert {book for _price, book in market.offered.values()} == {"bp:27"}
 
@@ -326,16 +327,16 @@ class TestStoredRows:
             _stored_ml("bp:10", -2200, 1200, line_type="current", fetched_at=2),
             _stored_ml("bp:19", -150, 130, line_type="opening"),
         ]
-        assert betting_routes._stored_rows_by_market(rows) == {}
+        assert stored_odds._stored_rows_by_market(rows) == {}
         for status in ("Live", "Final", "Postponed", None, "preview"):
-            line_types = betting_routes._usable_line_types(status)
+            line_types = stored_odds._usable_line_types(status)
             assert line_types == ("closing",), status
-            assert betting_routes._stored_rows_by_market(rows, line_types) == {}, status
+            assert stored_odds._stored_rows_by_market(rows, line_types) == {}, status
         # Before first pitch the same current rows are the day's stored lines.
         # The opening row is never a usable price.
-        line_types = betting_routes._usable_line_types("Preview")
+        line_types = stored_odds._usable_line_types("Preview")
         assert line_types == ("closing", "current")
-        by_market = betting_routes._stored_rows_by_market(rows, line_types)
+        by_market = stored_odds._stored_rows_by_market(rows, line_types)
         assert [(r["book"], r["home_ml"]) for r in by_market["moneyline"]] == [
             ("bp:12", -2500),
             ("bp:10", -2200),
@@ -348,15 +349,15 @@ class TestStoredRows:
             _stored_ml("bp:10", -145, 135, line_type="current", fetched_at=3),
             _stored_ml("bp:10", -140, 130, line_type="current", fetched_at=2),
         ]
-        preview = betting_routes._usable_line_types("Preview")
-        latest = betting_routes._latest_pregame_rows(rows, preview)
+        preview = stored_odds._usable_line_types("Preview")
+        latest = stored_odds._latest_pregame_rows(rows, preview)
         assert sorted((r["book"], r["line_type"], r["home_ml"]) for r in latest) == [
             ("bp:10", "current", -145),
             ("bp:12", "closing", -150),
         ]
         # The pure step drops what the SQL would drop: a stub that passes the
         # current rows of a game not in Preview still gets none of them.
-        started = betting_routes._latest_pregame_rows(rows, ("closing",))
+        started = stored_odds._latest_pregame_rows(rows, ("closing",))
         assert [(r["book"], r["home_ml"]) for r in started] == [("bp:12", -150)]
 
     def test_a_later_current_row_does_not_displace_the_books_closing_row(self):
@@ -366,7 +367,7 @@ class TestStoredRows:
             _stored_ml("bp:12", -150, 130, line_type="closing", fetched_at=1),
             _stored_ml("bp:12", -2500, 1100, line_type="current", fetched_at=9),
         ]
-        by_market = betting_routes._stored_rows_by_market(rows)
+        by_market = stored_odds._stored_rows_by_market(rows)
         graded = by_market["moneyline"]
         assert [(r["home_ml"], r["away_ml"]) for r in graded] == [(-150, 130)]
 
@@ -380,12 +381,12 @@ class TestStoredRows:
             _stored_ml("bp:12", -150, 130, line_type="current", fetched_at=1),
             _stored_ml("bp:12", -160, 140, line_type="current", fetched_at=2),
         ]
-        assert betting_routes._stored_rows_by_market(series) == {}
+        assert stored_odds._stored_rows_by_market(series) == {}
         closing = _stored_ml("bp:12", -155, 135, line_type="closing", fetched_at=0)
         for status in ("Final", "Preview"):
-            line_types = betting_routes._usable_line_types(status)
-            by_market = betting_routes._stored_rows_by_market([*series, closing], line_types)
-            market = betting_routes._stored_market(by_market, "moneyline")
+            line_types = stored_odds._usable_line_types(status)
+            by_market = stored_odds._stored_rows_by_market([*series, closing], line_types)
+            market = stored_odds._stored_market(by_market, "moneyline")
             assert market is not None, status
             assert (market.graded["home_ml"], market.graded["away_ml"]) == (-155, 135), status
             assert market.offered[MarketSide.AWAY] == (135.0, "bp:12"), status
@@ -401,13 +402,13 @@ class TestStoredRows:
             def __getitem__(self, key):
                 return self._row[key]
 
-        assert betting_routes._status_of([{"status": "Preview"}]) == "Preview"
-        assert betting_routes._status_of([_Record({"status": "Live"})]) == "Live"
+        assert stored_odds._status_of([{"status": "Preview"}]) == "Preview"
+        assert stored_odds._status_of([_Record({"status": "Live"})]) == "Live"
         # No raw.games row, a row without the column, or a NULL: no status.
-        assert betting_routes._status_of([]) is None
-        assert betting_routes._status_of(None) is None
-        assert betting_routes._status_of([{"book": "pinnacle"}]) is None
-        assert betting_routes._status_of([{"status": None}]) is None
+        assert stored_odds._status_of([]) is None
+        assert stored_odds._status_of(None) is None
+        assert stored_odds._status_of([{"book": "pinnacle"}]) is None
+        assert stored_odds._status_of([{"status": None}]) is None
 
     def test_the_latest_closing_row_of_a_book_counts(self):
         rows = [
@@ -416,7 +417,7 @@ class TestStoredRows:
             _stored_ml("bp:12", -170, 150, fetched_at=2),
             _stored_ml("bp:10", -145, 135, fetched_at=None),
         ]
-        by_market = betting_routes._stored_rows_by_market(rows)
+        by_market = stored_odds._stored_rows_by_market(rows)
         assert [(r["book"], r["home_ml"]) for r in by_market["moneyline"]] == [
             ("bp:12", -160),
             ("bp:10", -145),
@@ -433,20 +434,20 @@ class TestStoredRows:
             def __getitem__(self, key):
                 return self._row[key]
 
-        by_market = betting_routes._stored_rows_by_market([_Record(_stored_ml("bp:12", -150, 130))])
+        by_market = stored_odds._stored_rows_by_market([_Record(_stored_ml("bp:12", -150, 130))])
         assert by_market["moneyline"][0]["home_ml"] == -150
 
 
 class TestStoredMarket:
     def test_the_graded_book_gives_the_row_and_the_best_price_is_offered(self):
-        by_market = betting_routes._stored_rows_by_market(
+        by_market = stored_odds._stored_rows_by_market(
             [
                 _stored_ml("bp:24", -155, 140),
                 _stored_ml("bp:10", -145, 135),
                 _stored_ml("bp:12", -150, 130),
             ]
         )
-        market = betting_routes._stored_market(by_market, "moneyline")
+        market = stored_odds._stored_market(by_market, "moneyline")
         assert market is not None
         assert market.fair_book == "bp:12"
         assert (market.graded["home_ml"], market.graded["away_ml"]) == (-150, 130)
@@ -456,14 +457,14 @@ class TestStoredMarket:
     def test_without_a_preferred_book_the_first_other_sportsbook_grades(self, monkeypatch):
         monkeypatch.setitem(BOOK_KIND, 77, "sportsbook")
         monkeypatch.setitem(BOOK_KIND, 50, "sportsbook")
-        by_market = betting_routes._stored_rows_by_market(
+        by_market = stored_odds._stored_rows_by_market(
             [_stored_ml("bp:77", -120, 100), _stored_ml("bp:50", -130, 110)]
         )
-        market = betting_routes._stored_market(by_market, "moneyline")
+        market = stored_odds._stored_market(by_market, "moneyline")
         assert market is not None and market.fair_book == "bp:50"
 
     def test_the_offered_price_is_at_the_graded_line_and_a_tie_keeps_the_list_order(self):
-        by_market = betting_routes._stored_rows_by_market(
+        by_market = stored_odds._stored_rows_by_market(
             [
                 _stored_total("bp:13", 1.5, -105, -125),  # ties FanDuel's over
                 _stored_total("bp:19", 2.5, 100, -120),  # another line: not the same bet
@@ -471,7 +472,7 @@ class TestStoredMarket:
                 _stored_total("bp:12", 1.5, -110, -110),
             ]
         )
-        market = betting_routes._stored_market(by_market, "total")
+        market = stored_odds._stored_market(by_market, "total")
         assert market is not None and market.fair_book == "bp:12"
         # FanDuel (10) sits before Caesars (13) on the list, so it takes the tie.
         assert market.offered[MarketSide.OVER] == (-105.0, "bp:10")
@@ -479,21 +480,21 @@ class TestStoredMarket:
         assert market.offered[MarketSide.UNDER] == (-110.0, "bp:12")
 
     def test_a_run_line_side_is_matched_on_its_own_spread(self):
-        by_market = betting_routes._stored_rows_by_market(
+        by_market = stored_odds._stored_rows_by_market(
             [
                 _stored_rl("bp:12", -1.5, 140, 1.5, -160),
                 _stored_rl("bp:10", -1.5, 150, -1.5, 170),  # home -1.5 is the same bet
                 _stored_rl("bp:19", -2.5, 260, 2.5, -320),
             ]
         )
-        market = betting_routes._stored_market(by_market, "runline")
+        market = stored_odds._stored_market(by_market, "runline")
         assert market is not None
         assert market.offered[MarketSide.HOME] == (150.0, "bp:10")
         assert market.offered[MarketSide.AWAY] == (-160.0, "bp:12")
 
     def test_no_row_no_market(self):
-        assert betting_routes._stored_market({}, "moneyline") is None
-        assert betting_routes._stored_market(None, "total") is None
+        assert stored_odds._stored_market({}, "moneyline") is None
+        assert stored_odds._stored_market(None, "total") is None
 
     def test_the_offered_price_moves_the_ev_and_not_the_edge(self):
         base = moneyline_edge_report(
@@ -501,30 +502,30 @@ class TestStoredMarket:
             TwoWayMarket(side=MarketSide.HOME, entry=OddsQuote(side=-150.0, other=130.0)),
             side=MarketSide.HOME,
         )
-        moved = betting_routes._at_offered_price(base, (-140.0, "bp:10"))
+        moved = pricing._at_offered_price(base, (-140.0, "bp:10"))
         assert moved.offered_american == -140.0
         assert moved.ev == pytest.approx(expected_value(0.55, -140.0))
         assert moved.market_fair_prob == base.market_fair_prob
         assert moved.edge == base.edge
-        assert betting_routes._at_offered_price(base, None) is base
+        assert pricing._at_offered_price(base, None) is base
 
     def test_the_reference_margin_is_the_graded_books_own(self):
-        by_market = betting_routes._stored_rows_by_market(
+        by_market = stored_odds._stored_rows_by_market(
             [
                 _stored_total("bp:12", 8.5, -110, -110),
                 _stored_total("bp:10", 8.5, -120, 100),
                 _stored_ml("bp:19", -150, 130),
             ]
         )
-        assert betting_routes._stored_reference_margin(by_market, "bp:12") == pytest.approx(
+        assert stored_odds._stored_reference_margin(by_market, "bp:12") == pytest.approx(
             (2 * _imp(-110), "total")
         )
         # BetMGM has no total: its moneyline.
-        assert betting_routes._stored_reference_margin(by_market, "bp:19") == pytest.approx(
+        assert stored_odds._stored_reference_margin(by_market, "bp:19") == pytest.approx(
             (_imp(-150) + _imp(130), "moneyline")
         )
         # A book with neither: the flat margin.
-        assert betting_routes._stored_reference_margin(by_market, "bp:13") == (1.05, "flat")
+        assert stored_odds._stored_reference_margin(by_market, "bp:13") == (1.05, "flat")
 
 
 # ===========================================================================
@@ -634,7 +635,7 @@ class TestStoredEdges:
             ["closing"],
         )
         # The status is read first, for the game alone.
-        assert pool.status_calls == [(betting_routes._SQL_GAME_STATUS, (745001,))]
+        assert pool.status_calls == [(stored_odds._SQL_GAME_STATUS, (745001,))]
         assert pool.calls.index(pool.status_calls[0]) < pool.calls.index(pool.odds_calls[0])
 
     def test_a_preview_game_asks_for_the_current_rows_too(self, make_client):

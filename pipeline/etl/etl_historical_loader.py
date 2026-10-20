@@ -97,9 +97,6 @@ from pipeline.etl.boxscore_ingest import (
     persist_sync,
 )
 from pipeline.etl.historical.base import LoaderBase
-from pipeline.etl.historical.game_values import (
-    _build_starting_lineup_rows as _build_starting_lineup_rows,  # re-export: removed in the integration pass
-)
 from pipeline.etl.historical.game_values import _manager_from_coaches, _parse_height
 from pipeline.etl.historical.reference_rows import ReferenceRowsMixin
 from pipeline.etl.historical.rows import (

@@ -101,7 +101,7 @@ for _p in (str(_ROOT), str(_ROOT / "scripts")):
 
 import numpy as np  # noqa: E402
 
-from pipeline.batch.engine_artifacts import (  # noqa: E402
+from pipeline.batch.artifacts.park_geometry import (
     PARK_N_SECTORS,
     PARK_SECTOR_DEG,
     PARK_SPRAY_MAX,

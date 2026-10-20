@@ -32,8 +32,8 @@ import duckdb
 import numpy as np
 import pytest
 
+from pipeline.batch.artifacts.battedball_pool import BB_CLASS
 from pipeline.batch.engine_artifacts import (
-    BB_CLASS,
     BattedBallPool,
     EngineArtifacts,
     HandPool,

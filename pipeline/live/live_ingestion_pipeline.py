@@ -61,18 +61,6 @@ from fastapi.routing import APIRouter
 from api.auth import authenticate_websocket
 from db.introspect import pg_column_exists_async
 from pipeline.live.ingestion.base import PipelineBase
-from pipeline.live.ingestion.closing_rows import (
-    closing_candidates as closing_candidates,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.closing_rows import (
-    closing_hash as closing_hash,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.closing_rows import (
-    promote_closing_game_rows as promote_closing_game_rows,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.closing_rows import (
-    promote_closing_prop_rows as promote_closing_prop_rows,  # re-export: removed in the integration pass
-)
 from pipeline.live.ingestion.constants import (
     _EASTERN,
     GAME_TYPES,
@@ -85,55 +73,19 @@ from pipeline.live.ingestion.constants import (
     SCHEDULE_POLL_S,
     SCHEDULE_URL,
 )
-from pipeline.live.ingestion.constants import (
-    PREGAME_NEAR_START_CADENCE_S as PREGAME_NEAR_START_CADENCE_S,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.constants import (
-    PREGAME_NEAR_START_WINDOW_S as PREGAME_NEAR_START_WINDOW_S,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.constants import (
-    PROP_FETCH_CADENCE_S as PROP_FETCH_CADENCE_S,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.constants import (
-    PROP_ROLE_BATTER as PROP_ROLE_BATTER,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.constants import (
-    PROP_ROLE_BOTH as PROP_ROLE_BOTH,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.constants import (
-    PROP_ROLE_PITCHER as PROP_ROLE_PITCHER,  # re-export: removed in the integration pass
-)
 from pipeline.live.ingestion.game_odds import GameOddsMixin
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 from pipeline.live.ingestion.mlb_websocket import (
     ConnectionManager,
     MLBGameWebSocket,
 )
-from pipeline.live.ingestion.mock_odds import (
-    MockOddsAPI as MockOddsAPI,  # re-export: removed in the integration pass
-)
 from pipeline.live.ingestion.odds_routes import odds_router
-from pipeline.live.ingestion.odds_rows import (
-    _GAME_ODDS_INSERT_SQL as _GAME_ODDS_INSERT_SQL,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.odds_rows import (
-    _GAME_ODDS_RESTAMP_SQL as _GAME_ODDS_RESTAMP_SQL,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.odds_rows import (
-    _PROP_ODDS_RESTAMP_SQL as _PROP_ODDS_RESTAMP_SQL,  # re-export: removed in the integration pass
-)
 from pipeline.live.ingestion.odds_rows import (
     _json_default,
     _jsonable_odds,
     _odds_facts_may_be_stale,
     _scheduled_start,
     pregame_odds_cadence_s,
-)
-from pipeline.live.ingestion.odds_rows import (
-    insert_game_odds_rows as insert_game_odds_rows,  # re-export: removed in the integration pass
-)
-from pipeline.live.ingestion.odds_rows import (
-    insert_prop_odds_rows as insert_prop_odds_rows,  # re-export: removed in the integration pass
 )
 from pipeline.live.ingestion.prop_odds import PropOddsMixin
 
@@ -144,9 +96,6 @@ from pipeline.live.ingestion.prop_odds import PropOddsMixin
 from pipeline.odds_provider import (
     OddsProvider,
     get_odds_provider,
-)
-from pipeline.odds_row_guard import (
-    CLOSING_STAMP_GRACE as CLOSING_STAMP_GRACE,  # re-export: removed in the integration pass
 )
 
 # The load guard. Every writer shows it each non-empty row before the

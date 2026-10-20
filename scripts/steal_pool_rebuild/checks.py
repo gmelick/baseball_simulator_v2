@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.batch.engine_artifacts import STEAL_PITCH_CLASSES
+from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASSES
 
 from .common import (
     DEAD_BALL_CLASSES,

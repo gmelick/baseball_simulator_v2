@@ -62,7 +62,7 @@ def _computor_source() -> str:
 
 
 def _column_order():
-    from pipeline.batch.player_profile_computor import PHYSICAL_COLUMN_ORDER
+    from pipeline.batch.profiles.sql import PHYSICAL_COLUMN_ORDER
 
     return PHYSICAL_COLUMN_ORDER
 
@@ -117,7 +117,7 @@ def test_the_stance_side_crosses_over_to_the_pitcher_hand() -> None:
     """Facing a LEFT-handed pitcher a switch hitter bats RIGHT, so the ``_vs_l``
     column must read Savant's ``R`` stance row. Getting this backwards is
     invisible in the data — every column is populated, just mirrored."""
-    from pipeline.batch.player_profile_computor import _sql_stance_select
+    from pipeline.batch.profiles.sql import _sql_stance_select
 
     sql = _sql_stance_select()
     checked = 0
@@ -136,7 +136,7 @@ def test_the_swing_split_does_not_cross_over() -> None:
     """The swing sources are already filtered by the PITCHER's hand, so ``vs_l``
     maps straight to ``vs_l``. Only the stance board needs the crossover, and a
     crossover here would be invisible: every column populated, just mirrored."""
-    from pipeline.batch.player_profile_computor import _sql_swing_select
+    from pipeline.batch.profiles.sql import _sql_swing_select
 
     checked = 0
     for line in _sql_swing_select().splitlines():

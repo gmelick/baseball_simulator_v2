@@ -35,6 +35,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import api.routes.betting_pricing as pricing
+import api.routes.betting_stored_odds as stored_odds
 import api.routes.games as games_mod
 from api.routes import betting as betting_routes
 from api.routes.betting import router as betting_router
@@ -50,7 +52,7 @@ from betting.clv_engine import (
     three_way_edge_report,
     total_over_under_edge_report,
 )
-from pipeline.live.live_ingestion_pipeline import MockOddsAPI
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_NAMES, GAME_MARKET_TYPES
 from simulation.game_market_distributions import SegmentRuns, side_probabilities
 from simulation.game_state import GameState
@@ -243,9 +245,9 @@ def test_edges_default_prices_fifteen_markets_from_the_mock(client_for):
     body = resp.json()
     assert body["markets"] == list(GAME_MARKET_TYPES)
     assert body["odds_source"] == dict.fromkeys(GAME_MARKET_TYPES, "mock")
-    labels = [betting_routes._report_label(m) for m in GAME_MARKET_TYPES]
+    labels = [pricing._report_label(m) for m in GAME_MARKET_TYPES]
     assert body["market_names"] == {
-        betting_routes._report_label(m): GAME_MARKET_NAMES[m] for m in GAME_MARKET_TYPES
+        pricing._report_label(m): GAME_MARKET_NAMES[m] for m in GAME_MARKET_TYPES
     }
     assert len(body["market_names"]) == 15
     counts: dict[str, int] = {}
@@ -254,7 +256,7 @@ def test_edges_default_prices_fifteen_markets_from_the_mock(client_for):
     assert set(counts) == set(labels)
     for market in GAME_MARKET_TYPES:
         expected = 3 if GAME_MARKET_KIND[market] == "three_way" else 2
-        assert counts[betting_routes._report_label(market)] == expected, market
+        assert counts[pricing._report_label(market)] == expected, market
     # The three full-game labels stay; the run line keeps its source key.
     assert {"moneyline", "total", "run_line"} <= set(counts)
     assert "runline" in body["odds_source"] and "runline" not in counts
@@ -290,7 +292,7 @@ def test_the_default_request_prices_every_side_on_many_games(client_for):
             counts[e["label"]] = counts.get(e["label"], 0) + 1
         for market in GAME_MARKET_TYPES:
             expected = 3 if GAME_MARKET_KIND[market] == "three_way" else 2
-            label = betting_routes._report_label(market)
+            label = pricing._report_label(market)
             assert counts.get(label) == expected, (game_pk, market)
 
 
@@ -403,7 +405,7 @@ def test_three_way_row_without_a_tie_is_not_usable(client_for):
 
 
 def test_the_usability_rule_reads_the_kind():
-    by_market = betting_routes._stored_rows_by_market(
+    by_market = stored_odds._stored_rows_by_market(
         [
             _row("f1_moneyline", "bp:12", home_ml=180, away_ml=200),
             _row("first_to_score", "bp:12", home_ml=-110, away_ml=-110),
@@ -582,12 +584,12 @@ def test_the_twelve_do_not_move_the_three(client_for):
 
 
 def test_the_stored_read_of_a_full_game_request_is_unchanged():
-    assert betting_routes._stored_read_markets(("moneyline",)) == [
+    assert stored_odds._stored_read_markets(("moneyline",)) == [
         "moneyline",
         "runline",
         "total",
     ]
-    assert betting_routes._stored_read_markets(GAME_MARKET_TYPES) == list(GAME_MARKET_TYPES)
+    assert stored_odds._stored_read_markets(GAME_MARKET_TYPES) == list(GAME_MARKET_TYPES)
 
 
 def test_a_bad_market_is_still_a_422(client_for):

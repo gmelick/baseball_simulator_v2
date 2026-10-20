@@ -42,10 +42,8 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    LiveIngestionPipeline,
-    MockOddsAPI,
-)
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 from pipeline.odds_provider import ODDS_PROVIDER_ENV, get_odds_provider  # noqa: E402
 
 # The two environment names come from their readers. A rename in a reader

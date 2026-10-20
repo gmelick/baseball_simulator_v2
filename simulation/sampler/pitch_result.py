@@ -11,10 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import (
-    recv_block_cell,
-    recv_zone_group,
-)
+from pipeline.batch.artifacts.receiving import recv_block_cell, recv_zone_group
 from simulation.sampler.base import BaseMixin
 from simulation.sampler.kernels import (
     _PITCH_FEATURE_WEIGHTS,

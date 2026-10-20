@@ -258,7 +258,7 @@ def _feed_lineup_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     position and the starting pitcher. A game whose box lists no starter yet (a
     preview game without posted lineups) gives no rows.
     """
-    from pipeline.etl.etl_historical_loader import _build_starting_lineup_rows
+    from pipeline.etl.historical.game_values import _build_starting_lineup_rows
 
     game_pk = int(((payload.get("gameData") or {}).get("game") or {}).get("pk") or 0)
     season = int(((payload.get("gameData") or {}).get("game") or {}).get("season") or 0)

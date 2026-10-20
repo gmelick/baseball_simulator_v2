@@ -28,7 +28,7 @@ import unittest
 
 import numpy as np
 
-from pipeline.batch.player_profile_computor import recency_weight
+from pipeline.batch.profiles.pool_meta import recency_weight
 from similarity.backtesting.recency_walk_forward import (
     recency_weighted_prediction,
     walk_forward_folds,

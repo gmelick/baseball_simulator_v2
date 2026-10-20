@@ -32,24 +32,12 @@ import numpy as np
 
 from pipeline.batch.artifacts.actor_embeddings import build_actor_embeddings, load_actor_embeddings
 from pipeline.batch.artifacts.advancement_pool import (
-    _ADV_KEYS as _ADV_KEYS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.advancement_pool import (
     build_advancement_pool_artifact,
     load_advancement_pools,
 )
 from pipeline.batch.artifacts.battedball_pool import (
-    BB_CLASS as BB_CLASS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.battedball_pool import (
     build_battedball_pool_artifact,
     load_battedball_pools,
-)
-from pipeline.batch.artifacts.common import (
-    _GEOM_COLS as _GEOM_COLS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.common import (
-    _SIT_COLS as _SIT_COLS,  # re-export: removed in the integration pass
 )
 from pipeline.batch.artifacts.common import (
     DEFAULT_DUCKDB_PATH,
@@ -57,50 +45,8 @@ from pipeline.batch.artifacts.common import (
     _savez_plain,
     last_n_seasons,
 )
-from pipeline.batch.artifacts.common import (
-    RECENCY_FLOOR_SEASONS as RECENCY_FLOOR_SEASONS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.common import (
-    join_rows as join_rows,  # re-export: removed in the integration pass
-)
 from pipeline.batch.artifacts.manager_pool import build_pitching_change_pool, load_change_pool
-from pipeline.batch.artifacts.park_geometry import (
-    PARK_N_SECTORS as PARK_N_SECTORS,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    PARK_SECTOR_DEG as PARK_SECTOR_DEG,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    PARK_SPRAY_MAX as PARK_SPRAY_MAX,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    PARK_SPRAY_MIN as PARK_SPRAY_MIN,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    build_geometry_document as build_geometry_document,  # re-export: removed in the integration pass
-)
 from pipeline.batch.artifacts.park_geometry import build_park_geometry, load_park_geometry
-from pipeline.batch.artifacts.park_geometry import (
-    carry_predict as carry_predict,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    detect_moves as detect_moves,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    group_for_season as group_for_season,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    park_sector as park_sector,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    parse_group_key as parse_group_key,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    sector_line as sector_line,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.park_geometry import (
-    sector_of as sector_of,  # re-export: removed in the integration pass
-)
 from pipeline.batch.artifacts.pitch_pool import build_pitch_pool_artifact, load_pitch_pools
 from pipeline.batch.artifacts.pitcher_sim import build_pitcher_sim_matrix, load_pitcher_sim
 from pipeline.batch.artifacts.pools import (
@@ -116,28 +62,7 @@ from pipeline.batch.artifacts.pools import (
     HandPool,
     StealPool,
 )
-from pipeline.batch.artifacts.pools import (
-    STEAL_PITCH_CLASS_CODE as STEAL_PITCH_CLASS_CODE,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.pools import (
-    STEAL_PITCH_CLASSES as STEAL_PITCH_CLASSES,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.pools import (
-    steal_pitch_class_codes as steal_pitch_class_codes,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.receiving import (
-    RECV_BLOCK_PRIOR as RECV_BLOCK_PRIOR,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.receiving import (
-    RECV_FRAME_PRIOR as RECV_FRAME_PRIOR,  # re-export: removed in the integration pass
-)
 from pipeline.batch.artifacts.receiving import build_receiving_profiles, load_receiving
-from pipeline.batch.artifacts.receiving import (
-    recv_block_cell as recv_block_cell,  # re-export: removed in the integration pass
-)
-from pipeline.batch.artifacts.receiving import (
-    recv_zone_group as recv_zone_group,  # re-export: removed in the integration pass
-)
 from pipeline.batch.artifacts.reference import (
     IBB_RATES_FILE,
     VENUE_RUN_FACTORS_FILE,

@@ -40,17 +40,11 @@ from simulation.game_state import (
     Team,
 )
 from simulation.loop.boxscore import BoxScore, GameSimResult
-from simulation.loop.boxscore import (
-    PlayerStatLine as PlayerStatLine,  # re-export: removed in the integration pass
-)
 from simulation.loop.credit import CreditMixin
 from simulation.loop.in_play import InPlayMixin
 from simulation.loop.manager import ManagerMixin
 from simulation.loop.running_game import RunningGameMixin
 from simulation.loop.terminals import TerminalsMixin
-from simulation.loop.values import (
-    _DOUBLE_PLAY_EVENTS as _DOUBLE_PLAY_EVENTS,  # re-export: removed in the integration pass
-)
 from simulation.loop.values import (
     _MAX_INNINGS,
     EVENT_HIT_BY_PITCH,

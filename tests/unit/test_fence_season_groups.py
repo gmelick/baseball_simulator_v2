@@ -26,7 +26,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import BB_CLASS, BattedBallPool, EngineArtifacts
+from pipeline.batch.artifacts.battedball_pool import BB_CLASS
+from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts
 from simulation.full_pool_sampler import FullPoolSampler
 
 _SEASON = 2024

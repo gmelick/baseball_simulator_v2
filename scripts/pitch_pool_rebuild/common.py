@@ -12,8 +12,8 @@ from typing import Any
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import _ADV_KEYS
-from pipeline.batch.player_profile_computor import SQL_OUTCOME_TYPE
+from pipeline.batch.artifacts.advancement_pool import _ADV_KEYS
+from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE
 
 #: The repository root (this file is scripts/<package>/<module>.py).
 _ROOT = Path(__file__).resolve().parents[2]

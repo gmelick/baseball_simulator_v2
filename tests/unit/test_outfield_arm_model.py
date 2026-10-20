@@ -46,6 +46,7 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
+import pipeline.batch.profiles.constants as profile_constants
 from similarity.engines.fielder_similarity import (  # noqa: E402
     ALL_POSITIONS,
     ARM_ALPHA_PRIOR_CHANCES,
@@ -180,9 +181,8 @@ class TestArmFeatureList:
         assert ARM_ALPHA_PRIOR_CHANCES == 50
 
     def test_the_engine_and_the_computor_share_the_arm_prior(self) -> None:
-        from pipeline.batch import player_profile_computor as computor
 
-        assert computor.ARM_ALPHA_PRIOR_CHANCES == ARM_ALPHA_PRIOR_CHANCES
+        assert profile_constants.ARM_ALPHA_PRIOR_CHANCES == ARM_ALPHA_PRIOR_CHANCES
 
     def test_the_arm_scorer_carries_three_normalised_weights(self) -> None:
         engine = FielderSimilarityEngine(duckdb_path=":memory:")

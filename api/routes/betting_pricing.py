@@ -144,7 +144,7 @@ def _mock_odds(game_pk: int, market_type: str) -> dict[str, Any]:
     seeds its draw on ``game_pk``, so it is deterministic and needs no live
     feed. A market with no injected and no stored price falls back to it.
     """
-    from pipeline.live.live_ingestion_pipeline import MockOddsAPI
+    from pipeline.live.ingestion.mock_odds import MockOddsAPI
 
     return MockOddsAPI.get_odds(int(game_pk), market_type=market_type)
 

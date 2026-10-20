@@ -44,12 +44,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    STEAL_PITCH_CLASS_CODE,
-    STEAL_PITCH_CLASSES,
-    EngineArtifacts,
-    StealPool,
-)
+from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASS_CODE, STEAL_PITCH_CLASSES
+from pipeline.batch.engine_artifacts import EngineArtifacts, StealPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import NO_PITCH, PITCH_OUTCOMES, Bases, GameState, Half
 from simulation.loop.values import STEAL_CAUGHT, STEAL_SAFE, StealResolution

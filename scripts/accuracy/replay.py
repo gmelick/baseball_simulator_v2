@@ -124,10 +124,10 @@ def _replay_game(state, n_iter: int, base_seed: int | None) -> tuple[list, list]
     carries ``UNRESOLVED_PARK_FACTOR``, and ``sim_kwargs_from_state`` raises on it
     instead of replaying park-blind.
     """
-    from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
     from simulation.linescore import linescore_from_plays
     from simulation.play_recorder import record_game_plays
+    from simulation.sim_kwargs import sim_kwargs_from_state as _sim_kwargs_from_state
 
     sim_kwargs = _sim_kwargs_from_state(state)
     results = []
