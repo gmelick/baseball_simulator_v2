@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from simulation.constants import FIELD_POSITION_NAMES
 from simulation.game_state import (
     OUTS_PER_INNING,
     Bases,
@@ -19,18 +20,18 @@ from simulation.game_state import (
     Team,
 )
 from simulation.loop.base import LoopMixin
-from simulation.loop.values import _POS_NUM_TO_STR, FieldingSignal, _venue_of
+from simulation.loop.values import FieldingSignal, _venue_of
 
 
 class InPlayMixin(LoopMixin):
     """The state machine's in-play methods."""
 
     def _full_pool_fielding(self, state: GameState) -> FieldingSignal | None:
-        """SIM-425/511: draw a batted ball from the full bat_hand batted-ball
-        pool (Batter + Situation weighting, hard-filtered to the live base-out
-        cell) -> a FieldingSignal carrying the drawn row's whole transition.
-        None when no full-pool sampler / batted-ball pool is wired (the
-        count-machine-only mode then leaves the in-play pitch unresolved)."""
+        """Draw a batted ball from the batter hand's batted-ball pool,
+        hard-filtered to the live base-out cell -> a :class:`FieldingSignal`
+        carrying the drawn row's whole transition. None when no sampler or
+        batted-ball pool is wired: the count machine then leaves the in-play
+        pitch unresolved."""
         fp = self.full_pool_sampler
         if fp is None or not fp.has_battedball():
             return None
@@ -43,34 +44,26 @@ class InPlayMixin(LoopMixin):
             [state.balls, state.strikes, state.outs, state.runners_state, state.inning, sd],
             dtype=np.float32,
         )
-        # SIM-413: pass the live pitcher hand so the batted-ball draw is softly
-        # conditioned on the platoon matchup (no-op when the flag is off or the pool
-        # / pitcher hand is unknown).
+        # The live pitcher's hand, for the platoon weight (``SIM_BB_PLATOON``).
         pthrows = state.throw_hand if self._bb_platoon else None
-        # SIM-491: pass the live batting side for the home-field draw weight.
-        # A no-op unless the sampler's home_off_weight is set below 1.0
-        # (SIM_HOME_OFF_WEIGHT) AND the pool carries bat_home (migration 0019).
-        # SIM-491 part 2 (SIM-411): pass the live park run factor for the park
-        # kernel. A no-op unless the sampler's park_sigma is set above 0
-        # (SIM_PARK_KERNEL_SIGMA) AND the factory loaded a venue-factor map.
-        # SIM-523: pass the FIELDING team's defense map for the fielder factor
-        # (the per-position score matrices). A no-op on a bundle without them.
+        # The FIELDING team's defense map, for the fielder factor. The batting
+        # side and the park run factor go to the call below; the sampler reads
+        # each only when its weight is on.
         defense = state.home_defense if state.defense == Team.HOME else state.away_defense
-        # SIM-518 (SIM-472): the DRAWN pitch's geometry, so the batted ball can
-        # agree with the pitch that produced it. Passed only when the kernel is
-        # on (SIM_BB_PITCH_SIGMA > 0) — off, the call is unchanged.
+        # The DRAWN pitch's geometry, so the batted ball agrees with the pitch
+        # that produced it. Passed only when the kernel is on
+        # (``SIM_BB_PITCH_SIGMA`` > 0); off, the call is unchanged.
         bb_extra: dict[str, object] = {}
         if float(getattr(fp, "bb_pitch_sigma", 0.0)) > 0.0:
             pg = fp.last_pitch_geom()
             if pg is not None:
                 bb_extra["pitch_geom"] = pg
-        # SIM-523 part B: the batted ball BORN in the pitch-result draw (the
-        # result row's own, through the artifact's pitch-id join). Passed only
-        # when its kernel is on (SIM_BB_BORN_SIGMA > 0) — off, the call is
-        # unchanged.
+        # The batted ball BORN in the pitch-result draw (the result row's own,
+        # through the artifact's pitch-id join). Passed only when a reader is
+        # on: the born kernel, the class filter, the wall-zone rule or the
+        # fence stage.
         if (
             float(getattr(fp, "bb_born_sigma", 0.0)) > 0.0
-            # SIM-523 part C: the class filter and the wall-zone rule read it too.
             or bool(getattr(fp, "bb_class_filter", False))
             or bool(getattr(fp, "park_wall_zone_only", False))
             or bool(getattr(fp, "fence_stage", False))
@@ -79,8 +72,8 @@ class InPlayMixin(LoopMixin):
             born = reader() if reader is not None else None
             if born is not None:
                 bb_extra["born_bb"] = born
-        # SIM-523 part C4: the live park for the fence stage (``state.park``
-        # holds the venue id; passed only when the stage is on).
+        # The live park for the fence stage (``state.park`` holds the venue
+        # id; passed only when the stage is on).
         if bool(getattr(fp, "fence_stage", False)):
             bb_extra["venue_id"] = _venue_of(state)
         fp.battedball_new_pa(
@@ -95,12 +88,10 @@ class InPlayMixin(LoopMixin):
             **bb_extra,
         )
         ev, rh, _ro, la = fp.battedball_draw()
-        # --- SIM-511: the transition path -----------------------------------
-        # The draw was HARD-filtered to the live base-out cell and the drawn
-        # row carries its whole transition: the row IS the play (event, outs,
-        # WHO is out, all movement). SIM-486 deleted the legacy soft-draw
-        # resolution, so a bundle without transition columns is a data
-        # defect, not a fallback.
+        # The draw was hard-filtered to the live base-out cell and the drawn
+        # row carries its whole transition: the row IS the play (the event, the
+        # outs, WHO is out, every movement). A bundle without the transition
+        # columns is a data defect; there is no other in-play path.
         tr = fp.last_transition()
         if tr is None:
             raise RuntimeError(
@@ -125,18 +116,18 @@ class InPlayMixin(LoopMixin):
     def _live_fielder_at_drawn_position(
         self, state: GameState, fp
     ) -> tuple[int | None, str | None]:
-        """SIM-511/512: the LIVE defender at the drawn pool row's position.
+        """The LIVE defender at the drawn pool row's position.
 
         The pool row says WHERE the ball went; the live defense map says WHO
-        fields it in this game. Returns ``(fielder_id, position_name)`` —
-        the attribution for the play record and the arm the SIM-512
-        advancement draw conditions on. ``(None, None)`` when the bundle or
-        the defense map lacks the data (the draws then skip the arm factor).
+        fields it in this game. Returns ``(fielder_id, position_name)``: the
+        attribution for the play record and the arm the advancement draws
+        condition on. ``(None, None)`` when the bundle or the defense map lacks
+        the data (the draws then skip the arm factor).
         """
         f = fp.last_battedball_fielder()
         if f is None:
             return None, None
-        pos_str = _POS_NUM_TO_STR.get(int(f[0]))
+        pos_str = FIELD_POSITION_NAMES.get(int(f[0]))
         if pos_str is None:
             return None, None
         defense = state.home_defense if state.defense == Team.HOME else state.away_defense
@@ -146,10 +137,9 @@ class InPlayMixin(LoopMixin):
     @staticmethod
     def _normalized_dests(tr: dict, hit: int) -> dict[int, int]:
         """The drawn row's destinations with the five DISCRETIONARY movements
-        clamped to station-to-station (design decision 1 — the double-count
-        guard). The SIM-512 advancement draws are the sole authority on those
-        extra bases; the row's own sends are the DATA for the opportunity
-        pools, never applied twice.
+        clamped to station-to-station, so no extra base counts twice. The
+        advancement draws are the sole authority on those extra bases; the
+        row's own sends are the data for the opportunity pools.
 
         Keys 1/2/3 = the pre-pitch runner on that base; key 0 = the batter.
         Everything OUTSIDE the five scenarios is row truth at real data
@@ -188,15 +178,12 @@ class InPlayMixin(LoopMixin):
         """Seat a body on ``want``, else the nearest open bag — downward first
         (can't-pass), then upward — else return 4: the body is forced home.
 
-        A body is NEVER overwritten or dropped. The first lane run of the
-        transition draw crashed the SIM-500 conservation guard here: a rare
-        row whose normalized destinations collide cascaded a trailing runner
-        down to first base, and the old fallback let the batter OVERWRITE
-        him — one body vanished (before=2 + batter_reached=1, after=2 + 0 +
-        0). An impossible normalized row now degrades to a forced-advance
-        chain instead: every body keeps a bag or scores, so the conservation
-        identity always balances. The shape is ~1-in-100k plate appearances;
-        the upward/score branches are that tail, never the common path.
+        A body is NEVER overwritten or dropped. A rare row whose normalized
+        destinations collide would otherwise lose a runner and break the
+        runner-conservation check (``Bases.assert_transition``). Such a row
+        degrades to a forced-advance chain: every body keeps a bag or scores.
+        The shape is about one plate appearance in 100,000; the upward and
+        scoring branches are that tail, never the common path.
         """
         for b in (want, want - 1, want - 2, want + 1, want + 2):
             if 1 <= b <= 3 and seats[b] is None:
@@ -212,27 +199,22 @@ class InPlayMixin(LoopMixin):
         pre_outs: int,
         pre_bases: Bases,
     ) -> None:
-        """SIM-511/512: the drawn transition row IS the play.
+        """Apply the drawn transition row: the row IS the play.
 
         The row was hard-filtered to the live base-out cell, so its per-base
-        destinations apply 1:1 to the live runners: the event, the outs, WHO
-        is out, and all forced/automatic movement come from the row. The five
-        discretionary movements were normalized to station-to-station
-        (:meth:`_normalized_dests`); the SIM-512 advancement draws below are
-        the sole authority on those extra bases.
-
-        This is the ONLY in-play path (SIM-486 deleted the phantom-DP guard,
-        the ``outs = 0 if rh else 1`` inference, the uniform runner push, the
-        hand-set extra-advance and tag-up constants, and the SIM-349 sac-fly
-        nudge — a tag draw from 3B produces sacrifice flies naturally).
-        ``runners_retired`` is REAL here — the SIM-494 out-count-versus-bodies
-        identity is checked at the commit by ``Bases.assert_transition``.
+        destinations apply one to one to the live runners: the event, the
+        outs, WHO is out, and every forced or automatic movement come from the
+        row. The five discretionary movements are normalized to
+        station-to-station (:meth:`_normalized_dests`); the advancement draws
+        below decide those extra bases, and a tag from third scores sacrifice
+        flies. ``runners_retired`` is a real body count: the commit checks the
+        out count against the bodies (``Bases.assert_transition``).
         """
         tr = sig.transition or {}
         hit = int(sig.result_hits)
         event_label = sig.event
-        # A drawn sac-fly row's score was normalized away; the S4 tag draw
-        # re-decides it and relabels below.
+        # A drawn sac-fly row's score was normalized away; the tag draw from
+        # third (scenario 4) re-decides it and relabels the play.
         if event_label in ("sac_fly", "sacrifice_fly"):
             event_label = "field_out"
         ndest = self._normalized_dests(tr, hit)
@@ -280,7 +262,7 @@ class InPlayMixin(LoopMixin):
                     advances[rid] = placed
         state.bases = Bases(first=seats[1], second=seats[2], third=seats[3])
         self._check_bases(state.bases)
-        # --- 2. the five-scenario advancement draws (SIM-512) --------------
+        # --- 2. the five-scenario advancement draws ------------------------
         outs_now = int(pre_outs) + runners_retired + plate_out
         adv_runs = adv_retired = 0
         if outs_now < OUTS_PER_INNING:
@@ -334,7 +316,7 @@ class InPlayMixin(LoopMixin):
         advances: dict[int, int],
         event_label: str,
     ) -> tuple[int, int, str]:
-        """SIM-512: the per-runner attempt→outcome draws for the five
+        """The per-runner attempt and outcome draws for the five
         discretionary scenarios. Returns ``(runs, retired, event_label)`` and
         mutates ``state.bases`` + ``advances`` in place.
 
@@ -345,7 +327,7 @@ class InPlayMixin(LoopMixin):
         timing is free: runs banked by earlier (lead) resolutions stand when
         a trailing tag-out ends the inning, and no draw fires once the third
         out is recorded. A tag from 3B that scores on a caught ball relabels
-        the play ``sacrifice_fly`` post-hoc (AB/RBI per SIM-312).
+        the play ``sacrifice_fly`` after the fact (no at-bat, an RBI).
         """
         fp = self.full_pool_sampler
         if fp is None or not fp.has_advancement():
@@ -439,8 +421,8 @@ class InPlayMixin(LoopMixin):
             if r3 is not None and seats[3] == r3 and outs < OUTS_PER_INNING:
                 went = resolve(r3, 3, 4, None, draw(4, 3, 4, r3))
                 if went and advances.get(r3) == 0:
-                    # The tag from 3B scored on a caught ball: the play IS a
-                    # sacrifice fly (no AB, RBI credited — SIM-312 vocab).
+                    # The tag from third scored on a caught ball: the play IS
+                    # a sacrifice fly (no at-bat, an RBI).
                     event_label = "sacrifice_fly"
                 lead_declined = not went
             r2 = pre_bases.second
@@ -466,23 +448,23 @@ class InPlayMixin(LoopMixin):
         return runs, retired, event_label
 
     def _resolve_in_play(self, state: GameState, result: PlayResult) -> None:
-        """Resolve an in-play PA: the batted-ball transition draw (step 5/6) ->
-        the advancement draws (step 7) -> ONE ``resolve_runs`` commit (§8).
+        """Resolve an in-play plate appearance: the fielding draw, then the
+        advancement draws, then ONE commit through the run ledger.
 
-        The drawn row IS the play (SIM-511): :meth:`_full_pool_fielding` draws
-        it from the live base-out cell and :meth:`_resolve_in_play_transition`
-        applies its destinations to the live runners, runs the SIM-512
-        advancement draws for the discretionary extra bases, and commits.
+        The drawn row IS the play: :meth:`_full_pool_fielding` draws it from
+        the live base-out cell, and :meth:`_resolve_in_play_transition` applies
+        its destinations to the live runners, runs the advancement draws for
+        the discretionary extra bases and commits.
 
         In count-machine-only mode (no sampler, or a bundle with no batted-ball
         pool) the in-play outcome is left as an unresolved terminal
         (``event=None``) so the count machine can still be driven alone.
         """
         result.pa_terminal = True
-        # SIM-499: measure the base-out state HERE, at the top, above everything.
+        # Measure the base-out state HERE, at the top, above everything:
         # _resolve_in_play_transition rebuilds the whole base state, and the
-        # ledger needs the state as it was before it. Placing this snapshot
-        # below the mutator is a trap that has been walked into once already.
+        # ledger needs the state as it was before it. A snapshot below the
+        # mutator reads the after-state as the before-state (SIM-499).
         pre_outs = int(state.outs)
         pre_bases = self._snapshot_bases(state)
         sig = self._full_pool_fielding(state)

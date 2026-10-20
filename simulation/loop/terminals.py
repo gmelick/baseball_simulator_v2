@@ -20,34 +20,28 @@ class TerminalsMixin(LoopMixin):
     """The state machine's walk and strikeout methods."""
 
     def _resolve_walk(self, state: GameState, result: PlayResult, event: str = EVENT_WALK) -> None:
-        """Resolve a ball-4 walk (§5.1 / §7): force the runners + score any
-        forced run, routing the run/base-out delta through ``resolve_runs``.
+        """Resolve ball four: force the runners and score any forced run,
+        through the run ledger.
 
-        SIM-509: a HIT BY PITCH awards 1B with the same force mechanics, so it
-        resolves here too — pass ``event=EVENT_HIT_BY_PITCH`` and the play
-        carries its own canonical event (never counted as a BB).
+        A hit by pitch awards first base with the same force mechanics, so it
+        resolves here too: pass ``event=EVENT_HIT_BY_PITCH`` and the play
+        carries its own canonical event (never counted as a walk).
 
-        A walk forces the batter to 1B and pushes each runner ahead only when the
-        bag behind him is occupied (a true force).  The number of forced runs is
-        computed from the base state, then handed to :meth:`_commit_run_delta`.
-
-        SIM-414: each forced advance is also recorded in
-        ``result.baserunner_advances`` so the per-runner R credit in
-        :meth:`_accumulate_pa` fires for a walk-forced run (previously a
-        documented under-count that made the boxscore disagree with the
-        linescore once shown together).
+        A walk puts the batter on first and pushes each runner ahead only when
+        the bag behind him is occupied (a true force). Each forced advance is
+        recorded in ``result.baserunner_advances``, so the per-runner run
+        credit in :meth:`_accumulate_pa` fires for a run the walk forces home.
         """
         result.event = event
         result.pa_terminal = True
         b = state.bases
-        # SIM-499: measure the base-out state BEFORE the force pushes anyone.
-        # ``b`` is mutated in place below, so the ledger needs a copy, not a
-        # reference — the reference is what made the old ledger read the
-        # post-walk state and call it the pre-walk state.
+        # Measure the base-out state BEFORE the force pushes anyone. ``b`` is
+        # changed in place below, so the ledger needs a copy, not a reference
+        # (SIM-499).
         pre_outs = int(state.outs)
         pre_bases = self._snapshot_bases(state)
-        # Capture pre-walk runner identities before the base mutation overwrites
-        # them — the advances dict is keyed on the runner who moved, not the bag.
+        # Capture the runners before the push overwrites them: the advances
+        # dict is keyed on the runner who moved, not the bag.
         rid_1 = b.first
         rid_2 = b.second
         rid_3 = b.third
@@ -65,29 +59,17 @@ class TerminalsMixin(LoopMixin):
             # push 1B -> 2B
             b.second = rid_1
             result.baserunner_advances[int(rid_1)] = 2
-        # Batter to 1B.
-        #
-        # SIM-500: assign UNCONDITIONALLY. The old form was
-        #     b.first = state.batter_id if state.batter_id is not None else b.first
-        # which kept the OLD occupant of 1B whenever no batter was set — the
-        # count-machine path, which runs with no lineups. But the push above has
-        # already moved that same runner to 2B, so the fallback left ONE runner id
-        # standing on BOTH bags: a physically impossible state that then fed the
-        # steal, situation and run-value logic. The SIM-500 guard caught it on its
-        # first run ("runner 105 stands on both 1B and 2B").
-        #
-        # With no batter, 1B is simply vacant: the runner advanced and nobody
-        # replaced him. That under-counts the walk by one baserunner on a path that
-        # has no batter to count, which is the only self-consistent reading. Every
-        # path that HAS a batter is unchanged.
+        # Batter to 1B, unconditionally. With no batter set (the count-machine
+        # path, which runs with no lineups) first base is simply vacant: the
+        # push above already moved its runner to second, and keeping him on
+        # first too would stand one runner on two bags.
         b.first = state.batter_id
         self._check_bases(b)
         if state.batter_id is not None:
             result.baserunner_advances[state.batter_id] = 1
-        # Route the (possibly forced) run through resolve_runs — no inline runs.
         # The walk's after-state is deterministic: the batter reaches 1B (unless
-        # no batter is set, the count-machine path), and any forced run is a body
-        # that left the bases.  No runner is retired on a walk.
+        # no batter is set), and any forced run is a body that left the bases.
+        # No runner is retired on a walk.
         self._commit_run_delta(
             state,
             result,
@@ -103,26 +85,24 @@ class TerminalsMixin(LoopMixin):
         )
 
     def _issue_intentional_walk(self, state: GameState) -> PlayResult:
-        """Issue an intentional walk signalled by the manager (SIM-323 §3 item 2).
+        """Issue the intentional walk the manager's hook signalled.
 
-        No pitch is thrown: the batter is awarded first base via the same
-        forced-runner mechanics as a ball-4 walk, the run-resolution provenance is
-        attached, and the PA is rolled over (batting order advances, count resets
-        / half-inning rolls).  Returns the :class:`PlayResult` (``pitch_outcome``
-        carries the sentinel ``"ball"`` since an IBB is recorded as four balls).
+        No pitch is thrown: the batter is awarded first base through the walk's
+        force mechanics, and the plate appearance rolls over (the batting order
+        advances; the count resets or the half-inning rolls). The result's
+        ``pitch_outcome`` reads ``"ball"``, since an intentional walk is
+        recorded as four balls.
 
-        SIM-515/516: the play carries its OWN canonical event
-        (``intentional_walk`` — the SIM-509 HBP pattern), so the box still
-        credits a BB/non-AB while the lane's IBB_PA pool band can see it. The
-        first certifying lane proved the old ``walk`` label unreadable: the
-        IBB numerator read zero and the surplus polluted BB_PA.
+        The play carries its OWN canonical event, ``intentional_walk``, so the
+        box credits a walk and a non-at-bat while the lane's intentional-walk
+        band can still see it.
         """
         result = PlayResult(
             pitch_outcome="ball",
             is_contact=False,
             pa_terminal=True,
             event=EVENT_INTENTIONAL_WALK,
-            # SIM-557: the walk names the pitcher who issues it and his side.
+            # The walk names the pitcher who issues it and his side.
             pitcher_id=state.pitcher_id,
             fielding_team=state.defense,
         )
@@ -141,17 +121,15 @@ class TerminalsMixin(LoopMixin):
         first_open_at_pitch: bool | None = None,
         outs_at_pitch: int | None = None,
     ) -> None:
-        """Resolve a strike-3 strikeout (§5.1) incl. the dropped-third-strike
-        edge (§5.4).
+        """Resolve strike three, the dropped third strike included.
 
-        Ordinary K: route a one-out delta through ``resolve_runs``.  Dropped
-        third strike (uncaught swinging strike-3 with **1B open OR two outs**):
-        the batter may reach first — modelled here as a reach (no out, batter to
-        1B) when the drawn pitch got away; the run/base-out delta still goes
-        through ``resolve_runs``.
+        An ordinary strikeout commits one out through the run ledger. On a
+        dropped third strike (a swinging strike three that got away, with
+        first base open or two outs) the batter reaches first and no out is
+        recorded.
 
-        SIM-484: the reach commits as a STRIKEOUT, because the play is one.
-        Official scoring credits the pitcher's K and charges the batter's
+        The reach commits as a STRIKEOUT, because the play is one: official
+        scoring credits the pitcher's strikeout and charges the batter's
         (Rule 9.15(a)(3)). A run the reach forces home pays no RBI: Rule
         9.04(a) pays one only on a hit, a sacrifice, an infield out, a
         fielder's choice or a bases-full award, and this run scores on the
@@ -162,25 +140,24 @@ class TerminalsMixin(LoopMixin):
         """
         result.event = EVENT_STRIKEOUT
         result.pa_terminal = True
-        # SIM-517: read the D3K predicate at the pitch, before this method
+        # Read the dropped-third-strike rule at the pitch, before this method
         # moves anyone. A got-away strike three that CANNOT award first (1B
         # occupied, under two outs) still advances the runners: the ball
-        # still got away. The advance commits its own delta. The K's
+        # still got away. The advance commits its own delta. The strikeout's
         # snapshots below then measure the post-advance state, so the two
-        # commits chain like a steal and a K.
+        # commits chain like a steal and a strikeout.
         d3k = self._dropped_third_strike(
             state,
             result,
             first_open_at_pitch=first_open_at_pitch,
             outs_at_pitch=outs_at_pitch,
         )
-        # SIM-484: one mover per pitch, the non-terminal path's rule. When a
-        # steal or a pickoff already resolved this pitch's baserunning, the
-        # got-away moves nobody. Without the guard, a runner who stole second
-        # on a called third strike that got away went on to third.
+        # One mover per pitch, as on a non-terminal pitch: when a steal or a
+        # pickoff already resolved this pitch's baserunning, the got-away
+        # moves nobody.
         #
-        # SIM-554 (decision 4, owner 2026-10-01): the advance runs on the
-        # dropped-third-strike reach too, BEFORE the batter takes first. Every
+        # The advance runs on the dropped-third-strike reach too, BEFORE the
+        # batter takes first (the owner's decision 4 of 2026-10-01). Every
         # runner moves up one base while the ball is loose (28 of 32 real
         # unforced runners moved, 2023-2026); a runner on third scores with no
         # RBI. First base is then open, so the reach below pushes nobody.
@@ -195,34 +172,30 @@ class TerminalsMixin(LoopMixin):
             self._resolve_got_away_advance(state, result)
             if d3k:
                 self.running_game_tally.d3k_runners_moved += on_base
-        # SIM-499: measure the base-out state before _force_on_reach can push
-        # anyone.  ``_force_on_reach`` mutates ``state.bases`` in place.
+        # Measure the base-out state before _force_on_reach can push anyone:
+        # ``_force_on_reach`` changes ``state.bases`` in place.
         pre_outs = int(state.outs)
         pre_bases = self._snapshot_bases(state)
         if d3k:
-            # Uncaught K3: batter reaches 1B (no out recorded), pushing forced
-            # runners exactly like a walk does.  resolve_runs scores any force.
-            # SIM-554: after the got-away advance above first base is open, so
-            # the push moves nobody unless a steal or a pickoff on this pitch
-            # skipped the advance.
+            # The batter reaches first with no out, pushing forced runners as a
+            # walk does. After the got-away advance above first base is open,
+            # so the push moves nobody unless a steal or a pickoff on this
+            # pitch skipped the advance.
             self.running_game_tally.d3k_reaches += 1
             forced_run = self._force_on_reach(state, result)
-            # SIM-484: the forced run scores on the wild pitch or the passed
-            # ball, not on the batter, so it pays no RBI. The got-away advance
-            # and the steal of home use the same marker.
+            # The forced run scores on the wild pitch or the passed ball, not
+            # on the batter, so it pays no RBI. The got-away advance and the
+            # steal of home use the same marker.
             #
             # The run stays EARNED. The pool's got-away flag has no kind, so
             # the loop cannot tell a wild pitch (earned) from a passed ball
             # (unearned). About seven in ten real uncaught third strikes are
             # wild pitches (2023-2026). Splitting the charge needs a kind
-            # column on the pitch pool and a rebuild (the plan's decision 4).
+            # column on the pitch pool and a rebuild.
             result.steal_runs_scored += forced_run
-            # SIM-484: the reach commits as a strikeout. It used to commit as
-            # ``field_error``, so the box read a reach on an error: no K, an
-            # RBI paid, a count on the lane's reach-on-error channel. The run
-            # value comes from the two base-out states, never from the label,
-            # so the run value does not change. A reach is not a hit
-            # (``result_hits=0``).
+            # The reach commits as a strikeout and is not a hit
+            # (``result_hits=0``). The run value comes from the two base-out
+            # states, never from the label.
             self._commit_run_delta(
                 state,
                 result,
@@ -262,18 +235,17 @@ class TerminalsMixin(LoopMixin):
         first_open_at_pitch: bool | None = None,
         outs_at_pitch: int | None = None,
     ) -> bool:
-        """The §5.4 dropped-third-strike predicate.
+        """The dropped-third-strike rule: may the batter run to first?
 
-        The edge is *eligible* only on a swinging strike-3 when first base is
-        OPEN or there are two outs (the official rule).  Whether the ball got
-        away is the DRAWN PITCH ROW's own fact (SIM-517: the row was a real
-        uncaught third strike — no roll, no formula).  Without that fact the
-        edge does NOT fire (an ordinary K).
+        Only on a swinging strike three, and only when first base is OPEN or
+        there are two outs (the official rule). Whether the ball got away is
+        the DRAWN PITCH ROW's own fact: the row was a real uncaught third
+        strike, with no roll and no formula. Without that fact it is an
+        ordinary strikeout.
 
-        SIM-484: the rule reads first base and the outs AT THE PITCH. When a
-        steal on the same pitch has moved them, the caller passes the snapshot
-        it took before the steal resolved. Otherwise this method reads the
-        live state.
+        The rule reads first base and the outs AT THE PITCH. When a steal on
+        the same pitch has moved them, the caller passes the snapshot it took
+        before the steal resolved. Otherwise this method reads the live state.
 
         Known gap: Rule 5.05(a)(2) also lets the batter run on a CALLED third
         strike that is not caught. This predicate reads swinging strikes only.
@@ -292,17 +264,15 @@ class TerminalsMixin(LoopMixin):
         return bool(self._last_pitch_got_away)
 
     def _force_on_reach(self, state: GameState, result: PlayResult) -> int:
-        """Place the batter on 1B and force runners behind him (the
+        """Place the batter on first and force the runners behind him (the
         dropped-third-strike reach; the walk has its own copy in
-        :meth:`_resolve_walk`).  Returns forced runs.
+        :meth:`_resolve_walk`). Returns the forced runs.
 
-        SIM-421 fix: record every forced runner in ``result.baserunner_advances``
-        the way :meth:`_resolve_walk` does. The forced run from 3B is written
-        as ``0`` ("scored"), because :meth:`_accumulate_pa` credits a runner's
-        box ``r`` only from that entry. Before this fix the reach wrote only
-        the batter's entry, so a run forced home by a dropped third strike
-        with the bases loaded reached the team score but never the runner's
-        box line — and the R and HRR props read ``line.r``.
+        Every forced runner is recorded in ``result.baserunner_advances`` as
+        :meth:`_resolve_walk` records them. A run forced home from third is
+        written as ``0`` ("scored"), because :meth:`_accumulate_pa` credits a
+        runner's box run only from that entry (the R and HRR props read
+        ``line.r``).
         """
         b = state.bases
         # Capture the pre-shift runner identities: the advances dict is keyed

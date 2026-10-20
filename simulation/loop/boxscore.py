@@ -15,32 +15,30 @@ from simulation.game_state import GameState, Team
 
 @dataclass(slots=True)
 class PlayerStatLine:
-    """One player's accumulated stat line for a single simulated game (SIM-328).
+    """One player's stat line for one simulated game.
 
-    Carries BOTH a batting and a pitching slot so a single id (e.g. a two-way
-    player, or just to keep the keyspace uniform) has one home; a pure batter
-    leaves the pitching fields at 0 and vice-versa.
+    A line carries both a batting and a pitching part, so a two-way player has
+    one home; a pure batter leaves the pitching fields at 0 and the reverse.
 
-    Batting:  ``ab`` / ``h`` / ``hr`` / ``rbi``, plus ``so`` (SIM-484: the
-              batter's own strikeouts — the official box's batting ``k``).
-    Pitching: ``outs_recorded`` (the raw thirds-of-an-inning the pitcher retired)
-              plus ``bf`` / ``k`` / ``bb`` / ``er``.  Innings are represented
-              internally as an integer count of OUTS (thirds) so accumulation is
-              exact; the human-readable x.0 / x.1 / x.2 form and the decimal
-              thirds are derived on demand (:attr:`ip` / :attr:`ip_outs`).
-              SIM-557: ``StateMachine._record_outs`` writes ``outs_recorded``
-              when each out is recorded; ``StateMachine._accumulate_pa`` writes
-              ``bf`` and the other pitching fields at the end of a plate
-              appearance.
+    Batting:  ``ab`` / ``h`` / ``hr`` / ``rbi``, the extras ``b2`` / ``b3`` /
+              ``r`` / ``sb`` / ``cs``, and ``so``: the batter's own strikeouts
+              (the official box's batting ``k``).
+    Pitching: ``outs_recorded`` (innings as a count of outs, so the sum is
+              exact; :attr:`ip` and :attr:`ip_thirds` derive the two readable
+              forms) and ``bf`` / ``k`` / ``bb`` / ``er`` / ``h_allowed`` /
+              ``r_allowed``. ``StateMachine._record_outs`` writes
+              ``outs_recorded`` when each out is recorded;
+              ``StateMachine._accumulate_pa`` writes the other pitching fields
+              at the end of a plate appearance.
 
-    ``k`` is the PITCHER's strikeouts (the official box's ``p_k``). Readers
-    treat it that way. :attr:`BoxScore.pitchers` and the prop builder
+    ``k`` is the PITCHER's strikeouts (the official box's ``p_k``), and the
+    readers treat it that way: :attr:`BoxScore.pitchers` and the prop builder
     (:meth:`PropDistributionSet.from_boxscores`, which feeds the /boxscore card
-    and the prop routes) tell a pitcher by it; ``scripts/sim_stats.py`` sums it
-    for the game's strikeouts. So a batter's strikeout goes to ``so``, never
-    to ``k``. On ``k`` it would hand every batter who struck out the pitcher
-    props, double the smoke's strikeout count, and fold a two-way player's
-    own strikeouts into his pitching K prop.
+    and the prop routes) tell a pitcher by it, and ``scripts/sim_stats.py``
+    sums it for the game's strikeouts. So a batter's strikeout goes to ``so``,
+    never to ``k``: on ``k`` it would hand every batter who struck out the
+    pitcher props, double the smoke's strikeout count, and fold a two-way
+    player's own strikeouts into his pitching strikeout prop.
     """
 
     player_id: int
@@ -50,24 +48,21 @@ class PlayerStatLine:
     h: int = 0
     hr: int = 0
     rbi: int = 0
-    # SIM-365 additive batting extras (all default 0 so existing constructions
-    # and SIM-328 tests are unaffected):
     b2: int = 0  # doubles (a subset of ``h``)
     b3: int = 0  # triples (a subset of ``h``)
     r: int = 0  # runs scored by this player (offense)
     sb: int = 0  # stolen bases
-    cs: int = 0  # caught stealing (SIM-426)
-    so: int = 0  # SIM-484: struck out as a batter (``k`` below is the pitcher's)
+    cs: int = 0  # caught stealing
+    so: int = 0  # struck out as a batter (``k`` below is the pitcher's)
 
     # --- pitching (IP stored as outs == thirds of an inning) ---
     outs_recorded: int = 0
-    # SIM-557: batters faced as a pitcher (one per completed plate appearance,
-    # the intentional walk included; a no-pitch result adds none).
+    # Batters faced as a pitcher: one per completed plate appearance, the
+    # intentional walk included; a no-pitch result adds none.
     bf: int = 0
     k: int = 0
     bb: int = 0
     er: int = 0
-    # SIM-365 additive pitching extras (default 0):
     h_allowed: int = 0  # hits allowed
     r_allowed: int = 0  # runs allowed (earned + unearned; >= ``er``)
 
@@ -96,18 +91,16 @@ class PlayerStatLine:
 
 @dataclass(slots=True)
 class BoxScore:
-    """Per-game accumulator of :class:`PlayerStatLine`s, keyed by ``player_id``.
+    """The per-game store of :class:`PlayerStatLine`s, keyed by ``player_id``.
 
-    Populated INSIDE the PA loop (:meth:`StateMachine._accumulate_pa`) on every
-    terminal plate appearance: the batting team's current batter is credited on
-    offense, the fielding team's current pitcher is charged on defense.  The one
-    exception is a pitcher's outs: :meth:`StateMachine._record_outs` credits
-    each out when it is recorded, on any pitch (SIM-557).  A downstream
-    Monte-Carlo aggregator (SIM-329 props) sums these across N games.
+    The state machine credits it at the end of every plate appearance
+    (:meth:`StateMachine._accumulate_pa`): the batting team's batter on
+    offense, the fielding team's pitcher on defense. A pitcher's outs are
+    credited when each out is recorded (:meth:`StateMachine._record_outs`),
+    on any pitch. The prop distributions sum the lines across games.
 
-    Two views over the SAME line store so the keyspace stays simple:
-      * :attr:`batters` / :attr:`pitchers` are convenience filters;
-      * :meth:`line` returns (creating if needed) the single line for an id.
+    :attr:`batters` and :attr:`pitchers` filter the one line store;
+    :meth:`line` returns (creating if needed) one player's line.
     """
 
     lines: dict[int, PlayerStatLine] = field(default_factory=dict)
@@ -127,12 +120,9 @@ class BoxScore:
 
     @property
     def pitchers(self) -> dict[int, PlayerStatLine]:
-        """Lines with any pitching activity (outs recorded / batters faced / K /
-        BB / ER).
-
-        SIM-557: an out or a batter faced is the direct test that a pitcher
-        pitched. K / BB / ER stay in the test for lines built by hand.
-        """
+        """Lines with any pitching activity: an out recorded, a batter faced,
+        a strikeout, a walk or an earned run. An out or a batter faced is the
+        direct test; the other three cover lines built by hand."""
         return {
             pid: ln
             for pid, ln in self.lines.items()
@@ -142,14 +132,12 @@ class BoxScore:
 
 @dataclass(slots=True)
 class GameSimResult:
-    """The per-game result :func:`simulate_game` returns (SIM-320).
+    """The result of one simulated game, as :func:`simulate_game` returns it.
 
-    Minimal-but-complete (the richer multi-iteration aggregation contract is
-    SIM-327): the final score, how many innings were played, the terminal
-    :class:`~simulation.game_state.GameState`, the flags a caller needs to tell a
-    regulation finish from a walk-off / extra-innings finish, and the per-game
-    ``seed`` so a result is self-describing for the deterministic-replay contract
-    (spec §6.3).
+    It carries the final score, the innings played, the final
+    :class:`~simulation.game_state.GameState`, the flags that tell a
+    regulation finish from a walk-off or an extra-innings finish, and the
+    game's ``seed``, so the result names how to replay it.
     """
 
     home_score: int
@@ -161,20 +149,17 @@ class GameSimResult:
     seed: int | None = None
     #: Total pitches thrown across the game (a cheap sanity / perf signal).
     total_pitches: int = 0
-    #: SIM-557: the outs the play stream recorded (the sum of every step's
+    #: The outs the play stream recorded (the sum of every step's
     #: ``outs_recorded``). The outs on the pitchers' box lines must equal it.
     outs_played: int = 0
-    #: SIM-328 per-game boxscore: per-player AB/H/HR/RBI + IP/K/BB/ER, keyed by
-    #: player_id.  ADDITIVE/optional so SIM-320/327 returns + tests are
-    #: unaffected; ``None`` when no boxscore was accumulated (the loop attaches a
-    #: populated one via :func:`simulate_game`).
+    #: The game's box score; ``None`` when no plate appearance was credited.
     boxscore: BoxScore | None = None
-    #: SIM-546, the inning grid: each team's runs per inning, one cell per
-    #: inning. ``None`` in a cell marks a half the game never played (the
-    #: scoreboard "x"); ``0`` marks a half played without a run. The two lists
-    #: have the same length. The segment and team markets (the first inning,
-    #: the first five innings, a team's runs) are priced from these cells.
-    #: ``None`` for the whole field when the result was built by hand.
+    #: The inning grid: each team's runs per inning, one cell per inning.
+    #: ``None`` in a cell marks a half the game never played (the scoreboard
+    #: "x"); ``0`` marks a half played without a run. The two lists have the
+    #: same length. The segment and team markets (the first inning, the first
+    #: five innings, a team's runs) are priced from these cells. ``None`` for
+    #: the whole field when the result was built by hand.
     home_by_inning: list[int | None] | None = None
     away_by_inning: list[int | None] | None = None
 

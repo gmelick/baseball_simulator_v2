@@ -47,17 +47,14 @@ class CreditMixin(LoopMixin):
 
     @staticmethod
     def _current_batter_id(state: GameState) -> int | None:
-        """The id of the batter who just completed THIS PA (SIM-328 attribution).
+        """The id of the batter who just completed THIS plate appearance.
 
-        Reads the OFFENSE's lineup at its current slot pointer — the authoritative
-        "batter currently up" — when a lineup is wired.  This is preferred over
-        the loose ``state.batter_id`` because the loop leaves ``batter_id`` stale
-        at the prior (now-fielding) team's hitter for the FIRST PA of each new
-        half (``_advance_batting_order`` only repoints it at end-of-PA); reading
-        the offense's slot here credits the correct hitter from the half's first
-        PA without changing the locked ``batter_id`` / half-flip contract
-        (SIM-316).  Falls back to ``state.batter_id`` when no lineup is wired (the
-        count-machine-only tests).
+        It reads the OFFENSE's lineup at its current slot when a lineup is
+        wired. ``state.batter_id`` is not used: the loop leaves it at the
+        previous half's last hitter for the first plate appearance of each new
+        half, because ``_advance_batting_order`` moves it only at the end of a
+        plate appearance. Falls back to ``state.batter_id`` with no lineup
+        (the count-machine tests).
         """
         if state.offense == Team.HOME:
             lineup, slot = state.home_lineup, state.home_lineup_slot
@@ -68,76 +65,60 @@ class CreditMixin(LoopMixin):
         return state.batter_id
 
     def _box_line(self, player_id: int) -> PlayerStatLine:
-        """Lazily create the boxscore and return a player's line (SIM-365).
-
-        Mirrors the ``if self.boxscore is None`` guard inside
-        :meth:`_accumulate_pa`, so steal accumulation (which happens in
-        :meth:`_resolve_steal_outcome`, possibly on a non-terminal pitch that
-        never reaches end-of-PA) shares the same per-game store.
-        """
+        """A player's line in the game's box score, which it creates on first
+        use. Every credit writes through it, so a steal on a pitch that never
+        ends a plate appearance shares the same per-game store."""
         if self.boxscore is None:
             self.boxscore = BoxScore()
         return self.boxscore.line(int(player_id))
 
     def _accumulate_pa(self, state: GameState, result: PlayResult) -> None:
-        """Attribute one completed terminal PA to the batter + pitcher (SIM-328).
+        """Credit one completed plate appearance to the batter and the pitcher.
 
-        Called from :meth:`_end_of_pa` BEFORE the batting order advances, so
-        ``state.batter_id`` (offense) and ``state.pitcher_id`` (defense) still
-        name the two players who just resolved the PA — which is exactly the
-        attribution AC-2 requires (and the half-inning flip switches them
-        automatically, since the ids are read off the live ``GameState``).
+        :meth:`_end_of_pa` calls it BEFORE the batting order advances, so
+        ``state.pitcher_id`` still names the pitcher who just finished it, and
+        :meth:`_current_batter_id` the batter.
 
-        Classification uses the resolved CANONICAL event
-        (``result.canonical_event``, set by :meth:`_commit_run_delta` via
-        :func:`run_resolution.resolve_runs`); when that is absent (e.g. a
-        count-machine-only in-play terminal with no sampler) we fall back to
-        :func:`resolve_event_to_canonical` on the raw ``result.event``.  A PA with
-        no resolvable event (pure count-machine in-play hand-off, event is None)
-        is NOT credited — there is no scored outcome to attribute.
+        The classification uses the play's canonical event
+        (``result.canonical_event``, set by the run ledger). With none (a
+        count-machine in-play pitch with no sampler) it resolves
+        ``result.event``; a plate appearance with no resolvable event gets no
+        credit.
 
         BATTER:
-          * AB  — every terminal PA EXCEPT a walk / IBB / HBP / sac fly / sac
-            bunt (the standard PA-minus-(BB+HBP+SF+SH) at-bat definition).
+          * AB  — every plate appearance EXCEPT a walk, an intentional walk, a
+            hit by pitch, a sacrifice fly or a sacrifice bunt.
           * H   — single / double / triple / home_run.
           * HR  — home_run.
-          * SO  — a strikeout PA (canonical 'strikeout'), the dropped-third-
-            strike reach included (SIM-484); on ``so``, never on ``k``.
-          * RBI — the integer runs that physically scored on this play
-            (``result.runs_scored``), MINUS runs we treat as unearned-by-error
-            (see the earned/unearned split below) — RBI is not credited on an
-            error-driven run, mirroring the ER simplification.  A solo HR drives
-            in 1 (the batter himself scores), a 3-run HR drives in 3.  No RBI
-            either on a run marked in ``result.steal_runs_scored``: a steal of
-            home, a got-away advance, a run a dropped-third-strike reach forces
-            home. Rule 9.04(a) pays none on a steal, a wild pitch or a passed
-            ball.
+          * SO  — a strikeout, the dropped-third-strike reach included; on
+            ``so``, never on ``k``.
+          * RBI — the runs that scored on this play (``result.runs_scored``),
+            none on an error play. No RBI either on a run marked in
+            ``result.steal_runs_scored``: a steal of home, a got-away advance,
+            a run a dropped-third-strike reach forces home. Rule 9.04(a) pays
+            none on a steal, a wild pitch or a passed ball. A solo home run
+            drives in 1, a three-run home run 3.
 
         PITCHER:
-          * IP  — written by :meth:`_record_outs` when the out is recorded
-            (SIM-557); not here.
+          * IP  — written by :meth:`_record_outs` when the out is recorded; not
+            here.
           * BF  — one batter faced on every completed plate appearance, the
-            intentional walk included (SIM-557).
-          * K   — a strikeout PA (canonical 'strikeout'); credited even on a
-            dropped-third-strike reach (no out) per the scoring rule.
-          * BB  — a walk / IBB.
-          * ER  — earned runs charged: the runs that scored on this play, EXCEPT
-            when the play carried an error (``result.is_error``), in which case
-            we treat the run(s) as UNEARNED and do not charge the pitcher.
+            intentional walk included.
+          * K   — a strikeout, credited even on a dropped-third-strike reach.
+          * BB  — a walk or an intentional walk.
+          * H   — a base hit allowed.
+          * ER  — the runs that scored on this play, unless they are unearned.
+          * R   — every run that scored on this play, earned or not.
 
-        EARNED/UNEARNED — INNING-RECONSTRUCTION (SIM-414): full ER scoring per
-        MLB Rule 9.16(b) treats as UNEARNED any run that would not have scored
-        had the defense played errorlessly — including runs that score AFTER the
-        inning "should have ended".  We approximate this by tracking
-        ``_half_inning_error_outs_lost`` (incremented when an error play
-        recorded no outs — the canonical reach-on-error) and flagging the run as
-        unearned if ``outs_before_this_play + error_outs_lost >= 3``.  Combined
-        with the per-play ``is_error`` flag, this captures the two dominant
-        unearned-run patterns: (1) runs that score on an error play, (2) runs
-        that score in an extended inning.  The rarer "runner reached on an
-        error and later scored" case requires per-runner provenance and is
-        deferred (a future ticket can add it).  RBI tracks ``is_error`` only
-        (per Rule 9.04: a clean RBI in an extended inning still counts).
+        EARNED AND UNEARNED: Rule 9.16(b) makes a run UNEARNED when it would
+        not have scored had the defense played without errors, which includes
+        a run scored after the inning "should have ended". The approximation:
+        a run on an error play is unearned, and so is any run once the outs
+        before the play plus ``_half_inning_error_outs_lost`` (the reaches on
+        an error this half) reach three. A runner who reached on an error and
+        scored later is not traced; that needs per-runner provenance. The RBI
+        reads the error play only: a clean RBI in an extended inning counts
+        (Rule 9.04).
         """
         if self.boxscore is None:
             self.boxscore = BoxScore()
@@ -151,12 +132,11 @@ class CreditMixin(LoopMixin):
         outs = int(result.outs_recorded or 0)
         is_error = bool(result.is_error)
 
-        # SIM-414: inning-reconstruction unearned-run flag.  ``state.outs`` has
-        # already been incremented by this play, so the count BEFORE the play
-        # is ``state.outs - outs``.  If errors earlier in the half-inning
-        # prevented an out, the effective out total may already be >= 3 at the
-        # start of this play — any run that scores here is unearned even when
-        # this play itself is clean.
+        # The unearned-run flag of the extended inning. ``state.outs`` already
+        # holds this play's outs, so the count BEFORE the play is
+        # ``state.outs - outs``. When errors earlier in the half kept the
+        # defense from an out, the effective count may reach 3 before this
+        # play, and any run here is unearned even on a clean play.
         outs_before_play = max(0, int(state.outs) - outs)
         effective_outs_before_play = outs_before_play + self._half_inning_error_outs_lost
         inning_should_have_ended = effective_outs_before_play >= 3
@@ -173,44 +153,35 @@ class CreditMixin(LoopMixin):
                 bat.h += 1
                 if canonical == "home_run":
                     bat.hr += 1
-                # SIM-365: doubles / triples are a subset of ``h`` (so TB can be
-                # computed exactly downstream); singles need no field (h - b2 - b3
-                # - hr).  ADDITIVE on top of the existing ``h`` credit above.
+                # Doubles and triples are a subset of ``h``, so total bases
+                # are exact downstream; singles need no field (h - b2 - b3 - hr).
                 elif canonical == "double":
                     bat.b2 += 1
                 elif canonical == "triple":
                     bat.b3 += 1
-            # SIM-484: the batter's own strikeout, on every strikeout, the
+            # The batter's own strikeout, on every strikeout, the
             # dropped-third-strike reach included (Rule 9.15). It goes to
             # ``so``. ``k`` is the pitcher's, and the readers that tell a
             # pitcher by ``k`` would count this batter as one.
             if canonical == "strikeout":
                 bat.so += 1
-            # RBI: runs the batter drove in (not credited on an error-driven
-            # run). SIM-483: a run that scored ON A STEAL (a terminal-pitch
-            # steal of home folds its run into ``runs``) earns the batter NO
-            # RBI — MLB Rule 9.04(a) pays none on a stolen base. The got-away
-            # runs and the dropped-third-strike forced run share the marker.
+            # RBI: the runs the batter drove in, none on an error play. A run
+            # that scored on a steal (a terminal-pitch steal of home folds its
+            # run into ``runs``) pays no RBI (Rule 9.04(a)); the got-away runs
+            # and the dropped-third-strike forced run share the marker.
             rbi_runs = max(0, int(runs) - int(result.steal_runs_scored))
             if rbi_runs and not is_error:
                 bat.rbi += rbi_runs
 
-        # ---- runs scored (SIM-365): credit each runner who crossed home on this
-        # play.  ``baserunner_advances`` records ``end_base == 0`` for a runner who
-        # SCORED (set in :meth:`_resolve_in_play_transition` for a runner or the
-        # batter who crossed home, and SIM-414 for the runner on 3B forced home
-        # by a bases-loaded walk).  A retired runner has NO entry: the in-play
-        # path, :meth:`_resolve_pickoff` (SIM-507) and the caught-stealing
-        # branch of :meth:`_resolve_steal_outcome` all write none.
-        # SIM-421: a steal of home credits its runner in
-        # :meth:`_resolve_steal_outcome` on every pitch (a NON-terminal steal
-        # never reaches this method) and records him in ``box_run_credited``.
-        # Skip exactly that runner here.  The old guard skipped the whole loop
-        # on any steal pitch, so a safe steal to 2B plus a home run on the same
-        # pitch credited nobody a run — the R and HRR props read ``line.r``.
-        # A got-away run on a terminal pitch is credited HERE only
-        # (:meth:`_resolve_got_away_advance` credits the runner on a
-        # non-terminal pitch only).
+        # ---- runs scored: each runner who crossed home on this play ----
+        # ``baserunner_advances`` records ``end_base == 0`` for a runner or a
+        # batter who SCORED; a retired runner has NO entry on every path. A
+        # steal of home credits its runner in :meth:`_resolve_steal_outcome`
+        # on every pitch and records him in ``box_run_credited``; skip exactly
+        # him, so another scorer on the same pitch is still credited. A
+        # got-away run on a terminal pitch is credited here only
+        # (:meth:`_resolve_got_away_advance` credits it on a non-terminal
+        # pitch only).
         for rid, end_base in result.baserunner_advances.items():
             if int(end_base) == 0 and int(rid) not in result.box_run_credited:
                 box.line(int(rid)).r += 1
@@ -218,41 +189,37 @@ class CreditMixin(LoopMixin):
         # ---- pitcher (defense) ----
         if state.pitcher_id is not None:
             pit = box.line(int(state.pitcher_id))
-            # SIM-557: one batter faced per completed plate appearance. The
-            # outs are not written here: _record_outs credits each out when
-            # it is recorded.
-            # The batters faced follow the loop's own count (state.pitcher_bf,
-            # bumped in _end_of_pa). A known limit: in the single pre-pitch
-            # steal draw (SIM_STEAL_PITCH_CLASS=0, not production), a pickoff
-            # or caught stealing can make the third out before the pitch's
-            # result, and the loop still ends this plate appearance. The
-            # pitcher then gets a batter faced and the batter an at-bat. Both
-            # the batter's line and state.pitcher_bf had this flaw before the
-            # batters faced existed; its fix changes the batter's line too, so
-            # it needs its own ticket.
+            # One batter faced per completed plate appearance, following the
+            # loop's own count (``state.pitcher_bf``, bumped in _end_of_pa).
+            # The outs are not written here: _record_outs credits each out
+            # when it is recorded.
+            #
+            # A known limit of the single pre-pitch steal draw
+            # (SIM_STEAL_PITCH_CLASS=0, not production): a pickoff or a caught
+            # stealing can make the third out before the pitch's result, and
+            # the loop still ends this plate appearance, so the pitcher gets a
+            # batter faced and the batter an at-bat. A fix changes the batter's
+            # line too, so it needs its own ticket.
             pit.bf += 1
             if canonical == "strikeout":
                 pit.k += 1
             if canonical in self._BB_CANONICAL:
                 pit.bb += 1
-            # SIM-365: a base hit charged to the pitcher.
             if canonical in self._HIT_CANONICAL:
                 pit.h_allowed += 1
-            # ER: scored runs charged to the pitcher unless the run is unearned —
-            # SIM-414: now also excludes runs that score after the inning "should
-            # have ended" (an earlier error prevented an out).
+            # ER: the runs scored, unless unearned (an error play, or an
+            # inning that should already have ended).
             if runs and not run_is_unearned:
                 pit.er += runs
-            # SIM-365: runs allowed (R) include UNEARNED runs too, so unlike ER
-            # there is no ``is_error`` exclusion — R >= ER by construction.  A
-            # steal-of-home on a NON-terminal pitch is charged in
-            # :meth:`_resolve_steal_outcome` (it never reaches this method);
-            # a terminal-pitch steal-of-home's run is already in ``runs`` here.
+            # R: every run, earned or not, so R >= ER. A steal of home on a
+            # NON-terminal pitch is charged in :meth:`_resolve_steal_outcome`
+            # (it never reaches here); a terminal-pitch steal of home's run is
+            # already in ``runs``.
             if runs:
                 pit.r_allowed += runs
 
-        # SIM-414: a reach-on-error (the canonical error play — outs_recorded == 0
-        # with is_error == True) counts as one missed out; subsequent runs in the
-        # same half-inning will be unearned once effective_outs reaches 3.
+        # A reach on an error (an error play that recorded no out) counts as
+        # one missed out: later runs this half are unearned once the effective
+        # outs reach three.
         if is_error and outs == 0:
             self._half_inning_error_outs_lost += 1

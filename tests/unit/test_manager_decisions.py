@@ -33,7 +33,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from simulation.game_state import Bases, GameState, Half, Team
+from simulation.game_state import Bases, GameState, Half
 from simulation.sim_loop import StateMachine, simulate_game
 from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
@@ -73,8 +73,8 @@ def _state(
     return s
 
 
-def _machine(manager=None, *, seed: int = 7, bench=None) -> StateMachine:
-    return StateMachine(rng=np.random.default_rng(seed), manager=manager, bench=bench)
+def _machine(manager=None, *, seed: int = 7) -> StateMachine:
+    return StateMachine(rng=np.random.default_rng(seed), manager=manager)
 
 
 # A manager who does everything aggressively (all tendency rates near 1.0).
@@ -236,15 +236,13 @@ class TestNoManagerProfile:
         assert machine.manager_decisions == []
 
     def test_a_game_with_an_aggressive_manager_also_completes(self):
-        # With a full tendency set + a bullpen + bench wired, the game still ends
-        # validly (decisions degrade gracefully, never an illegal state).
+        # With a full tendency set wired, the game still ends validly
+        # (decisions degrade gracefully, never an illegal state).
         rng = np.random.default_rng(1)
-        bench = {Team.HOME: [777, 778], Team.AWAY: [677, 678]}
         machine = StateMachine(
             synthetic_sampler(league_artifacts(), 1),
             rng=rng,
             manager=_AGGRESSIVE,
-            bench=bench,
         )
         # Seed bullpens on the initial state via the manager context.
         result = simulate_game(

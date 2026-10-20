@@ -164,7 +164,7 @@ class TestEveryResultNamesItsPitcher:
 
     def test_the_intentional_walk_names_the_pitcher_who_issues_it(self):
         sm = _machine("ball")
-        sm._should_issue_ibb = lambda state, li: True
+        sm._should_issue_ibb = lambda state: True
         state = _state()
         state.bases = Bases(second=RUNNER)
         result = sm.step_pitch(state)

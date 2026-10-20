@@ -175,7 +175,7 @@ class TestPitchCountIncrement:
         s.manager.bullpen_available = bullpen
         m = StateMachine(_ScriptedDraw([True]), rng=np.random.default_rng(4), manager=_GATE)
         m.manager_draw = True
-        m._end_of_pa_hook(s)
+        m._start_of_pa_hook(s)
         assert s.pitcher_id == 301
         assert s.pitcher_pitch_count == 0
         assert m.manager_decisions[-1]["pitch_count"] == 105  # the outgoing arm's count

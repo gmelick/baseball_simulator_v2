@@ -23,34 +23,30 @@ class ManagerMixin(LoopMixin):
 
     @staticmethod
     def compute_leverage(state: GameState) -> float:
-        """Compute a simple Leverage Index (LI) for the current base-out-score-
-        inning spot (SIM-323; spec step 1 'leverage').
+        """A simple leverage index (LI) for the current base-out, score and
+        inning spot.
 
-        LI is the standard sabermetric concept (Tango/Inside-The-Book): how much
-        the *swing in win probability* of the average event in this spot exceeds
-        that of a neutral spot (LI == 1.0 average).  Computing the real WP-derived
-        LI needs a win-expectancy table; we deliberately use a documented,
-        monotone proxy built from the three drivers that dominate it, so the
-        decision gating is transparent and DB-free:
+        LI is the standard sabermetric idea: how much more the average event
+        in this spot swings the win probability than an event in a neutral
+        spot (LI 1.0). The real LI needs a win-expectancy table; this proxy
+        multiplies the three drivers that dominate it, so the decisions stay
+        transparent and need no database:
 
-          * ``inning``     — late innings raise LI (a run swings WP more in the 9th
-            than the 1st): a factor rising from ~0.6 (1st) toward ~2.0 (9th+).
-          * ``score_diff`` — LI peaks in a *tie / one-run* game and decays as the
-            margin grows (a blowout is low leverage): ``1 / (1 + |diff| * k)``.
-          * base/out state — runners on + fewer outs raise LI (more ways the spot
-            turns into runs): scaled by base occupancy and (3 - outs).
+          * ``inning``: late innings raise LI, from ~0.6 in the 1st to ~2.0 by
+            the 9th.
+          * ``score_diff``: LI peaks in a tie or one-run game and decays as
+            the margin grows: ``1 / (1 + |diff| * k)``.
+          * the base-out state: runners on and fewer outs raise LI.
 
-        The product is clamped to ``[0.05, 6.0]``.  It is *monotone* in the obvious
-        directions (later inning -> higher; bigger lead -> lower; more runners /
-        fewer outs -> higher), which is the only property the gating relies on.
-        Result is also written to ``state.manager.leverage`` so downstream reads
-        (spec step 1) see a populated LI.
+        The product is clamped to ``[0.05, 6.0]`` and is monotone in each
+        driver, the one property the decisions rely on. The result is also
+        written to ``state.manager.leverage``.
         """
         # Inning factor: ramps from ~0.6 in the 1st to ~2.0 by the 9th, flat after.
         inning = max(1, int(state.inning))
         inning_factor = 0.6 + 0.18 * min(inning - 1, 8)
         # Score factor: peaks at a tie (1.0) and decays with the margin.  Caps the
-        # margin at 6 so a blowout floors the factor instead of vanishing.
+        # margin at 8 so a blowout floors the factor instead of vanishing.
         margin = min(abs(int(state.score_diff)), 8)
         score_factor = 1.0 / (1.0 + 0.55 * margin)
         # Base/out factor: more runners + fewer outs == more leverage.  A weighted
@@ -69,45 +65,35 @@ class ManagerMixin(LoopMixin):
         return li
 
     def _manager_rng(self) -> float:
-        """A single [0, 1) draw from the machine's loop rng for a manager decision
-        (so a fixed seed makes every manager decision deterministic, spec §6.3)."""
+        """One [0, 1) draw from the machine's loop rng for a manager decision,
+        so a fixed seed makes every decision deterministic."""
         return float(self.rng.random())
 
     def _pre_pitch_hook(self, state: GameState) -> None:
-        """Pre-pitch manager decisions (§3): IBB, pitch-out, the steal
-        **green-light**, then the **steal initiate** wiring (SIM-319).
+        """The decisions before every pitch: the intentional walk, then the
+        single pre-pitch steal draw.
 
-        Order (all gated by the live Leverage Index + a manager tendency):
+          1. **The intentional walk**: on a plate appearance's first pitch, a
+             draw at the measured rate of its cell
+             (:meth:`_should_issue_ibb`). A walk sets
+             ``state.manager.intentional_walk_signalled``, and the count
+             machine never runs on that pitch: the loop issues the walk.
+          2. **The steal**: without the running game on the pitch, the steal
+             opportunity draw runs here, before the pitch
+             (:meth:`_steal_opportunity_draw`), unless a steal is already
+             staged. With it, :meth:`step_pitch` runs the pickoff and the
+             steal draws itself.
 
-          1. **IBB** (§3 item 2) — with first base OPEN and a runner in scoring
-             position, a close & late high-leverage spot, an above-average
-             ``platoon_advantage_exploitation_rate`` manager will signal an
-             intentional walk (``ManagerContext.intentional_walk_signalled``); the
-             count machine never runs on that pitch — the loop issues the walk.
-          2. (The pitch-out and the leverage-scaled steal green-light that sat
-             here were deleted 2026-09-13 — SIM-427; the steal draw's manager
-             weight is the batting manager's measured rate over the league's.)
-
-        The steal *decision* is the SIM-474 opportunity draw
-        (:meth:`_steal_opportunity_draw`, which stages the
-        :class:`StealResolution`); the *outcome* is committed in step 7
-        (:meth:`_resolve_steal_outcome`).  A test may instead call
-        :meth:`stage_steal` directly.
-
-        No-op-safe: with no manager profile wired (``self.manager is None``) every
-        tendency reads 0.0, so no IBB / pitch-out fires; with no steal pool the
-        draw stages nothing.
+        With no manager wired no intentional walk fires; with no steal pool
+        the draw stages nothing.
         """
         li = self.compute_leverage(state)
         mgr = state.manager
-        # Reset the per-pitch signal (it applies to THIS pitch only). SIM-427
-        # (owner decision 2026-09-13) deleted the pitch-out and hit-and-run
-        # signals with their hooks: neither had a consumer that changed a play,
-        # and the hit-and-run's only effect was to skip the steal draw.
+        # Reset the per-pitch signal: it applies to THIS pitch only.
         mgr.intentional_walk_signalled = False
 
-        # --- (1) Intentional walk: the SIM-515 cell draw --------------------------
-        if self._should_issue_ibb(state, li):
+        # --- (1) The intentional walk: the cell draw ---------------------------
+        if self._should_issue_ibb(state):
             mgr.intentional_walk_signalled = True
             self.manager_decisions.append(
                 {
@@ -119,45 +105,36 @@ class ManagerMixin(LoopMixin):
             )
             return
 
-        # --- steal initiate wiring (SIM-474) -----------------------------------
-        # Only auto-stage if a test has not already staged one. The old chain
-        # GATED the decision on a green-light RNG draw and then consulted a
-        # resolver production never wired — so production attempted ZERO steals
-        # from 2026-06-04 to 2026-08-16 (SIM-495 measured SB 0.0000 vs 0.59).
-        # Now the decision is a similarity-weighted draw from the SIM-468
-        # opportunity pool, where manager aggression is a WEIGHT on attempted
-        # rows — never a gate in front of the draw.
+        # --- (2) The single pre-pitch steal draw --------------------------------
+        # A staged steal (a test's) stands. The decision is a draw from the
+        # steal opportunity pool, where the manager's aggression is a WEIGHT on
+        # attempted rows, never a gate in front of the draw: a gated chain once
+        # attempted ZERO steals in production for ten weeks (SIM-495).
         if self._pending_steal is not None:
             return
-        # SIM-554: in the running game on the pitch the pickoff draw runs in
-        # step_pitch before the pitch and the steal draw after it, in the
-        # pitch's class group. The single draw here runs only without it.
+        # In the running game on the pitch, step_pitch draws the pickoff
+        # before the pitch and the steal after it, in the pitch's class group.
         if self._steal_order_active():
             return
         self._steal_opportunity_draw(state)
 
-    def _should_issue_ibb(self, state: GameState, li: float) -> bool:
-        """Decide an intentional walk (§3 item 2) — SIM-515.
+    def _should_issue_ibb(self, state: GameState) -> bool:
+        """Decide an intentional walk: a draw at the REAL rate of the plate
+        appearance's cell.
 
-        The decision is a draw at the REAL rate of the PA's hard-filtered cell:
         ``sim.ibb_rates`` holds, for every (runners_state, outs, late, close)
-        cell, how many real PAs entered it and how many were intentionally
-        walked (built over the pool's season window). One roll of the loop rng
-        against ``issued / opportunities`` — never a hand-tuned formula (the
-        owner's 2026-08-10 architecture rule).
+        cell, how many real plate appearances entered it and how many were
+        intentionally walked, over the pool's season window. One roll of the
+        loop rng against ``issued / opportunities``, never a hand-tuned
+        formula. The cell (late x close x base-out) IS the leverage context,
+        measured instead of modelled.
 
-        The draw fires ONCE per plate appearance, on its first pitch (the old
-        formula re-rolled per pitch and compounded to 2.64x MLB's IBB volume —
-        the SIM-429 diagnosis). A cell absent from the table has a measured
-        rate of ~0 and never fires. With no manager wired, or no rate table
-        loaded (a no-DB test machine), no IBB fires — the no-op-safe contract.
-
-        ``li`` is unused since SIM-515: the cell (late x close x base-out) IS
-        the leverage context, measured instead of modeled. Per-manager
-        modulation returns as a similarity WEIGHT when the SIM-427 real
-        profiles land (a weight, never a gate — the SIM-474 pattern).
+        The draw fires ONCE per plate appearance, on its first pitch: a per-pitch
+        roll compounds to 2.64x MLB's intentional-walk volume (SIM-429). A cell
+        absent from the table has a measured rate of about 0 and never fires.
+        With no manager wired, or no rate table loaded (a no-database test
+        machine), no intentional walk fires.
         """
-        del li  # SIM-515: the cell replaces the leverage heuristic.
         if self.manager is None:
             return False
         rates = self.ibb_rates
@@ -178,42 +155,27 @@ class ManagerMixin(LoopMixin):
         return self._manager_rng() < rate
 
     def _start_of_pa_hook(self, state: GameState) -> None:
-        """SIM-523 part D: the manager decisions at the START of a plate
-        appearance (the loop's step 1) — the pitching change, the pinch hit
-        and the bunt setup — evaluated once, on the first pitch, before the
-        intentional-walk and steal decisions. The body is the former
-        end-of-plate-appearance hook; ``_end_of_pa_hook`` stays as its alias."""
-        return self._end_of_pa_hook(state)
+        """The decision at the START of a plate appearance, on its first
+        pitch, before the intentional walk and the steal: the pitching change.
 
-    def _end_of_pa_hook(self, state: GameState) -> None:
-        """The manager decision at a plate-appearance boundary: the pitching
-        change (the loop's step 1), evaluated once per plate appearance on its
-        first pitch (SIM-523 part D). Since 2026-09-13 (SIM-427) it is a draw
-        from the change opportunity pool with the live manager's usage
-        similarity as a weight, and the entering arm is a draw from the live
-        pen; the pull formula, the pinch hit and the sac-bunt setup are
-        deleted. No-op-safe: with ``self.manager is None`` nothing fires (the
-        SIM-320/324/326 no-DB full-game tests stay green).
+        The change is a draw from the change opportunity pool with the live
+        manager's usage similarity as a weight, and the entering arm a draw
+        from the live pen (the owner's decision of 2026-09-13). With
+        ``self.manager is None`` nothing fires, so the no-database full-game
+        tests run with no change.
         """
         if self.manager is None:
             return None
-        # SIM-427 (owner decision 2026-09-13): the pitching change is the one
-        # decision here — the pinch hit and the bunt setup are deleted (no
-        # bench was ever wired; the bunt changed no play). (SIM-349's
-        # _maybe_sac_fly_intent sat here until 2026-08-19 — retired by
-        # SIM-513; the SIM-512 tag draw owns sacrifice flies.)
         li = self.compute_leverage(state)
         self._maybe_pull_starter(state, li)
         return None
 
     def _maybe_pull_starter(self, state: GameState, li: float) -> None:
-        """The pitching change (the loop's step 1) — a DRAW from the change
-        opportunity pool at the pool's own rate for this boundary's cell, the
-        live manager's usage similarity a weight (SIM-427). No floor, no
-        ceiling, no formula: the SIM-434 pull formula was deleted at the flip
-        (2026-09-13; it pulled every starter at ~81 pitches with a spread of
-        1.6). With the draw switch off, or no pool in the bundle, no change is
-        ever drawn — the no-DB synthetic bundle carries its own change pool.
+        """The pitching change: a DRAW from the change opportunity pool at the
+        pool's own rate for this boundary's cell, the live manager's usage
+        similarity a weight. No floor, no ceiling, no formula. With the draw
+        switch off (``manager_draw``), or no pool in the bundle, no change is
+        drawn; the no-database synthetic bundle carries its own change pool.
         """
         if not self.manager_draw:
             return
@@ -221,11 +183,11 @@ class ManagerMixin(LoopMixin):
             self._change_pitcher(state, li, forced=False, source="draw")
 
     def _pitching_change_by_draw(self, state: GameState) -> bool | None:
-        """SIM-523 part D: the boundary's inputs for the sampler's draw —
-        the current pitcher's key, whether he is the side's starter, whether
-        this is the first plate appearance of the half, his pitches and
-        batters faced so far, and the situation from the fielding side's
-        view. None when the sampler has no pool."""
+        """The boundary's inputs for the sampler's change draw: the current
+        pitcher's key, whether he is the side's starter, whether this is the
+        first plate appearance of the half, his pitches and batters faced so
+        far, the situation from the fielding side's view and the fielding
+        manager's key. None when the sampler has no change draw."""
         fp = self.full_pool_sampler
         draw = getattr(fp, "pitching_change_draw", None)
         if fp is None or draw is None or state.pitcher_id is None:
@@ -237,7 +199,7 @@ class ManagerMixin(LoopMixin):
         fld = state.home_score if defense == Team.HOME else state.away_score
         bat = state.away_score if defense == Team.HOME else state.home_score
         season = int(getattr(state, "season", 2024) or 2024)
-        # SIM-427: the FIELDING side's manager keys his usage-similarity row.
+        # The FIELDING side's manager keys his usage-similarity row.
         mid = state.home_manager_id if defense == Team.HOME else state.away_manager_id
         return draw(
             f"{pid}:{season}",
@@ -254,8 +216,9 @@ class ManagerMixin(LoopMixin):
 
     def _change_pitcher(self, state: GameState, li: float, *, forced: bool, source: str) -> None:
         """Bring in the reliever ``_pick_reliever`` selects and record the
-        change (``source`` is "draw" since the flip). No arm: stay with the pitcher."""
-        new_arm = self._pick_reliever(state, li, source=source)
+        change in ``manager_decisions``. With no arm available the pitcher
+        stays."""
+        new_arm = self._pick_reliever(state, li)
         if new_arm is None:
             return  # bullpen empty -> degrade gracefully (stay with the starter).
         old = state.pitcher_id
@@ -277,24 +240,23 @@ class ManagerMixin(LoopMixin):
                 "in_pitcher_id": int(new_arm),
                 "forced": forced,
                 "source": source,
-                # SIM-523 part D: the boundary's facts for the probe and the lane.
+                # The boundary's facts, for the manager probe and the lane.
                 "pitch_count": out_pitches,
                 "batters_faced": out_bf,
                 "new_half": new_half,
             }
         )
 
-    def _pick_reliever(self, state: GameState, li: float, *, source: str = "draw") -> int | None:
+    def _pick_reliever(self, state: GameState, li: float) -> int | None:
         """Choose the entering arm from the defending team's pen.
 
-        SIM-427 (owner decision 2026-09-13): the arm is a second draw from the
-        live pen — the candidate's resemblance to the arm the drawn pool row
-        brought in, in role, stuff, recent usage and hand
-        (:meth:`FullPoolSampler.relief_arm_draw`). Every weight off, or no
-        sampler, keeps the positional pick: high leverage late -> the first arm
-        (the closer / the arm the box listed as used first), otherwise from the
-        back. The SIM-434 ranking was deleted at the flip. Pops the chosen arm
-        so it cannot enter twice. None when no arm is available.
+        The arm is a second draw from the live pen: each candidate's
+        resemblance to the arm the drawn pool row brought in, in role, stuff,
+        recent usage and hand (:meth:`FullPoolSampler.relief_arm_draw`). With
+        every weight off, or no sampler, the pick is positional: in a
+        high-leverage late spot the first arm (the closer, the arm the box
+        listed first), otherwise the last. Pops the chosen arm so it cannot
+        enter twice. None when no arm is available.
         """
         pen_map = state.manager.bullpen_available or {}
         team = state.defense
