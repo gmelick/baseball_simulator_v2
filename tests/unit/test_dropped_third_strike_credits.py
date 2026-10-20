@@ -1,31 +1,30 @@
-"""SIM-484 — the box-score credits on the dropped-third-strike play.
+"""The box-score credits on the dropped-third-strike play.
 
 On a swinging third strike that gets away with first base open or two outs, the
-batter reaches first. The loop already put him there; the bookkeeping was wrong:
+batter reaches first. These tests pin the bookkeeping:
 
-  * the reach committed to the run ledger as ``field_error``, so the box read a
-    reach on an error — no strikeout for the pitcher, and the lane's
-    reach-on-error counter counted it. Official scoring (Rule 9.15) credits the
+  * the reach commits to the run ledger as a ``strikeout``, not a
+    ``field_error``. Official scoring (Rule 9.15) credits the pitcher the
     strikeout; on all 50 of 2025's reaches the official box does;
-  * a run the reach forced home paid the batter an RBI. Rule 9.04(a) pays none:
-    the run scores on the wild pitch or the passed ball;
-  * the batter's own strikeout was never credited, on ANY strikeout. It now goes
-    to ``PlayerStatLine.so``. ``k`` is the pitcher's field, and three readers
+  * a run the reach forces home pays the batter no RBI. Rule 9.04(a) pays
+    none: the run scores on the wild pitch or the passed ball;
+  * the batter's own strikeout, on ANY strikeout, goes to
+    ``PlayerStatLine.so``. ``k`` is the pitcher's field, and three readers
     tell a pitcher by it, so a batter's strikeout on ``k`` would hand every
     batter who struck out the pitcher props;
-  * the "first base open" test read the bases AFTER a steal on the same pitch
-    had moved them. A pickoff is thrown before the pitch, so after a pickoff
-    the live bases are the bases at the pitch;
-  * found on the way: a runner who stole on a got-away third strike that the
-    batter could not run on was moved twice (the steal, then the got-away
-    advance). The terminal path now keeps the non-terminal path's rule: one
-    mover per pitch.
+  * the "first base open" test reads the bases AT the pitch, before a steal on
+    the same pitch moves them. A pickoff is thrown before the pitch, so after
+    a pickoff the live bases are the bases at the pitch;
+  * one mover per pitch: a runner who steals on a got-away third strike that
+    the batter cannot run on moves once, not twice (the steal, then the
+    got-away advance).
 
-The relabel, the RBI marker and the batter's credit change no run value, out,
-score or run allowed. The rule at the pitch and the one-mover guard change the
-play itself, on purpose, in the cases they cover: a batter who used to reach is
-out, a runner who used to move twice moves once. Every test asserts the score,
-the outs and the runs allowed beside the credit it pins.
+The strikeout label, the RBI marker and the batter's credit change no run
+value, out, score or run allowed. The rule at the pitch and the one-mover
+guard decide the play itself in the cases they cover. Every test asserts the
+score, the outs and the runs allowed beside the credit it pins. The machine
+draws from a one-play synthetic bundle (``fixed_play_artifacts``), so no test
+needs a database.
 """
 
 from __future__ import annotations
@@ -91,7 +90,7 @@ class TestTheReachIsAStrikeout:
     def test_the_play_commits_as_a_strikeout(self):
         _sm, state, result = self._reach()
         assert result.pa_terminal and result.event == "strikeout"
-        assert result.canonical_event == "strikeout"  # was field_error
+        assert result.canonical_event == "strikeout"  # not field_error
         assert result.run_resolution_method == "re24_delta"
         assert not result.is_error
         assert state.bases.first == BATTER
@@ -100,7 +99,7 @@ class TestTheReachIsAStrikeout:
     def test_the_pitcher_is_credited_the_strikeout_and_no_out(self):
         sm, state, _result = self._reach()
         pit = sm.boxscore.line(PITCHER)
-        assert pit.k == 1  # was 0
+        assert pit.k == 1  # Rule 9.15
         assert pit.outs_recorded == 0 and state.outs == 0
         assert pit.r_allowed == 0 and pit.er == 0 and pit.h_allowed == 0
 
@@ -147,9 +146,9 @@ class TestAnOrdinaryStrikeout:
 
 class TestTheForcedRunPaysNoRbi:
     """Bases loaded, two outs: the runner on third scores on the loose ball.
-    Since SIM-554 (decision 4) every runner moves up one base before the
-    batter takes first, so the run scores on that advance, not on the
-    reach's push. The bases and the score are the ones the push gave."""
+    Every runner moves up one base before the batter takes first (the
+    running-game design's decision 4), so the run scores on that advance, not
+    on the reach's push. The bases and the score match what the push gives."""
 
     def test_the_run_scores_with_no_rbi_and_the_strikeout_credited(self):
         sm = _machine("swinging_strike")
@@ -166,7 +165,7 @@ class TestTheForcedRunPaysNoRbi:
         assert state.bases.second == RUNNER
         assert state.bases.third == 202
         bat = sm.boxscore.line(BATTER)
-        assert bat.rbi == 0  # Rule 9.04(a); was 1
+        assert bat.rbi == 0  # Rule 9.04(a)
         assert bat.so == 1 and bat.ab == 1 and bat.h == 0
         pit = sm.boxscore.line(PITCHER)
         assert pit.k == 1 and pit.outs_recorded == 0
@@ -205,8 +204,8 @@ class TestTheRuleReadsTheBasesAtThePitch:
     def test_a_steal_of_second_under_two_outs_leaves_the_batter_out(self):
         # One out, a runner on first steals second on a got-away strike
         # three. At the pitch first base was occupied under two outs: the
-        # batter is out. The loop used to see first base empty and let him
-        # reach. Now the batter is out, and the one-mover guard keeps the
+        # batter is out. Reading the bases after the steal would see first
+        # base empty and let him reach. The one-mover guard keeps the
         # got-away from carrying the runner on to third.
         sm = _machine("swinging_strike")
         state = _state()
@@ -230,7 +229,8 @@ class TestTheRuleReadsTheBasesAtThePitch:
     def test_a_caught_stealing_under_two_outs_makes_the_batter_the_third_out(self):
         # One out, the runner is caught stealing on the same pitch (the
         # second out). At the pitch: not eligible, so the batter is the third
-        # out. The loop used to see two outs and first base empty.
+        # out. Reading the bases after the steal would see two outs and first
+        # base empty.
         sm = _machine("swinging_strike")
         state = _state()
         state.bases = Bases(first=RUNNER)
@@ -311,7 +311,7 @@ class TestTheRuleReadsTheBasesAtThePitch:
 
 
 class TestOneMoverPerPitch:
-    """Found on the way: the terminal got-away advance had no guard."""
+    """The terminal got-away advance moves no runner who already moved on the pitch."""
 
     def test_a_runner_who_stole_on_a_got_away_strike_three_moves_once(self):
         # A called third strike cannot be a dropped-third-strike reach, so

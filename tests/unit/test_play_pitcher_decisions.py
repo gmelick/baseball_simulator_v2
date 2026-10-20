@@ -1,26 +1,28 @@
-"""SIM-557 — the play names its own pitcher, and the win module reads it.
+"""The play names its own pitcher, and the win module reads it.
 
 The plan is ``docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md``
 (decision 2, sections 5.4 and 7, tests 22 to 28).
 
-Every play result now names the pitcher on the mound for that play
-(``PlayResult.pitcher_id``) and his side (``PlayResult.fielding_team``). The
-win module (``decisions_from_plays``) used to read both from the play's next
-state. On the play that ends a half-inning, the next state already shows the
-NEXT half: the other fielding side and the other side's pitcher. So the last
-out of every half went to the wrong pitcher. The starter's out count for the
-five-inning rule was wrong in most games, and a reliever whose first play
-ended a half never became the pitcher of record for it.
+Every play result names the pitcher on the mound for that play
+(``PlayResult.pitcher_id``) and his side (``PlayResult.fielding_team``), and
+the win module (``decisions_from_plays``) reads both from the play. The play's
+next state is the wrong source: on the play that ends a half-inning, it
+already shows the NEXT half, the other fielding side and the other side's
+pitcher. Read from it, the last out of every half goes to the wrong pitcher,
+the starter's out count for the five-inning rule is wrong in most games, and a
+reliever whose first play ends a half never becomes the pitcher of record for
+it.
 
 The tests here:
 
-* drive ``step_pitch`` on a synthetic bundle and read the two new fields,
-  the no-pitch pickoff third out and the intentional walk included;
+* drive ``step_pitch`` on a synthetic bundle and read the two fields, the
+  no-pitch pickoff third out and the intentional walk included;
 * build play streams by hand, shaped like the REAL stream (the play that ends
   a half carries the next half's state and the other side's pitcher), and
   read the win, the loss and the save from them;
-* strip the two fields from the same streams and pin today's miscount, so the
-  fallback for a hand-built stream stays what it was;
+* strip the two fields from the same streams and pin the miscount of the
+  fallback (the next state), which a hand-built stream without the fields
+  still reads;
 * record whole synthetic games with scripted pitching changes and check the
   module's out count against the box line of every winning-side pitcher.
 """
@@ -301,7 +303,7 @@ def _real_stream(
     old pitcher in its next state.
 
     ``own`` sets the play's own pitcher and fielding side; ``own=False``
-    leaves both at None, the shape of a stream built before SIM-557.
+    leaves both at None, the shape of a stream without the two fields.
     """
     current = {Team.HOME: halves[0][0].pitcher, Team.AWAY: halves[1][0].pitcher}
     home = away = 0
@@ -490,17 +492,17 @@ class TestThePlaysOwnPitcherDecides:
 
 
 # ---------------------------------------------------------------------------
-# Test 27 — a stream without the two fields reads as today
+# Test 27 — a stream without the two fields reads through the fallback
 # ---------------------------------------------------------------------------
 
 
 class TestAStreamWithoutTheTwoFieldsReadsAsToday:
     """The same three games with the play's own pitcher removed. The module
-    falls back to the next state and makes today's mistakes, on purpose:
-    these assertions pin the fallback, not the truth."""
+    falls back to the next state and makes the fallback's mistakes, on
+    purpose: these assertions pin the fallback, not the truth."""
 
     def test_the_double_play_starter_is_short_of_15_and_loses_the_win(self):
-        # Today's count gives the starter 10 outs: one out a half from his
+        # The fallback's count gives the starter 10 outs: one out a half from his
         # own innings (the double play's two go to the away side) and the
         # last out of each bottom half he rolls into.
         d = decisions_from_plays(_strip(_real_stream(_double_play_starter_game())))
@@ -523,7 +525,7 @@ class TestAStreamWithoutTheTwoFieldsReadsAsToday:
     def test_a_stream_built_in_the_old_shape_keeps_its_meaning(self):
         # The win module's own suites build each play with a next state in
         # the play's own half. Without the two fields that shape reads the
-        # truth, as it always did.
+        # truth.
         stream = [
             PlayResult(
                 pitch_outcome="in_play",
@@ -542,17 +544,17 @@ class TestAStreamWithoutTheTwoFieldsReadsAsToday:
 
 
 class TestALeadTakenBeforeTheWinnersPitcherFields:
-    """Found while building these tests; outside the plan's decision 2.
+    """A rule outside the plan's decision 2.
 
     The module learns a side's pitcher of record from a play that side
     fields. The away side bats first. When it takes the lead for good in the
-    top of the 1st, its starter has fielded no play yet. The module used to
-    have no pitcher of record for it at the decisive play and gave no win.
-    One of the 24 recorded games below (the busy bundle, seed 2) ended this
-    way, under the old reading too. The module now puts the side's first
-    pitcher (its starter) on record until the side fields a play. It does so
-    only for a stream whose plays name their fielding side: a stream without
-    the two fields keeps the old answer (no winning pitcher)."""
+    top of the 1st, its starter has fielded no play yet, so with no rule the
+    side has no pitcher of record at the decisive play and nobody gets the
+    win. One of the 24 recorded games below (the busy bundle, seed 2) ends
+    this way. The module puts the side's first pitcher (its starter) on
+    record until the side fields a play. It does so only for a stream whose
+    plays name their fielding side: a stream without the two fields gives no
+    winning pitcher."""
 
     @staticmethod
     def _away_leads_from_the_first() -> list[list[P]]:
@@ -574,9 +576,8 @@ class TestALeadTakenBeforeTheWinnersPitcherFields:
 
     def test_a_stream_without_the_two_fields_keeps_the_old_answer_of_no_winner(self):
         # The starter fallback applies only to a stream whose plays name
-        # their fielding side. Without the two fields the stream reads as it
-        # did before SIM-557: the away side has no pitcher of record at the
-        # decisive play, so no pitcher gets the win.
+        # their fielding side. Without the two fields the away side has no
+        # pitcher of record at the decisive play, so no pitcher gets the win.
         d = decisions_from_plays(_strip(_real_stream(self._away_leads_from_the_first())))
         assert (d.home_score, d.away_score) == (0, 1)
         assert d.winning_pitcher_id is None
@@ -730,7 +731,8 @@ class TestRecordedGamesCountLikeTheBox:
 
     def test_the_old_reading_misses_the_box_in_some_games(self, recorded_games):
         """Without the play's own pitcher the count differs from the box in
-        some games. This proves the recorded games exercise the defect."""
+        some games. This proves the recorded games exercise the case the two
+        fields fix."""
         differs = 0
         for _kind, _seed, game, plays in recorded_games:
             winner = game.winner

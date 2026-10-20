@@ -1,8 +1,7 @@
 """
 test_prop_distributions.py
 ======================
-Unit tests for SIM-329 -- the **prop-distribution aggregator**
-:mod:`simulation.prop_distributions` (Phase 4, Sprint 4).
+The **prop-distribution aggregator** :mod:`simulation.prop_distributions`.
 
 These tests build synthetic per-game :class:`BoxScore`s (no loop run, no DB/FAISS)
 and assert the prop-PMF contract:
@@ -13,8 +12,7 @@ and assert the prop-PMF contract:
     and HALF-INTEGER lines, and the betting over/under/push convention holds
     (half-integer: over + under == 1; integer: over + under + push == 1, with a
     5.5 line splitting cleanly);
-  * total bases is computed as ``h + 3*hr`` (the documented (h, hr)-only lower
-    bound), per game;
+  * total bases is exact, ``h + b2 + 2*b3 + 3*hr``, per game;
   * an absent player yields ``None`` rather than crashing;
   * pitcher vs batter props are assigned by activity (a pure batter has no K PMF);
   * a DNP game contributes a 0 to the prop's PMF (denominator stays the full N);
@@ -172,8 +170,8 @@ def test_line_outside_support():
 
 
 # ===========================================================================
-# Total bases — EXACT since SIM-365 (b2/b3 tracked); the (h, hr)-only cases
-# below still hold under the exact formula h + b2 + 2*b3 + 3*hr.
+# Total bases — exact (b2/b3 tracked): h + b2 + 2*b3 + 3*hr. The cases below
+# set only h and hr.
 # ===========================================================================
 
 
@@ -291,7 +289,7 @@ def test_from_results_reads_boxscore():
 def test_from_results_none_boxscore_counts_as_zero_game():
     results = [
         _result(_box([_pitcher_line(PITCHER, k=8, outs=18)])),
-        _result(None),  # SIM-320 run with no accumulated boxscore
+        _result(None),  # a result built without a boxscore
     ]
     s = PropDistributionSet.from_results(results)
     assert s.n_iterations == 2

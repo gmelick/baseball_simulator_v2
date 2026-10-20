@@ -1,25 +1,22 @@
 """
 test_situational_decisions.py
 ===============================
-SIM-349 -- the **situational-decision module**: the hit-and-run (pre-pitch) and
-sac-fly-intent (PA-boundary) triggers added to the Phase-4 simulation loop
-(``simulation/sim_loop.py``), consolidated with SIM-323's IBB + sac-bunt into one
-leverage- and base/out-state-conditioned situational set.
+Whole games with and without a manager profile complete validly.
 
-WHAT THIS COVERS (what is left of the SIM-349 acceptance criteria)
-------------------------------------------------------------------
-  * a no-manager-profile game still completes with no decision taken, and an
+WHAT THIS COVERS
+----------------
+  * a no-manager-profile game completes with no decision taken, and an
     aggressive-manager game completes validly.
 
-  The hit-and-run trigger (deleted 2026-09-13 by SIM-427 with the other dead
-  hooks) and the sac-fly intent (retired 2026-08-19 by SIM-513) are gone; their
-  tests went with them.
+  The loop has no hit-and-run or sac-fly-intent hook: a hit-and-run is a steal
+  draw plus a pitch draw (the owner's decision of 2026-09-13), and the
+  advancement draw from third owns sacrifice flies.
 
-HOW THE TENDENCIES ARE INJECTED (no live DB)
---------------------------------------------
-Decisions read an injected ``manager`` dict of the SIM-2.8 manager-similarity rate
-names + a fixed-seed numpy rng, mirroring the SIM-316/319/320/323 inject-the-signal
-pattern -- no DuckDB / FAISS is touched.
+HOW THE MANAGER IS INJECTED (no live DB)
+----------------------------------------
+Decisions read an injected ``manager`` dict of manager rate names + a
+fixed-seed numpy rng, and the plays come from the in-memory league bundle, so
+no DuckDB / FAISS is touched.
 """
 
 from __future__ import annotations
@@ -85,30 +82,23 @@ _AGGRESSIVE = {
 _PASSIVE = dict.fromkeys(_AGGRESSIVE, 0.0)
 
 
-# (The `_SacFlyResolver` helper and the sac-fly-intent test classes lived
-# here until 2026-08-19 — retired with the SIM-349 nudge by SIM-513. The
-# SIM-512 tag draw from 3B owns sacrifice flies now, pinned by
-# tests/unit/test_transition_draw.py and the retargeted sac-fly
-# ledger test in tests/unit/test_run_ledger.py. The hit-and-run trigger,
-# its consolidation with the steal initiate and its determinism tests lived
-# here until 2026-09-13 — deleted with the hook by SIM-427 (owner decision:
-# the four dead hooks go; a hit-and-run is a steal draw plus a pitch draw, and
-# the hook changed no play). What stays: a no-manager game and an aggressive-
-# manager game both complete.)
+# (The advancement draw from 3B owns sacrifice flies, pinned by
+# tests/unit/test_transition_draw.py and the sac-fly ledger test in
+# tests/unit/test_run_ledger.py. A hit-and-run is a steal draw plus a pitch
+# draw, so the loop has no hook for it. This file pins that a no-manager game
+# and an aggressive-manager game both complete.)
 
 
 # ===========================================================================
-# No-manager-profile games still complete (every new trigger is no-op-safe)
+# Games with and without a manager profile complete
 # ===========================================================================
 
 
 class TestNoProfileFullGame:
     def test_no_profile_game_completes_with_new_triggers_no_op(self):
-        # SIM-498 reseeded the loop and full-pool generators from independent
-        # SeedSequence children, which legitimately changes the draw stream. Seed 0
-        # now yields a 0-0 tie that runs to the extra-inning cap; seed 2 decides in
-        # regulation. The seed is incidental — this test asserts the game reaches a
-        # decision rather than stalling, and it still does.
+        # The seed is incidental: this test asserts the game reaches a decision
+        # rather than stalling. Some seeds end tied at the extra-inning cap;
+        # seed 2 decides the game.
         rng = np.random.default_rng(2)
         machine = StateMachine(synthetic_sampler(league_artifacts(), 2), rng=rng)  # manager=None
         result = simulate_game(
@@ -119,17 +109,14 @@ class TestNoProfileFullGame:
         )
         assert result.home_score != result.away_score
         assert result.innings_played >= 9
-        # No profile => no situational decisions taken (the hooks were no-ops).
+        # No profile => no situational decisions taken (the hooks are no-ops).
         assert machine.manager_decisions == []
         result.final_state.assert_score_valid()
 
     def test_aggressive_situational_manager_game_completes_validly(self):
-        # SIM-505 CLOSED: the fixture used to pass this assertion by SEED LUCK
-        # (its in-play pitches resolved to nothing, so runners parked for
-        # whole innings and seeds 1 and 7 ended with a runner on two bases).
-        # With the injected batted-ball sample the resolver actually runs, so
-        # the game is legal at ANY seed — asserted across the two previously
-        # ILLEGAL seeds plus one that always passed.
+        # The game must be legal at ANY seed. Seeds 1 and 7 are the two that
+        # once ended with a runner on two bases, when in-play pitches resolved
+        # to nothing; seed 2 is a control.
         for seed in (1, 2, 7):
             rng = np.random.default_rng(seed)
             machine = StateMachine(

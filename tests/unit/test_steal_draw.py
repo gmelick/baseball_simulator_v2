@@ -1,13 +1,11 @@
-"""SIM-468 / SIM-474 — the steal opportunity pool and the steal draw.
+"""The steal opportunity pool and the steal draw.
 
-Production attempted ZERO steals from 2026-06-04 to 2026-08-16 (SIM-495
-measured SB 0.0000 against 0.59): the manager green-light gated the decision
-and then handed it to a resolver stub. SIM-474 deletes the gate and the tuned
-fallback; the decision is a similarity-weighted draw from the SIM-468
-opportunity pool — one row per pitch where a steal was POSSIBLE, attempted or
-not. The drawn row's `attempted` flag says whether the runner goes; its
-`success` flag says safe or caught; manager aggression is a WEIGHT on
-attempted rows, never a gate.
+The steal decision is a similarity-weighted draw from the steal opportunity
+pool: one row per pitch where a steal was POSSIBLE, attempted or not. The
+drawn row's `attempted` flag says whether the runner goes; its `success` flag
+says safe or caught; manager aggression is a WEIGHT on attempted rows, never a
+gate. A gate in front of the decision cut production to ZERO steals from
+2026-06-04 to 2026-08-16 (SB 0.0000 against a real 0.59, SIM-495).
 
 Three layers, mirroring the seams:
 
@@ -15,10 +13,11 @@ Three layers, mirroring the seams:
     DuckDB emulating pg.raw.pitches — the opportunity filter, the lead-runner
     mapping, and the flag selection per target base;
   * the artifact round-trip (`build_steal_pool_artifact` ->
-    `EngineArtifacts.load`), including the legacy-bundle fallback;
+    `EngineArtifacts.load`), including a bundle with no steal pool;
   * the sampler draw (`FullPoolSampler.steal_draw`) and the loop wiring
-    (`StateMachine._steal_opportunity_draw`) with a duck-typed sampler, the
-    pattern of `test_realism_consumers._FakeFramingFP`.
+    (`StateMachine._steal_opportunity_draw`) with a duck-typed sampler.
+
+Every layer runs in memory or under ``tmp_path``, so no test needs a database.
 """
 
 from __future__ import annotations
@@ -67,10 +66,10 @@ CREATE TABLE sim.steal_opportunity_pool (
 
 
 def _add_play_events(c) -> None:
-    """SIM-507: the builder probes pg.raw.play_events; absent (the default
-    here) it degrades to all-FALSE pickoff labels. Tests that exercise the
-    pickoff attribution create the table with this. SIM-554: the columns
-    the builder reads to write a pickoff row join the table."""
+    """The builder probes pg.raw.play_events; absent (the default here) it
+    degrades to all-FALSE pickoff labels. Tests that exercise the pickoff
+    attribution create the table with this, with the columns the builder
+    reads to write a pickoff row."""
     c.execute(
         "CREATE TABLE pg.raw.play_events ("
         "id BIGINT, game_pk INTEGER, at_bat_number INTEGER, game_date DATE, "
@@ -110,7 +109,7 @@ def _conn() -> duckdb.DuckDBPyConnection:
         "data_quality_flag BOOLEAN, events VARCHAR, inning_topbot VARCHAR)"
     )
     c.execute("CREATE SCHEMA sim")
-    # SIM-554: the pitch pool's class is the steal row's pitch_class.
+    # The pitch pool's class is the steal row's pitch_class.
     c.execute(
         "CREATE TABLE sim.pitch_pool ("
         "pitch_id BIGINT, game_pk INTEGER, at_bat_number INTEGER, pitch_number INTEGER, "
@@ -219,12 +218,12 @@ class TestTheComputorBuild:
         got = c.execute("SELECT pool_name, row_count FROM sim.pool_build_metadata").fetchone()
         assert got == ("steal_opportunity_pool", 1)
 
-    # -- SIM-506: the event-recorded outcomes the columns never carry --------
+    # -- the event-recorded outcomes the columns never carry ----------------
 
     def test_a_pa_ending_caught_stealing_is_an_attempted_failure(self):
         """A caught stealing that ENDS the plate appearance lives only in
         `events` (measured disjoint from the sb_* columns; 43% of 2B caught
-        stealings). Reading the columns alone labelled this row as a
+        stealings). Reading the columns alone would label this row a
         non-attempt and read the pool 87.6% safe against a real ~82.7%."""
         c = _conn()
         _pitch(c, 1, 1, 1, on_1b=11, ev="caught_stealing_2b")
@@ -254,7 +253,7 @@ class TestTheComputorBuild:
         rows = c.execute("SELECT attempted, success FROM sim.steal_opportunity_pool").fetchall()
         assert rows == [(False, False)]
 
-    # -- SIM-507: the K+CS double play and the pickoff labels ----------------
+    # -- the K+CS double play and the pickoff labels ------------------------
 
     def test_a_strikeout_double_play_is_an_attempted_failure(self):
         """K + caught runner: measured 2023, 100 of 100 rows sit in an
@@ -430,7 +429,7 @@ def _steal_pool(
         attempted=att,
         success=(np.asarray(success, dtype=np.int8) if success is not None else att.copy()),
         recency=np.ones(n, dtype=np.float32),
-        # SIM-507: None -> __post_init__ zero-fills (the legacy-bundle shape).
+        # None -> __post_init__ zero-fills (a bundle with no pickoff labels).
         pickoff_out=(np.asarray(pickoff_out, dtype=np.int8) if pickoff_out is not None else None),
         pickoff_advancing=(
             np.asarray(pickoff_advancing, dtype=np.int8) if pickoff_advancing is not None else None
@@ -464,7 +463,7 @@ def _attempt_rate(fp, n_draws=2000, **kw) -> float:
 class TestTheSamplerDraw:
     def test_the_attempt_rate_is_the_pools_own(self):
         # 10% of opportunity rows are attempts; with neutral weights the drawn
-        # attempt rate must track it. This is the denominator working: the old
+        # attempt rate must track it. This is the denominator working: an
         # attempts-only pool would attempt 100% of the time.
         fp = _sampler({"2": _steal_pool(1000, [1] * 100 + [0] * 900)})
         assert _attempt_rate(fp) == pytest.approx(0.10, abs=0.03)
@@ -502,9 +501,8 @@ class TestTheSamplerDraw:
             "std": vecs.std(axis=0) + 1e-6,
             "features": feats,
         }
-        # SIM-523 (the kernel retirement): the runner factor is the steal
-        # engine's score matrix — the burner scores 1.0 on his own rows and
-        # 0.0 on the plodder's.
+        # The runner factor is the steal engine's score matrix — the burner
+        # scores 1.0 on his own rows and 0.0 on the plodder's.
         matrix = {
             "index": {"11:2024": 0, "12:2024": 1},
             "matrix": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
@@ -535,7 +533,8 @@ class TestTheSamplerDraw:
 
     def test_the_drawn_row_answers_both_questions(self):
         # Every row: attempted, caught, no pickoff. The draw returns the full
-        # SIM-507 quintuple.
+        # quintuple (attempted, success, pickoff out, pickoff advancing,
+        # pickoff error).
         fp = _sampler({"2": _steal_pool(50, [1] * 50, success=[0] * 50)})
         assert fp.steal_draw(2, "11:2024", "", None, outs=0, balls=0, strikes=0, score_diff=0) == (
             True,
@@ -546,7 +545,7 @@ class TestTheSamplerDraw:
         )
 
     def test_the_drawn_row_carries_the_pickoff_labels(self):
-        # SIM-507: every row an advancing pickoff out.
+        # Every row an advancing pickoff out.
         fp = _sampler(
             {
                 "2": _steal_pool(
@@ -572,8 +571,8 @@ class TestTheSamplerDraw:
 
 
 class _FakeStealFP:
-    """Duck-typed sampler exposing only the steal seam (the _FakeFramingFP
-    pattern). Records the call so the wiring's arguments are assertable."""
+    """Duck-typed sampler exposing only the steal seam. Records the call so
+    the wiring's arguments are assertable."""
 
     def __init__(self, result):
         self.result = result
@@ -655,9 +654,9 @@ class TestTheLoopWiring:
     def test_manager_aggression_is_a_weight_not_a_gate(self):
         # An aggressive manager raises the weight; a never-runs manager damps
         # it but the draw still happens — the sampler is ALWAYS consulted.
-        # SIM-427 (2026-09-13): the weight is the BATTING side's real measured
-        # rate over the season's league mean, read off the game state (the
-        # hand-set 0.08 default is gone); the machine's manager is the gate.
+        # The weight is the BATTING side's measured rate over the season's
+        # league mean, read off the game state; the machine's manager is the
+        # gate.
         fp = _FakeStealFP((False, False))
         m = _machine_with_fp(fp, manager={})
         s = _state(first=11)  # the away side bats (top half)
@@ -694,10 +693,10 @@ class TestTheLoopWiring:
         assert fp.calls[0]["catcher"] == "903:2024"
 
     def test_the_pitch_class_reaches_the_draw_only_when_given(self):
-        """SIM-554: the loop names the class of the pitch that came out, and
-        the steal draw reads its class group. A call without a class (today's
-        single pre-pitch draw) sends no pitch_class key at all, so a sampler
-        without the keyword still works."""
+        """The loop names the class of the pitch that came out, and the steal
+        draw reads its class group. A call without a class (the single
+        pre-pitch draw) sends no pitch_class key at all, so a sampler without
+        the keyword still works."""
         fp = _FakeStealFP((False, False))
         m = _machine_with_fp(fp)
         m._steal_opportunity_draw(_state(first=11), pitch_class="ball")
@@ -707,7 +706,7 @@ class TestTheLoopWiring:
 
 
 class TestThePickoffChannel:
-    """SIM-507: the pickoff labels ride the same draw and resolve in step 7."""
+    """The pickoff labels ride the same draw and resolve with the steal outcome."""
 
     def test_a_pickoff_out_draw_stages_a_pickoff(self):
         m = _machine_with_fp(_FakeStealFP((False, False, True, False, False)))
@@ -726,7 +725,7 @@ class TestThePickoffChannel:
         assert result.steal_outcome is None
         assert s.bases.first is None
         # An out, NOT a caught stealing: the runner gets no box line and no
-        # CS. SIM-557: the out itself is the pitcher's, so the box holds one
+        # CS. The out itself is the pitcher's, so the box holds one
         # line, the pitcher's, with this one out and nothing else.
         assert m.boxscore is not None
         assert 11 not in m.boxscore.lines
@@ -760,8 +759,8 @@ class TestThePickoffChannel:
         assert m.boxscore is None
 
     def test_a_legacy_two_tuple_sampler_still_works(self):
-        # A duck-typed test sampler returning the pre-SIM-507 pair stages an
-        # ordinary steal and no pickoff.
+        # A duck-typed test sampler returning the two-value pair (attempted,
+        # success) stages an ordinary steal and no pickoff.
         m = _machine_with_fp(_FakeStealFP((True, True)))
         m._steal_opportunity_draw(_state(first=11))
         p = m._pending_steal

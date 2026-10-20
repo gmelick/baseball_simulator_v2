@@ -1,12 +1,12 @@
 """
 tests/unit/test_situation_sigma_env.py
 =======================================
-SIM-548: the pitch draw's situation bandwidth has an environment variable.
+The pitch draw's situation bandwidth has an environment variable.
 
-``FullPoolSampler.sit_sigma`` is the Gaussian on the base-out situation. Its
-code default is 2.0. Before SIM-548 no variable set it, so the offline fit
-could ladder it but no arm could run it. ``SIM_SIT_SIGMA`` closes that gap:
-the factory applies it to the production sampler next to the fatigue sigmas.
+``FullPoolSampler.sit_sigma`` is the width of the bell-curve (Gaussian) weight
+on the base-out situation. Its code default is 2.0. ``SIM_SIT_SIGMA`` sets it,
+so an arm of the accuracy fit (SIM-548) can run a fitted value: the factory
+applies it to the production sampler next to the fatigue sigmas.
 
 The sampler is built over a tiny in-memory bundle, the way
 ``tests/unit/test_actor_powers.py`` builds one.

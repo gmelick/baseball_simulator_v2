@@ -1,31 +1,29 @@
-"""SIM-421 — the per-runner R credit on a terminal pitch.
+"""The per-runner R credit on a terminal pitch (the prop-market work, SIM-421).
 
 The runs-scored prop (``R``) and the hits + runs + RBI prop (``HRR``) read
-``PlayerStatLine.r``. Four paths in the loop wrote a wrong ``r`` on a pitch
-that ends the plate appearance:
+``PlayerStatLine.r``. These tests pin the credit on four paths of a pitch that
+ends the plate appearance:
 
-  * a PICKOFF OUT wrote ``baserunner_advances[runner] = 0`` for the retired
+  * a PICKOFF OUT writes no ``baserunner_advances`` entry for the retired
     runner. ``_accumulate_pa`` reads 0 as "scored", and a pickoff never sets
-    ``steal_attempted`` (the guard the caught-stealing path relied on), so the
-    picked-off runner was credited a run;
-  * a GOT-AWAY pitch on strike three credited the scorer's ``r`` in
-    ``_resolve_got_away_advance`` AND wrote the 0 entry, so ``_accumulate_pa``
-    credited the same run again;
-  * a STEAL on the same pitch as a scoring play skipped the whole credit
-    loop (the guard meant only to protect a steal of home from a second
-    credit), so a safe steal to 2B plus a home run credited nobody a run.
-    ``_resolve_steal_outcome`` now records the steal-of-home runner in
-    ``PlayResult.box_run_credited`` and ``_accumulate_pa`` skips exactly him;
-  * a DROPPED THIRD STRIKE with the bases loaded and two outs forced the
-    runner on 3B home but ``_force_on_reach`` wrote only the batter's
-    entry, so the forced run reached the team score and never the runner's
-    line. It now records every forced runner the way ``_resolve_walk`` does
-    (the fourth path; found by the review's skeptics).
+    ``steal_attempted`` (the guard of the caught-stealing path), so a 0 entry
+    would credit the picked-off runner a run;
+  * a GOT-AWAY pitch on strike three credits the scorer's ``r`` once:
+    ``_resolve_got_away_advance`` credits it, and ``_accumulate_pa`` does not
+    credit it again;
+  * a STEAL on the same pitch as a scoring play: ``_resolve_steal_outcome``
+    records the steal-of-home runner in ``PlayResult.box_run_credited``, and
+    ``_accumulate_pa`` skips exactly him, so a safe steal to 2B plus a home
+    run credits both scorers;
+  * a DROPPED THIRD STRIKE with the bases loaded and two outs records every
+    runner who moves, so the forced run reaches the runner's line as well as
+    the team score.
 
-The team score was right every time; only the per-runner line was off, so
-the acceptance lane's R band never saw it. The harness mirrors
+The team score is right on every path; only the per-runner line can go wrong,
+so the acceptance lane's R band cannot see it. The harness mirrors
 ``test_steal_run_credit`` (a steal or pickoff staged directly) and
-``test_fielding_and_baserunning_steps`` (a play drawn from the synthetic bundle).
+``test_fielding_and_baserunning_steps`` (a play drawn from the synthetic
+bundle), so no test needs a database.
 """
 
 from __future__ import annotations
@@ -134,7 +132,7 @@ class TestPickoffOutOnATerminalPitch:
         sm.step_pitch(state, pitch_outcome="called_strike")
         props = PropDistributionSet.from_boxscores([sm.boxscore])
         # A line with no batting event at all posts nothing; a phantom run
-        # used to post R {1: 1.0} and HRR {1: 1.0} for a runner who was out.
+        # would post R {1: 1.0} and HRR {1: 1.0} for a runner who was out.
         for prop in ("R", "HRR"):
             dist = props.get(RUNNER, prop)
             assert dist is None or dist.prob(1) == 0.0
@@ -151,7 +149,7 @@ class TestGotAwayOnStrikeThree:
         assert result.runs_scored == 1 and state.away_score == 1
         assert state.outs == 1
         assert sm.boxscore.line(303).r == 1
-        # The rest of the run's accounting stays as before.
+        # The rest of the run's accounting.
         pit = sm.boxscore.line(PITCHER)
         assert pit.r_allowed == 1 and pit.er == 1
         assert sm.boxscore.line(BATTER).rbi == 0  # no RBI on a got-away run
@@ -206,12 +204,12 @@ class TestStealOnAScoringPitch:
         assert result.steal_attempted and result.event == "home_run"
         assert result.runs_scored == 2 and state.away_score == 2
         assert result.baserunner_advances == {RUNNER: 0, BATTER: 0}
-        # The old guard skipped the loop on any steal pitch: both read 0.
+        # A guard that skipped the credit loop on any steal pitch leaves both at 0.
         assert sm.boxscore.line(RUNNER).r == 1
         assert sm.boxscore.line(BATTER).r == 1
         assert sm.boxscore.line(BATTER).rbi == 2
         assert sm.boxscore.line(RUNNER).sb == 1
-        # The team, pitcher and out accounting are unchanged by the fix.
+        # The team, pitcher and out accounting.
         pit = sm.boxscore.line(PITCHER)
         assert pit.r_allowed == 2 and pit.er == 2
         assert state.outs == 0
@@ -230,9 +228,9 @@ class TestStealOnAScoringPitch:
         assert sm.boxscore.line(BATTER).r == 0
 
     def test_a_steal_of_home_on_a_terminal_walk_is_credited_once(self):
-        # The case the old whole-loop skip protected: the steal-of-home
-        # runner is credited in ``_resolve_steal_outcome`` AND reads 0 in
-        # ``baserunner_advances`` when ``_accumulate_pa`` runs.
+        # The steal-of-home runner is credited in ``_resolve_steal_outcome``
+        # AND reads 0 in ``baserunner_advances`` when ``_accumulate_pa`` runs;
+        # ``box_run_credited`` keeps the second credit off.
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _state()
         state.bases = Bases(third=303)
@@ -310,13 +308,13 @@ class TestStealOnAScoringPitch:
 
 class TestDroppedThirdStrikeForcesARunHome:
     """The uncaught third strike with the bases loaded and two outs: the batter
-    reaches first and the runner on 3B scores. Since SIM-554 (decision 4,
-    owner 2026-10-01) every runner moves up one base on the loose ball BEFORE
-    the batter takes first. The run scores on that advance, and the reach
-    pushes nobody. The bases and the score are the ones the reach's push gave.
-    The run is the runner's ``r`` and the pitcher's run allowed. It pays no
-    RBI (SIM-484, Rule 9.04(a): the run scores on the wild pitch / passed
-    ball)."""
+    reaches first and the runner on 3B scores. Every runner moves up one base
+    on the loose ball BEFORE the batter takes first (the running-game design's
+    decision 4, the owner's ruling of 2026-10-01). The run scores on that
+    advance, and the reach pushes nobody. The bases and the score match what
+    the reach's push gives. The run is the runner's ``r`` and the pitcher's
+    run allowed. It pays no RBI (Rule 9.04(a): the run scores on the wild
+    pitch / passed ball)."""
 
     def _bases_loaded_two_out_d3k(self) -> tuple[StateMachine, GameState, object]:
         sm = _got_away_machine("swinging_strike")
@@ -349,8 +347,7 @@ class TestDroppedThirdStrikeForcesARunHome:
         assert pit.outs_recorded == 0
         assert pit.r_allowed == 1 and pit.er == 1
         assert state.away_score == 1 and state.outs == 2
-        # SIM-484: the reach commits as a strikeout (it committed as a reach
-        # on an error until 2026-09-23): the pitcher is credited the K, the
+        # The reach commits as a strikeout: the pitcher is credited the K, the
         # batter is charged it, and the forced run pays no RBI.
         assert result.canonical_event == "strikeout"
         assert pit.k == 1
@@ -365,11 +362,10 @@ class TestDroppedThirdStrikeForcesARunHome:
         assert dist is not None and dist.prob(1) == 1.0
 
     def test_a_dropped_third_strike_with_first_base_open_moves_every_runner_up(self):
-        # SIM-554 (decision 4): the ball is loose, so the runners on second
-        # and third move up one base before the batter takes first. The
-        # runner on third scores. Until 2026-10-01 nobody was forced, so both
-        # runners held and nobody scored (real runners moved on 28 of 32
-        # such chances, 2023-2026).
+        # The ball is loose, so the runners on second and third move up one
+        # base before the batter takes first (the design's decision 4), and
+        # the runner on third scores. Real runners moved on 28 of 32 such
+        # chances (2023-2026).
         sm = _got_away_machine("swinging_strike")
         state = _state()
         state.bases = Bases(second=202, third=303)

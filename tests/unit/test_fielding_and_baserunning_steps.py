@@ -1,18 +1,17 @@
 """
 test_fielding_and_baserunning_steps.py
 ======================
-Unit tests for SIM-319 -- **step 6 (fielding)** + **step 7 (baserunning + steals)**
-of the simulation loop in ``simulation/sim_loop.py``, plus the §5.4
-dropped-third-strike edge.
+The loop's **fielding** step and its **baserunning + steals** step
+(:class:`simulation.sim_loop.StateMachine`), plus the dropped-third-strike edge.
 
-These tests run with NO live DuckDB: every batted ball is drawn through the
-PRODUCTION in-play path (the SIM-511 transition draw) from a fixed-play
+These tests run with NO DuckDB: every batted ball is drawn through the
+PRODUCTION in-play path (the transition draw) from a fixed-play
 :mod:`simulation.synthetic_bundle` bundle -- one event in every base-out cell,
-so the play is deterministic (SIM-486 deleted the injected ``PlayResolver``).
-Steals are staged through :meth:`StateMachine.stage_steal`; the dropped third
-strike is the drawn pitch row's own got-away fact (SIM-517).
+so the play is deterministic. Steals are staged through
+:meth:`StateMachine.stage_steal`; the dropped third strike is the drawn pitch
+row's own got-away fact.
 
-Coverage (the SIM-319 acceptance criteria):
+Coverage:
   * fielding: an in-play OUT records the out and an in-play HIT does not, with the
     run/base-out delta produced via ``run_resolution.resolve_runs`` (provenance on
     the PlayResult), not inline;
@@ -20,8 +19,8 @@ Coverage (the SIM-319 acceptance criteria):
     both with the run resolved through ``resolve_runs``;
   * steals: a staged attempt resolving SAFE (runner advances) and CAUGHT
     (runner removed + an out recorded);
-  * dropped third strike (§5.4): a swinging K3 that got away with 1B open lets
-    the batter reach.
+  * dropped third strike: a swinging K3 that got away with 1B open lets the
+    batter reach.
 """
 
 from __future__ import annotations
@@ -59,7 +58,7 @@ def _play_machine(event: str, *, got_away: bool = False, **overrides: int) -> St
 
 
 # ===========================================================================
-# Step 6 — fielding resolution: out vs hit
+# Fielding resolution: out vs hit
 # ===========================================================================
 
 
@@ -97,11 +96,11 @@ class TestFieldingResolution:
         assert r.is_error is True
         assert r.event == "field_error"
         assert state.outs == 0
-        assert state.bases.first == 900  # a reach, not a hit (SIM-511)
+        assert state.bases.first == 900  # a reach, not a hit
 
 
 # ===========================================================================
-# Step 7 — baserunner advancement (runs via resolve_runs)
+# Baserunner advancement (runs via resolve_runs)
 # ===========================================================================
 
 
@@ -174,10 +173,10 @@ class TestWalkForcing:
         assert state.bases.second == 102  # 2B runner not forced
 
     def test_bases_loaded_walk_records_forced_advances(self):
-        """SIM-414: a bases-loaded walk records every forced advance in
+        """A bases-loaded walk records every forced advance in
         ``baserunner_advances`` — including the runner on 3B who scored
-        (``end_base == 0``). Previously only the batter's advance was recorded
-        and the per-runner R credit silently dropped the forced run."""
+        (``end_base == 0``). The per-runner R credit reads that entry; without
+        it the forced run would credit no R."""
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _fresh_state(balls=3, batter_id=900)
         state.bases = Bases(first=101, second=102, third=103)
@@ -191,7 +190,7 @@ class TestWalkForcing:
         assert r.baserunner_advances[900] == 1  # batter to 1B
 
     def test_bases_loaded_walk_credits_per_runner_R(self):
-        """SIM-414: the per-runner R credit in :meth:`_accumulate_pa` fires
+        """The per-runner R credit in :meth:`_accumulate_pa` fires
         for the runner on 3B forced home by a bases-loaded walk, so the
         boxscore Σ r equals the linescore run total."""
         sm = StateMachine(rng=np.random.default_rng(0))
@@ -206,8 +205,8 @@ class TestWalkForcing:
         assert sm.boxscore.line(900).r == 0
 
     def test_two_runners_walk_no_run_but_advances_recorded(self):
-        """SIM-414: a walk with runners on 1B+2B records both forced advances
-        (no run scores) — the dict is now semantically complete."""
+        """A walk with runners on 1B+2B records both forced advances (no run
+        scores), so the dict is complete."""
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _fresh_state(balls=3, batter_id=900)
         state.bases = Bases(first=101, second=102)
@@ -223,7 +222,7 @@ class TestWalkForcing:
 
 
 # ===========================================================================
-# Steals — a staged decision (pre-pitch) + its outcome (step 7)
+# Steals — a staged decision (pre-pitch) + its outcome
 # ===========================================================================
 
 
@@ -269,7 +268,7 @@ class TestSteals:
 
 
 # ===========================================================================
-# Dropped third strike (§5.4) — the drawn pitch row's got-away fact
+# Dropped third strike — the drawn pitch row's got-away fact
 # ===========================================================================
 
 
@@ -284,7 +283,7 @@ class TestDroppedThirdStrike:
         assert r.outs_recorded == 0  # batter reached (no out)
         assert state.outs == 0
         assert state.bases.first == 900  # batter safe at 1B
-        # SIM-484: the box credits the strikeout on both lines (Rule 9.15).
+        # The box credits the strikeout on both lines (Rule 9.15).
         assert r.canonical_event == "strikeout"
         assert sm.boxscore.line(PITCHER).k == 1
         assert sm.boxscore.line(900).so == 1
@@ -301,7 +300,7 @@ class TestDroppedThirdStrike:
         assert state.outs == 1
         assert state.bases.first is None  # batter did NOT reach
         assert sm.boxscore.line(PITCHER).k == 1
-        assert sm.boxscore.line(900).so == 1  # SIM-484
+        assert sm.boxscore.line(900).so == 1  # the batter's own strikeout
 
     def test_dropped_k3_not_eligible_with_first_occupied_and_under_two_outs(self):
         # 1B occupied AND fewer than two outs -> the edge is NOT eligible even
@@ -314,7 +313,7 @@ class TestDroppedThirdStrike:
         assert r.outs_recorded == 1
         assert state.outs == 1
         assert sm.boxscore.line(PITCHER).k == 1
-        assert sm.boxscore.line(900).so == 1  # SIM-484
+        assert sm.boxscore.line(900).so == 1  # the batter's own strikeout
 
 
 # ===========================================================================
