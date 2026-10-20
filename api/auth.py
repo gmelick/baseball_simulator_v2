@@ -1,18 +1,20 @@
 """
 api/auth.py
 ===========
-API security primitives for the MLB Simulation Platform (SIM-351, SIM-389, SIM-443c).
+The API's security primitives: the login check, the rate limit, the
+latency window and the CORS allowlist.
 
-This module is dependency-free beyond FastAPI/Starlette (no ``slowapi``, no
-Redis). It provides these seams:
+The module needs nothing beyond FastAPI and Starlette (no ``slowapi``, no
+Redis). It provides:
 
   - ``require_auth``: a FastAPI dependency that accepts a valid session
     cookie, an ``X-API-Key`` header or an ``Authorization: Bearer <key>``
-    header. A request with none of them gets ``401``. The gate is enforced in
-    EVERY environment (SIM-443c): ``ENVIRONMENT`` no longer relaxes it. The
-    one opt-out is an explicit ``AUTH_DISABLED=1`` (``_auth_disabled``); the
-    app logs a warning at boot and ``/health`` reports ``auth_enforced``.
-    Every data router carries this dependency at the router level.
+    header. A request with none of them gets ``401``. The check holds in
+    every environment (the login on every route, SIM-443c); ``ENVIRONMENT``
+    plays no part. The one opt-out is an explicit ``AUTH_DISABLED=1``
+    (``_auth_disabled``); the app logs a warning at boot and ``/health``
+    reports ``auth_enforced``. Every data router carries this dependency at
+    the router level.
 
   - ``authenticate_websocket``: the same check for the live WebSocket. A
     ``require_auth`` takes a Request, and FastAPI does not supply one in a
@@ -21,30 +23,27 @@ Redis). It provides these seams:
     the handler calls this first. A failed check closes the socket with code 1008 (policy
     violation) before the handshake is accepted.
 
-  - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter.
-    It counts a request against a configured API key when the request
-    presents one, else against the client address (SIM-564). Behind a proxy
-    named in ``TRUSTED_PROXY_HOSTS`` the client address is the one the proxy
-    sends in ``X-Real-IP`` (SIM-569). Defaults to
-    ``RATE_LIMIT_PER_MINUTE`` requests/min and returns ``429`` when exceeded.
-    Disabled when ``RATE_LIMIT_ENABLED`` is false or the per-minute limit is
-    ``<= 0`` (the test/dev default), so it never interferes with the suite
-    unless a test explicitly opts in.
+  - ``RateLimitMiddleware``: an in-memory sliding-window limiter, standard
+    library only. It counts a request against a configured API key when the
+    request presents one, else against the client address (the rate
+    limiter's bucket, SIM-564). Behind a proxy named in
+    ``TRUSTED_PROXY_HOSTS`` the client address is the one the proxy sends in
+    ``X-Real-IP`` (the trusted proxy, SIM-569). The limit is
+    ``RATE_LIMIT_PER_MINUTE`` requests a minute; past it the middleware
+    answers ``429``. It is off when ``RATE_LIMIT_ENABLED`` is false or the
+    limit is ``<= 0`` (the dev and test default).
 
-Design notes
-------------
-The in-memory limiter is process-local and therefore correct only for a
-single worker. That is deliberate for a *baseline*: it gives us a real 429
-contract and a tested seam without pulling in Redis. A multi-worker
-production deployment should swap the backing store for the shared Redis
-cache (the same one ``api/state.py`` already opens) — the middleware's
-public surface (constructor knobs + ``_client_key`` seam) is written so that
-swap is a body change, not an interface change.
+  - ``LatencyMiddleware``: the rolling p95 latency that /metrics reports.
 
-``ENVIRONMENT`` still drives two things here: the cookie ``secure`` flag
-(``cookie_kwargs``) and the CORS defaults (``resolve_cors_origins``).
+  - ``resolve_cors_origins``: the CORS allowlist from the environment.
 
-Owned by Backend Developer (SIM-351).
+The in-memory limiter is local to one process, so it is right for one worker
+only. A deployment with several workers would move its store to the shared
+Redis cache; the middleware's surface (the constructor's knobs and the
+``_client_key`` seam) lets that change stay inside the class.
+
+``ENVIRONMENT`` drives two things here: the cookie's ``secure`` flag
+(``cookie_kwargs``) and the CORS default (``resolve_cors_origins``).
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 # ---------------------------------------------------------------------------
-# Env helpers
+# The environment
 # ---------------------------------------------------------------------------
 
 _FALSEY = ("0", "false", "no", "off", "")
@@ -74,14 +73,18 @@ _FALSEY = ("0", "false", "no", "off", "")
 def _is_development() -> bool:
     """True when ENVIRONMENT is development.
 
-    SIM-443c: this no longer touches authentication. It drives the cookie
-    ``secure`` flag and the CORS defaults only.
+    It drives the cookie's ``secure`` flag and the CORS default only, never the
+    login check.
     """
     return os.environ.get("ENVIRONMENT", "development").strip().lower() == "development"
 
 
 def _env_flag(name: str, *, default: bool) -> bool:
-    """Parse a boolean env var. Unset → ``default``; recognised falsey strings → False."""
+    """Parse an on/off environment variable.
+
+    Unset gives ``default``; one of :data:`_FALSEY` gives False; any other
+    value gives True.
+    """
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -89,11 +92,11 @@ def _env_flag(name: str, *, default: bool) -> bool:
 
 
 def _auth_disabled() -> bool:
-    """True when ``AUTH_DISABLED`` is set to a truthy value (SIM-443c).
+    """True when ``AUTH_DISABLED`` is set to a value that is not off.
 
-    This is the ONE opt-out from authentication. Every site that skips the
-    credential check reads this helper, so removing the opt-out later means
-    deleting this helper and its call sites.
+    This is the one opt-out from the login check. Every site that skips the
+    check reads this helper, so removing the opt-out means deleting this helper
+    and its call sites.
     """
     return _env_flag("AUTH_DISABLED", default=False)
 
@@ -101,32 +104,31 @@ def _auth_disabled() -> bool:
 def _configured_api_keys() -> set[str]:
     """Parse ``API_KEYS`` (comma-separated) into a set of non-empty keys.
 
-    Read at request time (not import time) so tests can monkeypatch the env
-    per-case and so a key rotation via container restart takes effect without
-    re-import gymnastics.
+    It reads the variable on each call, not at import, so a test can set the
+    environment per case and a key rotation takes effect at a container
+    restart.
     """
     raw = os.environ.get("API_KEYS", "")
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
 # ---------------------------------------------------------------------------
-# Session token primitives (SIM-389)
+# The session token
 #
-# Stateless signed session tokens — a minimal JWT-equivalent backed by
-# HMAC-SHA256 and stdlib only (no python-jose / PyJWT dependency).
+# A stateless signed session token: a minimal JWT equivalent on HMAC-SHA256,
+# standard library only (no python-jose, no PyJWT).
 #
 # Wire format:  <base64url(json_payload)>.<base64url(hmac_sha256_sig)>
-# Payload keys: sub (subject), iat (issued-at unix ts), exp (expiry unix ts).
+# Payload keys: sub (subject), iat (issued at, Unix time), exp (expiry, Unix time).
 #
-# Environment variables consumed:
-#   SECRET_KEY         — HMAC signing key. Required in every environment
-#                        (SIM-443c); there is no default.
-#   AUTH_PASSWORD      — The single shared login password for the browser UI.
-#                        Required in every environment; there is no default.
-#   SESSION_TTL_HOURS  — Cookie / token lifetime in hours (default: 8).
+# The environment variables it reads:
+#   SECRET_KEY         — the HMAC signing key. Required; there is no default.
+#   AUTH_PASSWORD      — the one shared login password of the browser UI.
+#                        Required; there is no default.
+#   SESSION_TTL_HOURS  — the cookie and token lifetime in hours (default 8).
 #
-# validate_environment() (api/main.py) refuses to boot without the first two,
-# unless AUTH_DISABLED=1. scripts/gen_secrets.py writes both into .env.
+# validate_environment() (api/env_check.py) refuses to boot without the first
+# two, unless AUTH_DISABLED=1. scripts/gen_secrets.py writes both into .env.
 # ---------------------------------------------------------------------------
 
 SESSION_COOKIE_NAME = "sim_session"
@@ -145,7 +147,7 @@ def _get_secret_key() -> str:
     """HMAC signing key from the SECRET_KEY env var.
 
     Raises ``RuntimeError`` when the variable is blank. There is no default
-    key (SIM-443c): a published default would let anyone mint a session.
+    key: a published default would let anyone mint a session.
     """
     key = os.environ.get("SECRET_KEY", "").strip()
     if not key:
@@ -157,7 +159,7 @@ def _get_auth_password() -> str:
     """Shared browser login password from the AUTH_PASSWORD env var.
 
     Raises ``RuntimeError`` when the variable is blank. There is no default
-    password (SIM-443c).
+    password.
     """
     pw = os.environ.get("AUTH_PASSWORD", "").strip()
     if not pw:
@@ -166,10 +168,12 @@ def _get_auth_password() -> str:
 
 
 def _b64url_encode(data: bytes) -> str:
+    """URL-safe base64 with the ``=`` padding removed."""
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
 def _b64url_decode(s: str) -> bytes:
+    """Decode :func:`_b64url_encode` text, restoring its padding."""
     pad = 4 - len(s) % 4
     if pad != 4:
         s += "=" * pad
@@ -216,8 +220,8 @@ def _verify_session_token(token: str) -> dict | None:
 def cookie_kwargs(*, max_age: int | None = None) -> dict:
     """Build the kwargs to pass to ``response.set_cookie`` / ``response.delete_cookie``.
 
-    ``secure`` is True only outside development (localhost http doesn't support Secure
-    cookies and the Vite proxy handles the forwarding anyway).
+    ``secure`` is True only outside development: localhost over http cannot
+    carry a Secure cookie, and the Vite proxy forwards the cookie anyway.
     """
     ttl = max_age if max_age is not None else _session_ttl_seconds()
     return {
@@ -231,7 +235,7 @@ def cookie_kwargs(*, max_age: int | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# The shared credential check (SIM-351, SIM-389, SIM-443c)
+# The shared credential check
 # ---------------------------------------------------------------------------
 
 API_KEY_HEADER = "X-API-Key"
@@ -313,8 +317,8 @@ def _authenticate(cookies: Mapping[str, str], headers: Mapping[str, str]) -> Pri
 async def require_auth(request: Request) -> str | None:
     """FastAPI dependency: the caller must present a valid credential.
 
-    Every data router carries this dependency (SIM-443c). It gates every
-    route except ``/health``, ``/ready``, ``/``, ``/auth/*`` and the API docs.
+    Every data router carries this dependency. It gates every route except
+    ``/health``, ``/ready``, ``/``, ``/auth/*`` and the API docs.
 
     Accepted credentials (the first match wins):
       1. a valid ``sim_session`` httpOnly cookie -> returns "cookie:<sub>"
@@ -344,7 +348,7 @@ async def require_auth(request: Request) -> str | None:
 
 
 async def authenticate_websocket(websocket: WebSocket) -> str | None:
-    """Check the credential of a WebSocket handshake (SIM-443c).
+    """Check the credential of a WebSocket handshake.
 
     The check reads the same cookie and headers as ``require_auth``; a
     browser sends the session cookie on a same-origin handshake. On success
@@ -363,7 +367,7 @@ async def authenticate_websocket(websocket: WebSocket) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# The client address behind a trusted proxy (SIM-569)
+# The client address behind a trusted proxy
 # ---------------------------------------------------------------------------
 
 TRUSTED_PROXY_HOSTS_ENV = "TRUSTED_PROXY_HOSTS"
@@ -388,7 +392,7 @@ def _resolve_proxy_host(name: str) -> set[str]:
 
 
 def _trusted_proxy_addresses() -> frozenset[str]:
-    """Return the addresses of the proxies ``TRUSTED_PROXY_HOSTS`` names (SIM-569).
+    """Return the addresses of the proxies that ``TRUSTED_PROXY_HOSTS`` names.
 
     The variable is a comma-separated list of host names or addresses. Empty,
     the default, trusts nothing. The names resolve at most once per
@@ -419,7 +423,7 @@ def _reset_trusted_proxy_cache() -> None:
 
 
 def _client_address(request: Request) -> str:
-    """Return the address a request comes from (SIM-569).
+    """Return the address a request comes from.
 
     The connection's own address is the answer, with one exception. When the
     connection comes from a trusted proxy, the answer is the address in the
@@ -437,31 +441,32 @@ def _client_address(request: Request) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rate-limit middleware (SIM-351)
+# The rate limit
 # ---------------------------------------------------------------------------
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """In-memory sliding-window rate limiter (pure stdlib).
+    """In-memory sliding-window rate limiter (standard library only).
 
     The limiter counts a request against a configured API key when the
-    request presents one, else against the client address (SIM-564).
+    request presents one, else against the client address.
     Callers with distinct configured API keys behind one shared address keep
     separate buckets. Each bucket holds a ``deque`` of recent request
     timestamps. On every request the limiter evicts timestamps older than
     ``window_s``. It answers ``429`` once the deque length reaches ``limit``.
 
-    Constructor knobs (all overridable for tests; defaults read from env):
-      limit     — max requests per window (``RATE_LIMIT_PER_MINUTE``)
-      window_s  — window length in seconds (default 60)
-      enabled   — master switch (``RATE_LIMIT_ENABLED``)
+    The constructor's knobs (a test can set each; the defaults come from the
+    environment):
+      limit     — the most requests per window (``RATE_LIMIT_PER_MINUTE``)
+      window_s  — the window's length in seconds (default 60)
+      enabled   — the on/off switch (``RATE_LIMIT_ENABLED``)
 
-    A ``limit <= 0`` (the default when the env var is unset) means "no limit",
-    which is the safe default for dev + the test suite. Tests opt in by setting
-    a tiny ``RATE_LIMIT_PER_MINUTE`` before building the app.
+    A ``limit <= 0`` (the default when the variable is unset) means no limit,
+    the default for a dev stack and the tests. A test opts in with a small
+    ``RATE_LIMIT_PER_MINUTE`` before it builds the app.
 
-    Exempt paths (``/health``, ``/ready``, ``/``) are never throttled so an
-    over-eager k8s probe loop can't trip the limiter and flap the pod.
+    The exempt paths (``/health``, ``/ready``, ``/``) are never throttled, so
+    a busy probe loop cannot trip the limiter.
     """
 
     _EXEMPT_PATHS = frozenset({"/health", "/ready", "/"})
@@ -475,9 +480,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         enabled: bool | None = None,
     ) -> None:
         super().__init__(app)
-        # Resolve config at construction time. ``create_app`` builds the app
-        # (and thus this middleware) per-process, and the test suite rebuilds
-        # the app per-case, so reading env here gives each app its own knobs.
+        # The knobs resolve at construction. ``create_app`` builds the app (and
+        # this middleware) once per process, and a test rebuilds the app per
+        # case, so each app reads its own environment.
         if limit is None:
             try:
                 limit = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "0"))
@@ -486,17 +491,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._limit = limit
         self._window_s = window_s
         if enabled is None:
-            # Enabled only when a positive limit is configured AND not explicitly
-            # disabled. Unset RATE_LIMIT_ENABLED defaults to True so a configured
-            # limit "just works", but a non-positive limit short-circuits to off.
+            # On only with a positive limit and no explicit off. An unset
+            # RATE_LIMIT_ENABLED counts as on, so a configured limit works on
+            # its own; a limit <= 0 turns the limiter off.
             enabled = _env_flag("RATE_LIMIT_ENABLED", default=True) and limit > 0
         self._enabled = enabled
-        # client-key -> deque[timestamp]
+        # bucket name -> deque[timestamp]
         self._hits: dict[str, deque[float]] = defaultdict(deque)
 
     @staticmethod
     def _client_key(request: Request) -> str:
-        """Return the bucket name of a request (SIM-564).
+        """Return the bucket name of a request.
 
         The limiter reads the key the same way the login does. A request
         that presents a configured API key counts against that key. The
@@ -505,7 +510,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         Every other request counts against the client address: no key, a
         made-up key, or no configured keys. Behind a trusted proxy the client
-        address is the real client's (``_client_address``, SIM-569). A request
+        address is the real client's (``_client_address``). A request
         with no client address counts against the bucket named ``ip:unknown``.
         The limiter never uses the raw header text, so a made-up key cannot
         open a new bucket.
@@ -550,33 +555,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 # ---------------------------------------------------------------------------
-# CORS allowlist (SIM-351)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# p95 latency middleware (SIM-410)
+# The p95 latency
 # ---------------------------------------------------------------------------
 
 
 class LatencyMiddleware(BaseHTTPMiddleware):
-    """ASGI timing middleware that computes a rolling p95 API latency (SIM-410).
+    """ASGI timing middleware that keeps a rolling p95 of the API latency.
 
-    Records each non-exempt request's wall-clock response time in a fixed-size
-    ring buffer (``maxlen=window_size``, default 200).  After every request the
-    p95 of the current window is recomputed and stored on
-    ``request.app.state.api_p95_seconds`` so the /metrics endpoint can expose
-    the live p95 to Prometheus / Grafana — replacing the placeholder ``0``
-    that existed before this middleware was registered.
+    It records each timed request's wall-clock time in a ring buffer
+    (``maxlen=window_size``, default 200). After each request it recomputes the
+    window's p95 and stores it on ``request.app.state.api_p95_seconds``, which
+    /metrics reports to Prometheus. It also counts the request for /metrics.
 
-    Exempt paths (``/health``, ``/ready``, ``/``, ``/metrics``) are never timed
-    so probe loops and scrapes don't inflate the latency distribution.
+    The exempt paths (``/health``, ``/ready``, ``/``, ``/metrics``) are never
+    timed, so probe loops and scrapes do not skew the distribution.
 
-    Sorting up to ``window_size`` floats on every request is O(N log N) where
-    N ≤ 200, which benchmarks at < 20 µs — negligible vs any real handler.
-    The ``deque(maxlen=...)`` ring buffer is not thread-safe under concurrent
-    ``append`` from multiple async tasks, but Starlette dispatches middleware
-    sequentially in the event loop so no locking is required here.
+    Sorting at most ``window_size`` floats per request costs under 20 µs. The
+    ring buffer takes no lock: the middleware runs in the event loop, one
+    request step at a time.
     """
 
     _EXEMPT_PATHS = frozenset({"/health", "/ready", "/", "/metrics"})
@@ -595,10 +591,8 @@ class LatencyMiddleware(BaseHTTPMiddleware):
 
         self._window.append(elapsed)
 
-        # SIM-410: feed the served-request counter via the /metrics seam, so
-        # baseball_sim_requests_total reflects real traffic (was perpetually 0 —
-        # the counter had no production caller). Local import avoids any import
-        # cycle; record_request is best-effort and never raises.
+        # Count the request for baseball_sim_requests_total (/metrics). The
+        # import is local to avoid an import cycle; a failure is ignored.
         try:
             from api.routes.metrics import record_request
 
@@ -606,7 +600,7 @@ class LatencyMiddleware(BaseHTTPMiddleware):
         except Exception:  # noqa: BLE001
             pass
 
-        # Compute p95 from the window and stash it on app.state.
+        # The window's p95, kept on app.state.
         w = self._window
         if len(w) >= 2:
             sorted_w = sorted(w)
@@ -621,18 +615,23 @@ class LatencyMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# ---------------------------------------------------------------------------
+# The CORS allowlist
+# ---------------------------------------------------------------------------
+
+
 def resolve_cors_origins() -> list[str]:
     """Resolve the CORS allowlist from the environment.
 
-    Precedence:
-      1. ``CORS_ORIGINS`` (comma-separated) if set — used verbatim.
-      2. else ``FRONTEND_URL`` if set.
-      3. else, ONLY in development, a permissive localhost dev default.
-      4. else (non-dev, nothing configured) a safe localhost fallback.
+    The order:
+      1. ``CORS_ORIGINS`` (comma-separated), when set, used as given.
+      2. else ``FRONTEND_URL``, when set.
+      3. else, in development only, the three localhost dev origins.
+      4. else one localhost origin.
 
-    Production must never end up as ``["*"]`` while ``allow_credentials=True``
-    (a CORS spec violation browsers reject anyway), so the wildcard is reachable
-    only under ENVIRONMENT=development.
+    No default is the wildcard ``"*"``: with ``allow_credentials=True``,
+    browsers refuse to send a cookie to a wildcard origin. Only an explicit
+    ``CORS_ORIGINS=*`` gives it.
     """
     raw = os.environ.get("CORS_ORIGINS")
     if raw and raw.strip():
@@ -643,19 +642,14 @@ def resolve_cors_origins() -> list[str]:
         return [frontend.strip()]
 
     if _is_development():
-        # SIM-389: Use SPECIFIC dev origins instead of the previous wildcard.
-        # allow_origins=["*"] + allow_credentials=True is a CORS spec violation
-        # that browsers reject (they refuse to send cookies to a wildcard origin).
-        # Specific origins allow credentials correctly; the Vite proxy at :5173
-        # forwards cookies transparently to the API at :8000, so this is the right
-        # pairing for cookie-based auth in development.
+        # Named origins, so the browser sends the session cookie; the Vite
+        # proxy at :5173 forwards it to the API at :8000.
         return [
             "http://localhost:5173",  # Vite dev server (primary)
             "http://localhost:3000",  # alternative dev port
             "http://localhost:8000",  # direct API access in dev tools
         ]
 
-    # Non-dev with nothing configured: do NOT fall back to "*". A locked-down
-    # localhost default is the least-surprising safe choice; operators set
-    # CORS_ORIGINS / FRONTEND_URL explicitly for real deployments.
+    # Outside development with nothing configured: one localhost origin, never
+    # the wildcard. A deployment sets CORS_ORIGINS or FRONTEND_URL.
     return ["http://localhost:3000"]

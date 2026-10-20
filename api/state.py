@@ -1,21 +1,20 @@
 """
 api/state.py
 =============
-Boot-time resource construction for the FastAPI app.
+The builders of the resources the lifespan (``api/main.py``) attaches to
+``app.state``:
 
-Owns the three resources the lifespan in ``api.main`` attaches to
-``app.state`` for the similarity routes (and other Phase-5 routes as
-they come online):
+  * the similarity engines: ``build_pitcher_engine`` and ``build_all_engines``
+    (all eleven, by their :data:`ENGINE_REGISTRY` name), each waiting out a
+    DuckDB writer (:func:`retry_on_duckdb_lock`);
+  * the calibration: ``load_calibration_report`` and
+    ``apply_calibration_to_engines``;
+  * ``make_pg_name_resolver``: player ids to names, from ``raw.players``;
+  * ``open_redis_cache``: the Redis client and the similarity payload cache;
+  * ``open_pg_pool``: an asyncpg pool; ``redact_dsn`` masks a DSN for a log.
 
-  1. ``pitcher_engine``        — a fully-built PitcherSimilarityEngine
-  2. ``player_name_resolver``  — async callable: pitcher_ids → names
-  3. ``similarity_cache``      — Redis-backed TTL cache for endpoint payloads
-
-Each builder is exported as a top-level function so unit tests can
-exercise it without booting the whole app. The route handler in
-``api/routes/similarity.py`` consumes these via FastAPI ``Depends``.
-
-Owner: Backend Developer (Agent 5).
+Each builder is a top-level function, so a unit test can run it without
+booting the app.
 """
 
 from __future__ import annotations
@@ -37,12 +36,12 @@ log = logging.getLogger("api.state")
 
 
 # ---------------------------------------------------------------------------
-# Pitcher similarity engine
+# The pitcher similarity engine, and the wait for a DuckDB writer
 # ---------------------------------------------------------------------------
 
 DEFAULT_DUCKDB_PATH = "/data/baseball_sim.duckdb"
 
-#: SIM-563: the longest a boot waits for a DuckDB writer (a rebuild) to finish.
+#: The longest a boot waits for a DuckDB writer (a rebuild) to finish, in seconds.
 BOOT_LOCK_WAIT_ENV = "SIM_BOOT_LOCK_WAIT_S"
 DEFAULT_BOOT_LOCK_WAIT_S = 1800.0
 
@@ -59,6 +58,7 @@ def _is_duckdb_lock_error(exc: BaseException) -> bool:
 
 
 def _boot_lock_wait_s() -> float:
+    """``SIM_BOOT_LOCK_WAIT_S``, read through the flag registry."""
     return read_float(BOOT_LOCK_WAIT_ENV)
 
 
@@ -70,12 +70,12 @@ def retry_on_duckdb_lock[T](
     sleep: Callable[[float], object] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> T:
-    """Run ``fn``; while a DuckDB writer holds the file, wait and try again (SIM-563).
+    """Run ``fn``; while a DuckDB writer holds the file, wait and try again.
 
-    A boot during the nightly rebuild used to crash (the pitcher engine is
-    fail-fast) or skip engines (10/11). It now waits for the writer, up to
-    ``SIM_BOOT_LOCK_WAIT_S`` (default 30 minutes), and then raises the lock error
-    as before. Any other error rises at once.
+    A boot during the nightly rebuild waits for the writer, up to
+    ``SIM_BOOT_LOCK_WAIT_S`` (default 30 minutes), then raises the lock error.
+    Any other error rises at once (the nightly rebuild that reaches users,
+    SIM-563).
     """
     limit = _boot_lock_wait_s() if max_wait_s is None else max_wait_s
     started = clock()
@@ -95,13 +95,12 @@ def retry_on_duckdb_lock[T](
 
 
 def build_pitcher_engine(duckdb_path: str | None = None):
-    """
-    Construct and build the PitcherSimilarityEngine.
+    """Construct and build the PitcherSimilarityEngine.
 
-    This is a synchronous, CPU+I/O bound call (engine.build() loads
-    thousands of profiles from DuckDB and applies shrinkage + GMM
-    standardization). Designed to be invoked from the FastAPI lifespan
-    under ``asyncio.to_thread(...)`` so it does not block the event loop.
+    The call is synchronous and CPU- and I/O-bound: ``engine.build()`` loads
+    thousands of profiles from DuckDB and applies the shrinkage and the GMM
+    standardization. The lifespan runs it under ``asyncio.to_thread(...)``, so
+    the event loop stays free.
 
     Parameters
     ----------
@@ -117,13 +116,12 @@ def build_pitcher_engine(duckdb_path: str | None = None):
 
     Raises
     ------
-    Any exception raised by ``PitcherSimilarityEngine.build()`` (most
-    commonly ``duckdb.IOException`` when the DuckDB file does not exist
-    or is locked by the nightly profile job). The lifespan treats this
-    as fatal, matching the fail-fast posture of ``validate_environment``.
+    Any exception ``PitcherSimilarityEngine.build()`` raises (most often
+    ``duckdb.IOException``: the DuckDB file is missing, or a writer still holds
+    it after the wait). The lifespan treats it as fatal.
     """
-    # Import lazily so importing this module in a numpy-free environment
-    # (e.g. ruff lint workers) doesn't require the heavy similarity deps.
+    # A lazy import, so importing this module needs no numpy or the other heavy
+    # similarity dependencies.
     from similarity.engines.pitcher_similarity import PitcherSimilarityEngine
 
     path = duckdb_path or os.environ.get("BASEBALL_DUCKDB_PATH") or DEFAULT_DUCKDB_PATH
@@ -133,23 +131,22 @@ def build_pitcher_engine(duckdb_path: str | None = None):
     retry_on_duckdb_lock(engine.build, "the pitcher engine build")
     log.info(
         "PitcherSimilarityEngine ready: %d profiles loaded.",
-        len(engine._profiles),  # noqa: SLF001 — internal counter for log line
+        len(engine._profiles),  # noqa: SLF001 — the log line's profile count
     )
     return engine
 
 
 # ---------------------------------------------------------------------------
-# All 11 similarity engines (SIM-361)
+# All eleven similarity engines
 # ---------------------------------------------------------------------------
 
-#: Stable name -> (module path, class name) registry for all 11 similarity
-#: engines the platform serves. The KEY is the contract: ``app.state.engines``
-#: is keyed by these names, so a route can ask for ``engines["batter"]`` without
-#: knowing the import path. Every engine takes ``duckdb_path=`` as its first
-#: keyword arg and exposes ``build()`` (verified across the suite), so the
-#: builder below treats them uniformly. The FAISS-backed engines (situation /
-#: pitch_pitch / batted_ball) accept the same ``duckdb_path=`` kwarg; their extra
-#: ``index_kind`` arg has a working default, so the uniform call is correct.
+#: The eleven similarity engines: stable name -> (module path, class name). The
+#: name is the contract: ``app.state.engines`` is keyed by it, so a route asks
+#: for ``engines["batter"]`` without the import path. Every engine takes
+#: ``duckdb_path=`` as its first keyword argument and has ``build()``, so the
+#: builder treats them alike. The FAISS engines (situation, pitch_pitch,
+#: batted_ball) take the same ``duckdb_path=``; their ``index_kind`` has a
+#: working default.
 ENGINE_REGISTRY: dict[str, tuple[str, str]] = {
     "pitcher": ("similarity.engines.pitcher_similarity", "PitcherSimilarityEngine"),
     "batter": ("similarity.engines.batter_similarity", "BatterSimilarityEngine"),
@@ -172,9 +169,10 @@ ENGINE_REGISTRY: dict[str, tuple[str, str]] = {
 
 
 def _default_engine_loader(module_path: str, class_name: str):
-    """Import ``class_name`` from ``module_path`` (lazy, so importing this
-    module needs no numpy/faiss). Factored out so a test can monkeypatch the
-    whole load step with fakes — no DuckDB, no heavy deps."""
+    """Import ``class_name`` from ``module_path``.
+
+    The import is lazy, so importing this module needs no numpy or faiss. A
+    test replaces the whole load step with fakes through ``loader``."""
     import importlib
 
     mod = importlib.import_module(module_path)
@@ -187,25 +185,22 @@ def build_all_engines(
     registry: dict[str, tuple[str, str]] | None = None,
     loader=None,
 ):
-    """Build all 11 similarity engines, keyed by their stable registry name.
+    """Build all eleven similarity engines, keyed by their registry name.
 
-    Mirrors :func:`build_pitcher_engine`'s pattern for each engine: resolve the
-    DuckDB path (arg -> ``BASEBALL_DUCKDB_PATH`` env -> ``DEFAULT_DUCKDB_PATH``),
-    construct with ``duckdb_path=``, call ``build()`` (which loads the engine's
-    profiles from DuckDB). Like ``build_pitcher_engine`` this is a synchronous,
-    CPU+I/O bound call meant to run under ``asyncio.to_thread(...)`` from the
-    FastAPI lifespan.
+    Each engine follows :func:`build_pitcher_engine`: the DuckDB path (the
+    argument, else ``BASEBALL_DUCKDB_PATH``, else ``DEFAULT_DUCKDB_PATH``), the
+    constructor with ``duckdb_path=``, then ``build()``, which loads the
+    engine's profiles. The call is synchronous; the lifespan runs it under
+    ``asyncio.to_thread(...)``.
 
-    **Resilient:** each engine is built inside its own try/except. An engine
-    that fails to construct or ``build()`` (e.g. a missing/empty profile table,
-    or faiss absent for a FAISS engine) is logged at WARNING and SKIPPED — it is
-    simply absent from the returned dict — so one bad profile table never takes
-    the whole API down with it. The returned dict therefore contains only the
-    engines that built successfully (0..11 entries).
+    Each engine builds in its own try/except. An engine that fails to construct
+    or to build (a missing or empty profile table, no faiss for a FAISS engine)
+    is logged at WARNING and left out of the result, so one bad table never
+    takes the API down. The result holds only the engines that built (0 to 11).
 
-    **Mockable:** the ``registry`` (name -> (module, class)) and the ``loader``
-    (``(module, class) -> engine_class``) are both injectable so a unit test can
-    feed fake engine classes and never touch DuckDB or the real heavy modules.
+    The ``registry`` (name -> (module, class)) and the ``loader``
+    (``(module, class) -> engine_class``) are parameters, so a unit test feeds
+    fake engine classes and never touches DuckDB or the heavy modules.
 
     Parameters
     ----------
@@ -220,7 +215,7 @@ def build_all_engines(
     Returns
     -------
     dict[str, object]
-        ``{engine_name: built_engine}`` for every engine that built OK.
+        ``{engine_name: built_engine}`` for every engine that built.
     """
     path = duckdb_path or os.environ.get("BASEBALL_DUCKDB_PATH") or DEFAULT_DUCKDB_PATH
     reg = registry if registry is not None else ENGINE_REGISTRY
@@ -234,7 +229,7 @@ def build_all_engines(
             retry_on_duckdb_lock(engine.build, f"the {name} engine build")
             engines[name] = engine
             log.info("Similarity engine '%s' built.", name)
-        except Exception as exc:  # noqa: BLE001 — one bad engine must not kill boot
+        except Exception as exc:  # noqa: BLE001 — one bad engine must not stop the boot
             log.warning(
                 "Skipping similarity engine '%s' — build failed (%s: %s).",
                 name,
@@ -246,7 +241,7 @@ def build_all_engines(
 
 
 # ---------------------------------------------------------------------------
-# Win-probability calibration loading (SIM-361)
+# The calibration report
 # ---------------------------------------------------------------------------
 
 #: Env var pointing at a persisted CalibrationReport JSON (CalibrationReport.to_json).
@@ -254,13 +249,12 @@ CALIBRATION_REPORT_PATH_ENV = "CALIBRATION_REPORT_PATH"
 
 
 def load_calibration_report(path: str | None = None):
-    """Load a ``CalibrationReport`` from a JSON file (SIM-361).
+    """Load a ``CalibrationReport`` from a JSON file, or None.
 
-    Best-effort: returns ``None`` when no path is given (and the
-    ``CALIBRATION_REPORT_PATH`` env var is unset), the file does not exist, or
-    the file is unreadable / malformed — each logged but never raised, so a
-    missing or corrupt report degrades gracefully to the identity calibration
-    rather than crashing boot.
+    It returns ``None`` when no path is given (and ``CALIBRATION_REPORT_PATH``
+    is unset), when the file does not exist, and when the file is unreadable or
+    malformed. Each case logs and none raises, so a missing or corrupt report
+    leaves the identity calibration in place instead of stopping the boot.
     """
     report_path = path or os.environ.get(CALIBRATION_REPORT_PATH_ENV)
     if not report_path:
@@ -288,44 +282,20 @@ def load_calibration_report(path: str | None = None):
         return None
 
 
-def load_calibration_map(path: str | None = None):
-    """Load a persisted CalibrationReport and turn it into a ``CalibrationMap``.
-
-    Returns the module-level ``IDENTITY_CALIBRATION`` singleton when no report is
-    found / loadable (see :func:`load_calibration_report`) OR when the report
-    carries no fitted reliability curve — the win-prob layer's documented
-    "well-calibrated until a curve says otherwise" default. Otherwise returns a
-    monotone ``CalibrationMap`` built via ``CalibrationMap.from_report``.
-
-    NOTE (2026-06-03 audit, both-agree, LOW): this is a TEST/LEGACY convenience
-    wrapper — it has no non-test caller. The CANONICAL boot path is inline in
-    ``api/main.py`` (``load_calibration_report`` + ``CalibrationMap.from_report``),
-    which is kept separate so the same loaded report can also be fed to
-    :func:`apply_calibration_to_engines`. Retained as low-risk library surface
-    (deleting it would also touch ``tests/unit/test_calibration_report_json.py``).
-    """
-    from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
-
-    report = load_calibration_report(path)
-    if report is None:
-        return IDENTITY_CALIBRATION
-    return CalibrationMap.from_report(report)
-
-
 def apply_calibration_to_engines(engines: dict[str, Any] | None, report: Any) -> list[str]:
-    """SIM-406: apply a fitted ``CalibrationReport`` to every engine that supports it.
+    """Apply a fitted ``CalibrationReport`` to every engine that supports it.
 
-    Each engine exposing ``apply_calibration`` gets the report wired into its RBF /
-    arsenal scorers, so similarity is scored on the population-fit 0.50-median curve
-    rather than hardcoded module literals (closing the audit gap: ``apply_calibration``
-    used to be wired only on the pitcher engine). The FAISS / KD-tree *distance*
-    engines (``situation`` / ``pitch_pitch`` / ``batted_ball``) have no RBF sigma to
-    calibrate and simply lack the seam — they are skipped.
+    Each engine with ``apply_calibration`` gets the report in its RBF and
+    arsenal scorers, so it scores on the fitted curve (median similarity 0.50)
+    rather than the module's literals (the calibration fit and apply,
+    SIM-406). The FAISS and KD-tree distance engines (``situation``,
+    ``pitch_pitch``, ``batted_ball``) have no RBF sigma and no such method;
+    they are skipped.
 
-    Best-effort per engine: a failure is logged and skipped so one bad engine never
-    blocks boot. Returns the names of the engines calibration was applied to. A
-    ``None`` report (no fitted file) is a no-op returning ``[]`` (engines keep their
-    locked module defaults).
+    A failure on one engine logs and moves on, so one bad engine never blocks
+    the boot. The function returns the names of the engines it calibrated. A
+    ``None`` report (no fitted file) returns ``[]``, and the engines keep
+    their module defaults.
     """
     if report is None:
         return []
@@ -355,29 +325,26 @@ def apply_calibration_to_engines(engines: dict[str, Any] | None, report: Any) ->
 
 
 # ---------------------------------------------------------------------------
-# Player name resolver
+# The player name resolver
 # ---------------------------------------------------------------------------
 
 
 class NameResolver(Protocol):
-    """
-    Async callable that maps an iterable of player_ids to a
-    ``{player_id: full_name}`` dict. Missing ids are simply absent
-    from the returned dict — callers fall back to a placeholder name.
+    """An async callable: an iterable of player ids to ``{player_id: full_name}``.
+
+    An unknown id is absent from the result; the caller falls back to a
+    placeholder name.
     """
 
     async def __call__(self, ids: Iterable[int]) -> dict[int, str]: ...
 
 
 def make_pg_name_resolver(pool: asyncpg.Pool) -> NameResolver:
-    """
-    Build a Postgres-backed NameResolver. Reads ``raw.players``,
-    matching pitcher_ids in a single ``ANY($1::int[])`` query so a
-    similarity query that fans out to 2,400 pitchers costs exactly one
-    round trip.
+    """Build a NameResolver over ``raw.players``.
 
-    Returned closure is safe to attach to ``app.state`` and call
-    concurrently — asyncpg pools are themselves concurrency-safe.
+    It matches the ids in one ``ANY($1::int[])`` query, so a similarity query
+    that fans out to 2,400 pitchers costs one round trip. The closure is safe to
+    attach to ``app.state`` and to call concurrently: an asyncpg pool is.
     """
 
     async def _resolve(ids: Iterable[int]) -> dict[int, str]:
@@ -394,7 +361,7 @@ def make_pg_name_resolver(pool: asyncpg.Pool) -> NameResolver:
 
 
 # ---------------------------------------------------------------------------
-# Similarity payload cache
+# The similarity payload cache
 # ---------------------------------------------------------------------------
 
 
@@ -402,31 +369,25 @@ CACHE_TTL_SECONDS = 24 * 60 * 60  # 24h — per docs/similarity_visualization_sp
 
 
 def make_cache_key(pitcher_id: int, season: int, bins: int, top_n: int) -> str:
-    """
-    Build the canonical Redis cache key for a similarity-distribution
-    payload. Format is pinned by the spec so the eventual nightly
-    invalidator can target ``simviz:*`` cleanly.
+    """The Redis key of a similarity-distribution payload.
+
+    The spec fixes the format, so an invalidator can target ``simviz:*``.
     """
     return f"simviz:pitcher:{pitcher_id}:{season}:bins={bins}:top_n={top_n}"
 
 
 class SimilarityCache(Protocol):
-    """
-    Minimal async cache interface used by the similarity route. Two
-    methods only: ``get_json`` and ``set_json``. Anything more elaborate
-    belongs in a dedicated caching layer when more routes need it.
-    """
+    """The async cache interface of the similarity route: ``get_json`` and ``set_json``."""
 
     async def get_json(self, key: str) -> Any | None: ...
     async def set_json(self, key: str, value: Any, ttl_s: int = CACHE_TTL_SECONDS) -> None: ...
 
 
 class RedisSimilarityCache:
-    """
-    Redis-backed implementation. Stores values as JSON strings under
-    keys produced by :func:`make_cache_key`. A decode failure is treated
-    as a cache miss (with a WARNING log) so a poisoned key never breaks
-    the route.
+    """The Redis implementation: JSON strings under :func:`make_cache_key` keys.
+
+    A value that does not decode reads as a miss and logs a WARNING, so a bad
+    key never breaks the route.
     """
 
     def __init__(self, redis_client: aioredis.Redis) -> None:
@@ -452,19 +413,18 @@ class RedisSimilarityCache:
 
 
 async def open_redis_cache(redis_url: str) -> tuple[aioredis.Redis, RedisSimilarityCache]:
-    """
-    Open a Redis client and wrap it in a SimilarityCache. Returns
-    the raw client too so the caller can close it on shutdown.
+    """Open a Redis client and wrap it in a SimilarityCache.
+
+    It returns the client too, so the caller can close it at shutdown.
     """
     client = aioredis.from_url(redis_url, decode_responses=True)
-    # Probe the connection so a misconfigured Redis fails fast at boot
-    # (matches the validate_environment philosophy in api.main).
+    # A ping, so a misconfigured Redis fails at boot.
     await client.ping()  # type: ignore[misc]  # redis-py async ping stub typing
     return client, RedisSimilarityCache(client)
 
 
 # ---------------------------------------------------------------------------
-# Postgres pool
+# The Postgres pool
 # ---------------------------------------------------------------------------
 
 
@@ -475,29 +435,25 @@ async def open_pg_pool(
     max_size: int = 10,
     server_settings: dict[str, str] | None = None,
 ) -> asyncpg.Pool:
-    """
-    Open an asyncpg pool against the project's PostgreSQL DSN.
+    """Open an asyncpg pool on a PostgreSQL DSN.
 
-    Mirrors the connection-pool sizing used by
-    ``pipeline.live.live_ingestion_pipeline.LiveIngestionPipeline.start()``.
-    Kept here as a small helper so the lifespan in ``api.main`` stays
-    declarative and the sizing knobs live in one place.
-
-    ``server_settings`` sets session parameters on every connection of the
-    pool (SIM-443e: the SQL console's pool sets ``search_path`` to ``raw``).
+    The sizing is the live pipeline's
+    (``LiveIngestionPipeline.start()``). ``server_settings`` sets session
+    parameters on every connection of the pool: the read-only pool sets
+    ``search_path`` to ``raw``.
     """
     pool = await asyncpg.create_pool(
         dsn, min_size=min_size, max_size=max_size, server_settings=server_settings
     )
     if pool is None:
-        # asyncpg.create_pool returns None only if init=False is passed;
-        # we never pass it. This branch is defensive only.
+        # asyncpg.create_pool returns None only with init=False, which this
+        # call never passes.
         raise RuntimeError("asyncpg.create_pool returned None")
     return pool
 
 
 def redact_dsn(dsn: str) -> str:
-    """Return ``dsn`` with its password masked, for a log line (SIM-443e).
+    """Return ``dsn`` with its password masked, for a log line.
 
     The result reads ``scheme://user:***@host:port/db``. Any query string is
     dropped, since it can carry a password too. A DSN that does not parse

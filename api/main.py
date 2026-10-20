@@ -225,9 +225,7 @@ def create_app() -> FastAPI:
 
     # CORS: the allowed origins come from CORS_ORIGINS (comma-separated), else
     # FRONTEND_URL, else a localhost default (api/auth.resolve_cors_origins).
-    # The "*" wildcard is possible only under ENVIRONMENT=development, so
-    # production never pairs "*" with allow_credentials=True, which browsers
-    # reject.
+    # No default is the wildcard "*", which browsers refuse with credentials.
     origins = resolve_cors_origins()
     app.add_middleware(
         CORSMiddleware,
