@@ -16,8 +16,8 @@ Covers the three deliverables of the ticket, all without a live DuckDB:
      yields a monotone ``CalibrationMap`` whose ``apply(p)`` differs from
      identity at a test point; a report with no curve yields the
      ``IDENTITY_CALIBRATION`` singleton. Also exercises the api.state
-     ``load_calibration_report`` / ``load_calibration_map`` loaders against a
-     written JSON file and a missing path.
+     ``load_calibration_report`` loader against a written JSON file, the
+     environment variable and a missing path.
 
   3. **build_all_engines.** With the engine loader monkeypatched to fakes (no
      DuckDB, no faiss), it returns all 11 keyed entries; a fake engine that
@@ -35,7 +35,6 @@ import numpy as np
 from api.state import (
     ENGINE_REGISTRY,
     build_all_engines,
-    load_calibration_map,
     load_calibration_report,
 )
 from similarity.similarity_calibration import CalibrationReport
@@ -237,25 +236,14 @@ class TestCalibrationMapFromReport:
         # Best-effort: a corrupt report must degrade, not raise.
         assert load_calibration_report(str(p)) is None
 
-    def test_load_calibration_map_from_file_with_curve(self, tmp_path):
-        r = _representative_report(with_curve=True)
-        p = tmp_path / "calib.json"
-        p.write_text(r.to_json(), encoding="utf-8")
-        m = load_calibration_map(str(p))
-        assert m is not IDENTITY_CALIBRATION
-        assert m.apply(0.9) != 0.9
-
-    def test_load_calibration_map_missing_path_is_identity(self, tmp_path):
-        m = load_calibration_map(str(tmp_path / "nope.json"))
-        assert m is IDENTITY_CALIBRATION
-
-    def test_load_calibration_map_env_var(self, tmp_path, monkeypatch):
+    def test_load_calibration_report_reads_the_env_var(self, tmp_path, monkeypatch):
         r = _representative_report(with_curve=True)
         p = tmp_path / "calib.json"
         p.write_text(r.to_json(), encoding="utf-8")
         monkeypatch.setenv("CALIBRATION_REPORT_PATH", str(p))
-        m = load_calibration_map()  # no arg -> reads env
-        assert m is not IDENTITY_CALIBRATION
+        loaded = load_calibration_report()  # no arg -> reads env
+        assert loaded is not None
+        assert r.equals(loaded)
 
 
 # ===========================================================================
