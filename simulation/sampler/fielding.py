@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from simulation.constants import FIELD_POSITION_NAMES
 from simulation.sampler.base import BaseMixin
-from simulation.sampler.kernels import (
-    _POS_NUM_TO_NAME,
-)
 
 
 class FieldingMixin(BaseMixin):
@@ -40,7 +38,7 @@ class FieldingMixin(BaseMixin):
         self._bb_park: dict[str, np.ndarray] = {}
         #: Per-hand per-row fielder-embedding index (-1 = absent).
         self._bb_fielder_emb: dict[str, np.ndarray] = {}
-        #: The pitch-similarity kernel (SIM-472): a Gaussian on the z-scored
+        #: The pitch-similarity kernel: a Gaussian on the z-scored
         #: distance between the drawn pitch and each row's own pitch
         #: (0.0 = off).
         self.bb_pitch_sigma = 0.0
@@ -92,9 +90,8 @@ class FieldingMixin(BaseMixin):
         self._bb_pool_bat: dict[str, np.ndarray] = {}
         self._bb_throws_r: dict[str, np.ndarray] = {}
         self._bb_meta_cache: dict[str, dict] = {}
-        self._fld_idx: dict[str, int] | None = None
 
-    # ---- SIM-425: batted-ball draw (step 5) -------------------------------
+    # ---- the batter factor and the per-row lookups -------------------------
     def _bb_batter_cols(self, hand: str) -> np.ndarray | None:
         """The batter matrix column per batted-ball row (-1 = unscored); None
         without the matrix. Cached per hand."""
@@ -107,10 +104,10 @@ class FieldingMixin(BaseMixin):
         return cols
 
     def _bb_batter_factor(self, hand: str, batter_key: str, rows: np.ndarray) -> np.ndarray:
-        """SIM-523 (the kernel retirement): the fielding draw's batter factor on
-        ``rows`` — the batter engine's score raised to ``bb_batter_power`` (at a
-        power other than 1 an unscored row weighs the rows' mean scored weight,
-        draw-neutral); ones on a bundle without the batter matrix."""
+        """The fielding draw's batter factor on ``rows``: the batter engine's
+        score raised to ``bb_batter_power``. At a power other than 1 an unscored
+        row weighs the rows' mean scored weight (draw-neutral). Ones on a bundle
+        without the batter matrix."""
         if self._batter_matrix_on():
             entry = self._actor_matrix("batter")
             live = entry["index"].get(batter_key) if entry is not None else None
@@ -133,6 +130,8 @@ class FieldingMixin(BaseMixin):
         return np.ones(rows.size, dtype=np.float32)
 
     def _bb_pool_bat_idx(self, hand: str) -> np.ndarray:
+        """Each batted-ball row's batter-embedding row (-1 = absent), cached
+        per hand."""
         if hand in self._bb_pool_bat:
             return self._bb_pool_bat[hand]
         pool = self.a.bb_pools[hand]
@@ -153,11 +152,11 @@ class FieldingMixin(BaseMixin):
         return pb
 
     def _bb_park_factors(self, hand: str) -> np.ndarray | None:
-        """SIM-491 part 2 (SIM-411): the per-row park run factor for the hand's
-        batted-ball pool, from ``venue_run_factors`` keyed (venue_id, row season)
-        with a venue-only mean fallback; 1.0 for unknown venues. None when the
-        pool carries no per-row ``venue_id`` (a pre-0012 bundle) or no factor
-        map is loaded — the caller then leaves the draw unweighted."""
+        """The per-row park run factor of the hand's batted-ball pool, from
+        ``venue_run_factors`` keyed (venue_id, row season), else the venue's
+        mean over its seasons, else 1.0. None when the pool carries no per-row
+        ``venue_id`` or no factor map is loaded: the caller then leaves the draw
+        unweighted."""
         cached = self._bb_park.get(hand)
         if cached is not None:
             return cached
@@ -182,17 +181,12 @@ class FieldingMixin(BaseMixin):
         self._bb_park[hand] = out
         return out
 
-    #: SIM-491 part 3: the OAA-centred feature subset of the fielder embedding
-    #: (derived.fielder_season_metrics). v1 is the range-quality core; the
-    #: SIM-476 fit may widen it toward the arm features the advancement draws
-    #: already use.
-    _FIELDER_BB_FEATURES = ("outs_above_average",)
-
     def _bb_fielder_emb_rows(self, hand: str) -> np.ndarray | None:
-        """SIM-491 part 3: each batted-ball row's fielder-embedding index, keyed
-        ``fielder_id:POS:row_season`` (the row's CONTEMPORANEOUS season — the
-        SIM-425b survivorship lesson); -1 when absent. None when the pool has no
-        fielder columns (a pre-0012 bundle) or no fielder embedding is loaded."""
+        """Each batted-ball row's fielder-embedding index, keyed
+        ``fielder_id:POS:row_season``; -1 when absent. The key is the ROW's own
+        season, not the game's: a game-season key would drop every pool fielder
+        without a row that season, a survivorship filter. None when the pool has
+        no fielder columns or no fielder embedding is loaded."""
         cached = self._bb_fielder_emb.get(hand)
         if cached is not None:
             return cached
@@ -205,7 +199,7 @@ class FieldingMixin(BaseMixin):
         ki = emb["key_index"]
         out = np.fromiter(
             (
-                ki.get(f"{int(f)}:{_POS_NUM_TO_NAME.get(int(p), '?')}:{int(s)}", -1)
+                ki.get(f"{int(f)}:{FIELD_POSITION_NAMES.get(int(p), '?')}:{int(s)}", -1)
                 for f, p, s in zip(fid, pos, pool.season, strict=False)
             ),
             dtype=np.int64,
@@ -215,21 +209,20 @@ class FieldingMixin(BaseMixin):
         return out
 
     def _fielder_matrices_on(self) -> bool:
-        """SIM-523 part A: the fielder factor applies whenever the fielder power
-        is above 0 and the bundle carries at least one per-position matrix."""
+        """The fielder factor applies whenever the fielder power is above 0
+        and the bundle carries at least one per-position matrix."""
         return float(self.actor_power.get("fielder", 1.0)) > 0.0 and any(
-            self._actor_matrix(f"fielder_{n}") is not None for n in _POS_NUM_TO_NAME.values()
+            self._actor_matrix(f"fielder_{n}") is not None for n in FIELD_POSITION_NAMES.values()
         )
 
     def _f_live_fielder(
         self, hand: str, rows: np.ndarray, defense_map: dict[str, int], season: int
     ) -> np.ndarray | None:
-        """SIM-523 (the kernel retirement): per row, the LIVE defender at the
-        row's position scored against the row's own fielder by the fielder
-        engine's per-position matrix, raised to the fielder power and rescaled
-        to a mean of 1 within each position. 1.0 (neutral) for rows where
-        either side is unscored; None when the bundle has no fielder
-        embedding (the pool rows cannot be keyed)."""
+        """Per row, the LIVE defender at the row's position scored against the
+        row's own fielder by the fielder engine's per-position matrix, raised
+        to the fielder power and rescaled to a mean of 1 within each position.
+        1.0 (neutral) for rows where either side is unscored; None when the
+        bundle has no fielder embedding (the pool rows cannot be keyed)."""
         emb = self.a.actor_emb.get("fielder")
         row_emb = self._bb_fielder_emb_rows(hand)
         if emb is None or row_emb is None:
@@ -238,7 +231,7 @@ class FieldingMixin(BaseMixin):
         # The live defender's embedding index per position NUMBER (the row's
         # fielder_pos vocabulary), -1 when the defense map / embedding lacks it.
         live_by_pos = np.full(10, -1, dtype=np.int64)
-        for p, name in _POS_NUM_TO_NAME.items():
+        for p, name in FIELD_POSITION_NAMES.items():
             pid = defense_map.get(name)
             if pid:
                 live_by_pos[p] = ki.get(f"{int(pid)}:{name}:{int(season)}", -1)
@@ -254,7 +247,7 @@ class FieldingMixin(BaseMixin):
         # neutral. The per-position mean-1 rescale below still applies (a
         # factor must never move balls between positions).
         valid = np.zeros(len(rows), dtype=bool)
-        for p, name in _POS_NUM_TO_NAME.items():
+        for p, name in FIELD_POSITION_NAMES.items():
             at = pos == p
             if not at.any():
                 continue
@@ -268,18 +261,17 @@ class FieldingMixin(BaseMixin):
                 continue
             out[at] = f
             valid |= at & (row_idx >= 0)
-        # SIM-476: the factor must not move batted balls BETWEEN positions.
-        # Where a ball goes is batted-ball physics (the batter/situation
-        # kernels); the fielder factor's job is to pick WHICH play at that
-        # position, given the live defender. Raw weights break that: a
-        # position whose live defender scores well against the pool outweighs
-        # a position with a poorly scored defender, so the draw redistributes
-        # balls toward well-matched positions (measured on the retired kernel:
-        # the OF share of drawn balls rose 52.7% -> 57.4% at sigma=0.5, which
-        # alone inflates hits ~+6% — the 2026-09-01 lane red). Normalizing to
-        # a MEAN of 1 within each position keeps the within-position
-        # discrimination and kills the cross-position shift; it also makes
-        # missing-identity rows (weight 1.0) exactly draw-neutral.
+        # The factor must not move batted balls BETWEEN positions. Where a
+        # ball goes is batted-ball physics (the batter and situation kernels);
+        # the fielder factor picks WHICH play at that position, given the live
+        # defender. Raw weights break that: a position whose live defender
+        # scores well against the pool outweighs one with a poorly scored
+        # defender, and the draw moves balls toward well-matched positions.
+        # Measured on an earlier fielder kernel, the outfield share of drawn
+        # balls rose from 52.7% to 57.4%, which alone inflates hits about 6%
+        # (the lane of 2026-09-01, SIM-476). A mean of 1 within each position
+        # keeps the within-position discrimination and removes the shift; it
+        # also leaves a row without a fielder identity (weight 1.0) neutral.
         for p in np.unique(pos[valid]):
             m = valid & (pos == p)
             mean_w = float(out[m].mean())
@@ -294,9 +286,9 @@ class FieldingMixin(BaseMixin):
         return out
 
     def _bb_same_hand_mask(self, hand: str, pitcher_throws: str) -> np.ndarray | None:
-        """SIM-413: boolean mask of batted-ball pool rows whose pitcher threw the
-        SAME hand as ``pitcher_throws``. None when the pool carries no per-row
-        ``p_throws`` (a legacy bundle) so the caller leaves the draw unweighted."""
+        """The mask of batted-ball rows whose pitcher threw the same hand as
+        ``pitcher_throws``. None when the pool carries no per-row ``p_throws``:
+        the caller then leaves the draw unweighted."""
         pool = self.a.bb_pools[hand]
         pt = getattr(pool, "p_throws", None)
         if pt is None:
@@ -308,9 +300,10 @@ class FieldingMixin(BaseMixin):
         return tr if pitcher_throws == "R" else ~tr
 
     def has_transition(self, hand: str) -> bool:
-        """SIM-511: True when this hand's batted-ball pool carries the SIM-510
-        transition columns (a sim510.1+ bundle). False = a data defect: SIM-486
-        deleted the legacy soft draw, so the batted-ball draw raises."""
+        """True when this hand's batted-ball pool carries the transition
+        columns (``r1_dest``, ``dest_ok``, ``is_air``; builder sim510.1 or
+        later). Without them the batted-ball draw raises: there is no other
+        in-play path."""
         pool = self.a.bb_pools.get(hand)
         return (
             pool is not None
@@ -320,14 +313,14 @@ class FieldingMixin(BaseMixin):
         )
 
     def _transition_meta(self, hand: str) -> dict | None:
-        """SIM-511 per-hand one-time precompute: the base-out cell index over
-        CONSISTENT transition rows (``dest_ok`` — SIM-510's outs-accounting
-        guard) plus the soft-kernel situation columns.
+        """Per-hand one-time precompute: the base-out cell index over the
+        consistent transition rows (``dest_ok``, the builder's outs-accounting
+        check) and the soft-kernel situation columns.
 
-        The hard filter is the base-out cell ALONE — 8 runner configurations
-        × 3 out states = 24 cells, all common (owner ruling 2026-08-19). The
-        filter is essential, so it never relaxes; the count stays SOFT
-        conditioning; an EMPTY cell raises as a data defect. Never widen.
+        The hard filter is the base-out cell alone: 8 runner configurations x
+        3 out states = 24 cells, all common (the owner's ruling of 2026-08-19).
+        The filter never relaxes; the count stays a soft kernel; an empty cell
+        raises as a data defect.
         """
         meta = self._bb_meta_cache.get(hand)
         if meta is not None:
@@ -366,71 +359,52 @@ class FieldingMixin(BaseMixin):
         born_bb: dict | None = None,
         venue_id: int | None = None,
     ) -> None:
-        """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
+        """Assemble the batted-ball weight CDF for the plate appearance.
 
-        SIM-523 part B: when ``born_bb`` (the result row's own batted ball,
-        :meth:`last_born_batted_ball`) is supplied AND :attr:`bb_born_sigma`
-        > 0, a Gaussian on the z-scored (exit velocity, launch angle, spray,
-        distance) distance between that ball and each cell row's pulls the
-        draw toward plays on similar batted balls — the ball born in the
-        pitch-result draw is what gets fielded. Omitted / sigma 0 -> unchanged.
+        The filters, in order:
 
-        SIM-523 part C: with :attr:`bb_class_filter` on and a born ball whose
-        class is known, the cell is hard-filtered to that class (an empty
-        class falls back to the cell); with
-        :attr:`park_wall_zone_only` on the park kernel applies only when the
-        born ball is in the wall zone. With :attr:`fence_stage` on and
-        ``venue_id`` (the live park) given, the born ball's carry against
-        that park's fence decides home run / no home run / the band before
-        the draw (:meth:`fence_decision`); ``live_season`` picks the park's
-        fence group (SIM-478).
+        * The exact base-out cell, always. The drawn row must be legal in the
+          live state; that is what makes "the drawn row is the play" safe. A
+          bundle without the transition columns raises.
+        * The born ball's class (``born_bb``, the result row's own batted ball
+          from :meth:`last_born_batted_ball`), with :attr:`bb_class_filter` on.
+          An empty class falls back to the cell.
+        * The fence stage (:attr:`fence_stage`, ``venue_id`` the live park):
+          the born ball's carry against that park's fence at its direction
+          decides home run, no home run or the band (:meth:`fence_decision`).
+          ``live_season`` picks the park's fence group.
+        * The wall-margin band (:attr:`bb_margin_band` > 0): a wall-zone air
+          ball the fence did not call over draws only rows whose margin to
+          their own wall is within the band of the born ball's margin to the
+          live wall (:meth:`_bb_margin_stage`).
 
-        SIM-478 §11 / §12 / §12.7: with :attr:`carry_offset` on and a
-        document that carries ``carry_offset_ft``, the born ball's distance
-        is first re-expressed in the live park's air (:meth:`carry_of`) — one
-        number the fence check, the kernel and the wall margin all read. The
-        born kernel measures on the born ball's CLASS ruler (per-class mean
-        and spread), with the exponent per feature when
-        :attr:`bb_born_per_feature` is on. With :attr:`bb_margin_band` > 0,
-        a wall-zone air ball the fence did not call over draws only rows whose
-        margin to their OWN wall sits within the band of the born ball's margin
-        to the live wall (:meth:`_bb_margin_stage`).
+        With :attr:`carry_offset` on and a document that carries
+        ``carry_offset_ft``, the born ball's distance is first re-read in the
+        live park's air (:meth:`carry_of`); the class filter, the fence, the
+        band and the born kernel all read that one copy.
 
-        SIM-518 (SIM-472): when ``pitch_geom`` (the DRAWN pitch's ten geometry
-        values, :meth:`last_pitch_geom`) is supplied AND :attr:`bb_pitch_sigma`
-        > 0 AND the pool carries ``pgeom``, a Gaussian on the z-scored distance
-        between that pitch and each row's own pitch pulls the draw toward
-        batted balls hit off similar pitches — the pitch and the contact
-        agree. Omitted / sigma 0 / a pre-sim518 export -> the draw is unchanged.
+        The weights: the batter factor (:meth:`_bb_batter_factor`), a Gaussian
+        situation kernel over the soft columns (balls, strikes, inning, score
+        margin) and recency, the as-of cutoff applied. Each gated extra runs
+        only when its argument is given, its switch is on and the pool carries
+        its column; otherwise the draw is unchanged:
 
-        SIM-511: the draw HARD-filters the exact base-out cell (the drawn row
-        must be legal in the live state — that is what makes "the drawn row is
-        the play" safe), and the situation kernel runs over the remaining soft
-        dims (balls, strikes, inning, score_diff). A bundle without the
-        transition columns raises (SIM-486 deleted the legacy soft draw).
-
-        SIM-413: when ``pitcher_throws`` ('L'/'R') is supplied AND the pool carries
-        per-row ``p_throws``, softly reweight toward same-hand-matchup rows (opposite
-        hand rows ×:attr:`platoon_off_weight`) so the drawn batted ball reflects the
-        live platoon matchup. Omitted / legacy pool -> the draw is unchanged.
-
-        SIM-491: when ``bat_home`` is supplied AND the pool carries per-row
-        ``bat_home`` (migration 0019), softly reweight toward rows whose batting
-        side matches the live one (mismatched rows ×:attr:`home_off_weight`) —
-        the SIM-412 home-field advantage as a draw weight. Omitted / weight 1.0 /
-        legacy pool -> the draw is unchanged.
-
-        SIM-491 part 2 (SIM-411): when ``park_run_factor`` is supplied,
-        :attr:`park_sigma` > 0 AND a venue-factor map is loaded, a Gaussian on
-        the |live − row| park-factor delta pulls the draw toward
-        run-environment-similar parks. Omitted / sigma 0 / no map -> the draw
-        is unchanged.
-
-        SIM-523 (the kernel retirement): when ``defense_map`` (position name
-        -> live defender id) is supplied and the bundle carries the per-position
-        fielder matrices, each row is weighted by the LIVE defender's engine
-        score against the row's own fielder, raised to the fielder power.
-        Omitted / no matrices / a pre-0012 bundle -> the draw is unchanged."""
+        * ``pitcher_throws``: an opposite-hand row times
+          :attr:`platoon_off_weight`.
+        * ``bat_home``: a row from the other batting side times
+          :attr:`home_off_weight`.
+        * ``park_run_factor``: a Gaussian on the park-factor difference
+          (:attr:`park_sigma`), only for a wall-zone ball when
+          :attr:`park_wall_zone_only` is on.
+        * ``defense_map`` (position name -> live defender id): the live
+          defender's score against the row's fielder (:meth:`_f_live_fielder`).
+        * ``pitch_geom`` (the drawn pitch's geometry, :meth:`last_pitch_geom`):
+          a Gaussian on the distance to the row's own pitch
+          (:attr:`bb_pitch_sigma`), so the pitch and the contact agree.
+        * ``born_bb``: a Gaussian on the distance to the born ball
+          (:attr:`bb_born_sigma`) on the ball's class ruler, divided by each
+          row's local density (:attr:`bb_born_density_power`): the ball born in
+          the pitch-result draw is the ball that gets fielded."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
         sv = np.asarray(state, dtype=np.float32)
@@ -441,7 +415,7 @@ class FieldingMixin(BaseMixin):
                 "columns (r1_dest / dest_ok / is_air) — a pre-sim510.1 bundle. Rebuild "
                 "the engine artifacts; there is no legacy soft-draw path."
             )
-        # --- SIM-511: the hard base-out cell ---------------------------
+        # --- the hard base-out cell ---------------------------------------
         rstate = int(sv[3]) & 0b111
         o = min(max(int(sv[2]), 0), 2)
         rows = meta["cells"].get((rstate, o))
@@ -452,20 +426,20 @@ class FieldingMixin(BaseMixin):
                 "The base-out filter is essential and never widens (owner "
                 "ruling 2026-08-19); rebuild the pool and investigate."
             )
-        # --- SIM-478 §11: the born ball's carry in the LIVE park's air -----
-        # One working copy carries carry_live as its distance. Its venue is
-        # the live park: the ball now sits in that park's air, so a second
-        # ``carry_of`` on it shifts by exactly 0. The class filter, the fence
-        # stage, the margin band and the kernel all read the copy.
+        # --- the born ball's carry in the LIVE park's air -------------------
+        # One working copy carries the live-air carry as its distance. Its
+        # venue is the live park, so a second ``carry_of`` on it shifts by
+        # exactly 0. The class filter, the fence stage, the margin band and the
+        # kernel all read the copy.
         born = self._born_in_live_air(born_bb, venue_id)
         self._fence_last_dec = None
-        # --- SIM-523 part C: the batted-ball CLASS, the third hard filter --
+        # --- the batted-ball class, the second hard filter ------------------
         if born is not None and self.bb_class_filter:
             rows = self._bb_class_rows(hand, meta, (rstate, o), rows, born.get("cls"))
-        # --- SIM-523 part C4: the fence stage ------------------------------
+        # --- the fence stage ------------------------------------------------
         if born is not None and self.fence_stage:
             rows = self._fence_rows(hand, meta, (rstate, o), rows, born, venue_id, live_season)
-        # --- SIM-478 §12.7: the wall-margin band ---------------------------
+        # --- the wall-margin band -------------------------------------------
         # A banded set is one subset per born margin. The density cache keys
         # a set by its ends and size, which names only the nested sets of the
         # cell, the class and the fence; a banded set skips the cache.
@@ -474,8 +448,6 @@ class FieldingMixin(BaseMixin):
             unbanded = rows
             rows = self._bb_margin_stage(hand, rows, born, venue_id, live_season)
             banded = rows is not unbanded
-        # SIM-523 (the kernel retirement): the batter engine's score when the
-        # matrices are on; the retired kernel's affinity off (byte-identical).
         f_bat = self._bb_batter_factor(hand, batter_key, rows)
         diff = meta["soft"][rows] - sv[[0, 1, 4, 5]]
         d2 = np.einsum("ij,ij->i", diff, diff)
@@ -493,8 +465,8 @@ class FieldingMixin(BaseMixin):
         if (
             park_run_factor is not None
             and self.park_sigma > 0.0
-            # SIM-523 part C: the park matters only to a ball that can reach
-            # its wall — when the zone rule is on and the ball is known.
+            # The park matters only to a ball that can reach its wall, when
+            # the zone rule is on and the ball is known.
             and (born is None or not self.park_wall_zone_only or self.in_wall_zone(born))
         ):
             pf = self._bb_park_factors(hand)
@@ -526,7 +498,7 @@ class FieldingMixin(BaseMixin):
         self._bb_rows = rows
         self._bb_cdf = cdf
 
-    # ---- SIM-523 part C: the fielding draw's class filter, speed, wall zone
+    # ---- the class filter --------------------------------------------------
     def _bb_class_rows(
         self, hand: str, meta: dict, cell: tuple[int, int], rows: np.ndarray, cls: int | None
     ) -> np.ndarray:
@@ -548,7 +520,7 @@ class FieldingMixin(BaseMixin):
         self.bb_class_counts[0] += 1
         return sub
 
-    # ---- SIM-523 part B: the born batted ball on the fielding draw ---------
+    # ---- the born-ball and pitch-similarity kernels -----------------------
     def _bb_born_features(self, hand: str) -> np.ndarray:
         """The batted-ball pool's (exit velocity, launch angle, spray[,
         distance]) matrix — distance only when the pool carries it."""
@@ -566,14 +538,14 @@ class FieldingMixin(BaseMixin):
         self, hand: str, cls: int | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """The born kernel's ruler: (mean, std, complete-row mask) of the
-        pool's (exit velocity, launch angle, spray[, distance]). SIM-478 §12
-        — the CLASS RULER: with ``cls`` given and the pool carrying the
-        class, the mean and spread come from the pool's complete rows of that
-        class (fly balls measured against fly balls); the pool-wide
-        statistics when the ball has no class, the pool no class column, or
-        the class fewer than two complete rows. The mask is completeness
-        alone (finite, exit velocity above 0, a distance above 0 when the
-        pool carries one), shared by every class. Cached per (hand, class)."""
+        pool's (exit velocity, launch angle, spray[, distance]). With ``cls``
+        given and the pool carrying the class, the mean and spread come from
+        the pool's complete rows of that class: fly balls are measured against
+        fly balls. The pool-wide statistics apply when the ball has no class,
+        the pool no class column, or the class fewer than two complete rows.
+        The mask is completeness alone (finite, exit velocity above 0, a
+        distance above 0 when the pool carries one), shared by every class.
+        Cached per (hand, class)."""
         key = (hand, int(cls) if cls is not None and int(cls) > 0 else None)
         cached = self._bb_born_stats.get(key)
         if cached is not None:
@@ -606,9 +578,8 @@ class FieldingMixin(BaseMixin):
         return stats
 
     def _born_scale(self, n_features: int) -> float:
-        """The born kernel's exponent divisor: 2 sigma^2 x the feature count
-        (today's formula), or 2 sigma^2 with the exponent per feature on
-        (SIM-478 §12)."""
+        """The born kernel's exponent divisor: 2 sigma^2 x the feature count,
+        or 2 sigma^2 with :attr:`bb_born_per_feature` on."""
         n = 1 if self.bb_born_per_feature else int(n_features)
         return 2.0 * float(self.bb_born_sigma) ** 2 * n
 
@@ -630,14 +601,14 @@ class FieldingMixin(BaseMixin):
         stream is untouched), floored at 5% of the median, raised to
         ``bb_born_density_power`` and normalized to a mean of 1; a row with
         incomplete features is exactly neutral. The candidate set is keyed by
-        its first and last row and its size — the nested sets of the cell,
-        the class filter and the fence stage. A margin-banded set (SIM-478
-        §12.7) is one subset per born margin. Two banded sets can share that
-        key and differ inside. The caller passes ``cache=False`` for a banded
-        set; the estimate then neither reads nor writes the cache. SIM-478
-        §12 — the key also carries the born ball's class (the ruler) and the
-        per-feature flag, and the estimate runs under the same ruler and
-        exponent as :meth:`_f_born_similarity`."""
+        its first and last row and its size, which names the nested sets of
+        the cell, the class filter and the fence stage. A margin-banded set is
+        one subset per born margin, so two banded sets can share that key and
+        differ inside: the caller passes ``cache=False`` for a banded set, and
+        the estimate then neither reads nor writes the cache. The key also
+        carries the born ball's class (the ruler) and the per-feature flag;
+        the estimate runs under the same ruler and exponent as
+        :meth:`_f_born_similarity`."""
         store = meta.setdefault("born_density", {})
         cls_key = int(cls) if cls is not None and int(cls) > 0 else None
         key = (
@@ -684,9 +655,9 @@ class FieldingMixin(BaseMixin):
         """The batted-ball similarity factor over the cell ``rows`` against the
         born ball: a Gaussian on the z-scored feature distance, normalized to
         a mean of 1 over the rows with complete data (an incomplete row is
-        exactly neutral). None when the born ball is incomplete. SIM-478 §12:
-        the ruler is the born ball's class's (``born["cls"]``), the distance
-        the born ball's ``dist`` (carry_live when the offset is on)."""
+        exactly neutral). None when the born ball is incomplete. The ruler is
+        the born ball's class's (``born["cls"]``); the distance is the born
+        ball's ``dist`` (its live-air carry when the offset is on)."""
         mean, std, valid_all = self._bb_born_z_stats(hand, born.get("cls"))
         x = self._bb_born_features(hand)
         live_vals = [born.get("ev"), born.get("la"), born.get("spray")]
@@ -709,9 +680,9 @@ class FieldingMixin(BaseMixin):
         return out
 
     def _bb_pgeom_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-        """SIM-518 (SIM-472): per-column mean/std of the batted-ball pool's
-        producing-pitch geometry over its all-finite rows, plus that row mask.
-        Cached per hand; None when the pool carries no ``pgeom``."""
+        """Per-column mean and std of the batted-ball pool's producing-pitch
+        geometry over its all-finite rows, plus that row mask. Cached per hand;
+        None when the pool carries no ``pgeom``."""
         cached = self._bb_pgeom_stats.get(hand)
         if cached is not None:
             return cached
@@ -733,8 +704,8 @@ class FieldingMixin(BaseMixin):
     def _f_pitch_similarity(
         self, hand: str, rows: np.ndarray, pitch_geom: np.ndarray
     ) -> np.ndarray | None:
-        """SIM-518 (SIM-472): the per-row pitch-similarity factor over the
-        cell ``rows`` — a Gaussian on the z-scored 10-dim distance between
+        """The per-row pitch-similarity factor over the cell ``rows``: a
+        Gaussian on the z-scored 10-dimension distance between
         the drawn pitch and each row's producing pitch, NORMALIZED to a mean
         of 1 over the rows with complete geometry; a row missing any value is
         exactly neutral. None when the pool carries no ``pgeom``."""
@@ -759,10 +730,9 @@ class FieldingMixin(BaseMixin):
     def battedball_draw(self) -> tuple[str, int, int, float]:
         """Draw one batted ball -> (event, result_hits, result_outs, launch_angle).
 
-        SIM-425: launch_angle (geom col 1) is returned so the resolver can tell a
-        fly out (tag-up eligible) from a ground out for productive-out advancement.
-        SIM-511: on a transition bundle the drawn index maps through the PA's
-        base-out cell; read the row's transition via :meth:`last_transition`.
+        The drawn index maps through the plate appearance's candidate rows;
+        :meth:`last_transition` reads the row's transition. Before any
+        ``battedball_new_pa`` it returns a plain field out.
         """
         if self._bb_hand is None or self._bb_cdf is None or self._bb_cdf[-1] <= 0:
             self._bb_last_i = None
@@ -773,7 +743,7 @@ class FieldingMixin(BaseMixin):
             i = int(self._bb_rows[min(i, len(self._bb_rows) - 1)])
         else:
             i = min(i, pool.n - 1)
-        self._bb_last_i = i  # SIM-425b: remember the row for the fielder lookup
+        self._bb_last_i = i  # the transition and fielder readers read this row
         return (
             str(pool.event[i]),
             int(pool.result_hits[i]),
@@ -782,8 +752,7 @@ class FieldingMixin(BaseMixin):
         )
 
     def last_transition(self) -> dict | None:
-        """SIM-511: the drawn row's full transition, or None when no draw has
-        happened yet.
+        """The drawn row's full transition, or None before any draw.
 
         Keys: ``r1``/``r2``/``r3`` — the destination of the pre-pitch runner
         on that base (-1 = no runner; 4 = scored; 3/2/1 = the post base;
@@ -791,7 +760,7 @@ class FieldingMixin(BaseMixin):
         ``adv1``/``adv2``/``adv3`` — thrown-out-advancing flags (a
         discretionary out, never a force or a doubled-off runner);
         ``is_air`` — a caught-ball row (the tag-up shape); ``ev``/``spray``/
-        ``dist`` — the throw geometry for the SIM-512 advancement kernel.
+        ``dist`` — the throw geometry for the advancement draws' kernel.
         """
         i = self._bb_last_i
         if i is None or self._bb_hand is None or not self.has_transition(self._bb_hand):
@@ -814,14 +783,10 @@ class FieldingMixin(BaseMixin):
         }
 
     def last_battedball_fielder(self) -> tuple[int, int, int] | None:
-        """SIM-425b: ``(fielded_by_position, fielder_player_id, season)`` of the row
-        the last :meth:`battedball_draw` returned, or None when the pool lacks the
-        fielder columns (a legacy bundle) or no draw has happened.
-
-        The ``season`` is the pool ROW's own season, so the caller scores that
-        fielder by their CONTEMPORANEOUS OAA — not the game season, which would drop
-        any pool fielder lacking a game-season row (a survivorship filter that biases
-        the live-vs-pool comparison)."""
+        """``(fielded_by_position, fielder_player_id, season)`` of the row the
+        last :meth:`battedball_draw` returned, or None when the pool lacks the
+        fielder columns or no draw has happened. ``season`` is the pool row's
+        own season."""
         i = self._bb_last_i
         if i is None or self._bb_hand is None:
             return None
@@ -831,26 +796,6 @@ class FieldingMixin(BaseMixin):
             return None
         return (int(pos[i]), int(fid[i]), int(pool.season[i]))
 
-    def fielder_quality(self, fielder_id: int, position: str, season: int) -> float | None:
-        """SIM-425b: the fielder's outs-above-average (per the fielder embedding,
-        keyed ``player_id:position:season``), or None when the fielder / feature is
-        absent. A higher value == a better defender at that position; the resolver
-        nudges out↔hit by the delta between the live defender and the pool play's
-        fielder. Returns None (-> neutral) on a legacy bundle or an unknown fielder."""
-        femb = self.a.actor_emb.get("fielder")
-        if femb is None or not fielder_id:
-            return None
-        feats = femb.get("features")
-        idx = femb["key_index"].get(f"{int(fielder_id)}:{position}:{int(season)}")
-        if feats is None or idx is None:
-            return None
-        if self._fld_idx is None:
-            self._fld_idx = {f: i for i, f in enumerate(feats)}
-        oaa_i = self._fld_idx.get("outs_above_average")
-        if oaa_i is None:
-            return None
-        v = float(femb["vecs"][idx][oaa_i])
-        return v if np.isfinite(v) else None
-
     def has_battedball(self) -> bool:
+        """True when the bundle carries the batted-ball pools."""
         return bool(self.a.bb_pools)

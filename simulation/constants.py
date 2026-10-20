@@ -1,34 +1,21 @@
-"""simulation.constants — the canonical outcome vocabulary + defensive run
-values (SIM-202, SIM-312, SIM-511).
+"""The simulator's shared vocabularies and defensive run values.
 
-This module is the single home for:
+* ``CANONICAL_OUTCOME_KEYS``: the thirteen plate-appearance outcomes every
+  consumer keys on (the ledger's ``canonical_event``, the linescore, the sim
+  store, the acceptance bands).
+* ``STATCAST_EVENT_ALIASES`` and :func:`resolve_event_to_canonical`: Statcast's
+  raw ``events`` strings mapped onto those outcomes, so every sampled event
+  resolves.
+* ``FIELD_POSITION_NAMES``: the scorekeeping position number -> the position
+  name that the fielder embedding and the defense maps key by.
+* ``DEFENSIVE_RUN_VALUES``: the runs saved per defensive event above average,
+  read by the profile computor.
 
-  * ``CANONICAL_OUTCOME_KEYS`` — the canonical plate-appearance outcome
-                              vocabulary every consumer keys on (the ledger's
-                              ``canonical_event``, the linescore, the sim
-                              store, the acceptance bands).
-  * ``DEFENSIVE_RUN_VALUES`` — defensive run conversions used by the
-                              fielder / catcher engines (runs saved per out,
-                              per block, per framing strike).
-  * ``STATCAST_EVENT_ALIASES`` + ``resolve_event_to_canonical`` — SIM-312:
-    map Statcast's raw ``events`` vocabulary onto the canonical keys so the
-    play pool's sampled events always resolve.
+There is no run value per outcome here, and there must not be one: a play's
+value comes from the RE24 matrix over the real base-out states before and after
+it (``simulation.run_resolution``; the owner's ruling of 2026-08-19).
 
-THE LINEAR-WEIGHT NUMBERS WERE REMOVED (owner ruling 2026-08-19, the
-SIM-511+512 landing). The old ``RUN_VALUES`` table carried a hand-set average
-run value per outcome. Production never read them: the ledger accepts only
-the RE24-delta method (real pre/post base-out states plus the runs that
-scored — ``simulation.run_resolution``), and the context-free fallback was
-consumed by tests alone (verified 2026-08-19). Only the KEYS were load-
-bearing, so the keys are what remains. Do not reintroduce a run-value table;
-a play's value comes from the RE24 matrix and real states, never a constant.
-
--------------------------------------------------------------------------------
-CANONICAL OUTCOME VOCABULARY  (``CANONICAL_OUTCOME_KEYS``)
--------------------------------------------------------------------------------
-The simulator models a plate appearance as resolving to exactly one of these
-mutually-exclusive, collectively-exhaustive outcomes (the standard
-Retrosheet/Statcast PA-outcome partition, plus ``field_error``):
+The canonical outcomes::
 
     single, double, triple, home_run,
     walk, intentional_walk, hit_by_pitch,
@@ -36,37 +23,20 @@ Retrosheet/Statcast PA-outcome partition, plus ``field_error``):
     sacrifice_fly, sacrifice_hit,
     field_error
 
-``field_error`` became its own canonical outcome with the SIM-511 landing
-(the SIM-496 fix). It aliased to ``single`` before — "treat as a single's
-run value" — which credited a drawn reach-on-error as a HIT in the boxscore
-while the loop retired the batter on the bases. The batter reaches on a
-``field_error`` and it is NOT a hit; the linescore keys on this vocabulary.
+``field_error`` is a reach on an error. The batter reaches, and it is not a hit.
 
--------------------------------------------------------------------------------
-DEFENSIVE RUN VALUES  (``DEFENSIVE_RUN_VALUES``)
--------------------------------------------------------------------------------
-Conversion factors from defensive events to runs, as used by the fielder and
-catcher engines. Grounded in Statcast OAA->runs research and Tango
-framing/blocking run conversions:
+The defensive run values come from the Statcast research on outs above average
+and Tango's framing and blocking conversions::
 
     runs_per_oaa_infield        0.75   runs per infield out above average
     runs_per_oaa_outfield       0.90   runs per outfield out above average
     runs_per_block_saved        0.25   runs per blocked pitch above average
     runs_per_strike_above_avg   0.125  runs per framing strike above average
-
-These four values are CENTRALIZED here unchanged from their prior inline
-definitions in ``pipeline/batch/player_profile_computor.py``.
 """
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# The canonical plate-appearance outcome vocabulary.
-# The 12 standard outcomes plus ``field_error`` (SIM-496/511 — the batter
-# reaches on an error and it is NOT a hit). Every consumer keys on this set;
-# the play's VALUE comes from simulation.run_resolution (RE24 over real
-# states), never from a per-outcome constant (owner ruling 2026-08-19).
-# ---------------------------------------------------------------------------
+#: The canonical plate-appearance outcomes: mutually exclusive and exhaustive.
 CANONICAL_OUTCOME_KEYS: frozenset[str] = frozenset(
     {
         # --- reaching base via a hit ---
@@ -78,7 +48,7 @@ CANONICAL_OUTCOME_KEYS: frozenset[str] = frozenset(
         "walk",
         "intentional_walk",
         "hit_by_pitch",
-        "field_error",  # SIM-511: its own outcome — a reach, never a hit
+        "field_error",  # a reach on an error, never a hit
         # --- outs ---
         "strikeout",
         "field_out",
@@ -88,29 +58,10 @@ CANONICAL_OUTCOME_KEYS: frozenset[str] = frozenset(
     }
 )
 
-# ---------------------------------------------------------------------------
-# SIM-312 — Statcast raw ``events`` vocabulary  ->  canonical outcome key.
-#
-# The play pool stores Statcast's *raw* ``events`` strings
-# (``sim.outcome_pool.events`` / ``sim.pitch_pool.events``) sampled verbatim.
-# Statcast's vocabulary is far larger than the canonical partition:
-# ``field_out``, ``force_out``, ``fielders_choice``, ``sac_fly``,
-# ``grounded_into_double_play``, ``double_play``, ``intent_walk`` ...
-#
-# SIM-312 history: the loop once scored runs by ``RUN_VALUES.get(event, 0.0)``
-# with mismatched spellings, so the most common outs silently scored 0.0 and
-# inflated the run environment. The alias map + ``resolve_event_to_canonical``
-# fixed the vocabulary half; the value half is gone entirely — the ledger
-# resolves every play by RE24 over real states (``simulation.run_resolution``)
-# and rejects anything else.
-#
-# Statcast ``events`` reference vocabulary: pybaseball / Baseball Savant
-# ``events`` field (the ``des`` / ``events`` column of Statcast play-by-play).
-# ---------------------------------------------------------------------------
-
-#: Statcast raw ``events`` string  ->  canonical outcome key.
-#: Covers the full set of *terminal plate-appearance* events Statcast emits.
-#: Alias targets all exist in ``CANONICAL_OUTCOME_KEYS`` (asserted at import).
+#: Statcast raw ``events`` string -> canonical outcome key, for every terminal
+#: plate-appearance event Statcast emits. The play pools store the raw strings
+#: (``sim.outcome_pool.events``, ``sim.pitch_pool.events``). Every target is a
+#: canonical key (checked at import below).
 STATCAST_EVENT_ALIASES: dict[str, str] = {
     # --- hits ---
     "single": "single",
@@ -126,7 +77,7 @@ STATCAST_EVENT_ALIASES: dict[str, str] = {
     # --- strikeouts ---
     "strikeout": "strikeout",
     "strikeout_double_play": "ground_into_double_play",  # K + runner out
-    # --- generic ball-in-play outs (the silently-zeroed bug class) ---
+    # --- ball-in-play outs ---
     "field_out": "field_out",
     "force_out": "field_out",
     "fielders_choice": "field_out",
@@ -144,14 +95,12 @@ STATCAST_EVENT_ALIASES: dict[str, str] = {
     "sac_bunt_double_play": "sacrifice_hit",
     "sacrifice_fly": "sacrifice_fly",  # tolerate canonical spelling
     "sacrifice_hit": "sacrifice_hit",  # tolerate canonical spelling
-    # --- reach-on-error: its own canonical outcome (SIM-496/511) ---
-    # This mapped to "single" until 2026-08-19, which credited a drawn
-    # reach-on-error as a HIT. The batter reaches; it is not a hit.
+    # --- a reach on an error: its own outcome, never a hit ---
     "field_error": "field_error",
 }
 
-# Import-time invariant: every alias target must be a canonical outcome key,
-# so a resolved event can never leave the vocabulary.
+# Every alias target must be a canonical key, so a resolved event never leaves
+# the vocabulary.
 assert set(STATCAST_EVENT_ALIASES.values()) <= CANONICAL_OUTCOME_KEYS, (
     "STATCAST_EVENT_ALIASES maps to a key absent from CANONICAL_OUTCOME_KEYS: "
     f"{set(STATCAST_EVENT_ALIASES.values()) - CANONICAL_OUTCOME_KEYS}"
@@ -177,10 +126,23 @@ def resolve_event_to_canonical(event: str | None) -> str | None:
     return STATCAST_EVENT_ALIASES.get(key)  # raw Statcast -> canonical, else None
 
 
-# ---------------------------------------------------------------------------
-# Defensive run values — runs saved per defensive event above average.
-# Centralized unchanged from pipeline/batch/player_profile_computor.py.
-# ---------------------------------------------------------------------------
+#: The scorekeeping position number (``fielded_by_position`` in the pools) ->
+#: the position name. The fielder embedding's keys are
+#: ``"{player_id}:{position}:{season}"`` with these names, and a game's
+#: defense map is keyed by them. The loop and the sampler share this one table.
+FIELD_POSITION_NAMES: dict[int, str] = {
+    1: "P",
+    2: "C",
+    3: "1B",
+    4: "2B",
+    5: "3B",
+    6: "SS",
+    7: "LF",
+    8: "CF",
+    9: "RF",
+}
+
+#: Runs saved per defensive event above average (see the module docstring).
 DEFENSIVE_RUN_VALUES: dict[str, float] = {
     "runs_per_oaa_infield": 0.75,
     "runs_per_oaa_outfield": 0.90,
@@ -189,8 +151,9 @@ DEFENSIVE_RUN_VALUES: dict[str, float] = {
 }
 
 __all__ = [
-    "DEFENSIVE_RUN_VALUES",
-    "STATCAST_EVENT_ALIASES",
     "CANONICAL_OUTCOME_KEYS",
+    "DEFENSIVE_RUN_VALUES",
+    "FIELD_POSITION_NAMES",
+    "STATCAST_EVENT_ALIASES",
     "resolve_event_to_canonical",
 ]

@@ -88,7 +88,7 @@ class BaseMixin:
         """The shared caches and the as-of cutoff."""
         #: Per-hand one-time precompute of the pitch pool (``_pool_meta``).
         self._pool_cache: dict[str, dict] = {}
-        #: The point-in-time cutoff, a YYYYMMDD integer (SIM-535). None draws
+        #: The point-in-time cutoff of a backtest, a YYYYMMDD integer. None draws
         #: from the whole pool, as a live game does; set, every draw refuses
         #: plays from after that date.
         self.asof_ymd: int | None = None
@@ -107,8 +107,12 @@ class BaseMixin:
         #: The z-scored actor embeddings (``_emb_z``).
         self._steal_emb_z: dict[str, np.ndarray] = {}
 
-    # ---- per-pool one-time precompute ------------------------------------
+    # ---- the per-hand pool precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
+        """The hand pool's one-time precompute: each row's pitcher-profile
+        index and batter-embedding row, the twelve count buckets' rows, the
+        outcome and taken-pitch arrays, the contiguous base-out columns and
+        the draw-neutral rule's counts. Cached per hand."""
         if hand in self._pool_cache:
             return self._pool_cache[hand]
         pool: HandPool = self.a.pools[hand]
@@ -137,9 +141,10 @@ class BaseMixin:
             )
         else:
             pool_bat = np.full(n, -1, dtype=np.int64)
-        # SIM-429: count bucket per row (balls*3 + strikes, 12 buckets) + the row
-        # indices per bucket, so the pitch draw conditions on the LIVE count
-        # (ball-rate swings 37%@0-0 -> 23%@3-2; a count-blind draw 2.8x-inflates).
+        # The count bucket per row (balls*3 + strikes, 12 buckets) and each
+        # bucket's rows, so the pitch draw conditions on the live count. The
+        # ball rate moves from 37% at 0-0 to 23% at 3-2, and a count-blind
+        # draw inflates it 2.8 times (SIM-429).
         balls = np.clip(pool.sit[:, 0].astype(np.int64), 0, 3)
         strikes = np.clip(pool.sit[:, 1].astype(np.int64), 0, 2)
         cbucket = balls * 3 + strikes
@@ -150,26 +155,25 @@ class BaseMixin:
             "pool_prof": pool_prof,
             "pool_bat": pool_bat,
             "outcome": np.asarray(pool.outcome_type, dtype=object),
-            # SIM-523 part E: the TAKEN rows (a called strike or a ball).
+            # The TAKEN rows (a called strike or a ball): the receiving ratio's.
             "taken": (outcome_arr == "called_strike") | (outcome_arr == "ball"),
             "bucket_rows": bucket_rows,
-            # SIM-430: the base-out columns as a CONTIGUOUS copy. _f_situation_baseout
-            # ran ``pool.sit[:, 2:6]`` (a non-contiguous 4-col slice + copy over the
-            # whole ~935K-row pool) on EVERY PA — the profiler's single biggest cost
-            # (~0.67 s/game). Materialising it once here makes the per-PA RBF a plain
-            # contiguous subtract.
+            # The base-out columns as one contiguous copy, so the per-PA
+            # situation kernel is a plain subtract. Slicing ``pool.sit[:, 2:6]``
+            # on every PA was the profiler's largest cost, ~0.67 s a game
+            # (SIM-430).
             "sit_baseout": np.ascontiguousarray(pool.sit[:, 2:6]),
-            # SIM-523 part F: the rows whose pitcher has no profile (the
-            # draw-neutral rule at a power) and the row counts per pitcher
-            # profile (the neutral mean; the batter's counts are per matrix
-            # column, ``bat_col_counts``).
+            # The rows whose pitcher has no profile (the draw-neutral rule at
+            # a power) and the row counts per pitcher profile (the neutral
+            # mean; the batter's counts are per matrix column,
+            # ``bat_col_counts``).
             "prof_unscored": pool_prof < 0,
             "prof_counts": np.bincount(pool_prof[pool_prof >= 0], minlength=max(1, len(pidx))),
         }
         self._pool_cache[hand] = meta
         return meta
 
-    # ---- SIM-535: the point-in-time cutoff --------------------------------
+    # ---- the point-in-time cutoff ----------------------------------------
     def set_asof(self, ymd: int | None) -> None:
         """Refuse pool rows from after ``ymd`` (a YYYYMMDD integer).
 
@@ -192,7 +196,7 @@ class BaseMixin:
 
         None when no cutoff is set, which keeps the live path free of any extra
         multiply. Raises when a cutoff IS set and the pool carries no dates: a
-        bundle exported before SIM-535 cannot be filtered, and drawing from it
+        bundle without ``game_ymd`` cannot be filtered, and drawing from it
         anyway would be exactly the silent leak this guards against.
         """
         if self.asof_ymd is None:
@@ -219,13 +223,13 @@ class BaseMixin:
             return w
         return w * (m if rows is None else m[rows])
 
-    # ---- SIM-523 part F: the draw-neutral rule for unscored rows ----------
-    # A pool row whose pitcher / batter has no score reads 1.0 in the raw
-    # factor — the MAXIMUM — which is harmless at power 1 (the certified
-    # weight, kept byte for byte) and fatal at a fitted power: at power 12 a
-    # 3% unscored share outweighs the whole scored pool. At any other power
-    # such a row weighs the mean scored weight instead. The means come from
-    # the live actor's matrix row and the row counts per column — no pool pass.
+    # ---- the draw-neutral rule for unscored rows --------------------------
+    # A pool row whose pitcher or batter has no score reads 1.0 in the raw
+    # factor, the MAXIMUM. That is harmless at power 1 and fatal at a fitted
+    # power: at power 12 a 3% unscored share outweighs the whole scored pool.
+    # At any other power such a row weighs the mean scored weight instead. The
+    # means come from the live actor's matrix row and the row counts per
+    # column, with no pool pass.
     def _pitcher_prof_score(self, pitcher_key: str) -> np.ndarray | None:
         """The live pitcher's score over the pitcher-sim profiles — the vector
         :meth:`_f_pitcher` gathers onto the rows; None when he has no profile
@@ -239,11 +243,10 @@ class BaseMixin:
         out: np.ndarray | None = None
         matrix = getattr(self.a, "pitcher_sim_matrix", None)
         if matrix is not None:
-            # SIM-430: dense fast path — one contiguous (shared) row instead of
-            # scattering the ~2 GB pitcher_sim dict. Byte-identical to the dict
-            # path: a key absent from the index, or an unscored/empty query (an
-            # all-zero row — a populated query always has >0 same-hand scores),
-            # both fall back to the flat-ones weighting exactly as ``if not sims``.
+            # The dense matrix: one contiguous shared row instead of the ~2 GB
+            # pitcher_sim dict. A key absent from the index, or an empty query
+            # (an all-zero row; a populated query always has a same-hand
+            # score), leaves the factor flat, as the dict path does.
             i = self.a.pitcher_sim_index.get(pitcher_key)
             if i is not None and matrix[i].any():
                 out = matrix[i]
@@ -359,9 +362,9 @@ class BaseMixin:
         return mean
 
     def _batter_factor_rows(self, hand: str, batter_key: str, rows: np.ndarray) -> np.ndarray:
-        """The RAW batter factor on ``rows`` (the matrix score to the actor
-        power when the matrices are on — SIM-523 part F: the matrix reaches
-        the cell path too — else the kernel affinity; 1.0 on an unscored row)."""
+        """The raw batter factor on ``rows``: the matrix score to the actor
+        power when the batter matrix is on, else ones; 1.0 on an unscored row.
+        The pitch draw's cell path reads it."""
         if self._batter_matrix_on():
             entry = self._actor_matrix("batter")
             assert entry is not None
@@ -382,7 +385,7 @@ class BaseMixin:
             return out
         return np.ones(rows.size, dtype=np.float32)
 
-    # ---- SIM-523 part A: the actor score-matrix lookups --------------------
+    # ---- the actor score-matrix lookups ----------------------------------
     #: Which actor embedding each matrix's keys index (fielder matrices are
     #: per position and share the fielder embedding).
     _MATRIX_EMBEDDING = {
@@ -423,7 +426,7 @@ class BaseMixin:
         no such matrix or the power is 0 (the caller leaves the actor neutral)."""
         power = float(self.actor_power.get(name, 1.0))
         if power <= 0.0:
-            return None  # SIM-523: power 0 turns this actor's factor off
+            return None  # power 0 turns this actor's factor off
         entry = self._actor_matrix(name)
         e2m = self._emb_to_mat(name)
         if entry is None or e2m is None:
@@ -442,12 +445,13 @@ class BaseMixin:
             scores = np.power(np.clip(scores, 0.0, None), np.float32(power)).astype(np.float32)
         out[valid] = scores
         if power != 1.0 and not valid.all():
-            # SIM-523 part F: an unscored row is draw-neutral at a power.
+            # At a power, an unscored row is draw-neutral.
             out[~valid] = np.float32(scores.mean())
         return out
 
     def _emb_z(self, actor: str) -> np.ndarray | None:
-        """The z-scored embedding matrix for ``actor`` (memoized)."""
+        """The z-scored embedding matrix for ``actor`` (memoized). The
+        conditional-rate probe reads it."""
         z = self._steal_emb_z.get(actor)
         if z is not None:
             return z
@@ -461,20 +465,19 @@ class BaseMixin:
         self._steal_emb_z[actor] = z
         return z
 
-    def _steal_actor_factor(
+    def _actor_factor(
         self,
-        actor: str,
+        matrix: str | None,
         live_key: str,
         emb_rows_all: np.ndarray | None,
         rows: np.ndarray,
-        feat_names: tuple[str, ...],
-        matrix: str | None = None,
     ) -> np.ndarray | None:
-        """The LIVE actor's engine score against each pool row's actor, read
-        from the ``matrix`` the bundle carries and raised to its power; 1.0
-        (neutral) for rows whose actor is unscored, None when the bundle has no
-        such matrix (the actor stays neutral). ``feat_names`` named the retired
-        kernel's features; the call sites still pass it (SIM-523)."""
+        """The LIVE actor's engine score against each candidate row's actor,
+        read from the named score ``matrix`` and raised to its power
+        (:meth:`_matrix_gather`). ``emb_rows_all`` is the actor's embedding row
+        per pool row, ``rows`` the candidate rows. 1.0 (neutral) for a row
+        whose actor is unscored; None when there is no matrix or no embedding
+        (the actor stays neutral). The steal and advancement draws use it."""
         if emb_rows_all is None or matrix is None:
             return None
         return self._matrix_gather(matrix, live_key, emb_rows_all[rows])

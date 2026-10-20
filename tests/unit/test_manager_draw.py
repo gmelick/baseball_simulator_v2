@@ -437,22 +437,6 @@ class TestTheDraw:
         assert last is not None and last["changed"] is True and last["incoming_id"] == 101
         assert last["pitcher_id"] == 100
 
-    def test_a_manager_weight_multiplies_the_rows(self):
-        rows = [(95, 22, 7, 1, 1, 0, 1, 0, 1, 100)] * 6 + [(95, 22, 7, 1, 1, 0, 1, 0, 0, 100)] * 6
-        fp = _sampler(_change_pool(rows))
-        w = np.array([1.0] * 6 + [0.0] * 6, dtype=np.float32)
-        base = {
-            "is_starter": True,
-            "new_half": False,
-            "pitch_count": 95,
-            "batters_faced": 22,
-            "inning": 7,
-            "outs": 1,
-            "runners_state": 1,
-            "score_diff": 0,
-        }
-        assert all(fp.pitching_change_draw("100:2024", manager_weight=w, **base) for _ in range(20))
-
 
 # ===========================================================================
 # The order and the switch

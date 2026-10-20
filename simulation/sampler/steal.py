@@ -43,42 +43,20 @@ class StealMixin(BaseMixin):
         #: Per-target precompute: the group indexes and the actor row gathers.
         self._steal_meta_cache: dict[str, dict] = {}
 
-    # ---- SIM-474: the steal draw over the opportunity pool -----------------
-
-    #: The steal-relevant feature subsets. Each actor's similarity is a gaussian
-    #: kernel over THESE z-scored columns only, so a runner is "similar" by how
-    #: he runs, not by how he tags up.
-    _RUNNER_STEAL_FEATURES = ("sprint_speed", "sb_attempt_rate", "sb_success_rate", "cs_rate")
-    _CATCHER_STEAL_FEATURES = (
-        "pop_time_mean",
-        "arm_strength_mean",
-        "cs_rate",
-        "steal_attempt_rate_against",
-    )
-    #: SIM-504 item 3 added pickoff_rate/stepoff_rate (raw.play_events
-    #: disengagements). `_steal_feat_cols` skips names a legacy artifact lacks,
-    #: so an old bundle degrades to the 3-feature kernel instead of failing.
-    _PITCHER_STEAL_FEATURES = (
-        "sb_against_per_9",
-        "cs_rate_forced",
-        "steal_attempt_rate_allowed",
-        "pickoff_rate",
-        "stepoff_rate",
-    )
-
     def has_steal_pool(self) -> bool:
+        """True when the bundle carries the steal opportunity pools."""
         return bool(self.a.steal_pools)
 
     def _steal_meta(self, target: str) -> dict | None:
         """Per-target one-time precompute: the group indexes plus per-row
         embedding-row gathers for the three actors.
 
-        SIM-554: up to three indexes over the pool's rows.
+        Up to three indexes over the pool's rows:
 
           * ``cells``: (outs, balls, strikes) -> the PITCH rows. The single
-            pre-pitch draw reads it (the flag off, or a bundle without
-            classes). On a bundle with classes the pickoff rows are left out,
-            so that draw reads the rows it read before migration 0031.
+            pre-pitch draw reads it (the switch off, or a bundle without
+            classes). The pickoff rows are left out, so that draw reads the
+            same rows as on a bundle without them.
           * ``pickoff_cells``: (outs, balls, strikes) -> EVERY row, the pitch
             rows and the pickoff rows. The pickoff draw's count group.
           * ``class_cells``: (outs, balls, strikes, class code) -> the pitch
@@ -87,8 +65,8 @@ class StealMixin(BaseMixin):
         The last two exist only when EVERY pitch row of the pool carries a
         class. A pickoff row is told apart by ``is_pickoff_row`` (by class code
         0 on a pool built without that column). A pool where some pitch rows
-        have no class (a season no builder rebuilt since migration 0031) keeps
-        the single pre-pitch draw over all its pitch rows, and says so once.
+        have no class (a season not rebuilt since migration 0031) keeps the
+        single pre-pitch draw over all its pitch rows, and logs a warning.
         """
         meta = self._steal_meta_cache.get(target)
         if meta is not None:
@@ -162,28 +140,17 @@ class StealMixin(BaseMixin):
         return meta
 
     def has_steal_classes(self) -> bool:
-        """SIM-554: True when every steal pool carries the pitch class on every
-        pitch row (a bundle exported after migration 0031 from rebuilt
-        seasons). The loop's new order needs it: the pickoff draw before the
-        pitch, the steal draw in the class group. One unclassed target keeps
-        the single pre-pitch draw for both, so the two targets never run
-        different orders."""
+        """True when every steal pool carries the pitch class on every pitch
+        row (a bundle exported after migration 0031 from rebuilt seasons). The
+        running game on the pitch needs it: the pickoff draw before the pitch,
+        the steal draw in the class group. One unclassed target keeps the
+        single pre-pitch draw for both, so the two targets never run different
+        orders. Cached."""
         if self._steal_classes is None:
             metas = [self._steal_meta(t) for t in self.a.steal_pools]
             live = [m for m in metas if m is not None]
             self._steal_classes = bool(live) and all("class_cells" in m for m in live)
         return self._steal_classes
-
-    def _steal_feat_cols(self, actor: str, names: tuple[str, ...]) -> np.ndarray | None:
-        emb = self.a.actor_emb.get(actor)
-        if emb is None:
-            return None
-        feats = emb.get("features")
-        if feats is None:
-            return None
-        fmap = {f: i for i, f in enumerate(feats)}
-        cols = [fmap[n] for n in names if n in fmap]
-        return np.asarray(cols, dtype=np.int64) if cols else None
 
     def _steal_pick(self, w: np.ndarray, rows: np.ndarray) -> int | None:
         """One random number -> one row of ``rows`` drawn by its weight ``w``;
@@ -210,31 +177,28 @@ class StealMixin(BaseMixin):
         pitch_class: str | None = None,
     ) -> tuple[bool, bool, bool, bool, bool] | None:
         """Draw ONE steal-opportunity row -> (attempted, success, pickoff_out,
-        pickoff_advancing, pickoff_error), or None when the pool/cell is
-        absent (the caller then stages nothing).
+        pickoff_advancing, pickoff_error), or None when the pool or the group
+        is absent (the caller then stages nothing).
 
-        The owner's rule (2026-08-10): every sim decision is a similarity-
-        weighted draw from a hard-filtered pool, never a hand-tuned formula.
-        Hard filter: target base + the exact (outs, balls, strikes) cell.
-        Weights: runner similarity (how he runs), pitcher hold similarity,
-        catcher-arm similarity — so a strong arm DETERS the attempt, because
-        rows against similar catchers carry fewer attempts — a soft score-diff
-        kernel (blowout damping emerges from the pool, not a constant), manager
-        aggression as a multiplier on ATTEMPTED rows (a weight, never a gate —
-        SIM-474), and recency. The drawn row answers the whole pre-pitch
-        running-game question at once: `attempted` says whether the runner
-        goes, `success` says safe or caught, and the SIM-507 pickoff labels
-        say whether a pickoff retired the runner (`pickoff_advancing` marks a
-        picked-off caught stealing) or an errant throw advanced him. On a
-        pre-0017 bundle the pickoff labels are all-zero and nothing changes.
+        The hard filter is the target base and the exact (outs, balls,
+        strikes) group of pitch rows. The weights are :meth:`steal_weights`':
+        recency, a soft score-margin kernel (blowout damping comes from the
+        pool, not a constant), the runner's, the pitcher's hold and the
+        catcher's arm scores, and the manager's aggression on ATTEMPTED rows
+        only (a weight, never a gate). A strong arm deters the attempt, because
+        rows against similar catchers carry fewer attempts. The drawn row
+        answers the whole running-game question: ``attempted`` whether the
+        runner goes, ``success`` safe or caught, and the pickoff labels whether
+        a pickoff retired him (``pickoff_advancing`` marks a picked-off caught
+        stealing) or an errant throw moved him up.
 
-        SIM-554: with ``pitch_class`` (the class of the pitch that came out)
-        on a bundle with classes and ``steal_pitch_class`` on, the hard filter
-        adds the class: the rows are the real pitches of that count AND that
-        class, and the group answers from its own rows however few. A group
-        with no row stages no steal; nothing falls back to the count group.
-        The pickoff was drawn before the pitch (:meth:`pickoff_draw`), so the
-        three pickoff fields read False.
+        With ``pitch_class`` (the class of the pitch that came out), a bundle
+        with classes and ``steal_pitch_class`` on, the hard filter adds the
+        class: the rows are the real pitches of that count AND that class, and
+        the group answers from its own rows however few. A group with no row
+        stages no steal; nothing falls back to the count group. The pickoff
+        was drawn before the pitch (:meth:`pickoff_draw`), so the three
+        pickoff fields read False.
         """
         if pitch_class is not None and self.steal_pitch_class:
             meta = self._steal_meta(str(int(target_base)))
@@ -305,14 +269,14 @@ class StealMixin(BaseMixin):
         strikes: int,
         score_diff: int,
     ) -> tuple[bool, bool, bool] | None:
-        """SIM-554: the pickoff draw BEFORE the pitch -> (out, advancing,
+        """The pickoff draw BEFORE the pitch -> (out, advancing,
         error) of ONE row of the count group, or None when the group is absent
         or holds no pickoff outcome at all (no random number is then used).
 
         Every row of the (target, outs, balls, strikes) group is a candidate:
         the pitch rows (a pickoff the builder tagged to the plate appearance's
         first pitch of the pair) and the pickoff rows (a pickoff thrown before
-        any pitch of the pair, migration 0031). The weights are
+        any pitch of the pair). The weights are
         :meth:`steal_weights`' own — recency, the score-margin curve, the
         runner, pitcher-hold and catcher look-alike weights — with no manager
         weight: the manager's weight acts on the steal's attempted rows.
@@ -362,7 +326,7 @@ class StealMixin(BaseMixin):
         aggression: float = 1.0,
         rows: np.ndarray | None = None,
     ) -> tuple[StealPool, np.ndarray, np.ndarray] | None:
-        """SIM-554: the steal draw's candidate rows and their weights —
+        """The steal draw's candidate rows and their weights:
         ``(pool, rows, w)`` — or None when the pool or the cell is absent.
 
         The one code path :meth:`steal_draw` and :meth:`pickoff_draw` sample
@@ -383,37 +347,14 @@ class StealMixin(BaseMixin):
         w = pool.recency[rows].astype(np.float32).copy()
         sd = pool.sit[rows, 3] - np.float32(score_diff)
         w *= np.exp(-(sd * sd) / (2.0 * self.steal_score_sigma**2)).astype(np.float32)
-        if True:
-            f = self._steal_actor_factor(
-                "baserunner",
-                runner_key,
-                meta["runner_rows"],
-                rows,
-                self._RUNNER_STEAL_FEATURES,
-                matrix="runner_steal",
-            )
-            if f is not None:
-                w *= f
-        if True:
-            f = self._steal_actor_factor(
-                "pitcher_steal",
-                pitcher_key,
-                meta["pitcher_rows"],
-                rows,
-                self._PITCHER_STEAL_FEATURES,
-                matrix="pitcher_steal",
-            )
-            if f is not None:
-                w *= f
+        f = self._actor_factor("runner_steal", runner_key, meta["runner_rows"], rows)
+        if f is not None:
+            w *= f
+        f = self._actor_factor("pitcher_steal", pitcher_key, meta["pitcher_rows"], rows)
+        if f is not None:
+            w *= f
         if catcher_key:
-            f = self._steal_actor_factor(
-                "catcher",
-                catcher_key,
-                meta["catcher_rows"],
-                rows,
-                self._CATCHER_STEAL_FEATURES,
-                matrix="catcher_throwing",
-            )
+            f = self._actor_factor("catcher_throwing", catcher_key, meta["catcher_rows"], rows)
             if f is not None:
                 w *= f
         if aggression != 1.0:

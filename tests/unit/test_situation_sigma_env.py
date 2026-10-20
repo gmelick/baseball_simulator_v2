@@ -102,11 +102,10 @@ def test_sit_sigma_changes_the_situation_weight() -> None:
     """The bandwidth reaches the draw: a row far from the live situation
     weighs less under a narrow bandwidth than under a wide one."""
     fp = _sampler()
-    far = np.zeros(6, dtype=np.float32)
-    far[4] = 5.0
-    far[0] = 3.0  # a different base state from every pool row
+    # (outs, runners, inning, score margin): far from every pool row.
+    far = np.array([2.0, 7.0, 15.0, 5.0], dtype=np.float32)
     apply_sit_sigma_env(fp, {"SIM_SIT_SIGMA": "2.0"})
-    wide = float(fp._f_situation("R", far)[0])
+    wide = float(fp._f_situation_baseout("R", far)[0])
     apply_sit_sigma_env(fp, {"SIM_SIT_SIGMA": "0.5"})
-    narrow = float(fp._f_situation("R", far)[0])
+    narrow = float(fp._f_situation_baseout("R", far)[0])
     assert narrow < wide

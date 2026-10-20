@@ -57,7 +57,7 @@ class PitchMixin(BaseMixin):
         #: draw or after an empty-bucket fallback.
         self._pp_last_i: int | None = None
         self._pp_pitch_i: int | None = None
-        #: The conditioning weights (SIM-518), each off by default (a 0.0
+        #: The conditioning weights, each off by default (a 0.0
         #: sigma or a 1.0 weight runs no multiplication). Fatigue: Gaussians on
         #: |live - row| pitch count and times through the order, normalized to
         #: a mean of 1 within each count bucket; a row with an unknown value is
@@ -66,7 +66,7 @@ class PitchMixin(BaseMixin):
         self.fatigue_pc_sigma = 0.0
         self.fatigue_tto_sigma = 0.0
         self.pitch_home_off_weight = 1.0
-        #: The pitch-draw cell index (SIM-467). Off, the per-PA weight covers
+        #: The pitch-draw cell index. Off, the per-PA weight covers
         #: the whole pool. On, each plate appearance selects its hard-filter
         #: cell -- (runners, outs, score band, batting side) -- and assembles
         #: the same weights over that cell's twelve count sub-cells only. A
@@ -89,8 +89,12 @@ class PitchMixin(BaseMixin):
         self._bucket_fp: list[np.ndarray | None] | None = None
         self._bucket_fb: list[np.ndarray | None] | None = None
 
-    # ---- factor builders --------------------------------------------------
+    # ---- the factors -----------------------------------------------------
     def _f_pitcher(self, hand: str, pitcher_key: str) -> np.ndarray:
+        """The pitcher factor per pool row: the live pitcher's score against
+        each row's pitcher, from the pitcher-sim row; 1.0 for a row whose
+        pitcher has no profile, and on every row when the live pitcher has
+        none."""
         meta = self._pool_meta(hand)
         prof_score = self._pitcher_prof_score(pitcher_key)
         if prof_score is None:
@@ -101,42 +105,37 @@ class PitchMixin(BaseMixin):
         return out.astype(np.float32)
 
     def _f_batter(self, hand: str, batter_key: str) -> np.ndarray:
+        """The batter factor per pool row: the batter engine's score matrix
+        row, at the batter power; ones on a bundle without the matrix."""
         meta = self._pool_meta(hand)
-        # SIM-523 (the kernel retirement): the batter engine's score matrix is
-        # the factor; a bundle without it leaves the batter neutral.
         f = self._matrix_gather("batter", batter_key, meta["pool_bat"])
         if f is not None:
             return f
         return np.ones(meta["pool"].n, dtype=np.float32)
 
-    def _f_situation(self, hand: str, state: np.ndarray) -> np.ndarray:
-        pool = self.a.pools[hand]
-        diff: np.ndarray = pool.sit - np.asarray(state, dtype=np.float32)
-        d2 = np.einsum("ij,ij->i", diff, diff)
-        return np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
-
     def _f_situation_baseout(self, hand: str, base_out: np.ndarray) -> np.ndarray:
-        """RBF over the base-out dims only (outs, runners, inning, score_diff) —
-        count is handled by the per-pitch bucket, not this factor (SIM-429)."""
-        s = self._pool_meta(hand)["sit_baseout"]  # SIM-430: contiguous, cached
+        """The situation kernel: a Gaussian over the base-out columns only
+        (outs, runners, inning, score margin), bandwidth ``sit_sigma``. The
+        count is the per-pitch bucket, not this factor."""
+        s = self._pool_meta(hand)["sit_baseout"]  # contiguous, cached
         diff: np.ndarray = s - np.asarray(base_out, dtype=np.float32)
         d2 = np.einsum("ij,ij->i", diff, diff)
         return np.exp(-d2 / (2.0 * self.sit_sigma**2 * s.shape[1])).astype(np.float32)
 
-    # ---- matchup lifecycle ------------------------------------------------
+    # ---- the matchup lifecycle -------------------------------------------
     def new_half_inning(self, hand: str, pitcher_key: str, catcher_key: str | None = None) -> None:
-        """Cache the half-inning-constant base (f_pitcher * recency) and stage
-        the fielding catcher for the SIM-517 receiving factor (a no-op at
-        both receiving sigmas 0)."""
+        """Cache the half-inning base weight (the pitcher factor at the pitch
+        power, times recency, the cutoff applied) and stage the fielding
+        catcher for the receiving ratio."""
         self._hand = hand
         self._catcher_key = catcher_key
         pool = self.a.pools[hand]
         f_pitcher = self._f_pitcher(hand, pitcher_key)
-        self._f_pitcher_vec = f_pitcher  # SIM-523 part B: the split re-raises it
-        # SIM-523 part F: the pitch draw's pitcher POWER (1.0 = the raw score);
-        # at any other power an unscored row weighs the mean scored weight
-        # (draw-neutral), and the result draw re-raises such a row by the
-        # ratio of the two neutral means.
+        self._f_pitcher_vec = f_pitcher  # the result draw re-raises it
+        # The pitch draw's pitcher POWER (1.0 = the raw score). At any other
+        # power an unscored row weighs the mean scored weight (draw-neutral),
+        # and the result draw re-raises such a row by the ratio of the two
+        # neutral means.
         p = float(self.pitch_pitcher_power)
         q = float(self.result_pitcher_power)
         self._pitcher_neutral_adj = 1.0
@@ -150,9 +149,9 @@ class PitchMixin(BaseMixin):
                 )
         elif q != 1.0:
             self._pitcher_neutral_adj = self._neutral_mean_pitcher(hand, pitcher_key, q)
-        # SIM-535: the cutoff rides on the half-inning base, so BOTH pitch
-        # paths — the cell index and the plain bucket draw — inherit it from the
-        # one place they share.
+        # The cutoff rides on the half-inning base, so BOTH pitch paths (the
+        # cell index and the plain bucket draw) inherit it from the one place
+        # they share.
         self._base = self._apply_asof((f_pitcher * pool.recency).astype(np.float32), pool)
 
     def new_plate_appearance(
@@ -164,16 +163,16 @@ class PitchMixin(BaseMixin):
         tto: int | None = None,
         bat_home: bool | None = None,
     ) -> None:
-        """Assemble the per-PA matchup weight (base · f_batter · f_situation_baseout
-        [· f_catcher_receiving — SIM-517] [· f_fatigue · the batting-side weight —
-        SIM-518]) and split it into 12 count-bucket CDFs for the per-pitch,
-        count-conditioned draw (SIM-429).
+        """Assemble the plate appearance's weight (the base, times the batter
+        factor and the base-out situation kernel, times the gated fatigue,
+        batting-side and receiving weights) and split it into twelve
+        count-bucket CDFs for the per-pitch draw.
 
-        SIM-518: ``pitch_count`` (pitches the live pitcher threw BEFORE this
-        PA) and ``tto`` (his times through the order entering it) feed the
-        fatigue kernel; ``bat_home`` feeds the batting-side weight. Each is
-        read only when its sigma / weight is ON and the pool carries the
-        column; omitted or off, the weight is exactly today's."""
+        ``pitch_count`` (pitches the live pitcher threw BEFORE this plate
+        appearance) and ``tto`` (his times through the order entering it) feed
+        the fatigue weight; ``bat_home`` feeds the batting-side weight. Each is
+        read only when its sigma or weight is on and the pool carries the
+        column; omitted or off, it changes nothing."""
         assert self._hand is not None and self._base is not None, "call new_half_inning first"
         if self.pitch_cell_index:
             self._new_plate_appearance_cell(
@@ -184,7 +183,7 @@ class PitchMixin(BaseMixin):
         self._pa_levels = None
         self._pa_keys = None
         f_bat = self._f_batter(self._hand, batter_key)
-        # SIM-523 part F: the batter powers with the draw-neutral rule.
+        # The batter powers, with the draw-neutral rule.
         uns_b = self._batter_unscored(self._hand)
         pb_power = float(self.pitch_batter_power)
         mean_pb = self._neutral_mean_batter(self._hand, batter_key, pb_power)
@@ -192,14 +191,14 @@ class PitchMixin(BaseMixin):
             self._hand, batter_key, float(self.result_batter_power)
         )
         w = self._base * f_bat * self._f_situation_baseout(self._hand, base_out)
-        # SIM-523 part E: the receiving ratio, applied per count bucket below
-        # (the single draw) or kept for the result draw (the split).
+        # The receiving ratio: applied per count bucket below (the single
+        # draw), or kept for the result draw (the split).
         recv = (
             self._recv_factor(self._hand, self._catcher_key)
             if self._receiving_on() and self._catcher_key is not None
             else None
         )
-        # --- SIM-518: the conditioning weights (each exactly absent when off)
+        # --- the conditioning weights (each absent when off) ---------------
         if (self.fatigue_pc_sigma > 0.0 or self.fatigue_tto_sigma > 0.0) and (
             pitch_count is not None or tto is not None
         ):
@@ -213,8 +212,8 @@ class PitchMixin(BaseMixin):
                 mismatch = (bh >= 0) & ((bh > 0) != bool(bat_home))
                 w = w * np.where(mismatch, np.float32(self.pitch_home_off_weight), np.float32(1.0))
         rows = self._pool_meta(self._hand)["bucket_rows"]
-        # SIM-523 part B: the split keeps the raw weight per count for the
-        # result draw; off, nothing is kept and ``w`` is untouched.
+        # The split keeps the raw weight per count for the result draw; off,
+        # nothing is kept.
         if self.pitch_result_split:
             fpv = self._f_pitcher_vec
             self._bucket_w = [(w[r] if r.size else None) for r in rows]
@@ -227,7 +226,7 @@ class PitchMixin(BaseMixin):
         else:
             self._bucket_w = self._bucket_fb = self._bucket_fp = None
             self._bucket_recv = None
-            # SIM-523 part F: the single draw's batter power (1.0 = as is).
+            # The single draw's batter power (1.0 = as is).
             w = _repower_neutral(w, f_bat, uns_b, pb_power, mean_pb)
             if recv is not None:
                 taken = self._pool_meta(self._hand)["taken"]
@@ -236,7 +235,7 @@ class PitchMixin(BaseMixin):
                         w[r] = self._apply_receiving(w[r], taken[r], recv[r])
         self._bucket_cdf = [(np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows]
 
-    # ---- SIM-467: the cell index -------------------------------------------
+    # ---- the cell index --------------------------------------------------
     def _cell_meta(self, hand: str) -> dict:
         """Per-hand one-time precompute of the cell index: every row's sub-cell
         id — ((runners, outs, band, side) × count) — a stable row order sorted
@@ -286,7 +285,7 @@ class PitchMixin(BaseMixin):
         means the live side is unknown — level 0 already unions the sides.
         Returns ``(rows, level)``; cached per sub-cell (occupancy is a pool
         fact, not a live-state fact). An empty level-3 cell raises: the
-        base-out cell is essential (the SIM-511 wording)."""
+        base-out cell is essential and never widens away."""
         meta = self._cell_meta(hand)
         n_side = meta["n_side"]
         order, off = meta["order"], meta["offsets"]
@@ -340,7 +339,7 @@ class PitchMixin(BaseMixin):
         tto: int | None,
         bat_home: bool | None,
     ) -> None:
-        """The SIM-467 cell path of :meth:`new_plate_appearance`: the same
+        """The cell path of :meth:`new_plate_appearance`: the same
         factors as the whole-pool path, evaluated on the live cell's rows only
         and multiplied in the same order, so every in-cell weight is bit-
         identical to the whole-pool path's weight for that row."""
@@ -359,16 +358,16 @@ class PitchMixin(BaseMixin):
             side = 1 if bat_home else 0
         base = self._base
         sitb = meta["sit_baseout"]
-        # SIM-523 part F: the batter factor per sub-cell (the matrix when on),
-        # its powers and the draw-neutral rule's ingredients.
+        # The batter factor per sub-cell (the matrix when on), its powers and
+        # the draw-neutral rule's ingredients.
         uns_b = self._batter_unscored(hand)
         pb_power = float(self.pitch_batter_power)
         mean_pb = self._neutral_mean_batter(hand, batter_key, pb_power)
         self._bat_neutral_rb = self._neutral_mean_batter(
             hand, batter_key, float(self.result_batter_power)
         )
-        # SIM-523 part E: the receiving ratio (the single draw applies it per
-        # sub-cell; the split keeps it for the result draw).
+        # The receiving ratio: the single draw applies it per sub-cell; the
+        # split keeps it for the result draw.
         recv: np.ndarray | None = (
             self._recv_factor(hand, self._catcher_key)
             if self._receiving_on() and self._catcher_key is not None
@@ -417,18 +416,18 @@ class PitchMixin(BaseMixin):
                 mismatch = (bhr >= 0) & ((bhr > 0) != bool(bat_home))
                 w = w * np.where(mismatch, np.float32(self.pitch_home_off_weight), np.float32(1.0))
             if split:
-                # SIM-523 part B: keep the raw weight + factors for the result
-                # draw; the pitch draw's batter power applies here only.
+                # Keep the raw weight and factors for the result draw; the
+                # pitch draw's batter power applies here only.
                 b_w.append(w)
                 b_fb.append(f_bat)
                 b_fp.append(fpv[rows] if fpv is not None else None)
                 b_recv.append(recv[rows] if recv is not None else None)
                 w = _repower_neutral(w, f_bat, uns_b[rows], pb_power, mean_pb)
             else:
-                # SIM-523 part F: the single draw's batter power (1.0 = as is).
+                # The single draw's batter power (1.0 = as is).
                 w = _repower_neutral(w, f_bat, uns_b[rows], pb_power, mean_pb)
                 if recv is not None:
-                    # SIM-523 part E: the receiving ratio, last, mass-preserving.
+                    # The receiving ratio, last, mass-preserving.
                     w = self._apply_receiving(w, taken_all[rows], recv[rows])
             cdfs.append(np.cumsum(w, dtype=np.float64))
         self._pa_rows = pa_rows
@@ -478,8 +477,8 @@ class PitchMixin(BaseMixin):
         return out
 
     def cell_index_stats(self) -> dict:
-        """SIM-467: draws per widening level (0 = the exact cell) and the
-        index shape per hand, for the lane's report."""
+        """Draws per widening level (0 = the exact cell) and the index shape
+        per hand, for the lane's report."""
         return {
             "enabled": bool(self.pitch_cell_index),
             "min_cell": int(self.pitch_min_cell),
@@ -488,7 +487,7 @@ class PitchMixin(BaseMixin):
         }
 
     def _f_fatigue(self, hand: str, pitch_count: int | None, tto: int | None) -> np.ndarray | None:
-        """SIM-518 (SIM-465): the per-row fatigue factor for the live pitcher's
+        """The per-row fatigue factor for the live pitcher's
         pitch count and times through the order — a Gaussian on each |live −
         row| distance (a sigma of 0.0 removes that term), NORMALIZED to a mean
         of 1 within each COUNT BUCKET over the rows that carry a value. A row
@@ -516,9 +515,10 @@ class PitchMixin(BaseMixin):
             touched = True
         if not touched:
             return None
-        # Per-COUNT-BUCKET normalization over the valid rows (the SIM-517
-        # pattern): the factor shifts WHICH pitch is drawn at a count; a
-        # fully underflowed bucket goes neutral rather than starving.
+        # Per-COUNT-BUCKET normalization over the valid rows: the factor
+        # shifts WHICH pitch is drawn at a count, never how often a count's
+        # pitches are drawn; a fully underflowed bucket goes neutral rather
+        # than starving.
         for r in self._pool_meta(hand)["bucket_rows"]:
             if r.size == 0:
                 continue
@@ -534,15 +534,16 @@ class PitchMixin(BaseMixin):
         return out
 
     def draw(self, balls: int = 0, strikes: int = 0) -> str:
-        """Count-conditioned draw of one pitch outcome (SIM-429): restrict to the
-        live count's bucket, weighted by the per-PA matchup weights."""
+        """Draw one pitch outcome in the live count's bucket, by the plate
+        appearance's weights. With the split on, the result draw then picks
+        the play among the same rows. An empty bucket returns ``"ball"``."""
         assert self._bucket_cdf is not None, "call new_plate_appearance first"
         meta = self._pool_cache[self._hand]
         b = min(max(int(balls), 0), 3) * 3 + min(max(int(strikes), 0), 2)
         cdf = self._bucket_cdf[b]
-        # SIM-467: on the cell path the bucket's rows are the live cell's
-        # sub-cell (global indices, so the got-away / geometry reads below
-        # are unchanged); count the draw's widening level.
+        # On the cell path the bucket's rows are the live cell's sub-cell
+        # (global indices, so the got-away and geometry reads work the same);
+        # count the draw's widening level.
         if self._pa_rows is not None:
             rows = self._pa_rows[b]
             if self._pa_levels is not None:
@@ -555,7 +556,7 @@ class PitchMixin(BaseMixin):
             return "ball"
         i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
         gi = int(rows[min(i, rows.size - 1)])
-        self._pp_pitch_i = gi  # SIM-523 part B: the pitch thrown
+        self._pp_pitch_i = gi  # the pitch thrown
         if self.pitch_result_split and self._bucket_w is not None:
             gi = self._result_draw(b, rows, gi)
         self._pp_last_i = gi  # the RESULT row: the got-away / born-ball reads

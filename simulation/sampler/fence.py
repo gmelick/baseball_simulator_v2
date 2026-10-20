@@ -74,9 +74,9 @@ class FenceMixin(BaseMixin):
             return False
         return int(cls) in (2, 3) and float(dist) >= float(self.wall_zone_distance)
 
-    # ---- SIM-523 part C4: the fence stage -----------------------------------
+    # ---- the fence stage -------------------------------------------------
     def _fence_line(self, pg: dict, venue_id: int | None, season: int | None) -> list | None:
-        """The venue's fence line for a season. SIM-478: a venue's entry is
+        """The venue's fence line for a season. A venue's entry is
         either a plain list (an old document — the one group) or a dict of
         ``"FIRST-LAST"`` group keys. The group whose range holds the season
         wins; with no such group, or no season, the latest group (the
@@ -128,7 +128,7 @@ class FenceMixin(BaseMixin):
         return float(f) if f is not None else None
 
     def _carry_offsets(self) -> dict[int, float] | None:
-        """SIM-478 §11: the document's ``carry_offset_ft`` table as {venue:
+        """The document's ``carry_offset_ft`` table as {venue:
         feet}, parsed once per document object; None without the table (or
         an empty one). A null entry (a park under 100 home runs) reads 0."""
         pg = getattr(self.a, "park_geometry", None)
@@ -147,7 +147,7 @@ class FenceMixin(BaseMixin):
         return self._carry_offsets_cache
 
     def carry_shift(self, born: dict, venue_live: int | None) -> float:
-        """SIM-478 §11: offset[live park] - offset[the born ball's park], in
+        """offset[live park] - offset[the born ball's park], in
         feet; 0 when :attr:`carry_offset` is off, the document has no table,
         the live park or the ball's park is unknown (a park absent from the
         table reads 0)."""
@@ -165,7 +165,7 @@ class FenceMixin(BaseMixin):
         """The born ball's carry: its own reported distance, else the bundle's
         carry model on its exit velocity and launch angle, else None. With
         ``venue_live`` given, the carry in that park's air — the offset
-        difference of :meth:`carry_shift` added (SIM-478 §11); a ball whose
+        difference of :meth:`carry_shift` added; a ball whose
         ``venue`` IS the live park shifts by exactly 0."""
         d = born.get("dist")
         carry: float | None = None
@@ -182,7 +182,7 @@ class FenceMixin(BaseMixin):
         return carry + self.carry_shift(born, venue_live)
 
     def _born_in_live_air(self, born_bb: dict | None, venue_live: int | None) -> dict | None:
-        """SIM-478 §11: the born ball re-expressed in the live park's air — a
+        """The born ball re-expressed in the live park's air: a
         working copy whose ``dist`` is :meth:`carry_of` with the shift and
         whose ``venue`` is the live park. The ball itself (no copy) when the
         shift cannot apply: the flag off, no live park, no ``venue`` on the
@@ -202,9 +202,9 @@ class FenceMixin(BaseMixin):
     def fence_decision(self, born: dict, venue_id: int | None, season: int | None = None) -> int:
         """0 = over the fence (a home run), 1 = short of it (no home run),
         2 = inside the band (the draw decides), 3 = the stage passes. The
-        season picks the park's fence group (SIM-478); the carry is read in
-        the live park's air (SIM-478 §11 — a copy from
-        :meth:`_born_in_live_air` already is, and shifts by 0)."""
+        season picks the park's fence group. The carry is read in the live
+        park's air; a copy from :meth:`_born_in_live_air` already is, and
+        shifts by 0."""
         cls = born.get("cls")
         if cls is None or int(cls) <= 0:
             return 3
@@ -263,7 +263,7 @@ class FenceMixin(BaseMixin):
             return rows
         return sub
 
-    # ---- SIM-478 §12.7: the wall-margin band ---------------------------------
+    # ---- the wall-margin band --------------------------------------------
     def _bb_margins(self, hand: str) -> np.ndarray:
         """Every pool row's margin to its OWN wall, float32 per row. The
         margin is the row's distance minus its park's fence at its spray and
@@ -343,8 +343,8 @@ class FenceMixin(BaseMixin):
     ) -> np.ndarray:
         """Apply the band after the class filter and the fence stage: only for
         a born AIR ball IN THE WALL ZONE (a line drive or a fly ball carrying
-        :attr:`wall_zone_distance` feet or more in the live air — the plan's
-        §12.7 names the wall play, not every fly ball) that the fence did NOT
+        :attr:`wall_zone_distance` feet or more in the live air: the band is
+        for the wall play, not every fly ball) that the fence did NOT
         call over (short, the band or passed; the stage's own decision when it
         ran, else a fresh read without a counter) whose margin to the live
         wall (its carry in the live air minus ``fence_at``) is finite.

@@ -50,14 +50,9 @@ class ManagerMixin(BaseMixin):
         self._change_meta_cache: dict | None = None
         self._change_last_row: int | None = None
 
-    # ---- SIM-523 part D: the pitching-change draw ---------------------------
+    # ---- the pitching-change draw ------------------------------------------
     #: The pitch-count bucket width (pitches) of the hard cell.
     _CHANGE_PC_BUCKET = 10
-
-    def has_change_pool(self) -> bool:
-        """SIM-523 part D: True when the bundle carries the change pool."""
-        pool = getattr(self.a, "change_pool", None)
-        return pool is not None and pool.n > 0
 
     def _change_meta(self) -> dict | None:
         """One-time precompute: the hard-cell index — (is_starter, new_half,
@@ -100,7 +95,7 @@ class ManagerMixin(BaseMixin):
             count=pool.n,
         )
         meta = {"cells": cells, "mean": mean, "std": std, "prof": prof, "widened": {}}
-        # SIM-427: each row's column in the manager-usage score matrix (-1 =
+        # Each row's column in the manager-usage score matrix (-1 =
         # unscored, no manager on the row, or no matrix in the bundle).
         entry = self._actor_matrix("manager_usage")
         mid = getattr(pool, "manager_id", None)
@@ -163,7 +158,6 @@ class ManagerMixin(BaseMixin):
         outs: int,
         runners_state: int,
         score_diff: int,
-        manager_weight: np.ndarray | None = None,
         manager_key: str | None = None,
     ) -> bool | None:
         """Step 1 of the loop: does the manager change pitchers at this
@@ -175,10 +169,10 @@ class ManagerMixin(BaseMixin):
         fielding side's score margin; bandwidth ``change_sit_sigma``), the
         current pitcher's similarity to each row's pitcher (the pitcher-sim
         row, raised to ``change_pitcher_power``; a row whose pitcher has no
-        profile is neutral) and, when given, a per-row manager weight (the
-        real per-team profiles of SIM-427; flat today). The drawn row's
-        ``changed`` flag IS the decision. None when the bundle carries no
-        pool — the caller then keeps its formula."""
+        profile is neutral) and the live manager's usage similarity to each
+        row's manager (``manager_key``, :meth:`_change_manager_factor`). The
+        drawn row's ``changed`` flag IS the decision. None when the bundle
+        carries no pool: the loop then makes no change."""
         pool = getattr(self.a, "change_pool", None)
         meta = self._change_meta()
         if pool is None or meta is None:
@@ -207,12 +201,10 @@ class ManagerMixin(BaseMixin):
             f = self._change_pitcher_factor(pitcher_key, meta["prof"][rows])
             if f is not None:
                 w = w * f
-        if manager_weight is not None:
-            w = w * np.asarray(manager_weight, dtype=np.float32)
-        # SIM-427 (owner decision 2026-09-13): the live manager's USAGE
-        # similarity to each row's manager, from the nightly matrix, at its
-        # fitted power (``SIM_ACTOR_POWER_MANAGER_USAGE``; 0 = off, the
-        # default). The draw-neutral rule for an unscored row.
+        # The live manager's USAGE similarity to each row's manager, from the
+        # nightly matrix, at its power (``SIM_ACTOR_POWER_MANAGER_USAGE``;
+        # 0 = off, the code default; the owner's decision of 2026-09-13). An
+        # unscored row is draw-neutral.
         if manager_key:
             f = self._change_manager_factor(meta, rows, manager_key)
             if f is not None:
@@ -234,7 +226,7 @@ class ManagerMixin(BaseMixin):
     def _change_manager_factor(
         self, meta: dict, rows: np.ndarray, manager_key: str
     ) -> np.ndarray | None:
-        """SIM-427: the live manager's usage-similarity row gathered onto the
+        """The live manager's usage-similarity row gathered onto the
         cell's rows, raised to ``actor_power['manager_usage']`` (0 = off ->
         None), an unscored row draw-neutral at the mean scored weight. None
         when the bundle has no manager matrix, the pool no manager column, or
@@ -263,8 +255,9 @@ class ManagerMixin(BaseMixin):
             out[~valid] = np.float32(scores.mean())
         return out
 
-    # ---- SIM-427: which arm — the reliever draw from the live pen -----------
+    # ---- the reliever draw from the live pen ------------------------------
     def relief_weights_on(self) -> bool:
+        """True when any reliever-draw weight is on."""
         return (
             self.relief_role_sigma > 0.0
             or self.relief_pitcher_power > 0.0
@@ -282,7 +275,7 @@ class ManagerMixin(BaseMixin):
         throw_hands: dict[int, str] | None = None,
         recent_usage: dict[int, tuple[int, int, int]] | None = None,
     ) -> int | None:
-        """SIM-427: draw the entering arm's INDEX in ``candidates`` (the live
+        """Draw the entering arm's INDEX in ``candidates`` (the live
         pen's available, unused arms), weighted by each candidate's resemblance
         to the arm the last drawn change-pool row brought in — role, stuff,
         recent usage and hand (the weights on the sampler; every one OFF ->
@@ -428,8 +421,9 @@ class ManagerMixin(BaseMixin):
         return scores
 
     def last_change_row(self) -> dict | None:
-        """SIM-523 part D: the last drawn boundary — ``changed`` and the
-        incoming pitcher's id (a mapping onto the live pen is SIM-427's)."""
+        """The last drawn change row: its index, ``changed``, the incoming and
+        outgoing pitchers' ids, the row's manager and the incoming arm's rest
+        and hand (None for a column the bundle lacks). None before any draw."""
         r = self._change_last_row
         pool = getattr(self.a, "change_pool", None)
         if r is None or pool is None:
@@ -440,7 +434,6 @@ class ManagerMixin(BaseMixin):
             "incoming_id": int(pool.incoming_id[r]),
             "pitcher_id": int(pool.pitcher_id[r]),
         }
-        # SIM-427: the row's manager and the incoming arm's rest and hand.
         for attr in ("manager_id", "in_days_rest", "in_pitched_2d", "in_pitches_3d", "in_throws"):
             col = getattr(pool, attr, None)
             out[attr] = int(col[r]) if col is not None else None

@@ -50,7 +50,7 @@ class PitchResultMixin(BaseMixin):
         #: group, a ball times its mirror, a got-away times his blocking ratio
         #: and the other taken rows times its mirror; the taken group is then
         #: rescaled to its old total, so the ratio never moves the swing-or-take
-        #: split. Off by default; fitting and enabling it is SIM-526.
+        #: split. Off by default; fitting and enabling it is open work (SIM-526).
         self.catcher_receiving = False
         #: (hand, catcher key) -> the per-row ratio, or None.
         self._recv_cache: dict[tuple[str, str], np.ndarray | None] = {}
@@ -59,7 +59,7 @@ class PitchResultMixin(BaseMixin):
         #: The fielding catcher's key, staged by ``new_half_inning``.
         self._catcher_key: str | None = None
 
-    # ---- SIM-523 part B: the pitch-result draw -----------------------------
+    # ---- the pitch-result draw -------------------------------------------
     def _pp_geom_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Per-column mean / std of the pitch pool's geometry over its
         complete rows (all finite, a real velocity), plus that row mask.
@@ -155,7 +155,7 @@ class PitchResultMixin(BaseMixin):
         return out
 
     def result_weights(self, b: int, rows: np.ndarray, pitch_gi: int) -> np.ndarray | None:
-        """SIM-548: the RESULT draw's weight over the pitch draw's candidate
+        """The RESULT draw's weight over the pitch draw's candidate
         rows (the same count sub-cell ``b``), anchored on the pitch ``pitch_gi``:
         the raw per-PA weight × the pitch-to-pitch factor × the density
         correction × the re-raised pitcher / batter factors × the receiving
@@ -173,7 +173,7 @@ class PitchResultMixin(BaseMixin):
         if self.result_density_power != 0.0:
             key = self._pa_keys[b] if self._pa_keys is not None else (-1, b)
             wr = wr * self._result_inv_density(self._hand, key, rows)
-        # SIM-523 part F: ``result_pitcher_power`` is ABSOLUTE. The raw weight
+        # ``result_pitcher_power`` is ABSOLUTE. The raw weight
         # carries the pitcher factor at the PITCH draw's power, so the result
         # draw re-raises by the difference (1.0 here = no change).
         q = float(self.result_pitcher_power) - float(self.pitch_pitcher_power) + 1.0
@@ -188,7 +188,7 @@ class PitchResultMixin(BaseMixin):
             if fb is not None:
                 uns = self._batter_unscored(self._hand)[rows]
                 wr = _repower_neutral(wr, fb, uns, rb, self._bat_neutral_rb)
-        # SIM-523 part E: the catcher receiving ratio, last, on taken rows.
+        # The catcher receiving ratio, last, on taken rows.
         if self._bucket_recv is not None and self._bucket_recv[b] is not None:
             taken = self._pool_meta(self._hand)["taken"][rows]
             wr = self._apply_receiving(wr, taken, self._bucket_recv[b])
@@ -209,13 +209,13 @@ class PitchResultMixin(BaseMixin):
         return int(rows[min(j, rows.size - 1)])
 
     def last_result_row(self) -> int | None:
-        """SIM-523 part B: the global pitch-pool index of the last RESULT row
+        """The global pitch-pool index of the last RESULT row
         (the play), or None before any draw / after an empty-bucket fallback.
         Equal to the pitch row while the split is off."""
         return self._pp_last_i
 
     def last_born_batted_ball(self) -> dict | None:
-        """SIM-523 part B: the last result row's OWN batted ball, read through
+        """The last result row's OWN batted ball, read through
         the artifact's pitch-id join — ``row`` (the batted-ball pool index),
         ``ev``, ``la``, ``spray`` (pull-relative), ``spray_raw``, ``dist``,
         ``is_air``. None when the last result was not in play, the bundle
@@ -238,17 +238,18 @@ class PitchResultMixin(BaseMixin):
             "spray_raw": (float(pool.spray_raw[j]) if pool.spray_raw is not None else None),
             "dist": (float(pool.hit_dist[j]) if pool.hit_dist is not None else None),
             "is_air": (bool(pool.is_air[j]) if pool.is_air is not None else None),
-            # SIM-523 part C: the class (BB_CLASS; None before part C) and the
-            # park the ball was hit in.
+            # The class (``BB_CLASS``; None on a pool without it) and the park
+            # the ball was hit in.
             "cls": (int(pool.bb_class[j]) if pool.bb_class is not None else None),
             "venue": (int(pool.venue_id[j]) if pool.venue_id is not None else None),
         }
 
     def last_pitch_got_away(self) -> bool:
-        """SIM-517: did the LAST drawn pitch row get away from its catcher (a
+        """Did the LAST drawn pitch row get away from its catcher (a
         passed ball / wild pitch, incl. an uncaught third strike)? The drawn
         row IS the play — this flag is its got-away fact. False before any
-        draw, after an empty-bucket fallback, or on a pre-0022 bundle."""
+        draw, after an empty-bucket fallback, or on a pool without the
+        ``got_away`` column."""
         i = self._pp_last_i
         if i is None or self._hand is None:
             return False
@@ -258,13 +259,13 @@ class PitchResultMixin(BaseMixin):
         return bool(ga[i])
 
     def last_pitch_geom(self) -> np.ndarray | None:
-        """SIM-518 (SIM-472): the LAST drawn pitch row's raw geometry (the ten
+        """The LAST drawn pitch row's raw geometry (the ten
         pitch-pool columns, ``_GEOM_COLS`` order), so the batted-ball draw can
         condition on the pitch that produced it. None before any draw, after
         an empty-bucket fallback, or when the row's velocity is missing (the
-        export writes a NULL as 0.0, and no real pitch reads 0 mph). SIM-523
-        part B: the PITCH-draw row — the pitch thrown — which is the result
-        row while the split is off."""
+        export writes a NULL as 0.0, and no real pitch reads 0 mph). It is the
+        PITCH-draw row, the pitch thrown, which is the result row while the
+        split is off."""
         i = self._pp_pitch_i if self._pp_pitch_i is not None else self._pp_last_i
         if i is None or self._hand is None:
             return None
@@ -273,8 +274,9 @@ class PitchResultMixin(BaseMixin):
             return None
         return g
 
-    # ---- SIM-523 part E: the catcher RECEIVING ratio --------------------------
+    # ---- the catcher receiving ratio -------------------------------------
     def _receiving_on(self) -> bool:
+        """True when the receiving ratio is on and a catcher is staged."""
         return bool(self.catcher_receiving) and self._catcher_key is not None
 
     def _recv_factor(self, hand: str, catcher_key: str) -> np.ndarray | None:

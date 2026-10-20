@@ -49,7 +49,7 @@ from pipeline.batch.engine_artifacts import (
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.production_factory import apply_result_split_env
-from simulation.sampler.kernels import _PITCH_FEATURE_WEIGHTS, _repower
+from simulation.sampler.kernels import _PITCH_FEATURE_WEIGHTS, _repower_neutral
 from simulation.sim_loop import StateMachine
 
 _SEASON = 2024
@@ -395,11 +395,12 @@ _BAT_MATRIX = {
 
 class TestThePowers:
     def test_repower(self):
+        # With no unscored rows the draw-neutral re-raise is the plain one.
         w = np.array([1.0, 0.5, 0.0], dtype=np.float32)
         f = np.array([1.0, 0.5, 0.0], dtype=np.float32)
-        assert _repower(w, f, 1.0) is w
-        np.testing.assert_allclose(_repower(w, f, 2.0), [1.0, 0.25, 0.0])
-        np.testing.assert_allclose(_repower(w, f, 0.5), [1.0, 0.5**0.5, 0.0])
+        assert _repower_neutral(w, f, None, 1.0, 1.0) is w
+        np.testing.assert_allclose(_repower_neutral(w, f, None, 2.0, 1.0), [1.0, 0.25, 0.0])
+        np.testing.assert_allclose(_repower_neutral(w, f, None, 0.5, 1.0), [1.0, 0.5**0.5, 0.0])
 
     def test_the_result_batter_power_re_raises_the_batter_factor(self):
         # Same pitch everywhere; batter 200's rows foul it off, 201's put it
