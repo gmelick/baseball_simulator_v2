@@ -360,7 +360,8 @@ baseball_simulator/
 ├── similarity/
 │   ├── engines/              # 11 engines (pitcher, batter, fielder, situation, ...)
 │   ├── backtesting/          # recency walk-forward + backtester (ECE/Brier/log-loss) [✅ SIM-076/220]
-│   └── similarity_calibration.py  # sigma / gamma / EB calibration [✅]
+│   ├── calibration/          # the per-engine calibration fits + CalibrationReport
+│   └── similarity_calibration.py  # SimilarityCalibrator: the sigma / gamma / EB fit [✅]
 ├── simulation/               # [✅ Phase 4 — the simulation loop lives HERE, not simulator/]
 │   ├── sim_loop.py           # StateMachine + simulate_game() (8-step loop + manager hooks)
 │   ├── game_state.py         # GameState / PlayResult / ManagerContext dataclasses

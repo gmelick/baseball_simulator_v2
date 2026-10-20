@@ -1,325 +1,453 @@
 # Similarity Engines
 
-The eleven similarity engines that compare the live matchup to real history, plus calibration and backtesting.
+The eleven similarity engines that compare a player, a game state, a pitch or a batted ball
+with real history, plus their calibration, their sanity checks and the backtesting library.
 
-*17 files documented — use the page outline (right sidebar) to jump to one.*
+*21 files documented — use the page outline (right sidebar) to jump to one.*
 
-### `similarity/registry.py`
+**How the simulator uses them.** The simulator never queries an engine at game time. The
+nightly bundle build (`pipeline/batch/engine_artifacts.py`) builds seven player engines,
+scores every profile against every other, and writes the scores as dense matrices
+(`actor_sim/`, plus `pitcher_sim.npz` from the pitcher engine). The sampler reads those
+matrices as draw weights. The app also builds all eleven engines at boot
+(`api/state.py`, `ENGINE_REGISTRY` and `build_all_engines`) for the similarity routes and
+the Data Lab, and applies `/data/calibration.json` to them. The bundle build does NOT apply
+the calibration report: the matrices use each engine's module defaults, so a refitted value
+reaches the simulator only when someone copies it into the module constant.
 
-Central catalog (SimilarityEngineRegistry) mapping each of the 11 canonical similarity-engine names to its module/class, plus metadata (algorithm family, similarity-vs-distance score type). Provides lazy import so faiss/POT are only pulled in when that specific engine is resolved.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `EngineSpec.engine_class (property)` | Lazily imports the engine's module and returns the class object. | — | `importlib.import_module` |
-| `SimilarityEngineRegistry.list_engines` | Returns all 11 canonical engine names in pipeline order. | `tests/unit/test_engine_registry.py` | — |
-| `SimilarityEngineRegistry.get_spec` | Returns the EngineSpec for a name; raises KeyError listing valid names. | — | — |
-| `SimilarityEngineRegistry.get_class` | Resolves a name to its engine class; can raise ImportError/RuntimeError if faiss/ot is missing. | — | — |
-| `SimilarityEngineRegistry.create` | Constructs an engine instance for a name with given kwargs. | — | — |
-
-**Depends on:** `similarity.engines.* (11 modules, imported lazily on demand)`
-
-**Used by:** `tests/unit/test_engine_registry.py (its only caller)`
-
-> **Notes for anyone changing this file:** This registry is NOT what production boot code uses. api/state.py defines its own separate ENGINE_REGISTRY dict and build_all_engines()/build_pitcher_engine() functions that duplicate this module's job. Grep confirms SimilarityEngineRegistry has zero callers outside its own unit test - treat it as a designed-but-orphaned discovery API. Before extending it, check whether api/state.py should be consolidated onto it instead of maintaining two engine catalogs.
+**The shared shape of a player engine.** Each player engine loads one profile per player
+and season from a `derived.*_metrics` table, shrinks small samples toward the league mean
+(empirical-Bayes shrinkage, `EmpiricalBayesShrinkage`: weight `n / (n + N_PRIOR)` on the
+player's own data), z-scores the features, and scores a pair as a weighted average of
+sub-scores. Each sub-score is a Gaussian kernel (an RBF: `exp(-d² / 2σ²)` over the
+reliability-weighted squared distance `d²`). The composite is multiplied by
+`sqrt(min(alpha_a, alpha_b))`, so a thin profile scores lower. `query(...)` scores one
+profile against every other; `query_pair(a, b)` scores one pair. Every player engine refuses a
+profile table stamped at two `asof_date` cutoffs (the one-cutoff rule, SIM-551) and exposes
+the cutoff as `asof_date`.
 
 ---
 
 ### `similarity/similarity_calibration.py`
 
-Computes population-derived ('Tier 1') calibration constants - RBF sigmas, the pitcher arsenal W2 gamma, Empirical-Bayes priors, and per-feature reliability weights - directly from live DuckDB profile tables for every one of the 8 RBF/GMM engines, and packages them into a JSON-round-trippable CalibrationReport that each engine consumes via its own apply_calibration() method.
+`SimilarityCalibrator` fits every engine's calibrated constants from the profile
+population in one DuckDB file: the kernel sigmas, the pitcher's arsenal anchor, the
+empirical-Bayes priors and the reliability weights. It combines the per-engine mixins of
+`similarity/calibration/`.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `calibrate_sigma` | Solves the RBF sigma so the median pairwise score over sampled pairs hits a target (default 0.50); returns a caller-chosen degenerate_value when the feature matrix has no spread. | `SimilarityCalibrator._fit_sigma` | — |
-| `calibrate_arsenal_gamma` | Same idea as calibrate_sigma but for the pitcher engine's squared-exponential W2-distance-to-score transform. | `SimilarityCalibrator._calibrate_arsenal_params` | `similarity.engines.pitcher_similarity.arsenal_scale_from_gamma (downstream, in the engine)` |
-| `calibrate_eb_prior` | Estimates EB_N_PRIOR from a within-player vs between-player variance decomposition (James-Stein shrinkage intensity). | — | — |
-| `calibrate_reliability_weights` | Derives per-feature reliability weights from season-to-season split-half correlation across multi-season players. | — | — |
-| `CalibrationReport (dataclass)` | Holds every calibrated constant for all 8 engines plus lossless to_dict/to_json/from_dict/from_json/equals for persistence to /data/calibration.json. | — | — |
-| `SimilarityCalibrator.calibrate_from_population` | Top-level orchestrator: opens a read-only DuckDB connection and runs all 9 per-engine _calibrate_*_params helpers, returning one CalibrationReport. | `scripts/fit_calibration.py` | — |
-| `SimilarityCalibrator._fit_sigma` | Wraps calibrate_sigma with degenerate_value=0.0 so an all-NULL/no-variance DuckDB column yields the 'keep the engine's tuned module default' sentinel instead of a spurious 1.0 override. | — | — |
-| `SimilarityCalibrator._calibrate_batter_params / _calibrate_pitcher_params / _calibrate_arsenal_params / _calibrate_fielder_params / _calibrate_baserunner_params / _calibrate_catcher_params / _calibrate_baserunner_steal_params / _calibrate_pitcher_steal_params / _calibrate_manager_params` | One private method per engine: SELECTs that engine's derived.*_metrics columns (guarded via information_schema so a trimmed DuckDB degrades to NULL placeholders instead of erroring) and fits sigmas/weights in the SAME feature space the live engine scores in. SIM-550 (2026-09-17): `_calibrate_fielder_params` reads the outfield arm as `arm_strength`, `arm_advancement_prevention`, `arm_thrown_out_rate` — the `OF_ARM_FEATURES` order; the run value and the hold rate left the SELECT — with NaN for NULL, and fits `sigma_of_arm` and the three `reliability_weights_of_arm` over the rows where all three are measured; fewer than 20 such rows keep the engine's module default. SIM-532 (2026-09-17, code and data landed): the outfield range SELECT reads the nine `OF_RANGE_FEATURES` (our five components, then `savant_oaa_per_100`, `jump_reaction_ft`, `jump_burst_ft`, `jump_route_ft`) and the infield SELECT the six (`savant_oaa_per_100` sixth), with NaN for NULL; `sigma_of_range` (and `sigma_if_range`) fits over the rows measured on every range feature (the outfielders with a jump row and a Savant figure, about 200 a season; fewer than 20 keeps the module default), the same measured-rows rule as the arm sigma; the per-feature `reliability_weights_of_range` (nine) and `reliability_weights_if_range` (six) fit over the whole NaN-carrying matrix, each feature on the season pairs that carry it — the jump trio on pairs with 25 or more plays in both seasons — so our five components keep every pair; a new feature with fewer than 20 pairs keeps its module default. | — | — |
+| `SimilarityCalibrator.calibrate_from_population(seasons, target_median_score=0.50, arsenal_w2_distances=None)` | Opens the file read-only and runs the nine `_calibrate_*_params` methods in order; returns one `CalibrationReport`. A calibrator whose table is absent leaves its fields at 0.0, so its engine keeps its defaults. | `scripts/fit_calibration.py` (`make calibrate`) | the mixins in `similarity/calibration/` |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.engines.batter_similarity (feature-list constants only)`, `similarity.engines.fielder_similarity (feature-list constants, incl. IF_PIVOT_FEATURES imported at module top)`, `similarity.engines.baserunner_similarity (feature-list constants)`, `DuckDB tables: derived.batter_season_metrics, derived.pitcher_season_metrics, derived.fielder_season_metrics, derived.baserunner_season_metrics, derived.catcher_season_metrics, derived.baserunner_steal_metrics, derived.pitcher_steal_metrics, derived.manager_season_metrics`
+**Depends on:** `similarity.calibration.*`, `duckdb`
 
-**Used by:** `scripts/fit_calibration.py (the `make calibrate` CLI)`, `api/state.py boot path (loads the resulting /data/calibration.json and calls each engine's apply_calibration)`
+**Used by:** `scripts/fit_calibration.py`. Outside callers still import `CalibrationReport`
+and `calibrate_sigma` from here (`api/state.py`, `simulation/prop_validation.py`,
+`scripts/fit_calibration.py`, two B5 tests); the module re-exports `calibrate_sigma` until
+the clean-up's integration pass re-points them.
 
-> **Notes for anyone changing this file:** This module never imports or instantiates an engine class (except pulling feature-list constants) - it re-derives each engine's feature vectors independently via hand-written SQL that MUST stay in sync with that engine's own _load_profiles query and feature-list order. If an engine's SELECT columns or feature order change, the matching _calibrate_*_params method silently calibrates the wrong feature space unless updated in the same change. The 0.0 'keep default' sentinel from _fit_sigma is a load-bearing contract: every engine's apply_calibration treats field==0.0 as 'no override' - never break that without touching all 8 apply_calibration methods across the engines.
+> **Notes for anyone changing this file:** Every module of the calibration logs as
+> `"similarity_calibration"`, and the report module imports the fielder engine at import
+> time (which runs its `logging.basicConfig`); keep both. The 0.0 "keep the default"
+> sentinel is a contract: every engine's `apply_calibration` treats a field at 0.0 (or
+> None) as no override.
+
+---
+
+### `similarity/calibration/` (`fitting.py`, `report.py`, `base.py` and eight mixins)
+
+The calibration in parts. Each per-engine mixin re-reads that engine's profile columns with
+its own SQL and fits in the same feature space the engine scores in.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `fitting.calibrate_sigma` | The sigma that puts the median random pair at the target score; returns `degenerate_value` when the matrix has no spread. | `CalibratorBase._fit_sigma` | — |
+| `fitting.calibrate_arsenal_gamma` | The gamma of `exp(-gamma · W₂²)` that puts the median pitcher pair (W₂, the Wasserstein-2 distance between two pitch mixtures) at the target. | `PitcherCalibratorMixin._calibrate_arsenal_params` | — |
+| `fitting.calibrate_eb_prior` | The empirical-Bayes prior strength: the median of within-player over between-player variance, clamped to [5, 200]. | the batter, pitcher and baserunner mixins | — |
+| `fitting.calibrate_reliability_weights` | One weight per feature: its correlation between consecutive seasons of one player (or one player at one position), clamped to [0.1, 1]. | the batter, fielder and baserunner mixins | — |
+| `fitting.keep_defaults_on_thin_entries` / `reliable_pair_count` | A feature measured on fewer than `RELIABILITY_MIN_PAIRS` (20) season pairs keeps its engine default weight. | `FielderCalibratorMixin` | — |
+| `report.CalibrationReport` | Every fitted value, a text `summary()`, and a lossless `to_json` / `from_json` / `equals` (numpy arrays tagged). Also carries the win-probability reliability curve that `simulation.prop_validation` writes. | the app's boot (`api.state.load_calibration_report`), every engine's `apply_calibration`, `simulation/win_probability.py` | — |
+| `base.CalibratorBase` | `_has_columns` (the column probe), `_zscore_matrix`, `_fit_sigma` (the sigma or 0.0, the keep-the-default sentinel). | every mixin | `db.introspect.duck_columns` |
+| `batter.py`, `pitcher.py`, `fielder.py`, `baserunner.py`, `catcher.py`, `baserunner_steal.py`, `pitcher_steal.py`, `manager.py` | One mixin per engine, each with one `_calibrate_<engine>_params` method (the pitcher mixin also has `_calibrate_arsenal_params`). A block that some rows lack (the batter's swing and stance, the fielder's Savant range and jump, the outfield arm, the runner's Savant attempt rate, the steal leads) loads NULL as NaN and fits over the measured rows; under 20 such rows the engine keeps its default. | `SimilarityCalibrator.calibrate_from_population` | the engines' feature lists |
+
+**Depends on:** `numpy`, the engines' feature-list constants, the eight `derived.*_metrics`
+tables.
+
+**Used by:** `similarity/similarity_calibration.py`; the engines import `CalibrationReport`
+for their type hints and the pitcher engine's docstring points at `calibrate_arsenal_gamma`.
+
+> **Notes for anyone changing this file:** The mixins read columns by position after a
+> fixed prefix. When an engine's SELECT or feature order changes, change its mixin in the
+> same commit, or the fit lands in the wrong feature space without an error.
+> `CalibrationReport.summary()` prints the reliability blocks from `_RELIABILITY_BLOCKS`;
+> it has no row for the batter's physical weights.
 
 ---
 
 ### `similarity/similarity_diagnostics.py`
 
-Offline sanity-check suite for a built engine's live output: flags collapsed/inflated/no-discrimination sub-scores, checks that a player's cross-season self-pairs score above the population median, and verifies score(A,B)==score(B,A) symmetry.
+The sanity checks on a built engine's scores: a collapsed, inflated or flat sub-score,
+the balance between sub-scores, cross-season self-similarity, and symmetry.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `ScoreDistribution.from_array` | Computes mean/median/std/percentiles for one score dimension and sets is_collapsed/is_inflated/is_no_discrimination flags against fixed thresholds. | — | — |
-| `run_batter_diagnostics / run_pitcher_diagnostics / run_fielder_diagnostics / run_baserunner_diagnostics` | Engine-specific runners: sample query profiles, collect every named sub-score across all query results, build a DiagnosticReport. | `each matching engine's `if __name__ == "__main__":` CLI block` | — |
-| `run_generic_diagnostics` | Same pipeline as the four engine-specific runners but works with any engine exposing profile_ids()/query()/query_pair()/profile_count - used for catcher, baserunner_steal, pitcher_steal, and manager. | `catcher_similarity.py, baserunner_steal_similarity.py, pitcher_steal_similarity.py, manager_similarity.py __main__ blocks` | — |
-| `_check_dimensional_balance / _check_cross_season / _check_cross_season_fielder / _check_symmetry_batter / _check_symmetry_fielder` | Shared check helpers reused across all engine-specific and generic runners. | — | — |
-| `_run_synthetic_batter_test / _run_synthetic_pitcher_test / _run_synthetic_fielder_test / _run_synthetic_baserunner_test` | Build a fully synthetic in-memory engine (no DuckDB) to self-test the diagnostics module in isolation. | — | — |
+| `ScoreDistribution.from_array` | The spread of one score and its three flags (median under 0.05, over 0.95, standard deviation under 0.05). | every runner | — |
+| `run_batter_diagnostics / run_fielder_diagnostics / run_baserunner_diagnostics` | Engine-specific runners: sample query profiles, collect every sub-score, run the checks. | the batter, fielder and baserunner engines' `__main__` blocks | — |
+| `run_generic_diagnostics(engine, sub_score_names, ...)` | The same for any engine keyed by `(player_id, season)` with named sub-scores. | the catcher, manager and both steal engines' `__main__` blocks | — |
+| `_check_dimensional_balance / _check_cross_season / _check_cross_season_fielder / _check_symmetry / _check_symmetry_fielder` | The shared checks. | the runners | — |
 
-**Depends on:** `numpy`, `(synthetic self-tests only) similarity.engines.batter_similarity / pitcher_similarity / fielder_similarity / baserunner_similarity internals`
+**Depends on:** `numpy`
 
-**Used by:** `manual `python <engine_file>.py` CLI invocations only - no API or pipeline caller`
+**Used by:** the engines' `__main__` blocks only; no API or pipeline caller.
 
-> **Notes for anyone changing this file:** Read-only: never mutates the engine it's given. If an engine's query() result dataclass changes its sub-score attribute names, run_generic_diagnostics(sub_score_names=[...]) callers must be updated to match. A 12th engine should be wired through run_generic_diagnostics rather than a new bespoke run_<x>_diagnostics function.
+> **Notes for anyone changing this file:** It never changes the engine it reads. A new
+> engine joins through `run_generic_diagnostics`, not a new runner.
+
+---
+
+### `similarity/engines/rbf_kernel.py`
+
+`WeightedRBFSimilarity`, the weighted Gaussian kernel the batter, fielder, catcher,
+manager and both steal engines score their sub-scores with. The weights are normalized to
+sum to 1.0, so the exponent is the weighted AVERAGE squared distance per feature and a
+sub-score's typical score does not depend on its feature count. A NaN difference counts as
+zero distance.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `WeightedRBFSimilarity(sigma, reliability_weights)` | `score(x, y)` for one pair, `score_batch(query, candidates)` for one query against a matrix. | the six engines' partitions and `apply_calibration` | — |
+
+**Used by:** the six engines above (each re-imports the name, so
+`<engine module>.WeightedRBFSimilarity` still resolves).
+
+> **Notes for anyone changing this file:** The baserunner engine keeps its own MASKED
+> kernel (a feature missing on either side drops out of the distance and its
+> normalization); do not merge the two.
 
 ---
 
 ### `similarity/engines/pitcher_similarity.py`
 
-Compares pitcher-to-pitcher (same season or cross-season) by blending GMM Wasserstein-2 arsenal distance with an RBF command-metrics score into one composite [0,1] similarity. Real-world comparison: 'how similar is this pitcher's stuff (velo/movement/spin/release mixture) and command (BB/K/CSW/chase/zone/whiff rates) to every other same-handed pitcher-season'.
+Compares pitcher-seasons (same season or across seasons) by blending the arsenal score
+(the W₂ distance between two pitchers' pitch mixtures, each a Gaussian mixture model, GMM)
+and a kernel over seven command rates, 0.65 / 0.35. Left- and right-handers live in
+separate partitions and never match.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `ArsenalSimilarity.distance / .score` | Wasserstein-2 optimal-transport distance between two pitchers' GMM arsenals (via POT `ot.emd2`, or a greedy fallback), converted to a [0,1] score via exp(-W2/ARSENAL_SCALE). | — | — |
-| `PitcherSimilarityEngine.build` | Loads all pitcher profiles + league averages from DuckDB, applies EB shrinkage, enforces minimum GMM cluster size, standardizes arsenals into z-score space, builds per-handedness vectorized RBF matrices. | — | `derived.pitcher_season_metrics`<br>`derived.league_averages` |
-| `PitcherSimilarityEngine.apply_calibration` | Converts a CalibrationReport's squared-exponential arsenal_gamma into the engine's canonical linear ARSENAL_SCALE (via arsenal_scale_from_gamma) and overrides the module-level constant so every scoring path picks it up. | `api/state.py boot (via similarity_calibration flow)` | — |
-| `PitcherSimilarityEngine.query / query_pair` | Scores a query pitcher-season against every same-handed profile (query) or one specific pair (query_pair), returning SimilarityResult(s) sorted by score. | `api/routes/similarity.py (v1 pitcher endpoint)`<br>`api/routes/similarity_explorer.py (generalized /api/similarity/pitcher/*)`<br>`pipeline/batch/engine_artifacts.py::build_pitcher_sim_matrix (nightly dense pitcher_sim_matrix export)` | — |
-| `ArsenalCache.row_distances / build_matrix` | SIM-075 vectorized all-vs-one W2 lookup: a single dense-matrix row slice once precomputed, instead of an O(N) per-candidate dict loop. | — | — |
-| `HandednessPartition.score_all` | Vectorized batch scoring of one query against an entire L/R partition; redistributes the arsenal weight onto command when a pitcher has no GMM. | — | — |
+| `ArsenalSimilarity.distance / .score` | The W₂ optimal-transport distance between two GMMs (POT's `ot.emd2`, or a greedy match when POT is missing), and the score `exp(-W₂ / ARSENAL_SCALE)`. | the partition, `_score_pair`, `arsenal_cache.py` | `scipy.linalg.sqrtm`, `ot` |
+| `PitcherSimilarityEngine.build` | Loads the profiles and league averages, shrinks the command rates, merges GMM components under 30 pitches, standardizes the arsenals into z-score space, builds the two partitions. | `api/state.py`, `pipeline/batch/engine_artifacts.py::build_pitcher_sim_matrix` | `derived.pitcher_season_metrics`<br>`derived.league_averages` |
+| `PitcherSimilarityEngine.apply_calibration` | Turns the report's `arsenal_gamma` and median W₂ into the linear `ARSENAL_SCALE` (`arsenal_scale_from_gamma`) and rewrites the module global, so every scoring path reads it. | `api.state.apply_calibration_to_engines` | — |
+| `PitcherSimilarityEngine.query / query_pair` | Scores one pitcher-season against every same-hand profile, or one pair. | `api/routes/similarity.py`, `api/routes/similarity_explorer.py`, `build_pitcher_sim_matrix` (the nightly `pitcher_sim_matrix`) | — |
+| `HandednessPartition.score_all` | The vectorized scoring of one query against a partition; a pitcher with no GMM moves the arsenal weight onto command. | `query` | `ArsenalCache.row_distances` |
 
-**Depends on:** `duckdb`, `numpy`, `scipy.linalg.sqrtm`, `ot (POT, optional - lazily guarded, RuntimeError via _require_pot if absent)`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Depends on:** `duckdb`, `numpy`, `scipy`, `ot` (POT; the import is optional, and without
+it `ArsenalSimilarity.distance` uses a greedy transport), `similarity/engines/arsenal_cache.py`
 
-**Used by:** `api/state.py::build_pitcher_engine and build_all_engines (boot, keyed 'pitcher')`, `api/routes/similarity.py`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::build_pitcher_sim_matrix`, `similarity/similarity_calibration.py (COMMAND_FEATURES constant only)`
+**Used by:** `api/state.py` (`build_pitcher_engine`, `build_all_engines`),
+`api/routes/similarity.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py::build_pitcher_sim_matrix`,
+`similarity/calibration/pitcher.py` (`COMMAND_FEATURES`), `scripts/fit_calibration.py`.
 
-> **Notes for anyone changing this file:** POT (`ot`) has no cp313 wheel as of 2026-05, so the import is lazily guarded - build()/query() raise a clean RuntimeError via _require_pot() rather than making the whole module unimportable. The docstring's 'Architecture' section mentions a `derived.pitcher_gmm_components` table for fast SQL lookup, but _load_profiles actually reads the GMM straight out of the `gmm_model` JSON column on `derived.pitcher_season_metrics` - that second table is not queried anywhere in this file; treat the docstring line as stale. Cross-season comparisons of the SAME pitcher_id are intentionally included in query() results - only the exact (pitcher_id, season) tuple is excluded. SIM-533 (2026-09-19): Savant's arm angle, active spin and spin-axis deviation are NOT features, by owner decision; the record is `docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md` and the decision block beside `GMM_FEATURE_NAMES`. The release point is already three of the arsenal's eight dimensions (release x, release z, extension). SIM-067 removed a second release sub-score that double-counted them (its `results` sub-score went into the confidence multiplier at the same time). Savant's arm angle is the release point measured from the pitcher's shoulder. The formula `atan2(release z − shoulder z, |release x − shoulder x|)` reproduces Savant's own column exactly (r 1.000, a 0.03° mean gap). Our per-pitcher mean release point gives 73% of its variance, 81% with the pitcher's height. The rest is the shoulder's posture at release, which the ball's flight does not carry. The spin-shape numbers are formulas on the columns the arsenal holds. The measured axis IS our `spin_axis` (agreement 0.992). The inferred axis is a formula on our movement (0.987). Active spin follows movement × velocity / spin rate (r 0.94). The measured-minus-inferred deviation rebuilds from our two axes at r 0.80. On 67,941 same-hand pairs of 2024 pitchers, no candidate adds more than 0.009 R² (the share of the pairs' outcome gap the fit explains) on the four outcomes the score does not read. On all nine outcome rates (the command sub-score reads six of them) the shoulder remainder adds 0.0005. The full arm-angle gap adds 0.026 there, but with a negative coefficient (−0.17): the gap is already in the score (r 0.35 with one minus the score). So neither number joins the model: no profile column reads them, and no board table exists. Savant's per-pitch arm angle is already stored, unread, in `raw.savant_pitch_tracking.arm_angle` (Alembic 0020 carried it for this ticket); the guard holds that no profile computor, engine or artifact builder reads it. The guard is `tests/unit/test_arm_angle_decision.py`; `scripts/probes/arm_angle_probe.py` re-runs the numbers. The one lead: given the score, a larger arm-angle gap goes with a SMALLER outcome gap (that −0.17). The Wasserstein-2 distance is the arsenal distance: the least "work" it takes to move one pitch mixture onto the other. Its eight z-scored dimensions are weighted equally today, so it may weight its release dimensions more than outcomes warrant. A per-dimension weight inside it is a candidate tunable for the comprehensive sweep (SIM-548), not a feature. Board traps for anyone who pulls them later: the arm-angle board takes `season=`, ignores `year=` silently and then serves the current season; all three boards start in 2020.
+> **Notes for anyone changing this file:** The file stays whole (1,700 lines) because
+> `ArsenalSimilarity.score`, `HandednessPartition.score_all` and `_score_pair` read the
+> module global `ARSENAL_SCALE`, which `apply_calibration` rewrites; the arsenal cache, which
+> does not read it, lives in `arsenal_cache.py`. A query includes the same pitcher's other
+> seasons; only the exact `(pitcher_id, season)` is excluded.
+>
+> **The arm-angle decision (SIM-533, owner decision 2026-09-19).** Savant's arm angle,
+> active spin and spin-axis deviation are NOT features. The record is
+> `docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md` and the decision block
+> above `GMM_FEATURE_NAMES`. The release point is already three of the arsenal's eight
+> dimensions (release x, release z, extension). Savant's arm angle is the release point
+> measured from the shoulder: `atan2(release z − shoulder z, |release x − shoulder x|)`
+> reproduces Savant's column exactly (r 1.000). Our per-pitcher release point gives 73% of
+> its variance, 81% with the pitcher's height; the rest is the shoulder's posture, which the
+> ball's flight does not carry. The spin-shape numbers are formulas on columns the arsenal
+> holds: the measured axis IS our `spin_axis` (0.992), the inferred axis is a formula on our
+> movement (0.987), active spin follows movement × velocity / spin rate (r 0.94). On 67,941
+> same-hand pairs of 2024, no candidate adds more than 0.009 R² on the four outcomes the
+> score does not read, and the shoulder remainder adds 0.0005 on all nine. The full
+> arm-angle gap adds 0.026 there with a negative coefficient (−0.17): given the score, a
+> larger gap goes with a SMALLER outcome gap, so the W₂'s equal weight on its release
+> dimensions may be too heavy. A per-dimension weight is a candidate for the comprehensive
+> sweep (SIM-548), not a feature. Savant's per-pitch arm angle sits unread in
+> `raw.savant_pitch_tracking`; `tests/unit/test_arm_angle_decision.py` holds that no
+> computor, engine or artifact builder reads it, and `scripts/probes/arm_angle_probe.py`
+> re-runs the numbers. Board traps: the arm-angle board takes `season=`, ignores `year=`
+> and then serves the current season; all three boards start in 2020.
+
+---
+
+### `similarity/engines/arsenal_cache.py`
+
+`ArsenalCache`, the pitcher engine's cache of pairwise W₂ distances. A distance costs about
+0.5 ms, and a query scores every same-hand pitcher, so the cache keeps each one: lazily
+(`get_or_compute`), or all at once (`precompute`, serially or on a process pool). It stores
+the raw distance, so a new `ARSENAL_SCALE` needs no recompute.
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `ArsenalCache.row_distances / build_matrix` | The all-vs-one lookup: one row slice of a dense matrix once the population is filled, else one row built against the dict. | `HandednessPartition.score_all` | — |
+| `ArsenalCache.precompute(profiles, n_workers)` | Fills every pair; `n_workers > 1` farms chunks to `_compute_w2_chunk` on a process pool. | `PitcherSimilarityEngine.precompute_arsenal_cache` | `_serialize_gmm` / `_deserialize_gmm` |
+| `ArsenalCache.finite_distances` | Every cached finite distance: the input of `calibrate_arsenal_gamma`. | `scripts/fit_calibration.py` (through the engine) | — |
+
+**Depends on:** `numpy`; `similarity.engines.pitcher_similarity` (the arsenal model,
+imported at call time because the engine imports this module).
+
+**Used by:** `similarity/engines/pitcher_similarity.py` (which re-imports the name).
+
+> **Notes for anyone changing this file:** The cache logs as `"pitcher_similarity"`.
+> `_compute_w2_chunk` is a process-pool target: keep it at module level.
 
 ---
 
 ### `similarity/engines/batter_similarity.py`
 
-Compares batter-to-batter by combining four RBF sub-scores (plate discipline, batted-ball profile, platoon splits, power) into one composite [0,1] similarity, with an optional pitcher-handedness context that reweights toward the platoon dimension. Real-world comparison: 'which batter-seasons approach and produce like this one, optionally when facing a same-handed pitcher'.
+Compares batter-seasons on five kernel sub-scores: plate discipline, batted-ball profile,
+platoon splits, power, and the physical block of swing and stance (SIM-529). The weights
+are 0.32 / 0.28 / 0.12 / 0.08 / 0.20; with the opposing pitcher's hand given, the platoon
+sub-score leads (0.24 / 0.20 / 0.28 / 0.08 / 0.20). With no physical data the weights fall
+back to the four-way split, so the scores do not move before the profiles carry it.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `BatterSimilarityEngine.build` | Loads profiles + league averages from derived.batter_season_metrics, applies EB shrinkage, fits the normalizer, builds the single BatterPartition (batters are NOT hand-partitioned). | — | — |
-| `BatterSimilarityEngine.apply_calibration` | Rebuilds the four WeightedRBFSimilarity scorers (discipline/batted_ball/platoon/power) from a CalibrationReport's sigma_* and reliability_weights_* fields, falling back to the current value when a field is 0.0/None. | — | — |
-| `BatterSimilarityEngine.query` | Scores a query batter against every batter-season; vs_hand shifts sub-score weights to WEIGHT_*_PLATOON variants (platoon becomes dominant). | — | — |
-| `bats_penalty / bats_penalty_vector` | Multiplicative penalty (0.92 opposite-hand, 0.97 vs switch, 1.00 same) applied because L/R batters' spray-angle distributions mirror each other. | — | — |
-| `BatterPartition.score_all` | Vectorized batch RBF scoring of a query against the whole population, applying the bats penalty and the sqrt(min eb_alpha) confidence discount. | — | — |
+| `BatterSimilarityEngine.build` | Loads the profiles and league averages, shrinks (prior 5), fits the normalizer, builds one partition (batters are not split by hand). | `api/state.py`, the bundle build | `derived.batter_season_metrics` |
+| `BatterSimilarityEngine.apply_calibration` | Rebuilds the five kernels from the report's sigmas and reliability weights; a 0.0 or None field keeps the current value. | `api.state.apply_calibration_to_engines` | — |
+| `BatterSimilarityEngine.query` | Scores one batter-season against every other; `vs_hand` switches to the platoon weights. | the bundle build (the `batter` matrix), the API | — |
+| `bats_penalty / bats_penalty_vector` | A multiplier for the batters' own hands: 0.92 opposite hands, 0.97 against a switch hitter, 1.00 the same. | `BatterPartition.score_all` | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_batter_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py` (the `batter` actor matrix),
+`similarity/calibration/batter.py` (the feature lists).
 
-**Used by:** `api/state.py build_all_engines (keyed 'batter')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES (SIM-523 actor score-matrix builder - batter matrix)`, `similarity/similarity_calibration.py (DISCIPLINE_FEATURES/BATTED_BALL_FEATURES/POWER_FEATURES/PLATOON_FEATURES constants)`
-
-> **Notes for anyone changing this file:** Feature weighting is explicitly informed by stabilization research in the module docstring (K%/contact%/swing% stabilize fastest, LD%/BABIP excluded) - changing DISCIPLINE_FEATURES/BATTED_BALL_FEATURES ordering or membership requires re-running similarity_calibration.py (it indexes columns positionally after the fixed prefix) and regenerating regression fixtures.
+> **Notes for anyone changing this file:** The calibration reads the batter columns by
+> position after a fixed prefix; change `similarity/calibration/batter.py` with any change
+> to the feature lists.
 
 ---
 
 ### `similarity/engines/fielder_similarity.py`
 
-Compares fielder-to-fielder STRICTLY within the same defensive position (1B/2B/3B/SS each own partition; LF/CF/RF each own partition - a 2B is never compared to a SS or to an OF) using position-appropriate sub-scores: infield Range/DP/Errors/Specialty, outfield Range/Arm/Star-plays/Errors. Real-world comparison: 'which same-position fielder-seasons have a similar defensive skill profile'.
+Compares fielder-seasons strictly within one position: each of 1B, 2B, 3B, SS, LF, CF and RF
+is its own partition. The infield blends range, double plays, errors and the
+position's specialty (0.45 / 0.30 / 0.15 / 0.10); the outfield blends range, arm, star
+catches and errors (0.40 / 0.30 / 0.15 / 0.15).
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `FielderSimilarityEngine.build` | Loads positional averages + profiles from derived.fielder_season_metrics for IF and OF positions separately, applies the larger EB_N_PRIOR=15 shrinkage (defensive metrics stabilize slowly), builds one PositionPartition per position. SIM-550 (2026-09-17): the outfield arm group `OF_ARM_FEATURES` is THREE features, each weighted by the year-to-year repeat `make calibrate` fitted on 2026-09-17 (consecutive seasons of one player at one position, 50 or more chances in both) — the throw velocity `arm_strength` (0.844; Savant's arm-strength board, per position), the advancement prevention `arm_advancement_prevention` (0.137) and the thrown-out rate `arm_thrown_out_rate` (0.240); the last two come from our own advancement opportunity pool, per fielder × position, with the expectation per season × decision × outs × position. The plan's 0.60 for the prevention pooled the three positions and was mostly the position label; within a position it repeats at 0.1 to 0.3. The run value and the raw hold rate stay stored but unread. NULL loads as NaN. The profile carries `sample_arm_chances` (the pool chances against him), and the two rates shrink on the arm's OWN chances (`ARM_ALPHA_PRIOR_CHANCES` 50: 25 chances → two thirds of the way to the league mean, 200 chances → a fifth), not on the batted-ball sample; a missing velocity becomes the league mean, never 0. SIM-532 (2026-09-17, code and data landed): the outfield range group `OF_RANGE_FEATURES` is NINE features — our five components, then Savant's per-position outs above average per 100 of our chances (`savant_oaa_per_100`) and the three parts of the outfield jump (`jump_reaction_ft`, `jump_burst_ft`, `jump_route_ft`; feet against the league in the first three seconds after contact); the infield range group gains `savant_oaa_per_100` as its SIXTH feature (decision 4). Every weight is the year-to-year repeat `make calibrate` fitted on 2026-09-17 after the fielder recompute (consecutive seasons of one player at one position, 2017–2026): outfield 0.344 / 0.373 / 0.677 / 0.594 / 0.203, Savant's figure 0.472, reaction 0.775, burst 0.658, route 0.743; infield 0.620 / 0.548 / 0.452 / 0.535 / 0.529 and Savant's figure 0.356 (the plan started the new features at 0.50 / 0.81 / 0.69 / 0.77 and 0.45). The range sigmas are 1.061 (outfield) and 1.055 (infield). The profile carries `sample_jump_plays`; the outfield range vector's first six entries shrink on the batted-ball sample at `EB_N_PRIOR`, the three jump entries on the jump's OWN plays (`JUMP_ALPHA_PRIOR_PLAYS` 25: 10 plays → about seven tenths of the way to the league mean, 64 plays → just over a quarter; the outfielder keeps plays / (plays + 25) of his own reading). A missing jump or Savant figure loads as NaN and becomes the league mean in the shrink; an absent league key is NaN, never 0.0. | — | — |
-| `FielderSimilarityEngine.apply_calibration` | Rebuilds the 8 position-specific WeightedRBFSimilarity scorers (IF range/dp/errors/specialty, OF range/arm/stars/errors) from a CalibrationReport. `sigma_of_arm` and `reliability_weights_of_arm` (three long since SIM-550) are the arm group's fields; 0.0 keeps the module default. | — | — |
-| `FielderSimilarityEngine.query` | Scores a query (player_id, position, season) against every same-position profile; rejects an invalid position up front. | — | — |
-| `FielderSimilarityEngine._get_rbfs_for_position` | Selects the correct (range, secondary, tertiary, error) RBF scorer set for IF vs OF. | — | — |
-| `PositionPartition.score_all` | Vectorized batch scoring within one position group, applying middle-infielder pivot features for 2B/SS and position-specific specialty features for corner IF. | — | — |
+| `FielderSimilarityEngine.build` | Loads the positional averages and the profiles, shrinks at prior 15 (defensive metrics stabilize slowly; CLAUDE.md §10), builds one partition per position. The outfield range group is nine features: our five components, Savant's outs above average per 100 of our chances, and the three parts of the jump (reaction, burst, route; SIM-532). The infield range group adds Savant's figure as a sixth. The outfield arm group is three features: the throw velocity, the advancement prevention and the thrown-out rate (SIM-550). The jump parts shrink on the jump's own plays (prior 25) and the arm rates on the arm's own chances (prior 50). A missing measurement loads as NaN and becomes the league mean in the shrink. | `api/state.py`, the bundle build | `derived.fielder_season_metrics`<br>`derived.league_averages` |
+| `FielderSimilarityEngine.apply_calibration` | Rebuilds the eight position-group kernels from the report. | `api.state.apply_calibration_to_engines` | — |
+| `FielderSimilarityEngine.query` | Scores one `(player_id, position, season)` against the same position; refuses an unknown position. | the bundle build (one `fielder_<pos>` matrix per position), the API | — |
+| `PositionPartition.score_all` | The vectorized scoring inside one position; 2B and SS carry the pivot features in their double-play group. | `query` | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_fielder_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py`, `similarity/calibration/fielder.py`, and
+`similarity/calibration/report.py` (which imports `IF_PIVOT_FEATURES` at import time).
 
-**Used by:** `api/state.py build_all_engines (keyed 'fielder')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES (SIM-523 actor score-matrix builder - one fielder matrix per position, _FIELDER_POSITIONS)`, `similarity/similarity_calibration.py (IF_*/OF_* feature-list constants, incl. IF_PIVOT_FEATURES imported at module top of similarity_calibration.py)`
-
-> **Notes for anyone changing this file:** Position gating is a hard invariant - never widen a partition to cross positions; the docstring explains why (range direction, throw distance, DP role differ fundamentally). EB_N_PRIOR=15 (vs 5 for batter/pitcher) is an intentional, documented design decision (CLAUDE.md section 10) - don't 'fix' it to match the other engines. SIM-550 (2026-09-17): the `fielder_LF` / `fielder_CF` / `fielder_RF` league rows carry the three arm keys (`arm_advancement_prevention`, `arm_thrown_out_rate`, `arm_strength`) from the SIM-550 recompute on; the loader reads an absent arm key as NaN, never 0.0 (a 0 thrown-out rate is the weakest arm in the league, not a neutral value). Until that recompute runs, the live table still holds the runner-view figures the September Savant join wrote and the league rows carry only `arm_hold_rate`. The arm block is filled by `_fill_outfield_arm_block` in `pipeline/batch/player_profile_computor.py` from `sim.advancement_opportunity_pool`, after the pools, not by the fielder aggregator (which writes the six arm columns NULL). SIM-532 (2026-09-17): the fielder split by batter hand — Savant's outs above average against left-handed batters and against right-handed batters — was measured and left out of every feature list. Within a position the left-minus-right gap repeats year to year at 0.04 to 0.14 for outfielders and only at shortstop (0.36 to 0.38, both eras) on the infield; the two halves correlate 0.61 with each other within a season (two noisy halves of one skill). The two columns (`oaa_vs_lhh`, `oaa_vs_rhh`) sit in `raw.savant_outs_above_average` for the record and no profile column or feature list reads them; a unit test holds that. Savant's per-position figure went in instead: it repeats within a position at 0.38 to 0.61 in the outfield and 0.34 to 0.63 on the infield, against 0.04 to 0.47 for every one of our own range components.
+> **Notes for anyone changing this file:** Never widen a partition across positions. The
+> outfield arm block is filled by `_fill_outfield_arm_block` in the profile computor from
+> `sim.advancement_opportunity_pool`; an absent league arm key reads as NaN, never 0.0 (a 0
+> thrown-out rate is the weakest arm, not a neutral value). Savant's split by batter hand
+> was measured and left out: within a position it repeats year to year at only 0.04 to
+> 0.14 for outfielders; the two columns stay stored and unread.
 
 ---
 
 ### `similarity/engines/baserunner_similarity.py`
 
-Compares baserunners on EXTRA-BASE advancement tendency (taking first-to-third, second-to-home, tagging up, etc.) via Speed/Aggression/Success RBF sub-scores. Real-world comparison: 'which runner-seasons take the extra base as often, and as successfully, as this one' - used for the advancement draw.
+Compares runners on taking the extra base on a ball in play (first to third, second to
+home, tagging up): speed, aggression and success, 0.35 / 0.40 / 0.25. Runners are not
+partitioned.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `BaserunnerSimilarityEngine.build` | Loads league averages + profiles from derived.baserunner_season_metrics; the `include_below_minimum` flag (SIM-523) additionally loads THIN (below-minimum-sample) profiles so the score matrix covers every runner-season a pool holds, relying on eb_alpha to down-weight low-confidence rows instead of excluding them. | — | — |
-| `BaserunnerSimilarityEngine.apply_calibration` | Rebuilds the speed/aggression/success WeightedRBFSimilarity scorers from a CalibrationReport. SIM-531: a reliability-weight vector whose length does not match the engine's feature list (a report fitted before `xb_attempt_rate_above_expected` joined the aggression group) is refused with a warning and the module weights stay. | — | — |
-| `WeightedRBFSimilarity.score / score_batch` | SIM-531: the MASKED kernel — a feature missing (NaN) on either side drops out of the weighted distance AND its normalisation, so a half-measured pair is neither inflated (the old `nan_to_num` read a missing feature as an exact match) nor penalised; a fully-measured pair gets exactly the number it got before. The normalizer keeps NaN for this reason. | `BaserunnerPartition.score_all`, `_score_pair` | — |
-| `BaserunnerSimilarityEngine.query / query_pair` | Scores a query runner-season against the (single, unpartitioned) population. | — | — |
+| `BaserunnerSimilarityEngine.build` | Loads the profiles; `include_below_minimum` also loads the thin profiles, so the matrix covers every runner-season the advancement pool holds (the confidence discount weighs them down). | `api/state.py`, the bundle build (as `runner_adv`) | `derived.baserunner_season_metrics` |
+| `WeightedRBFSimilarity` (this file's own) | The MASKED kernel: a feature missing on either side drops out of the distance and its normalization. | `BaserunnerPartition.score_all`, `_score_pair` | — |
+| `BaserunnerSimilarityEngine.apply_calibration` | Rebuilds the three kernels; a reliability vector of the wrong length is refused with a warning. | `api.state.apply_calibration_to_engines` | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_baserunner_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py` (the `runner_adv` matrix, the advancement draw's runner
+factor), `similarity/calibration/baserunner.py`.
 
-**Used by:** `api/state.py build_all_engines (keyed 'baserunner')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES as 'runner_adv' (feeds the advancement draw's runner factor; listed in _THIN_PROFILE_ENGINES so its thin-profile build() flag is used)`, `similarity/similarity_calibration.py (SPEED_FEATURES/AGGRESSION_FEATURES/SUCCESS_FEATURES constants)`
-
-> **Notes for anyone changing this file:** Not partitioned by any attribute - every runner is compared to every other runner; the RBF kernel is trusted to naturally separate fast/slow profiles. sprint_speed is often NULL/unpopulated on the live DB (see similarity_calibration.py comment), which is why _fit_sigma's 0.0 sentinel matters here specifically - a naive calibrator would otherwise clobber the tuned RBF_SIGMA_SPEED=0.8171 with a spurious 1.0. SIM-531 (2026-09-16): the aggression group has SEVEN features — the seventh, `xb_attempt_rate_above_expected` (the runner's extra-base attempt rate above Savant's expectation for his chances, weight 0.76 = its year-to-year repeat), loads NULL as NaN (0.0 is a real reading there); the `baserunner` league row carries its mean, and a league row without the key leaves the raw value (or the NaN) alone.
+> **Notes for anyone changing this file:** The aggression group's seventh feature, the
+> runner's extra-base attempt rate above Savant's expectation (SIM-531), loads NULL as NaN:
+> 0.0 is a real reading there. `RBF_SIGMA_SPEED` is a tuned 0.8171; the calibration's 0.0
+> sentinel protects it when `sprint_speed` is unpopulated.
 
 ---
 
 ### `similarity/engines/baserunner_steal_similarity.py`
 
-Compares baserunners specifically on STOLEN-BASE tendency and success (separate from extra-base advancement because it's a pre-meditated, pitcher-read-driven skill rather than a real-time fly-ball read). Real-world comparison: 'which runner-seasons attempt steals as often, and succeed as often, as this one' - feeds the steal draw's runner factor.
+Compares runners on stealing: tendency, lead and success, 0.45 / 0.45 / 0.10, each the
+group's share of its year-to-year repeat (SIM-531). The lead group is the runner's lead off
+the bag and his jump on the delivery, from Savant's basestealing board.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `BaserunnerStealSimilarityEngine.build` | Loads profiles from derived.baserunner_steal_metrics; three sub-scores since SIM-531 (owner decision 2026-09-16): Tendency 0.45, Lead 0.45 (`lead_primary_ft`, `lead_jump_ft` — the runner's lead off the bag and his jump on the delivery, from Savant's Basestealing Run Value board), Success 0.10 — each weight the group's share of its year-to-year repeat. The confidence (`eb_alpha`) is first-base opportunities over prior 50 (`EB_N_PRIOR_OPPS`), not attempts, so a runner who never went — every runner with a chance has a row since SIM-531 — still carries weight in the steal draw. NULL loads as NaN; `has_lead` is set at load. | — | — |
-| `BaserunnerStealSimilarityEngine.apply_calibration` | Rebuilds the tendency/lead/success WeightedRBFSimilarity scorers from a CalibrationReport (`sigma_baserunner_steal_lead` is the SIM-531 field; 0.0 keeps `RBF_SIGMA_LEAD`). | — | — |
-| `StealPartition.score_all / query_pair` | The missing-value rule (SIM-531): a pair with a measured lead on both sides blends the three groups; a pair missing it on either side blends tendency and success renormalized to one, and its `lead_score` is None. The two paths share one arithmetic (a test holds them equal). | — | — |
-| `BaserunnerStealSimilarityEngine.query / query_pair` | Scores a query runner-season against the population using run_generic_diagnostics-compatible SimilarityResult fields. | — | — |
+| `BaserunnerStealSimilarityEngine.build` | Loads the profiles (the thin ones too for the matrix); tendency and lead shrink on first-base opportunities (prior 50), success on attempts (prior 20). | `api/state.py`, the bundle build (as `runner_steal`) | `derived.baserunner_steal_metrics` |
+| `StealPartition.score_all / query_pair` | A pair measured on the lead on both sides blends three groups; otherwise tendency and success, renormalized, and `lead_score` is None. | `query`, `query_pair` | — |
+| `BaserunnerStealSimilarityEngine.apply_calibration` | Rebuilds the three kernels; `sigma_baserunner_steal_lead` 0.0 keeps `RBF_SIGMA_LEAD`. | `api.state.apply_calibration_to_engines` | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_generic_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py` (the steal draw's runner factor),
+`similarity/calibration/baserunner_steal.py`.
 
-**Used by:** `api/state.py build_all_engines (keyed 'baserunner_steal')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES as 'runner_steal' (feeds the steal draw's runner factor; also in _THIN_PROFILE_ENGINES)`, `similarity/similarity_calibration.py::_calibrate_baserunner_steal_params (TENDENCY/SUCCESS feature columns read directly by name, not via imported constants)`
-
-> **Notes for anyone changing this file:** SIM-408 removed the Jump/First-Step sub-score because Statcast never published per-runner reaction-time/burst-distance/break-angle; SIM-531 fills that hole with what Savant DOES publish — the lead and the jump in feet — as the Lead group. The weights are the measured split 0.45 / 0.45 / 0.10 (plan §6.1 of docs/audit/2026-09-16-sim531-lead-distance-build-plan.md), not the old renormalized fractions. Two shrinkage bases: tendency and lead on first-base opportunities (prior 50), success on attempts (prior 20) — each group on the denominator its features are measured over. `RBF_SIGMA_LEAD` carries the fitted value (0.9836, `make calibrate` on 2026-09-16 over the 481 qualified runner-seasons with a lead); a refit is copied in by hand because the matrix builder does not read the calibration report.
+> **Notes for anyone changing this file:** `RBF_SIGMA_LEAD` (0.9836) is the value
+> `make calibrate` fitted; the bundle build does not read the report, so a refit is copied
+> in by hand.
 
 ---
 
 ### `similarity/engines/catcher_similarity.py`
 
-Compares catchers across four defensive dimensions - Framing, Blocking, Throwing-Execution, Throwing-Deterrence (SIM-072 v2 split; the 5th 'Offense' sub-score was removed in SIM-408). Real-world comparison: 'which catcher-seasons frame/block/throw like this one, and get challenged by runners as often'.
+Compares catcher-seasons on four defensive sub-scores: framing, blocking, the execution of
+the throw, and deterrence (how often runners try), 0.529 / 0.235 / 0.141 / 0.094.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `CatcherSimilarityEngine.build` | Loads profiles from derived.catcher_season_metrics; EB_N_PRIOR=15 (same slow-stabilization rationale as fielder). | — | — |
-| `CatcherSimilarityEngine.apply_calibration` | Rebuilds the framing/blocking/throwing/deterrence WeightedRBFSimilarity scorers from a CalibrationReport. | — | — |
-| `CatcherSimilarityEngine.query / query_pair` | Scores a query catcher-season against the population; `throwing_score` is the field name retained for backward compatibility from the v1 single-throwing-dimension design. | — | — |
+| `CatcherSimilarityEngine.build` | Loads the profiles; shrinks at prior 15, as the fielder does. | `api/state.py`, the bundle build | `derived.catcher_season_metrics` |
+| `CatcherSimilarityEngine.apply_calibration` | Rebuilds the four kernels from the report's sigmas. | `api.state.apply_calibration_to_engines` | — |
+| `CatcherSimilarityEngine.query / query_pair` | Scores one catcher-season against every other. `throwing_score` is the execution sub-score. | the bundle build (`catcher`, and `catcher_throwing` for the steal draw's catcher-arm factor) | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_generic_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py`, `similarity/calibration/catcher.py` (which repeats
+this file's derived framing and blocking expressions; keep them in step).
 
-**Used by:** `api/state.py build_all_engines (keyed 'catcher')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES as 'catcher' (composite score) and 'catcher_throwing' (throwing_score alone - feeds the steal draw's catcher-arm factor)`, `similarity/similarity_calibration.py::_calibrate_catcher_params (mirrors this file's _load_profiles SQL expressions exactly - framing/blocking derived-column formulas must be kept in sync between the two files)`
-
-> **Notes for anyone changing this file:** CLAUDE.md notes the catcher RECEIVING kernel (a separate anisotropic bell-curve mechanism, SIM_CATCHER_*_SIGMA env flags) that sits in simulation/, not in this file - this engine only produces the static framing/blocking/throwing/deterrence similarity score consumed as a matrix factor, and is unrelated to that runtime receiving-ratio flag. The SIM-072 v1-to-v2 sub-score split (execution vs deterrence) was a direct response to a Baseball-Analyst pushback memo (2026-05-06) - see the docstring for the reasoning if reconsidering the split.
+> **Notes for anyone changing this file:** The catcher receiving ratio in the simulator
+> (`SIM_CATCHER_RECEIVING`) is a separate mechanism and does not read this engine.
 
 ---
 
 ### `similarity/engines/pitcher_steal_similarity.py`
 
-Compares pitchers on their ability to hold runners / prevent steals: an OUTCOME sub-score (SB allowed per 9, CS rate when challenged, attempt rate allowed) and, since SIM-531, a HOLD sub-score (the lead and the jump the pitcher allows, in feet, from Savant). SIM-408 had removed the unmeasurable Delivery and Pickoff/Disengagement sub-scores. Real-world comparison: 'do runners get the same lead and jump against these two pitchers, and fare similarly when they go'.
+Compares pitchers on holding runners: the outcome (steals allowed per nine, the
+caught-stealing rate, the attempt rate allowed) and the hold (the lead and the jump the
+pitcher allows, from Savant), 0.35 / 0.65 (SIM-531).
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `PitcherStealSimilarityEngine.build` | Loads profiles from derived.pitcher_steal_metrics; two sub-scores since SIM-531 (owner decision 2026-09-16): Outcome 0.35 and Hold 0.65 (`lead_allowed_primary_ft`, `lead_allowed_jump_ft` — the lead and the jump the pitcher allows, from Savant's Pitcher Running Game board; the jump allowed repeats at 0.89–0.90). NULL loads as NaN; `has_hold` is set at load; both groups shrink on baserunner events (prior 25). | — | — |
-| `PitcherStealSimilarityEngine.apply_calibration` | Rebuilds the outcome and hold WeightedRBFSimilarity scorers from a CalibrationReport (`sigma_pitcher_steal_hold` is the SIM-531 field; 0.0 keeps `RBF_SIGMA_HOLD`). | — | — |
-| `PitcherStealPartition.score_all / query_pair` | The missing-value rule (SIM-531): a pair with a measured hold on both sides is the two-way blend; a pair missing it on either side is the outcome score alone, and its `hold_score` is None. | — | — |
-| `PitcherStealSimilarityEngine.query / query_pair` | Scores a query pitcher-season against the population. | — | — |
+| `PitcherStealSimilarityEngine.build` | Loads the profiles; both groups shrink on baserunner events (prior 25). | `api/state.py`, the bundle build | `derived.pitcher_steal_metrics` |
+| `PitcherStealPartition.score_all / query_pair` | A pair measured on the hold on both sides blends the two; otherwise the outcome score alone, and `hold_score` is None. | `query`, `query_pair` | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_generic_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py` (the steal draw's pitcher factor),
+`similarity/calibration/pitcher_steal.py`.
 
-**Used by:** `api/state.py build_all_engines (keyed 'pitcher_steal')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES as 'pitcher_steal' (feeds the steal draw's pitcher-hold factor)`, `similarity/similarity_calibration.py::_calibrate_pitcher_steal_params`
-
-> **Notes for anyone changing this file:** This is intentionally a SEPARATE engine from pitcher_similarity.py - do not merge them; the docstring explains the skill (holding runners) is independent of arsenal/command. Because raw.pitches has no pickoff/disengagement columns historically, don't attempt to re-add the removed sub-scores without first confirming a new data source exists.
+> **Notes for anyone changing this file:** This engine is separate from the pitcher
+> engine on purpose: holding runners is a skill apart from the arsenal and command.
 
 ---
 
 ### `similarity/engines/manager_similarity.py`
 
-Compares managers on in-game tendency across Pitcher Usage (40%), Offensive Aggressiveness (35%), and Platoon/Matchup Management (25%). Real-world comparison: 'which manager-seasons pull starters, run/bunt, and platoon-substitute like this one' - feeds the manager pitching-change decision model (SIM-434) with a real per-manager profile once wired (SIM-427, still pending per CLAUDE.md).
+Compares manager-seasons on pitcher usage, offensive aggressiveness and platoon
+management, 0.40 / 0.35 / 0.25. The usage sub-score is the weight of the pitching-change
+draw: the bundle build writes it as the `manager_usage` matrix (the real-manager draw,
+SIM-427).
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `ManagerSimilarityEngine.build` | Loads profiles from derived.manager_season_metrics; EB_N_PRIOR=30 (managers need the largest sample of any engine to stabilize, per the docstring). | — | — |
-| `ManagerSimilarityEngine.apply_calibration` | Rebuilds the usage/aggression/platoon WeightedRBFSimilarity scorers from a CalibrationReport; usage is now a genuine 7-feature fit since SIM-427 un-gated available_reliever_usage_rate. | — | — |
-| `ManagerSimilarityEngine.query / query_pair` | Scores a query manager-season against the population. | — | — |
+| `ManagerSimilarityEngine.build` | Loads the profiles; shrinks at prior 30 (managers stabilize slowest). | `api/state.py`, the bundle build | `derived.manager_season_metrics` |
+| `ManagerSimilarityEngine.apply_calibration` | Rebuilds the three kernels from the report. | `api.state.apply_calibration_to_engines` | — |
+| `ManagerSimilarityEngine.query / query_pair` | Scores one manager-season against every other. | the bundle build (`usage_score`), the API | — |
 
-**Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_generic_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
-
-**Used by:** `api/state.py build_all_engines (keyed 'manager')`, `api/routes/similarity_explorer.py`, `similarity/similarity_calibration.py::_calibrate_manager_params (reads all 17 USAGE+AGGRESSION+PLATOON columns from derived.manager_season_metrics by position)`
-
-> **Notes for anyone changing this file:** Per CLAUDE.md this engine's OUTPUT is not yet wired into the live SIM-434 manager pitching-change decision model in simulation/ - that model currently uses a league-flat default, not this engine's per-manager similarity (tracked as SIM-427, still open as of 2026-09-10). Do not assume changing this engine changes in-game manager behavior today.
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`,
+`pipeline/batch/engine_artifacts.py`, `similarity/calibration/manager.py` (which reads the
+seventeen columns by position).
 
 ---
 
 ### `similarity/engines/situation_similarity.py`
 
-Given a game state (inning, outs, baserunners, score differential, leverage index, pitch/PA counts, park factor), finds the K nearest historical plate-appearance situations via a scipy KDTree over z-scored, importance-weighted features. Unlike every other engine, it compares GAME STATES, not players.
+Finds the K nearest historical plate-appearance situations (inning, outs, runners, score
+difference, leverage, pitch and PA counts, park factor) with a KD-tree (a tree over
+z-scored, importance-weighted features). It compares game states, not players.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `SituationSimilarityEngine.build` | Loads derived.at_bat_situations (one row per historical PA), z-score normalizes, builds a scipy KDTree; RAISES RuntimeError on a zero-row index (SIM-408 hardening) rather than building a silently NaN-poisoned engine. | — | `derived.at_bat_situations` |
-| `SituationSimilarityEngine.query / query_batch` | K-nearest-neighbor lookup for one or many SituationVectors, reconstructing NearestSituation rows from the columnar ColumnarSituationMeta store. | — | — |
-| `ColumnarSituationMeta` | SIM-334: parallel NumPy column arrays replacing a list[NearestSituation] of Python objects - cut memory ~10x and made the index share-able read-only across processes. | — | — |
+| `SituationSimilarityEngine.build` | Loads the situations, z-scores them, builds the tree; refuses an empty index. | `api/state.py` | `derived.at_bat_situations` |
+| `SituationSimilarityEngine.query / query_batch` | The K-nearest lookup for one or many `SituationVector`s. | `api/routes/similarity_explorer.py` (the Data Lab's situation finder) | `scipy.spatial.KDTree` |
+| `ColumnarSituationMeta` | The neighbours' metadata as parallel NumPy columns, read-only shareable across processes. | `query` | — |
 
-**Depends on:** `duckdb`, `numpy`, `scipy.spatial.KDTree`, `DuckDB view derived.at_bat_situations (built by pipeline/batch/player_profile_computor.py::_build_at_bat_situations)`
-
-**Used by:** `api/state.py build_all_engines (keyed 'situation')`, `api/routes/similarity_explorer.py (POST /api/similarity/situation/query - the one distance engine with a live query route; imports SituationVector directly)`
-
-> **Notes for anyone changing this file:** Despite being one of the '11 similarity engines' built at boot, this engine is NOT called anywhere in the production simulation loop (simulation/sim_loop.py, simulation/full_pool_sampler.py) or by pipeline/batch/engine_artifacts.py's nightly bundle builder - SIM-486 (2026-09-06) deleted the per-tile fallback architecture that used to consume it for the live pitch-outcome draw. Its only production consumer today is the SIM-439 Data Lab 'Situation Finder' exploration UI. player_profile_computor.py's docstring on _build_at_bat_situations explicitly says the computor SELECTed for this table but never built it until SIM-408 - check that table exists before assuming this engine can build.
+**Used by:** `api/state.py`, `api/routes/similarity_explorer.py`. The simulator does not
+read it.
 
 ---
 
 ### `similarity/engines/pitch_pitch_similarity.py`
 
-Indexes every pitch in sim.pitch_pool (physics vector: velo/IVB/HB/spin/release/plate location) into a FAISS IndexFlatL2 (or optional HNSW) for fast K-nearest-neighbor lookup, keyed by pitch, not by player.
+Indexes every pitch of `sim.pitch_pool` by its physics (velocity, movement, spin, release,
+plate location) in a FAISS index (a nearest-neighbour index over vectors) for K-nearest
+lookups.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `PitchPitchSimilarityEngine.build` | Loads the pitch pool, optionally applies a 2x recency-boost replication of the last 2 seasons, z-score normalizes + importance-weights features, builds the FAISS index. | — | — |
-| `PitchPitchSimilarityEngine.query / query_batch` | K-nearest-neighbor pitch lookup returning NearestPitch metadata (for looking up the pitch's outcome elsewhere). | — | — |
+| `PitchPitchSimilarityEngine.build` | Loads the pitch pool, z-scores and weights the features, builds the index; `recency_boost=True` (off by default) replicates the last two seasons. | `api/state.py` | `faiss` |
+| `PitchPitchSimilarityEngine.query / query_batch` | The K-nearest pitch lookup. | — | — |
 
-**Depends on:** `duckdb`, `numpy`, `faiss (optional - _FAISS_AVAILABLE guard; engine __init__ raises RuntimeError if faiss missing)`
-
-**Used by:** `api/state.py build_all_engines (keyed 'pitch_pitch')`
-
-> **Notes for anyone changing this file:** Like situation_similarity.py, this is one of the 11 boot-built engines but has NO production simulation caller - grep across the repo finds it referenced only in api/state.py's registry and its own tests; even api/routes/similarity_explorer.py explicitly 404s score/pair queries for this engine ('distance engines ... are not player-keyed'). It predates the SIM-422/429/486 full-pool architecture that replaced per-tile FAISS lookups with the whole-pool similarity-weighted sampler in simulation/full_pool_sampler.py; treat it as legacy/orphaned unless a new caller is added.
+**Used by:** `api/state.py` only (built at boot). No route queries it, and the simulator
+does not read it.
 
 ---
 
 ### `similarity/engines/batted_ball_similarity.py`
 
-Indexes every in-play pitch in sim.outcome_pool (exit_velo, launch_angle, spray_angle) into a FAISS index keyed by the batted ball's physical fingerprint, returning nearby outcomes (0/1/2/3/4 bases) for a launch-condition-conditioned outcome distribution.
+Indexes every ball in play of `sim.outcome_pool` by exit velocity, launch angle and spray
+angle in a FAISS index; `outcome_distribution` turns the K nearest into a distribution of
+bases.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `BattedBallSimilarityEngine.build` | Loads the outcome pool, auto-detects whether the handedness-corrected pull_relative_spray_angle column exists (SIM-051) and falls back to raw spray_angle if not, builds the FAISS index. | — | `_select_spray_column` |
-| `BattedBallSimilarityEngine.query / query_batch` | K-nearest-neighbor batted-ball lookup. | — | — |
-| `BattedBallSimilarityEngine.outcome_distribution` | Converts K nearest neighbors' result_hits values into a {0..4: probability} distribution - explicitly documented as 'the function the simulation loop will actually call'. | — | — |
+| `BattedBallSimilarityEngine.build` | Loads the pool, picks `pull_relative_spray_angle` when the column exists (else `spray_angle`), builds the index. | `api/state.py` | `faiss` |
+| `BattedBallSimilarityEngine.query / query_batch / outcome_distribution` | The K-nearest lookup and the bases distribution. | — | — |
 
-**Depends on:** `duckdb`, `numpy`, `faiss (optional - _FAISS_AVAILABLE guard)`
-
-**Used by:** `api/state.py build_all_engines (keyed 'batted_ball')`
-
-> **Notes for anyone changing this file:** outcome_distribution's own docstring says the simulation loop 'will actually call' it, but grep finds no caller of this class outside api/state.py and its own tests - the production batted-ball outcome draw is now done by simulation/full_pool_sampler.py's own pool-scoring logic, not this FAISS engine. Like pitch_pitch_similarity.py, this predates the SIM-422/429/486 full-pool architecture; verify with the Backend/Performance agents before assuming it is load-bearing. spray_column_used exposes which column the loader picked - useful for confirming whether SIM-051 has landed on a given DuckDB.
+**Used by:** `api/state.py` only (built at boot). The simulator's fielding draw scores the
+whole pool itself (`simulation/full_pool_sampler.py`).
 
 ---
 
 ### `similarity/backtesting/__init__.py`
 
-Package re-export surface for the two backtesting harnesses (SIM-076 recency walk-forward and SIM-220 probabilistic backtester).
+Re-exports the two backtesting modules' public names.
 
-**Depends on:** `similarity.backtesting.backtester`, `similarity.backtesting.recency_walk_forward`
-
-**Used by:** `tests/unit/test_probabilistic_backtester.py and similar test modules that import from the package rather than the submodule`
-
-> **Notes for anyone changing this file:** Pure re-export file, no logic of its own.
+**Used by:** `tests/unit/test_probabilistic_backtester.py`,
+`tests/unit/test_recency_walk_forward.py`.
 
 ---
 
 ### `similarity/backtesting/backtester.py`
 
-SIM-220 probabilistic backtester: scores a matrix of predicted outcome-class probabilities against actual labels via ECE, Brier score, log-loss, and a reliability curve, plus a walk-forward ablation harness comparing the full model to a league-average baseline (and optional per-engine ablations).
+An offline validation library for probability forecasts over discrete outcomes: the
+expected calibration error (ECE, the binned gap between the predicted confidence and the
+hit rate), the multi-class Brier score, the log-loss and the reliability curve, plus a
+walk-forward ablation that scores a model against a league-average floor.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `expected_calibration_error` | Binned gap between mean predicted confidence and empirical accuracy - the model's calibration error. | — | — |
-| `brier_score / log_loss` | Standard multi-class Brier score and eps-clipped cross-entropy. | — | — |
-| `reliability_curve` | Per-bin (mean_confidence, empirical_accuracy, count) points for a calibration diagram. | — | — |
-| `evaluate_distributions` | Convenience wrapper computing all of the above metrics at once. | — | — |
-| `walk_forward_ablation` | Runs SIM-076's expanding-window folds, scoring an injectable predict() function plus a league-average floor and optional named ablation predictors, reporting each's marginal lift over the floor. | — | — |
+| `expected_calibration_error / brier_score / log_loss / reliability_curve / evaluate_distributions` | The scores of an `(n, c)` probability matrix against `(n,)` labels. | tests only | — |
+| `walk_forward_ablation` | The expanding-window folds, a predictor against the league-average floor and named ablations. | tests only | `walk_forward_folds` |
+| `DEFAULT_N_BINS`, `OUTCOME_PROB_EPS` | The bin count and the probability floor. | `simulation/prop_validation.py` | — |
 
-**Depends on:** `numpy`, `similarity.backtesting.recency_walk_forward (walk_forward_folds, FEATURE_COL/OUTCOME_COL/SEASON_COL)`
+**Used by:** `simulation/prop_validation.py` (the two constants), the tests.
 
-**Used by:** `simulation/prop_validation.py (imports ONLY the two constants DEFAULT_N_BINS and OUTCOME_PROB_EPS - reimplements the binary win-probability/prop case itself rather than calling these functions)`, `tests/unit/test_probabilistic_backtester.py`
-
-> **Notes for anyone changing this file:** The module's own docstring labels the higher-level functions (walk_forward_ablation, evaluate_distributions) 'DEV / OFFLINE-ONLY - there is no live pipeline caller'. Production win-probability/prop calibration runs through simulation/prop_validation.py's own binary-case reimplementation, not through this module's multi-class machinery. This is a documented design choice, not a bug - don't 'fix' prop_validation.py to call evaluate_distributions() without understanding why the binary case was split out (a win-prob/over-under is inherently binary, which the multi-class ECE does not score correctly).
+> **Notes for anyone changing this file:** No program or script calls the functions; the
+> module keeps them as an offline library on purpose. The production win-probability and
+> prop calibration is binary and lives in `simulation/prop_validation.py`.
 
 ---
 
 ### `similarity/backtesting/recency_walk_forward.py`
 
-SIM-076 walk-forward harness validating that the recency_weight column (materialized by pipeline/batch/player_profile_computor.py) actually improves out-of-sample fit of a simple k-NN outcome predictor, versus an unweighted baseline.
+A walk-forward harness that checks whether the pool's `recency_weight` column improves a
+plain k-nearest-neighbour outcome predictor out of sample.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `walk_forward_folds` | Generates expanding-window (train, test) season splits. | `similarity.backtesting.backtester.walk_forward_ablation (reused, not reimplemented)` | — |
-| `recency_weighted_prediction` | A deliberately plain k-NN predictor (DEFAULT_K=8) over training rows, optionally weighting neighbors by their recency_weight column. | — | — |
-| `walk_forward_recency_eval` | Runs the full harness: for each fold, predicts with and without recency weighting and reports MAE/RMSE deltas. | — | — |
+| `walk_forward_folds` | Expanding-window (train, test) season splits. | `backtester.walk_forward_ablation` | — |
+| `recency_weighted_prediction` | A k-NN predictor (k 8), optionally weighting neighbours by `recency_weight`. | `walk_forward_recency_eval` | — |
+| `walk_forward_recency_eval` | Per fold, the prediction with and without the weight, and the MAE / RMSE change. | tests only | — |
 
-**Depends on:** `numpy`
+**Depends on:** `numpy`; in-memory inputs only, never a database.
 
-**Used by:** `similarity.backtesting.backtester (walk_forward_folds only)`, `tests/unit/test_probabilistic_backtester.py and similar tests`
-
-> **Notes for anyone changing this file:** Whole module is explicitly labeled 'DEV / OFFLINE-ONLY - no live pipeline caller' in its own docstring. Inputs are in-memory (pandas-DataFrame-like) only - never touches a live DB - by design, so it stays trivially unit-testable. `recency_weight` itself is produced by pipeline/batch/player_profile_computor.py::recency_weight (2.0x for the most recent two seasons, x0.75/season decay, floor 0.25); this module only consumes that column, it never recomputes it.
-
----
+**Used by:** `similarity/backtesting/backtester.py` (`walk_forward_folds`), the tests.

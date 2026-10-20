@@ -689,9 +689,15 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `prop_validation.py` (the prop ground-truth readers: the official box score, SIM-545, and the
   event-label fallback), `win_probability.py`,
   `snapshots.py`, `validation/replay_chi_squared.py`.
-- `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
-  walk-forward), `registry.py`.
-- `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
+- `similarity/` — `engines/` (the 11 engines; `rbf_kernel.py`, the weighted Gaussian kernel six
+  of them share; `arsenal_cache.py`, the pitcher engine's cache of pairwise W₂ distances),
+  `similarity_calibration.py` (`SimilarityCalibrator`, `make calibrate`'s fit) over
+  `calibration/` (SIM-493: `fitting.py` the population fits, `report.py` the
+  `CalibrationReport`, `base.py` the shared helpers, one mixin per engine),
+  `similarity_diagnostics.py` (the engines' `__main__` sanity checks), `backtesting/`
+  (backtester + walk-forward). `api/state.py`'s `ENGINE_REGISTRY` names and builds the engines.
+- `betting/` — `clv_engine.py` (prices, de-vig, edge, EV, closing line value), `bet_signal.py`
+  (the gate and the stake), `line_movement.py` (the opening-to-closing series).
 - SIM-519 (2026-10-09): `pipeline/mlb_schedule.py` (the one schedule parser and status mapper),
   `pipeline/mlb_game_feed.py` (the league feed → the slate card's detail), `api/league_feed.py`
   (the app's league reader), `api/sim_jobs.py` (the run-job registry),
