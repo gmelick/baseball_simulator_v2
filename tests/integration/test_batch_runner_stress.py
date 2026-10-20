@@ -1,18 +1,17 @@
 """
 tests/integration/test_batch_runner_stress.py
 ====================================================
-SIM-404 — stress / concurrency / leak suite for the persistent BatchRunner and
-the /simulate request path.
+The stress / concurrency / leak suite for the persistent BatchRunner and the
+/simulate request path.
 
 WHAT THIS COVERS
 ----------------
-SIM-403 lifted the artificial ``SIM_RUNNER_WORKERS=1`` cap so the lifespan
-BatchRunner spawns a real multi-worker ProcessPool. SIM-404 is the suite that
+The lifespan BatchRunner spawns a real multi-worker ProcessPool. This suite
 exercises that machinery under load and asserts the invariants a long-lived
 production API needs:
 
 1. **Warm-pool stability** — N sequential requests share the SAME warm
-   ``ProcessPoolExecutor`` (SIM-360 AC). No re-fork per request.
+   ``ProcessPoolExecutor``. No re-fork per request.
 2. **No worker / subprocess leak** — the live child count is stable across a
    batch of requests; the pool doesn't drift upward over many runs.
 3. **No FD leak** — Python file descriptor count is stable across a batch.
@@ -29,22 +28,23 @@ production API needs:
 WHAT IT IS NOT
 --------------
 These are sandbox-runnable in-process tests using FastAPI's ``TestClient`` +
-``ThreadPoolExecutor`` and the SIM-355 no-DB ``rng_driven_machine_factory``.
-They do NOT require Postgres / DuckDB / FAISS / Redis. They are timing-aware
+``ThreadPoolExecutor`` and the no-DB ``rng_driven_machine_factory``.
+They do NOT require Postgres / DuckDB / Redis. They are timing-aware
 but NOT a perf gate (the 2 s / 30 s SLA lives in
 ``tests/performance/bench_api_simulate.py``). They CATCH leaks and
-concurrency bugs that the existing per-request unit tests can't reach because
+concurrency bugs that the per-request unit tests can't reach because
 those tests run a single request through ``max_workers=1`` (in-process).
 
 The pool sizes here are intentionally MODEST (2-4 workers, 30 logical
-requests, small ``n_iterations``) so the suite is bounded; the real
-production validation is the SIM-372 perf gate + the SIM-404 numbers under
-``PERF_STRICT``-style load runs on target hardware.
+requests, small ``n_iterations``) so the suite is bounded; the served-latency
+check is the perf gate in ``tests/performance/bench_api_simulate.py``.
 
-The whole class is ``@pytest.mark.slow``: spawning a real ProcessPool +
+Every class is ``@pytest.mark.slow``: spawning a real ProcessPool +
 running tens of full simulate requests across worker subprocesses puts these
-well outside the fast unit lane's 30 s timeout. CI runs them in the
-SIM-418 slow lane.
+well outside the fast unit lane's 30 s timeout. No CI job selects them: the
+CI slow lane runs ``tests/unit/`` only, and the integration lanes select
+``-m integration``, which these tests do not carry. Run them by hand with
+``pytest tests/integration/test_batch_runner_stress.py``.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def _spec() -> GameSpec:
 
 def _build_app(runner: BatchRunner, cache: InMemoryCache | None = None) -> FastAPI:
     """Tiny FastAPI app with the real games router and a shared BatchRunner
-    attached as ``app.state.sim_runner`` — the SIM-360 long-lived-runner path
+    attached as ``app.state.sim_runner`` — the long-lived-runner path
     /simulate exercises in production."""
     app = FastAPI()
     app.include_router(games_router)
@@ -196,7 +196,7 @@ def _child_process_count(executor) -> int:
 
 @pytest.mark.slow
 class TestWarmPoolStability:
-    """N sequential /simulate requests share the same warm pool (SIM-360 AC).
+    """N sequential /simulate requests share the same warm pool.
 
     Asserts the persistent BatchRunner exposed at ``app.state.sim_runner``
     creates ONE ``ProcessPoolExecutor`` on first use and that no later request
@@ -318,7 +318,7 @@ class TestNoResourceLeak:
 @pytest.mark.slow
 class TestConcurrentSimulateRequests:
     """N concurrent /simulate requests against the shared runner must all
-    serve 200s with self-consistent SIM-327 summaries. No request is starved,
+    serve 200s with self-consistent summaries. No request is starved,
     no request returns truncated/null data, no race on the shared cache.
     """
 

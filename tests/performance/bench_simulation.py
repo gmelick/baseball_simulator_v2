@@ -1,19 +1,22 @@
 """
 bench_simulation.py
 ===================
-SIM-118 — Performance benchmark harness.
+The performance benchmark harness.
 
-This is the canonical performance baseline that all downstream work measures
-against. It uses ``pytest-benchmark`` to time the project's hot paths and
-records the timings so CI can track regressions over time.
+This is the performance baseline that downstream work measures against. It
+uses ``pytest-benchmark`` to time the project's hot paths and records the
+timings so CI can track regressions over time.
 
 Hot paths benchmarked
 ----------------------
   Bench 1  pitcher engine ``query()``           target  p50 <= 5ms,  p99 <= 20ms
   Bench 2  arsenal cache lookup (all-vs-one)     target  <= 0.1ms
   Bench 3  GMM fit per-season (single fit)       target  <= 10min (CI-scale)
-  Bench 4  Phase 4 sim-loop per-pitch step       target  <= 1.23ms/pitch (SIM-119)
-  Bench 5  Phase 4 batch-runner throughput       target  <= 0.37s/game (SIM-119)
+  Bench 4  sim-loop per-pitch step               target  <= 1.23ms/pitch (time budget, SIM-119)
+  Bench 5  batch-runner throughput               target  <= 0.37s/game (time budget, SIM-119)
+
+The time budget is the sim loop's per-step allocation
+(docs/archive/perf/2026-06-03-sim-loop-time-budget.md, SIM-119).
 
 Threshold philosophy — soft locally, hard in CI
 ------------------------------------------------
@@ -58,7 +61,7 @@ from similarity.engines.pitcher_similarity import (
 )
 
 # ---------------------------------------------------------------------------
-# Performance thresholds (documented targets — SIM-118 acceptance criteria)
+# Performance thresholds (the documented targets)
 #
 # These encode the latency/throughput budgets the simulator must hold.  They
 # are asserted as HARD failures only under PERF_STRICT=1 (CI on dedicated
@@ -67,8 +70,9 @@ from similarity.engines.pitcher_similarity import (
 # ---------------------------------------------------------------------------
 
 # Bench 1 — pitcher engine query() latency.
-#   The simulation issues one query() per pitcher per iteration.  The
-#   vectorized RBF + cached W2 path must stay interactive.
+#   The nightly bundle build issues one query() per pitcher-season to fill the
+#   pitcher similarity matrix, and the similarity API issues one per request.
+#   The vectorized RBF + cached W2 path must stay interactive.
 QUERY_P50_TARGET_MS = 5.0  # median query() latency budget
 QUERY_P99_TARGET_MS = 20.0  # tail (99th pct) query() latency budget
 
@@ -86,30 +90,30 @@ ARSENAL_CACHE_LOOKUP_TARGET_MS = 0.1  # warm all-vs-one lookup budget
 GMM_FIT_BUDGET_SECONDS = 10 * 60.0  # 10 min — CI-scale full-season target
 GMM_SINGLE_FIT_TARGET_MS = 5_000.0  # one small synthetic fit budget (5s, very loose)
 
-# Bench 4 — Phase 4 sim-loop per-pitch step (SIM-119 §3 per-pitch budget).
-#   The SIM-119 budget allocates ~1.233 ms across the 8 per-pitch loop steps
-#   (docs/archive/perf/2026-06-03-sim-loop-time-budget.md §3).  ~81% of that is the
-#   pitcher query() (Bench 1), which is DB/FAISS-backed and NOT exercised here:
-#   this bench times the *count machine + outcome determination + fielding/
-#   baserunning + state-update/loop-control* steps (1, 4, 5, 6, 7, 8) of
-#   StateMachine.step_pitch with the sampler call replaced by an injected
-#   fixed-play bundle (the SIM-486 no-DB seam).  Those steps' combined
-#   SIM-119 allocation is ~233 µs/pitch (everything except step 2/query and
-#   step 3/sampler).  We assert against the FULL ~1.23 ms per-pitch envelope so
-#   the bench is a true budget gate: the in-loop work it measures must stay well
-#   inside the whole-pitch budget (it has the query()+sampler ~1.0 ms of slack).
-SIM_LOOP_PER_PITCH_BUDGET_MS = 1.233  # SIM-119 §3 per-pitch roll-up (≈1.23 ms)
+# Bench 4 — sim-loop per-pitch step (the time budget's per-pitch budget, §3).
+#   The time budget allocates ~1.233 ms across the 8 per-pitch loop steps
+#   (docs/archive/perf/2026-06-03-sim-loop-time-budget.md §3).  It assigns ~81%
+#   of that to the pitcher query() (Bench 1), which this bench does NOT
+#   exercise.  The bench times the *count machine + outcome determination +
+#   fielding/baserunning + state-update/loop-control* steps (1, 4, 5, 6, 7, 8)
+#   of StateMachine.step_pitch.  The bench supplies each pitch outcome, and the
+#   contact path draws from a fixed-play bundle (the no-DB synthetic bundle).
+#   Those steps' combined allocation is ~233 µs/pitch (everything except step
+#   2/query and step 3/sampler).  We assert against the FULL ~1.23 ms per-pitch
+#   envelope so the bench is a true budget gate: the in-loop work it measures
+#   must stay well inside the whole-pitch budget (it has the query()+sampler
+#   ~1.0 ms of slack).
+SIM_LOOP_PER_PITCH_BUDGET_MS = 1.233  # the time budget's per-pitch roll-up (§3, ≈1.23 ms)
 
-# Bench 5 — Phase 4 batch-runner per-game throughput (SIM-119 §4.2).
-#   The single-game SLA is 2 s; the SIM-119 *budgeted* per-game roll-up is
-#   ~0.37 s (1.233 ms × 300 pitches).  Since the per-tile fallback was deleted
-#   (SIM-486), the no-DB batch game is a real game.  The production
-#   StateMachine plays it over the in-memory league bundle
+# Bench 5 — batch-runner per-game throughput (the time budget, §4.2).
+#   The single-game SLA is 2 s; the time budget's per-game roll-up is
+#   ~0.37 s (1.233 ms × 300 pitches).  The no-DB batch game is a real game.
+#   The production StateMachine plays it over the in-memory league bundle
 #   (simulation/synthetic_bundle.py): it records real outs and ends by its own
 #   rules, at about 300 pitches.  The bench checks the per-game wall time
 #   against this budget.  It also checks the per-pitch throughput against the
-#   SIM-119 per-pitch budget.  Both are hard gates under PERF_STRICT_LOOP.
-SIM_GAME_BUDGET_SECONDS = 0.37  # SIM-119 §4.2 budgeted per-game roll-up
+#   per-pitch budget.  Both are hard gates under PERF_STRICT_LOOP.
+SIM_GAME_BUDGET_SECONDS = 0.37  # the time budget's per-game roll-up (§4.2)
 
 # When set, latency/throughput targets are asserted as hard failures.
 PERF_STRICT = os.environ.get("PERF_STRICT", "") == "1"
@@ -154,7 +158,7 @@ def _check_threshold(name: str, measured: float, target: float, unit: str) -> No
 
 
 def _check_loop_threshold(name: str, measured: float, target: float, unit: str) -> None:
-    """Assert a SIM-119 loop micro-budget — HARD only under PERF_STRICT_LOOP.
+    """Assert a sim-loop micro-budget — HARD only under PERF_STRICT_LOOP.
 
     Identical to :func:`_check_threshold` but gated on :data:`PERF_STRICT_LOOP`
     (PERF_STRICT *and* PERF_STRICT_SANDBOX) rather than bare ``PERF_STRICT``.
@@ -309,10 +313,9 @@ def _build_synthetic_engine(
 def test_bench_pitcher_query(benchmark):
     """Bench 1: time PitcherSimilarityEngine.query() (warm arsenal cache).
 
-    Measures the per-iteration simulation hot path: scoring a query pitcher
-    against the entire same-handedness partition.  We warm the W2 cache once
-    so the benchmarked path reflects the steady-state (iterations 2..N) cost,
-    which is what dominates a 100-iteration simulation.
+    Measures scoring a query pitcher against the entire same-handedness
+    partition.  We warm the W2 cache once so the benchmarked path reflects the
+    steady-state cost (every query after the first).
 
     Targets: p50 <= QUERY_P50_TARGET_MS, p99 <= QUERY_P99_TARGET_MS
     (asserted hard only under PERF_STRICT=1).
@@ -347,9 +350,9 @@ def test_bench_arsenal_cache_lookup(benchmark):
 
     Once the W2 cache is fully warm, scoring a query against the partition is
     just N dict lookups (no W2 compute).  This isolates that pure-lookup cost,
-    which must be negligible (<= ARSENAL_CACHE_LOOKUP_TARGET_MS) so that the
-    steady-state simulation iteration is bounded by the vectorized RBF math,
-    not cache overhead.
+    which must be negligible (<= ARSENAL_CACHE_LOOKUP_TARGET_MS) so that a
+    steady-state query is bounded by the vectorized RBF math, not cache
+    overhead.
 
     Target: <= ARSENAL_CACHE_LOOKUP_TARGET_MS (hard only under PERF_STRICT=1).
     """
@@ -445,18 +448,18 @@ def test_bench_gmm_fit_single_season(benchmark):
 
 
 # ---------------------------------------------------------------------------
-# Bench 4 — Phase 4 simulation-loop per-pitch step (SIM-335 / SIM-119)
+# Bench 4 — the simulation-loop per-pitch step (the time budget, SIM-119)
 #
 # Times ONE StateMachine.step_pitch — the §2 step-1→step-8 per-pitch loop body
-# — with NO live DuckDB/FAISS.  The DB/FAISS-backed steps (step 2 pitcher
-# query() / step 3 sampler) are replaced by the SIM-319/320 injection seam: the
-# machine is driven in count-machine-only mode (an explicit pitch_outcome is
-# supplied per pitch) and contact is resolved through an injected PlayResolver
-# that returns a deterministic FieldingSignal.  This exercises the count machine
-# (§5.1, incl. the SIM-056 two-strike-foul absorbing rule), outcome
-# determination (step 4), fielding/baserunning resolution (steps 6/7 via
-# resolve_runs), and state-update / half-inning loop control (step 8) — exactly
-# the in-loop work SIM-119 §3 allocates the non-query()/non-sampler budget to.
+# — with NO live DuckDB.  The machine runs in count-machine-only mode: the
+# bench supplies an explicit pitch_outcome per pitch, so no pitch draw runs.
+# Contact draws from a fixed-play bundle in which every play is a field out
+# (simulation/synthetic_bundle.py).  This exercises the count machine (§5.1,
+# incl. the two-strike-foul absorbing rule: a two-strike foul keeps the count),
+# outcome determination (step 4), fielding/baserunning resolution (steps 6/7
+# via resolve_runs), and state-update / half-inning loop control (step 8).
+# That is the in-loop work the time budget's §3 funds outside query() and the
+# sampler.
 # ---------------------------------------------------------------------------
 
 
@@ -478,9 +481,9 @@ _BENCH4_OUTCOME_CYCLE = (
 
 @pytest.mark.benchmark(max_time=1.0)
 def test_bench_phase4_simulation_loop(benchmark):
-    """Bench 4: time ONE StateMachine.step_pitch (the SIM-119 per-pitch loop body).
+    """Bench 4: time ONE StateMachine.step_pitch (the per-pitch loop body).
 
-    Drives the SIM-316 state machine through a representative outcome cycle with
+    Drives the state machine through a representative outcome cycle with
     NO live DB (count-machine-only pitches + a fixed-play out bundle for the
     contact path), so the benched call is the real per-pitch step (count machine,
     outcome determination, fielding/baserunning via resolve_runs, state update +
@@ -488,10 +491,11 @@ def test_bench_phase4_simulation_loop(benchmark):
     machine drives the game to completion so the benched step always operates on
     a live (in-play) state.
 
-    Target: per-pitch step <= SIM_LOOP_PER_PITCH_BUDGET_MS (SIM-119 §3, ~1.23 ms;
-    the budget includes the DB-backed query()+sampler ~1.0 ms NOT timed here, so
-    this in-loop work has ample slack).  Asserted HARD only under PERF_STRICT_LOOP
-    (PERF_STRICT=1 AND PERF_STRICT_SANDBOX=1 — CI hardware); soft elsewhere.
+    Target: per-pitch step <= SIM_LOOP_PER_PITCH_BUDGET_MS (the time budget,
+    SIM-119 §3, ~1.23 ms; the budget includes the query()+sampler ~1.0 ms NOT
+    timed here, so this in-loop work has ample slack).  Asserted HARD only
+    under PERF_STRICT_LOOP (PERF_STRICT=1 AND PERF_STRICT_SANDBOX=1 — CI
+    hardware); soft elsewhere.
     """
     from simulation.game_state import GameState
     from simulation.sim_loop import StateMachine
@@ -533,34 +537,32 @@ def test_bench_phase4_simulation_loop(benchmark):
 
 
 # ---------------------------------------------------------------------------
-# Bench 5 — Phase 4 batch-runner throughput (SIM-335 / SIM-332 / SIM-119 §4)
+# Bench 5 — the batch-runner throughput (the time budget, SIM-119 §4)
 #
-# Times the SIM-332 BatchRunner fan-out/fan-in for a small N-game Monte-Carlo
-# batch on the in-process (max_workers=1) path, with NO live DB/FAISS.  The
-# picklable no-DB factory (simulation.batch_runner.rng_driven_machine_factory)
-# builds the production StateMachine over a FullPoolSampler.  The sampler reads
-# the in-memory league bundle (simulation/synthetic_bundle.py), the seam that
-# replaced the per-tile fallback (SIM-486).  Every pitch and every batted ball
-# is a real full-pool draw.  The loop records real outs.  The game ends by its
-# own rules.  This is the real batch hot path (derive seeds -> simulate_game
-# per iteration -> GameSimSummary.from_results).  The bench reports per-pitch
-# throughput, so the figure is comparable to the SIM-119 per-pitch budget
-# whatever the game length.
+# Times the BatchRunner fan-out/fan-in for a small N-game Monte-Carlo batch on
+# the in-process (max_workers=1) path, with NO live DB.  The picklable no-DB
+# factory (simulation.batch_runner.rng_driven_machine_factory) builds the
+# production StateMachine over a FullPoolSampler.  The sampler reads the
+# in-memory league bundle (simulation/synthetic_bundle.py).  Every pitch and
+# every batted ball is a real full-pool draw.  The loop records real outs.  The
+# game ends by its own rules.  This is the real batch hot path (derive seeds ->
+# simulate_game per iteration -> GameSimSummary.from_results).  The bench
+# reports per-pitch throughput, so the figure is comparable to the per-pitch
+# budget whatever the game length.
 # ---------------------------------------------------------------------------
 
 # Bench 5 plays a real game, so each side needs a nine-man batting order.  The
 # loop rotates the batter through it.  It seats a batter who reaches base by
 # his id.  Without a lineup the batter id is None, and the first hit trips the
-# SIM-500 base guard ("Bases.1B has a negative runner id: -1").  The two
-# lineups mirror the spec that tests/unit/test_batch_runner.py passes to the
-# runner (SIM-552).
+# base guard ("Bases.1B has a negative runner id: -1").  The two lineups
+# mirror the spec that tests/unit/test_batch_runner.py passes to the runner.
 _BENCH5_AWAY_LINEUP = list(range(101, 110))
 _BENCH5_HOME_LINEUP = list(range(201, 210))
 
 
 @pytest.mark.benchmark(min_rounds=3, max_time=2.0, warmup=False)
 def test_bench_phase4_batch_runner(benchmark):
-    """Bench 5: time a small no-DB Monte-Carlo batch via the SIM-332 BatchRunner.
+    """Bench 5: time a small no-DB Monte-Carlo batch via the BatchRunner.
 
     Runs ``_BATCH_N`` games in-process (max_workers=1 — fast, deterministic, no
     fork/pickle round-trip) through the no-DB factory, then aggregates to a
@@ -570,10 +572,10 @@ def test_bench_phase4_batch_runner(benchmark):
     (seed derivation -> simulate_game per game -> summary aggregation).
     Reported as per-game wall time and as per-pitch throughput (total wall /
     total pitches across the batch).  Each figure is asserted against its
-    SIM-119 budget.
+    time budget (SIM-119).
 
-    Targets: per-game wall <= SIM_GAME_BUDGET_SECONDS (SIM-119 §4.2) and
-    per-pitch throughput <= SIM_LOOP_PER_PITCH_BUDGET_MS (SIM-119 §3).
+    Targets: per-game wall <= SIM_GAME_BUDGET_SECONDS (the time budget, §4.2)
+    and per-pitch throughput <= SIM_LOOP_PER_PITCH_BUDGET_MS (§3).
     Both HARD only under PERF_STRICT_LOOP (CI hardware); soft otherwise.
     """
     from simulation.batch_runner import BatchRunner, GameSpec, _run_one, derive_seed
@@ -619,10 +621,10 @@ def test_bench_phase4_batch_runner(benchmark):
 
     batch_median_s = benchmark.stats.stats.median
     per_game_s = batch_median_s / _BATCH_N
-    # Per-game wall against the SIM-119 §4.2 budgeted ~0.37 s/game: hard under
+    # Per-game wall against the time budget's ~0.37 s/game (§4.2): hard under
     # PERF_STRICT_LOOP, soft elsewhere.
     _check_loop_threshold("batch per-game wall", per_game_s, SIM_GAME_BUDGET_SECONDS, "s")
-    # Per-pitch throughput against the SIM-119 §3 per-pitch budget (same gate).
+    # Per-pitch throughput against the time budget's per-pitch budget (§3, same gate).
     if total_pitches > 0:
         per_pitch_ms = (batch_median_s / total_pitches) * 1_000.0
         _check_loop_threshold(

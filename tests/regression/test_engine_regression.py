@@ -1,28 +1,25 @@
 """
-tests/regression/test_engine_regression.py — SIM-147, narrowed by SIM-542
-=========================================================================
-Similarity engine INVARIANT gate.
+The similarity engine INVARIANT gate.
 
 WHAT THIS CHECKS, AND WHAT IT DELIBERATELY DOES NOT
 ---------------------------------------------------
 It checks the properties an engine's scores must satisfy no matter how the
-model is tuned. It does NOT check that the scores are the same as last week.
+model is tuned. It does NOT check that the scores match a stored snapshot.
 
-The suite used to do both. The second half was a set of committed snapshots —
-the top five comparables and their exact scores for a handful of queries — and
-any change to any weight, feature or bandwidth failed them. That is the wrong
-alarm for this platform: the model is under continuous deliberate change, so a
-score moving is the normal case rather than the signal. In practice the failure
-meant "regenerate the snapshot", which is a ritual that teaches people to
-regenerate without reading, and a tripwire nobody reads is not a tripwire.
-Owner ruling 2026-09-10: the snapshots are gone.
+The gate holds no snapshots (owner ruling 2026-09-10). A snapshot of the top
+comparables and their exact scores fails on any change to any weight, feature
+or bandwidth. That is the wrong alarm for this platform: the model is under
+continuous deliberate change, so a score moving is the normal case rather than
+the signal. The fix for such a failure is "regenerate the snapshot", a ritual
+that teaches people to regenerate without reading. A tripwire nobody reads is
+not a tripwire.
 
-What replaces them is nothing, on purpose. The behaviour that actually matters
-is graded downstream, by the acceptance lane, against the play pool's own
-totals — an outcome test rather than a memory of last week's numbers.
+The behaviour that matters is graded downstream, by the acceptance lane,
+against the play pool's own totals: an outcome test rather than a memory of
+last week's numbers.
 
-WHAT SURVIVES
--------------
+THE INVARIANTS
+--------------
   * Identical profiles score 1.0 (or the max the shrinkage allows)
   * Scores are bounded [0, 1]
   * Scoring is symmetric: score(A->B) == score(B->A)
@@ -33,11 +30,11 @@ Every one of these holds for ANY weights and ANY data, so a deliberate model
 change never trips them, and a genuine defect — a sign error, a NaN leaking out
 of a kernel — still does.
 
-The weight-constant checks went the same way as the snapshots (owner ruling
-2026-09-10). Asserting a published split of 45/20/12/8 locks a modelling
-DECISION rather than a property, and every engine here is reweighted on
-purpose; each sub-score module already asserts its own weights sum to 1.0 at
-import time, which is the part that is genuinely an invariant.
+The gate does not assert a published weight split either (owner ruling
+2026-09-10). Asserting a split of 45/20/12/8 locks a modelling DECISION rather
+than a property, and every engine here is reweighted on purpose. Each
+sub-score module asserts at import time that its own weights sum to 1.0, and
+that sum is the real invariant.
 
 FIXTURE ENGINES
 ---------------
@@ -209,9 +206,9 @@ class TestCatcherEngineProperties:
         assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
 
     def test_four_sub_scores_present(self, catcher_engine):
-        """SIM-408: catcher composite is a 4-sub-score defensive blend
-        (Offense TRIMmed). Framing + Blocking + Throwing/Execution + Deterrence,
-        renormalized over 0.85.
+        """The catcher composite blends four defensive sub-scores: framing,
+        blocking, throwing/execution and deterrence. Their weights renormalize
+        over 0.85, because the composite carries no offense sub-score.
         """
         ids = catcher_engine.profile_ids()
         cid, season = ids[0]
@@ -265,8 +262,8 @@ class TestPitcherStealEngineProperties:
         assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
 
     def test_outcome_sub_score_present(self, pitcher_steal_engine):
-        # SIM-408: the Delivery + Pickoff sub-scores were removed (Statcast
-        # publishes neither); the engine is now outcome-only.
+        # The engine scores outcomes only: Statcast publishes no delivery-time
+        # or pickoff columns to build those sub-scores from.
         ids = pitcher_steal_engine.profile_ids()
         pid, season = ids[0]
         results = pitcher_steal_engine.query(pid, season)

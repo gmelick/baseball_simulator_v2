@@ -1,6 +1,6 @@
 """
-Integration test fixtures — SIM-145
-====================================
+Integration test fixtures
+=========================
 Provides session-scoped testcontainers fixtures for PostgreSQL 15 and Redis 7.
 Each container starts once per test session, drastically reducing overhead
 versus per-test containers.
@@ -60,8 +60,8 @@ def _docker_available() -> bool:
     testcontainers.  When the host has no Docker (e.g., Windows without
     Docker Desktop running, or a sandboxed CI without DinD) the spin-up
     raises an opaque Connection-refused error during the *first fixture
-    request*, which pytest then reports as 21 collection-time ERRORS
-    instead of clean skips.  Probing for `docker version` up-front lets
+    request*, which pytest then reports as one collection-time ERROR per
+    test instead of clean skips.  Probing for `docker version` up-front lets
     us emit a single, descriptive SKIP per test instead.
     """
     if not _TESTCONTAINERS_AVAILABLE:

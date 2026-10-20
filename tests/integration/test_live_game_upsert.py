@@ -1,25 +1,25 @@
 """
-Integration test: live-pipeline game upsert supplies season — SIM-438
-=====================================================================
+Integration test: the live-pipeline game upsert supplies the season
+===================================================================
 Drives the real ``LiveIngestionPipeline._upsert_game_record()``
 (pipeline/live/live_ingestion_pipeline.py) against the migrated schema.
 
-The bug (SIM-438)
------------------
-``raw.games.season`` is ``INTEGER NOT NULL`` (migration 0001, never relaxed) and
-is half of all three composite foreign keys::
+Why the season matters
+----------------------
+``raw.games.season`` is ``INTEGER NOT NULL`` (migration 0001) and is half of
+all three composite foreign keys::
 
     FOREIGN KEY (venue_id, season)     REFERENCES raw.venues(venue_id, season)
     FOREIGN KEY (home_team_id, season) REFERENCES raw.teams(team_id, season)
     FOREIGN KEY (away_team_id, season) REFERENCES raw.teams(team_id, season)
 
-but ``_upsert_game_record()`` never supplied it, so **every** INSERT of a game
-the pipeline had not seen before raised ``NotNullViolationError``.  The failure
-was silent because the call site is fire-and-forget
-(``asyncio.create_task(self._upsert_game_record(game))``) — the exception never
-propagated.  The ``ON CONFLICT (game_pk) DO UPDATE`` path kept working for games
-the historical ETL had already loaded, so status transitions looked healthy
-while no new game was ever created.
+so ``_upsert_game_record()`` must supply it. Without it, **every** INSERT of a
+game the pipeline has not seen before raises ``NotNullViolationError``.  That
+failure is silent, because one call site is fire-and-forget
+(``asyncio.create_task(self._upsert_game_record(game))``): the exception never
+propagates.  The ``ON CONFLICT (game_pk) DO UPDATE`` path keeps working for
+games the historical ETL already loaded, so status transitions look healthy
+while no new game is created.
 
 What this covers
 ----------------
@@ -174,8 +174,8 @@ class TestUpsertGameRecordSeason:
     async def test_new_game_is_inserted_with_season_from_the_api_string(
         self, live_pipeline: LiveIngestionPipeline, asyncpg_pool
     ) -> None:
-        """The regression: before SIM-438 this raised NotNullViolationError and
-        left raw.games empty for every game the pipeline had not seen before."""
+        """A missing season raises NotNullViolationError and leaves raw.games
+        empty for every game the pipeline has not seen before."""
         game_pk = _GAME_PKS[0]
         assert await _get_game(asyncpg_pool, game_pk) is None
 

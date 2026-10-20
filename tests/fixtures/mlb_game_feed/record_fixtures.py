@@ -1,4 +1,4 @@
-"""Record trimmed league game feeds for the SIM-519 Part I tests.
+"""Record trimmed league game feeds for the tests that parse the feed.
 
 Run by hand from the repo root: ``python tests/fixtures/mlb_game_feed/record_fixtures.py NAME PK ...``
 (add ``--plays`` to keep every play, read with ``hydrate=alignment``, for the what-if tests).

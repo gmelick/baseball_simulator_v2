@@ -1,19 +1,18 @@
 """
 bench_api_simulate.py
 ============================
-SIM-372 — End-to-end ``GET /api/games/{game_pk}/simulate`` latency perf gate.
+The end-to-end ``GET /api/games/{game_pk}/simulate`` latency perf gate.
 
 WHY THIS EXISTS — the request-path gap (vs bench_simulation.py)
 --------------------------------------------------------------
-The canonical perf baseline ``tests/performance/bench_simulation.py``
-(SIM-118 / SIM-335) times the RUNNER hot paths only — the pitcher engine
-``query()``, the arsenal cache, a single ``StateMachine.step_pitch``, and the
-``BatchRunner`` fan-out/fan-in.  It deliberately does NOT cross the FastAPI
-request boundary, so the published SLA budgets were never measured against the
-ACTUAL served latency a client sees.
+The perf baseline ``tests/performance/bench_simulation.py`` times the RUNNER
+hot paths only: the pitcher engine ``query()``, the arsenal cache, a single
+``StateMachine.step_pitch``, and the ``BatchRunner`` fan-out/fan-in. It does
+NOT cross the FastAPI request boundary, so it does not measure the served
+latency a client sees.
 
-SIM-372 closes that gap: this bench times the FULL HTTP request path of the
-production simulate endpoint via Starlette's ``TestClient`` —
+This bench times the FULL HTTP request path of the production simulate
+endpoint via Starlette's ``TestClient``:
 
     HTTP dispatch
       -> resolve_factory_ref + lineup resolve (-> GameState)
@@ -21,11 +20,11 @@ production simulate endpoint via Starlette's ``TestClient`` —
       -> GameSimSummaryModel serialization (numpy-free JSON)
       -> the SimulateResponse envelope back over the wire
 
-— for both a SINGLE-game request (small ``n_iterations``) and a 100-iteration
-BATCH request, and records the served median against the documented SLA.
+It times a SINGLE-game request (small ``n_iterations``) and a 100-iteration
+BATCH request, and records the served median against the SLA.
 
-THE SLA (SIM-372 acceptance criteria)
--------------------------------------
+THE SLA
+-------
   * a SINGLE game simulate request  < 2 s   (``SINGLE_GAME_SLA_S``)
   * a 100-iteration BATCH request    < 30 s  (``BATCH_SLA_S``)
 
@@ -36,39 +35,39 @@ Threshold philosophy — soft locally, hard in CI (mirrors bench_simulation.py)
 -----------------------------------------------------------------------------
 The latency targets are *hardware dependent* (see bench_simulation.py's module
 docstring).  Asserting them unconditionally would make this suite flaky on a
-shared/loaded sandbox or a developer laptop.  So, exactly like the SIM-118
-harness:
+shared/loaded sandbox or a developer laptop.  So, exactly like
+bench_simulation.py:
 
   * By default the benches RUN the full request path and RECORD the served
     latency via the ``benchmark(...)`` fixture, then emit a SOFT, non-fatal
     note (``warnings.warn`` + print) when the served median exceeds the SLA.
     The suite is therefore always green here.
-  * When ``PERF_STRICT=1`` (set by the dedicated-hardware perf CI workflow) the
-    SLA is asserted as a HARD failure so a real regression fails the gate.
+  * When ``PERF_STRICT=1`` (set by the weekly perf CI workflow) the SLA is
+    asserted as a HARD failure so a real regression fails the gate.
 
 THE NO-DB CAVEAT — what the sandbox figure means (and does not)
 ---------------------------------------------------------------
-This bench runs under the SIM-355 factory-ref testability seam with the no-DB
-``simulation.batch_runner:rng_driven_machine_factory`` (the same seam the unit
-tests use), and a monkeypatched ``resolve_game_state`` returning a fixed small
-GameState — so it runs with NO live Postgres / DuckDB / FAISS.  That means the
-sandbox-measured latency is a LOWER BOUND / smoke for the SLA: it exercises the
-real request -> runner -> serialize -> response path and its Python/serialize
-overhead, but the per-pitch cost of the real DB/FAISS-backed sampler+query
-(~1 ms/pitch, see bench_simulation.py Bench 1/4) is NOT included.
+This bench sets the factory-ref seam (``app.state.sim_factory_ref``) to the
+no-DB ``simulation.batch_runner:rng_driven_machine_factory``, the same seam the
+unit tests use. That factory builds the production ``StateMachine`` over the
+small in-memory synthetic bundle. A monkeypatched ``resolve_game_state``
+returns a fixed small GameState. So the bench runs with NO live Postgres or
+DuckDB and no artifact bundle on disk. The measured latency is therefore a
+LOWER BOUND / smoke for the SLA. It exercises the real request -> runner ->
+serialize -> response path and its Python/serialize overhead. It does NOT
+include the per-pitch cost of the sampler over the full production bundle
+(~1 ms/pitch, see bench_simulation.py Bench 1/4).
 
-The AUTHORITATIVE gate therefore runs ON TARGET HARDWARE with the real
-DB-backed production factory: a CI perf job (added by the orchestrator to the
-perf workflow) stands up the DB-backed app, points the endpoint at the
-production factory, sets ``PERF_STRICT=1``, and runs this file so the 2s/30s
-SLA is enforced as a hard failure against true served latency.  The sandbox run
-remains a fast, always-green structural + lower-bound smoke.
+The weekly perf workflow (``.github/workflows/perf-weekly.yml``) runs this file
+with ``PERF_STRICT=1`` on a CI runner, under the same no-DB factory, so it
+hard-gates the lower bound. No job runs this file against the real DB-backed
+production factory.
 
 Run locally (always green — records + soft-notes):
     pytest tests/performance/bench_api_simulate.py --benchmark-only
 Structure-only (CI collect/verify, no timing):
     pytest tests/performance/bench_api_simulate.py --benchmark-disable
-Run as the SLA gate (dedicated hardware + DB-backed factory):
+Run as the SLA gate (hard failures):
     PERF_STRICT=1 pytest tests/performance/bench_api_simulate.py --benchmark-only
 """
 
@@ -86,11 +85,11 @@ from api.routes.games import router as games_router
 from simulation.game_state import GameState
 
 # ---------------------------------------------------------------------------
-# SLA constants (SIM-372 acceptance criteria — the served-latency budget).
+# SLA constants (the served-latency budget).
 #
-# Asserted as HARD failures only under PERF_STRICT=1 (the dedicated-hardware
-# perf CI job, against the REAL DB-backed factory); otherwise recorded +
-# soft-warned so the harness is always green in shared sandboxes / laptops.
+# Asserted as HARD failures only under PERF_STRICT=1 (the weekly perf CI job);
+# otherwise recorded + soft-warned so the harness is always green in shared
+# sandboxes / laptops.
 # ---------------------------------------------------------------------------
 
 #: A single-game simulate request must serve in under 2 s end-to-end.
@@ -99,8 +98,8 @@ SINGLE_GAME_SLA_S = 2.0
 #: A 100-iteration batch simulate request must serve in under 30 s end-to-end.
 BATCH_SLA_S = 30.0
 
-#: The 100-iteration batch the production endpoint defaults to (SIM-355: the
-#: /simulate route's ``n_iterations`` default is 100). The BATCH bench uses this.
+#: The 100-iteration batch the production endpoint defaults to (the /simulate
+#: route's ``n_iterations`` default is 100). The BATCH bench uses this.
 BATCH_N_ITERATIONS = 100
 
 #: A small single-game iteration count — the "one game" served-latency probe.
@@ -108,17 +107,16 @@ BATCH_N_ITERATIONS = 100
 #: request -> runner -> serialize -> response path at least once per round.
 SINGLE_N_ITERATIONS = 1
 
-#: The no-DB, picklable rng factory — the SIM-355 testability seam the endpoint's
-#: ``app.state.sim_factory_ref`` is set to so /simulate runs a REAL (fast, no
-#: live sampler/DuckDB) batch. The DB-backed production factory replaces this on
-#: target hardware where the authoritative SLA gate runs.
+#: The no-DB, picklable rng factory. The bench sets the endpoint's
+#: ``app.state.sim_factory_ref`` to it, so /simulate runs a REAL batch of the
+#: production loop over the in-memory synthetic bundle (fast, no DuckDB).
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 #: A stable game_pk for the benched requests.
 BENCH_GAME_PK = 745001
 
-#: When set, the SLA is asserted as a HARD failure (the dedicated-hardware perf
-#: CI workflow). Mirrors bench_simulation.py's PERF_STRICT switch.
+#: When set, the SLA is asserted as a HARD failure (the weekly perf CI
+#: workflow). Mirrors bench_simulation.py's PERF_STRICT switch.
 PERF_STRICT = os.environ.get("PERF_STRICT", "") == "1"
 
 
@@ -131,9 +129,9 @@ def _check_sla(name: str, measured_s: float, target_s: float) -> None:
     """Assert the served-latency SLA under PERF_STRICT, else soft-warn.
 
     Keeps the harness always-green on shared hardware (sandbox / laptop) while
-    letting the dedicated-hardware perf CI job (PERF_STRICT=1, real DB-backed
-    factory) enforce the 2s/30s SLA as a hard regression gate. Identical
-    philosophy to bench_simulation.py's ``_check_threshold``.
+    letting the weekly perf CI job (PERF_STRICT=1) enforce the 2s/30s SLA as a
+    hard regression gate. Identical philosophy to bench_simulation.py's
+    ``_check_threshold``.
     """
     ok = measured_s <= target_s
     msg = (
@@ -196,8 +194,9 @@ def _build_app(*, pool, cache=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
     Mirrors test_api_games._build_app: includes the games router and attaches
     ``pg_pool`` (so _get_pool does not 503), ``sim_cache`` (None => BatchRunner
     picks its own backend), and ``sim_factory_ref`` (the no-DB testability seam).
-    No ``sim_duckdb`` is attached, so the SIM-357 replay-artifact persist is
-    skipped (it returns early when no DuckDB store is wired) — keeping this bench
+    No ``replay_duckdb`` is attached, so the replay persist step records no
+    game. Its Postgres history write meets the fake pool, which has no
+    ``fetchval``, and fails best-effort with a logged warning. The bench stays
     on the pure simulate request path.
     """
     app = FastAPI()
@@ -247,7 +246,7 @@ def _benched_request(client: TestClient, n_iterations: int):
     dispatch -> route handler -> lineup resolve (patched) -> BatchRunner.run
     (the real simulate_game loop under the no-DB factory) -> GameSimSummaryModel
     serialization -> JSON response. ``use_cache=false`` forces a real recompute
-    every round (no SIM-359 summary-cache short-circuit).
+    every round (no summary-cache short-circuit).
     """
     resp = client.get(
         f"/api/games/{BENCH_GAME_PK}/simulate",
@@ -297,9 +296,8 @@ def test_bench_api_simulate_single_game(benchmark, simulate_client):
     DB-backed factory a single game is sub-second, so the same markers run many
     rounds there.
 
-    The no-DB sandbox figure is a LOWER BOUND for the SLA (no live sampler/query
-    per-pitch cost); the authoritative gate runs on target hardware with the
-    real DB-backed factory. See the module docstring.
+    The no-DB sandbox figure is a LOWER BOUND for the SLA (no per-pitch cost of
+    the sampler over the full production bundle). See the module docstring.
     """
     resp = benchmark(lambda: _benched_request(simulate_client, SINGLE_N_ITERATIONS))
     # Sanity: the request really served a summary for the requested run.
@@ -332,8 +330,7 @@ def test_bench_api_simulate_batch_100(benchmark, simulate_client):
     ``min_rounds=1`` keeps the sandbox wall-time bounded (a 100-iteration batch
     is the heavy path); pytest-benchmark still records a median from however
     many rounds fit in ``max_time``. The no-DB figure is a LOWER BOUND for the
-    SLA — the authoritative gate runs on target hardware with the real
-    DB-backed factory. See the module docstring.
+    SLA. See the module docstring.
     """
     resp = benchmark(lambda: _benched_request(simulate_client, BATCH_N_ITERATIONS))
     body = resp.json()

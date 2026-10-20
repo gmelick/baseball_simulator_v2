@@ -1,12 +1,12 @@
 """
-Integration test: Alembic schema migrations — SIM-145 / SIM-082 / SIM-083
-==========================================================================
+Integration test: the Alembic schema migrations
+===============================================
 Verifies that ``alembic upgrade head`` produces the complete production schema
 in a fresh PostgreSQL 15 database.
 
-Acceptance criteria (SIM-145):
+What it checks:
   - The raw.* and sim.* base tables match the canonical set exactly.
-  - The unique partial index required by SIM-082 exists.
+  - The unique partial index the lineup_state upsert needs exists.
   - Alembic's ``alembic_version`` table records the head revision.
 
 The table lists below are the *canonical* set produced by the migration chain
@@ -62,36 +62,36 @@ _RAW_TABLES = {
     "game_lineups",  # 0001
     "sprint_speed",  # 0001
     "pitches",  # 0001 — the pitch-level Statcast table
-    "etl_data_freshness",  # 0003 (SIM-083)
-    "game_odds",  # 0003 (SIM-083 / SIM-133)
-    "prop_odds",  # 0003 (SIM-083), renamed column in 0004
-    "pipeline_run_log",  # 0003 (SIM-083 / SIM-138)
-    "etl_errors",  # 0011 (SIM-093)
-    "game_bullpen_availability",  # 0015 (SIM-433)
-    "etl_game_ingest",  # 0017 (SIM-441)
-    "play_events",  # 0018 (SIM-502) — non-pitch play events
-    "savant_bat_tracking",  # 0019 (SIM-528 / SIM-529) — asof_date + PK rebuilt in 0021
-    "savant_swing_path",  # 0019 (SIM-528 / SIM-529) — asof_date + PK rebuilt in 0021
-    "savant_batting_stance",  # 0019 (SIM-528 / SIM-529) — asof_date + PK rebuilt in 0020
-    "savant_arm_strength",  # 0019 (SIM-528 / SIM-530)
-    "savant_baserunning",  # 0019 (SIM-528 / SIM-530)
-    "savant_poptime",  # 0019 (SIM-528 / SIM-530)
-    "savant_catcher_throwing",  # 0019 (SIM-528 / SIM-530)
-    "savant_first_base_receiving",  # 0019 (SIM-528 / SIM-530)
-    "savant_pitch_tracking",  # 0020 (SIM-534) — per-pitch batter measurements
-    "game_player_stats",  # 0023 (SIM-545) — the official per-player box score
-    "game_bullpen",  # 0025 (SIM-427) — the MLB box's per-game bullpen listing
-    "savant_basestealing",  # 0026 (SIM-531)
-    "savant_pitcher_running_game",  # 0026 (SIM-531)
-    "savant_outs_above_average",  # 0027 (SIM-532)
-    "savant_outfield_jump",  # 0027 (SIM-532)
-    "game_odds_archive",  # 0028 (SIM-555) — the retired consensus game-odds rows
-    "prop_odds_archive",  # 0028 (SIM-555) — the retired consensus prop-odds rows
+    "etl_data_freshness",  # 0003
+    "game_odds",  # 0003
+    "prop_odds",  # 0003, renamed column in 0004
+    "pipeline_run_log",  # 0003
+    "etl_errors",  # 0011
+    "game_bullpen_availability",  # 0015
+    "etl_game_ingest",  # 0017
+    "play_events",  # 0018 — non-pitch play events
+    "savant_bat_tracking",  # 0019 — asof_date + PK rebuilt in 0021
+    "savant_swing_path",  # 0019 — asof_date + PK rebuilt in 0021
+    "savant_batting_stance",  # 0019 — asof_date + PK rebuilt in 0020
+    "savant_arm_strength",  # 0019
+    "savant_baserunning",  # 0019
+    "savant_poptime",  # 0019
+    "savant_catcher_throwing",  # 0019
+    "savant_first_base_receiving",  # 0019
+    "savant_pitch_tracking",  # 0020 — per-pitch batter measurements
+    "game_player_stats",  # 0023 — the official per-player box score
+    "game_bullpen",  # 0025 — the MLB box's per-game bullpen listing
+    "savant_basestealing",  # 0026
+    "savant_pitcher_running_game",  # 0026
+    "savant_outs_above_average",  # 0027
+    "savant_outfield_jump",  # 0027
+    "game_odds_archive",  # 0028 — the retired consensus game-odds rows
+    "prop_odds_archive",  # 0028 — the retired consensus prop-odds rows
 }
 
 _SIM_TABLES = {
-    "lineup_state",  # 0001 (unique partial index added in 0002 / SIM-082)
-    "sim_runs",  # 0014 (SIM-356)
+    "lineup_state",  # 0001 (unique partial index in 0002)
+    "sim_runs",  # 0014
 }
 
 #: Views are tracked separately — information_schema.tables lists them too, so
@@ -183,7 +183,7 @@ class TestSchemaMigrations:
         )
 
     def test_sim082_unique_partial_index_exists(self, pg_connection: sa.Connection) -> None:
-        """SIM-082: The unique partial index on sim.lineup_state must exist.
+        """The unique partial index on sim.lineup_state must exist.
 
         Without this index, ON CONFLICT (game_pk) WHERE is_live_game=TRUE silently
         fails or raises an error.  This test is the e2e verification for migration 0002.
@@ -203,7 +203,7 @@ class TestSchemaMigrations:
         )
 
     def test_sim083_game_odds_has_clv_columns(self, pg_connection: sa.Connection) -> None:
-        """SIM-083 / SIM-133: raw.game_odds must have the four CLV-related columns.
+        """raw.game_odds must have the four CLV-related columns.
 
         These columns (book, line_type, market_type, is_sharp_book) are required
         to compute Closing Line Value.  Their absence would silently corrupt all
@@ -227,13 +227,11 @@ class TestSchemaMigrations:
             "Migrations 0003 (SIM-083 / SIM-133) may not have been applied."
         )
 
-    # -- migration 0017 (SIM-441) ------------------------------------------
+    # -- migration 0017 -----------------------------------------------------
     #
-    # 0017 shipped without any integration coverage. The exact-set table guard
-    # above caught the new TABLE a week later, on the next scheduled run — but
-    # nothing covered the four column/index changes in the same migration, and a
-    # column-level drift is exactly what went undetected here before (the
-    # raw.etl_data_freshness failures of 2026-06-29 → 07-20). These close that gap.
+    # The exact-set table guard above sees only the new TABLE of migration 0017.
+    # The tests below cover the column, index and constraint changes in the same
+    # migration, because a column-level drift passes the table guard.
 
     def test_sim441_etl_game_ingest_records_terminal_outcomes(
         self, pg_connection: sa.Connection
@@ -283,8 +281,8 @@ class TestSchemaMigrations:
         assert default is not None and "false" in default.lower()
 
     def test_sim441_players_active_column_is_gone(self, pg_connection: sa.Connection) -> None:
-        """0017 dropped raw.players.active — it was never populated or read, and a
-        column that always says TRUE invites being trusted."""
+        """raw.players.active must not exist (migration 0017 drops it). Nothing
+        writes or reads it, and a column that always says TRUE invites trust."""
         row = pg_connection.execute(
             text("""
                 SELECT 1 FROM information_schema.columns
@@ -305,9 +303,10 @@ class TestSchemaMigrations:
     ) -> None:
         """0017: the error ledger must be idempotent.
 
-        Re-running a game used to append a fresh copy of every error it hit, so
-        the ledger inflated on each retry and could not be counted. Asserted
-        BEHAVIOURALLY — a catalogue check would pass on a non-unique index.
+        Without the natural key, re-running a game appends a fresh copy of every
+        error it hits, so the ledger inflates on each retry and cannot be
+        counted. Asserted BEHAVIOURALLY — a catalogue check would pass on a
+        non-unique index.
         """
         trans = pg_connection.begin_nested()
         try:
@@ -327,9 +326,9 @@ class TestSchemaMigrations:
     def test_manager_ids_are_nullable(self, pg_connection: sa.Connection) -> None:
         """raw.pitches.{home,away}_manager_id must accept NULL.
 
-        The loader no longer invents a manager when the feed has none — it used to
-        fall back to ``coaches[0]``, i.e. whoever the API happened to list first.
-        NOT NULL here would force that guess back.
+        The loader leaves the manager NULL when the feed has none. It does not
+        guess ``coaches[0]``, which is whoever the API happens to list first.
+        NOT NULL here would force that guess.
 
         ⚠ This is an INVARIANT, not migration-0017 coverage. 0017 contains
         ``ALTER COLUMN ... DROP NOT NULL`` for both columns, but they were already
@@ -353,21 +352,21 @@ class TestSchemaMigrations:
                 f"raw.pitches.{column_name} is still NOT NULL — migration 0017 did not apply"
             )
 
-    # -- migrations 0022 + 0024 (SIM-421, the fifteen-market odds vocabulary) --
+    # -- migrations 0022 + 0024 (the fifteen-market odds vocabulary, SIM-421) --
     #
     # The unit tests that pin these two CHECK constraints read the migration
     # file's TEXT.  A constraint that fails to apply, or drifts from the code's
     # vocabulary, passes them.  The two tests below read the constraint the
     # database enforces.  They compare it to the one source of the vocabulary,
-    # ``pipeline/odds_provider.py`` (added with SIM-552).
+    # ``pipeline/odds_provider.py``.
 
     def test_sim421_prop_odds_check_matches_the_code_vocabulary(
         self, pg_connection: sa.Connection
     ) -> None:
         """0022: raw.prop_odds accepts exactly the fifteen prop markets the code prices.
 
-        A narrower constraint rejects the eight new markets at load time. A wider
-        one lets a typo'd market into the table, where no pricer reads it.
+        A narrower constraint rejects a priced market at load time. A wider one
+        lets a typo'd market into the table, where no pricer reads it.
         """
         found = _check_values(pg_connection, "prop_odds", "ck_prop_odds_prop_stat")
         assert found == set(PROP_STATS), (
@@ -410,7 +409,7 @@ class TestSchemaMigrations:
 
         The table-name list above sees only that the archives exist. This test
         reads what the migration's SQL built: ``book_line_at`` is a nullable
-        TIMESTAMPTZ on both odds tables (every pre-SIM-555 row stays NULL); each
+        TIMESTAMPTZ on both odds tables (a row stored with no book stamp holds NULL); each
         index covers the columns the graded-row read sorts on; each archive has
         the live table's columns in the same order (the retirement script copies
         with ``INSERT ... SELECT *``); and an archive's ``id`` has no default, so
@@ -481,11 +480,7 @@ class TestSchemaMigrations:
             assert defaults["fetched_at"] is not None, f"raw.{table}_archive lost its defaults"
 
     def test_raw_etl_freshness_table_exists(self, pg_connection: sa.Connection) -> None:
-        """SIM-083: raw.etl_data_freshness must exist.
-
-        Previously this table was only created by dead string constant code that
-        was never executed.  Migration 0003 creates it authoritatively.
-        """
+        """raw.etl_data_freshness must exist. Migration 0003 creates it."""
         assert_table_exists(pg_connection, "raw", "etl_data_freshness")
 
     def test_schemas_are_created(self, pg_connection: sa.Connection) -> None:
