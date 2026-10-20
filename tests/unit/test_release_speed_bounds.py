@@ -52,7 +52,7 @@ class TestReleaseSpeedBounds:
 
     def test_validate_row_accepts_68_mph(self) -> None:
         """A 68 mph slow curve draws no release_speed warning."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 68.0})
         # The row passes the hard validation.
@@ -65,7 +65,7 @@ class TestReleaseSpeedBounds:
 
     def test_validate_row_accepts_60_mph_boundary(self) -> None:
         """60 mph draws no warning."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 60.0})
         assert not result.hard_errors
@@ -76,7 +76,7 @@ class TestReleaseSpeedBounds:
 
     def test_validate_row_still_flags_impossible_low(self) -> None:
         """A 35 mph pitch is impossible and warns."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         assert not result.hard_errors
@@ -85,7 +85,7 @@ class TestReleaseSpeedBounds:
 
     def test_validate_row_still_flags_too_fast(self) -> None:
         """A 112 mph pitch is above the 110 mph ceiling and warns."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 112.0})
         assert not result.hard_errors
@@ -99,7 +99,7 @@ class TestReleaseSpeedBounds:
         maximum is about 105.8). A lower ceiling removes that tail from
         ``sim.pitch_pool`` and the arsenal GMMs (Gaussian mixture models).
         """
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         for velo in (102.5, 104.0, 105.8, 110.0):
             result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": velo})
@@ -113,7 +113,7 @@ class TestReleaseSpeedBounds:
         the database, so a stricter Python floor wins on every row. Both
         layers state 50, so a pitch in [50, 60) stays clean.
         """
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         for velo in (50.0, 55.0, 59.9):
             result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": velo})
@@ -122,7 +122,7 @@ class TestReleaseSpeedBounds:
 
     def test_validator_warning_text_advertises_actual_bounds(self) -> None:
         """The warning text states the band the code enforces."""
-        from pipeline.etl.etl_historical_loader import _validate_row
+        from pipeline.etl.historical.rows import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         rs_warnings = [w for w in result.warnings if "release_speed" in w]

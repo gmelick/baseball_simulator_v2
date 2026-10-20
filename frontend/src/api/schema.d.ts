@@ -1108,8 +1108,7 @@ export interface components {
          *     Built from a :class:`simulation.prop_distributions.PropDistributionSet` via
          *     :meth:`from_prop_set`, iterating ``by_player`` and reading each
          *     :attr:`PropDistribution.mean` -- so the card is the means-only projection of
-         *     the full PMF set (a consumer that needs the full PMF reads the heavier
-         *     :class:`PropDistributionSetModel` instead).  numpy-free.
+         *     the full PMF set.  numpy-free.
          */
         BoxscoreCardModel: {
             /** Base Seed */

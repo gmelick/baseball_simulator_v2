@@ -154,7 +154,7 @@
       },
       "BoxscoreCardModel": {
         "additionalProperties": false,
-        "description": "Response model for the SIM-366 per-player boxscore-average card.\n\nThe boxscore-card payload for one Monte-Carlo run: every player's prop\n**means** (the 100-iteration boxscore average) keyed\n``str(player_id) -> BoxscoreCardRowModel`` (JSON object keys must be strings).\nBuilt from a :class:`simulation.prop_distributions.PropDistributionSet` via\n:meth:`from_prop_set`, iterating ``by_player`` and reading each\n:attr:`PropDistribution.mean` -- so the card is the means-only projection of\nthe full PMF set (a consumer that needs the full PMF reads the heavier\n:class:`PropDistributionSetModel` instead).  numpy-free.",
+        "description": "Response model for the SIM-366 per-player boxscore-average card.\n\nThe boxscore-card payload for one Monte-Carlo run: every player's prop\n**means** (the 100-iteration boxscore average) keyed\n``str(player_id) -> BoxscoreCardRowModel`` (JSON object keys must be strings).\nBuilt from a :class:`simulation.prop_distributions.PropDistributionSet` via\n:meth:`from_prop_set`, iterating ``by_player`` and reading each\n:attr:`PropDistribution.mean` -- so the card is the means-only projection of\nthe full PMF set.  numpy-free.",
         "properties": {
           "base_seed": {
             "anyOf": [
