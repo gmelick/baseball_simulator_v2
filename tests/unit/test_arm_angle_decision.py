@@ -97,6 +97,7 @@ UNREADING_MODULES = (
     REPO / "pipeline" / "batch" / "player_profile_computor.py",
     *sorted((REPO / "pipeline" / "batch" / "profiles").glob("*.py")),
     REPO / "pipeline" / "batch" / "engine_artifacts.py",
+    *sorted((REPO / "pipeline" / "batch" / "artifacts").glob("*.py")),
     *sorted((REPO / "similarity" / "engines").glob("*.py")),
 )
 ALEMBIC_VERSIONS = REPO / "db" / "migrations" / "versions"
