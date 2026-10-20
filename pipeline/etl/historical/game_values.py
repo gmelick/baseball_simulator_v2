@@ -90,7 +90,7 @@ def _map_game_status(gd: dict) -> str:
 
 
 def _build_starting_lineup_rows(game_pk: int, season: int, game_dict: dict) -> list[tuple]:
-    """Build raw.game_lineups rows for the STARTING lineups from a feed/live boxscore (SIM-409).
+    """Build raw.game_lineups rows for the STARTING lineups from a feed/live boxscore.
 
     Reads ``liveData.boxscore.teams.{home,away}``: a player whose ``battingOrder``
     ends in ``00`` (``int(bo) % 100 == 0``) is the original starter in slot
@@ -99,7 +99,7 @@ def _build_starting_lineup_rows(game_pk: int, season: int, game_dict: dict) -> l
     order (AL / DH games). Substitutions (sequence > 1, pinch roles) are out of
     scope — this ingests the opening lineup the sim resolves from.
 
-    ``position_code`` is the position the starter held at first pitch (SIM-559):
+    ``position_code`` is the position the starter held at first pitch:
     the feed's ``allPositions[0]``. The feed's ``position`` is the LAST position
     he held, and the rows loaded before SIM-559 carry that value, so a fielder
     who moved mid-game left his starting slot empty in the defense map and a

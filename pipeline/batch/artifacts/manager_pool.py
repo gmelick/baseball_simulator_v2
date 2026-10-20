@@ -19,12 +19,12 @@ log = logging.getLogger("engine_artifacts")
 
 
 # ---------------------------------------------------------------------------
-# SIM-523 part D — the pitching-change OPPORTUNITY pool (the manager's step 1)
+# The pitching-change OPPORTUNITY pool (the manager's step 1)
 # ---------------------------------------------------------------------------
 #
 # One row per plate-appearance boundary while a pitcher is on the mound,
-# changed or not — the denominator the old pull formula never had (the
-# SIM-468 steal-pool pattern). The situation table gives the boundary (the
+# changed or not: the denominator, as in the steal opportunity pool. The
+# situation table gives the boundary (the
 # half, the outs, the bases, the scores); the pitch pool gives the pitcher of
 # every plate appearance. A boundary's row describes the pitcher who threw the
 # PREVIOUS plate appearance for that side: his pitches and batters faced so
@@ -35,7 +35,7 @@ _CHANGE_SIT_COLS = ["pitch_count", "batters_faced", "inning", "outs", "runners_s
 
 
 def _default_game_context(seasons: list[int]) -> tuple[dict, dict, dict] | None:
-    """SIM-427: the builder's one Postgres read — the game's two managers and
+    """The builder's one Postgres read — the game's two managers and
     every appearance's rest as of its game (``pipeline.bullpen_usage``).
     None when no DSN is set or the read fails: the pool then carries unknowns
     (-1) in the manager and rest columns, and the log says so."""
@@ -60,8 +60,8 @@ def _default_game_context(seasons: list[int]) -> tuple[dict, dict, dict] | None:
         return None
 
 
-#: The four SIM-427 columns the change pool's meta parquet carries beyond the
-#: part-D set, and their "unknown" value.
+#: The columns of the real managers and pens the change pool's meta
+#: parquet carries beyond the situation, and their "unknown" value.
 _CHANGE_CTX_COLS: tuple[tuple[str, int], ...] = (
     ("manager_id", -1),
     ("in_days_rest", -1),
@@ -82,7 +82,7 @@ def build_pitching_change_pool(
     reliever ROLE sidecar ``roles.parquet`` and the manifest (the counts and
     the pool's own change rates). Returns the manifest.
 
-    SIM-427: every row also carries the FIELDING side's manager (``manager_id``;
+    Every row also carries the FIELDING side's manager (``manager_id``;
     the top of an inning is the home side fielding) and the incoming arm's rest
     as of the game (``in_days_rest`` capped at five, ``in_pitched_2d``,
     ``in_pitches_3d`` — ``pipeline.bullpen_usage``'s definitions), read from
@@ -92,7 +92,7 @@ def build_pitching_change_pool(
     pool_dir = os.path.join(out_dir, "manager_pool")
     os.makedirs(pool_dir, exist_ok=True)
     season_list = ", ".join(str(int(s)) for s in seasons)
-    # SIM-535: the row's game date (a YYYYMMDD integer) so the backtest's
+    # The row's game date (a YYYYMMDD integer) so the backtest's
     # point-in-time cutoff applies to this draw too; an older pitch pool
     # without the column leaves it NULL (the cutoff then refuses, loudly).
     have_date = "game_date" in duck_columns(con, "sim", "pitch_pool")
@@ -156,7 +156,7 @@ def build_pitching_change_pool(
         np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _CHANGE_SIT_COLS], axis=1)
     ).astype(np.float32)
     np.save(os.path.join(pool_dir, "change.sit.npy"), sit)
-    # --- SIM-427: the fielding manager and the incoming arm's rest per row ---
+    # --- The fielding manager and the incoming arm's rest per row ---
     ctx = _default_game_context(seasons) if game_context is True else game_context
     keys = con.execute(
         "SELECT game_pk, at_bat_number, top_or_bottom, incoming_id FROM _change_pool "
@@ -205,7 +205,7 @@ def build_pitching_change_pool(
         f"TO '{os.path.join(pool_dir, 'change.meta.parquet')}' (FORMAT parquet)"
     )
     con.unregister("_change_ctx")
-    # --- SIM-427: the reliever ROLE sidecar — per incoming arm and season, his
+    # --- The reliever ROLE sidecar — per incoming arm and season, his
     # entries, the share in a high-leverage spot (inning >= 7, margin within
     # two — the manager computor's own bucket) and his mean entry inning.
     con.execute(
@@ -239,11 +239,11 @@ def build_pitching_change_pool(
             "changed_reliever": (float(rates[4]) if rates[4] is not None else None),
         },
         "games": int(rates[5] or 0),
-        # SIM-427: the context coverage and the role sidecar's size.
+        # The context coverage and the role sidecar's size.
         "manager_coverage": float((manager >= 0).mean()) if n else 0.0,
         "rest_coverage": float((rest[:, 0] >= 0).mean()) if n else 0.0,
         "roles": n_roles,
-        # SIM-535: whether every row carries its game date (the cutoff's input).
+        # Whether every row carries its game date (the cutoff's input).
         "game_ymd": bool(have_date),
     }
     with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
@@ -269,7 +269,7 @@ def load_change_pool(
 ) -> tuple[ChangePool | None, dict[str, tuple[int, float, float]] | None]:
     """Load the pitching-change pool and the relievers' role sidecar; (None,
     None) when the bundle has no manager pool."""
-    # SIM-523 part D: the pitching-change opportunity pool (None on a
+    # The pitching-change opportunity pool (None on a
     # bundle without it).
     change_pool: ChangePool | None = None
     change_roles: dict[str, tuple[int, float, float]] | None = None
@@ -286,7 +286,7 @@ def load_change_pool(
             return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
 
         def _cp_opt(attr: str, col: str, dtype, *, _m=cm) -> np.ndarray | None:
-            # SIM-427: a column an older bundle lacks stays None.
+            # A column an older bundle lacks stays None.
             v = views.get(f"change_pool.{attr}")
             if isinstance(v, np.ndarray):
                 return v
@@ -316,7 +316,7 @@ def load_change_pool(
             in_throws=_cp_opt("in_throws", "in_throws", np.int8),
             game_ymd=_cp_opt("game_ymd", "game_ymd", np.int32),
         )
-        # SIM-535: a date column that is NULL on every row (a pitch pool
+        # A date column that is NULL on every row (a pitch pool
         # without dates) must read as ABSENT, so a cutoff refuses instead
         # of admitting every row through the -1 fill.
         if change_pool.game_ymd is not None and not (change_pool.game_ymd > 0).any():

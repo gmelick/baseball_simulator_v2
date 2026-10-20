@@ -1,7 +1,7 @@
 """
 opening_line_job.py
 ===================
-SIM-138 — Nightly Opening Line Ingestion Job
+Nightly Opening Line Ingestion Job
 MLB Baseball Simulation Platform
 
 Scheduled to run at 08:00 ET every morning via cron / scheduler.
@@ -85,7 +85,7 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-# SIM-555: the live pipeline's writers: the one INSERT, the odds_hash, the dedup.
+# The live pipeline's writers: the one INSERT, the odds_hash, the dedup.
 from pipeline.live.ingestion.odds_rows import (  # noqa: E402
     insert_game_odds_rows,
     insert_prop_odds_rows,
@@ -100,7 +100,7 @@ from pipeline.odds_provider import (  # noqa: E402
     prop_rows_by_book,
 )
 
-# SIM-555: the load guard (pure; no I/O).
+# The load guard (pure; no I/O).
 from pipeline.odds_row_guard import RefusalTally, check_row  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 LOOKAHEAD_DAYS = 7  # how many days ahead to capture opening lines
 
-# SIM-134 / SIM-421: the prop markets, aligned with the 15-value CHECK constraint
+# The prop markets, aligned with the 15-value CHECK constraint
 # on raw.prop_odds (migration 0022). The lists live in pipeline/odds_provider.py
 # (the single source); this job keeps its historical names as aliases.
 #
@@ -136,12 +136,12 @@ BATTER_PROP_TYPES: tuple[str, ...] = BATTER_PROP_STATS
 # get_prop_odds() (the default mock keeps the vig model, RNG seeding, and line
 # centres in a single place) — the provider is selected via the SIM-370 seam.
 
-#: SIM-555: the odds fields of a prop row; a row with all three empty is not a quote.
+#: The odds fields of a prop row; a row with all three empty is not a quote.
 _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
 
 
 def _has_odds(row: dict[str, Any]) -> bool:
-    """SIM-555: True when a game or prop row carries at least one price or line."""
+    """True when a game or prop row carries at least one price or line."""
     fields = _PROP_ODDS_FIELDS if row.get("prop_stat") is not None else GAME_ODDS_FIELDS
     return any(row.get(f) is not None for f in fields)
 
@@ -180,7 +180,7 @@ class OpeningLineJob:
         self._lookahead = lookahead_days
         self._dry_run = dry_run
         self._db: asyncpg.Pool | None = None
-        # SIM-555: one provider per run (its offers cache then serves the game
+        # One provider per run (its offers cache then serves the game
         # and prop reads of one event), and the guard's refusals for the run.
         self._provider: OddsProvider | None = None
         self.refusals = RefusalTally()
@@ -366,7 +366,7 @@ class OpeningLineJob:
         return self._provider
 
     def _keep(self, game_pk: int, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """SIM-555: the rows worth storing: non-empty, and kept by the load guard.
+        """The rows worth storing: non-empty, and kept by the load guard.
 
         A row with no price or line is dropped silently. A refused row is
         logged at INFO and counted in ``self.refusals``.
@@ -395,7 +395,7 @@ class OpeningLineJob:
 
     def _fetch_opening_rows(self, game_pk: int) -> list[dict[str, Any]]:
         """
-        SIM-555: the moneyline's opening rows for ``game_pk`` that are worth storing.
+        The moneyline's opening rows for ``game_pk`` that are worth storing.
 
         Read through ``odds_rows_by_book`` from the configured provider (the
         SIM-370 seam; the deterministic mock when ODDS_PROVIDER is unset, which
@@ -417,7 +417,7 @@ class OpeningLineJob:
         Inserts a single raw.game_odds row with line_type='opening'.
         Skips the write if dry_run=True.
 
-        SIM-555: the row keeps its book label and writes ``book_line_at``
+        The row keeps its book label and writes ``book_line_at``
         (migration 0028). It goes through the live writer
         (``insert_game_odds_rows``), so it carries the ``odds_hash`` the live
         schema requires and the ``ON CONFLICT`` dedup. A row with no
@@ -438,7 +438,7 @@ class OpeningLineJob:
         away_pitcher_id: int | None,
     ) -> int:
         """
-        SIM-134: Stores opening prop lines for announced starters.
+        Stores opening prop lines for announced starters.
 
         Covers:
           - Pitcher props: every market in PITCHER_PROP_TYPES (strikeouts,
@@ -451,7 +451,7 @@ class OpeningLineJob:
         seam (the default mock keeps the vig model and RNG seeding in a single
         canonical place — SIM-134).
 
-        SIM-555: each (pitcher, market) stores every by-book opening row the
+        Each (pitcher, market) stores every by-book opening row the
         provider gives that the load guard keeps, with its book label and
         ``book_line_at``, in one batch through the live writer
         (``insert_prop_odds_rows``: the ``odds_hash`` and the dedup); a market
@@ -489,7 +489,7 @@ class OpeningLineJob:
                 rows = prop_rows_by_book(
                     provider, game_pk, pitcher_id, prop_stat, line_type="opening"
                 )
-                # SIM-555: the row is keyed to this game and pitcher, and a row
+                # The row is keyed to this game and pitcher, and a row
                 # with no line_type key is stored as 'opening', as before.
                 kept = [
                     {"line_type": "opening", **prop, "game_pk": game_pk, "player_id": pitcher_id}
@@ -509,7 +509,7 @@ class OpeningLineJob:
                             prop.get("book"),
                         )
                     continue
-                # SIM-555: one batch per market, through the live writer (the
+                # One batch per market, through the live writer (the
                 # odds_hash and the ON CONFLICT dedup).
                 inserted += await insert_prop_odds_rows(self._db, kept)
                 log.debug(

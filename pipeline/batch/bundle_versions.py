@@ -1,5 +1,5 @@
 """
-pipeline/batch/bundle_versions.py — the engine-artifact bundle as published versions (SIM-563).
+pipeline/batch/bundle_versions.py — the engine-artifact bundle as published versions.
 
 Why: the export used to rewrite ``/data/play_pool/engine_artifacts`` in place.
 The running app's workers read that folder whenever one of them (re)starts, so
@@ -23,7 +23,7 @@ The first publish on a host converts a legacy real folder: it moves the folder
 under ``engine_artifacts.versions/legacy-<ts>`` and links to it, so the old
 path keeps resolving to the same files.
 
-Owner: Data Engineer (SIM-563).
+Owner: Data Engineer.
 """
 
 from __future__ import annotations

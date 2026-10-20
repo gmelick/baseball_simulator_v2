@@ -134,21 +134,21 @@ class ConnectionManager:
     async def broadcast(self, game_pk: int, payload: dict) -> None:
         """Send a JSON payload to all clients watching this game.
 
-        SIM-103: Iterate over a SHALLOW COPY of the subscription set.
+        Iterate over a SHALLOW COPY of the subscription set.
         ``await ws.send_text()`` yields control, so a concurrent connect()
         or disconnect() on the same game_pk would mutate the original set
         mid-loop and raise ``RuntimeError: Set changed size during iteration``.
         Copy is O(N); the receive set rarely exceeds a few dozen connections.
         Dead-connection cleanup still applies to the live underlying set.
 
-        SIM-555: a date or a datetime in the payload goes out as ISO-8601 text
+        A date or a datetime in the payload goes out as ISO-8601 text
         (the by-book odds rows carry ``book_line_at`` as a datetime); the
         refresh loop also strips the odds row before it gets here.
         """
         live_subs = self._subscriptions.get(game_pk, set())
         if not live_subs:
             return
-        subs_snapshot = set(live_subs)  # SIM-103: iteration-safe snapshot
+        subs_snapshot = set(live_subs)  # Iteration-safe snapshot
         dead: set[WebSocket] = set()
         message = json.dumps(payload, default=_json_default)
         for ws in subs_snapshot:

@@ -16,7 +16,7 @@ from pipeline.batch.artifacts.pools import StealPool, steal_pitch_class_codes
 log = logging.getLogger("engine_artifacts")
 
 
-#: The steal draw's situation columns (SIM-474). `outs` and the count are the
+#: The steal draw's situation columns. `outs` and the count are the
 #: hard-filter cell; `score_diff` is soft-kernelled. `inning` is deliberately
 #: excluded — leverage shaping rides on the manager weight, not the pool.
 _STEAL_SIT_COLS = ["count_balls", "count_strikes", "outs", "score_diff"]
@@ -25,15 +25,15 @@ _STEAL_SIT_COLS = ["count_balls", "count_strikes", "outs", "score_diff"]
 def build_steal_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
-    """Write the per-target-base steal OPPORTUNITY pool for SIM-474.
+    """Write the per-target-base steal OPPORTUNITY pools the steal draw reads.
 
-    One row per pitch where a steal was possible (SIM-468), attempted or not —
+    One row per pitch where a steal was possible, attempted or not —
     the `attempted` flag is the denominator the attempts-only pool lacks, so a
     single draw answers both "does the runner go" and "safe or caught".
     Sub-pools are split by target base ("2" = 1B->2B, "3" = 2B->3B), mirroring
     the per-hand split of the other pools.
 
-    SIM-554: the meta parquet carries ``pitch_id``, the pitch's class
+    The meta parquet carries ``pitch_id``, the pitch's class
     (``pitch_class``; '' on a pickoff row) and ``is_pickoff_row``. The loader
     maps the class to the codes of :data:`STEAL_PITCH_CLASS_CODE`. A DuckDB
     without migration 0031 is refused before any file is written: the run book
@@ -69,7 +69,7 @@ def build_steal_pool_artifact(
 
 
 def _steal_pool_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
-    """SIM-554: the columns of sim.steal_opportunity_pool in this DuckDB file
+    """The columns of sim.steal_opportunity_pool in this DuckDB file
     (an attached Postgres catalog is left out)."""
     return duck_columns(con, "sim", "steal_opportunity_pool", this_file_only=True)
 
@@ -82,12 +82,12 @@ def _write_steal_pool_targets(
     counts: dict[str, int],
     staged: list[tuple[str, str]],
 ) -> None:
-    """SIM-554: write each target's sit and meta files under temporary names
+    """Write each target's sit and meta files under temporary names
     (``tmp_<target>.*``) and record them in ``staged``; the caller moves them
     into place once every target succeeded."""
     for target in ("2", "3"):
         w = f"target_base = {target} AND season IN ({season_list})"
-        # SIM-554: both queries sort by pitch_id. The sit rows and the meta rows
+        # Both queries sort by pitch_id. The sit rows and the meta rows
         # are written by two queries, and row i of one must be row i of the
         # other. Without the sort they lined up only because two unsorted scans
         # of the same filter happened to return the same order.
@@ -109,14 +109,14 @@ def _write_steal_pool_targets(
         con.execute(
             "COPY (SELECT runner_id, pitcher_id, catcher_id, season, "
             "attempted, success, recency_weight, "
-            # SIM-507: COALESCE keeps a pre-0017 DuckDB (NULL columns absent
+            # COALESCE keeps a pre-0017 DuckDB (NULL columns absent
             # from an un-migrated table would fail the SELECT outright — the
             # migration adds them; NULLs only appear on rows an old builder
             # wrote) reading as plain no-outcome rows.
             "COALESCE(pickoff_out, FALSE) AS pickoff_out, "
             "COALESCE(pickoff_advancing, FALSE) AS pickoff_advancing, "
             "COALESCE(pickoff_error, FALSE) AS pickoff_error, "
-            # SIM-554 (migration 0031): the caller refused a table without these
+            # The caller refused a table without these
             # two columns. A NULL class (a pickoff row, or a pitch row an old
             # builder wrote) exports as '', which the loader reads as 0;
             # is_pickoff_row tells the two apart.
@@ -128,7 +128,7 @@ def _write_steal_pool_targets(
         )
         counts[target] = int(n)
         log.info("steal_pool[%s]: %d rows (seasons %s)", target, n, seasons)
-        # SIM-554: a pitch row with no class comes from a season that no
+        # A pitch row with no class comes from a season that no
         # builder has rebuilt since migration 0031 (a ten-season export, say).
         # The sampler then keeps the single pre-pitch draw for the whole
         # bundle and logs it, so the export goes on and says so here.
@@ -151,16 +151,16 @@ def load_steal_pools(
     con: duckdb.DuckDBPyConnection, art_dir: str, views: dict[str, np.ndarray]
 ) -> dict[str, StealPool]:
     """Load the steal pools by target base; {} when the bundle has none."""
-    # SIM-474: the steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
+    # The steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
     # Presence-gated like the batted-ball pool: {} on a legacy bundle,
-    # and the sampler then stages no steals (the pre-SIM-474 behavior).
+    # and the sampler then stages no steals.
     steal_pools: dict[str, StealPool] = {}
     sp_dir = os.path.join(art_dir, "steal_pool")
     if os.path.exists(os.path.join(sp_dir, "manifest.json")):
         for target in ("2", "3"):
             meta_path = os.path.join(sp_dir, f"{target}.meta.parquet")
-            # SELECT * so a pre-SIM-507 parquet (no pickoff columns)
-            # still loads; the taker fills missing columns below.
+            # SELECT * so a parquet without the pickoff columns still
+            # loads; the taker fills the missing columns below.
             m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
 
             def _sp_take(attr: str, col: str, dtype, fill, *, _t=target, _m=m) -> np.ndarray:
@@ -169,14 +169,13 @@ def load_steal_pools(
                 if isinstance(v, np.ndarray):
                     return v
                 if col not in _m:
-                    # SIM-507: a legacy bundle carries no pickoff
-                    # columns — all-zero labels stage no pickoffs,
-                    # the pre-SIM-507 behavior.
+                    # A legacy bundle carries no pickoff columns:
+                    # all-zero labels stage no pickoffs.
                     n_rows = len(_m["runner_id"])
                     return np.full(n_rows, fill, dtype=dtype)
                 return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
 
-            # SIM-554: the class of each row's pitch. Not through
+            # The class of each row's pitch. Not through
             # _sp_take: its fill would read a pre-0031 bundle as all
             # pickoff rows (code 0). No column means no classes (None),
             # and the loop then runs the single pre-pitch draw.
@@ -198,7 +197,7 @@ def load_steal_pools(
                 is_pickoff_row = None
 
             steal_pools[target] = StealPool(
-                # SIM-535: the game date, for the draw-time cutoff.
+                # The game date, for the draw-time cutoff.
                 game_ymd=(
                     np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
                     if "game_ymd" in m
@@ -229,7 +228,7 @@ def load_steal_pools(
                 pitch_class=pitch_class,
                 is_pickoff_row=is_pickoff_row,
             )
-            # SIM-554: the two files of a target come from two writes;
+            # The two files of a target come from two writes;
             # refuse a pair whose row counts differ (a torn export).
             n_meta = len(m["runner_id"])
             if steal_pools[target].n != n_meta:

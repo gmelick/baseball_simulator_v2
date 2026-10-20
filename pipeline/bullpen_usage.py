@@ -1,7 +1,7 @@
 """
 pipeline/bullpen_usage.py
 =========================
-SIM-427 — the pen's facts from the official box score and the MLB API's
+The pen's facts from the official box score and the MLB API's
 per-game bullpen listing, for the pitching-change draw and the reliever draw.
 
 Two consumers share these queries so the pool rows and the live candidates

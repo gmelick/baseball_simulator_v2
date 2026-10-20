@@ -19,13 +19,13 @@ _BP_BASE = "https://api.bettingpros.com/v3"
 _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 
 
-#: SIM-421: the most ``/offers`` pages read for one (event, market). The API
+#: The most ``/offers`` pages read for one (event, market). The API
 #: pages at 10 offers; a batter market lists every hitter in the game (two to
 #: three pages), so the cap only guards against a runaway pager.
 _MAX_OFFER_PAGES = 20
 
 
-#: SIM-555: the error types a read may retry. ``OSError`` is the base of
+#: The error types a read may retry. ``OSError`` is the base of
 #: ``URLError`` (a time-out or a refused connection inside ``urlopen``; also
 #: the base of ``HTTPError``, whose status :func:`_is_transient` checks), of
 #: ``TimeoutError`` (``socket.timeout`` since Python 3.10) and of
@@ -36,12 +36,12 @@ _MAX_OFFER_PAGES = 20
 #: ``HTTPException`` covers ``RemoteDisconnected`` and ``IncompleteRead``.
 _RETRYABLE_ERRORS: tuple[type[Exception], ...] = (OSError, http.client.HTTPException)
 
-#: SIM-555: the statuses whose numeric ``Retry-After`` sets a floor on the wait.
+#: The statuses whose numeric ``Retry-After`` sets a floor on the wait.
 _RETRY_AFTER_STATUSES = frozenset({429, 503})
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """True when a failed read may succeed on a later attempt (SIM-555).
+    """True when a failed read may succeed on a later attempt.
 
     An HTTP 429 or 5xx, a time-out, a refused or dropped connection, an
     unreachable network, a TLS error. Any other HTTP status (a 4xx) is the
@@ -54,7 +54,7 @@ def _is_transient(exc: BaseException) -> bool:
 
 
 def _retry_after_s(exc: BaseException) -> float | None:
-    """The numeric ``Retry-After`` of a 429 or 503, in seconds, or ``None`` (SIM-555).
+    """The numeric ``Retry-After`` of a 429 or 503, in seconds, or ``None``.
 
     ``None`` when the status is another one, or the header is absent, an
     HTTP date, negative or not finite.
@@ -73,7 +73,7 @@ def _retry_after_s(exc: BaseException) -> float | None:
 
 
 def _log_target(url: str) -> str:
-    """The host and path of a URL, for a log line: no query string, no user part (SIM-555)."""
+    """The host and path of a URL, for a log line: no query string, no user part."""
     parts = urllib.parse.urlsplit(url)
     return f"{parts.hostname or ''}{parts.path}"
 
@@ -83,7 +83,7 @@ class TransportMixin(ProviderBase):
 
     # ----------------------------------------------------------------- HTTP
     def set_retry_policy(self, max_retries: int, retry_wait_s: float) -> None:
-        """Set the retries of a transient read failure and the first wait (SIM-555).
+        """Set the retries of a transient read failure and the first wait.
 
         ``max_retries`` is a whole number 0 or more (0 = one attempt);
         ``retry_wait_s`` is 0 or more seconds. Raises ``ValueError`` otherwise.
@@ -96,7 +96,7 @@ class TransportMixin(ProviderBase):
         self._retry_wait_s = float(retry_wait_s)
 
     def _retry_wait(self, retry: int, exc: BaseException) -> float:
-        """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc`` (SIM-555).
+        """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc``.
 
         ``retry_wait_s`` doubles per retry. A 429 or 503 with a numeric
         ``Retry-After`` waits at least that long. Both stop at
@@ -110,7 +110,7 @@ class TransportMixin(ProviderBase):
         return min(wait, self.RETRY_WAIT_CAP_S)
 
     def _describe_error(self, exc: BaseException, url: str) -> str:
-        """The error for a log line, with the URL's query and the API key taken out (SIM-555)."""
+        """The error for a log line, with the URL's query and the API key taken out."""
         text = f"{type(exc).__name__}: {exc}".replace(url, _log_target(url))
         if self._api_key:
             text = text.replace(self._api_key, "<api key>")
@@ -119,7 +119,7 @@ class TransportMixin(ProviderBase):
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
         """GET ``url`` and decode its JSON body; the one read of every vendor and MLB call.
 
-        SIM-555: a transient failure (an HTTP 429 or 5xx, a time-out, a refused
+        A transient failure (an HTTP 429 or 5xx, a time-out, a refused
         or dropped connection) is retried up to ``max_retries`` times, after
         the wait of :meth:`_retry_wait`. Each retry logs one INFO line with the
         attempt, the error, the host and path (no query, no key) and the wait.

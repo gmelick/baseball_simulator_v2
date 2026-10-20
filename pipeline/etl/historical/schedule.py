@@ -10,12 +10,12 @@ from datetime import (
     timedelta,
 )
 
-# SIM-441: the MLB schedule endpoint silently clamps any window wider than a year
+# The MLB schedule endpoint silently clamps any window wider than a year
 # to startDate + 365 and still answers HTTP 200. Slice below that so nothing is
 # lost, and leave headroom so a leap year cannot tip a slice over the limit.
 _MAX_SCHEDULE_WINDOW_DAYS = 364
 
-# SIM-441: how many games may fail back-to-back before a run aborts. One bad feed
+# How many games may fail back-to-back before a run aborts. One bad feed
 # must be survivable across a 21,600-game sweep; an API outage or a schema
 # mismatch must not be, because it would otherwise "succeed" having loaded almost
 # nothing.

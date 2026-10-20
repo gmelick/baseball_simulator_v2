@@ -1,7 +1,7 @@
 """
 savant_pitch_tracking_loader.py
 ===============================
-SIM-534 — the per-PITCH tracking measurements, loaded one day at a time.
+The per-PITCH tracking measurements, loaded one day at a time.
 
 WHY PER PITCH AND NOT PER SEASON
 --------------------------------

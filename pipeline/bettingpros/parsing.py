@@ -26,7 +26,7 @@ _K = TypeVar("_K")
 _V = TypeVar("_V")
 
 
-#: SIM-555: the sides a row of each market kind must price. A market missing a
+#: The sides a row of each market kind must price. A market missing a
 #: required side in the payload gets no row for any book.
 _REQUIRED_SIDES: dict[str, tuple[str, ...]] = {
     "moneyline": ("home", "away"),
@@ -44,7 +44,7 @@ _Quote = tuple[float | None, float | None, Any]
 
 
 class _FirstInningReadError(RuntimeError):
-    """SIM-555: the first-inning read the twin rule needs failed.
+    """The first-inning read the twin rule needs failed.
 
     The first-five market then gets no rows: without the check, a book's
     first-five entry may be a first-inning bet under the wrong label.
@@ -52,7 +52,7 @@ class _FirstInningReadError(RuntimeError):
 
 
 def _usable(ln: Mapping[str, Any]) -> bool:
-    """True when a line is a price the book is taking (SIM-555).
+    """True when a line is a price the book is taking.
 
     A line flagged ``is_off`` or inactive, or without a price, is not a quote.
     """
@@ -69,7 +69,7 @@ def _opt_int(value: Any) -> int | None:
 
 
 def _book_line(sel: Mapping[str, Any], book_id: int) -> dict[str, Any] | None:
-    """The book's usable line on one selection, or ``None`` (SIM-555).
+    """The book's usable line on one selection, or ``None``.
 
     The feed lists one line per book per selection. When a book lists more than
     one usable line, the one flagged ``main`` wins, else the first.
@@ -96,7 +96,7 @@ def _book_line(sel: Mapping[str, Any], book_id: int) -> dict[str, Any] | None:
 
 
 def _shared_opener(sides: Mapping[str, Mapping[str, Any]]) -> int | None:
-    """The one book that opened every side, or ``None`` (SIM-555).
+    """The one book that opened every side, or ``None``.
 
     The same rule as the opening row: every side's ``opening_line`` names a
     ``book_id`` and a ``cost``, and all sides name the same book. No sides,
@@ -152,7 +152,7 @@ def _tie_rules_out_twin(
     f1_tie: Mapping[str, Any] | None,
     tolerance: float = TWIN_PRICE_TOLERANCE,
 ) -> bool:
-    """True when the ties show a first-five entry is not a first-inning copy (SIM-555).
+    """True when the ties show a first-five entry is not a first-inning copy.
 
     A book that lists a first-five tie the first-inning entry lacks, or a tie
     beyond ``tolerance`` of the first-inning tie, did not copy the entry. A

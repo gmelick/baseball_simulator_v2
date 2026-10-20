@@ -1,7 +1,7 @@
 """
 pipeline/bettingpros_odds_provider.py
 =====================================
-SIM-405 — a real :class:`~pipeline.odds_provider.OddsProvider` backed by the
+A real :class:`~pipeline.odds_provider.OddsProvider` backed by the
 BettingPros v3 API (https://api.bettingpros.com/v3), replacing the SIM-370 stub.
 
 Conforms to the structural ``OddsProvider`` protocol (``get_odds`` /
@@ -89,7 +89,7 @@ the daily-fantasy apps, the exchanges and the prediction markets are never the
 default, with or without a pin. ``prefer_book_id`` pins every call to that one
 book; a pinned non-sportsbook is readable only by naming it (``book='bp:0'``).
 
-The offers cache (SIM-421)
+The offers cache
 --------------------------
 One ``/offers`` response for an (event_id, market_id) pair carries EVERY
 player's offer for that market, and the same response serves every book and
@@ -125,7 +125,7 @@ failure on a later page logs a warning that names the event, the market and
 the page, and returns the pages already in hand, so the players on page 1
 keep their quotes. Neither result is cached: the next call fetches again.
 
-A failed game, event or player lookup (SIM-555) is kept for one time-to-live,
+A failed game, event or player lookup is kept for one time-to-live,
 never for the process lifetime. A found game, event or player name is kept for
 the process lifetime. So the live pipeline finds a game that BettingPros lists
 later, and one failed lookup costs one read per time-to-live, not one read per
@@ -246,16 +246,16 @@ log = logging.getLogger("pipeline.bettingpros_odds_provider")
 
 
 class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
-    """Real odds provider backed by BettingPros v3 (SIM-405).
+    """Real odds provider backed by BettingPros v3.
 
-    ``offers_cache_ttl_s`` (SIM-421) is the time-to-live of the offers and the
+    ``offers_cache_ttl_s`` is the time-to-live of the offers and the
     per-date events caches, in seconds. ``None`` reads ``ODDS_OFFERS_CACHE_TTL_S``
     and falls back to 30 seconds — half the live pipeline's 60-second prop
     cadence, so a cycle never persists a stale snapshot (see the module
     docstring). ``0`` disables the caches. ``clock`` is the monotonic time
     source, injectable for tests.
 
-    ``max_retries`` and ``retry_wait_s`` (SIM-555) set how often a read that
+    ``max_retries`` and ``retry_wait_s`` set how often a read that
     fails for a transient reason is retried, and the first wait in seconds
     (see :meth:`_http_get_json`). ``None`` reads ``BETTINGPROS_MAX_RETRIES``
     (default 0: one attempt, no retry) and ``BETTINGPROS_RETRY_WAIT_S``
@@ -265,7 +265,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
     API's event loop, and a retry's ``sleep`` blocks that loop. So leave
     ``BETTINGPROS_MAX_RETRIES`` unset in the API container.
 
-    ``read_failures`` (SIM-555) counts the reads that failed after their
+    ``read_failures`` counts the reads that failed after their
     retries and that the provider caught, to go on with an empty or partial
     result: a game, event or player lookup, the extra slate of a resumed game,
     an offers read, a later offers page, the first-inning read of the twin
@@ -281,19 +281,19 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
     """
 
     API_KEY_ENV = "ODDS_API_KEY"
-    #: SIM-555: env var that sets how many times a transient read failure is retried.
+    #: Env var that sets how many times a transient read failure is retried.
     MAX_RETRIES_ENV = "BETTINGPROS_MAX_RETRIES"
-    #: SIM-555: env var that sets the wait before the first retry (seconds).
+    #: Env var that sets the wait before the first retry (seconds).
     RETRY_WAIT_ENV = "BETTINGPROS_RETRY_WAIT_S"
-    #: SIM-555: no retry by default; the live pipeline keeps its single attempt.
+    #: No retry by default; the live pipeline keeps its single attempt.
     DEFAULT_MAX_RETRIES = 0
-    #: SIM-555: the default wait before the first retry (seconds); it doubles per retry.
+    #: The default wait before the first retry (seconds); it doubles per retry.
     DEFAULT_RETRY_WAIT_S = 2.0
-    #: SIM-555: the longest wait before one retry, a ``Retry-After`` included (seconds).
+    #: The longest wait before one retry, a ``Retry-After`` included (seconds).
     RETRY_WAIT_CAP_S = 60.0
-    #: SIM-421: env var that sets the offers-cache time-to-live (seconds).
+    #: Env var that sets the offers-cache time-to-live (seconds).
     OFFERS_CACHE_TTL_ENV = "ODDS_OFFERS_CACHE_TTL_S"
-    #: SIM-421: the default time-to-live — half PROP_FETCH_CADENCE_S (60 s).
+    #: The default time-to-live — half PROP_FETCH_CADENCE_S (60 s).
     DEFAULT_OFFERS_CACHE_TTL_S = 30.0
 
     def __init__(
@@ -317,7 +317,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
             )
         self._offers_cache_ttl_s = float(offers_cache_ttl_s)
         self._clock: Callable[[], float] = clock or time.monotonic
-        # SIM-555: the retry policy of _http_get_json and the count of caught read failures.
+        # The retry policy of _http_get_json and the count of caught read failures.
         if max_retries is None:
             max_retries = int(os.environ.get(self.MAX_RETRIES_ENV, self.DEFAULT_MAX_RETRIES))
         if retry_wait_s is None:
@@ -329,7 +329,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         self._retry_sleep: Callable[[float], None] = sleep or time.sleep
         self.read_failures = 0
         # Per-instance caches (cleared by constructing a new provider).
-        # SIM-555: the game, event and player-name caches hold a found value
+        # The game, event and player-name caches hold a found value
         # for the process lifetime. A failed lookup goes to _failed_lookups for
         # one time-to-live only: a long-lived process (the live pipeline,
         # polling from the morning) finds a game that BettingPros lists later,
@@ -337,16 +337,16 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         # (the loader asks about 410 times per game).
         self._event_cache: dict[int, dict[str, Any]] = {}
         self._game_meta_cache: dict[int, tuple[str, str, str, datetime | None]] = {}
-        # SIM-555: the schedule facts of a resolved game (the played entry, the
+        # The schedule facts of a resolved game (the played entry, the
         # resume slates, the postponed start), filled in the same read as the meta.
         self._game_schedule_cache: dict[int, _ScheduleInfo] = {}
         self._player_name_cache: dict[int, str] = {}
         self._failed_lookups: dict[tuple[str, int], tuple[float, None]] = {}
-        # SIM-421: time-stamped caches — (stored_at, payload), served while
+        # Time-stamped caches — (stored_at, payload), served while
         # younger than the time-to-live; every store drops the stale entries.
         self._offers_cache: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
         self._events_by_date_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-        # SIM-555: the first-five exclusions already logged, per (event, market, book).
+        # The first-five exclusions already logged, per (event, market, book).
         self._f5_logged: set[tuple[int, int, str]] = set()
 
     def _choose_row(self, rows: list[dict[str, Any]], book: str | None) -> dict[str, Any] | None:
@@ -380,7 +380,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         line_type: str = "current",
         market_type: str = "moneyline",
     ) -> list[dict[str, Any]]:
-        """One row per book for one game market and line type (SIM-555).
+        """One row per book for one game market and line type.
 
         ``market_type`` is any value of ``GAME_MARKET_TYPES`` (``run_line`` is
         accepted as the legacy alias of ``runline`` and echoed as asked); an
@@ -436,7 +436,7 @@ class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
         *,
         line_type: str = "current",
     ) -> list[dict[str, Any]]:
-        """One row per book for one player's prop market (SIM-555).
+        """One row per book for one player's prop market.
 
         The same rules as :meth:`get_odds_by_book` over the offer's over and
         under. ``line`` is the over's line (the under's when the over has none);

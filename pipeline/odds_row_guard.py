@@ -312,7 +312,7 @@ def _check_stamp(row: Mapping[str, Any]) -> Refusal | None:
 
 
 def _check_postponement(row: Mapping[str, Any]) -> Refusal | None:
-    """SIM-555: refuse a made-up game's row stamped up to 15 minutes after its postponed start.
+    """Refuse a made-up game's row stamped up to 15 minutes after its postponed start.
 
     The 15 minutes (``CLOSING_STAMP_GRACE``) cover the vendor's game-time
     snapshot at the original start. Opening and closing rows alike. A row
@@ -336,7 +336,7 @@ def check_row(row: Mapping[str, Any]) -> Refusal | None:
     A prop row (it has ``prop_stat``) is checked as a full-game total at its
     ``line``. A game row is checked by its market's kind and segment. Then every
     closing row is checked for a late stamp, and every row of a made-up game
-    for a stamp at or before its postponed original start (SIM-555). A row with
+    for a stamp at or before its postponed original start. A row with
     every odds field empty is not refused here: the writers skip empty rows
     before the guard.
     """

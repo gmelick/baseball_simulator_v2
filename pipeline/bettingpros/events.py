@@ -39,7 +39,7 @@ class EventMatchMixin(TransportMixin):
     def _resolve_game_meta(self, game_pk: int) -> tuple[str, str, str, datetime | None] | None:
         """``game_pk`` → (official local date, home name, away name, UTC start time).
 
-        SIM-536: the date MUST come from ``officialDate`` (the schedule's own
+        The date MUST come from ``officialDate`` (the schedule's own
         local-calendar-date field), never from truncating ``gameDate`` (a UTC
         timestamp). For any West-/Mountain-time night game, the UTC clock has
         already rolled past midnight into the next calendar day while the game
@@ -54,7 +54,7 @@ class EventMatchMixin(TransportMixin):
         :meth:`_resolve_event` can pick the right BettingPros event by actual
         start time instead of guessing.
 
-        SIM-555: a resolved game is cached for the process lifetime. A failed
+        A resolved game is cached for the process lifetime. A failed
         read returns ``None`` and is kept for one time-to-live
         (:meth:`_failed_recently`); the first call after that reads the
         schedule again. A read that raised counts in ``read_failures``; a
@@ -87,7 +87,7 @@ class EventMatchMixin(TransportMixin):
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve game_pk %s: %s", game_pk, exc)
             if not read_done:
-                self.read_failures += 1  # SIM-555: the schedule read failed
+                self.read_failures += 1  # The schedule read failed
         if meta is not None:
             self._game_meta_cache[game_pk] = meta
         else:
@@ -97,7 +97,7 @@ class EventMatchMixin(TransportMixin):
     def _resolve_event(self, game_pk: int) -> dict[str, Any] | None:
         """``game_pk`` → the matching BettingPros event dict (or None).
 
-        SIM-536: when more than one event matches by team name (a
+        When more than one event matches by team name (a
         double-header), the earlier code always picked the earliest-scheduled
         one — silently returning game 1's odds even when ``game_pk`` was game
         2. It now picks whichever candidate's ``scheduled`` time is CLOSEST to
@@ -108,7 +108,7 @@ class EventMatchMixin(TransportMixin):
         from the real first pitch is treated as no match, rather than priced
         against whatever the closest name match happened to be.
 
-        SIM-555: a matched event is cached for the process lifetime. No match
+        A matched event is cached for the process lifetime. No match
         (or a failed read) is kept for one time-to-live
         (:meth:`_failed_recently`), so a repeat call inside that window reads
         nothing, and the first call after it looks again. A failed slate read
@@ -160,7 +160,7 @@ class EventMatchMixin(TransportMixin):
             except Exception as exc:  # noqa: BLE001
                 log.warning("BettingPros: event lookup failed for game_pk %s: %s", game_pk, exc)
                 if not read_done:
-                    self.read_failures += 1  # SIM-555: the events read failed
+                    self.read_failures += 1  # The events read failed
         if event is not None:
             self._event_cache[game_pk] = event
         else:
@@ -206,7 +206,7 @@ class EventMatchMixin(TransportMixin):
         smallest gap wins (the played slate first on a tie).
 
         * A gap of :data:`_MAX_EVENT_TIME_DELTA` (2 h) or less is a match. On a
-          double-header this picks the right game (SIM-536).
+          double-header this picks the right game.
         * The single-event rule: a larger gap still matches when the event is
           the ONLY same-team event on the played date's slate, the played
           entry is not a double-header (``doubleHeader`` 'N' or absent), and
@@ -249,7 +249,7 @@ class EventMatchMixin(TransportMixin):
                     game_pk,
                     exc,
                 )
-                self.read_failures += 1  # SIM-555: the extra slate read failed
+                self.read_failures += 1  # The extra slate read failed
                 extra_failed = True
                 continue
             for e in self._same_team_events(extra, home_n, away_n):
@@ -347,7 +347,7 @@ class EventMatchMixin(TransportMixin):
     def _match_game_two(
         self, game_pk: int, played: list[dict[str, Any]], info: _ScheduleInfo
     ) -> dict[str, Any] | None:
-        """The vendor event of game 2 of a straight double-header with no listed start (SIM-555).
+        """The vendor event of game 2 of a straight double-header with no listed start.
 
         MLB lists no real start for such a game (``startTimeTBD``); its
         ``gameDate`` is game 1's start plus 5 minutes. The event nearest that
@@ -395,7 +395,7 @@ class EventMatchMixin(TransportMixin):
         return self._clock() - stored_at < self._offers_cache_ttl_s
 
     def _failed_recently(self, kind: str, key: int) -> bool:
-        """True while a failed ``kind`` lookup of ``key`` is inside the time-to-live (SIM-555).
+        """True while a failed ``kind`` lookup of ``key`` is inside the time-to-live.
 
         ``kind`` is ``'game'`` (the MLB schedule), ``'event'`` (the vendor
         event) or ``'player'`` (the MLB name). A time-to-live of 0 keeps no
@@ -409,7 +409,7 @@ class EventMatchMixin(TransportMixin):
         self._store(self._failed_lookups, (kind, int(key)), None)
 
     def forget_failed_lookups(self) -> None:
-        """Drop every stored failed lookup, so the next call reads again (SIM-555).
+        """Drop every stored failed lookup, so the next call reads again.
 
         The historical loader calls this before each game. A failed player
         lookup is stored for one time-to-live (600 s in the loader, about 33
@@ -422,7 +422,7 @@ class EventMatchMixin(TransportMixin):
         self._failed_lookups.clear()
 
     def forget_game(self, game_pk: int) -> None:
-        """Drop every cached fact of one game, so the next call reads it again (SIM-555).
+        """Drop every cached fact of one game, so the next call reads it again.
 
         The provider keeps a found game's meta, its schedule facts and its
         vendor event for the process lifetime. A game postponed or suspended
@@ -528,7 +528,7 @@ class EventMatchMixin(TransportMixin):
                     len(offers),
                     exc,
                 )
-                self.read_failures += 1  # SIM-555: the market comes back partial
+                self.read_failures += 1  # The market comes back partial
                 return offers, False
             offers.extend(more.get("offers", []))
         return offers, True
@@ -542,7 +542,7 @@ class EventMatchMixin(TransportMixin):
         process lifetime, so one timeout cost the player every prop for the
         rest of a season's load or of the live pipeline's day. A read that
         raised counts in ``read_failures``; an answer without the player does
-        not (SIM-555).
+        not.
         """
         if player_id in self._player_name_cache:
             return self._player_name_cache[player_id]
@@ -558,7 +558,7 @@ class EventMatchMixin(TransportMixin):
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve player_id %s: %s", player_id, exc)
             if not read_done:
-                self.read_failures += 1  # SIM-555: the people read failed
+                self.read_failures += 1  # The people read failed
         if name is None:
             self._note_failed_lookup("player", player_id)
         else:
@@ -575,7 +575,7 @@ class EventMatchMixin(TransportMixin):
         fills it first). The start is for the load guard only; the date drives
         the dated first-five exclusion.
 
-        SIM-555: game 2 of a straight double-header with no listed start
+        Game 2 of a straight double-header with no listed start
         (:attr:`_ScheduleInfo.start_unknown`) takes ``event``'s start instead.
         MLB's placeholder sits 5 minutes after game 1's start, so the guard
         would refuse every closing price of game 2 as late. The vendor's start
@@ -600,7 +600,7 @@ class EventMatchMixin(TransportMixin):
         return start, official, date_str
 
     def _postponed_start(self, game_pk: int) -> datetime | None:
-        """The original start of a game postponed and made up later, as aware UTC (SIM-555).
+        """The original start of a game postponed and made up later, as aware UTC.
 
         ``None`` for any other game, and for a game whose schedule facts the
         provider did not read (a subclass that resolves the meta another

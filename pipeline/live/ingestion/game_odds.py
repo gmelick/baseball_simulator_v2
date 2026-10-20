@@ -34,7 +34,7 @@ class GameOddsMixin(PipelineBase):
     """Fetches and stores the game markets of every watched game."""
 
     def _forget_odds_game(self, game_pk: Any) -> None:
-        """Make the odds provider read one game's schedule and event again (SIM-555).
+        """Make the odds provider read one game's schedule and event again.
 
         The BettingPros provider keeps a found game for the process lifetime
         (``forget_game``); a provider without that method keeps nothing, so
@@ -46,11 +46,11 @@ class GameOddsMixin(PipelineBase):
 
     async def _fetch_odds(self, game_pk: int) -> dict:
         """
-        Returns odds from the configured provider (SIM-370).  Defaults to the
+        Returns odds from the configured provider.  Defaults to the
         deterministic MockOddsAPI; set ODDS_PROVIDER=bettingpros to use the real
         BettingProsOddsProvider feed without touching this code.
 
-        SIM-555: the refresh loop sends this one row to the browser and no
+        The refresh loop sends this one row to the browser and no
         longer persists it; :meth:`_persist_game_odds_cycle` stores every
         book's row. With BettingPros the row is the graded book's moneyline.
         """
@@ -59,7 +59,7 @@ class GameOddsMixin(PipelineBase):
     def _game_market_offers(
         self, game_pk: int, *, line_type: str = "current"
     ) -> list[tuple[str, list[dict]]]:
-        """SIM-555: every book's rows of each ``GAME_MARKET_TYPES`` market, one entry per market.
+        """Every book's rows of each ``GAME_MARKET_TYPES`` market, one entry per market.
 
         Each entry is ``(market_type, rows)``, empty rows dropped; a market with
         no row is left out. An unknown market_type is a programming error and a
@@ -87,10 +87,10 @@ class GameOddsMixin(PipelineBase):
         return offers
 
     def _fetch_game_market_odds(self, game_pk: int, *, line_type: str = "current") -> list[dict]:
-        """SIM-421 / SIM-555: every book's row of every game market, in market order.
+        """Every book's row of every game market, in market order.
 
         The rename of the old segment-only fetch: the three full-game markets
-        now come through here too (SIM-555), one row per book and market. A
+        now come through here too, one row per book and market. A
         market the provider cannot resolve (no event, no offer) gives no row,
         so no empty row is ever written.
         """
@@ -101,7 +101,7 @@ class GameOddsMixin(PipelineBase):
         ]
 
     async def _persist_game_odds_cycle(self, game_pk: int) -> int:
-        """SIM-421 / SIM-555: persist every book's row of every game market, on the cadence.
+        """Persist every book's row of every game market, on the cadence.
 
         The rename of the old segment cycle. Gated by its own clock
         (``_last_game_odds_fetch``) at ``PROP_FETCH_CADENCE_S``, so the fifteen
@@ -148,27 +148,27 @@ class GameOddsMixin(PipelineBase):
         """
         Inserts a fresh odds snapshot into raw.game_odds.
 
-        SIM-133: Writes all four CLV-enabling columns
+        Writes all four CLV-enabling columns
           (book, line_type, market_type, is_sharp_book).
 
-        SIM-092: Also writes ``odds_hash`` (SHA-256 of the odds payload)
+        Also writes ``odds_hash`` (SHA-256 of the odds payload)
           and uses ON CONFLICT (game_pk, source, odds_hash) DO NOTHING
           so successive identical snapshots are deduplicated at write time.
           Backed by the partial unique index ``idx_game_odds_dedup``.
 
-        SIM-555: also writes ``book_line_at`` (migration 0028). The live cycle
+        Also writes ``book_line_at`` (migration 0028). The live cycle
         and the historical loader persist one offer's rows at a time through
         :meth:`_persist_odds_many`; this one-row method stays for single rows.
 
         The live pipeline always writes line_type='current'.  Opening lines are
-        captured by the nightly opening line job (SIM-138).  Closing lines are
+        captured by the nightly opening line job.  Closing lines are
         designated by mark_closing_lines(), which the schedule poll calls at
-        first pitch (SIM-546).
+        first pitch.
         """
         await self._db.execute(_GAME_ODDS_INSERT_SQL, *self._odds_params(game_pk, odds))
 
     async def _persist_odds_many(self, game_pk: int, rows: list[dict]) -> int:
-        """SIM-555: insert one offer's game-odds rows in one ``executemany``.
+        """Insert one offer's game-odds rows in one ``executemany``.
 
         The same SQL and the same dedup as :meth:`_persist_odds` (the
         ``odds_hash`` ``ON CONFLICT DO NOTHING``), one database round trip for
@@ -186,7 +186,7 @@ class GameOddsMixin(PipelineBase):
         *,
         scheduled_start: datetime | None = None,
     ) -> int:
-        """SIM-133 / SIM-546: designate a game's closing rows in raw.game_odds.
+        """Designate a game's closing rows in raw.game_odds.
 
         SIM-546 rewrote the rule: one closing row per (market, book), not one
         per game. Per key, the latest row fetched at or before

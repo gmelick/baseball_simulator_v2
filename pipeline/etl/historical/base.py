@@ -11,7 +11,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-# SIM-090: connection pool sizing.  A historical backfill issues many short
+# Connection pool sizing.  A historical backfill issues many short
 # DB round-trips per game (one per FK-existence check, plus inserts and the
 # freshness upsert).  Re-connecting for every one of those is wasteful, so we
 # borrow from a pool instead.  Sized via env so ops can tune for the box.
@@ -40,7 +40,7 @@ class LoaderBase:
         single-threaded backfill it behaves identically.  Pool bounds come from
         ETL_DB_POOL_MIN / ETL_DB_POOL_MAX (resolved at import time).
         """
-        # SIM-441: double-checked locking. The bare ``if self._pool is None``
+        # Double-checked locking. The bare ``if self._pool is None``
         # was a check-then-set race — two threads could each build a pool, and
         # the loser's connections would leak (never returned, never closed)
         # because ``close()`` only ever shuts down the pool it can see. Harmless

@@ -14,16 +14,15 @@ from pipeline.batch.artifacts.common import _savez_plain
 log = logging.getLogger("engine_artifacts")
 
 
-#: Actor engines whose per-(id, season) season-metrics vector is exported as a v1
-#: embedding (the worker z-scores + RBFs it for the f_batter / f_catcher / ... factor).
-#: SIM-424/425/426/427 refine these to each engine's exact feature selection/weights.
+#: The actor engines whose per-(id, season) season-metrics vector is exported
+#: as an embedding (the worker z-scores it for the actor factors).
 _ACTOR_TABLES = {
     "batter": "batter_season_metrics",
     "catcher": "catcher_season_metrics",
     "fielder": "fielder_season_metrics",
     "baserunner": "baserunner_season_metrics",
     "manager": "manager_season_metrics",
-    # SIM-474: the pitcher's hold-runner outcomes (sb_against_per_9,
+    # The pitcher's hold-runner outcomes (sb_against_per_9,
     # cs_rate_forced, steal_attempt_rate_allowed) weight the steal draw. The
     # id column resolves to pitcher_id via the `endswith("_id")` rule below.
     "pitcher_steal": "pitcher_steal_metrics",
@@ -31,12 +30,10 @@ _ACTOR_TABLES = {
 _NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
 
 
-#: SIM-523 part G (the plan's "got-away rates out of any profile used for
-#: selection"): the catcher's got-away-derived columns never enter a
-#: similarity kernel again. Part E's receiving ratio reads got-aways from the
-#: pool itself as a draw WEIGHT on the got-away row (the intended use); a
-#: catcher's got-away rate as a SELECTION feature proxied his staff's wildness
-#: (the SIM-523 confound).
+#: The catcher's got-away columns never enter a similarity score (the
+#: play-picker redesign, SIM-523). The receiving ratio reads got-aways from the
+#: pool itself, as a draw WEIGHT on the got-away row; as a SELECTION feature a
+#: catcher's got-away rate stands in for his staff's wildness.
 _EMBEDDING_EXCLUDE: dict[str, frozenset[str]] = {
     "catcher": frozenset(
         {
@@ -73,7 +70,7 @@ def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
             and not c.startswith("sample_")
             and c not in _EMBEDDING_EXCLUDE.get(actor, frozenset())
         ]
-        # SIM-425b: the fielder engine is POSITION-PARTITIONED — the same player has
+        # The fielder engine is POSITION-PARTITIONED — the same player has
         # one row per position they played, so keying the embedding by
         # player_id:season alone collapses multi-position fielders (last-wins;
         # ~11.3k rows → ~5.3k keys). Key the FIELDER embedding by

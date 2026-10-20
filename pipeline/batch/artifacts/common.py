@@ -29,20 +29,18 @@ _SIT_COLS = ["count_balls", "count_strikes", "outs", "runners_state", "inning", 
 DEFAULT_POOL_DIR = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 
-#: The artifact's season window. SIM-516 (owner ruling 2026-08-20): the last
-#: three COMPLETED seasons plus the current one — operationally the 4 newest
-#: seasons in the pool (full 2023-2026 today). Chosen over the old 3-season
-#: floor for cell thickness (the SIM-511 hard base-out filter's thinnest cell
-#: goes 323 -> 439 rows; +36% batted balls) at <0.5% frequency drift — the
-#: window census (`scripts/pool_window_census.py`) is the measurement. The old
-#: 3-season value was a SIM-423 perf gate (~1M rows/hand for the 2 s/game
-#: SLA); 4 seasons costs ~35% more per-PA scoring on a SLA that is already
-#: hardware-bound and de-prioritized (CLAUDE.md §12).
+#: The artifact's season window (owner ruling 2026-08-20, SIM-516): the last
+#: three COMPLETED seasons plus the current one, in practice the 4 newest
+#: seasons in the pool (2023-2026 today). Four seasons against three thicken
+#: the thinnest cell of the fielding draw's hard base-out filter from 323 to
+#: 439 rows (+36% batted balls) at under 0.5% frequency drift (the window
+#: census, `scripts/pool_window_census.py`). They cost about 35% more scoring
+#: per plate appearance.
 RECENCY_FLOOR_SEASONS = 4
 
 
 def ymd_select(con, table: str) -> str:
-    """The SIM-535 date column for ``table``, or nothing when it has none.
+    """The game-date column for ``table``, or nothing when it has none.
 
     Probed rather than assumed, matching how every other optional pool column
     is exported: a minimal or older ``sim.*`` table still builds, and the
@@ -53,12 +51,13 @@ def ymd_select(con, table: str) -> str:
     return f", {GAME_YMD_SQL} " if "game_date" in have else " "
 
 
-#: SIM-535: every pool row's game date as a plain YYYYMMDD integer.
+#: Every pool row's game date as a plain YYYYMMDD integer.
 #:
 #: The pools hold four seasons of plays and the simulator draws from all of
 #: them. Simulating a game played in April 2025 while the pool still offers
-#: plays from that September is look-ahead — the same defect SIM-534 fixed in
-#: the batter profiles, and a larger one, because it is the plays themselves.
+#: plays from that September is look-ahead (the pool cutoff, SIM-535): the
+#: same defect as a profile built past its cutoff, and a larger one, because it
+#: is the plays themselves.
 #: Carrying the date per row lets the sampler exclude the future at draw time,
 #: which costs one comparison per game instead of one bundle rebuild per date.
 #:
@@ -78,7 +77,7 @@ def last_n_seasons(con: duckdb.DuckDBPyConnection, n: int = RECENCY_FLOOR_SEASON
 
 
 def join_rows(keys: np.ndarray, targets: np.ndarray) -> np.ndarray:
-    """SIM-523 part B: for every ``keys[i]`` the index j with
+    """For every ``keys[i]`` the index j with
     ``targets[j] == keys[i]`` (the first such j), or -1. int32."""
     keys = np.asarray(keys, dtype=np.int64)
     targets = np.asarray(targets, dtype=np.int64)
@@ -94,7 +93,7 @@ def join_rows(keys: np.ndarray, targets: np.ndarray) -> np.ndarray:
 
 
 def _savez_plain(path: str, **arrays: Any) -> None:
-    """Write a compressed npz file that loads without a pickle (SIM-565).
+    """Write a compressed npz file that loads without a pickle.
 
     The bundle loader reads every file with ``allow_pickle=False``. An object
     array needs a pickle, so the loader refuses it. This writer refuses it

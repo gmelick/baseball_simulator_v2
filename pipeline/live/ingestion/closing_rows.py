@@ -21,7 +21,7 @@ from pipeline.odds_row_guard import (
 )
 
 # ---------------------------------------------------------------------------
-# SIM-546: every live game's closing rows
+# Every live game's closing rows
 # ---------------------------------------------------------------------------
 # A closing row is the last price a book posted before first pitch. At first
 # pitch the live pipeline promotes, per (market, book) for game odds and per
@@ -44,7 +44,7 @@ from pipeline.odds_row_guard import (
 #     against it. When a row with that hash already exists under the key of the
 #     dedup index, the loader got there first, and the row stays 'current'.
 
-#: SIM-546: one pre-pitch game row per (market, book): its closing row when it
+#: One pre-pitch game row per (market, book): its closing row when it
 #: has one, else its latest current row stamped no later than ``$3`` (the
 #: scheduled start plus the grace; NULL = no stamp check).
 _CLOSING_GAME_READ_SQL = """
@@ -63,7 +63,7 @@ _CLOSING_GAME_READ_SQL = """
                      fetched_at DESC, id DESC
             """
 
-#: SIM-546: the prop analogue: one pre-pitch row per (player, prop stat, book),
+#: The prop analogue: one pre-pitch row per (player, prop stat, book),
 #: by the same order and the same stamp bound ``$3``.
 _CLOSING_PROP_READ_SQL = """
             SELECT DISTINCT ON (player_id, prop_stat, book)
@@ -80,7 +80,7 @@ _CLOSING_PROP_READ_SQL = """
                      fetched_at DESC, id DESC
             """
 
-#: SIM-546: the new hashes already stored for one (game, source). The dedup
+#: The new hashes already stored for one (game, source). The dedup
 #: index of raw.game_odds is (game_pk, source, odds_hash).
 _CLOSING_GAME_EXISTING_SQL = """
             SELECT source, odds_hash
@@ -88,7 +88,7 @@ _CLOSING_GAME_EXISTING_SQL = """
             WHERE game_pk = $1 AND source = $2 AND odds_hash = ANY($3::text[])
             """
 
-#: SIM-546: the prop analogue. The dedup index of raw.prop_odds is
+#: The prop analogue. The dedup index of raw.prop_odds is
 #: (game_pk, player_id, source, odds_hash); the caller matches the player.
 _CLOSING_PROP_EXISTING_SQL = """
             SELECT player_id, source, odds_hash
@@ -96,7 +96,7 @@ _CLOSING_PROP_EXISTING_SQL = """
             WHERE game_pk = $1 AND source = $2 AND odds_hash = ANY($3::text[])
             """
 
-#: SIM-546: promote the picked rows in one statement. The line_type guard makes
+#: Promote the picked rows in one statement. The line_type guard makes
 #: a concurrent second call harmless: it skips a row already promoted.
 _CLOSING_GAME_UPDATE_SQL = """
             UPDATE raw.game_odds AS g
@@ -105,7 +105,7 @@ _CLOSING_GAME_UPDATE_SQL = """
             WHERE  g.id = v.id AND g.line_type = 'current'
             """
 
-#: SIM-546: the prop analogue of the update.
+#: The prop analogue of the update.
 _CLOSING_PROP_UPDATE_SQL = """
             UPDATE raw.prop_odds AS p
             SET    line_type = 'closing', odds_hash = v.odds_hash
@@ -113,7 +113,7 @@ _CLOSING_PROP_UPDATE_SQL = """
             WHERE  p.id = v.id AND p.line_type = 'current'
             """
 
-#: SIM-546: the price columns of a game row and of a prop row. Postgres stores a
+#: The price columns of a game row and of a prop row. Postgres stores a
 #: price as INTEGER. A writer may have hashed it as a float: the BettingPros
 #: provider reads every price as a float (-110.0, not -110).
 _GAME_PRICE_KEYS: tuple[str, ...] = (
@@ -127,7 +127,7 @@ _GAME_PRICE_KEYS: tuple[str, ...] = (
 )
 _PROP_PRICE_KEYS: tuple[str, ...] = ("over_ml", "under_ml")
 
-#: SIM-546: the line columns. Postgres stores a line as FLOAT. A writer may have
+#: The line columns. Postgres stores a line as FLOAT. A writer may have
 #: hashed a whole line as an int (5, not 5.0).
 _GAME_LINE_KEYS: tuple[str, ...] = ("home_spread", "away_spread", "total_line")
 _PROP_LINE_KEYS: tuple[str, ...] = ("line",)
@@ -165,7 +165,7 @@ def _hash_typings(row: Mapping[str, Any], is_prop: bool) -> list[dict[str, Any]]
 
 
 def closing_hash(row: Mapping[str, Any]) -> str:
-    """SIM-546: the odds_hash of ``row`` as a closing row.
+    """The odds_hash of ``row`` as a closing row.
 
     The hash is ``LiveIngestionPipeline._odds_hash`` (for a prop row, one with
     ``prop_stat``: ``_prop_odds_hash``) of the row with ``line_type`` set to
@@ -191,7 +191,7 @@ def closing_hash(row: Mapping[str, Any]) -> str:
 def closing_candidates(
     rows: Sequence[Mapping[str, Any]], *, scheduled_start: datetime | None
 ) -> list[tuple[int, str]]:
-    """PURE (SIM-546): the (row id, new odds_hash) of every row to promote.
+    """PURE: the (row id, new odds_hash) of every row to promote.
 
     ``rows`` are the promotion's read: one pre-pitch row per key, 'current' or
     'closing' (per (market_type, book) for game odds, per (player_id,
@@ -229,7 +229,7 @@ async def _promote_closing_rows(
     scheduled_start: datetime | None,
     is_prop: bool,
 ) -> int:
-    """SIM-546: one read, one existence check per source, then one update."""
+    """One read, one existence check per source, then one update."""
     read_sql = _CLOSING_PROP_READ_SQL if is_prop else _CLOSING_GAME_READ_SQL
     stamp_bound = None if scheduled_start is None else scheduled_start + CLOSING_STAMP_GRACE
     rows = [dict(r) for r in await conn.fetch(read_sql, game_pk, first_pitch_at, stamp_bound)]
@@ -269,7 +269,7 @@ async def promote_closing_game_rows(
     *,
     scheduled_start: datetime | None,
 ) -> int:
-    """SIM-546: promote one game's closing rows in raw.game_odds, one per (market, book).
+    """Promote one game's closing rows in raw.game_odds, one per (market, book).
 
     ``conn`` is an asyncpg pool or connection. ``first_pitch_at`` bounds the rows
     read (``fetched_at`` at or before it). ``scheduled_start`` feeds the load
@@ -290,7 +290,7 @@ async def promote_closing_prop_rows(
     *,
     scheduled_start: datetime | None,
 ) -> int:
-    """SIM-546: the prop analogue: one closing row per (player, prop stat, book)."""
+    """The prop analogue: one closing row per (player, prop stat, book)."""
     return await _promote_closing_rows(
         conn, game_pk, first_pitch_at, scheduled_start=scheduled_start, is_prop=True
     )

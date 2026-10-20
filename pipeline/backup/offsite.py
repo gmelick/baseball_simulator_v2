@@ -1,4 +1,4 @@
-"""pipeline/backup/offsite.py — the off-site copy of the backup sets (SIM-568).
+"""pipeline/backup/offsite.py — the off-site copy of the backup sets.
 
 Run it in the jobs container as ``appuser``:
 
@@ -83,13 +83,13 @@ from pipeline.backup.status import (
     newest_complete_set,
 )
 
-#: The mark of the data job of the scheduled backups (SIM-525). The copy waits while it runs.
+#: The mark of the data job of the scheduled backups. The copy waits while it runs.
 DATA_JOB_MARK = "nightly-backup"
 
 #: The Postgres job's lock file under the backup root. It holds "<pid> <start epoch>".
 POSTGRES_LOCK_OWNER = Path("postgres") / ".lock" / "owner"
 
-#: The copy lock in the mark folder (SIM-568): one copy run at a time.
+#: The copy lock in the mark folder: one copy run at a time.
 #: It holds "<pid> <start epoch> <host>".
 COPY_LOCK = "offsite-copy.lock"
 
@@ -390,7 +390,7 @@ def free_space_ok(
 
 
 # ---------------------------------------------------------------------------
-# The copy lock (SIM-568)
+# The copy lock
 # ---------------------------------------------------------------------------
 
 
@@ -733,7 +733,7 @@ def mirror_store(
             flush=True,
         )
         copied.append(info.set_id)
-    # SIM-568: protect every wanted set, not only the ones copied now. An
+    # Protect every wanted set, not only the ones copied now. An
     # off-site set newer than any local one would otherwise push a wanted set
     # out, and the next run would copy it back.
     prune_offsite(offsite_root, plan.store, keep, protect=wanted_ids)
@@ -816,7 +816,7 @@ def run_copy(
             return 2
         print_dry_run(offsite_root, plans, keep)
         return 0
-    # SIM-568: one copy run at a time. The lock spans the wait and the copy.
+    # One copy run at a time. The lock spans the wait and the copy.
     lock, refusal = take_lock(mark_dir, lock_stale_s=waits["lock_stale_s"], now=clock())
     if refusal is not None:
         log(f"refused: {refusal}")

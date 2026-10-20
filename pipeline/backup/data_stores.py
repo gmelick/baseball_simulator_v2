@@ -1,5 +1,5 @@
 """pipeline/backup/data_stores.py — back up, verify and restore the DuckDB
-analytics file and the engine-artifact bundle (SIM-525).
+analytics file and the engine-artifact bundle.
 
 Run it in the jobs container as ``appuser``:
 
@@ -51,7 +51,7 @@ from typing import Any
 
 import duckdb
 
-from pipeline.backup.common import (  # the shared helpers moved there (SIM-568)
+from pipeline.backup.common import (  # the shared helpers moved there
     CHUNK,  # noqa: F401  (re-exported under its old name)
     GIB,
     Clock,

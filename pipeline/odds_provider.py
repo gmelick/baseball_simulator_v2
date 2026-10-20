@@ -1,10 +1,10 @@
 """
 pipeline/odds_provider.py
 =========================
-SIM-370 — Odds/prop provider abstraction (real-provider swap seam).
+Odds/prop provider abstraction (real-provider swap seam).
 
 Phase 5 wired multi-book ingestion, a sharp-book flag, and a fetch cadence
-(SIM-340) on top of :class:`MockOddsAPI` in
+ on top of :class:`MockOddsAPI` in
 ``pipeline/live/live_ingestion_pipeline.py``.  This module adds the *seam* that
 lets a REAL odds/prop provider drop in behind that mock without touching any
 ingestion, CLV, or persistence code:
@@ -26,7 +26,7 @@ ingestion, CLV, or persistence code:
 Provider contract (what a real provider MUST honour)
 ----------------------------------------------------
 Both methods must return the same dict shapes ``MockOddsAPI`` returns, because
-``raw.game_odds`` / ``raw.prop_odds`` inserts and the CLV engine (SIM-339)
+``raw.game_odds`` / ``raw.prop_odds`` inserts and the CLV engine
 depend on them:
 
 ``get_odds(game_pk, *, line_type, market_type, book, is_sharp_book) -> dict``
@@ -43,7 +43,7 @@ is_sharp_book) -> dict``
     an unknown ``prop_stat`` (the 15 markets in ``PROP_STATS``), mirroring
     ``MockOddsAPI``.
 
-The prop-market vocabulary (SIM-421)
+The prop-market vocabulary
 ------------------------------------
 This module is the ONE place the ``raw.prop_odds.prop_stat`` vocabulary is
 written down. :data:`PITCHER_PROP_STATS` and :data:`BATTER_PROP_STATS` split
@@ -128,7 +128,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
-# SIM-421: the prop-market vocabulary (the single source; see the module docstring)
+# The prop-market vocabulary (the single source; see the module docstring)
 # ---------------------------------------------------------------------------
 
 #: The pitcher markets. A pitcher gets these and never a batter market.
@@ -157,7 +157,7 @@ BATTER_PROP_STATS: tuple[str, ...] = (
 )
 
 #: Every prop market, in the canonical order: the seven original markets
-#: (SIM-134) first, then the eight SIM-421 markets. A tuple so a caller cannot
+#: first, then the eight SIM-421 markets. A tuple so a caller cannot
 #: mutate the order.
 PROP_STATS: tuple[str, ...] = (
     "strikeouts",
@@ -205,7 +205,7 @@ PROP_STAT_TO_MODEL_PROP: dict[str, str] = {
 #: The three full-game markets (moneyline, run line, total).
 FULL_GAME_MARKET_TYPES: tuple[str, ...] = ("moneyline", "runline", "total")
 
-#: SIM-555: an alias of :data:`FULL_GAME_MARKET_TYPES`, kept for the readers
+#: An alias of :data:`FULL_GAME_MARKET_TYPES`, kept for the readers
 #: that name it. Before SIM-555 a row for one of these three markets carried all
 #: three markets' columns. The mock still fills all three on one row; the
 #: BettingPros provider no longer does: each market fills only its own columns.
@@ -419,7 +419,7 @@ BOOK_IDS_BY_NAME: dict[str, int] = {
 BOOK_LABEL_PREFIX = "bp:"
 
 #: The filter every reader appends. The old ``consensus`` rows were retired on 2026-10-01
-#: (SIM-555); the filter stays, so no other label is ever graded.
+#:; the filter stays, so no other label is ever graded.
 STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
 
 #: SIM-555 (decision 1): the graded book, in order. A reader grades against the
@@ -576,7 +576,7 @@ class OddsProvider(Protocol):
     satisfies this implicitly: its staticmethods are callable on an *instance*,
     which is how the pipeline invokes them.
 
-    SIM-555: the two ``*_by_book`` methods return one row per book. A structural
+    The two ``*_by_book`` methods return one row per book. A structural
     protocol cannot give a non-subclass a default body, so a writer calls them
     through :func:`odds_rows_by_book` / :func:`prop_rows_by_book`; those fall
     back to the one-row methods for a test fake that has only ``get_odds`` /
@@ -615,7 +615,7 @@ class OddsProvider(Protocol):
         line_type: str = "current",
         market_type: str = "moneyline",
     ) -> list[dict[str, Any]]:
-        """SIM-555: one ``get_odds``-shaped row per book for one market and line type."""
+        """One ``get_odds``-shaped row per book for one market and line type."""
         ...
 
     def get_prop_odds_by_book(
@@ -626,7 +626,7 @@ class OddsProvider(Protocol):
         *,
         line_type: str = "current",
     ) -> list[dict[str, Any]]:
-        """SIM-555: one ``get_prop_odds``-shaped row per book for one player and market."""
+        """One ``get_prop_odds``-shaped row per book for one player and market."""
         ...
 
 
@@ -637,7 +637,7 @@ def odds_rows_by_book(
     line_type: str = "current",
     market_type: str = "moneyline",
 ) -> list[dict[str, Any]]:
-    """SIM-555: every book's row of one game market, from any provider.
+    """Every book's row of one game market, from any provider.
 
     The provider's ``get_odds_by_book`` when it has one; otherwise its one
     ``get_odds`` row in a list (a test fake with only the one-row method). A
@@ -660,7 +660,7 @@ def prop_rows_by_book(
     *,
     line_type: str = "current",
 ) -> list[dict[str, Any]]:
-    """SIM-555: every book's row of one player's prop market, from any provider.
+    """Every book's row of one player's prop market, from any provider.
 
     The same fallback as :func:`odds_rows_by_book`, over ``get_prop_odds``.
     """
@@ -679,24 +679,24 @@ def prop_rows_by_book(
 
 class RealOddsAPIProvider:
     """
-    SIM-370 TEMPLATE for a real odds/prop provider (e.g. The Odds API).
+        SIM-370 TEMPLATE for a real odds/prop provider (e.g. The Odds API).
 
-    Conforms to :class:`OddsProvider` so it is a structural drop-in, but every
-    method raises until a live integration is actually wired.  This is a
-    reference template only: no ``ODDS_PROVIDER`` value resolves to it — both
-    ``ODDS_PROVIDER=bettingpros`` and ``ODDS_PROVIDER=real`` now map to the live
-    :class:`~pipeline.bettingpros_odds_provider.BettingProsOddsProvider`
-    (SIM-405).  It marks *exactly* where the HTTP calls go and what
-    configuration they need, should a third provider ever be added.
+        Conforms to :class:`OddsProvider` so it is a structural drop-in, but every
+        method raises until a live integration is actually wired.  This is a
+        reference template only: no ``ODDS_PROVIDER`` value resolves to it — both
+        ``ODDS_PROVIDER=bettingpros`` and ``ODDS_PROVIDER=real`` now map to the live
+        :class:`~pipeline.bettingpros_odds_provider.BettingProsOddsProvider`
+    .  It marks *exactly* where the HTTP calls go and what
+        configuration they need, should a third provider ever be added.
 
-    To implement (as a new named provider):
-      1. Read the API key from ``ODDS_PROVIDER_API_KEY`` (see ``__init__``).
-      2. In ``get_odds`` issue the game-odds request and map the response onto
-         the dict shape documented in this module / produced by ``MockOddsAPI``
-         (set ``source=<name>``, ``is_mock=False``; echo book / line_type /
-         market_type / is_sharp_book through unchanged).
-      3. In ``get_prop_odds`` do the same per (book, player, prop_stat); raise
-         ``ValueError`` for an unknown ``prop_stat``.
+        To implement (as a new named provider):
+          1. Read the API key from ``ODDS_PROVIDER_API_KEY`` (see ``__init__``).
+          2. In ``get_odds`` issue the game-odds request and map the response onto
+             the dict shape documented in this module / produced by ``MockOddsAPI``
+             (set ``source=<name>``, ``is_mock=False``; echo book / line_type /
+             market_type / is_sharp_book through unchanged).
+          3. In ``get_prop_odds`` do the same per (book, player, prop_stat); raise
+             ``ValueError`` for an unknown ``prop_stat``.
     """
 
     #: env var the real integration reads its credentials from.
@@ -806,7 +806,7 @@ def _make_bettingpros_provider() -> OddsProvider:
 
 # Built-in providers.
 register_odds_provider("mock", _make_mock_provider)
-# SIM-405: "bettingpros" is the live BettingPros v3 integration; "real" now
+# "bettingpros" is the live BettingPros v3 integration; "real" now
 # points to it (was the unimplemented SIM-370 stub) so ODDS_PROVIDER=real works.
 register_odds_provider("bettingpros", _make_bettingpros_provider)
 register_odds_provider("real", _make_bettingpros_provider)
@@ -850,7 +850,7 @@ __all__ = [
     "available_providers",
     "ODDS_PROVIDER_ENV",
     "DEFAULT_PROVIDER",
-    # SIM-421: the prop-market vocabulary
+    # The prop-market vocabulary
     "PROP_STATS",
     "PITCHER_PROP_STATS",
     "BATTER_PROP_STATS",

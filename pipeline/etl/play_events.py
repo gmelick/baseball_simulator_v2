@@ -1,4 +1,4 @@
-"""SIM-502: extract the non-pitch play events ``raw.pitches`` cannot represent.
+"""Extract the non-pitch play events ``raw.pitches`` cannot represent.
 
 WHY THIS MODULE EXISTS
 ======================
@@ -248,7 +248,7 @@ def extract_play_events(
         return thrower_at.get(play_index) or following_pitcher.get(play_index) or pitcher_id
 
     # Score entering the play, from the batting side's perspective. Supplied by
-    # the caller — the play's own `result` scores are POST-play (SIM-502b).
+    # the caller — the play's own `result` scores are POST-play.
     if topbot == "Top":
         bat_score, fld_score = int(away_score_before), int(home_score_before)
     else:
@@ -308,7 +308,7 @@ def extract_play_events(
             rows.append(_row(kind, index, runners_state=state))
             continue
 
-        # SIM-502d: the base the throw targeted. A bare throw carries it ONLY
+        # The base the throw targeted. A bare throw carries it ONLY
         # in the description text ("Pickoff Attempt 1B" — no structured field
         # exists on the event, verified); an action-carried outcome names it in
         # the eventType itself (`pickoff_1b` / `pickoff_error_3b`). Without

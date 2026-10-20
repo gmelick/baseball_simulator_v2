@@ -20,7 +20,7 @@ the project's hybrid Postgres/DuckDB convention:
      One row per pitch, keyed by ``(run_id, sequence)``, carrying exactly the
      fields needed to rebuild a :class:`simulation.snapshots.PlayByPlayEntry`
      (and thus a whole ``PlayByPlay``) without replaying the sim. Backs GET
-     .../plays and GET .../state/{at_bat}/{pitch} (SIM-357). Accessed sync via a
+     .../plays and GET .../state/{at_bat}/{pitch}. Accessed sync via a
      duckdb connection.
 
 The two stores join on ``run_id``: ``store_sim_run`` returns the Postgres
@@ -115,7 +115,7 @@ PLAY_ROW_FIELDS: tuple[str, ...] = (
     "home_score",
 )
 
-#: SIM-561: the context fields -- all nullable ints except ``half`` (a str).
+#: The context fields -- all nullable ints except ``half`` (a str).
 _PLAY_CONTEXT_INT_FIELDS: tuple[str, ...] = (
     "inning",
     "outs_before",
@@ -208,12 +208,12 @@ def _opt_int(value: Any) -> int | None:
     return None if value is None else int(value)
 
 
-#: Rows per multi-row INSERT (SIM-561).
+#: Rows per multi-row INSERT.
 _INSERT_CHUNK_ROWS = 200
 
 
 def _insert_rows(con: Any, insert_head: str, params: list[tuple]) -> None:
-    """Insert ``params`` with a few multi-row INSERTs (SIM-561).
+    """Insert ``params`` with a few multi-row INSERTs.
 
     ``insert_head`` is ``"INSERT INTO <table> (<cols>) VALUES "``.  DuckDB's
     ``executemany`` runs one statement per row: about 7 ms a row, 4 s for one
@@ -328,7 +328,7 @@ async def list_sim_runs(conn: Any, game_pk: int, *, limit: int = 10) -> list[dic
 
 
 # ---------------------------------------------------------------------------
-# SIM-386: live in-progress game state (sim.lineup_state)
+# Live in-progress game state (sim.lineup_state)
 # ---------------------------------------------------------------------------
 
 #: Read the most-recently-updated live row for a game_pk (the partial index
@@ -697,7 +697,7 @@ def store_game_card(
 ) -> None:
     """Persist one game's derived loop card (linescore + decisions) for a run.
 
-    SIM-561: ``base_seed`` is the seed the game was played at (DuckDB 0032).
+    ``base_seed`` is the seed the game was played at (DuckDB 0032).
 
     ``linescore`` / ``decisions`` are the already-jsonable dicts
     (``api.serialization.to_jsonable(linescore)`` /
@@ -776,7 +776,7 @@ def load_game_card(
 
 
 # ===========================================================================
-# DuckDB -- the replay file (SIM-561)
+# DuckDB -- the replay file
 # ===========================================================================
 #
 # The three replay tables live in their own DuckDB file, which only the app
@@ -845,7 +845,7 @@ def open_replay_store(path: str) -> Any:
 def next_replay_run_id(con: Any) -> int:
     """The next run id in the replay file: one above every stored run, any game.
 
-    SIM-561: the replay file numbers its own runs.  Its primary keys do not
+    The replay file numbers its own runs.  Its primary keys do not
     carry ``game_pk``, so a run id is unique across games.  The caller holds the
     app's replay write lock, so two stores never draw the same id.
     """
@@ -906,14 +906,14 @@ __all__ = [
     # DuckDB -- play stream
     "store_play_stream",
     "load_play_stream",
-    # DuckDB -- state snapshots (SIM-357)
+    # DuckDB -- state snapshots
     "store_state_snapshots",
     "load_state_at",
     "load_state_snapshots",
-    # DuckDB -- game cards (SIM-362/364)
+    # DuckDB -- game cards
     "store_game_card",
     "load_game_card",
-    # DuckDB -- the replay file (SIM-561)
+    # DuckDB -- the replay file
     "REPLAY_MIGRATIONS",
     "REPLAY_RUNS_KEPT",
     "ensure_replay_schema",

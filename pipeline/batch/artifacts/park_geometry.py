@@ -16,7 +16,7 @@ log = logging.getLogger("engine_artifacts")
 
 
 # ---------------------------------------------------------------------------
-# SIM-523 part C — the park geometry (SIM-478) and the carry model (SIM-479)
+# The park geometry and the carry model
 # ---------------------------------------------------------------------------
 #
 # The fence line of every park, as the pool's own batted balls reveal it: per
@@ -25,18 +25,15 @@ log = logging.getLogger("engine_artifacts")
 # of the lowest home-run carries (their 10th percentile) and the longest
 # carries that stayed in (the 99th percentile of the other air balls). A tall
 # wall shows up as a longer required carry, so one number per sector is the
-# EFFECTIVE fence. The DuckDB writer lock (SIM-524) keeps the ``derived``
-# table for later; the bundle carries ``park_geometry.json`` and merges an
+# EFFECTIVE fence. The bundle carries ``park_geometry.json`` and merges an
 # optional hand-curated ``park_geometry_overrides.json`` over it at build time.
 #
-# The fence certification (SIM-478/479/480, the plan at
-# ``docs/audit/2026-09-20-sim478-480-fence-certification-plan.md``, §4 and
-# §5.1) changed the document to VERSION 2 in three ways:
+# The document is VERSION 2 (the fence certification, SIM-478/479/480; the
+# plan is ``docs/audit/2026-09-20-sim478-480-fence-certification-plan.md``,
+# §4 and §5.1):
 #
-#   1. The grid runs to +-55 degrees (eleven sectors, was +-45 and nine). A
-#      ball down the line reads -50; the old builder dropped it and the stage
-#      clamped it to an edge sector built from balls at -40. Now the
-#      down-the-line balls get their own sectors.
+#   1. The grid runs to +-55 degrees (eleven sectors), so a ball down the line
+#      (about -50) has a sector of its own.
 #   2. A venue's lines come per SEASON GROUP. A CHANGE DETECTOR splits a
 #      venue's seasons where a sector's early line and late line, each on
 #      ``PARK_MOVE_MIN_HR`` home runs or more, differ by ``PARK_MOVE_FT`` or
@@ -48,12 +45,12 @@ log = logging.getLogger("engine_artifacts")
 #      offset between the effective and the published fence at that sector,
 #      blended toward the park's own balls at ``PARK_PRIOR_N`` home runs.
 #
-# The CARRY model is unchanged: a home run's reported distance is its landing
+# The CARRY model: a home run's reported distance is its landing
 # point, so the pool's home runs fit a quadratic in exit velocity and launch
 # angle (validated on them: mean absolute error ~14 ft) that stands in for a
 # ball whose own distance is missing.
 #
-# THE CARRY OFFSET (the plan's §11, 2026-09-22): one number per park, the
+# THE CARRY OFFSET (the plan's §11): one number per park, the
 # park's mean home-run carry against the league's for the same exit
 # velocity, launch angle and spray. It is the park term of the carry model
 # refitted with one dummy per park (``carry_offsets``). The fit runs on the

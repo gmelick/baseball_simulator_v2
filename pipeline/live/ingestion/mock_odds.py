@@ -17,7 +17,7 @@ from pipeline.odds_provider import (
 # ---------------------------------------------------------------------------
 # DDL helpers
 # ---------------------------------------------------------------------------
-# NOTE (SIM-083): GAME_ODDS_DDL has been removed from this file.
+# NOTE: GAME_ODDS_DDL has been removed from this file.
 # raw.game_odds DDL (including SIM-133 CLV columns) now lives in:
 #   db/schemas/01_postgres_schema.sql
 # Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
@@ -44,12 +44,12 @@ class MockOddsAPI:
       Favourite:  odds = -(prob / (1-prob)) * 100  (negative integer)
       Underdog:   odds = ((1-prob) / prob) * 100   (positive integer)
 
-    SIM-134: Added get_prop_odds() for the 7 Betting-Analyst-confirmed prop markets.
-    SIM-421: the eight markets the book already offers joined them (15 in all).
+    Added get_prop_odds() for the 7 Betting-Analyst-confirmed prop markets.
+    The eight markets the book already offers joined them (15 in all).
     """
 
     # ------------------------------------------------------------------
-    # SIM-134: Prop line configuration
+    # Prop line configuration
     # Betting Analyst (Agent 8) approved centers and vig ranges.
     # Format: (line_center, half_spread, over_vig_range, under_vig_range)
     #   line_center:  base prop line (snapped to nearest 0.5 by get_prop_odds)
@@ -75,7 +75,7 @@ class MockOddsAPI:
         "walks": (2.5, 0.5, (-115, -105), (-115, -105)),
         "total_bases": (1.5, 0.5, (-120, -105), (-115, -105)),
         "rbis": (0.5, 0.5, (-120, -110), (-110, -100)),
-        # SIM-421: the eight markets the book already offers.
+        # The eight markets the book already offers.
         "singles": (0.5, 0.5, (-120, -105), (-115, -100)),
         "doubles": (0.5, 0.0, (+150, +200), (-250, -190)),
         "triples": (0.5, 0.0, (+600, +900), (-1400, -1000)),
@@ -106,7 +106,7 @@ class MockOddsAPI:
         """
         Returns mock betting lines for a game.
 
-        SIM-133: Added book, line_type, market_type, is_sharp_book fields so all
+        Added book, line_type, market_type, is_sharp_book fields so all
         raw.game_odds inserts populate the four CLV-enabling columns.
 
         Parameters
@@ -136,7 +136,7 @@ class MockOddsAPI:
         home_win_prob = rng.uniform(0.38, 0.64)
         away_win_prob = 1.0 - home_win_prob
 
-        # SIM-132: Apply realistic book vig so mock lines don't produce zero-
+        # Apply realistic book vig so mock lines don't produce zero-
         # overround prices.  Without vig, implied probs sum to exactly 1.0 —
         # no real book prices this way.  Every edge calculation, calibration
         # target, and display component built through Phase 6 would be trained
@@ -221,7 +221,7 @@ class MockOddsAPI:
         elif kind == "runline":
             spread = mrng.choice([-0.5, 0.5])
             result["home_spread"], result["away_spread"] = spread, -spread
-            # SIM-546: every mock price is a valid American price. A raw
+            # Every mock price is a valid American price. A raw
             # integer draw put about half of them inside (-100, 100) and
             # some at 0, which the de-vig refuses for both sides.
             p_home = mrng.uniform(0.40, 0.60)
@@ -259,7 +259,7 @@ class MockOddsAPI:
         is_sharp_book: bool = False,
     ) -> dict[str, Any]:
         """
-        SIM-134: Returns a deterministic mock prop line for a player.
+        Returns a deterministic mock prop line for a player.
 
         The RNG is seeded on (game_pk, player_id, prop_stat) so the same
         combination always returns the same line — frontend and tests never
@@ -330,7 +330,7 @@ class MockOddsAPI:
         line_type: str = "current",
         market_type: str = "moneyline",
     ) -> list[dict[str, Any]]:
-        """SIM-555: the by-book protocol method. The mock has one book: its one row.
+        """The by-book protocol method. The mock has one book: its one row.
 
         The row keeps the mock's ``consensus`` label and, for the three
         full-game markets, its all-three-markets shape. The method reads
@@ -348,7 +348,7 @@ class MockOddsAPI:
         *,
         line_type: str = "current",
     ) -> list[dict[str, Any]]:
-        """SIM-555: the by-book protocol method. The mock has one book: its one row.
+        """The by-book protocol method. The mock has one book: its one row.
 
         Reads ``self.get_prop_odds``, as :meth:`get_odds_by_book` reads
         ``self.get_odds``.

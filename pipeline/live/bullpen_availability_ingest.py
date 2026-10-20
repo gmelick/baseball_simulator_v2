@@ -1,10 +1,10 @@
 """
 pipeline/live/bullpen_availability_ingest.py
 ============================================
-SIM-433 — per-game bullpen availability ingestion.
+Per-game bullpen availability ingestion.
 
 ``raw.game_lineups`` records who *played*, not who was *available*. The manager
-USAGE profile (SIM-427 / SIM-434) needs the available-but-unused signal: was a
+USAGE profile needs the available-but-unused signal: was a
 reliever NOT used because the manager chose to hold him, or because he *couldn't*
 pitch (on the IL, or rest-unavailable after a heavy / back-to-back outing)?
 
@@ -153,7 +153,7 @@ _WORKLOAD_COLS = (
 
 @dataclass
 class BullpenAvailabilityIngest:
-    """Fetch + parse + persist per-game bullpen availability (SIM-433).
+    """Fetch + parse + persist per-game bullpen availability.
 
     Parameters
     ----------
@@ -187,7 +187,7 @@ class BullpenAvailabilityIngest:
     def _resolve_game_meta(self, game_pk: int) -> _GameMeta | None:
         """``game_pk`` → (date, home_team_id, away_team_id) via the MLB schedule.
 
-        SIM-536: ``date`` MUST come from the schedule's ``officialDate`` field
+        ``date`` MUST come from the schedule's ``officialDate`` field
         (the local calendar date the game is actually played on), never from
         truncating ``gameDate`` (a UTC timestamp). For a West-/Mountain-time
         night game the UTC clock has already rolled into the next calendar

@@ -1,7 +1,7 @@
 """
 venue_backfill_job.py
 =====================
-SIM-086 — Backfill NULL venue_id rows on raw.games.
+Backfill NULL venue_id rows on raw.games.
 
 Why this job exists
 -------------------

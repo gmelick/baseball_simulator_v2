@@ -72,7 +72,7 @@ class ReferenceRowsMixin(LoaderBase):
             division = div_map.get(t.get("division", {}).get("name", ""), "AL East")
             # A team's OWN venue is the right value for raw.teams (its home park),
             # so the game's venue is only a fallback — and on a neutral-site game
-            # it may be absent entirely (SIM-447), hence the guarded lookup rather
+            # it may be absent entirely, hence the guarded lookup rather
             # than gd["venue"]["id"].
             venue_id = t.get("venue", {}).get("id") or (gd.get("venue") or {}).get("id")
             if venue_id is None:
@@ -114,7 +114,7 @@ class ReferenceRowsMixin(LoaderBase):
         """
         Upserts raw.managers for the home and away managers of this game.
 
-        SIM-441: the PK is ``(manager_id, season)`` — the old docstring said
+        The PK is ``(manager_id, season)`` — the old docstring said
         ``(manager_id, team_id, season_start)``, which is not what the DDL
         declares and not what the ``ON CONFLICT`` targets.
 
@@ -162,7 +162,7 @@ class ReferenceRowsMixin(LoaderBase):
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 for mid, name, tid in missing:
-                    # SIM-441: find the CURRENTLY-ACTIVE incumbent to hand off from.
+                    # Find the CURRENTLY-ACTIVE incumbent to hand off from.
                     #
                     # This probe used to have no ORDER BY, no LIMIT and no
                     # `season_end IS NULL` predicate, with a bare fetchone() — so
@@ -386,7 +386,7 @@ class ReferenceRowsMixin(LoaderBase):
             conn.commit()
 
     def _ensure_game_lineups(self, game_pk: int, season: int, game_dict: dict) -> None:
-        """Insert the starting-lineup rows into raw.game_lineups (SIM-409).
+        """Insert the starting-lineup rows into raw.game_lineups.
 
         Idempotent (``ON CONFLICT DO NOTHING`` on the natural key) so a re-fetch
         of an already-loaded game does not duplicate rows. The starting lineups
@@ -424,6 +424,6 @@ class ReferenceRowsMixin(LoaderBase):
             conn.commit()
         log.info("  Inserted %d starting-lineup rows for game %s", len(rows), game_pk)
 
-    #: SIM-519: tri-state cache of "does ``raw.game_lineups.source`` exist"
+    #: Tri-state cache of "does ``raw.game_lineups.source`` exist"
     #: (Alembic 0029). ``None`` means not yet probed.
     _lineup_source_column_exists: bool | None = None

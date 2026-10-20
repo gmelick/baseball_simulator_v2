@@ -16,12 +16,12 @@ from typing import (
 
 from pipeline.bettingpros.parsing import _parse_utc
 
-#: SIM-536: the largest gap allowed between the actual game's start time and the
+#: The largest gap allowed between the actual game's start time and the
 #: BettingPros event we matched it to. A match beyond this is treated as no
 #: match at all, rather than silently priced against the wrong game.
 _MAX_EVENT_TIME_DELTA = timedelta(hours=2)
 
-#: SIM-555: the largest gap the single-event rule accepts. The vendor sometimes
+#: The largest gap the single-event rule accepts. The vendor sometimes
 #: keeps a game's first start time after MLB moves it (game 745169: MLB moved
 #: it to 18:15Z, the vendor's only event of the two teams that day kept
 #: 00:15Z, six hours later). The rule takes such an event only when it is the
@@ -30,7 +30,7 @@ _MAX_SINGLE_EVENT_DELTA = timedelta(hours=12)
 
 
 class _ScheduleInfo(NamedTuple):
-    """SIM-555: the MLB schedule facts the matcher reads beyond the meta 4-tuple.
+    """The MLB schedule facts the matcher reads beyond the meta 4-tuple.
 
     Every time is naive UTC, as :func:`_parse_utc` gives it.
     """
@@ -57,7 +57,7 @@ class _ScheduleInfo(NamedTuple):
 
     @property
     def start_unknown(self) -> bool:
-        """True for game 2 of a straight double-header with no listed start (SIM-555).
+        """True for game 2 of a straight double-header with no listed start.
 
         MLB sets ``startTimeTBD`` on such a game and gives it a placeholder
         ``gameDate``: game 1's start plus 5 minutes (game 746773: 18:15Z
@@ -68,7 +68,7 @@ class _ScheduleInfo(NamedTuple):
 
 
 def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
-    """The schedule facts of a game with one entry (SIM-555).
+    """The schedule facts of a game with one entry.
 
     The matcher uses it when the schedule cache holds nothing for a game (a
     subclass that resolves the meta another way).
@@ -78,7 +78,7 @@ def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
 
 
 def _is_postponed(game: Mapping[str, Any]) -> bool:
-    """True when an MLB schedule entry is a postponed game (SIM-555).
+    """True when an MLB schedule entry is a postponed game.
 
     The test reads two status fields. ``detailedState`` starts with
     "Postponed"; ``codedGameState`` "D" is MLB's postponed code (the ETL's
@@ -94,7 +94,7 @@ def _is_postponed(game: Mapping[str, Any]) -> bool:
 def _read_schedule(
     data: Mapping[str, Any],
 ) -> tuple[tuple[str, str, str, datetime | None], _ScheduleInfo]:
-    """The meta 4-tuple and the schedule facts of one ``schedule?gamePk=`` answer (SIM-555).
+    """The meta 4-tuple and the schedule facts of one ``schedule?gamePk=`` answer.
 
     MLB lists a game once per date it touched. A game postponed and made up
     later has two entries: the postponed one (its ``gameDate`` the original

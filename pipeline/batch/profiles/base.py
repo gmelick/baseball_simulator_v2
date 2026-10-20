@@ -148,7 +148,7 @@ class ComputorBase:
         """
 
     # ------------------------------------------------------------------
-    # One cutoff per profile table (SIM-551)
+    # One cutoff per profile table
     # ------------------------------------------------------------------
 
     #: The profile tables that carry a point-in-time stamp. ``asof_date`` is

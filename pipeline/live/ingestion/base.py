@@ -78,7 +78,7 @@ class PipelineBase:
 
     def _odds_provider(self) -> OddsProvider:
         """
-        SIM-370: Resolve the active odds provider.
+        Resolve the active odds provider.
 
         Normally set in __init__ (env-selected, defaults to MockOddsAPI), but
         pipelines built via __new__ (some tests) skip __init__, so fall back to
@@ -92,7 +92,7 @@ class PipelineBase:
         return provider
 
     # ------------------------------------------------------------------
-    # SIM-555: the load guard on the live writers
+    # The load guard on the live writers
     # ------------------------------------------------------------------
 
     def _refusal_tally(self) -> RefusalTally:

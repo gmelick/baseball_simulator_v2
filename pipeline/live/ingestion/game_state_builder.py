@@ -34,7 +34,7 @@ class GameStateBuilder:
       home_lineup, away_lineup, home_bullpen, away_bullpen,
       home_bench, away_bench, play_history
 
-    SIM-101 — Per-game caching:
+    Per-game caching:
       One builder is now stored per ``game_pk`` on the pipeline
       (LiveIngestionPipeline._builders).  The builder caches:
 
@@ -52,7 +52,7 @@ class GameStateBuilder:
 
     def __init__(self, db_pool: asyncpg.Pool) -> None:
         self._db = db_pool
-        # SIM-101: per-game caches.  Reset implicitly each time a fresh
+        # Per-game caches.  Reset implicitly each time a fresh
         # builder is constructed (one per game_pk).
         self._history: list[dict] = []
         self._last_at_bat_index: int = -1  # -1 = nothing seen yet
@@ -75,7 +75,7 @@ class GameStateBuilder:
         home_team_id = game_data["teams"]["home"]["id"]
         away_team_id = game_data["teams"]["away"]["id"]
 
-        # SIM-100: extract game_date for replay-safe days_rest calculation.
+        # Extract game_date for replay-safe days_rest calculation.
         # officialDate is "YYYY-MM-DD"; None-safe for edge cases.
         _game_date_str = game_data.get("datetime", {}).get("officialDate")
         try:
@@ -105,7 +105,7 @@ class GameStateBuilder:
         # ---- Current participants ------------------------------------------
         current_batter_id = offense.get("batter", {}).get("id")
 
-        # SIM-099: removed dead first assignment from offense dict (matchup is
+        # Removed dead first assignment from offense dict (matchup is
         # batter-centric; the "pitcher" key there was silently overwritten by
         # the lookup chain below).
         #
@@ -131,7 +131,7 @@ class GameStateBuilder:
             )
 
         # ---- Lineups -------------------------------------------------------
-        # SIM-100: pass game_date so days_rest is anchored to the game date,
+        # Pass game_date so days_rest is anchored to the game date,
         # not date.today() — required for correct historical replay behaviour.
         home_lineup, home_bullpen, home_bench = await self._parse_roster(
             boxscore, game_pk, side="home", team_id=home_team_id, game_date=_game_date
@@ -141,10 +141,10 @@ class GameStateBuilder:
         )
 
         # ---- Play history (at-bat level summary) ---------------------------
-        # SIM-101: cache game_date on first refresh.
+        # Cache game_date on first refresh.
         if self._game_date is None:
             self._game_date = _game_date
-        # SIM-101: incremental parse — only walk plays beyond what we've
+        # Incremental parse — only walk plays beyond what we've
         # already processed.  Returns the cached running history.
         play_history = self._parse_play_history(live_data["plays"].get("allPlays", []))
 
@@ -215,7 +215,7 @@ class GameStateBuilder:
         lineup: list[dict] = []
         bench: list[dict] = []
 
-        # SIM-100: two-pass approach — collect pitchers first, then batch-query
+        # Two-pass approach — collect pitchers first, then batch-query
         # days_rest for all of them in a single DB round-trip.
         bullpen_candidates: list[tuple] = []  # (pid, name, pitching_stats, game_stats, pitch_count)
 
@@ -246,7 +246,7 @@ class GameStateBuilder:
             if position == "P":
                 pitching_stats = stats.get("pitching", {})
                 pitch_count_today = pitching_stats.get("pitchesThrown", 0)
-                # SIM-100: removed used_pitcher_ids.add(pid) — set was populated
+                # Removed used_pitcher_ids.add(pid) — set was populated
                 # but never read anywhere; dead code confirmed by full-file grep.
                 bullpen_candidates.append(
                     (pid, name, pitching_stats, game_stats, pitch_count_today)
@@ -261,7 +261,7 @@ class GameStateBuilder:
                     }
                 )
 
-        # SIM-100: single batch query replaces N per-pitcher queries
+        # Single batch query replaces N per-pitcher queries
         pitcher_ids = [c[0] for c in bullpen_candidates]
         days_rest_cache = await self._batch_days_rest(pitcher_ids, game_pk, as_of_date=game_date)
 
@@ -270,7 +270,7 @@ class GameStateBuilder:
             days_rest = days_rest_cache.get(pid)  # int | None
             role = self._infer_role(pitching_stats, game_stats)
 
-            # SIM-100: corrected availability logic.
+            # Corrected availability logic.
             # Old (wrong): pitch_count_today == 0
             #   → marks every pitcher who has thrown even 1 pitch as unavailable,
             #     so most of the bullpen is unavailable mid-game.
@@ -362,7 +362,7 @@ class GameStateBuilder:
         """
         Best-effort role inference from in-game stats.
 
-        SIM-102: Adds an Opener bucket between SP and MRP.  Pre-SIM-102 logic
+        Adds an Opener bucket between SP and MRP.  Pre-SIM-102 logic
         only used IP, so a pitcher who threw 2.0 IP and faced 9 batters was
         labelled MRP — exactly the misclassification that breaks the Phase 4
         manager engine, which then treats the opener as a middle reliever
@@ -404,7 +404,7 @@ class GameStateBuilder:
         Converts allPlays into a lightweight at-bat-level log for the frontend
         play-by-play panel and for simulation replay.
 
-        SIM-101 — Incremental parse:
+        Incremental parse:
           Pre-SIM-101 this was a static method that walked every play in
           ``all_plays`` on every WS signal.  By the 9th inning of a 10-inning
           game with ~90 plays, this fired 20+ times per inning (one per WS
@@ -461,7 +461,7 @@ class GameStateBuilder:
 
     @staticmethod
     def _build_history_entry(play: dict) -> dict:
-        """SIM-101: extracted from the old parser so both the incremental
+        """Extracted from the old parser so both the incremental
         path and any consumer that wants to reformat a single play stay in
         sync."""
         about = play.get("about", {})

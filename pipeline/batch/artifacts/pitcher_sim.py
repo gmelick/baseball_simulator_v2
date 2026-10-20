@@ -16,8 +16,8 @@ log = logging.getLogger("engine_artifacts")
 def build_pitcher_sim_matrix(
     duckdb_path: str, out_dir: str, seasons: list[int], limit: int | None = None
 ) -> int:
-    """Export the same-hand pitcher×pitcher composite similarity from the SIM-075
-    engine. The FULL run is the ~1 h nightly job (~1.2 s/query × ~3k profiles);
+    """Export the same-hand pitcher-by-pitcher composite similarity from the
+    pitcher engine. The FULL run is the ~1 h nightly job (~1.2 s/query × ~3k profiles);
     ``limit`` scores only the first N profiles (verification mode)."""
     from similarity.engines.pitcher_similarity import PitcherSimilarityEngine
 
@@ -31,17 +31,15 @@ def build_pitcher_sim_matrix(
         results = engine.query(pid, s)  # all same-hand profiles, sorted
         sims[f"{pid}:{s}"] = {f"{r.pitcher_id}:{r.season}": float(r.score) for r in results}
     os.makedirs(out_dir, exist_ok=True)
-    # SIM-430: also store a DENSE (n_prof x n_prof) float32 similarity matrix.
+    # Also store a DENSE (n_prof x n_prof) float32 similarity matrix.
     # The dict-of-dicts costs ~2 GB resident per process (Python str/float/dict
     # overhead) and is NOT shareable through multiprocessing.shared_memory, so
-    # every ProcessPool worker held a full private copy -> 10 workers OOM-killed
-    # the host (the SIM-430 fan-out blocker). The dense matrix is ~11 MB for 1677
-    # profiles and rides the existing SIM-403b shared-memory seam, so ALL workers
-    # attach one read-only view. Row i = the prof_score vector for query profile
-    # index i (M[i, j] = sim(i, j), 0.0 when absent) — exactly what _f_pitcher
-    # scatters from the dict today, so the drawn outcome is byte-identical. The
-    # dict is kept in the npz for back-compat (older loaders + the matrix-absent
-    # fallback path).
+    # every process-pool worker would hold a full private copy (ten workers run
+    # the host out of memory). The dense matrix is ~11 MB for 1677 profiles and
+    # rides the shared-memory seam, so ALL workers attach one read-only view.
+    # Row i is the prof_score vector of query profile i (M[i, j] = sim(i, j),
+    # 0.0 when absent) — exactly what the dict yields, so the draw is the same
+    # either way. The dict stays in the npz for an older loader.
     n_prof = len(index)
     sim_matrix = np.zeros((n_prof, n_prof), dtype=np.float32)
     for qk, srow in sims.items():
@@ -72,13 +70,13 @@ def load_pitcher_sim(
     ps_matrix: np.ndarray | None = None
     ps_path = os.path.join(art_dir, "pitcher_sim.npz")
     if os.path.exists(ps_path):
-        # SIM-430: prefer the dense matrix. A worker gets it as a shared view
+        # Prefer the dense matrix. A worker gets it as a shared view
         # (``views["pitcher_sim.matrix"]``); the parent/dev path reads it from
         # the npz. In EITHER case we read ONLY the tiny ``index`` from disk and
         # SKIP json-parsing the ~2 GB ``sims`` dict. The dict is parsed solely
         # on a legacy bundle that has no ``pitcher_sim_matrix`` array.
         mv = views.get("pitcher_sim.matrix")
-        # SIM-565: the bundle never carries a pickle. Every load here refuses
+        # The bundle never carries a pickle. Every load here refuses
         # one, and ``_savez_plain`` keeps the builder from writing one.
         z = np.load(ps_path, allow_pickle=False)
         ps_index = json.loads(str(z["index"]))

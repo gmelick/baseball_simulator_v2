@@ -1,7 +1,7 @@
 """
 pipeline/batch/pool_chain.py
 ============================
-SIM-553 — the count chain of the pitch pool, and the label check against real
+The count chain of the pitch pool, and the label check against real
 plate appearances.
 
 THE COUNT CHAIN
@@ -165,7 +165,7 @@ def _sql_is_batting_event(col: str = "events") -> str:
 def _sql_pa_flag(col: str = "events") -> str:
     """The group aggregate that marks a plate appearance: 1 when a row's ``col`` is a batting event.
 
-    SIM-553: :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
+    :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
     chain (on ``sim.pitch_pool``) both judge a ``(game_pk, at_bat_number)``
     group with this one expression, so the two sides cannot disagree on what a
     plate appearance is.
@@ -191,7 +191,7 @@ def _sql_pa_keys(pred: str) -> str:
 def pa_group_count(con: Any, pred: str) -> int:
     """The number of plate appearances the ``pa_only`` chain reads from ``sim.pitch_pool WHERE ({pred})``.
 
-    SIM-553: a plate appearance is a ``(game_pk, at_bat_number)`` group whose
+    A plate appearance is a ``(game_pk, at_bat_number)`` group whose
     rows inside ``pred`` hold a batting event, judged from the pool's own
     ``events`` column (:func:`_sql_pa_keys`, the SQL the ``pa_only`` read
     uses). The label check compares this with ``real_pa_rates(...)['n_pa']``:
@@ -283,7 +283,7 @@ def pool_count_matrix(
     :data:`OUTCOMES` order. ``pred`` is a SQL predicate on the pool's columns
     (``season``, ``game_date``, ...).
 
-    ``pa_only`` (SIM-553) keeps only the rows of real plate appearances: the
+    ``pa_only`` keeps only the rows of real plate appearances: the
     rows whose ``(game_pk, at_bat_number)`` group holds a batting event in the
     pool's own ``events`` column. The group test is :func:`_sql_pa_flag`, the
     one :func:`real_pa_rates` applies to ``raw.pitches``, and it reads
@@ -313,7 +313,7 @@ def pool_count_matrix(
     """
     volume = "SUM(recency_weight)" if weighted else "COUNT(*)"
     if pa_only:
-        # SIM-553: one CTE of the plate-appearance keys (_sql_pa_keys, the SQL
+        # One CTE of the plate-appearance keys (_sql_pa_keys, the SQL
         # pa_group_count counts), joined back. Each key appears once, so the
         # join adds no row. The CTE holds only the two key columns, so a bare
         # column in ``pred`` stays unambiguous. ``pred`` applies twice: in the
@@ -510,7 +510,7 @@ def format_label_check(rows: list[tuple[str, float, float, float, bool]]) -> lis
 def format_pa_count(n_pool: int, n_real: int) -> str:
     """Render the plate-appearance count check on one line, aligned with :func:`format_label_check`.
 
-    SIM-553: ``n_pool`` is :func:`pa_group_count`, ``n_real`` is
+    ``n_pool`` is :func:`pa_group_count`, ``n_real`` is
     ``real_pa_rates(...)['n_pa']``. Equal counts PASS. Unequal counts FAIL,
     with the plain reason: the two sides no longer read the same plate
     appearances.
@@ -527,7 +527,7 @@ def format_pa_count(n_pool: int, n_real: int) -> str:
 def format_gaps(rows: list[tuple[str, float, float, float, bool]]) -> str:
     """Render :func:`label_check` rows' gaps on one line, for a for-the-record read.
 
-    SIM-553: the census and the standing test print the all-rows chain's gaps
+    The census and the standing test print the all-rows chain's gaps
     this way beside the ``pa_only`` verdict.
     """
     return "  ".join(

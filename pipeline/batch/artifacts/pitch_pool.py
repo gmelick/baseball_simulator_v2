@@ -37,14 +37,14 @@ def build_pitch_pool_artifact(
             f"SELECT {cols}, pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})"
         ).fetchnumpy()
-        # SIM-517 / SIM-518: the optional pool columns (migrations 0022 /
+        # The optional pool columns (migrations 0022 /
         # 0023). Probed so a pre-migration sim DB still exports (the loader
         # treats them as optional exactly like the batted-ball realism
         # columns).
         pp_cols = duck_columns(con, "sim", "pitch_pool")
         has_catcher = "catcher_id" in pp_cols
         has_conditioning = pp_cols >= _PP_CONDITIONING_COLS
-        # SIM-523 part E: the zone, for the receiving ratio's zone groups.
+        # The zone, for the receiving ratio's zone groups.
         zone_select = ", COALESCE(zone, 0) AS zone" if "zone" in pp_cols else ""
         n = len(d["pitch_id"])
         # fetchnumpy yields masked arrays for nullable cols; fill -> plain float32.
@@ -63,7 +63,7 @@ def build_pitch_pool_artifact(
             if has_catcher
             else ""
         )
-        # SIM-518 (migration 0023): the draw-conditioning columns. A NULL (a
+        # The draw-conditioning columns. A NULL (a
         # row the rebuild has not filled) exports as UNKNOWN — bat_home -1,
         # pitch count -1, times through the order 0 — and every consumer is
         # exactly neutral on an unknown row.
@@ -98,7 +98,7 @@ def build_pitch_pool_artifact(
     return counts
 
 
-#: SIM-518: the pitch-pool conditioning columns (migration 0023). Presence
+#: The pitch-pool conditioning columns (migration 0023). Presence
 #: of ALL of them marks a 0023-migrated DB; the export writes them together.
 _PP_CONDITIONING_COLS = frozenset({"bat_home", "pitcher_pitch_count", "times_through_order"})
 
@@ -106,7 +106,7 @@ _PP_CONDITIONING_COLS = frozenset({"bat_home", "pitcher_pitch_count", "times_thr
 def _pp_take(
     views: dict[str, np.ndarray], hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
 ) -> np.ndarray | None:
-    """SIM-518: the same optional-column rule for the PITCH pool."""
+    """The same optional-column rule for the PITCH pool."""
     v = views.get(f"pool.{hand}.{attr}")
     if isinstance(v, np.ndarray):
         return v
@@ -128,21 +128,21 @@ def load_pitch_pools(
         # The metadata parquet stays disk-loaded — outcome_type is
         # object-dtype (not shareable) and the ids/recency are small.
         meta_path = os.path.join(pool_dir, f"{hand}.meta.parquet")
-        # SIM-517: the receiving columns exist only on a post-0022
+        # The receiving columns exist only on a post-0022
         # export — probe the parquet schema and select what is there
-        # (the SIM-411/413 batted-ball pattern).
+        # (the batted-ball pool's pattern).
         pp_avail = {
             r[0] for r in con.execute(f"SELECT name FROM parquet_schema('{meta_path}')").fetchall()
         }
         receiving_sel = ", catcher_id, got_away" if "catcher_id" in pp_avail else ""
-        # SIM-518: the conditioning columns exist only on a sim518
+        # The conditioning columns exist only on a sim518
         # export — the same probe-and-select pattern.
         conditioning_sel = "".join(
             f", {c}"
             for c in ("bat_home", "pitcher_pitch_count", "times_through_order", "zone")
             if c in pp_avail
         )
-        # SIM-535: the game date, on a bundle exported after it existed.
+        # The game date, on a bundle exported after it existed.
         ymd_sel = ", game_ymd" if "game_ymd" in pp_avail else ""
         m = con.execute(
             "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight"
@@ -205,15 +205,15 @@ def load_pitch_pools(
                     else None
                 )
             ),
-            # SIM-518: the draw-conditioning columns (unknown = -1 / -1 / 0).
+            # The draw-conditioning columns (unknown = -1 / -1 / 0).
             bat_home=_pp_take(views, hand, m, "bat_home", "bat_home", np.int8, -1),
             pitch_count=_pp_take(
                 views, hand, m, "pitch_count", "pitcher_pitch_count", np.int16, -1
             ),
             tto=_pp_take(views, hand, m, "tto", "times_through_order", np.int8, 0),
-            # SIM-523 part E: the zone (None before part E).
+            # The zone (None on an older bundle).
             zone=_pp_take(views, hand, m, "zone", "zone", np.int8, 0),
-            # SIM-523 part B: the pitch-id join (None before part B).
+            # The pitch-id join (None on an older bundle).
             bb_row=(
                 views.get(f"pool.{hand}.bb_row")
                 if isinstance(views.get(f"pool.{hand}.bb_row"), np.ndarray)

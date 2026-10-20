@@ -516,7 +516,7 @@ class FielderProfilesMixin(ComputorBase):
     # ------------------------------------------------------------------
 
     def _fill_outfield_arm_block(self, seasons: list[int], asof: date | None = None) -> None:
-        """Fill the outfield arm block (SIM-550) from
+        """Fill the outfield arm block from
         ``sim.advancement_opportunity_pool``, per (fielder, position, season).
 
         The pool holds one row per real chance to take an extra base, with

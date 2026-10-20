@@ -1,8 +1,8 @@
-"""pipeline/backup/common.py — the helpers the backup modules share (SIM-525, SIM-568).
+"""pipeline/backup/common.py — the helpers the backup modules share.
 
 The data-store backup (``data_stores``) and the off-site copy (``offsite``) use
 them. This module is pure standard library: ``data_stores`` imports duckdb at
-module level, and the off-site copy (SIM-568) must never import it.
+module level, and the off-site copy must never import it.
 """
 
 from __future__ import annotations

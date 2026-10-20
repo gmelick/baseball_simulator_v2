@@ -38,7 +38,7 @@ ALWAYS_REQUIRED: set[str] = {
     "away_score",
 }
 
-# SIM-441: how many fielding-credit slots raw.pitches actually has. A credit past
+# How many fielding-credit slots raw.pitches actually has. A credit past
 # the last slot sets `field_assist_6_plus` instead of being silently dropped.
 _MAX_ASSIST_SLOTS = 5
 _MAX_PUTOUT_SLOTS = 3
@@ -354,7 +354,7 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
         if row.get(f"sb_success_{base}") and not row.get(f"sb_attempt_{base}"):
             result.hard_errors.append(f"sb_success_{base}=TRUE but sb_attempt_{base}=FALSE")
 
-    # SIM-441: mirror the remaining raw.pitches CHECK constraints.
+    # Mirror the remaining raw.pitches CHECK constraints.
     #
     # This validator was a strict SUBSET of the DB constraints, so a row that
     # violated one of the checks below sailed through here and raised inside

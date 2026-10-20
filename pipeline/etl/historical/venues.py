@@ -16,7 +16,7 @@ class MissingVenueError(RuntimeError):
     """A game's feed carries no venue, and no venue is known for it."""
 
 
-# SIM-447: games whose feed omits ``gameData.venue`` ENTIRELY.
+# Games whose feed omits ``gameData.venue`` ENTIRELY.
 #
 # MLB's one-off neutral-site games can ship with no venue ANYWHERE in the feed:
 # ``gameData.venue`` is absent and the schedule endpoint returns

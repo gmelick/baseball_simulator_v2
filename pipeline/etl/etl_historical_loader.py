@@ -142,7 +142,7 @@ RETRY_BACKOFF_S = 2.0  # seconds between retries
 HTTP_TIMEOUT_S = 30.0
 _USER_AGENT = "baseball-sim-etl/1.0 (+historical loader)"
 
-# SIM-446: the ETL's HTTP transport is stdlib ``urllib.request`` BY DEFAULT.
+# The ETL's HTTP transport is stdlib ``urllib.request`` BY DEFAULT.
 #
 # The corrective reload sweep used to die with::
 #
@@ -194,14 +194,14 @@ _USER_AGENT = "baseball-sim-etl/1.0 (+historical loader)"
 # into the address space at all.
 _HTTP_TRANSPORT = os.environ.get("ETL_HTTP_TRANSPORT", "urllib").strip().lower()
 
-# SIM-441: statuses worth retrying. A 404/400/403 is a permanent answer — the old
+# Statuses worth retrying. A 404/400/403 is a permanent answer — the old
 # code retried it 10 times over ~90 s, turning one missing game into a 90-second
 # stall. 429 and 5xx are transient and ARE retried (429 honours Retry-After).
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _MAX_RETRY_AFTER_S = 60.0  # never sleep longer than this on a server's say-so
 
 
-# SIM-441: 'C' ("Championship") was removed — it is an obsolete MLB game type
+# 'C' ("Championship") was removed — it is an obsolete MLB game type
 # predating our 2015+ window, and it is NOT in the raw.games CHECK constraint
 # (('R','P','S','A','D','F','L','W')), so a single such game would have raised a
 # CheckViolation and, before the per-game isolation below, killed the whole run.
@@ -211,7 +211,7 @@ GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 class HttpError(OSError):
     """A non-2xx response the retry policy could not resolve.
 
-    SIM-446: replaces ``requests.HTTPError`` so callers stay transport-agnostic.
+    Replaces ``requests.HTTPError`` so callers stay transport-agnostic.
     Subclasses ``OSError`` to match ``requests.RequestException``'s own ancestry,
     which keeps every existing ``except OSError`` handler behaving identically.
     """
@@ -436,7 +436,7 @@ def _fetch_game_pitches(
     home_team = game_dict["gameData"]["teams"]["home"]["abbreviation"]
     away_team_id = game_dict["gameData"]["teams"]["away"]["id"]
     away_team = game_dict["gameData"]["teams"]["away"]["abbreviation"]
-    # SIM-447: neutral-site games can ship with NO gameData.venue at all.
+    # Neutral-site games can ship with NO gameData.venue at all.
     venue_id, venue_name = _resolve_venue(game_pk, game_dict["gameData"])
 
     home_manager_id, home_manager_name = "", ""
@@ -457,7 +457,7 @@ def _fetch_game_pitches(
             home_manager_id = coach["person"]["id"]
             home_manager_name = coach["person"]["fullName"]
     if home_manager_name == "":
-        # SIM-441: do NOT fall back to coaches[0].
+        # Do NOT fall back to coaches[0].
         # The old code installed whatever coach the roster happened to list
         # first — typically a pitching coach — as the manager, with no log
         # line. That fabricated id then propagated to every pitch row, to
@@ -488,7 +488,7 @@ def _fetch_game_pitches(
             away_manager_id = coach["person"]["id"]
             away_manager_name = coach["person"]["fullName"]
     if away_manager_name == "":
-        # SIM-441: do NOT fall back to coaches[0].
+        # Do NOT fall back to coaches[0].
         # The old code installed whatever coach the roster happened to list
         # first — typically a pitching coach — as the manager, with no log
         # line. That fabricated id then propagated to every pitch row, to
@@ -508,7 +508,7 @@ def _fetch_game_pitches(
     outs = 0
     prev_half = "bottom"
     pitch_rows: list[dict[str, Any]] = []
-    # SIM-502: non-pitch events (pickoff, stepoff, balk, intentional walk) go to
+    # Non-pitch events (pickoff, stepoff, balk, intentional walk) go to
     # raw.play_events. They cannot live on a pitch row: an intentional walk is
     # signalled rather than thrown, so its play has NO pitch events at all.
     play_event_rows: list[dict[str, Any]] = []
@@ -525,7 +525,7 @@ def _fetch_game_pitches(
         if top_bot != prev_half:
             outs = 0
             runners_state_before = 0
-        # SIM-502: advance the half-inning marker HERE, at the play level.
+        # Advance the half-inning marker HERE, at the play level.
         #
         # It used to be advanced inside the pitch branch below, so a play with NO
         # pitches never reached it. The next play then re-entered this check with
@@ -538,7 +538,7 @@ def _fetch_game_pitches(
         # reached the table — luck, not correctness. This is the same defect class
         # already fixed once inside the extractor, re-introduced in the caller.
         prev_half = top_bot
-        # SIM-502a: an extra-innings half does NOT start with the bases empty —
+        # An extra-innings half does NOT start with the bases empty —
         # the automatic runner is on second, and the reset above just erased
         # him. THE FIX IS IN THE FEED: the placement is announced by an
         # `action` playEvent with eventType `runner_placed` that carries the
@@ -551,7 +551,7 @@ def _fetch_game_pitches(
                 _placed_base = _ev.get("base")
                 if _placed_base in (1, 2, 3):
                     runners_state_before |= 1 << (int(_placed_base) - 1)
-        # SIM-501: the PRE-play out count, read from the payload rather than
+        # The PRE-play out count, read from the payload rather than
         # accumulated. `playEvents[0].count.outs` is the state ENTERING the play;
         # `play.count.outs` is the state after it. Verified on real games —
         # ab=13 Flyout reads playEvents[0].outs=0 and play.count.outs=1.
@@ -572,7 +572,7 @@ def _fetch_game_pitches(
                 season=int(str(game_date)[:4]),
                 outs_before_play=outs,
                 runners_state_before=runners_state_before,
-                # SIM-502b: the PRE-play score, the same numbers the pitch rows
+                # The PRE-play score, the same numbers the pitch rows
                 # get. The extractor must not read the play's own `result`
                 # scores — those are post-play.
                 home_score_before=home_score_before,
@@ -588,14 +588,14 @@ def _fetch_game_pitches(
             + (4 if _matchup.get("postOnThird") else 0)
         )
         balls, strikes = 0, 0
-        # SIM-441: bind the post-play score at PLAY scope. These are assigned
+        # Bind the post-play score at PLAY scope. These are assigned
         # inside the pitch branch but read at play scope by the score re-sync
         # below — and Python evaluates a `.get(key, default)` default EAGERLY, so
         # the read happens even when the key is present. A pitch-less FIRST play
         # (every event taken by the non-pitch `continue`) would otherwise raise
         # NameError before the re-sync could run.
         home_score_after, away_score_after = home_score_before, away_score_before
-        # SIM-441: the `.replace(",", "")` here and on the pitch description was a
+        # The `.replace(",", "")` here and on the pitch description was a
         # leftover from the CSV-writing ancestor of this loader. Both values are
         # bound psycopg2 parameters now, so stripping commas was pure lossy
         # mutation — it stored "In play out(s)" for "In play, out(s)" on every
@@ -740,7 +740,7 @@ def _fetch_game_pitches(
                 coord_x = hd["coordinates"].get("coordX", "")
                 coord_y = hd["coordinates"].get("coordY", "")
                 if coord_x != "" and coord_y != "":
-                    # SIM-441: coord_y > 198.27 is BEHIND home plate (a foul pop
+                    # Coord_y > 198.27 is BEHIND home plate (a foul pop
                     # into the screen/backstop). `arctan` of a negative
                     # denominator mirrors those into the fair-field quadrant, so
                     # a ball struck behind the plate reported a plausible pull or
@@ -753,7 +753,7 @@ def _fetch_game_pitches(
                     elif coord_y == 198.27:
                         spray_angle = 90 if coord_x > 125.42 else -90
                     else:
-                        # SIM-445: `math.atan`, not `np.arctan`. This was the ONLY
+                        # `math.atan`, not `np.arctan`. This was the ONLY
                         # numpy call in this 2,900-line module, and importing numpy
                         # for it drags OpenBLAS (DYNAMIC_ARCH, MAX_THREADS=64),
                         # libgfortran and libquadmath into every ETL process. It is
@@ -766,7 +766,7 @@ def _fetch_game_pitches(
                 batted_ball_type = hd["trajectory"]
                 hit_location = hd.get("location", "")
 
-            # SIM-501: COUNT the outs this pitch caused; do not derive them.
+            # COUNT the outs this pitch caused; do not derive them.
             # This read `play_event["count"]["outs"] - outs`, which cannot work:
             # `count.outs` is the out total entering the play and is CONSTANT
             # across every pitch of it, so subtracting a running total that
@@ -784,7 +784,7 @@ def _fetch_game_pitches(
             putout_dict: dict[str, Any] = {}
             throwing_error_dict: dict[str, Any] = {}
             assist_tracker = putout_tracker = throwing_error_tracker = 1
-            # SIM-441: raw.pitches has field_assist_1..5, field_putout_1..3 and
+            # Raw.pitches has field_assist_1..5, field_putout_1..3 and
             # throwing_error_1..2. Credits past those slots used to be written to
             # keys _build_row_dict never reads, so they vanished with no warning
             # and no ledger row. Multi-runner rundowns are rare enough that the
@@ -856,7 +856,7 @@ def _fetch_game_pitches(
                         # the `[i .. max_play_index]` window, so an index OTHER than
                         # `i` means a non-pitch event that followed this pitch.
                         #
-                        # SIM-502c — where every displaced out actually lands,
+                        # Where every displaced out actually lands,
                         # MEASURED over 357 games / 19,072 outs (131 displaced):
                         #   * 53 pickoff-family outs -> `raw.play_events`
                         #   * 63 mid-plate-appearance caught stealings -> the
@@ -948,7 +948,7 @@ def _fetch_game_pitches(
                 "fld_score": field_score,
                 "balls": balls,
                 "strikes": strikes,
-                # SIM-501: this read a running variable that was updated AFTER the
+                # This read a running variable that was updated AFTER the
                 # row was built, so every row carried the PREVIOUS play's entry
                 # value. Measured against the payload: raw.pitches.outs was wrong
                 # on 46% of plate appearances, almost always one too low. The
@@ -1054,7 +1054,7 @@ def _fetch_game_pitches(
             home_score_before = home_score_after
             away_score_before = away_score_after
             prev_half = top_bot
-        # SIM-501: carry the POST-play out count so a pitch-less play that follows
+        # Carry the POST-play out count so a pitch-less play that follows
         # still knows the state it began in. Reset to 0 on a half-inning change
         # above, because the last play of a half-inning posts 3.
         outs = int((play.get("count") or {}).get("outs") or outs)
@@ -1070,7 +1070,7 @@ def _fetch_game_pitches(
         "away_manager_id": away_manager_id,
         "away_manager_name": away_manager_name,
     }
-    # SIM-502: ride on game_dict rather than widening the return. This function
+    # Ride on game_dict rather than widening the return. This function
     # already hands back side-channel data that way (`_managers`), and 38 tests
     # mock it as a 2-tuple — a third element breaks every one of them for no
     # gain.
@@ -1184,7 +1184,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         write_csv: bool = False,
         csv_output_dir: str = ".",
     ) -> None:
-        # SIM-153: dsn is now optional — falls back to BASEBALL_DB_DSN env var.
+        # Dsn is now optional — falls back to BASEBALL_DB_DSN env var.
         # Pass an explicit DSN to override (test fixtures, ad-hoc backfills).
         # Raises a clear error if neither is set, rather than letting psycopg2
         # surface a confusing "could not connect" error mid-run.
@@ -1199,13 +1199,13 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         self.write_csv = write_csv
         self.csv_output_dir = csv_output_dir
 
-        # SIM-090: lazily-initialised connection pool.  Created on first DB use
+        # Lazily-initialised connection pool.  Created on first DB use
         # (see _ensure_pool) and shared across every game in a backfill run,
         # rather than opening/closing a fresh psycopg2 connection per round-trip.
         self._pool: psycopg2.pool.ThreadedConnectionPool | None = None
-        # SIM-441: guards the lazy construction above (see _ensure_pool).
+        # Guards the lazy construction above (see _ensure_pool).
         self._pool_lock = threading.Lock()
-        # SIM-441: circuit breaker for _dispatch_game — see its docstring.
+        # Circuit breaker for _dispatch_game — see its docstring.
         self._consecutive_failures = 0
 
     # ------------------------------------------------------------------
@@ -1453,7 +1453,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     ) -> None:
         """Route one scheduled game to load/reload and tally the outcome.
 
-        SIM-441: BOTH paths now contain per-game failures. The incremental path
+        BOTH paths now contain per-game failures. The incremental path
         previously called ``load_game`` bare, and the parser is full of hard
         subscripts on third-party JSON (``pd_data["strikeZoneTop"]``,
         ``hd["trajectory"]``, ``defense["catcher"]["id"]``), so one malformed feed
@@ -1508,7 +1508,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         # reload path exists to make visible.
         summary["rows_written"] += int(result.get("inserted", 0))
 
-    # NOTE: ``backfill_lineups_and_scores`` (SIM-409) was removed — it re-fetched
+    # NOTE: ``backfill_lineups_and_scores`` was removed — it re-fetched
     # each Final game and re-ran ``_ensure_prerequisites`` to fill in lineups and
     # final scores on already-loaded games.  ``refresh_seasons(reload=True)``
     # does everything it did (it calls the same ``_ensure_prerequisites``) and
@@ -1546,11 +1546,11 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         self._ensure_teams(home_team_id, away_team_id, season, gd)
         self._ensure_players(game_dict)
         self._ensure_managers(managers, home_team_id, away_team_id, season, game_date)
-        # SIM-409: pass the FULL game_dict so _ensure_game can read the linescore
+        # Pass the FULL game_dict so _ensure_game can read the linescore
         # + decisions (under liveData, not gameData), then ingest the lineups.
         self._ensure_game(game_pk, season, game_dict, managers)
         self._ensure_game_lineups(game_pk, season, game_dict)
-        # SIM-545: the official per-player box score (the prop ground truth) from
+        # The official per-player box score (the prop ground truth) from
         # the same in-hand payload. Non-fatal: a failure logs a warning and never
         # fails the game load.
         self._ensure_game_player_stats(
@@ -1584,7 +1584,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 
         log.info("  Fetching missing venue %s, season %s", venue_id, season)
 
-        # SIM-441: both scrapes used to loop the full MAX_API_RETRIES with NO
+        # Both scrapes used to loop the full MAX_API_RETRIES with NO
         # `break` on success — ~10 redundant Savant requests per new
         # (venue_id, season), roughly 3,000 across a 2017-2026 backfill where 300
         # would do. Worse, `resp` was reassigned every iteration, so a fetch that
@@ -1676,7 +1676,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                     (
                         venue_id,
                         season,
-                        # SIM-447: was `dimensions.get("venu_name_short", " ")` — a
+                        # Was `dimensions.get("venu_name_short", " ")` — a
                         # typo (missing the 'e'), so the key NEVER matched and every
                         # row fell through to the " " default. All 331 rows in
                         # raw.venues had a blank name. The two payload shapes use
@@ -1795,7 +1795,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             name = person.get("fullName") or ""
             first = person.get("firstName") or ""
             last = person.get("lastName") or ""
-            # SIM-441: `position` in the boxscore is the player's PRIMARY position,
+            # `position` in the boxscore is the player's PRIMARY position,
             # not the slot he happened to fill this game, so it is safe to store.
             # The default is 'UT' (utility), not 'P' — defaulting to pitcher
             # silently asserted a fact about anyone whose position was absent, and
@@ -1863,11 +1863,11 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 
         # --- 5. Game record -----------------------------------------------------
 
-    #: SIM-545: tri-state cache of "does ``raw.game_player_stats`` exist" (Alembic
+    #: Tri-state cache of "does ``raw.game_player_stats`` exist" (Alembic
     #: 0023). ``None`` means not yet probed. Same reasoning as
     #: ``_play_events_table_exists``: one catalogue lookup per run, not per game.
     _game_player_stats_table_exists: bool | None = None
-    #: SIM-427: the same tri-state cache for ``raw.game_bullpen`` (Alembic 0025).
+    #: The same tri-state cache for ``raw.game_bullpen`` (Alembic 0025).
     _game_bullpen_table_exists: bool | None = None
 
     def _ensure_game_player_stats(
@@ -1881,7 +1881,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     ) -> None:
         """Upsert the official per-player box score into ``raw.game_player_stats``.
 
-        The official box-score ground truth (SIM-545): the live feed already
+        The official box-score ground truth: the live feed already
         carries the box under ``liveData.boxscore.teams``, so the loader writes
         it from the payload it holds — no extra HTTP call. The parser
         (:func:`pipeline.etl.boxscore_ingest.parse_boxscore`) emits one row per
@@ -1920,7 +1920,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                             conn.rollback()
                             return
                         written = persist_sync(cur, rows)
-                        # SIM-427: the arms the box lists per side (Alembic
+                        # The arms the box lists per side (Alembic
                         # 0025) — the simulator's pen for the game. The same
                         # payload, no extra call; absent table = not stored.
                         pen_written = 0
@@ -1972,19 +1972,19 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-# NOTE (SIM-083): FRESHNESS_TABLE_DDL was removed from this file.
+# NOTE: FRESHNESS_TABLE_DDL was removed from this file.
 # The raw.etl_data_freshness CREATE TABLE DDL now lives in:
 #   db/schemas/01_postgres_schema.sql
 # Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
-# SIM-090: connection pooling — see HistoricalDataLoader._ensure_pool / .close().
+# Connection pooling — see HistoricalDataLoader._ensure_pool / .close().
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # SIM-443b: no default password. The loader reads BASEBALL_DB_DSN and raises
+    # No default password. The loader reads BASEBALL_DB_DSN and raises
     # a clear error when it is not set.
     loader = HistoricalDataLoader()
     try:
         loader.refresh_seasons()
     finally:
-        # SIM-090: tear the pool down so all pooled sockets are released.
+        # Tear the pool down so all pooled sockets are released.
         loader.close()

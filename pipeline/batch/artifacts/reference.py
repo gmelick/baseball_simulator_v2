@@ -13,14 +13,14 @@ import duckdb
 log = logging.getLogger("engine_artifacts")
 
 
-#: SIM-563: the reference tables a worker used to read from DuckDB. They ride
-#: the bundle so a worker never opens the database (a rebuild may hold its lock).
+#: The reference tables a worker reads from the bundle, so it never opens the
+#: DuckDB file (a rebuild may hold its lock).
 IBB_RATES_FILE = "ibb_rates.json"
 VENUE_RUN_FACTORS_FILE = "venue_run_factors.json"
 
 
 def ibb_rates_from_rows(rows) -> dict[tuple[int, int, bool, bool], float] | None:
-    """SIM-515: the issued share per cell, from ``(rs, outs, late, close, opp, issued)``."""
+    """The issued share per cell, from ``(rs, outs, late, close, opp, issued)``."""
     out = {
         (int(rs), int(o), bool(late), bool(close)): float(iss) / float(opp)
         for rs, o, late, close, opp, iss in rows
@@ -30,7 +30,7 @@ def ibb_rates_from_rows(rows) -> dict[tuple[int, int, bool, bool], float] | None
 
 
 def venue_run_factors_from_rows(rows) -> dict[tuple[int, int], float] | None:
-    """SIM-491: ``(venue_id, season) -> factor`` for the sane 0.5-2.0 range."""
+    """``(venue_id, season) -> factor`` for the sane 0.5-2.0 range."""
     out = {
         (int(v), int(s)): float(f) for v, s, f in rows if f is not None and 0.5 <= float(f) <= 2.0
     }
@@ -38,7 +38,7 @@ def venue_run_factors_from_rows(rows) -> dict[tuple[int, int], float] | None:
 
 
 def build_reference_tables(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict[str, int]:
-    """SIM-563: write the IBB rates and the venue run factors into the bundle.
+    """Write the IBB rates and the venue run factors into the bundle.
 
     The rows are the ones the worker loaders read from DuckDB
     (``simulation/production_factory._load_ibb_rates`` / ``_load_venue_run_factors``).

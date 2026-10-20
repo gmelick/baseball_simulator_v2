@@ -23,7 +23,7 @@ from pipeline.live.ingestion.constants import (
 from pipeline.odds_provider import GAME_ODDS_FIELDS
 
 # ---------------------------------------------------------------------------
-# SIM-555: odds rows, JSON and the database
+# Odds rows, JSON and the database
 # ---------------------------------------------------------------------------
 
 #: The by-book row keys that serve the load guard and the logs only. They are
@@ -36,7 +36,7 @@ _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
 
 
 def _json_default(value: Any) -> str:
-    """The ``json.dumps`` fallback: a date or a datetime as ISO-8601 text (SIM-555).
+    """The ``json.dumps`` fallback: a date or a datetime as ISO-8601 text.
 
     The BettingPros rows carry ``book_line_at`` as a datetime; a bare
     ``json.dumps`` raises ``TypeError`` on it. Any other unknown type still
@@ -48,7 +48,7 @@ def _json_default(value: Any) -> str:
 
 
 def _jsonable_odds(odds: Mapping[str, Any] | None) -> dict[str, Any]:
-    """An odds row made safe for ``json.dumps`` (SIM-555).
+    """An odds row made safe for ``json.dumps``.
 
     The row loses the guard-only keys (``scheduled_start``, ``game_date``,
     ``postponed_start``) and sends a date or a datetime (``book_line_at``) as
@@ -64,7 +64,7 @@ def _jsonable_odds(odds: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def _odds_facts_may_be_stale(game: Mapping[str, Any]) -> bool:
-    """True when the odds provider's cached facts of a schedule entry's game may be old (SIM-555).
+    """True when the odds provider's cached facts of a schedule entry's game may be old.
 
     The provider keeps a found game's schedule facts and vendor event for the
     process lifetime. A game looked up before a postponement keeps its
@@ -95,7 +95,7 @@ def _odds_facts_may_be_stale(game: Mapping[str, Any]) -> bool:
 
 
 def _stamp_param(value: Any) -> datetime | None:
-    """A row's ``book_line_at`` as an aware datetime for the TIMESTAMPTZ column (SIM-555).
+    """A row's ``book_line_at`` as an aware datetime for the TIMESTAMPTZ column.
 
     A naive datetime is read as UTC (the vendor stamps in UTC); ISO-8601 text is
     parsed; anything else (``None``, a mock row without the key) gives ``None``.
@@ -112,7 +112,7 @@ def _stamp_param(value: Any) -> datetime | None:
 
 
 def _scheduled_start(game: Mapping[str, Any]) -> datetime | None:
-    """SIM-546: a schedule entry's scheduled start as an aware UTC datetime.
+    """A schedule entry's scheduled start as an aware UTC datetime.
 
     The entry's ``gameDate`` is ISO 8601 UTC text ("2026-10-09T23:05:00Z").
     A missing or unreadable value gives ``None``.
@@ -121,7 +121,7 @@ def _scheduled_start(game: Mapping[str, Any]) -> datetime | None:
 
 
 def pregame_odds_cadence_s(game: Mapping[str, Any], now: datetime) -> int:
-    """PURE (SIM-546): the pre-game cycle's cadence in seconds for one schedule entry.
+    """PURE: the pre-game cycle's cadence in seconds for one schedule entry.
 
     Inside PREGAME_NEAR_START_WINDOW_S of the scheduled start, or past the
     start while the game still waits in ``Preview`` (a delay), the cadence is
@@ -188,7 +188,7 @@ _PROP_ODDS_RESTAMP_SQL = _PROP_ODDS_INSERT_SQL.replace(
 
 def _odds_hash(odds: dict) -> str:
     """
-    SIM-092: Deterministic SHA-256 fingerprint of an odds payload.
+    Deterministic SHA-256 fingerprint of an odds payload.
 
     Hashing rules:
       * Stable key order regardless of dict iteration order.
@@ -248,8 +248,8 @@ def _odds_hash(odds: dict) -> str:
 
 def _prop_odds_hash(prop: dict) -> str:
     """
-    SIM-340: Deterministic SHA-256 fingerprint of a prop-odds payload —
-    the prop analogue of _odds_hash() (SIM-092).
+    Deterministic SHA-256 fingerprint of a prop-odds payload —
+    the prop analogue of _odds_hash().
 
     Identical prop snapshots produce identical hashes, so an
     INSERT … ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING
@@ -291,7 +291,7 @@ def _prop_odds_hash(prop: dict) -> str:
 def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, ...]:
     """The bind values of one raw.game_odds INSERT, in ``_GAME_ODDS_INSERT_SQL`` order.
 
-    SIM-555: ``book_line_at`` (the vendor's stamp on the row's line) sits just
+    ``book_line_at`` (the vendor's stamp on the row's line) sits just
     before ``odds_hash``, which stays LAST: two pinned tests read the hash as
     the final argument. The stamp is not in the hash, so an unchanged line
     re-fetched later still deduplicates. The live pipeline, the historical
@@ -316,8 +316,8 @@ def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, .
         odds.get("total_line"),
         odds.get("over_ml"),
         odds.get("under_ml"),
-        odds.get("draw_ml"),  # SIM-421: the tie price of a three-way segment moneyline
-        _stamp_param(odds.get("book_line_at")),  # SIM-555: the vendor's stamp
+        odds.get("draw_ml"),  # The tie price of a three-way segment moneyline
+        _stamp_param(odds.get("book_line_at")),  # The vendor's stamp
         _odds_hash(dict(odds)),  # stays LAST: two pinned tests read it last
     )
 
@@ -325,7 +325,7 @@ def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, .
 def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
     """The bind values of one raw.prop_odds INSERT, in ``_PROP_ODDS_INSERT_SQL`` order.
 
-    SIM-555: ``book_line_at`` sits just before ``odds_hash``, which stays last;
+    ``book_line_at`` sits just before ``odds_hash``, which stays last;
     the stamp is not in the hash. Every prop writer binds through this function.
     """
     return (
@@ -340,7 +340,7 @@ def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
         prop.get("book", "consensus"),
         prop.get("line_type", "current"),
         prop.get("is_sharp_book", False),
-        _stamp_param(prop.get("book_line_at")),  # SIM-555: the vendor's stamp
+        _stamp_param(prop.get("book_line_at")),  # The vendor's stamp
         _prop_odds_hash(dict(prop)),  # stays LAST
     )
 
@@ -348,7 +348,7 @@ def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
 async def insert_game_odds_rows(
     conn: Any, game_pk: int, rows: Sequence[Mapping[str, Any]], *, restamp: bool = False
 ) -> int:
-    """SIM-555: insert game-odds rows in one ``executemany``, with the dedup.
+    """Insert game-odds rows in one ``executemany``, with the dedup.
 
     ``conn`` is an asyncpg pool or connection. The SQL is the live writer's
     (``odds_hash`` last, ``ON CONFLICT ... DO NOTHING``). Returns the number of
@@ -366,7 +366,7 @@ async def insert_game_odds_rows(
 async def insert_prop_odds_rows(
     conn: Any, rows: Sequence[Mapping[str, Any]], *, restamp: bool = False
 ) -> int:
-    """SIM-555: insert prop-odds rows in one ``executemany``, with the dedup.
+    """Insert prop-odds rows in one ``executemany``, with the dedup.
 
     The prop analogue of :func:`insert_game_odds_rows`. Returns the rows sent.
     """

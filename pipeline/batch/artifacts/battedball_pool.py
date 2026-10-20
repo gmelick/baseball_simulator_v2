@@ -23,7 +23,7 @@ log = logging.getLogger("engine_artifacts")
 
 _BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
 
-#: SIM-523 part C: the batted-ball CLASS vocabulary (``BattedBallPool.bb_class``).
+#: The batted-ball CLASS vocabulary (``BattedBallPool.bb_class``).
 #: 0 = unknown. The three bunt types share one class.
 BB_CLASS: dict[str, int] = {
     "ground_ball": 1,
@@ -44,8 +44,9 @@ _BB_CLASS_SELECT = (
 def build_battedball_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
-    """Write the full per-hand batted-ball pool (recency-floored) for SIM-425:
-    geom (EV/LA/spray) + situation + metadata (batter, event, result deltas)."""
+    """Write the per-hand batted-ball pool over the season window: the
+    geometry (exit velocity, launch angle, spray), the situation and the
+    metadata (batter, event, result deltas)."""
     pool_dir = os.path.join(out_dir, "battedball_pool")
     os.makedirs(pool_dir, exist_ok=True)
     season_list = ", ".join(str(int(s)) for s in seasons)
@@ -54,23 +55,23 @@ def build_battedball_pool_artifact(
         "AND launch_angle IS NOT NULL AND pull_relative_spray_angle IS NOT NULL"
     )
     counts: dict[str, int] = {}
-    # SIM-510: the transition columns exist only on a 0018-migrated DB. Export
+    # The transition columns exist only on a 0018-migrated DB. Export
     # them when present; a pre-0018 DB still exports the legacy shape. The
-    # export keeps EVERY row (SIM-510 is behavior-neutral) — the SIM-511
-    # fielding draw's cell index is what excludes ``dest_ok = 0`` rows.
+    # export keeps EVERY row: the fielding draw's cell index is what excludes
+    # the ``dest_ok = 0`` rows.
     op_cols = {str(d[0]) for d in con.execute("SELECT * FROM sim.outcome_pool LIMIT 0").description}
     has_transition = op_cols >= _BB_TRANSITION_SOURCE_COLS
-    # SIM-491: the batting side exists only on a 0019-migrated DB. Same
+    # The batting side exists only on a 0019-migrated DB. Same
     # back-compatible pattern as the transition columns.
     bat_home_select = ", bat_home" if "bat_home" in op_cols else ""
     transition_select = (
         ", runner_1b_dest, runner_2b_dest, runner_3b_dest, batter_dest, "
         "COALESCE(dest_outs_consistent, FALSE) AS dest_ok, "
-        # SIM-511 normalization facts: the thrown-out-advancing flags tell a
-        # discretionary out from a force/doubled-off out; is_air marks the
-        # tag-up shape (SAME definition as the SIM-510 builder's scenario 4);
-        # raw spray + distance feed the SIM-512 advancement kernel (the bb
-        # geom carries only the PULL-relative spray).
+        # The normalization facts: the thrown-out-advancing flags tell a
+        # discretionary out from a force or doubled-off out; is_air marks the
+        # tag-up shape (the SAME definition as the advancement pool's scenario
+        # 4); the raw spray and distance feed the advancement draw (the
+        # batted-ball geometry carries only the PULL-relative spray).
         "COALESCE(runner_1b_out_advancing, FALSE) AS r1_adv_out, "
         "COALESCE(runner_2b_out_advancing, FALSE) AS r2_adv_out, "
         "COALESCE(runner_3b_out_advancing, FALSE) AS r3_adv_out, "
@@ -84,18 +85,18 @@ def build_battedball_pool_artifact(
             "battedball_pool: sim.outcome_pool has no SIM-510 transition columns "
             "(pre-0018 DB) — exporting the legacy shape."
         )
-    # SIM-518 (SIM-463): the ten pitch-feature columns of the pitch that
+    # The ten pitch-feature columns of the pitch that
     # produced each batted ball, plus its pitcher. The pool build selects
     # them from the pitch pool, so a production outcome pool always has them;
     # a reduced synthetic pool may not, hence the probe. The loader treats a
-    # missing pgeom file / pitcher column as None (the SIM-472 kernel then
-    # stays neutral).
+    # missing pgeom file or pitcher column as None (the pitch-similarity
+    # kernel then stays neutral).
     has_pgeom = set(_GEOM_COLS) <= op_cols
     pitcher_select = ", pitcher_id" if "pitcher_id" in op_cols else ""
-    # SIM-523 part C: the batted-ball class (the fielding draw's third
+    # The batted-ball class (the fielding draw's third
     # hard filter) — from bb_type when the pool carries it.
     class_select = _BB_CLASS_SELECT if "bb_type" in op_cols else ""
-    # SIM-523 part G: the fielding CHAIN — the eight-position alignment and
+    # The fielding CHAIN — the eight-position alignment and
     # the positions credited a putout / an assist (migration 0024); absent
     # on an older pool, and the loader is None without them.
     has_chain = "putout_pos_mask" in op_cols
@@ -123,8 +124,8 @@ def build_battedball_pool_artifact(
         ).astype(np.float32)
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
-        # SIM-523 part B: the pitch-id JOIN, in reverse of the SIM-518
-        # ``pgeom`` export — for every PITCH-pool row (its meta parquet,
+        # The pitch-id JOIN, the reverse of the ``pgeom`` export: for every
+        # PITCH-pool row (its meta parquet,
         # written by build_pitch_pool_artifact just before), the row of
         # THIS pool that holds its batted ball, or -1. The pitch-result
         # draw's in-play row reads its own batted ball through it.
@@ -161,13 +162,10 @@ def build_battedball_pool_artifact(
         con.execute(
             "COPY (SELECT pitch_id, batter_id, season, events, result_hits, result_outs, "
             "result_runs, recency_weight, "
-            # SIM-411/413/425b: per-row realism facts (migration 0012). p_throws (the
-            # pitcher hand) drives the SIM-413 platoon reweight; venue_id the SIM-411
-            # park multiplier; fielded_by_position + fielder_player_id the SIM-425b
-            # relative defensive nudge. The loader is back-compatible when these are
-            # absent (a pre-0012 artifact), so writing them is safe to roll out ahead
-            # of the consumers. SIM-510 appends the transition destinations the same
-            # back-compatible way.
+            # The per-row facts (migration 0012): p_throws (the pitcher's hand),
+            # venue_id (the park), and fielded_by_position with fielder_player_id
+            # (the fielder). The loader reads a pre-0012 artifact without them.
+            # The transition destinations follow, in the same optional way.
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
             f"{transition_select}{bat_home_select}{pitcher_select}{class_select}"
             f"{chain_select} "
@@ -185,12 +183,12 @@ def build_battedball_pool_artifact(
                 "geom_cols": _BB_GEOM_COLS,
                 "sit_cols": _SIT_COLS,
                 "transition": has_transition,
-                # SIM-518 (SIM-463): the pitch-geometry columns of {hand}.pgeom.npy.
+                # The pitch-geometry columns of {hand}.pgeom.npy.
                 "pgeom_cols": _GEOM_COLS if has_pgeom else [],
-                # SIM-523 part B: pitch rows joined to a batted ball, per hand
+                # Pitch rows joined to a batted ball, per hand
                 # (the join file lives in pitch_pool/{hand}.bb_row.npy).
                 "pitch_join": pitch_join,
-                # SIM-523 part G: the fielding chain columns are in the parquet.
+                # The fielding chain columns are in the parquet.
                 "chain": has_chain,
             },
             fh,
@@ -199,7 +197,7 @@ def build_battedball_pool_artifact(
     return counts
 
 
-#: SIM-510: the outcome-pool columns the transition export needs. Presence of
+#: The outcome-pool columns the transition export needs. Presence of
 #: ALL of them marks a 0018-migrated, sim510.1-rebuilt DB.
 _BB_TRANSITION_SOURCE_COLS = frozenset(
     {
@@ -218,7 +216,7 @@ _BB_TRANSITION_SOURCE_COLS = frozenset(
 def _bb_take(
     views: dict[str, np.ndarray], hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
 ) -> np.ndarray | None:
-    """SIM-411/425b: load an OPTIONAL numeric batted-ball meta column.
+    """Load an OPTIONAL numeric batted-ball meta column.
     Prefer a published shared view; else fill the parquet column (NULL ->
     ``fill``); else (a pre-0012 artifact that lacks the column) return None
     so the consumer falls back to a neutral factor."""
@@ -231,7 +229,7 @@ def _bb_take(
 
 
 def _bb_fielders(views: dict[str, np.ndarray], hand: str, meta: dict) -> np.ndarray | None:
-    """SIM-523 part G: the (N, 8) alignment from fielder_2..fielder_9
+    """The (N, 8) alignment from fielder_2..fielder_9
     (a published view first; None on a pre-part-G artifact)."""
     v = views.get(f"bb_pool.{hand}.fielders")
     if isinstance(v, np.ndarray):
@@ -252,7 +250,7 @@ def load_battedball_pools(
     if os.path.exists(os.path.join(bb_dir, "manifest.json")):
         for hand in ("L", "R"):
             meta_path = os.path.join(bb_dir, f"{hand}.meta.parquet")
-            # SIM-411/413/425b: select the realism columns only when present,
+            # Select the realism columns only when present,
             # so a pre-0012 artifact (no venue/hand/fielder columns) still loads.
             avail = {
                 str(d[0])
@@ -275,26 +273,26 @@ def load_battedball_pools(
                     "venue_id",
                     "fielded_by_position",
                     "fielder_player_id",
-                    # SIM-510: the transition destinations.
+                    # The transition destinations.
                     "runner_1b_dest",
                     "runner_2b_dest",
                     "runner_3b_dest",
                     "batter_dest",
                     "dest_ok",
-                    # SIM-511: the normalization facts + geometry.
+                    # The normalization facts + geometry.
                     "r1_adv_out",
                     "r2_adv_out",
                     "r3_adv_out",
                     "is_air",
                     "spray_raw",
                     "hit_dist",
-                    # SIM-491: the batting side.
+                    # The batting side.
                     "bat_home",
-                    # SIM-518 (SIM-463): the producing pitch's pitcher.
+                    # The producing pitch's pitcher.
                     "pitcher_id",
-                    # SIM-523 part C: the batted-ball class.
+                    # The batted-ball class.
                     "bb_class",
-                    # SIM-523 part G: the alignment + the fielding chain.
+                    # The alignment + the fielding chain.
                     "fielder_2",
                     "fielder_3",
                     "fielder_4",
@@ -305,12 +303,12 @@ def load_battedball_pools(
                     "fielder_9",
                     "putout_pos_mask",
                     "assist_pos_mask",
-                    # SIM-535: the game date, for the draw-time cutoff.
+                    # The game date, for the draw-time cutoff.
                     "game_ymd",
                 )
                 if c in avail
             ]
-            # SIM-518 (SIM-463): the producing pitch's geometry file
+            # The producing pitch's geometry file
             # (absent on a pre-sim518 export -> None).
             pgeom_path = os.path.join(bb_dir, f"{hand}.pgeom.npy")
             pgeom_view = views.get(f"bb_pool.{hand}.pgeom")
@@ -363,37 +361,37 @@ def load_battedball_pools(
                         nan=1.0,
                     )
                 ),
-                # SIM-413: pitcher hand per row (object 'L'/'R', not shared —
+                # Pitcher hand per row (object 'L'/'R', not shared —
                 # object-dtype like ``event``). None on a legacy artifact.
                 p_throws=(np.asarray(m["p_throws"], dtype=object) if "p_throws" in m else None),
-                # SIM-411 / SIM-425b numeric realism columns (shared when
-                # published; None on a pre-0012 bundle).
+                # The numeric per-row facts (shared when published; None on
+                # a pre-0012 bundle).
                 venue_id=_bb_take(views, hand, m, "venue_id", "venue_id", np.int64, 0),
                 fielder_pos=_bb_take(
                     views, hand, m, "fielder_pos", "fielded_by_position", np.int8, 0
                 ),
                 fielder_id=_bb_take(views, hand, m, "fielder_id", "fielder_player_id", np.int64, 0),
-                # SIM-510: the transition destinations (-1 = no runner on
+                # The transition destinations (-1 = no runner on
                 # that base pre-pitch; None on a pre-0018 bundle).
                 r1_dest=_bb_take(views, hand, m, "r1_dest", "runner_1b_dest", np.int8, -1),
                 r2_dest=_bb_take(views, hand, m, "r2_dest", "runner_2b_dest", np.int8, -1),
                 r3_dest=_bb_take(views, hand, m, "r3_dest", "runner_3b_dest", np.int8, -1),
                 batter_dest=_bb_take(views, hand, m, "batter_dest", "batter_dest", np.int8, -1),
                 dest_ok=_bb_take(views, hand, m, "dest_ok", "dest_ok", np.int8, 0),
-                # SIM-511: the normalization facts + geometry.
+                # The normalization facts + geometry.
                 r1_adv_out=_bb_take(views, hand, m, "r1_adv_out", "r1_adv_out", np.int8, 0),
                 r2_adv_out=_bb_take(views, hand, m, "r2_adv_out", "r2_adv_out", np.int8, 0),
                 r3_adv_out=_bb_take(views, hand, m, "r3_adv_out", "r3_adv_out", np.int8, 0),
                 is_air=_bb_take(views, hand, m, "is_air", "is_air", np.int8, 0),
                 spray_raw=_bb_take(views, hand, m, "spray_raw", "spray_raw", np.float32, 0),
                 hit_dist=_bb_take(views, hand, m, "hit_dist", "hit_dist", np.float32, 0),
-                # SIM-491: the batting side (None on a pre-0019 bundle).
+                # The batting side (None on a pre-0019 bundle).
                 bat_home=_bb_take(views, hand, m, "bat_home", "bat_home", np.int8, 0),
-                # SIM-523 part G: the fielding chain (None on an older bundle).
+                # The fielding chain (None on an older bundle).
                 fielders=_bb_fielders(views, hand, m),
                 putout_mask=_bb_take(views, hand, m, "putout_mask", "putout_pos_mask", np.int16, 0),
                 assist_mask=_bb_take(views, hand, m, "assist_mask", "assist_pos_mask", np.int16, 0),
-                # SIM-518 (SIM-463): the producing pitch (None on a
+                # The producing pitch (None on a
                 # pre-sim518 export).
                 pgeom=(
                     pgeom_view
@@ -405,7 +403,7 @@ def load_battedball_pools(
                     )
                 ),
                 pitcher_id=_bb_take(views, hand, m, "pitcher_id", "pitcher_id", np.int64, 0),
-                # SIM-523 part C: the batted-ball class (None before part C).
+                # The batted-ball class (None on an older bundle).
                 bb_class=_bb_take(views, hand, m, "bb_class", "bb_class", np.int8, 0),
             )
     return bb_pools

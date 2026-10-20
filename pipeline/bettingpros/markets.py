@@ -43,7 +43,7 @@ _PROP_MARKET_IDS: dict[str, int] = {
     "walks": 408,
     "total_bases": 293,
     "rbis": 289,
-    # SIM-421: the eight markets the book already offers.
+    # The eight markets the book already offers.
     "singles": 295,
     "doubles": 291,
     "triples": 292,

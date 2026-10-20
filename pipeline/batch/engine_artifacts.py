@@ -1,30 +1,22 @@
-"""
-pipeline/batch/engine_artifacts.py
-==================================
-SIM-422 — Fork-safe engine-artifact bundle (the foundation of the
-similarity-engine-wiring epic; see
-``docs/architecture/2026-09-03-engine-wiring-and-full-pool-scoring.md``).
+"""The engine-artifact bundle: the nightly builder and the per-worker loader.
 
-The live sim runs in ProcessPool workers that cannot receive the app-process
-engine objects, so every engine's contribution must reach the worker as a disk
-artifact (generalizing the SIM-421 deriver-from-disk pattern). This module is the
-NIGHTLY BUILDER for that bundle; the per-worker LOADER is :class:`EngineArtifacts`
-below.
+The simulator runs in process-pool workers that cannot receive the app
+process's engine objects, so every engine's contribution reaches a worker as
+files on disk (the design: docs/architecture/2026-09-03-engine-wiring-and-full-pool-scoring.md).
+``python -m pipeline.batch.engine_artifacts --what all`` builds the bundle;
+:class:`EngineArtifacts` loads it in a worker.
 
-Built here (incrementally; more engines land with SIM-424/425/426/427):
-  * **Full per-hand pitch pool** (3-season recency floor) — the geometry + situation
-    + per-row metadata the full-pool scorer iterates. ONE pool per batter hand; no
-    pitcher/season hard filter (pitcher hand self-zeroes via the pitcher engine).
-  * **Pitcher×pitcher similarity matrix** — same-hand W2+RBF composite from the
-    SIM-075 pitcher engine; the keystone that lets pitcher similarity *weight* the
-    pitch draw instead of hard-filtering on ``pitcher_id``.
+Each artifact has its own module in ``pipeline/batch/artifacts/`` with its
+builder and its loader: the per-hand pitch and batted-ball pools, the steal,
+advancement and pitching-change pools, the park geometry, the catcher
+receiving document, the pitcher-by-pitcher similarity matrix, the actor
+embeddings and the reference tables. This module keeps the actor score
+matrices (the tests patch ``_ENGINE_LOADER``, ``concentration_report`` and
+``_matrix_from_queries`` here), ``EngineArtifacts`` and the entry point.
 
-Layout (under ``${BASEBALL_PLAY_POOL_DIR}/engine_artifacts/``):
-  pitch_pool/<hand>.geom.npy      (N,10) float32 raw geometry
-  pitch_pool/<hand>.sit.npy       (N,6)  float32 situation (balls,strikes,outs,
-                                          runners_state,inning,score_diff)
-  pitch_pool/<hand>.meta.parquet  pitch_id,pitcher_id,batter_id,season,outcome_type,recency
-  pitcher_sim.npz                 profiles[(pid,season)] + same-hand similarity rows
+Without ``--out-dir`` the build writes a new version of the published bundle
+and moves the link to it when the build is complete
+(``pipeline/batch/bundle_versions.py``).
 """
 
 from __future__ import annotations
@@ -166,11 +158,11 @@ log = logging.getLogger("engine_artifacts")
 
 
 # ============================================================================
-# SIM-523 part A — the actor SCORE MATRICES (the pitcher pattern, generalized)
+# The actor SCORE MATRICES (the pitcher pattern, generalized)
 # ============================================================================
 #
 # The play-picker redesign (docs/audit/2026-09-08-sim523-play-picker-redesign-
-# plan.md, part A): every actor factor in the draw is its ENGINE's composite
+# plan.md): every actor factor in the draw is its ENGINE's composite
 # 0-to-1 score, emitted nightly as a dense matrix and looked up at draw time —
 # no distances, no bell curves on the play path. One matrix per actor role:
 #
@@ -188,12 +180,12 @@ log = logging.getLogger("engine_artifacts")
 # one lookup table. The diagonal is 1.0 (the same profile); a pair the engine
 # did not score is NaN and reads as neutral (1.0) in the sampler.
 #
-# The CONCENTRATION REPORT runs at build time (the redesign's new check): for
-# every catcher-season and fielder-season, the share of the pool's draw weight
-# his row of the matrix would put on his OWN staff's rows against the unweighted
-# share. The 2026-09-08 tests measured 8.9% on the live catcher's own pitches
-# (pool share 0.56%) under the old bell-curve kernel; a matrix whose p90 ratio
-# exceeds CONCENTRATION_MAX_RATIO fails a --strict build.
+# The CONCENTRATION REPORT runs at build time: for every catcher-season and
+# fielder-season, the share of the pool's draw weight his row of the matrix
+# would put on his OWN staff's rows against the unweighted share. A distance
+# kernel measured 8.9% on the live catcher's own pitches against a pool share
+# of 0.56% (2026-09-08); a matrix whose p90 ratio exceeds
+# CONCENTRATION_MAX_RATIO fails a --strict build.
 
 #: Engine class per matrix role. Local (not api.state's registry) so the
 #: pipeline layer never imports the API layer; a test swaps _ENGINE_LOADER.
@@ -210,14 +202,14 @@ _ACTOR_SIM_ENGINES: dict[str, tuple[str, str]] = {
         "similarity.engines.pitcher_steal_similarity",
         "PitcherStealSimilarityEngine",
     ),
-    # SIM-427: the manager (the usage sub-score weights the pitching-change draw).
+    # The manager (the usage sub-score weights the pitching-change draw).
     "manager": ("similarity.engines.manager_similarity", "ManagerSimilarityEngine"),
 }
 
 #: The matrices, each: (engine, the key-tuple -> "a:b[:c]" string, the score
 #: attribute on the engine's SimilarityResult, the result's key attributes).
 _ACTOR_SIM_SPECS: dict[str, dict] = {
-    # SIM-427 (owner decision 2026-09-13): the manager's USAGE similarity —
+    # The manager's USAGE similarity (owner decision 2026-09-13, SIM-427) —
     # starter pitch counts, pulled-before-100, closer entry leverage, the
     # high-leverage reliever share, opener and bulk rates, available-reliever
     # usage — is the weight on the pitching-change draw. The concentration
@@ -249,9 +241,9 @@ _ACTOR_SIM_SPECS: dict[str, dict] = {
     },
 }
 _FIELDER_POSITIONS = ("1B", "2B", "3B", "SS", "LF", "CF", "RF")
-#: SIM-523 (the kernel retirement): the engines that score their THIN profiles
-#: too, so the matrices cover every runner-season the pools hold (two thirds
-#: of steal rows and half of advancement rows were unscored before).
+#: The engines that score their THIN profiles too, so the matrices cover
+#: every runner-season the pools hold (without them two thirds of the steal
+#: rows and half of the advancement rows would have no score).
 _THIN_PROFILE_ENGINES = frozenset({"baserunner", "baserunner_steal"})
 CONCENTRATION_MAX_RATIO = 3.0
 
@@ -267,11 +259,11 @@ _ENGINE_LOADER = _default_actor_engine_loader
 
 def _key_of(result, key_attrs: tuple[str, ...]) -> str:
     # A list comprehension, not ``str.join(<generator>)``. The steal-runner
-    # matrix build (6.7 million calls since SIM-531) segfaulted three times out
-    # of three inside the generator on 2026-09-16 and ran clean in this form.
-    # The same generator form then ran clean 8 of 8 that evening, so the fault
-    # is stochastic (the SIM-445 crash class). This form is a precaution, not a
-    # proven fix (scripts/genexpr_crash_probe.py).
+    # matrix build (6.7 million calls) segfaulted three times out of three
+    # inside the generator on 2026-09-16 and ran clean in this form. The same
+    # generator form then ran clean 8 of 8 that evening, so the fault is
+    # stochastic (the crash class of CLAUDE.md §2a). This form is a precaution,
+    # not a proven fix (scripts/genexpr_crash_probe.py).
     return ":".join([str(getattr(result, a)) for a in key_attrs])
 
 
@@ -305,15 +297,15 @@ def build_actor_sim_matrices(
     strict: bool = False,
     only: set[str] | None = None,
 ) -> dict[str, int]:
-    """SIM-523 part A: export the actor score matrices for ``seasons`` into
+    """Export the actor score matrices for ``seasons`` into
     ``<out_dir>/actor_sim/`` and write the concentration report. ``limit``
     scores only the first N profiles per matrix (verification mode). Returns
     the matrix sizes by name.
 
-    SIM-427: ``only`` (matrix names, e.g. ``{"manager_usage"}``) rebuilds those
+    ``only`` (matrix names, e.g. ``{"manager_usage"}``) rebuilds those
     matrices alone and MERGES their sizes into the existing manifest — one
     matrix at a time, without paying for the others (a full build segfaulted
-    on the batter engine on 2026-09-13, the SIM-445 class). The concentration
+    on the batter engine on 2026-09-13; CLAUDE.md §2a). The concentration
     report is not re-run in that mode.
     """
     sim_dir = os.path.join(out_dir, "actor_sim")
@@ -397,8 +389,8 @@ def concentration_share(
 ) -> tuple[float, float, float]:
     """For one live profile: (weighted own-staff share, unweighted share, ESS
     share) over pool rows whose actor has a matrix column (``row_actor_col``
-    >= 0), the matrix row raised to ``power`` (SIM-523 part F: the fitted
-    power; 1.0 = the raw score). Pure arithmetic, unit-tested on a toy pool."""
+    >= 0), the matrix row raised to ``power`` (the fitted power; 1.0 = the
+    raw score). Pure arithmetic, unit-tested on a toy pool."""
     valid = row_actor_col >= 0
     if not valid.any():
         return float("nan"), float("nan"), float("nan")
@@ -424,7 +416,7 @@ def concentration_report(
     entry reports the distribution over live profiles of the ratio (weighted
     own-staff share / unweighted own-staff share) and of the effective sample
     share of the actor's matrix row over the pool."""
-    pw = powers or {}  # SIM-523 part F: the fitted powers (1.0 = the raw score)
+    pw = powers or {}  # The fitted powers (1.0 = the raw score)
     season_list = ", ".join(str(int(s)) for s in seasons)
     con = duckdb.connect(duckdb_path, read_only=True)
     try:
@@ -557,12 +549,12 @@ def _load_actor_sim(art_dir: str, views: dict[str, np.ndarray]) -> dict[str, dic
 
 
 class EngineArtifacts:
-    """Per-worker loader for the SIM-422 bundle (resident, built entirely from disk
-    so nothing live crosses the ProcessPool fork).  Holds both batter-hand pools +
-    (when present) the pitcher×pitcher similarity lookup; the SIM-423 sampler reads
-    these to assemble the factorized full-pool weights.
+    """The per-worker bundle, built entirely from disk so nothing live crosses
+    the process-pool fork. It holds both batter hands' pools, the other pools,
+    the documents and (when present) the pitcher-by-pitcher similarity lookup;
+    the full-pool sampler reads them to assemble its draw weights.
 
-    SIM-403b: the big read-only numpy arrays (pitch pool + batted-ball pool +
+    The big read-only numpy arrays (pitch pool + batted-ball pool +
     actor embeddings) can be PUBLISHED INTO SHARED MEMORY by the parent (via
     :meth:`extract_shared_arrays`) and ATTACHED zero-copy by each worker (via
     :meth:`attach_shared_views`), so a 10-worker pool resident-set drops from
@@ -592,42 +584,42 @@ class EngineArtifacts:
         has_reference: bool = False,
     ):
         self.pools: dict[str, HandPool] = pools
-        #: SIM-563: the IBB rate per cell and the venue run factors, read from the
-        #: bundle. ``has_reference`` is False on a bundle built before SIM-563; the
-        #: worker then reads DuckDB as before.
+        #: The IBB rate per cell and the venue run factors, read from the
+        #: bundle. ``has_reference`` is False on an older bundle; the worker
+        #: then reads DuckDB.
         self.ibb_rates = ibb_rates
         self.venue_run_factors = venue_run_factors
         self.has_reference = has_reference
-        #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
+        #: Matrix role -> {"index": {key: row}, "matrix": (n, n)
         #: float32}; {} on a bundle built before the actor matrices (then every
-        #: actor factor is neutral — the kernels are retired, SIM-523).
+        #: actor factor is neutral).
         self.actor_sim: dict[str, dict] = actor_sim or {}
-        #: SIM-523 part C: the park geometry document (``build_park_geometry``),
+        #: The park geometry document (``build_park_geometry``),
         #: or None on a bundle without it — the fence stage then stays off.
         self.park_geometry: dict | None = park_geometry
-        #: SIM-523 part D: the pitching-change opportunity pool, or None on a
-        #: bundle without it — the manager draw then falls back to the formula.
+        #: The pitching-change opportunity pool, or None on a bundle without
+        #: it (the manager draw then has no pool to draw from).
         self.change_pool: ChangePool | None = change_pool
-        #: SIM-523 part E: the receiving-ratio document (``build_receiving_profiles``),
+        #: The receiving-ratio document (``build_receiving_profiles``),
         #: or None on a bundle without it — the factor then stays neutral.
         self.receiving: dict | None = receiving
-        #: SIM-427: the reliever ROLE sidecar — ``"pitcher_id:season"`` ->
+        #: The reliever ROLE sidecar — ``"pitcher_id:season"`` ->
         #: (entries, high-leverage entry share, mean entry inning); None on a
         #: bundle without it (the role weight then stays neutral).
         self.change_roles: dict[str, tuple[int, float, float]] | None = change_roles
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
-        #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
+        #: Target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
-        #: SIM-510: decision key ("{scenario}_{from_base}_{target_base}") ->
-        #: AdvancementPool; {} on a legacy bundle (the SIM-512 draw then
+        #: Decision key ("{scenario}_{from_base}_{target_base}") ->
+        #: AdvancementPool; {} on a legacy bundle (the advancement draw then
         #: stages no discretionary advancement).
         self.adv_pools: dict[str, AdvancementPool] = adv_pools or {}
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
-        #: SIM-430: dense (n_prof x n_prof) float32 same-hand similarity matrix.
+        #: Dense (n_prof x n_prof) float32 same-hand similarity matrix.
         #: When present, :meth:`FullPoolSampler._f_pitcher` reads a contiguous row
         #: instead of scattering the ~2 GB ``pitcher_sim`` dict, and the dict is
-        #: NOT loaded per worker (it rides the SIM-403b shared-memory seam as one
+        #: NOT loaded per worker (it rides the shared-memory seam as one
         #: read-only view). None on a legacy bundle that predates the matrix.
         self.pitcher_sim_matrix: np.ndarray | None = pitcher_sim_matrix
         self.seasons: list[int] = seasons or []
@@ -635,7 +627,7 @@ class EngineArtifacts:
         self.actor_emb: dict[str, dict] = actor_emb or {}
 
     # ------------------------------------------------------------------
-    # SIM-403b — shared-memory publish/attach helpers
+    # Shared-memory publish/attach helpers
     # ------------------------------------------------------------------
 
     def extract_shared_arrays(self) -> dict[str, np.ndarray]:
@@ -658,11 +650,11 @@ class EngineArtifacts:
 
         The object-dtype arrays (``outcome_type`` / ``event``) and the legacy
         ``pitcher_sim`` dict-of-dicts are NOT included — they are not shareable
-        through ``shared_memory`` and stay per-worker.  SIM-430: the ``pitcher_sim``
-        dict is ~2 GB resident (NOT "a small fraction" as previously claimed here —
-        it was the dominant per-worker cost and the OOM driver), so it is replaced
-        by the dense ``pitcher_sim_matrix`` (~11 MB), which IS published here under
-        ``"pitcher_sim.matrix"`` and attached read-only by every worker.
+        through ``shared_memory`` and stay per-worker. The ``pitcher_sim`` dict
+        would be about 2 GB resident per worker, so the dense
+        ``pitcher_sim_matrix`` (about 11 MB) replaces it: the matrix IS published
+        here under ``"pitcher_sim.matrix"`` and attached read-only by every
+        worker.
         """
         out: dict[str, np.ndarray] = {}
         for hand, pool in self.pools.items():
@@ -680,28 +672,28 @@ class EngineArtifacts:
                 v = emb.get(attr)
                 if isinstance(v, np.ndarray):
                     out[f"actor_emb.{actor}.{attr}"] = v
-        # SIM-474: the steal opportunity pools.
+        # The steal opportunity pools.
         for target, spool in self.steal_pools.items():
             for attr in _STEAL_POOL_SHAREABLE_ATTRS:
                 arr = getattr(spool, attr, None)
                 if isinstance(arr, np.ndarray):
                     out[f"steal_pool.{target}.{attr}"] = arr
-        # SIM-510: the advancement opportunity pools.
+        # The advancement opportunity pools.
         for key, apool in self.adv_pools.items():
             for attr in _ADV_POOL_SHAREABLE_ATTRS:
                 arr = getattr(apool, attr, None)
                 if isinstance(arr, np.ndarray):
                     out[f"adv_pool.{key}.{attr}"] = arr
-        # SIM-523 part D: the pitching-change opportunity pool.
+        # The pitching-change opportunity pool.
         if self.change_pool is not None:
             for attr in _CHANGE_POOL_SHAREABLE_ATTRS:
                 arr = getattr(self.change_pool, attr, None)
                 if isinstance(arr, np.ndarray):
                     out[f"change_pool.{attr}"] = arr
-        # SIM-430: the dense pitcher similarity matrix (replaces the ~2 GB dict).
+        # The dense pitcher similarity matrix (replaces the ~2 GB dict).
         if isinstance(self.pitcher_sim_matrix, np.ndarray):
             out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
-        # SIM-523 part A: the actor score matrices.
+        # The actor score matrices.
         for name, entry in self.actor_sim.items():
             m = entry.get("matrix")
             if isinstance(m, np.ndarray):
@@ -745,29 +737,29 @@ class EngineArtifacts:
                 v = views.get(key)
                 if isinstance(v, np.ndarray):
                     emb[attr] = v
-        # SIM-474: attach the shared steal-pool views.
+        # Attach the shared steal-pool views.
         for target, spool in self.steal_pools.items():
             for attr in _STEAL_POOL_SHAREABLE_ATTRS:
                 v = views.get(f"steal_pool.{target}.{attr}")
                 if isinstance(v, np.ndarray):
                     setattr(spool, attr, v)
-        # SIM-510: attach the shared advancement-pool views.
+        # Attach the shared advancement-pool views.
         for key, apool in self.adv_pools.items():
             for attr in _ADV_POOL_SHAREABLE_ATTRS:
                 v = views.get(f"adv_pool.{key}.{attr}")
                 if isinstance(v, np.ndarray):
                     setattr(apool, attr, v)
-        # SIM-523 part D: attach the shared change-pool views.
+        # Attach the shared change-pool views.
         if self.change_pool is not None:
             for attr in _CHANGE_POOL_SHAREABLE_ATTRS:
                 v = views.get(f"change_pool.{attr}")
                 if isinstance(v, np.ndarray):
                     setattr(self.change_pool, attr, v)
-        # SIM-430: attach the shared dense pitcher-sim matrix view.
+        # Attach the shared dense pitcher-sim matrix view.
         mv = views.get("pitcher_sim.matrix")
         if isinstance(mv, np.ndarray):
             self.pitcher_sim_matrix = mv
-        # SIM-523 part A: attach the shared actor score matrices.
+        # Attach the shared actor score matrices.
         for name, entry in self.actor_sim.items():
             v = views.get(f"actor_sim.{name}.matrix")
             if isinstance(v, np.ndarray):
@@ -777,16 +769,15 @@ class EngineArtifacts:
     def load(
         cls, art_dir: str, shared_views: dict[str, np.ndarray] | None = None
     ) -> EngineArtifacts:
-        """Load the bundle from disk. When ``shared_views`` is supplied (the
-        SIM-403b shared-memory map from :func:`extract_shared_arrays`), the big
-        per-pool / per-embedding numpy arrays are taken DIRECTLY from the views
-        and the corresponding ``.npy`` disk reads are SKIPPED — turning a
-        ~150-300 MB cold-load into a ~5 MB metadata-only read per worker.  This
-        is the SIM-402 fix: without it, 9 cold workers all racing to read the
-        full bundle from a Windows-hosted Docker volume serializes into a
-        ~500 s stall on a 10-iteration request.  When ``shared_views`` is None
-        (the dev path / no published bundle), every array still loads from disk
-        exactly as before.
+        """Load the bundle from disk, one loader per artifact. When
+        ``shared_views`` is supplied (the shared-memory map from
+        :func:`extract_shared_arrays`), the big per-pool and per-embedding numpy
+        arrays come DIRECTLY from the views and their ``.npy`` disk reads are
+        SKIPPED: a 150-300 MB cold load becomes a 5 MB metadata read per worker.
+        Without it, nine cold workers reading the full bundle from a
+        Windows-hosted Docker volume at once stall for about 500 s on a
+        10-iteration request. When ``shared_views`` is None (the dev path, or
+        no published bundle), every array loads from disk.
 
         The OBJECT-dtype columns (``outcome_type`` on HandPool, ``event`` on
         BattedBallPool), the metadata-only ids/seasons/recency columns, the
@@ -812,7 +803,7 @@ class EngineArtifacts:
         receiving = load_receiving(art_dir)
         park_geometry = load_park_geometry(art_dir)
         actor_emb = load_actor_embeddings(art_dir, views)
-        # SIM-563: the reference tables (absent on an older bundle).
+        # The reference tables (absent on an older bundle).
         ibb_rows = _read_reference_rows(art_dir, IBB_RATES_FILE)
         venue_rows = _read_reference_rows(art_dir, VENUE_RUN_FACTORS_FILE)
         return cls(
@@ -896,7 +887,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    # SIM-563: with no --out-dir, build a staged version and publish it at the end.
+    # With no --out-dir, build a staged version and publish it at the end.
     link = os.path.join(DEFAULT_POOL_DIR, "engine_artifacts")
     staged = args.out_dir is None
     if staged:
@@ -926,23 +917,23 @@ def _build(args: argparse.Namespace) -> None:
         if args.what in ("actors", "all"):
             build_actor_embeddings(con, args.out_dir)
         if args.what in ("park", "all"):
-            # SIM-523 part C: the park geometry + the carry model.
+            # The park geometry + the carry model.
             build_park_geometry(con, args.out_dir, seasons)
         if args.what in ("manager", "all"):
-            # SIM-523 part D: the pitching-change opportunity pool.
+            # The pitching-change opportunity pool.
             build_pitching_change_pool(con, args.out_dir, seasons)
         if args.what in ("receiving", "all"):
-            # SIM-523 part E: the catcher receiving ratios.
+            # The catcher receiving ratios.
             build_receiving_profiles(con, args.out_dir, seasons)
         if args.what in ("reference", "all"):
-            # SIM-563: the IBB rates and the venue run factors, for the workers.
+            # The IBB rates and the venue run factors, for the workers.
             build_reference_tables(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit
             )
         if args.what in ("actors_sim", "all"):
-            # SIM-523 part A: the actor score matrices + the concentration report.
+            # The actor score matrices + the concentration report.
             build_actor_sim_matrices(
                 args.duckdb_path,
                 args.out_dir,

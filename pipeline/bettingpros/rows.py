@@ -269,7 +269,7 @@ class OfferRowsMixin(EventMatchMixin):
         required_sides: Mapping[str, Mapping[str, Any]],
         game_date: date | None,
     ) -> frozenset[int]:
-        """The books on F5_EXCLUDED_BOOKS whose date is on or before the game's (SIM-555).
+        """The books on F5_EXCLUDED_BOOKS whose date is on or before the game's.
 
         Only for the first-five markets of F5_TWIN_MARKETS, and for each book
         only on the markets :data:`F5_EXCLUDED_MARKETS` lists for it (see
@@ -306,7 +306,7 @@ class OfferRowsMixin(EventMatchMixin):
         *,
         tie: Mapping[str, Any] | None = None,
     ) -> frozenset[int]:
-        """The books whose first-five entry is a first-inning bet (SIM-555).
+        """The books whose first-five entry is a first-inning bet.
 
         Only for the three first-five markets of F5_TWIN_MARKETS. Two rules:
         (1) a book on F5_EXCLUDED_BOOKS whose date is on or before the game's
@@ -366,7 +366,7 @@ class OfferRowsMixin(EventMatchMixin):
         *,
         tie: Mapping[str, Any] | None = None,
     ) -> bool:
-        """True when the first-five opener copies the first-inning opener (SIM-555).
+        """True when the first-five opener copies the first-inning opener.
 
         On every required side: the same opening book, the same line, the
         implied probabilities within :func:`twin_price_tolerance` (identical
@@ -443,7 +443,7 @@ class OfferRowsMixin(EventMatchMixin):
             {
                 "scheduled_start": start,
                 "game_date": date_str,
-                "postponed_start": self._postponed_start(game_pk),  # SIM-555: for the guard
+                "postponed_start": self._postponed_start(game_pk),  # For the guard
             }
         )
         event_id = event["id"]
@@ -479,7 +479,7 @@ class OfferRowsMixin(EventMatchMixin):
                 market_type,
                 exc,
             )
-            self.read_failures += 1  # SIM-555: the first-inning read failed
+            self.read_failures += 1  # The first-inning read failed
             return base, []
         rows = self._rows(
             base, kind, sides, line_type, excluded=excluded, opener_is_twin=opener_is_twin
@@ -512,7 +512,7 @@ class OfferRowsMixin(EventMatchMixin):
             "over_line": None,
             "under_line": None,
             "game_date": None,
-            "postponed_start": None,  # SIM-555: a made-up game's original start, for the guard
+            "postponed_start": None,  # A made-up game's original start, for the guard
         }
         event = self._resolve_event(game_pk)
         player_name = self._resolve_player_name(player_id)
@@ -535,7 +535,7 @@ class OfferRowsMixin(EventMatchMixin):
     def _selections(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
         """All selections of the (single) offer for a game-level market."""
         try:
-            offers = self._offers(event_id, market_id)  # SIM-421: cached per (event, market)
+            offers = self._offers(event_id, market_id)  # Cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: offers fetch failed (market %s): %s", market_id, exc)
             self.read_failures += 1  # SIM-555
@@ -573,7 +573,7 @@ class OfferRowsMixin(EventMatchMixin):
     ) -> dict[str, Any] | None:
         """The prop offer whose participant matches ``player_name`` (normalized)."""
         try:
-            offers = self._offers(event_id, market_id)  # SIM-421: cached per (event, market)
+            offers = self._offers(event_id, market_id)  # Cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: prop offers fetch failed (market %s): %s", market_id, exc)
             self.read_failures += 1  # SIM-555

@@ -44,7 +44,7 @@ class PropOddsMixin(PipelineBase):
     @staticmethod
     def _collect_prop_player_roles(game_state: dict) -> dict[int, str]:
         """
-        SIM-421: player_id → role for every player eligible for prop-line
+        Player_id → role for every player eligible for prop-line
         capture in a built game_state.
 
         Props are offered on the pitcher on the mound and on the batters in
@@ -86,7 +86,7 @@ class PropOddsMixin(PipelineBase):
     @staticmethod
     def _pregame_prop_player_roles(game: Mapping[str, Any]) -> dict[int, str]:
         """
-        SIM-555: player_id → role for a game that has not started, read from
+        Player_id → role for a game that has not started, read from
         the hydrated schedule entry (see ``SCHEDULE_HYDRATE``).
 
         A game before first pitch has no live feed, so the roles come from the
@@ -134,7 +134,7 @@ class PropOddsMixin(PipelineBase):
     @classmethod
     def _collect_prop_player_ids(cls, game_state: dict) -> list[int]:
         """
-        SIM-340: Extract the player_ids eligible for prop-line capture from a
+        Extract the player_ids eligible for prop-line capture from a
         built game_state (the keys of :meth:`_collect_prop_player_roles`).
 
         Deduplicated, None-filtered, and order-stable so a fixed game_state
@@ -145,7 +145,7 @@ class PropOddsMixin(PipelineBase):
     @staticmethod
     def _prop_stats_for_role(role: str, prop_stats: tuple[str, ...]) -> tuple[str, ...]:
         """
-        SIM-421: the subset of ``prop_stats`` a player in ``role`` is asked for.
+        The subset of ``prop_stats`` a player in ``role`` is asked for.
 
         A pitcher gets the pitcher markets, a hitter the batter markets. Any
         other role (PROP_ROLE_BOTH, or an unknown string) gets every market —
@@ -166,18 +166,18 @@ class PropOddsMixin(PipelineBase):
         prop_stats: tuple[str, ...] = PROP_STATS,
         roles: Mapping[int, str] | None = None,
     ) -> list[tuple[int, str, list[dict]]]:
-        """SIM-555: every book's prop rows, one entry per offer.
+        """Every book's prop rows, one entry per offer.
 
         An offer is one (player, prop_stat) at one line type. Each entry is
         ``(player_id, prop_stat, rows)``: the provider's by-book rows through
         ``prop_rows_by_book`` (one row for the mock or a provider with only the
         one-row method), empty rows dropped. An offer with no row is left out.
 
-        SIM-421: ``roles`` (player_id → PROP_ROLE_*) splits the markets by role;
+        ``roles`` (player_id → PROP_ROLE_*) splits the markets by role;
         a player missing from ``roles``, or ``roles=None``, is asked for every
         market in ``prop_stats``. An unknown prop_stat is logged and skipped.
         """
-        provider = self._odds_provider()  # SIM-370: env-selected, mock by default
+        provider = self._odds_provider()  # Env-selected, mock by default
         offers: list[tuple[int, str, list[dict]]] = []
         for player_id in player_ids:
             role = roles.get(player_id, PROP_ROLE_BOTH) if roles else PROP_ROLE_BOTH
@@ -210,7 +210,7 @@ class PropOddsMixin(PipelineBase):
         roles: Mapping[int, str] | None = None,
     ) -> list[dict]:
         """
-        SIM-340 / SIM-555: a flat list of every book's prop rows for the players.
+        A flat list of every book's prop rows for the players.
 
         SIM-555 (2026-09-28): the provider names the books. The method reads
         every book's row of each (player, prop_stat) through
@@ -219,7 +219,7 @@ class PropOddsMixin(PipelineBase):
         are dropped; the load guard runs later, in the persisting cycle. The
         old fixed book list (PROP_BOOKS) and its ``books`` argument are gone.
 
-        SIM-421: ``roles`` splits the markets by role (see
+        ``roles`` splits the markets by role (see
         :meth:`_prop_offers`).
         """
         return [
@@ -233,7 +233,7 @@ class PropOddsMixin(PipelineBase):
     async def _persist_prop_offers(
         self, game_pk: int, offers: list[tuple[int, str, list[dict]]]
     ) -> int:
-        """SIM-555: guard and persist each offer's rows in one batch; return the rows sent.
+        """Guard and persist each offer's rows in one batch; return the rows sent.
 
         One ``executemany`` per offer. A failed batch is logged and the next
         offer still runs.
@@ -258,29 +258,29 @@ class PropOddsMixin(PipelineBase):
 
     async def _persist_prop_odds_cycle(self, game_pk: int, game_state: dict) -> int:
         """
-        SIM-340: Live prop-odds persistence cycle.
+                Live prop-odds persistence cycle.
 
-        Called from _refresh_game_state() on every WS signal, but self-throttled
-        to at most once per PROP_FETCH_CADENCE_S seconds per game (prop lines move
-        far more slowly than the per-pitch WS feed).  When the cadence gate opens,
-        it:
-          1. Collects prop-eligible players + their roles from the game_state
-             (SIM-421: pitcher / batter / both).
-          2. Fetches every book's rows of each offer via _prop_offers()
-             (SIM-555), the pitcher markets for pitchers and the batter markets
-             for hitters.
-          3. Runs the load guard on each row and persists each offer's kept
-             rows in one batch via _persist_prop_odds_many() (SIM-555).
+                Called from _refresh_game_state() on every WS signal, but self-throttled
+                to at most once per PROP_FETCH_CADENCE_S seconds per game (prop lines move
+                far more slowly than the per-pitch WS feed).  When the cadence gate opens,
+                it:
+                  1. Collects prop-eligible players + their roles from the game_state
+                     (SIM-421: pitcher / batter / both).
+                  2. Fetches every book's rows of each offer via _prop_offers()
+        , the pitcher markets for pitchers and the batter markets
+                     for hitters.
+                  3. Runs the load guard on each row and persists each offer's kept
+                     rows in one batch via _persist_prop_odds_many().
 
-        Returns the number of prop rows sent this cycle (0 when the cadence
-        gate is closed or no eligible players were found).
+                Returns the number of prop rows sent this cycle (0 when the cadence
+                gate is closed or no eligible players were found).
         """
         return await self._persist_prop_roles_cycle(
             game_pk, self._collect_prop_player_roles(game_state)
         )
 
     async def _persist_prop_roles_cycle(self, game_pk: int, roles: Mapping[int, str]) -> int:
-        """SIM-555: the prop cycle for a given role map (player_id → PROP_ROLE_*).
+        """The prop cycle for a given role map (player_id → PROP_ROLE_*).
 
         The body of :meth:`_persist_prop_odds_cycle`, shared with the pre-game
         cycle (:meth:`_persist_pregame_odds`), whose roles come from the
@@ -328,7 +328,7 @@ class PropOddsMixin(PipelineBase):
         roles: Mapping[int, str] | None = None,
     ) -> int:
         """
-        SIM-340 / SIM-138: Opening-line capture hook for player props.
+        Opening-line capture hook for player props.
 
         Writes the raw.prop_odds rows of each (player, prop_stat) with
         line_type='opening'.  This is the prop analogue of the nightly opening
@@ -336,12 +336,12 @@ class PropOddsMixin(PipelineBase):
         line posted so opening→closing movement is recoverable for props, not
         just game markets.
 
-        SIM-555: the rows are the provider's by-book opening rows (BettingPros:
+        The rows are the provider's by-book opening rows (BettingPros:
         the opener's one row, labelled ``'bp:<id>'``); each passes the load
         guard and each offer's rows go to the database in one batch. The old
         ``books`` argument is gone with PROP_BOOKS.
 
-        SIM-421: pass ``roles`` (player_id → PROP_ROLE_*) to split the markets
+        Pass ``roles`` (player_id → PROP_ROLE_*) to split the markets
         by role; without it every player is asked for every market.
 
         Idempotent by virtue of the dedup hash (migration 0013): re-running with
@@ -365,37 +365,37 @@ class PropOddsMixin(PipelineBase):
 
     async def _persist_prop_odds(self, prop: dict) -> None:
         """
-        SIM-134: Inserts a fresh player prop odds snapshot into raw.prop_odds.
+                Inserts a fresh player prop odds snapshot into raw.prop_odds.
 
-        Parameters
-        ----------
-        prop : dict returned by the configured provider's get_prop_odds()
-               (MockOddsAPI by default, or BettingProsOddsProvider under
-               ODDS_PROVIDER=bettingpros).  Required keys:
-                 game_pk, player_id, prop_stat, line,
-                 over_ml, under_ml, book, line_type, is_sharp_book,
-                 source, is_mock
+                Parameters
+                ----------
+                prop : dict returned by the configured provider's get_prop_odds()
+                       (MockOddsAPI by default, or BettingProsOddsProvider under
+                       ODDS_PROVIDER=bettingpros).  Required keys:
+                         game_pk, player_id, prop_stat, line,
+                         over_ml, under_ml, book, line_type, is_sharp_book,
+                         source, is_mock
 
-        Notes
-        -----
-        The live pipeline writes line_type='current' during active game windows
-        via _persist_prop_odds_cycle() (SIM-340 wiring).  Opening lines are
-        captured by capture_opening_prop_lines() and the nightly opening_line_job
-        (SIM-138).  Closing lines are designated by mark_closing_prop_lines().
+                Notes
+                -----
+                The live pipeline writes line_type='current' during active game windows
+                via _persist_prop_odds_cycle() (SIM-340 wiring).  Opening lines are
+                captured by capture_opening_prop_lines() and the nightly opening_line_job
+        .  Closing lines are designated by mark_closing_prop_lines().
 
-        SIM-340: also writes ``odds_hash`` (SHA-256 of the prop payload) and uses
-        ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING so the
-        live cadence never accumulates duplicate rows for an unchanged line.
-        Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
-        0013).
+                Also writes ``odds_hash`` (SHA-256 of the prop payload) and uses
+                ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING so the
+                live cadence never accumulates duplicate rows for an unchanged line.
+                Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
+                0013).
 
-        SIM-555: also writes ``book_line_at`` (migration 0028). The cycles
-        persist one offer's rows at a time through
-        :meth:`_persist_prop_odds_many`.
+                Also writes ``book_line_at`` (migration 0028). The cycles
+                persist one offer's rows at a time through
+                :meth:`_persist_prop_odds_many`.
 
-        The DB enforces prop_stat values via CHECK constraint (migration 0004).
-        Any unknown prop_stat will fail here with a clear IntegrityError before
-        the invalid value reaches the application layer.
+                The DB enforces prop_stat values via CHECK constraint (migration 0004).
+                Any unknown prop_stat will fail here with a clear IntegrityError before
+                the invalid value reaches the application layer.
         """
         await self._db.execute(_PROP_ODDS_INSERT_SQL, *self._prop_odds_params(prop))
 
@@ -404,7 +404,7 @@ class PropOddsMixin(PipelineBase):
         return prop_odds_insert_args(prop)
 
     async def _persist_prop_odds_many(self, rows: list[dict]) -> int:
-        """SIM-555: insert one offer's prop rows in one ``executemany``.
+        """Insert one offer's prop rows in one ``executemany``.
 
         The same SQL and dedup as :meth:`_persist_prop_odds`. Returns the number
         of rows sent (the dedup may insert fewer). An empty list sends nothing.
@@ -420,7 +420,7 @@ class PropOddsMixin(PipelineBase):
         *,
         scheduled_start: datetime | None = None,
     ) -> int:
-        """SIM-340 / SIM-546: the prop analogue of :meth:`mark_closing_lines`.
+        """The prop analogue of :meth:`mark_closing_lines`.
 
         One closing row per (player, prop stat, book), by the same rule, with
         the prop hash rewritten. See :func:`promote_closing_prop_rows`.

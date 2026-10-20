@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from datetime import date
 
-#: SIM-555: a first-five market → the first-inning market whose entries a
+#: A first-five market → the first-inning market whose entries a
 #: mislabelled first-five entry copies (283 run line → 282, 281 total → 280,
 #: 279 moneyline → 278).
 F5_TWIN_MARKETS: dict[int, int] = {283: 282, 281: 280, 279: 278}
 
-#: SIM-555: a book whose first-five entries are first-inning bets from this
+#: A book whose first-five entries are first-inning bets from this
 #: date on. Applies to the F5_TWIN_MARKETS keys that F5_EXCLUDED_MARKETS lists
 #: for the book. The 300-game census before the re-load confirms the date and
 #: finds any other book.
@@ -29,7 +29,7 @@ F5_EXCLUDED_MARKETS: dict[int, frozenset[int]] = {12: frozenset({283, 281})}
 
 
 def f5_excluded_markets(book_id: int) -> frozenset[int]:
-    """The first-five market ids a book's dated exclusion applies to (SIM-555).
+    """The first-five market ids a book's dated exclusion applies to.
 
     The book's entry on :data:`F5_EXCLUDED_MARKETS`, else every key of
     :data:`F5_TWIN_MARKETS`. The answer does not say whether the book is on
@@ -39,7 +39,7 @@ def f5_excluded_markets(book_id: int) -> frozenset[int]:
 
 
 def is_f5_dated_excluded(book_id: int, market_id: int, game_date: date | None) -> bool:
-    """True when the dated rule drops this book's row of this market on this date (SIM-555).
+    """True when the dated rule drops this book's row of this market on this date.
 
     The book is on :data:`F5_EXCLUDED_BOOKS`, its date is on or before the
     game's, and the market is one of :func:`f5_excluded_markets`. An unknown
@@ -51,7 +51,7 @@ def is_f5_dated_excluded(book_id: int, market_id: int, game_date: date | None) -
     return start <= game_date and int(market_id) in f5_excluded_markets(book_id)
 
 
-#: SIM-555: the implied-probability gap under which a first-five line "copies"
+#: The implied-probability gap under which a first-five line "copies"
 #: the same book's first-inning line.
 TWIN_PRICE_TOLERANCE = 0.03
 
@@ -68,7 +68,7 @@ _EXACT_TWIN_MARKETS: frozenset[int] = frozenset({279})
 
 
 def twin_price_tolerance(market_id: int) -> float:
-    """The twin rule's price gap for a first-five market id (SIM-555).
+    """The twin rule's price gap for a first-five market id.
 
     The moneyline (279) needs identical prices
     (:data:`TWIN_MONEYLINE_PRICE_TOLERANCE`); the run line and the total take

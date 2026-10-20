@@ -51,7 +51,7 @@ class WritesMixin(LoaderBase):
     def _game_already_loaded(self, game_pk: int) -> bool:
         """True if this game has been ingested and should be skipped.
 
-        SIM-441: this used to be `SELECT 1 FROM raw.pitches … LIMIT 1` alone,
+        This used to be `SELECT 1 FROM raw.pitches … LIMIT 1` alone,
         which cannot distinguish "never loaded" from "loaded and legitimately
         produced zero pitch rows" — a game whose every row hard-errors, or one
         the feed simply has no pitches for. Such a game was re-fetched and
@@ -95,7 +95,7 @@ class WritesMixin(LoaderBase):
         corrected parser output actually overwrites the old values instead of
         being discarded by ``ON CONFLICT … DO NOTHING``.
 
-        SIM-093: Hard-error rows are now persisted to raw.etl_errors as well
+        Hard-error rows are now persisted to raw.etl_errors as well
         as logged.  Without this, skipped rows had no audit trail and there
         was no way to find which pitches a re-ingest would need to recover.
         """
@@ -135,7 +135,7 @@ class WritesMixin(LoaderBase):
             for ab, pitch_num, errs in hard_errors:
                 log.error("    ab=%s pitch_number=%s: %s", ab, pitch_num, "; ".join(errs))
 
-        # SIM-441: the ledger is written INSIDE the pitch transaction (see
+        # The ledger is written INSIDE the pitch transaction (see
         # _batch_insert). It used to commit first, on its own connection, which
         # made it structurally blind to insert-path losses: if the pitch insert
         # then failed and rolled back, the errors survived describing a game that
@@ -163,7 +163,7 @@ class WritesMixin(LoaderBase):
         game_pk: int,
         errors: list[tuple[int | None, int | None, list[str]]],
     ) -> None:
-        """SIM-093/SIM-441: one raw.etl_errors row per skipped pitch, idempotently.
+        """One raw.etl_errors row per skipped pitch, idempotently.
 
         Runs on the CALLER's cursor so it shares the pitch-insert transaction.
 
@@ -200,7 +200,7 @@ class WritesMixin(LoaderBase):
         pitch_rows: int,
         skipped_rows: int,
     ) -> None:
-        """SIM-441: record the terminal per-game ETL outcome.
+        """Record the terminal per-game ETL outcome.
 
         ``_game_already_loaded`` keys on pitch rows existing, which cannot
         distinguish "never loaded" from "loaded and legitimately produced zero
@@ -232,7 +232,7 @@ class WritesMixin(LoaderBase):
 
     def reprocess_errored_games(self, since: date) -> list[int]:
         """
-        SIM-093: Return distinct game_pks that have raw.etl_errors rows
+        Return distinct game_pks that have raw.etl_errors rows
         on or after ``since``.  Caller iterates the list and reruns
         load_game(game_pk, season) for each — typical use is "after a
         validator bug-fix, find all games that were affected and re-ingest".
@@ -250,10 +250,10 @@ class WritesMixin(LoaderBase):
             cur.execute(sql, (since,))
             return [r[0] for r in cur.fetchall()]
 
-    #: SIM-502: non-pitch play events.  ON CONFLICT DO NOTHING makes a partial
+    #: Non-pitch play events.  ON CONFLICT DO NOTHING makes a partial
     #: re-run idempotent; the reload path DELETEs first so a genuine replace still
     #: replaces rather than silently keeping the old rows.
-    #: SIM-502: tri-state cache of "does `raw.play_events` exist".  ``None`` means
+    #: Tri-state cache of "does `raw.play_events` exist".  ``None`` means
     #: not yet probed.  Cached because a 2,430-game sweep must not run 2,430
     #: identical catalogue lookups, and because the answer cannot change mid-run:
     #: applying a migration while a sweep is in flight is not a supported move.
@@ -296,7 +296,7 @@ class WritesMixin(LoaderBase):
         load relies on the natural-key ``ON CONFLICT DO NOTHING`` to stay
         idempotent.
         """
-        # SIM-502: SKIP ENTIRELY when the table is absent.
+        # SKIP ENTIRELY when the table is absent.
         #
         # Alembic 0018 creates `raw.play_events`, and this code lands BEFORE that
         # migration is applied anywhere. Without this guard the statements below
@@ -338,7 +338,7 @@ class WritesMixin(LoaderBase):
     ) -> int:
         """Insert rows in BATCH_SIZE chunks.  Returns rows ACTUALLY written.
 
-        SIM-441: this is now the SINGLE transaction for one game's write — the
+        This is now the SINGLE transaction for one game's write — the
         optional DELETE, the pitch rows, the ``raw.etl_errors`` ledger and the
         ``raw.etl_game_ingest`` outcome all commit or roll back together."
 
@@ -366,7 +366,7 @@ class WritesMixin(LoaderBase):
         # outright; inferring it from the rows is only a fallback for a caller
         # that does not pass one.
         #
-        # SIM-441 fix: this used to infer ONLY from ``rows``. When every row of a
+        # This used to infer ONLY from ``rows``. When every row of a
         # game hard-errors, ``rows`` is empty, so the inference produced None and
         # BOTH the error ledger and the ingest-outcome write below were silently
         # skipped — for exactly the games that most need an audit trail. That was
@@ -396,7 +396,7 @@ class WritesMixin(LoaderBase):
                             deleted,
                         )
 
-                    # SIM-502: non-pitch play events, INSIDE this same
+                    # Non-pitch play events, INSIDE this same
                     # transaction. `_write_play_events` deletes the game's rows
                     # first, so a load and a reload behave identically and a
                     # re-run cannot double-count a pickoff. If the pitch insert

@@ -15,7 +15,7 @@ log = logging.getLogger("engine_artifacts")
 
 
 # ---------------------------------------------------------------------------
-# SIM-523 part E — the catcher RECEIVING ratio (the ball-strike ratio on taken pitches)
+# The catcher RECEIVING ratio (the ball-strike ratio on taken pitches)
 # ---------------------------------------------------------------------------
 #
 # The receiving factor of the pitch-result draw: on TAKEN pitches (called

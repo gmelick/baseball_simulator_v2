@@ -16,7 +16,7 @@ from pipeline.batch.artifacts.pools import AdvancementPool
 log = logging.getLogger("engine_artifacts")
 
 
-#: SIM-510: the eight advancement decisions, keyed "{scenario}_{from_base}_
+#: The eight advancement decisions, keyed "{scenario}_{from_base}_
 #: {target_base}" (see the migration-0018 header for the scenario names).
 _ADV_KEYS = ("1_1_3", "2_2_4", "3_1_4", "4_1_2", "4_2_3", "4_3_4", "5_0_2", "5_0_3")
 
@@ -28,9 +28,9 @@ _ADV_FEAT_COLS = ["exit_velo", "launch_angle", "spray_angle", "hit_distance", "o
 def build_advancement_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
-    """Write the per-decision advancement OPPORTUNITY pools for SIM-512.
+    """Write the per-decision advancement OPPORTUNITY pools the advancement draw reads.
 
-    One row per discretionary runner-advancement decision (SIM-510),
+    One row per discretionary runner-advancement decision,
     attempted or not — the non-attempt rows are the denominator, exactly the
     steal-pool pattern. Sub-pools split by (scenario, from_base, target_base)
     because each is a different decision with different rates.
@@ -79,9 +79,9 @@ def load_advancement_pools(
     con: duckdb.DuckDBPyConnection, art_dir: str, views: dict[str, np.ndarray]
 ) -> dict[str, AdvancementPool]:
     """Load the advancement pools by decision key; {} when the bundle has none."""
-    # SIM-510: the advancement opportunity pools, one per decision key.
+    # The advancement opportunity pools, one per decision key.
     # Presence-gated like the others: {} on a legacy bundle, and the
-    # SIM-512 draw then stages no discretionary advancement.
+    # advancement draw then stages no discretionary advancement.
     adv_pools: dict[str, AdvancementPool] = {}
     ap_dir = os.path.join(art_dir, "advancement_pool")
     if os.path.exists(os.path.join(ap_dir, "manifest.json")):
@@ -99,7 +99,7 @@ def load_advancement_pools(
                 return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
 
             adv_pools[key] = AdvancementPool(
-                # SIM-535: None on a bundle exported before the date
+                # None on a bundle exported before the date
                 # existed, which the sampler reports rather than
                 # silently drawing from the future.
                 game_ymd=(
