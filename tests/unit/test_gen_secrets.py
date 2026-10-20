@@ -1,20 +1,14 @@
-"""SIM-443b — the secrets generator writes the eight secrets and never prints one."""
+"""The secrets generator writes the eight secrets; ``--append`` and ``--check`` never print one."""
 
 from __future__ import annotations
 
-import importlib.util
 import re
-import sys
 from pathlib import Path
 
 import pytest
+from tests.script_loader import load_script
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "gen_secrets.py"
-_spec = importlib.util.spec_from_file_location("gen_secrets", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-gen = importlib.util.module_from_spec(_spec)
-sys.modules["gen_secrets"] = gen
-_spec.loader.exec_module(gen)
+gen = load_script("gen_secrets")
 
 EXPECTED_KEYS = (
     "POSTGRES_PASSWORD",

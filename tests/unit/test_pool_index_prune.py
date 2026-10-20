@@ -1,7 +1,7 @@
 """
 test_pool_index_prune.py
 ============================
-Unit test for SIM-115 — prune DuckDB sim-pool indexes.
+Unit test for migration 0005, which prunes the DuckDB sim-pool indexes.
 
 Applies migration 0005 to a DuckDB that has the full (pre-prune) index set and
 asserts that the 8 pitch-pool + 9 outcome-pool write-overhead indexes are gone
@@ -102,7 +102,7 @@ def _seed_full_index_set():
     return c
 
 
-class TestSim115Prune(unittest.TestCase):
+class TestPoolIndexPrune(unittest.TestCase):
     def setUp(self):
         self.c = _seed_full_index_set()
         sql = open(MIGRATION_0005, encoding="utf-8").read()

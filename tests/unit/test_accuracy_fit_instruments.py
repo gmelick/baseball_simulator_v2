@@ -1,5 +1,6 @@
 """
-SIM-548 — the joint-fit plan's instruments, on synthetic inputs (no DB, no bundle):
+The instruments of the joint-fit plan (the accuracy fit, SIM-548), on synthetic
+inputs (no DB, no bundle):
 
   * the market skill table (scripts/market_skill.py): Brier, base rate,
     AUC, bias and the overround exclusion on a toy market;
@@ -88,9 +89,9 @@ def test_skill_table_excludes_a_market_whose_prices_are_not_a_pair():
 
 
 def _two_bet_records(n_games: int, rng: np.random.Generator) -> list[dict]:
-    """SIM-549: the first-five run line as the comparison now scores two
-    separate bets — per game a home record and an away record, each with its
-    own price and no fade price."""
+    """The first-five run line as the comparison scores two separate bets:
+    per game a home record and an away record, each with its own price and
+    no price for the other side."""
     out = []
     for g in range(n_games):
         for market, price in (("f5_runline", 350.0), ("f5_runline_away", 150.0)):
@@ -170,7 +171,7 @@ def test_a_mis_stored_one_sided_line_is_excluded(capsys):
         )
     rows = skill._order(skill.market_rows(bad, min_n=100, n_boot=20, seed=10))
     row = rows[0]
-    assert row["overround"] is None  # no pair, so the old guard has nothing to read
+    assert row["overround"] is None  # no pair, so the pairs' guard has nothing to read
     assert row["one_sided_line"]["z"] < -skill.ONE_SIDED_LINE_Z
     assert not row["line_ok"] and not row["enters"]
     skill.print_table(rows, {}, 100)
@@ -230,11 +231,11 @@ def test_a_stamped_and_an_unstamped_report_do_not_merge(tmp_path: Path):
 
 
 def test_chunks_run_in_two_running_game_orders_do_not_merge(tmp_path: Path):
-    """SIM-554: two chunks of one baseline on one bundle carry the same
-    manifest times. One ran the running game's new order, one the single
-    pre-pitch draw (SIM_STEAL_PITCH_CLASS=0), so the merge must refuse them.
-    The paired read still allows the flip: a pair that flips it on purpose
-    measures that flip."""
+    """Two chunks of one baseline on one bundle carry the same manifest
+    times. One ran the running game on the pitch (the pickoff draw before the
+    pitch, the steal draw after its result), one the single pre-pitch draw
+    (SIM_STEAL_PITCH_CLASS=0), so the merge must refuse them. The paired read
+    allows the flip: a pair that flips it on purpose measures that flip."""
     rng = np.random.default_rng(13)
     prov = {"artifact_dir": "/data/play_pool/engine_artifacts", "manifest_mtimes": {"x": 1.0}}
 

@@ -62,7 +62,7 @@ DEFAULT_MIN_N = 150
 # ---------------------------------------------------------------------------
 
 
-#: SIM-555: the report stamps that say which odds rows a report was graded
+#: The report stamps that say which odds rows a report was graded
 #: against (``scripts/accuracy_comparison.py`` writes them into ``params``). The same
 #: tuple as ``ODDS_ROW_KEYS`` in ``scripts/market_skill.py``.
 ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")

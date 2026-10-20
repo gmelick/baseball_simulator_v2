@@ -11,12 +11,12 @@ No network, no DB.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
 import os
-import sys
 from datetime import date
+
+from tests.script_loader import REPO, load_script
 
 from pipeline.etl.boxscore_ingest import parse_boxscore
 from simulation.prop_distributions import PropDistribution
@@ -30,19 +30,9 @@ from simulation.prop_validation import (
     real_props_from_boxscore_rows,
 )
 
-# Import the audit script by path (scripts/ is not a package). It MUST be
-# registered in sys.modules before exec_module so that @dataclass(slots=True) can
-# resolve the module's namespace (dataclasses looks the module up by name).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "boxscore_audit.py")
-_spec = importlib.util.spec_from_file_location("boxscore_audit", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-audit = importlib.util.module_from_spec(_spec)
-sys.modules["boxscore_audit"] = audit
-_spec.loader.exec_module(audit)
+audit = load_script("boxscore_audit")
 
-_FIXTURE = os.path.join(_REPO_ROOT, "tests", "fixtures", "mlb", "boxscore_746437.json")
+_FIXTURE = os.path.join(str(REPO), "tests", "fixtures", "mlb", "boxscore_746437.json")
 GAME_PK = 746437
 
 
@@ -204,7 +194,7 @@ class _FakePset:
 
 class TestPairPropsBoxscoreTuples:
     def test_default_pairs_only_the_event_label_props(self):
-        """The default keyword keeps scripts/validate_props.py unchanged."""
+        """With the default keywords, the pairing reads the event-label props only."""
         pset = _FakePset(
             {
                 (10, "H"): PropDistribution.from_samples(10, "H", [1, 2]),

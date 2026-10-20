@@ -1,24 +1,23 @@
 """
 tests/integration/test_api_end_to_end.py
 =========================================
-SIM-371 -- the API + WebSocket + historical-replay END-TO-END test suite (the
-final Phase-5 testing slice).
+The API + WebSocket + historical-replay END-TO-END test suite.
 
 WHAT THIS IS (and is NOT)
 -------------------------
-A TRUE end-to-end suite that drives the REAL Phase-5 routers (games + betting +
-the live ws_router) through the FULL multi-endpoint FLOWS a frontend would walk,
+A TRUE end-to-end suite that drives the REAL routers (games + betting + the
+live ws_router) through the FULL multi-endpoint FLOWS a frontend would walk,
 asserting CROSS-ENDPOINT CONSISTENCY -- not just single endpoints in isolation.
 It is SANDBOX-RUNNABLE: it uses FastAPI's ``TestClient`` over an in-process app
 wired with the established mock seams (a fake asyncpg pool serving canned raw.*
-rows + an in-memory DuckDB with the SIM-356/357/362 migrations applied + the
-no-DB rng machine factory + an in-memory sim cache). It is NOT a testcontainers /
+rows + an in-memory DuckDB with the replay migrations applied + the no-DB rng
+machine factory + an in-memory sim cache). It is NOT a testcontainers /
 live-Postgres / live-MLB-WebSocket suite -- the only things stubbed are the DB
-(lineup resolution + raw.games / raw.game_odds reads) and the production sampler;
-EVERYTHING else (the BatchRunner + simulate_game loop + the SIM-357 record ->
-persist replay flow + the SIM-362/364 linescore/decisions derivation + the
-SIM-367/369 betting math + the SIM-350 serializers + the ws_router handshake)
-runs FOR REAL in-process.
+(lineup resolution + raw.games / raw.game_odds reads) and the artifact bundle
+(the no-DB factory draws from the in-memory synthetic bundle); EVERYTHING else
+(the BatchRunner + simulate_game loop + the record -> persist replay flow + the
+linescore/decisions derivation + the betting math + the serializers + the
+ws_router handshake) runs FOR REAL in-process.
 
 ISOLATION STRATEGY (mirrors tests/unit/test_api_games*.py + test_api_betting*.py)
 -------------------------------------------------------------------------------
@@ -27,19 +26,18 @@ and attaches the app.state contract the routes read:
 
   * ``pg_pool``          -- a fake asyncpg pool/connection. ``fetch`` serves
     canned ``raw.games`` rows (for GET /{date}) or canned ``raw.game_odds`` rows
-    (for /line-movement + /clv); ``fetchval`` stands in as the SIM-356 sim-run
-    history INSERT ... RETURNING run_id conn so a real cross-store run_id flows
-    into the DuckDB play-stream / state / card writes.
+    (for /line-movement + /clv); ``fetchval`` answers the Postgres sim-run
+    history INSERT ... RETURNING run_id. The replay file numbers its own runs,
+    so that id never reaches the play-stream / state / card rows.
   * ``replay_duckdb``    -- a REAL in-memory DuckDB with migrations 0008 (play
     stream), 0009 (state snapshots), 0010 (game card) and 0032 (the pitch
-    context, SIM-561) applied, so the SIM-357
-    /plays + /state and SIM-362/364 /linescore + /decisions + /card reads serve
-    the persisted run.
+    context) applied, so the /plays + /state and /linescore + /decisions +
+    /card reads serve the persisted run.
   * ``sim_factory_ref``  -- the no-DB ``rng_driven_machine_factory`` so the
-    BatchRunner runs a real (fast, in-process, deterministic) batch with NO live
-    sampler/DuckDB.
+    BatchRunner runs a real (fast, in-process, deterministic) batch of the
+    production loop over the in-memory synthetic bundle, with no DuckDB file.
   * ``sim_cache``        -- a shared in-memory cache so the same persisted run is
-    reused across the flow's endpoints (the SIM-359 memoization path).
+    reused across the flow's endpoints (the summary memoization path).
 
 ``resolve_game_state`` (as imported into api.routes.games -- the module the
 betting router ALSO reuses) is monkeypatched to a fixed small GameState, so the
@@ -67,7 +65,7 @@ THE FLOWS (each a clear test; fixtures reused)
      (same seed -> identical summary AND identical persisted play-stream) -- the
      "replay" property -- while a different seed diverges.
 
-Owned by QA / DevOps (SIM-371).
+Owned by QA / DevOps.
 """
 
 from __future__ import annotations
@@ -94,12 +92,13 @@ DUCK_MIGRATIONS = (
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0008_sim356_play_stream.sql",
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0009_sim357_state_snapshots.sql",
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0010_sim362_364_game_card.sql",
-    # SIM-561: the pitch context columns on the play stream.
+    # The pitch context columns on the play stream.
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0032_sim561_play_stream_context.sql",
 )
 
 # The no-DB, picklable rng factory -- the production factory ref is swapped to
-# this so the whole flow runs a real batch with no live sampler/DuckDB.
+# this so the whole flow runs a real batch of the production loop over the
+# in-memory synthetic bundle, with no DuckDB file.
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
@@ -178,11 +177,11 @@ class _FakePool:
     """A fake asyncpg pool/connection serving canned rows.
 
     ``fetch`` returns whatever canned rows it was built with (raw.games for the
-    date listing, raw.game_odds for line-movement). ``fetchval`` stands in as the
-    SIM-356 sim-run history ``INSERT ... RETURNING run_id`` conn so the replay
-    persist gets a real cross-store run_id (the play-stream / state / card rows
-    are then grouped under it). No ``acquire`` is exposed, so the routes use the
-    pool directly as a connection (the mock-pool / direct-conn path).
+    date listing, raw.game_odds for line-movement). ``fetchval`` answers the
+    Postgres sim-run history ``INSERT ... RETURNING run_id``. The replay file
+    numbers its own runs, so the play-stream / state / card rows never carry
+    that id. No ``acquire`` is exposed, so the routes use the pool directly as
+    a connection (the mock-pool / direct-conn path).
     """
 
     def __init__(self, *, games_rows=None, odds_rows=None, run_id=4242):
@@ -205,9 +204,8 @@ class _FakePool:
         return rows[0] if rows else None
 
     async def fetchval(self, sql, *args):
-        # The SIM-356 sim-run history INSERT ... RETURNING run_id. A monotonically
-        # increasing run_id per call keeps repeated /simulate runs in distinct
-        # game-card rows (latest-run-wins on the by-game read).
+        # The Postgres sim-run history INSERT ... RETURNING run_id. Each call
+        # returns a new, increasing run_id, as the real sequence does.
         self._run_id += 1
         self.run_ids_issued.append(self._run_id)
         return self._run_id
@@ -228,14 +226,14 @@ def _small_game_state() -> GameState:
 
 
 # ---------------------------------------------------------------------------
-# DuckDB replay store (real in-memory, migrations 0008 + 0009 + 0010 applied)
+# DuckDB replay store (real in-memory, migrations 0008 + 0009 + 0010 + 0032)
 # ---------------------------------------------------------------------------
 
 
 def _fresh_duckdb():
-    """A real in-memory DuckDB with the play-stream (0008), state-snapshot (0009)
-    and game-card (0010) migrations applied -- the full SIM-357/362/364 replay
-    store the flow's /plays + /state + /linescore + /decisions + /card read."""
+    """A real in-memory DuckDB with the play-stream (0008), state-snapshot (0009),
+    game-card (0010) and pitch-context (0032) migrations applied -- the full
+    replay store the flow's /plays + /state + /linescore + /decisions + /card read."""
     import duckdb
 
     con = duckdb.connect(":memory:")
@@ -274,7 +272,7 @@ def _build_e2e_app(*, pool, duck, cache=None) -> FastAPI:
     app.include_router(betting_router)
     app.include_router(ws_router)
     app.state.pg_pool = pool
-    app.state.replay_duckdb = duck  # SIM-561: the replay store's own handle
+    app.state.replay_duckdb = duck  # the replay store's own handle
     app.state.sim_cache = cache  # None => each runner picks its own backend
     app.state.sim_factory_ref = NO_DB_FACTORY_REF  # the testability seam
     return app
@@ -627,9 +625,9 @@ class TestHistoricalReplayE2E:
 
         # Two seeded runs with caching OFF so we exercise the REAL recompute +
         # re-persist path both times (a cache hit would trivially match). Each
-        # run persists under its own replay run id (SIM-561: the replay file
-        # numbers its runs), so the two streams coexist in the store -- we
-        # compare them PER RUN below.
+        # run persists under its own replay run id (the replay file numbers its
+        # own runs), so the two streams coexist in the store -- we compare them
+        # PER RUN below.
         a = client.get(f"/api/games/{game_pk}/simulate?n_iterations=5&base_seed=7&use_cache=false")
         b = client.get(f"/api/games/{game_pk}/simulate?n_iterations=5&base_seed=7&use_cache=false")
 

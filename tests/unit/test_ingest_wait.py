@@ -1,7 +1,7 @@
-"""SIM-563 follow-up — the nightly rebuild waits for the finals load.
+"""The nightly rebuild waits for the finals load.
 
-On 2026-10-11 the scheduler fired the finals load and the rebuild in the same
-second. ``scripts/with_mark.sh`` marks an ingest job while it runs and records
+The scheduler can fire the finals load and the rebuild in the same second.
+``scripts/with_mark.sh`` marks an ingest job while it runs and records
 its last exit; ``scripts/wait_for_ingest.sh`` holds the rebuild until the finals
 load has run today, and runs it when it has not.
 """

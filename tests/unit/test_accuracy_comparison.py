@@ -1,11 +1,11 @@
 """
 tests/unit/test_accuracy_comparison.py
 ===============================================
-Unit tests for the SIM-538 sim-vs-closing-line accuracy comparison
-(``scripts/accuracy_comparison.py``) — the platform's new headline market-accuracy
-metric, which replaces Closing Line Value (CLV) as the gold standard.
+Unit tests for the sim-vs-closing-line accuracy comparison
+(``scripts/accuracy_comparison.py``). The comparison is the platform's headline
+market-accuracy metric.
 
-What SIM-538 does, in plain words: for every game or player prop with a
+What the comparison does, in plain words: for every game or player prop with a
 closing betting price, compare the simulator's own probability and the
 closing line's probability (bookmaker margin removed) against what actually
 happened. Both are scored with a proper scoring rule — Brier score and log
@@ -27,42 +27,43 @@ objects built the same way ``tests/unit/test_clv_engine.py`` and
 from __future__ import annotations
 
 import dataclasses
-import importlib.util
-import os
-import sys
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
-# Import the script module by path (scripts/ is not a package). It MUST be
-# registered in sys.modules before exec_module so that @dataclass(slots=True) can
-# resolve the module's namespace (dataclasses looks the module up by name).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
-_MODULE_PATH = os.path.join(_REPO_ROOT, "scripts", "accuracy_comparison.py")
-_spec = importlib.util.spec_from_file_location("accuracy_comparison", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-accuracy_comparison = importlib.util.module_from_spec(_spec)
-sys.modules["accuracy_comparison"] = accuracy_comparison
-_spec.loader.exec_module(accuracy_comparison)
+accuracy_comparison = load_script("accuracy_comparison")
+
+from accuracy import replay as replay_mod  # noqa: E402
+from accuracy.confidence import _bootstrap_paired_diff_ci  # noqa: E402
+from accuracy.grading import (  # noqa: E402
+    RUN_LINE_SCORING_VERSION,
+    score_game_accuracy,
+    score_prop_accuracy,
+    warn_market_shapes,
+)
+from accuracy.pricing import ClosingPrices, _closing_prices  # noqa: E402
+from accuracy.records import (  # noqa: E402
+    BOXSCORE_SCORED_PROPS,
+    EVENT_LABEL_SCORED_PROPS,
+    AccuracyRecord,
+    run_line_market_key,
+    trust_label,
+)
+from accuracy.replay import _score_one_game  # noqa: E402
+from accuracy.report import (  # noqa: E402
+    _accuracy_row_for,
+    aggregate_accuracy_comparison,
+    format_accuracy_comparison,
+)
+from accuracy.selection import bundle_provenance  # noqa: E402
 
 from simulation.prop_distributions import PropDistribution, PropDistributionSet  # noqa: E402
 from simulation.results import ConfidenceInterval, GameSimSummary  # noqa: E402
 from simulation.win_probability import TieHandling, WinProbability  # noqa: E402
 
-AccuracyRecord = accuracy_comparison.AccuracyRecord
-ClosingPrices = accuracy_comparison.ClosingPrices
-_closing_prices = accuracy_comparison._closing_prices
-score_game_accuracy = accuracy_comparison.score_game_accuracy
-score_prop_accuracy = accuracy_comparison.score_prop_accuracy
-#: SIM-545: the per-game prop sets each ground-truth source can grade. The
-#: scorer takes the set for the game it scores; there is no module constant.
-BOXSCORE_SCORED_PROPS = accuracy_comparison.BOXSCORE_SCORED_PROPS
-EVENT_LABEL_SCORED_PROPS = accuracy_comparison.EVENT_LABEL_SCORED_PROPS
-_bootstrap_paired_diff_ci = accuracy_comparison._bootstrap_paired_diff_ci
-_accuracy_row_for = accuracy_comparison._accuracy_row_for
-aggregate_accuracy_comparison = accuracy_comparison.aggregate_accuracy_comparison
-format_accuracy_comparison = accuracy_comparison.format_accuracy_comparison
+#: Each ground-truth source grades its own prop set (``BOXSCORE_SCORED_PROPS``,
+#: ``EVENT_LABEL_SCORED_PROPS``). The scorer takes the set of the game it scores.
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +72,7 @@ format_accuracy_comparison = accuracy_comparison.format_accuracy_comparison
 
 
 def _win_prob(p_home: float) -> WinProbability:
-    """A synthetic SIM-330 WinProbability with an injected home win prob."""
+    """A synthetic WinProbability with an injected home win prob."""
     return WinProbability(
         home_win_prob=p_home,
         away_win_prob=1.0 - p_home,
@@ -157,8 +158,8 @@ def _odds_closing_only(
 
 def test_closing_prices_reads_only_the_closing_row():
     """The returned line is the CLOSING row's own line, never the opening
-    row's -- this is the SIM-538 fix for the legacy step's "cross-line" gap
-    (_game_prices reads a market's line from the OPENING row only)."""
+    row's. A line from the opening row would grade the closing prices at a
+    different line (the "cross-line" gap)."""
     odds = {
         "total": {
             "opening": {"over_ml": -110.0, "under_ml": -110.0, "total_line": 7.5},
@@ -170,8 +171,7 @@ def test_closing_prices_reads_only_the_closing_row():
 
 
 def test_closing_prices_needs_no_opening_row_at_all():
-    """Unlike the legacy _game_prices, a market with ONLY a closing row is
-    still scoreable."""
+    """A market with ONLY a closing row is scoreable."""
     odds = _odds_closing_only("moneyline", "home_ml", "away_ml", None, side=-150.0, other=130.0)
     cp = _closing_prices(odds, "moneyline", "home_ml", "away_ml", None)
     assert cp == ClosingPrices(side=-150.0, other=130.0, line=None)
@@ -215,16 +215,16 @@ def test_accuracy_record_to_from_jsonable_roundtrip():
         "market_prob": 0.55,
         "outcome": 1,
         "player_id": 42,
-        # SIM-540: the raw closing prices, absent here since this record was
-        # built without them (the same "None means not priced" contract
+        # The raw closing prices: absent here, because the record is built
+        # without them (the "None means not priced" contract that
         # score_hypothetical_return relies on).
         "market_side_price": None,
         "market_other_price": None,
-        # SIM-548: the raw (pre-calibration) probability; None where no map
-        # applies — every market but the moneyline today.
+        # The raw (pre-calibration) probability: None where no calibration
+        # map applies (every market but the moneyline).
         "sim_prob_raw": None,
-        # SIM-555: the best sportsbook price at the graded line and its book;
-        # None on a record built without the other books' rows.
+        # The best sportsbook price at the graded line and its book: None on
+        # a record built without the other books' rows.
         "market_best_price": None,
         "market_best_book": None,
     }
@@ -232,9 +232,9 @@ def test_accuracy_record_to_from_jsonable_roundtrip():
 
 
 def test_accuracy_record_carries_the_raw_closing_prices_when_given():
-    """SIM-540 needs the RAW (vigged) closing prices, not just the de-vigged
-    market_prob, to price a hypothetical bet -- confirm the roundtrip holds
-    with them populated too."""
+    """The hypothetical-return read needs the RAW closing prices (bookmaker
+    margin included), not just the de-vigged market_prob, to price a
+    hypothetical bet. The round trip holds with them set too."""
     rec = AccuracyRecord(
         game_pk=12345,
         market="K",
@@ -271,21 +271,19 @@ def test_score_game_accuracy_moneyline_home_win():
     assert rec.sim_prob == pytest.approx(0.65)
     assert rec.outcome == 1
     assert 0.0 < rec.market_prob < 1.0
-    # SIM-540: the RAW closing prices must be threaded through, and threaded
-    # to the RIGHT leg -- side and other are asymmetric here (-140 vs 120)
-    # specifically so a future edit that swapped cp.side/cp.other would fail
-    # this assertion (an adversarial review of SIM-540 flagged this wiring
-    # as previously untested end-to-end).
+    # The RAW closing prices reach the record, each on the RIGHT leg. The
+    # side and other prices differ here (-140 vs 120), so an edit that swaps
+    # cp.side and cp.other fails this assertion.
     assert rec.market_side_price == pytest.approx(-140.0)
     assert rec.market_other_price == pytest.approx(120.0)
 
 
-def test_score_game_accuracy_moneyline_carries_the_raw_share_sim548():
-    """SIM-548: the moneyline record carries the simulator's RAW decisive
+def test_score_game_accuracy_moneyline_carries_the_raw_share():
+    """The moneyline record carries the simulator's RAW decisive
     home-win share beside the mapped probability, so the calibration layer can
     be fitted on the raw value. The summary here says 62 home wins, 36 away
     wins and 2 ties in 100 iterations -> raw = 62 / 98."""
-    wp = _win_prob(0.50)  # the mapped value the stale curve would give
+    wp = _win_prob(0.50)  # the mapped value from a calibration curve
     summary = _summary_from_totals_and_margins(totals=[8] * 10, margins=[2] * 10)
     summary = dataclasses.replace(summary, home_win_pct=0.62, away_win_pct=0.36, tie_pct=0.02)
     odds = _odds_closing_only("moneyline", "home_ml", "away_ml", None, side=-140.0, other=120.0)
@@ -293,12 +291,12 @@ def test_score_game_accuracy_moneyline_carries_the_raw_share_sim548():
     assert len(recs) == 1
     assert recs[0].sim_prob == pytest.approx(0.50)
     assert recs[0].sim_prob_raw == pytest.approx(0.62 / 0.98)
-    # the round trip keeps it, and an older record without it still loads
-    again = accuracy_comparison.AccuracyRecord.from_jsonable(recs[0].to_jsonable())
+    # the round trip keeps it, and a record without the field loads as None
+    again = AccuracyRecord.from_jsonable(recs[0].to_jsonable())
     assert again.sim_prob_raw == pytest.approx(0.62 / 0.98)
     old = recs[0].to_jsonable()
     old.pop("sim_prob_raw")
-    assert accuracy_comparison.AccuracyRecord.from_jsonable(old).sim_prob_raw is None
+    assert AccuracyRecord.from_jsonable(old).sim_prob_raw is None
 
 
 def test_score_game_accuracy_moneyline_home_loss():
@@ -320,9 +318,9 @@ def test_score_game_accuracy_moneyline_skipped_without_closing_price():
 def test_score_game_accuracy_total_over_and_under():
     wp = _win_prob(0.5)
     summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)
-    # SIM-540: asymmetric (not -110/-110) so market_side_price/other_price
-    # assertions below would fail on a swapped side/other -- a symmetric
-    # price pair could not have caught that class of bug.
+    # Unequal prices (not -110/-110), so the market_side_price and
+    # market_other_price assertions below fail on a swapped side and other.
+    # An equal pair cannot catch that bug.
     odds = _odds_closing_only(
         "total", "over_ml", "under_ml", "total_line", side=-105.0, other=-115.0, line=8.5
     )
@@ -362,15 +360,15 @@ def test_score_game_accuracy_runline_cover_and_push():
         other=-150.0,
         line=-1.0,
     )
-    # SIM-549: the store keeps the away spread too; its mirror makes this a pair.
+    # The store keeps the away spread too; its mirror makes this a pair.
     odds["runline"]["closing"]["away_spread"] = 1.0
     # margin=3, threshold=-line=1.0 -> home covers (3 > 1.0).
     cover_recs = score_game_accuracy(1, wp, summary, odds, home_score=5, away_score=2)
     rl = [r for r in cover_recs if r.market == "runline"][0]
     assert rl.outcome == 1
-    # SIM-540: the raw closing prices, threaded to the RIGHT leg (side=130
-    # is home_spread_ml, other=-150 is away_spread_ml -- asymmetric enough
-    # that a swap would fail this assertion).
+    # The raw closing prices, each on the RIGHT leg (side=130 is
+    # home_spread_ml, other=-150 is away_spread_ml; a swap fails this
+    # assertion).
     assert rl.market_side_price == pytest.approx(130.0)
     assert rl.market_other_price == pytest.approx(-150.0)
 
@@ -397,13 +395,14 @@ def test_score_game_accuracy_scores_all_three_markets_together():
             line=-1.5,
         ),
     }
-    odds["runline"]["closing"]["away_spread"] = 1.5  # SIM-549: a pair
+    odds["runline"]["closing"]["away_spread"] = 1.5  # the mirror: a pair
     recs = score_game_accuracy(1, wp, summary, odds, home_score=5, away_score=3)
     assert {r.market for r in recs} == {"moneyline", "total", "runline"}
 
 
 # ---------------------------------------------------------------------------
-# SIM-549: the full-game run line uses the same shape rule as the segments
+# The full-game run line uses the same shape rule as the segments (the
+# run-line shape rule, SIM-549)
 # ---------------------------------------------------------------------------
 
 
@@ -490,7 +489,7 @@ def test_the_shape_warning_names_two_bets_and_an_unpaired_market(caplog):
         "margin_mean": {"f5_runline": 1.05, "total": 1.30},
     }
     with caplog.at_level(logging.WARNING):
-        accuracy_comparison.warn_market_shapes(tally)
+        warn_market_shapes(tally)
     assert "f5_runline" in caplog.text and "two separate bets" in caplog.text
     assert "total" in caplog.text and "1.300" in caplog.text
 
@@ -530,13 +529,13 @@ async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp
     )
     await accuracy_comparison.run(args)
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["params"]["run_line_scoring"] == accuracy_comparison.RUN_LINE_SCORING_VERSION
+    assert report["params"]["run_line_scoring"] == RUN_LINE_SCORING_VERSION
     assert report["counters"]["market_shapes"] == {"run_lines": {}, "margin_mean": {}}
 
 
 def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
-    """A pair still goes through today's arithmetic: the edge report's sim
-    probability and de-vigged fair probability, to the bit."""
+    """A pair goes through the edge report's arithmetic: its sim probability
+    and its de-vigged fair probability, to the bit."""
     from betting.clv_engine import MarketSide, OddsQuote, TwoWayMarket, run_line_edge_report
 
     wp = _win_prob(0.5)
@@ -556,8 +555,8 @@ def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
 
 
 def test_full_game_run_line_still_drops_a_certain_simulator_probability():
-    """The full-game run line never scored a simulator probability of exactly
-    0 or 1 (its edge report refuses one); the shared scorer keeps that."""
+    """The full-game run line scores no simulator probability of exactly 0
+    or 1 (its edge report refuses one). The shared scorer keeps that rule."""
     wp = _win_prob(0.5)
     # every margin at least +2: home -1.5 covers in every iteration (p = 1.0)
     summary = _summary_from_totals_and_margins(totals=[9] * 10, margins=[3] * 10)
@@ -595,13 +594,11 @@ def test_full_game_run_line_without_an_away_spread_gives_no_record():
 
 
 def test_the_away_keys_carry_their_market_s_trust_label():
-    assert accuracy_comparison.trust_label("runline_away") == accuracy_comparison.trust_label(
-        "runline"
-    )
-    assert accuracy_comparison.trust_label("f5_runline_away") == "unvalidated"
-    assert accuracy_comparison.trust_label("f1_runline_away") == "unvalidated"
-    assert accuracy_comparison.run_line_market_key("f5_runline", "away") == "f5_runline_away"
-    assert accuracy_comparison.run_line_market_key("f5_runline", "home") == "f5_runline"
+    assert trust_label("runline_away") == trust_label("runline")
+    assert trust_label("f5_runline_away") == "unvalidated"
+    assert trust_label("f1_runline_away") == "unvalidated"
+    assert run_line_market_key("f5_runline", "away") == "f5_runline_away"
+    assert run_line_market_key("f5_runline", "home") == "f5_runline"
 
 
 def test_the_console_table_names_each_run_line_s_shape():
@@ -627,10 +624,11 @@ def test_the_console_table_names_each_run_line_s_shape():
 
 # ---------------------------------------------------------------------------
 # (d) score_prop_accuracy -- the OVER side against the closing line. The props
-# it grades are the SOURCE's own set (SIM-545): every priced market on the
-# official box score, H/HR/TB/K/BB on the event-label fallback. The tests here
-# drive the fallback set; tests/unit/test_accuracy_comparison_props.py drives the
-# official set (RBI/ER and the SIM-421 markets).
+# it grades are the SOURCE's own set (the official box-score ground truth,
+# SIM-545): every priced market on the official box score, H/HR/TB/K/BB on the
+# event-label fallback. The tests here drive the fallback set;
+# tests/unit/test_accuracy_comparison_props.py drives the official set (RBI/ER
+# and the markets of the prop-market work, SIM-421).
 # ---------------------------------------------------------------------------
 
 
@@ -655,9 +653,8 @@ def test_score_prop_accuracy_batter_hits_over_and_under():
     assert over_recs[0].market_type == "prop"
     assert over_recs[0].player_id == 7
     assert over_recs[0].outcome == 1  # actual 2 > line 1.5
-    # SIM-540: the raw closing prices, threaded to the RIGHT leg (110 is
-    # close_over, -130 is close_under -- asymmetric enough that a swap
-    # would fail this assertion).
+    # The raw closing prices, each on the RIGHT leg (110 is close_over,
+    # -130 is close_under; a swap fails this assertion).
     assert over_recs[0].market_side_price == pytest.approx(110.0)
     assert over_recs[0].market_other_price == pytest.approx(-130.0)
 
@@ -677,7 +674,7 @@ def test_score_prop_accuracy_pitcher_strikeouts():
     assert len(recs) == 1
     assert recs[0].market == "K"
     assert recs[0].outcome == 1  # 6 > 5.5
-    # SIM-540: the raw closing prices, threaded to the RIGHT leg.
+    # The raw closing prices, each on the RIGHT leg.
     assert recs[0].market_side_price == pytest.approx(-115.0)
     assert recs[0].market_other_price == pytest.approx(-105.0)
 
@@ -715,8 +712,8 @@ def test_score_prop_accuracy_fallback_path_still_skips_rbi_and_er():
 
 
 def test_score_prop_accuracy_official_path_scores_rbi_and_er():
-    """On the official box score (SIM-545), the SAME inputs score both — the
-    two props the platform priced but could not grade before."""
+    """On the official box score (the props' ground truth, SIM-545), the SAME
+    inputs score both: two priced props that no event label can grade."""
     pset, prop_odds = _rbi_and_er_fixture()
     recs = score_prop_accuracy(
         1,
@@ -816,12 +813,12 @@ def test_bootstrap_ci_low_le_high():
 
 
 def test_bootstrap_ci_matches_a_flat_bootstrap_when_one_observation_per_game():
-    """SIM-538 fix: the cluster bootstrap resamples GAMES, not raw rows (see
-    the function's own docstring). When every game contributes exactly one
-    observation -- true for a single-player market like moneyline -- that
-    reduces EXACTLY to the plain per-observation bootstrap the code used to
-    run. Prove it by reimplementing that plain bootstrap by hand, with the
-    identical seed, and checking the two intervals match bit-for-bit."""
+    """The cluster bootstrap resamples whole GAMES, not raw rows, so the rows
+    of one game move together (see the function's own docstring). When every
+    game gives exactly one observation (true for a one-row-per-game market
+    like the moneyline), it reduces EXACTLY to the plain per-observation
+    bootstrap. The test reimplements that plain bootstrap by hand with the
+    same seed and checks that the two intervals match bit for bit."""
     rng = np.random.default_rng(5)
     diffs = rng.normal(loc=0.02, scale=0.15, size=25)
     game_pks = np.arange(25, dtype=np.int64)  # one distinct game per row
@@ -836,13 +833,12 @@ def test_bootstrap_ci_matches_a_flat_bootstrap_when_one_observation_per_game():
 
 
 def test_bootstrap_ci_is_degenerate_when_every_observation_shares_one_game():
-    """The sharpest demonstration of the clustering fix: 20 observations that
-    all come from the SAME game (e.g. 20 props from one start) carry exactly
-    ONE independent trial's worth of information. There is nothing to
-    resample BETWEEN games, so the honest answer is a degenerate point
-    estimate at the mean -- not the artificially tight interval a
-    per-observation bootstrap would have reported by treating 20 correlated
-    rows as 20 independent games."""
+    """The sharpest case for the clustering: 20 observations that all come
+    from the SAME game (e.g. 20 props from one start) carry exactly ONE
+    independent trial's worth of information. There is nothing to resample
+    BETWEEN games, so the honest answer is a degenerate point estimate at the
+    mean. A per-observation bootstrap treats the 20 correlated rows as 20
+    independent games and reports a falsely tight interval."""
     rng = np.random.default_rng(9)
     diffs = rng.normal(loc=-0.03, scale=0.2, size=20)
     game_pks = np.full(20, 777, dtype=np.int64)  # every row is the SAME game
@@ -856,13 +852,12 @@ def test_bootstrap_ci_is_wider_when_the_same_data_clusters_into_fewer_games():
     """The SAME 20 raw diff values, correctly grouped into 4 real games (5
     observations each -- one start's worth of props, say), give a WIDER
     (more honest) interval than treating those same 20 values as if they
-    came from 20 independent games. This is exactly the harm an adversarial
-    review of SIM-538 found: pretending 5 correlated same-game rows are 5
-    independent trials understates uncertainty.
+    came from 20 independent games. Treating 5 correlated rows of one game as
+    5 independent trials understates the uncertainty.
 
     The 4 "games" here are built with a LARGE gap between their own means
-    (-0.30 .. +0.30) and only tiny within-game noise, so the result the
-    between-game spread carries almost all the real variance -- exactly the
+    (-0.30 .. +0.30) and only tiny within-game noise, so the between-game
+    spread carries almost all the real variance -- exactly the
     situation clustering matters for, and the one place a plain (wrong)
     per-observation bootstrap most understates it: resampling 20 individual
     rows nearly always draws a representative mix of all 4 games, averaging
@@ -877,8 +872,8 @@ def test_bootstrap_ci_is_wider_when_the_same_data_clusters_into_fewer_games():
 
     # The TRUE grouping: 4 real games, 5 correlated observations each.
     real_games = np.repeat(np.arange(4, dtype=np.int64), 5)
-    # The WRONG grouping this fix prevents: every row treated as its own
-    # independent game, discarding the real correlation structure.
+    # The WRONG grouping: every row treated as its own independent game,
+    # which discards the real correlation between the rows of one game.
     fake_distinct_games = np.arange(20, dtype=np.int64)
 
     lo_real, hi_real = _bootstrap_paired_diff_ci(diffs, real_games, n_bootstrap=2000, seed=55)
@@ -996,15 +991,13 @@ def test_format_accuracy_comparison_renders_without_crashing():
 
 @pytest.mark.asyncio
 async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypatch):
-    """SIM-538 fix: this script only ever replays PAST, completed games, so a
-    None from resolve_asof_ymd here always means the lookup failed -- a live
-    game (the other reason resolve_asof_ymd can return None) is not this
-    script's case. Before this fix, a failed lookup let the replay proceed
-    with NO cutoff at all: the sampler would then draw from the WHOLE pool,
-    including this game's own real plays -- the exact leak SIM-535/538 exist
-    to close. An adversarial review of SIM-538 confirmed this. Confirm the
-    game is now skipped (status "unresolved", no records) and the replay
-    (_replay_game) is NEVER reached."""
+    """The script replays only PAST, completed games, so a None from
+    resolve_asof_ymd here always means the lookup failed. A live game (the
+    other cause of a None) is not this script's case. A replay with NO cutoff
+    lets the sampler draw from the WHOLE pool, this game's own real plays
+    included: the leak the point-in-time cutoff closes (SIM-535). The test
+    confirms that the game is skipped (status "unresolved", no records) and
+    that the replay (_replay_game) is NEVER reached."""
     import api.routes.games as games_mod
     import simulation.sim_kwargs as sim_kwargs_mod
 
@@ -1020,7 +1013,7 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
         return None  # the lookup failed for this game
 
     async def fake_fetch_game_odds(pool, game_pk, **_kw):
-        # SIM-555: the reader also takes the benchmark book (a keyword).
+        # The reader also takes the benchmark book (a keyword).
         return {"moneyline": {"opening": {"home_ml": -120}, "closing": {"home_ml": -130}}}
 
     def replay_must_not_run(*args, **kwargs):
@@ -1032,14 +1025,12 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     monkeypatch.setattr(games_mod, "_resolve_state_or_error", fake_resolve_state)
     monkeypatch.setattr(sim_kwargs_mod, "resolve_park_factor_onto_state", fake_park_factor)
     monkeypatch.setattr(sim_kwargs_mod, "resolve_asof_ymd", fake_asof)
-    monkeypatch.setattr(accuracy_comparison, "_fetch_game_odds", fake_fetch_game_odds)
-    monkeypatch.setattr(
-        accuracy_comparison, "_replay_game", replay_must_not_run
-    )  # SIM-421: the seam moved
+    monkeypatch.setattr(replay_mod, "_fetch_game_odds", fake_fetch_game_odds)
+    monkeypatch.setattr(replay_mod, "_replay_game", replay_must_not_run)
 
-    # SIM-545: the fourth element is the prop ground-truth source; a skipped
-    # game graded nothing, so it has none.
-    accuracy, status, park_factor, ground_truth_source = await accuracy_comparison._score_one_game(
+    # The fourth element is the prop ground-truth source; a skipped game
+    # graded nothing, so it has none.
+    accuracy, status, park_factor, ground_truth_source = await _score_one_game(
         pool=object(),
         game_pk=12345,
         duck=object(),
@@ -1055,7 +1046,7 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
 
 
 def _steal_pool_bundle(tmp_path, targets: dict[str, list[tuple] | None]):
-    """SIM-554: an artifact dir with a steal pool. ``targets`` maps "2" / "3"
+    """An artifact dir with a steal pool. ``targets`` maps "2" / "3"
     to the meta rows: ``(pitch_class, is_pickoff_row)`` pairs, ``(pitch_class,)``
     for a pool without the mark, or None for a pool without either column
     (exported before migration 0031)."""
@@ -1091,16 +1082,16 @@ def _provenance(tmp_path, monkeypatch, flag: str | None = "1") -> dict:
         monkeypatch.delenv("SIM_STEAL_PITCH_CLASS", raising=False)
     else:
         monkeypatch.setenv("SIM_STEAL_PITCH_CLASS", flag)
-    return accuracy_comparison.bundle_provenance(str(tmp_path / "no_calibration.json"))
+    return bundle_provenance(str(tmp_path / "no_calibration.json"))
 
 
 _CLASSED = [("ball", False), ("called_strike", False), ("", True)]
 
 
 def test_the_provenance_stamps_the_steal_pool(tmp_path, monkeypatch):
-    """SIM-554: the steal-pool rebuild exports steal_pool/ alone, so the
-    provenance must see that directory, or a report from before the export
-    pairs with one from after it."""
+    """The steal-pool rebuild exports steal_pool/ alone, so the provenance
+    must see that directory. Otherwise a report from before the export pairs
+    with one from after it."""
     _steal_pool_bundle(tmp_path, {"2": _CLASSED, "3": _CLASSED})
     (tmp_path / "engine_artifacts" / "pitch_pool").mkdir()
     (tmp_path / "engine_artifacts" / "pitch_pool" / "manifest.json").write_text("{}")
@@ -1116,8 +1107,8 @@ def test_the_provenance_stamps_the_steal_pool(tmp_path, monkeypatch):
 def test_the_running_game_stamp_reads_the_flag_as_the_factory_does(
     tmp_path, monkeypatch, flag, want
 ):
-    """SIM-554: the flag as the factory reads it. Unset is on (the default),
-    so an unset variable records True, not None."""
+    """The stamp reads the flag as the factory reads it. Unset is on (the
+    default), so an unset variable records True, not None."""
     _steal_pool_bundle(tmp_path, {"2": _CLASSED, "3": _CLASSED})
     assert _provenance(tmp_path, monkeypatch, flag)["running_game"] == {
         "flag": want,
@@ -1156,7 +1147,8 @@ def test_the_running_game_stamp_reads_none_without_a_steal_pool(tmp_path, monkey
 def test_the_running_game_stamp_reads_whether_the_bundle_is_classed(
     tmp_path, monkeypatch, targets, want
 ):
-    """SIM-554: the new order runs only on a bundle whose every pitch row
+    """The running game on the pitch (the pickoff draw before the pitch, the
+    steal draw after its result) runs only on a bundle whose every pitch row
     carries its class. The flag alone does not say which order ran."""
     _steal_pool_bundle(tmp_path, targets)
     assert _provenance(tmp_path, monkeypatch)["running_game"]["classed_bundle"] is want

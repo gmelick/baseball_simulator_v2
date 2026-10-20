@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/nightly_finals.sh — load the last few days' final games (SIM-519 Part D).
+# scripts/nightly_finals.sh — load the last few days' final games.
 #
 # Loads every game that became Final from (today - DAYS) to today, today in
 # Eastern time (the league's day). DAYS defaults to 3: the window catches a
@@ -17,7 +17,7 @@
 # =============================================================================
 set -eu
 
-# SIM-443b: no default password. The container composes the DSN from .env.
+# No default password: the container composes the DSN from .env.
 : "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the jobs service composes it from .env (see .env.example)}"
 export BASEBALL_DB_DSN
 export DAYS="${DAYS:-3}"

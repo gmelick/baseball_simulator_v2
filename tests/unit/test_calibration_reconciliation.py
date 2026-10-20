@@ -1,30 +1,30 @@
 """
 test_calibration_reconciliation.py
 =========================================
-SIM-432 — reconcile the SIM-406 calibrator + the SIM-407 ``validate_props`` script
-against the live (SIM-408-trimmed) DuckDB / Postgres schema, so the fit + validate
-jobs actually run and the app can apply a real (non-identity) calibration.
+The similarity calibrator and the ``validate_props`` script against the live
+DuckDB / Postgres schema. The fit and validate jobs must run on that schema, so
+the app can apply a real (non-identity) calibration.
 
-The cascade SIM-432 closes, each guarded by a test here:
+Each guard has a test here:
 
-  1. **Pitcher calibrator import.** ``_calibrate_pitcher_params`` imported
-     ``RESULT_FEATURES`` from ``pitcher_similarity`` — removed in SIM-067 (the
-     engine has only arsenal + command sub-scores now) → ``ImportError`` on the live
-     engine. The engine must export ``COMMAND_FEATURES`` and NOT ``RESULT_FEATURES``,
-     and the calibrator must fit ``sigma_command`` over the real command features
-     while leaving ``sigma_results`` at the 0.0 keep-default sentinel.
+  1. **Pitcher calibrator import.** The pitcher engine has only arsenal and
+     command sub-scores. It exports ``COMMAND_FEATURES`` and NOT
+     ``RESULT_FEATURES``. The calibrator fits ``sigma_command`` over the real
+     command features and leaves ``sigma_results`` at the 0.0 keep-default
+     sentinel.
 
-  2. **Degenerate-sigma safety (regression-proof apply).** The older fielder /
-     baserunner / manager calibrators used raw ``calibrate_sigma``, which returns a
-     degenerate ``1.0`` when a sub-score has no usable spread (e.g. sprint_speed is
-     unpopulated on the live DB). ``apply_calibration`` (``v if v > 0 else current``)
-     would apply that 1.0 as a real override, silently clobbering a tuned default
-     (baserunner ``RBF_SIGMA_SPEED=0.8171``). They now route through ``_fit_sigma``,
-     which yields the 0.0 keep-default sentinel for ANY uncalibratable matrix.
+  2. **Degenerate-sigma safety.** Raw ``calibrate_sigma`` returns a degenerate
+     ``1.0`` when a sub-score has no usable spread (e.g. sprint_speed is
+     unpopulated on the live DB). ``apply_calibration`` (``v if v > 0 else
+     current``) applies any positive value as a real override, so a 1.0 would
+     silently overwrite a tuned default (baserunner ``RBF_SIGMA_SPEED=0.8171``).
+     The fielder, baserunner and manager calibrators therefore route through
+     ``_fit_sigma``, which yields the 0.0 keep-default sentinel for ANY matrix
+     it cannot calibrate.
 
-  3. **validate_props ↔ raw.games.** ``_fetch_final_games`` selected
-     ``home_score`` / ``away_score`` — absent in the live Postgres, which stores the
-     final score in ``home_score_final`` / ``away_score_final``.
+  3. **validate_props and raw.games.** The live Postgres stores the final
+     score in ``home_score_final`` / ``away_score_final``. ``_fetch_final_games``
+     selects those columns under the names ``home_score`` / ``away_score``.
 
 All calibration-module tests use synthetic data + a tiny fake DuckDB connection, so
 no live DuckDB / Postgres is required.
@@ -32,11 +32,9 @@ no live DuckDB / Postgres is required.
 
 from __future__ import annotations
 
-import importlib.util
-import os
-
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 from similarity.similarity_calibration import (
     CalibrationReport,
@@ -74,7 +72,7 @@ class _FakeConn:
 
 
 # ===========================================================================
-# 1. calibrate_sigma degenerate_value (SIM-432)
+# 1. calibrate_sigma degenerate_value
 # ===========================================================================
 class TestCalibrateSigmaDegenerateValue:
     def test_default_degenerate_value_is_one(self):
@@ -94,7 +92,7 @@ class TestCalibrateSigmaDegenerateValue:
 
 
 # ===========================================================================
-# 2. _fit_sigma keep-default sentinel (SIM-432)
+# 2. _fit_sigma keep-default sentinel
 # ===========================================================================
 class TestFitSigmaSentinel:
     def test_empty_matrix_returns_zero(self):
@@ -139,7 +137,7 @@ class TestPitcherCalibratorReconciliation:
         report = cal._calibrate_pitcher_params(conn, [2024], 0.5, CalibrationReport())
 
         assert report.sigma_command > 0.0
-        assert report.sigma_results == 0.0  # vestigial — never fit (SIM-067/432)
+        assert report.sigma_results == 0.0  # vestigial: the engine has no result sub-score
         assert report.eb_n_prior_pitcher > 0.0
         # The information_schema guard was consulted.
         assert any("information_schema" in q for q in conn.queries)
@@ -176,7 +174,7 @@ class TestBaserunnerKeepsDefaultOnDegenerate:
             speed = 27.0  # constant -> degenerate
             agg = rng.normal(size=6).tolist()
             suc = rng.normal(size=5).tolist()
-            # SIM-531: the SELECT carries a seventh aggression column
+            # The SELECT carries a seventh aggression column
             # (xb_attempt_rate_above_expected) — NULL on a database without the
             # 0029 column, which is what an empty information_schema probe means.
             rows.append((3000 + i, 2024, 100 + i, speed, *agg, None, *suc))
@@ -205,14 +203,8 @@ class TestBaserunnerKeepsDefaultOnDegenerate:
 # 5. validate_props ↔ raw.games column reconciliation
 # ===========================================================================
 def _load_validate_props():
-    """Import scripts/validate_props.py by path (scripts/ is not a package)."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = os.path.join(repo_root, "scripts", "validate_props.py")
-    spec = importlib.util.spec_from_file_location("sim432_validate_props", path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """``scripts/validate_props.py`` as a fresh module."""
+    return load_script("validate_props", module_name="calibration_reconciliation_validate_props")
 
 
 class TestValidatePropsFinalGamesQuery:

@@ -1,10 +1,10 @@
 """
 tests/unit/test_odds_readers.py
 =================================
-SIM-555, the readers (plan tests 15 and 16;
+The odds readers (tests 15 and 16 of the one-book-per-row plan, SIM-555:
 ``docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`` §5.5, §7).
 
-What changed, in plain words: the odds store now holds one row per book,
+In plain words: the odds store holds one row per book,
 labelled ``book = 'bp:<id>'``. The accuracy comparison
 (``scripts/accuracy_comparison.py``) grades each market against ONE book: the first
 book on the preference list that has a row for the market, the same list on
@@ -19,8 +19,7 @@ differ. Three other scripts read the store with the same rule.
 No database. ``_StubPool`` stands in for Postgres: it applies what each SQL
 asks for (the label filter, the books to leave out, the preference order,
 DISTINCT ON), so a test checks both the SQL and the parameters the reader
-passes. The same SQL was run against the live database, read-only, on
-synthetic rows when this file was written.
+passes.
 """
 
 from __future__ import annotations
@@ -54,8 +53,35 @@ rescore = load_script("rescore_runlines")
 manager_probe = load_script("manager_probe")
 fatigue_probe = load_script("fatigue_probe")
 
-AccuracyRecord = bt.AccuracyRecord
-BETTABLE_CLOSING = bt.BETTABLE_CLOSING
+from accuracy import replay as replay_mod  # noqa: E402
+from accuracy.grading import score_run_line_market, score_segment_market_accuracy  # noqa: E402
+from accuracy.pricing import (  # noqa: E402
+    BETTABLE_CLOSING,
+    BETTABLE_GAME_CLOSES_SQL,
+    BETTABLE_PROP_CLOSES_SQL,
+    INCOMPLETE_THREE_WAY_LAST_SQL,
+    THREE_WAY_MARKET_TYPES,
+    _closing_prices,
+    _fetch_game_odds,
+    attach_best_prices,
+    best_bettable_price,
+    fetch_bettable_game_closes,
+    fetch_graded_game_odds,
+    graded_game_odds_sql,
+    graded_prop_odds_sql,
+    odds_row_provenance,
+    reference_margin,
+)
+from accuracy.records import (  # noqa: E402
+    BOXSCORE_SCORED_PROPS,
+    GROUND_TRUTH_OFFICIAL,
+    AccuracyRecord,
+    PropGroundTruth,
+)
+from accuracy.replay import _process_one_game  # noqa: E402
+from accuracy.report import aggregate_accuracy_comparison, format_accuracy_comparison  # noqa: E402
+
+from betting.clv_engine import DEFAULT_ONE_SIDED_MARGIN  # noqa: E402
 
 # The book ids the tests use (BettingPros' ids).
 BLEND = "bp:0"
@@ -69,9 +95,8 @@ POLYMARKET = "bp:73"  # a prediction market
 
 # The first four books on the graded-book preference list, by position. A test
 # whose point is "the first book on the list with a row is graded" gives its
-# books these ROLES, so a reorder of the list never changes what it checks
-# (the order changed on 2026-09-29). On that list they are DraftKings, BetMGM,
-# FanDuel and theScore.
+# books these ROLES, so a reorder of the list never changes what it checks.
+# On the list today they are DraftKings, BetMGM, FanDuel and theScore.
 FIRST_LISTED, SECOND_LISTED, THIRD_LISTED, FOURTH_LISTED = graded_book_labels()[:4]
 
 _GAME_COLUMNS = (
@@ -173,16 +198,16 @@ class _StubPool:
         pref = list(args[2]) if "array_position($3::varchar[], book)" in sql else []
         # a graded game-market read sorts a tie-less three-way row after the
         # complete ones, BEFORE the preference list
-        tie_last = bt.INCOMPLETE_THREE_WAY_LAST_SQL in sql
+        tie_last = INCOMPLETE_THREE_WAY_LAST_SQL in sql
         if tie_last and pref:
-            assert sql.index(bt.INCOMPLETE_THREE_WAY_LAST_SQL) < sql.index("array_position(")
+            assert sql.index(INCOMPLETE_THREE_WAY_LAST_SQL) < sql.index("array_position(")
 
         def order(r):
             rank = pref.index(r["book"]) if r["book"] in pref else len(pref)
             incomplete = (
                 tie_last
                 and r.get("draw_ml") is None
-                and r.get("market_type") in bt.THREE_WAY_MARKET_TYPES
+                and r.get("market_type") in THREE_WAY_MARKET_TYPES
             )
             return (incomplete, rank, -r["fetched_at"])
 
@@ -210,7 +235,7 @@ def _four_book_game() -> list[dict[str, Any]]:
         # an older fetch of the graded book
         _game_row("moneyline", SECOND_LISTED, fetched_at=1, home_ml=-999, away_ml=999),
         _game_row("moneyline", SECOND_LISTED, line_type="opening", home_ml=-150, away_ml=130),
-        # the old mixed row: never read
+        # a mixed 'consensus' row (no per-book label): never read
         _game_row("moneyline", "consensus", fetched_at=99, home_ml=-100, away_ml=-100),
         # the total: the fourth book pays more on the over, but at another line
         _game_row("total", SECOND_LISTED, total_line=8.5, over_ml=-110, under_ml=-110),
@@ -256,7 +281,7 @@ async def test_the_graded_row_read():
     the blend and the prediction market are skipped, and each record reports
     the best bettable price at the graded line with its book."""
     pool = _StubPool(game_rows=_four_book_game())
-    odds = await bt._fetch_game_odds(pool, 1)
+    odds = await _fetch_game_odds(pool, 1)
 
     closing = odds["moneyline"]["closing"]
     # the first book on the list with a row, over the third's newer fetch
@@ -265,7 +290,7 @@ async def test_the_graded_row_read():
     assert odds["moneyline"]["opening"]["book"] == SECOND_LISTED
     assert odds["total"]["closing"]["book"] == SECOND_LISTED
     # the sportsbooks' closing rows ride beside the graded row; the blend,
-    # the prediction market and the old mixed row are not among them
+    # the prediction market and the mixed 'consensus' row are not among them
     assert {r["book"] for r in odds["moneyline"][BETTABLE_CLOSING]} == {
         SECOND_LISTED,
         THIRD_LISTED,
@@ -276,7 +301,7 @@ async def test_the_graded_row_read():
         FOURTH_LISTED,
     }
 
-    ml, total = bt.attach_best_prices([_moneyline_record(), _total_record()], odds, {})
+    ml, total = attach_best_prices([_moneyline_record(), _total_record()], odds, {})
     # the best price is another sportsbook's, not the graded row's
     assert (ml.market_best_price, ml.market_best_book) == (-140.0, THIRD_LISTED)
     # the fourth book's +100 is an over 9, not an over 8.5: another bet
@@ -297,62 +322,62 @@ async def test_the_first_book_on_the_list_wins_over_a_newer_fetch():
     rows = _four_book_game() + [
         _game_row("moneyline", FIRST_LISTED, fetched_at=0, home_ml=-150, away_ml=130),
     ]
-    odds = await bt.fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
+    odds = await fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
     assert odds["moneyline"]["closing"]["book"] == FIRST_LISTED
     # a market the first book does not quote still falls to the second
     assert odds["total"]["closing"]["book"] == SECOND_LISTED
 
 
 async def test_a_book_off_the_list_is_graded_only_when_no_listed_book_quotes(monkeypatch):
-    # A sportsbook off the preference list, classified for the test: since
-    # 2026-09-29 every sportsbook the vocabulary lists is on the list.
+    # A sportsbook off the preference list, classified for the test: every
+    # sportsbook the vocabulary lists is on the list.
     monkeypatch.setitem(BOOK_KIND, 77, "sportsbook")
     off_list = "bp:77"
     assert off_list in bettable_labels() and off_list not in graded_book_labels()
     rows = [_game_row("first_to_score", off_list, fetched_at=9, home_ml=-115, away_ml=-105)]
-    odds = await bt.fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
+    odds = await fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
     assert odds["first_to_score"]["closing"]["book"] == off_list
     # the last book on the list still wins over its newer fetch
     last_listed = graded_book_labels()[-1]
     rows.append(_game_row("first_to_score", last_listed, fetched_at=0, home_ml=-110, away_ml=-110))
-    odds = await bt.fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
+    odds = await fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
     assert odds["first_to_score"]["closing"]["book"] == last_listed
 
 
 async def test_a_book_the_vocabulary_does_not_list_is_never_graded_or_offered():
-    """Review fix (2026-09-28, finding VOCAB-1): the readers keep a list of
-    what may be graded (the listed sportsbooks). An unlisted id, a prediction
-    market (DraftKings Predictions, 74) or a pick'em app (Betr, 45) used to
-    pass a blacklist and could be graded or named the best price."""
+    """The readers keep a list of what may be graded (the listed
+    sportsbooks), never a blacklist. An unlisted id, a prediction market
+    (DraftKings Predictions, 74) and a pick'em app (Betr, 45) are never
+    graded or named the best price."""
     rows = [
         _game_row("first_to_score", "bp:999", home_ml=-115, away_ml=-105),
         _game_row("first_to_score", "bp:74", home_ml=-110, away_ml=-110),
         _game_row("first_to_score", "bp:45", home_ml=-105, away_ml=-115),
     ]
-    odds = await bt.fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
+    odds = await fetch_graded_game_odds(_StubPool(game_rows=rows), 1)
     assert "first_to_score" not in odds
-    closes = await bt.fetch_bettable_game_closes(_StubPool(game_rows=rows), 1)
+    closes = await fetch_bettable_game_closes(_StubPool(game_rows=rows), 1)
     assert closes == {}
     for label in ("bp:999", "bp:74", "bp:45"):
         assert label not in bettable_labels()
-    assert bt.best_bettable_price(rows, "home_ml") is None
+    assert best_bettable_price(rows, "home_ml") is None
 
 
 async def test_a_game_with_only_the_old_rows_reads_as_no_odds():
-    """A half-loaded season never mixes: a game whose rows are all the old
+    """A half-loaded season never mixes: a game whose rows are all mixed
     ``consensus`` rows has no graded row, and the second read never runs."""
     pool = _StubPool(
         game_rows=[_game_row("moneyline", "consensus", home_ml=-120, away_ml=100)],
         prop_rows=[_prop_row(7, "strikeouts", "consensus", line=5.5, over_ml=-110, under_ml=-110)],
     )
-    assert await bt._fetch_game_odds(pool, 1) == {}
-    assert await bt._fetch_prop_odds(pool, 1) == {}
+    assert await _fetch_game_odds(pool, 1) == {}
+    assert await replay_mod._fetch_prop_odds(pool, 1) == {}
     assert len(pool.calls) == 2  # one graded read per table, no bettable read
 
 
 async def test_the_benchmark_book_grades_against_that_one_book():
     pool = _StubPool(game_rows=_four_book_game())
-    odds = await bt._fetch_game_odds(pool, 1, benchmark_book=BLEND)
+    odds = await _fetch_game_odds(pool, 1, benchmark_book=BLEND)
     assert odds["moneyline"]["closing"]["book"] == BLEND
     assert odds["total"]["closing"]["book"] == BLEND
     sql, args = pool.calls[0]
@@ -367,7 +392,7 @@ async def test_the_benchmark_book_grades_against_that_one_book():
         market_prob=0.5,
         outcome=1,
     )
-    (out,) = bt.attach_best_prices([rec], odds, {})
+    (out,) = attach_best_prices([rec], odds, {})
     assert (out.market_best_price, out.market_best_book) == (-140.0, THIRD_LISTED)
 
 
@@ -386,7 +411,7 @@ async def test_the_prop_graded_row_and_best_price():
         ),
     ]
     pool = _StubPool(prop_rows=rows)
-    odds = await bt._fetch_prop_odds(pool, 1)
+    odds = await replay_mod._fetch_prop_odds(pool, 1)
     assert odds[(7, "strikeouts")]["closing"]["book"] == DRAFTKINGS
     assert odds[(7, "strikeouts")]["opening"]["book"] == FANDUEL
     rec = AccuracyRecord(
@@ -400,7 +425,7 @@ async def test_the_prop_graded_row_and_best_price():
         market_side_price=-120.0,
         market_other_price=-110.0,
     )
-    (out,) = bt.attach_best_prices([rec], {}, odds)
+    (out,) = attach_best_prices([rec], {}, odds)
     assert (out.market_best_price, out.market_best_book) == (-115.0, FANDUEL)
 
 
@@ -410,12 +435,12 @@ def test_a_tie_in_payout_goes_to_the_book_earlier_on_the_list():
         {"book": DRAFTKINGS, "home_ml": -120},
         {"book": "bp:999", "home_ml": -120},
     ]
-    assert bt.best_bettable_price(rows, "home_ml") == (-120.0, DRAFTKINGS)
+    assert best_bettable_price(rows, "home_ml") == (-120.0, DRAFTKINGS)
     # -100 and +100 pay the same; the list decides
     rows = [{"book": CAESARS, "home_ml": 100}, {"book": BETMGM, "home_ml": -100}]
-    assert bt.best_bettable_price(rows, "home_ml") == (-100.0, BETMGM)
+    assert best_bettable_price(rows, "home_ml") == (-100.0, BETMGM)
     # no sportsbook quotes the side: no price
-    assert bt.best_bettable_price([{"book": BLEND, "home_ml": 150}], "home_ml") is None
+    assert best_bettable_price([{"book": BLEND, "home_ml": 150}], "home_ml") is None
 
 
 def test_the_run_line_away_bet_is_priced_at_the_away_spread():
@@ -449,7 +474,7 @@ def test_the_run_line_away_bet_is_priced_at_the_away_spread():
     odds = {"f5_runline": {"closing": graded, BETTABLE_CLOSING: others}}
     home = AccuracyRecord(1, "f5_runline", "f5_runline", 0.2, 0.2, 0, market_side_price=350.0)
     away = AccuracyRecord(1, "f5_runline_away", "f5_runline", 0.3, 0.3, 1, market_side_price=150.0)
-    home_out, away_out = bt.attach_best_prices([home, away], odds, {})
+    home_out, away_out = attach_best_prices([home, away], odds, {})
     assert (home_out.market_best_price, home_out.market_best_book) == (360.0, BETMGM)
     assert (away_out.market_best_price, away_out.market_best_book) == (150.0, FANDUEL)
 
@@ -465,7 +490,7 @@ def test_a_three_way_candidate_must_list_the_tie():
     ]
     odds = {"f5_moneyline": {"closing": graded, BETTABLE_CLOSING: others}}
     rec = AccuracyRecord(1, "f5_moneyline", "f5_moneyline", 0.4, 0.38, 1)
-    (out,) = bt.attach_best_prices([rec], odds, {})
+    (out,) = attach_best_prices([rec], odds, {})
     assert (out.market_best_price, out.market_best_book) == (160.0, CAESARS)
 
 
@@ -478,19 +503,19 @@ def _implied(american: float) -> float:
 def test_the_three_way_markets_are_the_two_segment_moneylines():
     from pipeline.odds_provider import GAME_MARKET_KIND
 
-    assert set(bt.THREE_WAY_MARKET_TYPES) == {"f1_moneyline", "f5_moneyline"}
+    assert set(THREE_WAY_MARKET_TYPES) == {"f1_moneyline", "f5_moneyline"}
     assert {m for m, k in GAME_MARKET_KIND.items() if k == "three_way"} == set(
-        bt.THREE_WAY_MARKET_TYPES
+        THREE_WAY_MARKET_TYPES
     )
-    assert bt.INCOMPLETE_THREE_WAY_LAST_SQL == (
+    assert INCOMPLETE_THREE_WAY_LAST_SQL == (
         "(draw_ml IS NULL AND market_type IN ('f1_moneyline', 'f5_moneyline'))"
     )
-    for sql in (bt.graded_game_odds_sql(), bt.graded_game_odds_sql(benchmark=True)):
-        assert bt.INCOMPLETE_THREE_WAY_LAST_SQL in sql
+    for sql in (graded_game_odds_sql(), graded_game_odds_sql(benchmark=True)):
+        assert INCOMPLETE_THREE_WAY_LAST_SQL in sql
 
 
 async def test_a_three_way_row_with_no_tie_is_graded_only_when_no_book_lists_the_tie():
-    """Review finding 1: the first book on the list lists the first-inning
+    """The first book on the list lists the first-inning
     moneyline's two teams only (as DraftKings does: a tie refunds the bet);
     the second and third books list all three. The scorer cannot price a
     three-way market without the tie, so the second book's complete row is
@@ -512,7 +537,7 @@ async def test_a_three_way_row_with_no_tie_is_graded_only_when_no_book_lists_the
         _game_row("moneyline", SECOND_LISTED, fetched_at=9, home_ml=-125, away_ml=105),
     ]
     pool = _StubPool(game_rows=rows)
-    odds = await bt._fetch_game_odds(pool, 1)
+    odds = await _fetch_game_odds(pool, 1)
     f1 = odds["f1_moneyline"]["closing"]
     # the first book on the list with a complete row (not the third book's newer one)
     assert (f1["book"], f1["home_ml"], f1["draw_ml"]) == (SECOND_LISTED, 150, -110)
@@ -522,12 +547,12 @@ async def test_a_three_way_row_with_no_tie_is_graded_only_when_no_book_lists_the
 
     grids = [([0, 1, 0, 2, 0, 0, 1, 1, 0], [1, 0, 1, 0, 0, 0, 0, 1, 0]), ([0] * 9, [0] * 9)]
     official = {"home": [0, 2, 0, 1, 0, 0, 0, 0, 0], "away": [0, 0, 0, 0, 0, 0, 0, 0, 1]}
-    recs = bt.score_segment_market_accuracy(1, SegmentRuns.from_inning_grids(grids), odds, official)
+    recs = score_segment_market_accuracy(1, SegmentRuns.from_inning_grids(grids), odds, official)
     (f1_rec,) = [r for r in recs if r.market == "f1_moneyline"]
     fair = [_implied(150), _implied(190), _implied(-110)]
     assert f1_rec.market_side_price == 150.0
     assert f1_rec.market_prob == pytest.approx(fair[0] / sum(fair))
-    # the tie-less first-five row gives no record, as before
+    # the tie-less first-five row gives no record
     assert not [r for r in recs if r.market == "f5_moneyline"]
 
     # the benchmark read keeps the rule inside its one book: an older
@@ -536,13 +561,13 @@ async def test_a_three_way_row_with_no_tie_is_graded_only_when_no_book_lists_the
         _game_row("f1_moneyline", BLEND, fetched_at=9, home_ml=-120, away_ml=100),
         _game_row("f1_moneyline", BLEND, fetched_at=1, home_ml=155, away_ml=185, draw_ml=-112),
     ]
-    odds = await bt.fetch_graded_game_odds(_StubPool(game_rows=bench_rows), 1, benchmark_book=BLEND)
+    odds = await fetch_graded_game_odds(_StubPool(game_rows=bench_rows), 1, benchmark_book=BLEND)
     assert odds["f1_moneyline"]["closing"]["draw_ml"] == -112
 
 
 def _two_bets_game() -> dict[str, Any]:
-    """Review finding 2's game: the graded first-five run line is BetMGM's,
-    listed as two separate bets (-1.5 +250 / -1.5 +400). The graded
+    """A game whose graded first-five run line is BetMGM's, listed as two
+    separate bets (-1.5 +250 / -1.5 +400). The graded
     first-five total is FanDuel's at -125 / -125 (margin 1.111); BetMGM's own
     is -104 / -104 (margin 1.0196). BetMGM also posts a full-game moneyline."""
     rl = {
@@ -564,24 +589,24 @@ def _two_bets_game() -> dict[str, Any]:
 
 
 def test_a_run_line_listed_as_two_bets_takes_its_own_books_margin():
-    """Review finding 2: each bet is priced over the margin of the run-line
-    row's OWN book, never over another book's graded total."""
+    """Each bet is priced over the margin of the run-line row's OWN book,
+    never over another book's graded total."""
     odds = _two_bets_game()
     own = 2 * _implied(-104)
-    assert bt.reference_margin(odds, "f5", book=BETMGM) == (pytest.approx(own), "f5_total")
-    # no book given (a row with no label): the graded rows, as before SIM-555
-    assert bt.reference_margin(odds, "f5")[0] == pytest.approx(2 * _implied(-125))
+    assert reference_margin(odds, "f5", book=BETMGM) == (pytest.approx(own), "f5_total")
+    # no book given (a row with no label): the graded rows give the margin
+    assert reference_margin(odds, "f5")[0] == pytest.approx(2 * _implied(-125))
 
-    cp = bt._closing_prices(
+    cp = _closing_prices(
         odds, "f5_runline", "home_spread_ml", "away_spread_ml", "home_spread", "away_spread"
     )
-    recs = bt.score_run_line_market(
+    recs = score_run_line_market(
         1, "f5_runline", cp, odds, sim_cover=lambda _s, _l: 0.3, real_cover=lambda _s, _l: 0
     )
     by_market = {r.market: r for r in recs}
     assert by_market["f5_runline"].market_prob == pytest.approx(_implied(250) / own)
     assert by_market["f5_runline_away"].market_prob == pytest.approx(_implied(400) / own)
-    # the reviewer's numbers: 0.2802 and 0.196, not 0.2571 and 0.18
+    # 0.2802 and 0.196; FanDuel's graded total would give 0.2571 and 0.18
     assert round(by_market["f5_runline"].market_prob, 4) == 0.2802
     assert round(by_market["f5_runline_away"].market_prob, 3) == 0.196
 
@@ -592,12 +617,12 @@ def test_the_own_book_margin_falls_to_its_moneyline_then_the_flat_margin():
     total sits inside the band: the live /edges page does the same."""
     odds = _two_bets_game()
     odds["f5_total"][BETTABLE_CLOSING] = [odds["f5_total"]["closing"]]
-    margin, source = bt.reference_margin(odds, "f5", book=BETMGM)
+    margin, source = reference_margin(odds, "f5", book=BETMGM)
     assert source == "moneyline"
     assert margin == pytest.approx(_implied(-120) + _implied(102))
     odds["moneyline"][BETTABLE_CLOSING] = [odds["moneyline"]["closing"]]
-    assert bt.reference_margin(odds, "f5", book=BETMGM) == (bt.DEFAULT_ONE_SIDED_MARGIN, "flat")
-    # its own total out of the band is skipped, as a graded one was
+    assert reference_margin(odds, "f5", book=BETMGM) == (DEFAULT_ONE_SIDED_MARGIN, "flat")
+    # its own total out of the band is skipped, as a graded one is
     odds = _two_bets_game()
     odds["f5_total"][BETTABLE_CLOSING][1] = {
         "book": BETMGM,
@@ -605,7 +630,7 @@ def test_the_own_book_margin_falls_to_its_moneyline_then_the_flat_margin():
         "over_ml": -300,
         "under_ml": -300,
     }
-    assert bt.reference_margin(odds, "f5", book=BETMGM)[1] == "moneyline"
+    assert reference_margin(odds, "f5", book=BETMGM)[1] == "moneyline"
 
 
 def test_the_benchmark_books_margin_is_its_own_graded_row():
@@ -614,14 +639,15 @@ def test_the_benchmark_books_margin_is_its_own_graded_row():
     blend_total = {"book": BLEND, "total_line": 4.5, "over_ml": -108, "under_ml": -112}
     fd_total = {"book": FANDUEL, "total_line": 4.5, "over_ml": -125, "under_ml": -125}
     odds = {"f5_total": {"closing": blend_total, BETTABLE_CLOSING: [fd_total]}}
-    assert bt.reference_margin(odds, "f5", book=BLEND) == (
+    assert reference_margin(odds, "f5", book=BLEND) == (
         pytest.approx(_implied(-108) + _implied(-112)),
         "f5_total",
     )
 
 
 def test_the_run_line_rescore_prices_over_the_run_line_books_margin():
-    """The SIM-549 re-score reads the margin as the backtest does. The
+    """The run-line re-score (``scripts/rescore_runlines.py``) reads the
+    margin as the backtest does. The
     report's own first-five total record is FanDuel's graded row, another
     book's, so it does not check the margin; with FanDuel's run line it does."""
     odds = _two_bets_game()
@@ -672,13 +698,13 @@ def test_a_record_without_the_other_books_keeps_no_best_price_but_its_graded_one
     the one candidate when its book is a sportsbook; the blend is not."""
     rec = _moneyline_record()
     odds = {"moneyline": {"closing": {"book": FANDUEL, "home_ml": -145, "away_ml": 125}}}
-    (out,) = bt.attach_best_prices([rec], odds, {})
+    (out,) = attach_best_prices([rec], odds, {})
     assert (out.market_best_price, out.market_best_book) == (-145.0, FANDUEL)
     odds = {"moneyline": {"closing": {"book": BLEND, "home_ml": -145, "away_ml": 125}}}
-    (out,) = bt.attach_best_prices([rec], odds, {})
+    (out,) = attach_best_prices([rec], odds, {})
     assert out.market_best_price is None and out.market_best_book is None
     # no graded row for the market: the record is returned as it came
-    (out,) = bt.attach_best_prices([rec], {}, {})
+    (out,) = attach_best_prices([rec], {}, {})
     assert out == rec
 
 
@@ -730,11 +756,11 @@ async def test_score_one_game_puts_the_best_price_on_each_record(monkeypatch):
         return prop_odds
 
     async def _truth(pool, game_pk):
-        return bt.PropGroundTruth(
+        return PropGroundTruth(
             batter_actuals={},
             pitcher_actuals={7: {"K": 7}},
-            source=bt.GROUND_TRUTH_OFFICIAL,
-            scorable_props=bt.BOXSCORE_SCORED_PROPS,
+            source=GROUND_TRUTH_OFFICIAL,
+            scorable_props=BOXSCORE_SCORED_PROPS,
         )
 
     pset = PropDistributionSet(
@@ -749,9 +775,9 @@ async def test_score_one_game_puts_the_best_price_on_each_record(monkeypatch):
     )
     monkeypatch.setattr(sk, "resolve_park_factor_onto_state", _park)
     monkeypatch.setattr(sk, "resolve_asof_ymd", _asof)
-    monkeypatch.setattr(bt, "_fetch_prop_odds", _prop_odds)
-    monkeypatch.setattr(bt, "_fetch_prop_ground_truth", _truth)
-    monkeypatch.setattr(bt, "_replay_game", lambda *_a, **_k: ([object()], []))
+    monkeypatch.setattr(replay_mod, "_fetch_prop_odds", _prop_odds)
+    monkeypatch.setattr(replay_mod, "_fetch_prop_ground_truth", _truth)
+    monkeypatch.setattr(replay_mod, "_replay_game", lambda *_a, **_k: ([object()], []))
     monkeypatch.setattr(
         results_mod.GameSimSummary, "from_results", classmethod(lambda cls, r: object())
     )
@@ -759,7 +785,7 @@ async def test_score_one_game_puts_the_best_price_on_each_record(monkeypatch):
     monkeypatch.setattr(
         pd_mod.PropDistributionSet, "from_results", classmethod(lambda cls, r: pset)
     )
-    recs, status, _pf, _src = await bt._score_one_game(
+    recs, status, _pf, _src = await replay_mod._score_one_game(
         object(),
         1,
         duck=object(),
@@ -777,7 +803,7 @@ async def test_score_one_game_puts_the_best_price_on_each_record(monkeypatch):
 
 
 def test_the_worker_passes_the_benchmark_book_on(monkeypatch):
-    monkeypatch.setattr(bt, "_worker_lazy_init", lambda *_a, **_k: None)
+    monkeypatch.setattr(replay_mod, "_worker_lazy_init", lambda *_a, **_k: None)
     seen: dict[str, Any] = {}
 
     async def _score(pool, game_pk, **kw):
@@ -788,12 +814,12 @@ def test_the_worker_passes_the_benchmark_book_on(monkeypatch):
         def run_until_complete(self, coro):
             return asyncio.new_event_loop().run_until_complete(coro)
 
-    monkeypatch.setattr(bt, "_score_one_game", _score)
-    monkeypatch.setattr(bt, "_WORKER_LOOP", _Loop())
+    monkeypatch.setattr(replay_mod, "_score_one_game", _score)
+    monkeypatch.setattr(replay_mod, "_WORKER_LOOP", _Loop())
     params = {"do_game": True, "do_props": False, "iterations": 1, "base_seed": 0}
-    bt._process_one_game(1, {**params, "benchmark_book": BLEND})
+    _process_one_game(1, {**params, "benchmark_book": BLEND})
     assert seen["benchmark_book"] == BLEND
-    bt._process_one_game(1, params)  # an older caller's params: the preference list
+    _process_one_game(1, params)  # params with no benchmark book: the preference list
     assert seen["benchmark_book"] is None
 
 
@@ -804,17 +830,17 @@ def test_the_worker_passes_the_benchmark_book_on(monkeypatch):
 
 def test_every_reader_sql_filters_to_the_label():
     graded = [
-        bt.graded_game_odds_sql(),
-        bt.graded_prop_odds_sql(),
+        graded_game_odds_sql(),
+        graded_prop_odds_sql(),
         rescore.CLOSING_ROWS_SQL,
         manager_probe.K_LINES_SQL,
         fatigue_probe.K_LINES_SQL,
     ]
     others = [
-        bt.graded_game_odds_sql(benchmark=True),
-        bt.graded_prop_odds_sql(benchmark=True),
-        bt.BETTABLE_GAME_CLOSES_SQL,
-        bt.BETTABLE_PROP_CLOSES_SQL,
+        graded_game_odds_sql(benchmark=True),
+        graded_prop_odds_sql(benchmark=True),
+        BETTABLE_GAME_CLOSES_SQL,
+        BETTABLE_PROP_CLOSES_SQL,
         rescore.BOOK_CLOSES_SQL,
     ]
     for sql in graded + others:
@@ -823,7 +849,7 @@ def test_every_reader_sql_filters_to_the_label():
         # only the listed sportsbooks are read, and the preference list orders
         assert "AND book = ANY($" in sql and "NOT (book = ANY(" not in sql
         assert "array_position($" in sql and "NULLS LAST, fetched_at DESC" in sql
-    for sql in (bt.BETTABLE_GAME_CLOSES_SQL, bt.BETTABLE_PROP_CLOSES_SQL):
+    for sql in (BETTABLE_GAME_CLOSES_SQL, BETTABLE_PROP_CLOSES_SQL):
         assert "AND book = ANY($2::varchar[])" in sql and "line_type = 'closing'" in sql
     assert "AND book = ANY($3::varchar[])" in rescore.BOOK_CLOSES_SQL
     assert "line_type = 'closing'" in rescore.BOOK_CLOSES_SQL
@@ -916,7 +942,7 @@ async def test_the_run_line_rescore_reads_the_graded_row(monkeypatch):
     # book's own margin
     books = out[2]["f5_total"][BETTABLE_CLOSING]
     assert [(r["book"], r["over_ml"]) for r in books] == [(FANDUEL, -125.0), (BETMGM, -104.0)]
-    assert bt.reference_margin(out[2], "f5", book=BETMGM) == (
+    assert reference_margin(out[2], "f5", book=BETMGM) == (
         pytest.approx(2 * _implied(-104)),
         "f5_total",
     )
@@ -984,18 +1010,18 @@ def test_the_benchmark_book_takes_a_label_or_a_name():
 
 
 def test_the_table_header_names_the_graded_book():
-    comparison = bt.aggregate_accuracy_comparison([], n_bootstrap=20, seed=1)
-    params = {"seasons": [2024], **bt.odds_row_provenance()}
-    text = bt.format_accuracy_comparison(comparison, params=params)
+    comparison = aggregate_accuracy_comparison([], n_bootstrap=20, seed=1)
+    params = {"seasons": [2024], **odds_row_provenance()}
+    text = format_accuracy_comparison(comparison, params=params)
     # every book on the list by its display name, in the list's order
     names = ", ".join(BOOK_NAMES[book_id] for book_id in GRADED_BOOK_PREFERENCE)
     assert f"in this order: {names} (odds rows {ODDS_ROW_VERSION})" in text
-    text = bt.format_accuracy_comparison(
-        comparison, params={"seasons": [2024], **bt.odds_row_provenance(BLEND)}
+    text = format_accuracy_comparison(
+        comparison, params={"seasons": [2024], **odds_row_provenance(BLEND)}
     )
     assert "BettingPros Consensus (bp:0)" in text
-    # an older report's params: no line
-    text = bt.format_accuracy_comparison(comparison, params={"seasons": [2024]})
+    # params with no odds-row stamp: no line
+    text = format_accuracy_comparison(comparison, params={"seasons": [2024]})
     assert "graded against" not in text
 
 
@@ -1027,11 +1053,11 @@ def _write(tmp_path: Path, name: str, rep: dict[str, Any]) -> str:
 
 def test_a_report_without_the_stamp_does_not_merge_with_one_that_has_it(tmp_path):
     old = _write(tmp_path, "old.json", _report({}, 0))
-    new = _write(tmp_path, "new.json", _report(bt.odds_row_provenance(), 100))
+    new = _write(tmp_path, "new.json", _report(odds_row_provenance(), 100))
     with pytest.raises(SystemExit, match="odds_row_version"):
         skill.load_reports([old, new], force=False)
     # two reads graded the same way merge
-    new2 = _write(tmp_path, "new2.json", _report(bt.odds_row_provenance(), 200))
+    new2 = _write(tmp_path, "new2.json", _report(odds_row_provenance(), 200))
     records, prov = skill.load_reports([new, new2], force=False)
     assert len(records) == 12 and prov["odds_row_version"] == ODDS_ROW_VERSION
     # --force merges with a warning, as for the other stamps
@@ -1040,13 +1066,13 @@ def test_a_report_without_the_stamp_does_not_merge_with_one_that_has_it(tmp_path
 
 
 def test_two_preference_lists_or_two_benchmarks_do_not_merge(tmp_path):
-    base = bt.odds_row_provenance()
+    base = odds_row_provenance()
     other_list = dict(base, graded_book_preference=[10, 12, 19])
     a = _write(tmp_path, "a.json", _report(base, 0))
     b = _write(tmp_path, "b.json", _report(other_list, 100))
     with pytest.raises(SystemExit, match="graded_book_preference"):
         skill.load_reports([a, b], force=False)
-    c = _write(tmp_path, "c.json", _report(bt.odds_row_provenance(BLEND), 200))
+    c = _write(tmp_path, "c.json", _report(odds_row_provenance(BLEND), 200))
     with pytest.raises(SystemExit, match="benchmark_book"):
         skill.load_reports([a, c], force=False)
 
@@ -1054,14 +1080,14 @@ def test_two_preference_lists_or_two_benchmarks_do_not_merge(tmp_path):
 def test_two_lists_do_not_pair(tmp_path, capsys):
     """The paired read and the skill table's composite both refuse two reads
     graded against different odds rows, on the same games."""
-    base = bt.odds_row_provenance()
+    base = odds_row_provenance()
     a = _report(base, 0)
     b = _report(dict(base, graded_book_preference=[10, 12, 19]), 0)
     problems = pair.provenance_mismatches(a, b)
     assert any("graded_book_preference" in p for p in problems)
     unstamped = _report({}, 0)
     assert any("odds_row_version" in p for p in pair.provenance_mismatches(unstamped, a))
-    bench = _report(bt.odds_row_provenance(BLEND), 0)
+    bench = _report(odds_row_provenance(BLEND), 0)
     assert any("benchmark_book" in p for p in pair.provenance_mismatches(a, bench))
     # the composite: a base read and an arm read graded against other lists
     pa = _write(tmp_path, "base.json", a)
@@ -1078,11 +1104,12 @@ def test_two_lists_do_not_pair(tmp_path, capsys):
 
 
 def test_a_report_rescored_onto_the_graded_book_stays_apart_from_a_fresh_run(tmp_path):
-    """The SIM-555 re-score (``rescored_from``) re-prices the fixed-line
-    records only; its totals, run lines and props keep the old rows' prices.
+    """The re-score onto the graded book (``rescored_from``) re-prices the
+    fixed-line records only; its totals, run lines and props keep the prices
+    the report scored them on.
     It carries the same odds-row stamp as a fresh run, so the re-score mark
     is what keeps the two apart."""
-    stamp = bt.odds_row_provenance()
+    stamp = odds_row_provenance()
     rescored = _report({**stamp, "rescored_from": "old.json"}, 0)
     fresh = _report(stamp, 100)
     a = _write(tmp_path, "rescored.json", rescored)
@@ -1104,15 +1131,14 @@ def test_a_report_rescored_onto_the_graded_book_stays_apart_from_a_fresh_run(tmp
 
 
 def test_the_calibration_layer_refuses_reports_graded_against_other_odds_rows(tmp_path):
-    """Review item: ``load_records`` merged accuracy reports without checking
-    they were graded against the same odds rows. It now refuses a mix, on the
-    same stamps as the market-skill table's merge."""
+    """``load_records`` refuses to merge accuracy reports graded against
+    other odds rows, on the same stamps as the market-skill table's merge."""
     assert calib.ODDS_ROW_KEYS == skill.ODDS_ROW_KEYS
-    stamp = bt.odds_row_provenance()
+    stamp = odds_row_provenance()
     a = _write(tmp_path, "a.json", _report(stamp, 0))
     b = _write(tmp_path, "b.json", _report(stamp, 100))
     assert len(calib.load_records([a, b])) == 12
-    # a report graded before SIM-555 (no stamp)
+    # a report with no odds-row stamp
     old = _write(tmp_path, "old.json", _report({}, 200))
     with pytest.raises(SystemExit, match=r"odds_row_version: missing \(before SIM-555\)"):
         calib.load_records([a, old])
@@ -1122,7 +1148,7 @@ def test_the_calibration_layer_refuses_reports_graded_against_other_odds_rows(tm
     )
     with pytest.raises(SystemExit, match="graded_book_preference"):
         calib.load_records([a, other_list])
-    bench = _write(tmp_path, "bench.json", _report(bt.odds_row_provenance(BLEND), 400))
+    bench = _write(tmp_path, "bench.json", _report(odds_row_provenance(BLEND), 400))
     with pytest.raises(SystemExit, match="benchmark_book"):
         calib.load_records([a, bench])
     rescored = _write(tmp_path, "re.json", _report({**stamp, "rescored_from": "x.json"}, 500))
@@ -1139,7 +1165,7 @@ def test_the_calibration_layer_refuses_reports_graded_against_other_odds_rows(tm
 def test_the_calibration_layer_refuses_a_fit_and_a_check_on_other_odds_rows(tmp_path):
     """The map is fitted on one set and read on the other against the same
     closing lines, so the two sets must match each other too."""
-    stamp = bt.odds_row_provenance()
+    stamp = odds_row_provenance()
     fit = _write(tmp_path, "fit.json", _report(stamp, 0))
     check = _write(tmp_path, "check.json", _report({}, 100))
     with pytest.raises(SystemExit, match="odds_row_version"):

@@ -558,17 +558,12 @@ class TestLoaderHook:
 # scripts/load_official_boxscores.py — the backfill CLI (no network, no DB)
 # ===========================================================================
 
-import importlib.util  # noqa: E402
 import sys  # noqa: E402
 import types  # noqa: E402
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_CLI_PATH = os.path.join(_REPO_ROOT, "scripts", "load_official_boxscores.py")
-_cli_spec = importlib.util.spec_from_file_location("load_official_boxscores", _CLI_PATH)
-assert _cli_spec is not None and _cli_spec.loader is not None
-cli = importlib.util.module_from_spec(_cli_spec)
-sys.modules["load_official_boxscores"] = cli
-_cli_spec.loader.exec_module(cli)
+from tests.script_loader import load_script  # noqa: E402
+
+cli = load_script("load_official_boxscores")
 
 
 class _FakePgConn:
@@ -660,7 +655,7 @@ class TestBackfillCli:
             rc = asyncio.run(cli.run(args))
         assert rc == 0
         assert calls == [1, 2, 3, 4]
-        # games 1 and 4 — the box rows (each game also writes its SIM-427 bullpen listing)
+        # games 1 and 4 — the box rows (each game also writes its bullpen listing)
         assert sum(1 for sql, _ in conn.writes if sql == UPSERT_SQL_ASYNCPG) == 2
         assert conn.closed
         final = [r.message for r in caplog.records if "backfill complete" in r.message]
@@ -730,7 +725,7 @@ class TestBackfillCli:
         assert rc == 0
         assert calls == list(range(1, 13))
         # games 3, 6, 9, 12 — the box rows; each game also writes its bullpen
-        # listing (SIM-427), so count the player-stats upserts only.
+        # listing, so count the player-stats upserts only.
         assert sum(1 for sql, _ in conn.writes if sql == UPSERT_SQL_ASYNCPG) == 4
 
     def test_nothing_written_and_one_failure_exits_one(self, monkeypatch, caplog):

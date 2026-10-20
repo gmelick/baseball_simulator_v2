@@ -1,4 +1,4 @@
-"""SIM-421 (owner ruling 2026-09-12) — every game market the book posts.
+"""Every game market the book posts (the prop-market work, SIM-421, owner ruling 2026-09-12).
 
 The odds tables carry all 15 game markets: the three full-game markets and the
 twelve segment / team markets BettingPros posts on every game. These tests
@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.script_loader import load_script
 
 from pipeline.bettingpros_odds_provider import _GAME_MARKET_IDS, BettingProsOddsProvider
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline, MockOddsAPI
@@ -148,7 +149,7 @@ class TestVocabulary:
 class TestProviderSegmentMarkets:
     """Every expected number below is the selection's ``opening_line`` in the
     captured payload, or, for the current and closing lines, one named book's
-    own line on the named selection (SIM-555: one row per book), so each test
+    own line on the named selection (one row per book), so each test
     checks WHICH selection landed in WHICH column."""
 
     @staticmethod
@@ -167,8 +168,8 @@ class TestProviderSegmentMarkets:
         odds = _SegmentFixtureProvider().get_odds(
             1, market_type="f1_moneyline", line_type="opening"
         )
-        # ATL is home, TB away; Caesars opened both. SIM-555: the tie opened at
-        # FanDuel, another book, so the Caesars opening row carries no tie.
+        # ATL is home, TB away; Caesars opened both. The tie opened at FanDuel,
+        # another book, so the Caesars opening row carries no tie.
         assert odds["book"] == "bp:13"
         assert odds["home_ml"] == -120.0 and odds["away_ml"] == -110.0
         assert odds["draw_ml"] is None
@@ -247,8 +248,7 @@ class TestProviderSegmentMarkets:
         assert odds["home_ml"] is None
 
     def test_closing_is_one_row_per_book(self):
-        # SIM-555: the closing line is one row per book, each side from that book
-        # (it was the newest stamp across every book, per side).
+        # The closing line is one row per book, each side from that book.
         p = _SegmentFixtureProvider()
         rows = p.get_odds_by_book(1, market_type="f1_total", line_type="closing")
         assert [r["book"] for r in rows] == ["bp:0", "bp:12", "bp:14"]
@@ -343,8 +343,8 @@ class TestMockSegmentMarkets:
 
 class TestHashAndPersist:
     def test_two_way_hash_is_unchanged_by_the_new_column(self):
-        # A payload without draw_ml hashes exactly as it did before the column
-        # existed (every stored hash still deduplicates).
+        # A two-way payload hashes the same with or without the draw_ml key,
+        # so every stored two-way hash still deduplicates.
         odds = MockOddsAPI.get_odds(745000)
         without = {k: v for k, v in odds.items() if k != "draw_ml"}
         assert LiveIngestionPipeline._odds_hash(odds) == LiveIngestionPipeline._odds_hash(without)
@@ -364,23 +364,21 @@ class TestHashAndPersist:
         args = pipeline._db.execute.await_args.args[1:]
         assert "draw_ml" in sql
         assert args[-1] == LiveIngestionPipeline._odds_hash(odds)
-        # SIM-555 moved this pin on purpose: book_line_at now sits between the
-        # tie price and the hash (the mock carries no stamp).
+        # book_line_at sits between the tie price and the hash (the mock
+        # carries no stamp).
         assert args[-2] is None
         assert args[-3] == odds["draw_ml"]
         assert args[5] == "f5_moneyline"  # market_type keeps its slot
 
 
 # ===========================================================================
-# The live cycle (SIM-555: every game market, every book, on the cadence)
+# The live cycle: every game market, every book, on the cadence
 # ===========================================================================
 
 
 class TestLiveGameMarketCycle:
-    """SIM-555 rewrote this class on purpose. The live cycle used to persist the
-    twelve segment markets on the cadence and the full-game row on every pitch;
-    it now persists every book's row of all fifteen markets on the cadence, one
-    batch per market, and the per-pitch row is no longer stored."""
+    """The live cycle persists every book's row of all fifteen markets on the
+    cadence, one batch per market. It stores no per-pitch row."""
 
     def _pipeline(self) -> LiveIngestionPipeline:
         p = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
@@ -449,15 +447,7 @@ class TestLiveGameMarketCycle:
 
 class TestLoaderGameMarkets:
     def _loader(self):
-        import importlib.util
-        import sys
-
-        path = Path(__file__).resolve().parent.parent.parent / "scripts" / "load_historical_odds.py"
-        spec = importlib.util.spec_from_file_location("load_historical_odds_sim421_gm", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod
-        spec.loader.exec_module(mod)
-        return mod
+        return load_script("load_historical_odds", module_name="load_historical_odds_game_markets")
 
     def test_default_is_every_market(self):
         loader = self._loader()
@@ -482,7 +472,7 @@ class TestLoaderGameMarkets:
         persisted = []
         batches = []
 
-        # SIM-555: the loader hands one offer's kept rows to a batch writer.
+        # The loader hands one offer's kept rows to a batch writer.
         async def persist(game_pk, rows):
             batches.append(rows)
             persisted.extend(rows)
@@ -517,7 +507,7 @@ class TestLoaderGameMarkets:
 
 
 class TestLoaderResume:
-    """SIM-421 resume: ``--skip-loaded-since`` skips the games a dead run finished."""
+    """The loader's resume: ``--skip-loaded-since`` skips the games a dead run finished."""
 
     def _loader(self):
         return TestLoaderGameMarkets._loader(TestLoaderGameMarkets())
@@ -567,8 +557,8 @@ class TestLoaderResume:
         since = loader.parse_skip_loaded_since("2026-09-12T23:40:00")
         await loader._fetch_final_games("dsn", [2025], None, skip_loaded_since=since)
         assert "NOT EXISTS" in seen[-1][0] and "raw.prop_odds" in seen[-1][0]
-        # SIM-555: the run's line types are bound as $2 (the live cycle's
-        # 'current' rows never mark a game as loaded).
+        # The run's line types are bound as $2 (the live cycle's 'current'
+        # rows never mark a game as loaded).
         assert seen[-1][1] == (since, ["opening", "closing"])
-        # SIM-555: an old consensus row never marks a game as loaded.
+        # A consensus row (no 'bp:' book) never marks a game as loaded.
         assert "p.book LIKE 'bp:%'" in seen[-1][0]

@@ -1,9 +1,9 @@
 """
 tests/unit/test_pitch_cell_index.py
 ====================================
-SIM-467 — the pitch-draw CELL INDEX (plan: docs/audit/2026-09-04-sim467-518-plan.md §5).
+The pitch-draw CELL INDEX (plan: docs/audit/2026-09-04-sim467-518-plan.md §5).
 
-The 12 count buckets generalize to the SIM-451 cell — (runners, outs, count,
+The 12 count buckets generalize to the filter cell — (runners, outs, count,
 score band, batting side) — ordered so each plate-appearance cell is one
 contiguous slice with its 12 count sub-cells inside it. What these tests pin:
 
@@ -16,19 +16,19 @@ contiguous slice with its 12 count sub-cells inside it. What these tests pin:
   * a pre-0023 bundle (no ``bat_home``) has no side dimension — 1,440 cells —
     and places the same rows in the same (runners, outs, band, count) cell;
   * the drawn row's global index survives (the got-away / geometry reads);
-  * the cell algebra lives in ``simulation.filter_cells`` and the SIM-451
-    script re-exports the very same objects;
+  * the cell algebra lives in ``simulation.filter_cells`` and the
+    filter-cell measurement script re-exports the very same objects;
   * the loop passes the live side when the index is on and a mid-PA base-out
     change re-selects the cell.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import os
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
 from simulation import filter_cells as fc
@@ -148,10 +148,10 @@ def _draws(fp: FullPoolSampler, bo: np.ndarray, cb: int, n: int = 60, **kw) -> s
 
 class TestCellPathEquivalence:
     def test_an_all_unknown_side_column_has_no_side_dimension(self):
-        # SIM-523 part B found this live: a migration-0023 pool exported before
-        # its rebuild carries bat_home = -1 on EVERY row. With a side
-        # dimension every live side's cell is empty and every draw widens to
-        # level 2 (past the score band). The column must count as absent.
+        # A migration-0023 pool exported before its rebuild carries
+        # bat_home = -1 on EVERY row. With a side dimension every live side's
+        # cell is empty and every draw widens to level 2 (past the score
+        # band). The column must count as absent.
         pool = _grid_pool(with_side=False)
         pool.bat_home = np.full(pool.n, -1, dtype=np.int8)
         fp = _sampler(pool, on=True)
@@ -206,7 +206,7 @@ class TestCellPathEquivalence:
 
     def test_the_drawn_row_keeps_its_global_index(self):
         # got_away only on the live cell's rows: the cell path must resolve the
-        # drawn row globally (the SIM-517 read) — a local index would miss it.
+        # drawn row globally (the got-away read) — a local index would miss it.
         pool = _grid_pool(got_away_fn=lambda rs, o, b, s, cb: int((rs, o, b, s) == (2, 1, 0, 1)))
         fp = _sampler(pool, on=True)
         fp.new_half_inning("R", _PITCHER)
@@ -338,7 +338,7 @@ class TestSideDimension:
 
 
 # ===========================================================================
-# The algebra lives in simulation.filter_cells; the SIM-451 script re-exports it
+# The algebra lives in simulation.filter_cells; the measurement script re-exports it
 # ===========================================================================
 
 
@@ -358,10 +358,7 @@ class TestCellAlgebra:
         assert fc.score_band_array(sd).tolist() == [fc.score_band(int(x)) for x in sd]
 
     def test_the_script_re_exports_the_modules_objects(self):
-        spec = importlib.util.spec_from_file_location("measure_filter_cells_467", _SCRIPT)
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = load_script("measure_filter_cells", module_name="measure_filter_cells_cell_index")
         assert mod.cell_key is fc.cell_key
         assert mod.decode_cell is fc.decode_cell
         assert mod.score_band is fc.score_band

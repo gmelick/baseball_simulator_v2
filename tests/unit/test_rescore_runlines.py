@@ -1,11 +1,12 @@
-"""SIM-549 — the re-score of stored accuracy reports (``scripts/probes/rescore_runlines.py``).
+"""The re-score of stored accuracy reports (``scripts/probes/rescore_runlines.py``).
 
-The accuracy comparison used to price every closing run line as the two sides
-of one bet. The reports written before the fix are re-priced beside their
-originals: a pair keeps its record, a row the book listed as two separate bets
-re-prices its home record from its own price over the same game's reference
-margin, and the away bet's record joins from the next backtest run. These tests
-drive the pure re-score on a toy report and a toy store; no database.
+A report with no ``run_line_scoring`` stamp prices every closing run line as
+the two sides of one bet. The re-score writes a re-priced copy beside the
+original (the run-line shape rule, SIM-549). A pair keeps its record. A row the
+book listed as two separate bets re-prices its home record from its own price
+over the same game's reference margin. The away bet's record comes only from a
+fresh backtest run. These tests drive the pure re-score on a toy report and a
+toy store; no database.
 """
 
 from __future__ import annotations
@@ -16,7 +17,10 @@ import pytest
 from tests.script_loader import load_script
 
 rescore = load_script("rescore_runlines")
-bt = rescore.bt
+
+from accuracy.grading import RUN_LINE_SCORING_VERSION  # noqa: E402
+from accuracy.records import AccuracyRecord  # noqa: E402
+from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
 
 def _implied(american: float) -> float:
@@ -46,7 +50,7 @@ def _toy_report() -> dict:
     from betting.clv_engine import devig_two_way
 
     pair_mkt = devig_two_way(105.0, -125.0)[0]
-    paired_two_bets = devig_two_way(350.0, 150.0)[0]  # the old, wrong number
+    paired_two_bets = devig_two_way(350.0, 150.0)[0]  # a pair's de-vig: wrong for two bets
     return {
         "params": {"base_seed": 0, "bootstrap_samples": 20, "bootstrap_seed": 1},
         "counters": {"games_scored": 3, "n_accuracy_records": 4},
@@ -132,7 +136,7 @@ def test_rescore_script_on_a_toy_report():
     assert recs[(2, "f5_total")] == report["accuracy_records"][2]
     assert recs[(3, "moneyline")] == report["accuracy_records"][3]
     # the stamp, the provenance of the re-score, the fresh tally and table
-    assert out["params"]["run_line_scoring"] == bt.RUN_LINE_SCORING_VERSION
+    assert out["params"]["run_line_scoring"] == RUN_LINE_SCORING_VERSION
     assert out["params"]["rescored"]["from"] == "toy.json"
     assert out["params"]["rescored"]["records"] == 3
     assert out["params"]["rescored"]["reference_margin_sources"] == {
@@ -224,11 +228,9 @@ def test_the_derived_blocks_are_recomputed():
     out, _ = rescore.rescore_report(report, store, source="t.json", date="2026-09-25")
     assert "stale" not in out["hypothetical_return"]
     assert out["counters"]["n_accuracy_records"] == len(out["accuracy_records"]) == 5
-    objs = [bt.AccuracyRecord.from_jsonable(r) for r in out["accuracy_records"]]
+    objs = [AccuracyRecord.from_jsonable(r) for r in out["accuracy_records"]]
     # the report's own bootstrap size and seed, not the defaults
-    assert out["accuracy_comparison"] == bt.aggregate_accuracy_comparison(
-        objs, n_bootstrap=20, seed=1
-    )
+    assert out["accuracy_comparison"] == aggregate_accuracy_comparison(objs, n_bootstrap=20, seed=1)
 
 
 def _write_report(tmp_path: Path) -> Path:
@@ -253,7 +255,7 @@ def test_main_keeps_an_existing_output_unless_told(tmp_path, monkeypatch):
     assert dest.read_text(encoding="utf-8") == "keep me"
     assert rescore.main([str(src), "--dsn", "postgresql://x/y", "--overwrite"]) == 0
     written = json.loads(dest.read_text(encoding="utf-8"))
-    assert written["params"]["run_line_scoring"] == bt.RUN_LINE_SCORING_VERSION
+    assert written["params"]["run_line_scoring"] == RUN_LINE_SCORING_VERSION
 
 
 def test_main_writes_a_report_with_problems_only_when_accepted(tmp_path, monkeypatch):

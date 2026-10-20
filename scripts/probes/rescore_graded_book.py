@@ -65,7 +65,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
-import importlib.util
 import json
 import os
 import sys
@@ -123,7 +122,7 @@ _GAME_COLUMNS = (
 #: three-way row whose book lists no tie sorts after every row that lists one,
 #: so a tie-less row is graded only when no book lists the tie. The same term,
 #: built the same way, as ``INCOMPLETE_THREE_WAY_LAST_SQL`` in
-#: ``scripts/accuracy_comparison.py`` (the backtest module is loaded below this SQL,
+#: ``scripts/accuracy/pricing.py`` (the stage modules are imported below this SQL,
 #: so the term is built here; a unit test keeps the two equal). The re-price of
 #: the first-inning and first-five moneylines needs the tie.
 INCOMPLETE_THREE_WAY_LAST_SQL = "(draw_ml IS NULL AND market_type IN ({}))".format(
@@ -195,21 +194,18 @@ WHERE game_pk = ANY($1::int[]) AND line_type = 'closing' AND {STORED_BOOK_FILTER
 """
 
 
-def _load_backtest_module() -> Any:
-    """The backtest, imported by path (``scripts/`` is not a package)."""
-    if "accuracy_comparison" in sys.modules:
-        return sys.modules["accuracy_comparison"]
-    spec = importlib.util.spec_from_file_location(
-        "accuracy_comparison", str(_ROOT / "scripts" / "accuracy_comparison.py")
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["accuracy_comparison"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+# The accuracy comparison's stages live in scripts/accuracy/.
+if str(_ROOT / "scripts") not in sys.path:
+    sys.path.append(str(_ROOT / "scripts"))
 
-
-bt = _load_backtest_module()
+from accuracy.confidence import DEFAULT_BOOTSTRAP_SAMPLES  # noqa: E402
+from accuracy.grading import market_shape_tally  # noqa: E402
+from accuracy.hypothetical_return import (  # noqa: E402
+    DEFAULT_RETURN_EDGE_THRESHOLD,
+    aggregate_hypothetical_return,
+)
+from accuracy.records import AccuracyRecord  # noqa: E402
+from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
 
 class RescoreRefused(ValueError):
@@ -460,26 +456,24 @@ def rescore_report(
         else:
             counts["line_moved"] += 1
 
-    objs = [bt.AccuracyRecord.from_jsonable(r) for r in kept]
-    n_boot = int(params.get("bootstrap_samples", bt.DEFAULT_BOOTSTRAP_SAMPLES))
+    objs = [AccuracyRecord.from_jsonable(r) for r in kept]
+    n_boot = int(params.get("bootstrap_samples", DEFAULT_BOOTSTRAP_SAMPLES))
     seed = int(params.get("bootstrap_seed", 538))
     out = dict(report)
     # The records as they came: an untouched record stays byte-identical to the
     # original (a round trip through AccuracyRecord would add fields).
     out["accuracy_records"] = kept
-    out["accuracy_comparison"] = bt.aggregate_accuracy_comparison(
-        objs, n_bootstrap=n_boot, seed=seed
-    )
+    out["accuracy_comparison"] = aggregate_accuracy_comparison(objs, n_bootstrap=n_boot, seed=seed)
     if "hypothetical_return" in report:
-        out["hypothetical_return"] = bt.aggregate_hypothetical_return(
+        out["hypothetical_return"] = aggregate_hypothetical_return(
             objs,
-            edge_threshold=float(params.get("edge_threshold", bt.DEFAULT_RETURN_EDGE_THRESHOLD)),
+            edge_threshold=float(params.get("edge_threshold", DEFAULT_RETURN_EDGE_THRESHOLD)),
             n_bootstrap=n_boot,
             seed=seed,
         )
     counters = dict(report.get("counters") or {})
     counters["n_accuracy_records"] = len(objs)
-    counters["market_shapes"] = bt.market_shape_tally(objs)
+    counters["market_shapes"] = market_shape_tally(objs)
     out["counters"] = counters
 
     problems = [

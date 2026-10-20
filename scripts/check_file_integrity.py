@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
-"""SIM-315 — file-integrity guard (OneDrive / Cowork truncation remediation).
+"""The file-integrity guard: it catches a ``.py`` file that a file bridge truncated
+or filled with NUL bytes.
 
-The Cowork/OneDrive file bridge has been observed to truncate large source
-files mid-statement and to inject NUL bytes when an edit is flushed through the
-mount. Either corruption silently breaks a ``.py`` file: a truncated file may
-still *look* plausible in a diff yet fail to import, and an embedded NUL byte
-makes the file un-parseable. This guard catches both classes of corruption
-*before* they are committed.
+The Cowork/OneDrive file bridge can truncate a large source file mid-statement.
+It can also inject NUL bytes when it flushes an edit through the mount (the
+truncation finding, SIM-315). Either corruption breaks a ``.py`` file with no
+warning. A truncated file can look plausible in a diff and still fail to
+import. A NUL byte makes the file un-parseable. The guard catches both before
+a commit.
 
-For every candidate ``.py`` file it:
+For every candidate ``.py`` file the guard:
 
-  1. reads the raw bytes and flags any file containing a NUL byte (``\\x00``);
-  2. ``ast.parse``-s the decoded source and flags any file that fails to parse
-     (this is what catches truncated / mid-statement files).
+  1. reads the raw bytes and flags any file that holds a NUL byte (``\\x00``);
+  2. runs ``ast.parse`` on the decoded source and flags any file that fails to
+     parse (this catches a truncated, mid-statement file).
 
-It prints a clear per-file report and exits non-zero if *any* offender is
-found, zero otherwise.
+It prints one line per offending file. It exits 1 when it finds an offender,
+else 0.
 
 Usage::
 
     python scripts/check_file_integrity.py                 # scan whole repo
     python scripts/check_file_integrity.py path/to/file.py # scan given paths
 
-When invoked with explicit path arguments (as pre-commit does with the list of
-changed files), only those paths are checked; directories among the arguments
-are walked. With no arguments the entire repository tree is walked, excluding
-VCS / cache / virtualenv / build directories.
+With path arguments (pre-commit passes the list of changed files), the guard
+checks only those paths and walks any directory among them. With no argument
+it walks the whole repository tree, minus the VCS, cache, virtualenv and build
+directories.
 
-Pure standard library — no third-party dependencies — so it is safe to run as a
-fast pre-commit hook and as a lightweight CI job.
+The guard uses only the standard library, so it runs as a fast pre-commit hook
+and as a light CI job.
 """
 
 from __future__ import annotations
@@ -39,8 +40,8 @@ import os
 import sys
 from collections.abc import Iterable, Iterator
 
-# Directories that never contain hand-authored source we want to guard.
-# Skipped during a full-tree walk (and when an explicit directory arg is walked).
+# Directories that hold no hand-written source to guard. Every walk skips them:
+# the full-tree walk and the walk of a directory argument.
 EXCLUDED_DIRS: frozenset[str] = frozenset(
     {
         ".git",
@@ -100,8 +101,8 @@ def iter_python_files(paths: Iterable[str]) -> Iterator[str]:
                 for filename in filenames:
                     if filename.endswith(".py"):
                         yield os.path.join(root, filename)
-        # Silently ignore non-existent paths / non-.py file args — pre-commit
-        # filters by ``types: [python]`` so this is just defensive.
+        # A missing path or a file that is not .py is skipped with no message.
+        # Pre-commit already filters by ``types: [python]``, so this is a guard only.
 
 
 def check_file(path: str) -> Offender | None:

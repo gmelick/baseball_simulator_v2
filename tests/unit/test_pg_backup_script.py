@@ -1,4 +1,4 @@
-"""SIM-525 — the scheduled Postgres backup and its restore (db/backup).
+"""The scheduled Postgres backup and its restore (db/backup).
 
 ``db/backup/pg_backup.sh`` dumps the database in directory format, counts every
 table before and after the dump, and writes a manifest last. The tests run the
@@ -242,9 +242,9 @@ def test_a_backup_writes_a_complete_set(fake):
 
 
 def test_the_set_is_readable_by_another_user(fake):
-    # pg_dump creates the dump folder 0700. The off-site copy (SIM-568) reads
-    # the set from the jobs container as appuser, another uid, so the script
-    # opens every folder and file of the set before the manifest lands.
+    # pg_dump creates the dump folder 0700. The off-site copy reads the set
+    # from the jobs container as appuser, another uid, so the script opens
+    # every folder and file of the set before the manifest lands.
     env, root, _logs = fake
     res = _run(BACKUP_SH, env=env)
     assert res.returncode == 0, res.stdout + res.stderr

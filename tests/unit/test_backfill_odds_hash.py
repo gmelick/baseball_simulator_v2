@@ -1,40 +1,31 @@
-"""tests/unit/test_backfill_odds_hash.py — SIM-157
-====================================================
-Unit tests for the odds_hash backfill script.  These tests confirm:
+"""tests/unit/test_backfill_odds_hash.py
+======================================
+Unit tests for the odds_hash backfill script
+(``scripts/probes/backfill_odds_hash.py``).  These tests confirm:
 
   * The hashing logic in `LiveIngestionPipeline._odds_hash` is what the
     backfill script uses (byte-for-byte identical fingerprints).
-  * The dedup ranking SQL keeps the earliest row per
-    `(game_pk, source, odds_hash)` group (smallest received_at; falls back
-    to smallest id on ties).
   * The Alembic migration `0012` chains correctly off `0011`.
 
-Live Postgres tests for `_backfill_hashes` / `_dedup_rows` live in
-`tests/integration/` since they require a running database.
+No test here runs `_backfill_hashes` / `_dedup_rows`, because they need a
+running database. The dedup ranking SQL keeps the earliest row per
+`(game_pk, source, odds_hash)` group (smallest received_at; falls back to
+smallest id on ties).
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
 from pathlib import Path
+
+from tests.script_loader import load_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_script_module():
-    """Import the backfill script as a module without requiring asyncpg
-    side-effects (we only exercise pure functions)."""
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    spec = importlib.util.spec_from_file_location(
-        "backfill_odds_hash",
-        REPO_ROOT / "scripts" / "probes" / "backfill_odds_hash.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The backfill probe as a module; the tests run only its pure functions."""
+    return load_script("backfill_odds_hash")
 
 
 class TestOddsHashConsistency(unittest.TestCase):

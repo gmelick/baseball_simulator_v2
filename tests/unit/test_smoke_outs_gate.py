@@ -1,4 +1,5 @@
-"""SIM-557 — the outs check in the smoke harness (the plan's tests 29 and 30).
+"""The outs check in the smoke harness (tests 29 and 30 of the pitcher-outs plan,
+``docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md``).
 
 Every out the game plays belongs to one pitcher's line.  The smoke harness
 ``scripts/sim_stats.py`` reads the outs on the pitchers' lines against the outs

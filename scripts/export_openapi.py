@@ -1,18 +1,20 @@
 """
 scripts/export_openapi.py
 =========================
-SIM-420 — export the FastAPI OpenAPI schema to ``frontend/openapi.json``.
+Export the FastAPI OpenAPI schema to ``frontend/openapi.json``.
 
-The frontend's typed API client is generated FROM this snapshot
-(``npm run gen:api`` → ``openapi-typescript``). Run this whenever the API
-contract changes, then regenerate + commit the TS types:
+``npm run gen:api`` (``openapi-typescript``) generates the frontend's typed API
+client FROM this snapshot. Run the export whenever the API contract changes.
+Run it in the app image with the checkout mounted, never on the host: the
+host's Pydantic 2.10 drops ``additionalProperties: true`` (the API snapshot,
+SIM-573). Then regenerate the TypeScript types, and commit both files:
 
-    python scripts/export_openapi.py
+    docker compose run --rm -v <checkout>:/app app python scripts/export_openapi.py
     cd frontend && npm run gen:api
 
-Imports the app and serializes ``app.openapi()`` — no server / DB needed
-(``create_app`` only registers routes). Writes pretty-printed, stable-key JSON
-so the committed snapshot diffs cleanly.
+The script imports the app and serializes ``app.openapi()``. It needs no server
+and no database: ``create_app`` only registers the routes. It writes indented
+JSON with sorted keys, so the committed snapshot diffs cleanly.
 """
 
 from __future__ import annotations
@@ -21,8 +23,8 @@ import json
 import sys
 from pathlib import Path
 
-# Make the repo root importable regardless of how the script is invoked
-# (``python scripts/export_openapi.py`` puts scripts/ — not the root — on the path).
+# Put the repo root on the path: ``python scripts/export_openapi.py`` puts
+# scripts/ there, not the root.
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))

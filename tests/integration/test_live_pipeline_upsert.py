@@ -1,18 +1,18 @@
 """
-Integration test: Live pipeline lineup_state upsert — SIM-082 / SIM-145
-========================================================================
+Integration test: the live pipeline's lineup_state upsert
+=========================================================
 Drives the real ``LiveIngestionPipeline._upsert_lineup_state()``
 (pipeline/live/live_ingestion_pipeline.py) against the migrated schema:
 
   * ON CONFLICT (game_pk) WHERE is_live_game=TRUE correctly deduplicates rows
-    (requires the unique partial index from migration 0002 / SIM-082)
+    (requires the unique partial index from migration 0002)
   * A second upsert for the same game updates the existing row rather than
     inserting a duplicate — verified by the ``session_id`` staying put
   * The upsert is idempotent: N identical calls produce exactly 1 row
 
-This test intentionally exercises the database path that was silently broken
-before SIM-082 — the unique partial index didn't exist, so PostgreSQL rejected
-the ON CONFLICT specification outright and live game state was never persisted.
+This test exercises the database path on purpose. Without the unique partial
+index, PostgreSQL rejects the ON CONFLICT specification outright and no live
+game state is persisted.
 
 Schema note
 -----------
@@ -27,10 +27,6 @@ Isolation note
 The pipeline writes through its own asyncpg pool and each statement commits, so
 these tests cannot ride the rolled-back ``pg_connection`` transaction; the
 fixture deletes the rows it created on teardown instead.
-
-Acceptance criteria (SIM-082):
-  "ON CONFLICT clause in _upsert_lineup_state() references the new partial
-   index; integration test passes."
 
 Run:
     pytest tests/integration/test_live_pipeline_upsert.py -v -m integration
@@ -164,9 +160,9 @@ class TestLivePipelineUpsert:
     ) -> None:
         """A second upsert for the same game updates the row — no duplicate created.
 
-        This is the core regression test for SIM-082.  Before the unique partial
-        index existed, PostgreSQL rejected the ON CONFLICT specification and the
-        row was never written at all.
+        This is the core regression test.  Without the unique partial index,
+        PostgreSQL rejects the ON CONFLICT specification and the row is never
+        written at all.
 
         The ``session_id`` check is what proves this was an UPDATE: the column
         defaults to a fresh ``uuid_generate_v4()`` on every INSERT, so a stable
@@ -240,8 +236,8 @@ class TestLivePipelineUpsert:
     def test_unique_partial_index_name_in_catalog(self, pg_connection: sa.Connection) -> None:
         """The unique partial index that enables ON CONFLICT must exist in pg_indexes.
 
-        This is a schema-level guard: if the index was accidentally dropped, the
-        upsert tests above would fail with a confusing error.  This test gives a
+        This is a schema-level guard: if the index is dropped by accident, the
+        upsert tests above fail with a confusing error.  This test gives a
         clear failure message pointing to the migration.
         """
         row = pg_connection.execute(

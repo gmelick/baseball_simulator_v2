@@ -1,7 +1,7 @@
-"""SIM-443b — the nightly shell scripts carry no default DSN.
+"""The nightly shell scripts carry no default DSN.
 
 Each script must stop at once, naming ``BASEBALL_DB_DSN``, when the variable is
-not set. A default password used to sit in each one.
+not set.
 """
 
 from __future__ import annotations

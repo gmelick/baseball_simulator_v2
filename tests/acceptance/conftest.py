@@ -1,18 +1,15 @@
-"""SIM-450 — the fixtures that run the simulator in the PRODUCTION configuration.
+"""The fixtures that run the simulator in the PRODUCTION configuration (the
+acceptance lane, SIM-450).
 
 WHY THIS FILE EXISTS
 ====================
-``tests/conftest.py`` writes six environment flags OFF at IMPORT time (lines 33,
-39, 45, 51, 52 and 53). Production sets the exact inverse. Every test in this
-repo therefore drives a different simulator from the one that serves users, and
-the four methods that shape every production pitch — ``_full_pool_outcome``,
-``_full_pool_fielding``, ``_full_pool_out_advancement`` and the steal decision
-(``_steal_opportunity_draw`` since SIM-474; previously the unreachable
-``_full_pool_steal_decision``) — had zero test references anywhere. That is how
-four confirmed production defects survived eight weeks.
-
-This conftest is the first real opt-in. It turns the flags back ON for this
-package only.
+``tests/conftest.py`` pins several environment flags OFF at IMPORT time, and
+production sets the inverse. Every other test therefore drives a different
+simulator from the one that serves users. This conftest turns the production
+flags back ON for this package only, and wraps the production methods the lane
+measures (``_full_pool_outcome``, ``_full_pool_fielding``,
+``_resolve_in_play_transition``, ``_steal_opportunity_draw``,
+``_accumulate_pa`` and ``_commit_run_delta``) with counting probes.
 
 THE OVERRIDE SEAM, AND WHY IT IS A PACKAGE-SCOPED FIXTURE
 =========================================================
@@ -31,33 +28,23 @@ simulations is itself package-scoped, and pytest builds wider-scoped fixtures
 first — a function-scoped env fixture would set the flags AFTER the simulations
 had already run with them off.
 
-The simulator reads every flag at CALL time, never at import time
-(``sim_loop.py:968-978`` in ``StateMachine.__init__``, ``sim_loop.py:2115`` for
-the home-field bias, ``production_factory.py:331`` and ``:473`` in the factory).
-Setting the environment before the machine is built is therefore effective.
+The simulator reads every flag at CALL time, never at import time (in
+``StateMachine.__init__``, the sampler and the production factory). Setting the
+environment before the machine is built is therefore effective.
 
 The fixture asserts the values it just wrote. If a future change to
 ``tests/conftest.py`` re-pins a flag in a way this seam cannot beat, the lane
 fails loudly instead of quietly measuring the wrong simulator.
 
-WHAT CHANGED ON 2026-08-10 (SIM-450 remediation round 3)
-========================================================
-Three things, all forced by a review of the band arithmetic:
+THE GAME SET
+============
+``ACCEPTANCE_GAME_PKS`` IS ``bands.BALANCED_GAME_ORDER``: the balanced 45-game set
+of three full-day slates (owner ruling 2026-09-09), chosen so every graded
+channel's actor-matched expectation sits within 0.6% of the pool's totals. The
+fixture slices ``[:n_games]``, and the order keeps every prefix of four or more
+games park-balanced.
 
-* **The game order.** ``ACCEPTANCE_GAME_PKS`` was ASCENDING by park run factor
-  and the fixture slices ``[:n_games]``, so an 8-game run took the eight most
-  pitcher-friendly parks — mean 0.96844 against 0.99952 for the full twelve. It
-  now IS ``bands.BALANCED_GAME_ORDER``, so every prefix of four or more games
-  measures the same run environment as the whole set.
-* **The run size.** The round-3 floors are 3x to 7x tighter, so the certifying
-  run is 5,100 game-sims rather than 1,200. ``DEFAULT_ITERS`` moved 100 -> 425
-  and ``MIN_MEANINGFUL_SIMS`` is now read from ``bands`` instead of hard-coded.
-* **A second reach-on-error channel.** ``BACKLOG.md:20`` (SIM-496) records that
-  the drawn-ROE probe below measures the pool BEFORE the loop discards the play,
-  so no floor on it can ever red on that defect. ``ROE_reached`` counts batters
-  who actually reached, at the single commit point.
-
-Owner: QA / DevOps (SIM-450).
+Owner: QA / DevOps.
 """
 
 from __future__ import annotations
@@ -79,41 +66,33 @@ from tests.acceptance import bands
 
 #: The whole production configuration, stated so a reader of the log sees it:
 #: the inverse of the flags ``tests/conftest.py`` pins off, plus the flags it
-#: leaves unpinned on purpose (SIM-554's ``SIM_STEAL_PITCH_CLASS`` defaults ON).
+#: leaves unpinned on purpose (``SIM_STEAL_PITCH_CLASS`` defaults ON). The
+#: compose file carries the same values; the parity tests hold them together.
+#: Each ``SIM<ticket>_LANE_*`` variable sets one flag for a lane run that measures
+#: another arm.
 PRODUCTION_FLAGS: dict[str, str] = {
-    "SIM_MANAGER": "1",  # SIM-434 manager pull / reliever decisions
-    "SIM_BB_PLATOON": "1",  # SIM-413 batted-ball platoon
-    # SIM-476 (2026-08-30): the SIM-411/412/425b post-draw flips are DELETED;
-    # production now runs the FITTED SIM-491 draw-weight kernels instead.
-    "SIM_PARK_KERNEL_SIGMA": "0.02",  # SIM-476 fitted park kernel
-    # SIM-476 owner ruling 2026-08-30: w=0 — the batted-ball draw
-    # hard-conditions on the batting side (the SIM-412 replacement).
+    "SIM_MANAGER": "1",  # the manager decisions
+    "SIM_BB_PLATOON": "1",  # the batted-ball platoon
+    # The fitted draw-weight kernels (SIM-476): the park kernel's bandwidth, and
+    # the home-field weight 0.0, so the batted-ball draw hard-conditions on the
+    # batting side (owner ruling 2026-08-30).
+    "SIM_PARK_KERNEL_SIGMA": "0.02",
     "SIM_HOME_OFF_WEIGHT": "0.0",
-    # SIM-517 (2026-09-04): the fitted anisotropic receiving kernel (the
-    # SIM-428 framing flip is DELETED) + the drawn row's got-away resolution.
-    # SIM-523 part E (2026-09-09): the catcher receiving RATIO on taken pitches
-    # replaces the SIM-517 kernel (deleted). OFF until SIM-526 fits and enables
-    # it; set SIM523_LANE_RECEIVING=1 on a lane run to measure the ON arm.
+    # The catcher receiving ratio on taken pitches: built and OFF until its
+    # enable ticket fits it (SIM-526). The drawn row's got-away fact is ON.
     "SIM_CATCHER_RECEIVING": os.environ.get("SIM523_LANE_RECEIVING", "0"),
     "SIM_GOT_AWAY": "1",
-    # SIM-467 (2026-09-07): the pitch-draw CELL INDEX — each plate appearance
-    # draws from its (runners, outs, score band, side) cell with decision #19's
-    # widening ladder below MIN_CELL rows. Production is OFF: the first 12×500
-    # lane with it ON read PITCHES_PA +5.5% and BB_PA −4.6% RED (plan §5.4).
-    # Set SIM467_LANE_CELL_INDEX=1 on a lane run to certify the ON arm; the
-    # certification commit flips this default and docker-compose together.
-    # OWNER GO 2026-09-08: production runs the cell index ON (lane 2 certified it).
+    # The pitch-draw cell index (SIM-467): each plate appearance draws from its
+    # (runners, outs, score band, side) cell, widening below MIN_CELL rows. ON in
+    # production (owner go 2026-09-08).
     "SIM_PITCH_CELL_INDEX": os.environ.get("SIM467_LANE_CELL_INDEX", "1"),
     "SIM_PITCH_MIN_CELL": os.environ.get("SIM467_LANE_MIN_CELL", "20"),
-    # SIM-523 (2026-09-09, the kernel retirement): the actor SCORE MATRICES are
-    # the only actor factors, at the fitted powers below (a power of 0 turns
-    # that actor's factor off). The 45 × 130 lane certified them 2026-09-09.
-    # OWNER RULING 2026-09-16: every similarity power is 1 until the sweep of the
-    # tunable parameters fits them together (the fitted values they replace:
-    # fielder 1.2, steal-runner 12, advancement-runner 20, catcher-throwing 2,
-    # pitcher-steal 12; the split's 16 / 16 / 8; the fielding draw's batter 4;
-    # manager-usage 4; reliever stuff ON at 1, was OFF at 0). The compose file
-    # carries the same values (the parity tests hold them together).
+    # The actor score matrices are the only actor factors (the play-picker
+    # redesign, SIM-523; a power of 0 turns an actor's factor off). Every power is
+    # 1 until the sweep of the tunable parameters fits them together (owner ruling
+    # 2026-09-16); the fitted values are the sweep's starting points (fielder 1.2,
+    # steal-runner 12, advancement-runner 20, catcher-throwing 2, pitcher-steal 12;
+    # the split's 16 / 16 / 8; the fielding draw's batter 4; manager-usage 4).
     "SIM_ACTOR_POWER_BATTER": os.environ.get("SIM523_LANE_ACTOR_POWER_BATTER", "1"),
     "SIM_ACTOR_POWER_FIELDER": os.environ.get("SIM523_LANE_ACTOR_POWER_FIELDER", "1"),
     "SIM_ACTOR_POWER_RUNNER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_STEAL", "1"),
@@ -122,13 +101,10 @@ PRODUCTION_FLAGS: dict[str, str] = {
         "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "1"
     ),
     "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "1"),
-    # SIM-523 part B (2026-09-08): the pitch / pitch-result split, fitted
-    # pitcher 16 / 16, batter 8. Held OFF while the balanced lane read
-    # strikeouts per plate appearance −2.4% (SIM-527); FLIPPED ON 2026-09-14 by
-    # owner decision on the accuracy comparison (SIM-548 Part A4: the starter
-    # strikeout market −0.0155 Brier). The same values as the compose file (a
-    # test holds them together). Set SIM523_LANE_RESULT_SPLIT=0 and the powers
-    # to 1.0 on a lane run to measure the OFF arm.
+    # The pitch / pitch-result split: ON in production (owner decision
+    # 2026-09-14, on the accuracy comparison's starter strikeout market, -0.0155
+    # Brier), with the strikeout shortfall it reads on the balanced lane open
+    # (SIM-527). Set SIM523_LANE_RESULT_SPLIT=0 on a lane run to measure the OFF arm.
     "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "1"),
     "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "1"),
     "SIM_RESULT_PITCH_SIGMA": os.environ.get("SIM523_LANE_RESULT_PITCH_SIGMA", "1.0"),
@@ -138,38 +114,33 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_RESULT_DENSITY_POWER": os.environ.get("SIM523_LANE_RESULT_DENSITY_POWER", "1.0"),
     "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "1.0"),
     "SIM_BB_BORN_DENSITY_POWER": os.environ.get("SIM523_LANE_BORN_DENSITY_POWER", "1.0"),
-    # SIM-523 part C (2026-09-08): the fielding draw's class filter, the batter
-    # power and the park wall-zone rule — fitted and certified 2026-09-09.
+    # The fielding draw: the born ball's class filter, the batter power, the park
+    # wall-zone rule and the fence stage.
     "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "1"),
     "SIM_BB_BATTER_POWER": os.environ.get("SIM523_LANE_BB_BATTER_POWER", "1"),
     "SIM_PARK_WALL_ZONE_ONLY": os.environ.get("SIM523_LANE_WALL_ZONE_ONLY", "1"),
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
     "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "1"),
     "SIM_FENCE_MARGIN": os.environ.get("SIM523_LANE_FENCE_MARGIN", "0"),
-    # SIM-478 (2026-09-22, the plan's §11 / §12 / §12.7 — the owner's
-    # "implement this updated design"). Three flags. The carry offset: the
-    # born ball's carry in the live park's air (the document's per-park
-    # offset, a fact of the air). The born-ball kernel's exponent per
-    # feature, under the class ruler. The wall-margin band (feet; 0 = off)
-    # with its row floor. The compose file carries the same values. Set the
-    # SIM523_LANE_* twin to measure the other arm.
+    # The fence certification's amendments (SIM-478, plan §11 / §12 / §12.7):
+    # the born ball's carry in the live park's air (the document's per-park
+    # offset), the born-ball kernel's exponent per feature under the class
+    # ruler, and the wall-margin band (feet; 0 = off) with its row floor.
     "SIM_CARRY_OFFSET": os.environ.get("SIM523_LANE_CARRY_OFFSET", "1"),
     "SIM_BB_BORN_PER_FEATURE": os.environ.get("SIM523_LANE_BORN_PER_FEATURE", "1"),
     "SIM_BB_MARGIN_BAND": os.environ.get("SIM523_LANE_MARGIN_BAND", "15"),
     "SIM_BB_MARGIN_MIN_ROWS": os.environ.get("SIM523_LANE_MARGIN_MIN_ROWS", "20"),
-    # SIM-523 part D / SIM-427: the pitching change as a draw — production ON
-    # since the flip of 2026-09-13 (the pull formula is deleted, so OFF means no
-    # pitching change; SIM427_LANE_MANAGER_DRAW=0 measures that arm).
+    # The pitching change as a draw (SIM-427): ON in production. OFF means no
+    # pitching change at all; SIM427_LANE_MANAGER_DRAW=0 measures that arm.
     "SIM_MANAGER_DRAW": os.environ.get(
         "SIM427_LANE_MANAGER_DRAW", os.environ.get("SIM523_LANE_MANAGER_DRAW", "1")
     ),
-    # SIM-427 (2026-09-13): the live manager's usage-similarity weight on the
-    # change draw and the reliever draw's weights at their FITTED values
-    # (docs/audit/2026-09-13-sim427-build-plan.md, part 4f: power 4, role 0.1,
-    # rest 0.5, pitched-in-2-days 0.25, pitches-in-3-days 10; hand and stuff
-    # off); a lane run overrides one with its SIM427_LANE_* twin.
+    # The live manager's usage-similarity weight on the change draw (power 1,
+    # fitted at 4) and the reliever draw's weights at their fitted values
+    # (docs/audit/2026-09-13-sim427-build-plan.md, part 4f: role 0.1, rest 0.5,
+    # pitched-in-2-days 0.25, pitches-in-3-days 10; hand off).
     "SIM_ACTOR_POWER_MANAGER_USAGE": os.environ.get("SIM427_LANE_MANAGER_POWER", "1"),
-    # The pen source: 'box' (production since the flip) or 'synthetic'.
+    # The pen source: 'box' (production) or 'synthetic'.
     "SIM_BULLPEN_SOURCE": os.environ.get("SIM427_LANE_BULLPEN_SOURCE", "box"),
     "SIM_RELIEF_ROLE_SIGMA": os.environ.get("SIM427_LANE_RELIEF_ROLE_SIGMA", "0.1"),
     "SIM_RELIEF_PITCHER_POWER": os.environ.get("SIM427_LANE_RELIEF_PITCHER_POWER", "1"),
@@ -179,33 +150,29 @@ PRODUCTION_FLAGS: dict[str, str] = {
     ),
     "SIM_RELIEF_PITCHES3D_SIGMA": os.environ.get("SIM427_LANE_RELIEF_PITCHES3D_SIGMA", "10"),
     "SIM_RELIEF_HAND_OFF_WEIGHT": os.environ.get("SIM427_LANE_RELIEF_HAND_OFF_WEIGHT", "1.0"),
-    # SIM-518 (2026-09-13; LANDED 2026-09-14 by owner decision): the
-    # pitcher-fatigue weight on the pitch draw — the times-through-the-order
-    # term at bandwidth 0.5, the pitch-count term OFF, the same values as the
-    # compose file (a test holds them together). Set SIM518_LANE_FATIGUE_PC_SIGMA
-    # / SIM518_LANE_FATIGUE_TTO_SIGMA on a lane run to measure another arm
-    # (docs/audit/2026-09-12-sim518-fit-plan.md). The other two SIM-518 weights
-    # stay at their off values by owner ruling (2026-09-12): the batting side
-    # is a hard filter of the cell index; the pitch reaches the fielding draw
-    # through the born batted ball.
+    # The pitcher-fatigue weight on the pitch draw (SIM-518, landed by owner
+    # decision 2026-09-14): the times-through-the-order term at bandwidth 0.5, the
+    # pitch-count term OFF (docs/audit/2026-09-12-sim518-fit-plan.md). The other
+    # two weights of that work stay off (owner ruling 2026-09-12): the batting
+    # side is a hard filter of the cell index, and the pitch reaches the fielding
+    # draw through the born batted ball.
     "SIM_FATIGUE_PC_SIGMA": os.environ.get("SIM518_LANE_FATIGUE_PC_SIGMA", "0"),
     "SIM_FATIGUE_TTO_SIGMA": os.environ.get("SIM518_LANE_FATIGUE_TTO_SIGMA", "0.5"),
-    # SIM-548: the pitch draw's situation bandwidth (2.0 = the code default).
+    # The pitch draw's situation bandwidth (2.0 = the code default).
     "SIM_SIT_SIGMA": os.environ.get("SIM548_LANE_SIT_SIGMA", "2.0"),
     "SIM_PITCH_HOME_OFF_WEIGHT": "1.0",
     "SIM_BB_PITCH_SIGMA": "0",
-    # SIM-554 (2026-10-01): the running game on the pitch — the pickoff draw
-    # before the pitch, the steal draw after it among real pitches of the same
-    # count and class. ON in production (the compose file carries the same
-    # value; a test holds them together). It needs a bundle whose steal pool
-    # carries the pitch class; on an older bundle the loop keeps the single
-    # pre-pitch draw. Set SIM554_LANE_STEAL_PITCH_CLASS=0 to measure that arm.
+    # The running game on the pitch (SIM-554): the pickoff draw before the pitch,
+    # the steal draw after it among real pitches of the same count and class. ON
+    # in production. It needs a bundle whose steal pool carries the pitch class;
+    # on an older bundle the loop keeps the single pre-pitch draw. Set
+    # SIM554_LANE_STEAL_PITCH_CLASS=0 to measure that arm.
     "SIM_STEAL_PITCH_CLASS": os.environ.get("SIM554_LANE_STEAL_PITCH_CLASS", "1"),
 }
 
 
 def cell_index_line(stats: dict[str, Any]) -> str:
-    """SIM-518: one report line for the pitch-draw cell index — its shape
+    """One report line for the pitch-draw cell index: its shape
     (cells per side: 3 = away / home / unknown, 1 = no side dimension), its
     minimum cell size, and the share of draws at each widening level (0 = the
     exact cell; 1 = the score band widened; 2 = the batting side too; 3 = the
@@ -229,57 +196,36 @@ def cell_index_line(stats: dict[str, Any]) -> str:
 
 
 #: Env names the lane must ERASE (not set) so a default code path proves
-#: itself. Empty since SIM-476 deleted the SIM-412 flip this once guarded;
-#: the machinery stays for the next default-path flag.
+#: itself. Empty today; the machinery stays for the next default-path flag.
 DELETED_FLAGS: tuple[str, ...] = ()
 
-#: Twelve 2024 regular-season Final games, one per venue, spread evenly across
-#: the 2024 park-factor distribution. Verified against the live database on
-#: 2026-08-10: every game is season=2024, game_type='R', status='Final' with 20
-#: ingested lineup slots, and every venue has a ``derived.park_factors``
-#: ``factor_type='R'`` row for 2024. The set's mean park run factor is 0.9995
-#: against a league mean of 1.0014, so the set does not bias the run environment.
+#: The balanced certifying set (owner ruling 2026-09-09): 45 games from three
+#: full-day slates, every team three times, chosen so every graded channel's
+#: actor-matched expectation sits within 0.6% of the pool's totals
+#: (``scripts/balanced_game_set.py``). Iterations cut noise; they do nothing about
+#: a biased matchup set, which is why the set is chosen by expectation.
 #:
 #: THE ORDER IS LOAD-BEARING. The fixture slices ``[:n_games]``, so a shortened
-#: run measures a PREFIX. ``bands.BALANCED_GAME_ORDER`` pairs extremes — widest
-#: pair first, each pair low-then-high — which holds every prefix of four or more
-#: games inside ``bands.MAX_PREFIX_PARK_BIAS`` of the full-set mean. Do not
-#: re-sort this tuple; ``test_conftest_slices_the_balanced_game_order_sim450``
-#: fails if you do.
-#:
-#: ⚠ SIM-497 — THIS SAMPLE IS BIASED, NOT MERELY SMALL. READ BEFORE TRUSTING A RESULT.
-#: These are TWELVE MATCHUPS: twelve specific starting pitchers, twelve specific
-#: lineups, twelve specific parks. Simulating them ten thousand times converges on
-#: the true answer FOR THOSE TWELVE. That number is not the league mean unless the
-#: twelve happen to be league-average, and nothing makes them so. **Iterations cut
-#: noise. They do nothing about this.** A long run therefore buys PRECISION ON A
-#: BIASED ESTIMATE — a more stable wrong number.
-#:
-#: The park-balance machinery above is the confession, not the cure: you only
-#: hand-balance a sample you already know is too small to be representative.
-#:
-#: SIM-497 replaces this fixture with a DATE-RANGE backtest over every game in a
-#: period (~2,430 games for 2024, ~1.5 h per pass, all 30 parks, no selection to
-#: defend), scored against BOTH each game's actual outcome AND the league averages.
-#: Until SIM-497a lands, treat any verdict from this lane as indicative only.
+#: run measures a PREFIX. ``bands.BALANCED_GAME_ORDER`` keeps every prefix of four
+#: or more games inside ``bands.MAX_PREFIX_PARK_BIAS`` of the full-set mean. Do not
+#: re-sort this tuple; ``test_conftest_slices_the_balanced_game_order`` fails if
+#: you do.
 ACCEPTANCE_GAME_PKS: tuple[int, ...] = bands.BALANCED_GAME_ORDER
 
-#: The certifying size. ``bands.binding_requirement`` says the twelve box
-#: channels need 5,100 game-sims under the round-3 floors, so 12 games x 425
-#: iterations = 5,100 game-sims = 10,200 team-games. Measured 2.25 s per sim on
-#: 2026-08-10 (901.6 s for 400 sims), so this run takes about 3.2 hours serial.
+#: The certifying size: 45 games x 130 iterations = 5,850 game-sims, above the
+#: box channels' binding requirement (``bands.binding_requirement``, 5,648). At
+#: 2.25 s per sim (measured 2026-08-10) it runs about 3.7 hours serial.
 #:
 #: ``home_win_pct`` is NOT covered by it. That channel takes one observation per
 #: decisive game rather than two per game-sim, and its floor is sized on the
-#: ``CLAUDE.md §11`` baseline, so it needs 26,015 decisive games — about 16.3
-#: hours. Read ``bands.py`` "THE COST, STATED PLAINLY" before you shorten a run.
+#: ``CLAUDE.md §11`` baseline, so it needs 13,365 decisive games. Read ``bands.py``
+#: "THE COST, STATED PLAINLY" before you shorten a run.
 DEFAULT_GAMES = 45
 DEFAULT_ITERS = 130
 
 #: The lowest size that still says anything, read from the band arithmetic rather
-#: than hard-coded. It was a hand-written 400 until 2026-08-10, which the round-3
-#: floors overtook by more than 12x. Below this every channel returns
-#: UNDERPOWERED and the lane certifies nothing.
+#: than hard-coded. Below this every channel returns UNDERPOWERED and the lane
+#: certifies nothing.
 MIN_MEANINGFUL_SIMS = bands.binding_requirement(bands.BOX_CHANNELS)[1]
 
 _FACTORY = "simulation.production_factory:production_machine_factory"
@@ -391,7 +337,7 @@ def _duckdb_path() -> str:
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+    from pipeline.db_dsn import require_dsn  # no default password (SIM-443b)
 
     return require_dsn()
 
@@ -428,7 +374,7 @@ def preconditions(production_flags: dict[str, str]) -> None:
 
         asyncio.run(_probe())
     except Exception as exc:  # noqa: BLE001 -- report ANY connect failure verbatim
-        # SIM-443b: an unset DSN raises inside the probe; name the host only when set.
+        # An unset DSN raises inside the probe; name the host only when set (SIM-443b).
         where = os.environ.get("BASEBALL_DB_DSN", "").rsplit("@", 1)[-1] or "BASEBALL_DB_DSN"
         missing.append(f"Postgres at {where} ({exc!r})")
 
@@ -461,9 +407,10 @@ class AcceptanceRun:
     n_iters: int
     elapsed_s: float
     observations: dict[str, list[float]] = field(default_factory=dict)
-    #: Call counts for the four production methods that had zero test references.
+    #: Call counts for the production methods the lane measures.
     calls: dict[str, int] = field(default_factory=dict)
-    #: Per-game park run factor and defense-map sizes — the SIM-449 wiring guard.
+    #: Per-game park run factor and defense-map sizes: the sim-kwargs wiring guard
+    #: (SIM-449).
     park_factors: dict[int, float] = field(default_factory=dict)
     defense_sizes: dict[int, tuple[int, int]] = field(default_factory=dict)
     #: Stolen bases and caught-stealings the boxscore reported but no lineup
@@ -471,29 +418,29 @@ class AcceptanceRun:
     unattributed_sb: int = 0
     unattributed_cs: int = 0
     ties: int = 0
-    #: SIM-516: whole-lane numerators/denominators for the POOL-REFERENCED
-    #: frequency bands (bands.POOL_REFERENCES). Counted by the probes:
+    #: Whole-lane numerators and denominators for the POOL-REFERENCED frequency
+    #: bands (bands.POOL_REFERENCES). Counted by the probes:
     #: PA / BB_pitched / IBB / HBP / K_pa (per-PA terminals), BIP / DP_ROW /
     #: DP_OPP_DEN (per fielding resolution). Pitches come from
     #: ``calls["_full_pool_outcome"]``.
     pool_counts: dict[str, int] = field(default_factory=dict)
-    #: SIM-518 (2026-09-13): the pitch-draw cell index's shape and its draws
-    #: per widening level (``FullPoolSampler.cell_index_stats``), read once at
-    #: the end of the run from the process-cached sampler. The share of draws
-    #: that widened past the batting side (level 2+) is the evidence the
-    #: side-weight record and the thin-cell census (SIM-451) cite.
+    #: The pitch-draw cell index's shape and its draws per widening level
+    #: (``FullPoolSampler.cell_index_stats``), read once at the end of the run from
+    #: the process-cached sampler. The share of draws that widened past the
+    #: batting side (level 2+) is the evidence the side-weight record and the
+    #: thin-cell census (SIM-451) cite.
     cell_index: dict[str, Any] = field(default_factory=dict)
-    #: SIM-478 (2026-09-21): one record per game — ``game_pk``, ``venue_id``,
+    #: One record per game (the fence certification, SIM-478): ``game_pk``, ``venue_id``,
     #: ``season``, ``iters``, the game's home runs / hits / runs summed over
     #: both teams and every iteration, and its balls in play / plate
     #: appearances (the ``pool_counts`` deltas). The certification script's
     #: per-park read (``scripts/fence_check.py --lane``) joins it.
     per_game: list[dict[str, Any]] = field(default_factory=list)
-    #: SIM-478: the fence stage's own counters (``FullPoolSampler.fence_counts``:
+    #: The fence stage's own counters (``FullPoolSampler.fence_counts``:
     #: over, short, band, passed, no matching rows, not an air ball), read once
     #: at the end from the process-cached sampler; zeroed at the lane's start.
     fence_counts: list[int] = field(default_factory=list)
-    #: SIM-478 (the plan's §12.7): the wall-margin band's counters
+    #: The wall-margin band's counters (plan §12.7)
     #: (``FullPoolSampler.bb_margin_counts``: applied, fallback (too few
     #: rows), skipped), read with the fence counters; empty on a sampler
     #: without them.
@@ -505,7 +452,7 @@ class AcceptanceRun:
 
 
 def _lane_json(run: AcceptanceRun, flags: dict[str, str]) -> dict[str, Any]:
-    """SIM-478: the lane's machine-readable record (``SIM_ACCEPTANCE_JSON_OUT``).
+    """The lane's machine-readable record (``SIM_ACCEPTANCE_JSON_OUT``).
 
     The per-game series, the pool counters, the fence counters, the cell index
     and the park factors, with the flag set that produced them. The band
@@ -551,12 +498,11 @@ def _install_probes(
     calls: dict[str, int],
     pool_counts: dict[str, int] | None = None,
 ) -> None:
-    """Wrap the four production methods on a built machine (SIM-450).
+    """Wrap the production methods the lane measures on a built machine.
 
-    This is the instrumentation that finally gives those four methods a test
-    reference. It is also the ONLY way to count double plays and reaches on
-    error: ``BoxScore`` / ``PlayerStatLine`` (``sim_loop.py:3437-3510``) carry no
-    DP or ROE field.
+    The wrappers count the calls, and they are the ONLY way to count double plays
+    and reaches on error: ``BoxScore`` / ``PlayerStatLine`` carry no DP or ROE
+    field.
 
     A fifth wrapper on ``_accumulate_pa`` counts the batting side's H / HR / 2B /
     3B / BB / K. The boxscore's ``k`` and ``bb`` are PITCHING stats, so summing
@@ -564,33 +510,23 @@ def _install_probes(
     wrapper reads ``state.offense`` before the plate appearance is committed, so
     every channel is attributed to the team that batted.
 
-    A sixth wrapper on ``_commit_run_delta`` counts ``ROE_reached`` (SIM-496).
-    ``BACKLOG.md:20`` requires it: the ``ROE`` counter above reads the DRAWN
-    event at the ``_full_pool_fielding`` boundary, which is before the loop
-    decides what the play was, so a green ROE band proves only that the pool
-    supplies errors at about the right rate. ``_commit_run_delta`` is the
-    single place the loop turns a play into a base-out delta, and every
-    reach-on-error site passes through it. A batter reached on an error when
-    that commit carries the ``field_error`` event AND ``batter_reached``.
+    A sixth wrapper on ``_commit_run_delta`` counts ``ROE_reached``. The ``ROE``
+    counter above reads the DRAWN event at the ``_full_pool_fielding`` boundary,
+    before the loop decides what the play was, so a green ROE band proves only
+    that the pool supplies errors at about the right rate. ``_commit_run_delta``
+    is the single place the loop turns a play into a base-out delta, and every
+    reach-on-error site passes through it. A batter reached on an error when that
+    commit carries the ``field_error`` event AND ``batter_reached`` (the loop's
+    transition fact; a correct commit carries ``result_hits = 0``, since a reach
+    is not a hit).
 
-    ⚠ PROBE HISTORY (2026-08-19): the condition used to require
-    ``result_hits >= 1`` — written for the ALIAS world, where field_error
-    masqueraded as a single. The SIM-511 landing made ``field_error`` its own
-    canonical outcome: a correct commit carries ``result_hits = 0`` (not a
-    hit) with ``batter_reached=True``, so the old condition read 0.0000 on a
-    lane where batters genuinely reached. The probe now reads the
-    ``batter_reached`` transition fact — the loop's own body ledger.
-
-    A seventh wrapper counts calls to ``_resolve_in_play_transition`` — the
-    SIM-511 production resolution path (SIM-486 deleted the legacy
-    ``_full_pool_out_advancement`` it used to bypass).
-
-    The wrapper pattern matches the old ``scripts/archive/diag_dp.py:64-78`` (git history).
+    A seventh wrapper counts calls to ``_resolve_in_play_transition``, the
+    production resolution of a ball in play (the transition draw, SIM-511).
     """
     from simulation.constants import resolve_event_to_canonical
     from simulation.sim_loop import _DOUBLE_PLAY_EVENTS
 
-    # SIM-516: the pool-band counters (lane-global, never reset per game).
+    # The pool-band counters (lane-global, never reset per game).
     pc = pool_counts if pool_counts is not None else {}
     for key in (
         "PA",
@@ -601,29 +537,28 @@ def _install_probes(
         "BIP",
         "DP_ROW",
         "DP_OPP_DEN",
-        # SIM-476: steal opportunities / attempts / safe, per target base.
+        # Steal opportunities / attempts / safe, per target base.
         "STEAL_OPP_2",
         "STEAL_ATT_2",
         "STEAL_SAFE_2",
         "STEAL_OPP_3",
         "STEAL_ATT_3",
         "STEAL_SAFE_3",
-        # SIM-517: the receiving channels — taken pitches, called strikes,
-        # and drawn got-away rows (the pitch seam counts them below).
+        # The receiving channels: taken pitches, called strikes and drawn
+        # got-away rows (the pitch seam counts them below).
         "TAKEN",
         "CALLED",
         "GOT_AWAY",
     ):
         pc.setdefault(key, 0)
 
-    # SIM-476: count steals at the SAMPLER seam, where the drawn row's own
-    # `attempted`/`success` flags live — the pool's exact semantics. The
-    # sampler is CACHED per process while machines are per-game, so this
-    # wrapper installs ONCE (the sentinel) and closes over the lane-global
-    # counters; wrapping per game would stack k-fold (the recorded SIM-514
-    # instrument trap).
+    # Count steals at the SAMPLER seam, where the drawn row's own
+    # `attempted`/`success` flags live: the pool's exact semantics. The sampler
+    # is CACHED per process while machines are per-game, so this wrapper installs
+    # ONCE (the sentinel) and closes over the lane-global counters; wrapping per
+    # game would stack k-fold.
     fp = getattr(machine, "full_pool_sampler", None)
-    if fp is not None and not getattr(fp.steal_draw, "_sim450_wrapped", False):
+    if fp is not None and not getattr(fp.steal_draw, "_acceptance_wrapped", False):
         orig_steal_draw = fp.steal_draw
 
         def steal_draw(target_base: Any, *a: Any, **kw: Any) -> Any:
@@ -637,7 +572,7 @@ def _install_probes(
                         pc[f"STEAL_SAFE_{t}"] += 1
             return res
 
-        steal_draw._sim450_wrapped = True  # type: ignore[attr-defined]
+        steal_draw._acceptance_wrapped = True  # type: ignore[attr-defined]
         fp.steal_draw = steal_draw
 
     orig_outcome = machine._full_pool_outcome
@@ -650,10 +585,9 @@ def _install_probes(
     def outcome(state: Any, _o: Any = orig_outcome) -> Any:
         calls["_full_pool_outcome"] += 1
         out = _o(state)
-        # SIM-517: the receiving channels, read at the pitch seam. The
-        # got-away fact comes from the SAMPLER's accessor (the drawn row's
-        # own flag) so the count works whether or not SIM_GOT_AWAY resolves
-        # its consequences.
+        # The receiving channels, read at the pitch seam. The got-away fact
+        # comes from the SAMPLER's accessor (the drawn row's own flag), so the
+        # count works whether or not SIM_GOT_AWAY resolves its consequences.
         if out in ("ball", "called_strike"):
             pc["TAKEN"] += 1
             if out == "called_strike":
@@ -665,8 +599,8 @@ def _install_probes(
     def fielding(state: Any, _o: Any = orig_fielding) -> Any:
         calls["_full_pool_fielding"] += 1
         side = int(state.offense)
-        # SIM-516: the DP-opportunity denominator reads the PRE-resolution
-        # state — a ball in play with a runner on 1B and fewer than two outs.
+        # The DP-opportunity denominator reads the PRE-resolution state: a ball
+        # in play with a runner on 1B and fewer than two outs.
         dp_opportunity = state.bases.first is not None and int(state.outs) < 2
         sig = _o(state)
         if sig is not None:
@@ -679,9 +613,8 @@ def _install_probes(
                 tr = getattr(sig, "transition", None)
                 if tr is not None and tr.get("r1") == 0 and tr.get("batter") == 0:
                     pc["DP_ROW"] += 1
-            # A DP is counted only when a second out was actually recorded. The
-            # SIM-429 phantom-DP fix relabels a runner-less DP draw to a plain
-            # field_out, so the drawn event alone would over-count.
+            # A DP is counted only when a second out was actually recorded, so
+            # a double-play event with no second out never counts.
             if sig.event in _DOUBLE_PLAY_EVENTS and int(sig.result_outs) >= 2:
                 tally["DP"][side] += 1
             if bool(sig.is_error) or sig.event == "field_error":
@@ -695,19 +628,18 @@ def _install_probes(
         return _o(state, result, sig, pre_outs, pre_bases)
 
     def steal(state: Any, *a: Any, _o: Any = orig_steal, **kw: Any) -> Any:
-        # SIM-554: the loop passes the drawn pitch's class (``pitch_class=``)
-        # in the running game on the pitch. The probe passes every argument
-        # through and never re-states the loop's signature (the commit probe's
-        # rule below).
+        # The loop passes the drawn pitch's class (``pitch_class=``) in the
+        # running game on the pitch. The probe passes every argument through and
+        # never re-states the loop's signature (the commit probe's rule below).
         calls["_steal_opportunity_draw"] += 1
         return _o(state, *a, **kw)
 
     def accumulate(state: Any, result: Any, _o: Any = orig_accumulate) -> Any:
         side = int(state.offense)
         canonical = result.canonical_event or resolve_event_to_canonical(result.event)
-        # SIM-516: every accumulated PA terminal feeds the pool-band
-        # denominators; walks split pitched-vs-intentional because their pool
-        # references differ (the count-machine chain vs sim.ibb_rates).
+        # Every accumulated PA terminal feeds the pool-band denominators; walks
+        # split pitched-vs-intentional because their pool references differ (the
+        # count-machine chain vs sim.ibb_rates).
         pc["PA"] += 1
         if canonical in ("single", "double", "triple", "home_run"):
             tally["H"][side] += 1
@@ -738,17 +670,13 @@ def _install_probes(
         _o: Any = orig_commit,
         **kwargs: Any,
     ) -> Any:
-        # **kwargs passes through whatever the loop adds to the ledger call —
-        # SIM-499 added pre_outs/pre_bases/batter_reached/runners_scored/
-        # runners_retired after this probe was written, and pinning the old
-        # four kwargs broke the whole lane with a TypeError at setup. The
-        # probe only READS the four it tallies; it must never re-state the
-        # loop's signature.
+        # **kwargs passes through whatever the loop adds to the ledger call
+        # (pre_outs, pre_bases, batter_reached, runners_scored, ...). The probe
+        # only READS what it tallies; it never re-states the loop's signature, so
+        # a new keyword cannot break the lane with a TypeError.
         calls["_commit_run_delta"] += 1
-        # SIM-511: field_error is its own canonical outcome — a correct commit
-        # carries result_hits = 0 (a reach is NOT a hit) with batter_reached
-        # truth. The old `result_hits >= 1` condition was the alias world's
-        # and read 0.0000 on a lane where batters genuinely reached.
+        # field_error is its own canonical outcome: a correct commit carries
+        # result_hits = 0 (a reach is NOT a hit) with batter_reached.
         if event == "field_error" and bool(kwargs.get("batter_reached", False)):
             tally["ROE_reached"][int(state.offense)] += 1
         return _o(
@@ -770,15 +698,15 @@ def _install_probes(
 
 
 def running_game_on_the_pitch_wanted(env: Mapping[str, str] | None = None) -> bool:
-    """SIM-554: True when SIM_STEAL_PITCH_CLASS asks for the running game on
-    the pitch — the parse of ``production_factory.apply_running_game_env``."""
+    """True when SIM_STEAL_PITCH_CLASS asks for the running game on the pitch:
+    the parse of ``production_factory.apply_running_game_env``."""
     src = os.environ if env is None else env
     raw = src.get("SIM_STEAL_PITCH_CLASS", "1").strip().lower()
     return raw not in ("", "0", "false", "no", "off")
 
 
 def check_running_game_order(machine: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-554: fail the lane when the flag and the order the loop runs differ.
+    """Fail the lane when the flag and the order of the running game differ.
 
     The flag alone does not run the running game on the pitch: the bundle's
     steal pool must carry the pitch class on every pitch row (migration 0031
@@ -813,11 +741,9 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
     prove the workers' environment first.
 
     The kwargs come from ``simulation.sim_kwargs.sim_kwargs_from_state`` (SIM-449),
-    never from a hand-rolled copy. That single import is what keeps the lane from
-    repeating the defect it is validating: the old harness dropped
-    ``home_defense``, ``away_defense`` and ``park_run_factor``, so ``SIM_PARK_FACTOR``
-    and ``SIM_FIELDER_RBF`` were structurally inert and A/B tests of them compared
-    two identical no-ops.
+    never from a hand-rolled copy. A copy that drops ``home_defense``,
+    ``away_defense`` or ``park_run_factor`` leaves the fielder factor and the park
+    factor inert, and an A/B test of either would compare two identical no-ops.
     """
     import asyncio
 
@@ -847,7 +773,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
     run.calls = {
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
-        "_resolve_in_play_transition": 0,  # SIM-511: the production path
+        "_resolve_in_play_transition": 0,  # the production resolution of a ball in play
         "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,
     }
@@ -868,14 +794,14 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
             state.park_run_factor = await resolve_park_run_factor(
                 conn, duck, int(game_pk), int(getattr(state, "season", 2024) or 2024)
             )
-            # SIM-478: the venue itself, for the fence stage. Without it the
+            # The venue itself, for the fence stage. Without it the
             # stage PASSES every air ball (``fence_counts[3]``) and the lane
             # grades the fence lines inactive. The harness resolves it the
             # same way (``scripts/sim_stats.py``).
             venue = await resolve_venue_id(conn, int(game_pk))
             if venue is not None:
                 state.park = str(venue)
-            # SIM-427: the managers' tendency profiles and the league means.
+            # The managers' profiles and the league means (the steal weight's inputs).
             resolve_manager_profiles_onto_state(state, duck)
             return state
         finally:
@@ -885,7 +811,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
     try:
         for game_pk in game_pks:
             state = asyncio.run(_resolve(game_pk))
-            # SIM-478 guard. With the fence stage ON and no venue on the state
+            # The fence-stage guard (SIM-478). With the fence stage ON and no venue on the state
             # the stage passes every air ball, so the lane would certify the
             # fence lines inactive. The lane does not report that as a read.
             if (
@@ -899,7 +825,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
                 )
             kwargs = sim_kwargs_from_state(state)
 
-            # SIM-449 guard. A missing key here means the lane is measuring a
+            # The sim-kwargs guard (SIM-449). A missing key here means the lane is measuring a
             # configuration in which two production features cannot act.
             assert set(kwargs) == set(SIM_KWARG_KEYS), (
                 f"SIM-449 regression: sim kwargs are {sorted(kwargs)}, "
@@ -916,21 +842,21 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
 
             spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kwargs))
             machine = production_machine_factory(0, spec)
-            # SIM-554 guard, on the first game's machine (every game reads the
+            # The running-game guard (SIM-554), on the first game's machine (every game reads the
             # same bundle and the same flag).
             if not run.per_game:
                 check_running_game_order(machine)
             tally = _blank_tally()
             _install_probes(machine, tally, run.calls, run.pool_counts)
 
-            # SIM-478: the fence counters live on the process-cached sampler,
+            # The fence counters live on the process-cached sampler,
             # so the first game zeroes them and the lane reads its own at the
             # end. The per-game record starts from a snapshot of the pool
             # counters (its BIP / PA are the deltas over this game).
             fp = getattr(machine, "full_pool_sampler", None)
             if not run.per_game and fp is not None and hasattr(fp, "fence_counts"):
                 fp.fence_counts[:] = 0
-            # SIM-478 §12.7: the wall-margin band's counters, zeroed with them.
+            # The wall-margin band's counters (plan §12.7), zeroed with them.
             if not run.per_game and fp is not None and hasattr(fp, "bb_margin_counts"):
                 fp.bb_margin_counts[:] = 0
             pool_before = dict(run.pool_counts)
@@ -975,7 +901,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
                     run.ties += 1
                 else:
                     run.observations["home_win_pct"].append(1.0 if home_r > away_r else 0.0)
-            # SIM-478: the game's record. The venue is the state's ``park``
+            # The game's record. The venue is the state's ``park``
             # (a digit string; ``simulation.sim_loop._venue_of``), 0 when the
             # state carries none.
             park_text = str(getattr(state, "park", None) or "").strip()
@@ -992,12 +918,12 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
                     "PA": int(run.pool_counts.get("PA", 0)) - int(pool_before.get("PA", 0)),
                 }
             )
-            # SIM-518: the cell index's counters live on the process-cached
+            # The cell index's counters live on the process-cached
             # sampler, so the last machine's read covers the whole lane.
             stats = getattr(fp, "cell_index_stats", None)
             if callable(stats):
                 run.cell_index = dict(stats())
-            # SIM-478: the fence counters, the same way.
+            # The fence counters, the same way.
             fence = getattr(fp, "fence_counts", None)
             if fence is not None:
                 run.fence_counts = [int(x) for x in fence]
@@ -1008,7 +934,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
         duck.close()
         run.elapsed_s = time.perf_counter() - started
 
-    # SIM-478: the machine-readable record, when the operator asked for one.
+    # The machine-readable record, when the operator asked for one.
     json_out = os.environ.get("SIM_ACCEPTANCE_JSON_OUT", "").strip()
     if json_out:
         import json

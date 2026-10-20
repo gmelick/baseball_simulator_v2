@@ -1,29 +1,23 @@
 """
-scripts/sim_stats.py — Scaled Monte-Carlo box-score harness (SIM-429 follow-on).
+scripts/sim_stats.py — the scaled Monte-Carlo box-score harness.
 
 WHAT THIS IS
 ============
 Runs N iterations per game through the PRODUCTION sim (the full-pool sampler
-over the engine-artifact bundle) and reports the per-game box line + the per-channel
-breakdowns the SIM-429 follow-on calibration needs:
+over the engine-artifact bundle) and reports the box line and the per-channel
+reads a calibration needs:
 
-  * per-team R / H / HR / 2B / 3B / BB / K vs the MLB-2025 baseline (SIM-508)
-  * **home vs away** splits — the SIM-412 home-field-bias validation surface
-  * advancement rates per type (second-to-home on a single, first-to-third, etc.)
-  * **RISP** performance — hits with runners in scoring position + RISP conversion rate
-  * SB / CS rates per game (SIM-426 verification)
-  * DP rate per game (SIM-429 phantom-DP fix verification)
-  * per-pitcher aggregate ERA / K/9 / BB/9 / WHIP
+  * per-team R / H / HR / 2B / 3B / BB / K / SB / CS against the MLB-2025 baseline
+    (this project's own 2025 season, SIM-508);
+  * **home vs away** splits and the home win share, the home-field read;
+  * the fence stage's counters and the wall-margin band's counters;
+  * the outs check: the pitchers' credited outs against the outs each game
+    played (the script's one gate: it exits 1 on a difference).
 
-WHY THIS REPLACES sim_stats.py v1
----------------------------------
-The original 4-game × 25-iter harness produced ~±0.2 R variance at the per-team
-mean — too noisy to read per-channel calibration moves cleanly.  This v2 defaults
-to 200 iters per game (configurable up to thousands) AND adds the per-channel
-breakouts so a calibration sweep can target the actual residual (hit sequencing
-/ RISP conversion / DP rate) instead of guessing.  Read-only against the
-DuckDB-backed sampler so it can run while the nightly profile computor holds
-the DuckDB write lock.
+The default is 200 iterations per game (up to thousands), so a per-channel move
+is readable above the noise. The harness reads the DuckDB file read-only, so it
+runs while a nightly build holds the write lock. The ``--json-out`` record keeps
+the per-game series, the park factors and the flag set behind the numbers.
 
 USAGE
 -----
@@ -36,13 +30,12 @@ USAGE
     # Machine-readable for downstream analysis
     python scripts/sim_stats.py --iters 500 --json-out stats.json 744795 ...
 
-    # Toggle the SIM-476 home kernel for an A/B read (w=0 hard conditioning)
+    # Toggle the home-field draw weight for an A/B read (0.0 = hard conditioning)
     SIM_HOME_OFF_WEIGHT=1.0 python scripts/sim_stats.py --iters 500 ...   # off
     SIM_HOME_OFF_WEIGHT=0.0 python scripts/sim_stats.py --iters 500 ...   # production
 
-    # SIM-449: the run PRINTS the park factor and the defense-map sizes it
-    # actually passed, so a neutral no-op can never read as a measured
-    # "no effect".
+    # The run PRINTS the park factor and the defense-map sizes it actually
+    # passed, so a neutral no-op can never read as a measured "no effect".
     SIM_PARK_FACTOR=1 python scripts/sim_stats.py --iters 400 744795 ...
 """
 
@@ -78,15 +71,14 @@ from simulation.sim_loop import BoxScore, simulate_game  # noqa: E402
 
 _FACTORY = "simulation.production_factory:production_machine_factory"
 
-# MLB-2025 per-team per-game baseline (the calibration target). SIM-508
-# (owner decision 2026-08-18): the reference is THIS PROJECT'S OWN ingested
-# 2025 season — 2,430 regular-season Final games, 4,860 team-games, measured
-# 2026-08-18 — replacing the hand-written 2023 constants. 2025 sits inside
-# the artifact's 2024-2026 recency floor, so the sim is graded against the
-# era it draws from. BB includes intentional walks (595 from raw.play_events
-# — the probe counts both canonical walk classes); CS includes all scored
-# classes: pitch-steal CS, K+CS double plays, and advancing pickoffs (149
-# from raw.play_events, Rule 9.07(h)).
+# The MLB-2025 per-team per-game baseline (the calibration target, SIM-508,
+# owner decision 2026-08-18): THIS PROJECT'S OWN ingested 2025 season, 2,430
+# regular-season Final games and 4,860 team-games, measured 2026-08-18. 2025 sits
+# inside the pool window, so the sim is graded against the era it draws from.
+# BB includes intentional walks (595 from raw.play_events — the probe counts
+# both canonical walk classes). CS includes all scored classes: pitch-steal CS,
+# K+CS double plays, and advancing pickoffs (149 from raw.play_events, Rule
+# 9.07(h)).
 _MLB_2025 = {
     "R": 4.4473,
     "H": 8.2588,
@@ -99,21 +91,21 @@ _MLB_2025 = {
     "CS": 0.1922,
 }
 
-#: Measured 2025 home win share, same 2,430 games (SIM-508; was the
-#: Tango/Lichtman ~.535 literature value).
+#: The measured 2025 home win share, over the same 2,430 games (the calibration
+#: target, SIM-508).
 _MLB_HOME_WIN_PCT = 0.5428
 
-#: SIM-449: every env flag that changes what the sim does.  The harness prints all
-#: of them, so an operator reads a result against the exact configuration that
-#: produced it.
+#: Every env flag that changes what the sim does (each a registered flag of
+#: ``simulation/flags.py``). The harness prints all of them, so an operator reads
+#: a result against the exact configuration that produced it.
 _REALISM_FLAGS = (
     "SIM_MANAGER",
     "SIM_BB_PLATOON",
-    "SIM_HOME_OFF_WEIGHT",  # SIM-491/476: the home-field DRAW weight (1.0 = off; prod 0.0)
-    "SIM_PARK_KERNEL_SIGMA",  # SIM-491 pt.2: the park KERNEL bandwidth (0 = off)
-    "SIM_CATCHER_RECEIVING",  # SIM-523 part E: the receiving ratio on taken pitches
-    "SIM_GOT_AWAY",  # SIM-517: honor the drawn row's got-away fact
-    # SIM-523 (the play-picker redesign, parts A-F): the switches and the fitted powers.
+    "SIM_HOME_OFF_WEIGHT",  # the home-field draw weight (1.0 = off; production 0.0)
+    "SIM_PARK_KERNEL_SIGMA",  # the park kernel's bandwidth (0 = off)
+    "SIM_CATCHER_RECEIVING",  # the catcher receiving ratio on taken pitches
+    "SIM_GOT_AWAY",  # honour the drawn row's got-away fact
+    # The play-picker redesign's switches and powers (SIM-523).
     "SIM_PITCH_RESULT_SPLIT",
     "SIM_PITCH_PITCHER_POWER",
     "SIM_RESULT_PITCHER_POWER",
@@ -122,13 +114,14 @@ _REALISM_FLAGS = (
     "SIM_BB_CLASS_FILTER",
     "SIM_PARK_WALL_ZONE_ONLY",
     "SIM_FENCE_STAGE",
-    # SIM-478 (the plan's §11 / §12 / §12.7): the born ball's carry in the live
-    # park's air, the born-ball kernel's exponent per feature, the wall-margin band.
+    # The fence certification's amendments (SIM-478): the born ball's carry in the
+    # live park's air, the born-ball kernel's exponent per feature, the wall-margin band.
     "SIM_CARRY_OFFSET",
     "SIM_BB_BORN_PER_FEATURE",
     "SIM_BB_MARGIN_BAND",
     "SIM_MANAGER_DRAW",
-    # SIM-427: the pen source, the manager weight and the reliever-draw weights.
+    # The manager draw (SIM-427): the pen source, the manager weight and the
+    # reliever-draw weights.
     "SIM_BULLPEN_SOURCE",
     "SIM_ACTOR_POWER_MANAGER_USAGE",
     "SIM_RELIEF_ROLE_SIGMA",
@@ -137,14 +130,14 @@ _REALISM_FLAGS = (
     "SIM_RELIEF_PITCHED2D_OFF_WEIGHT",
     "SIM_RELIEF_PITCHES3D_SIGMA",
     "SIM_RELIEF_HAND_OFF_WEIGHT",
-    # SIM-554: the running game on the pitch (the pickoff draw before the pitch,
-    # the steal draw after it in the pitch's class); 0 = the single pre-pitch draw.
+    # The running game on the pitch (SIM-554): the pickoff draw before the pitch,
+    # the steal draw after it in the pitch's class; 0 = the single pre-pitch draw.
     "SIM_STEAL_PITCH_CLASS",
 )
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+    from pipeline.db_dsn import require_dsn  # the DSN or a loud error: no default password
 
     return require_dsn()
 
@@ -164,11 +157,11 @@ async def _resolve(game_pk: int, duck: Any):
         state.park_run_factor = await resolve_park_run_factor(
             conn, duck, int(game_pk), int(getattr(state, "season", 2024) or 2024)
         )
-        # SIM-523 part C4: the venue itself, for the fence stage.
+        # The venue itself, for the fence stage.
         venue = await resolve_venue_id(conn, int(game_pk))
         if venue is not None:
             state.park = str(venue)
-        # SIM-427: each side's manager tendency profile and the league means.
+        # Each side's manager profile and the league means (the steal weight's inputs).
         resolve_manager_profiles_onto_state(state, duck)
         return state
     finally:
@@ -225,7 +218,7 @@ def _game_summary(result, *, home_ids: set[int], away_ids: set[int]) -> dict:
         "AB": ab,
         "SB": sb,
         "CS": cs,
-        # Per-half (home vs away batting) for SIM-412 validation:
+        # Per-half (home vs away batting), for the home-field read:
         "home_R": home_R,
         "away_R": away_R,
         "home_H": home_box["h"],
@@ -236,14 +229,14 @@ def _game_summary(result, *, home_ids: set[int], away_ids: set[int]) -> dict:
         "home_win": int(home_R > away_R),
         "away_win": int(away_R > home_R),
         "tie": int(home_R == away_R),
-        # SIM-557: the outs on the pitchers' lines, and the outs the game
-        # played.  An older simulator has no played count: None.
+        # The outs on the pitchers' lines, and the outs the game played. A
+        # result without ``outs_played`` gives None.
         "p_outs": p_outs,
         "outs_played": getattr(result, "outs_played", None),
     }
 
 
-#: SIM-557: the outs check names at most this many differing game-simulations.
+#: The outs check names at most this many differing game-simulations.
 MAX_NAMED_MISMATCHES = 5
 
 
@@ -372,20 +365,20 @@ def _print_report(agg: dict, *, n_games: int) -> None:
     )
     print("=" * 72)
 
-    # Both-teams totals (per game) — the legacy v1 view.
+    # Both-teams totals per game.
     keys = ("R", "H", "HR", "2B", "3B", "BB", "K", "SB", "CS")
     print("\n--- Both-teams per game ---")
     print("  " + "  ".join(f"{k}={agg[k]:6.2f}" for k in keys))
 
     # Per-team vs MLB baseline.
-    print("\n--- Per-team (both-teams / 2) vs MLB-2023 ---")
+    print("\n--- Per-team (both-teams / 2) vs MLB-2025 ---")
     for k in keys:
         sim = agg[k] / 2.0
         mlb = _MLB_2025.get(k, 0.0)
         delta_pct = ((sim - mlb) / mlb * 100.0) if mlb else 0.0
         print(f"  {k:3s} sim={sim:6.2f}   mlb={mlb:6.2f}   delta={delta_pct:+6.1f}%")
 
-    # SIM-412 home-field validation: home_win_pct + home vs away R/H/HR.
+    # The home-field read: home_win_pct and home vs away R/H/HR.
     print("\n--- SIM-412 home-field validation ---")
     home_win = agg["home_win"]
     away_win = agg["away_win"]
@@ -418,7 +411,8 @@ def _print_report(agg: dict, *, n_games: int) -> None:
     print(f"\n--- precision: R standard error = {se:.4f}  ({verdict}) ---")
 
 
-# SIM-478/479/480 (plan §7 D): the fence stage's own counters and their read.
+# The fence stage's own counters and their read (the fence certification,
+# SIM-478, plan §7 D).
 #: passed <= 0.1% of air balls; no matching rows <= 0.5%; over = 9 +/- 1%.
 FENCE_PASSED_MAX = 0.001
 FENCE_NO_ROWS_MAX = 0.005
@@ -473,7 +467,7 @@ def _margin_counter_summary(
     counts: Any, air_balls: int | None = None
 ) -> tuple[str, dict[str, Any]]:
     """One report line and one record for the sampler's ``bb_margin_counts``
-    (SIM-478, the plan's §12.7): [applied, fallback (too few rows), skipped
+    (the wall-margin band, plan §12.7): [applied, fallback (too few rows), skipped
     (not an air ball / over / no margin / off)]. The applied share is over
     the air balls when the caller gives their count (the fence counters'
     denominator); without it the line says "n/a". Informational: no read,
@@ -532,8 +526,8 @@ def main() -> None:
         f"sim_stats: {len(args.game_pks)} games × {args.iters} sims = "
         f"{len(args.game_pks) * args.iters} total sims"
     )
-    # SIM-449: name every realism input.  A silent no-op — an empty defense map or
-    # a neutral park factor — used to look exactly like a measured "no effect".
+    # Name every realism input: a silent no-op (an empty defense map, a neutral
+    # park factor) would otherwise look exactly like a measured "no effect".
     print("  flags: " + "  ".join(f"{n}={os.environ.get(n, '<unset>')}" for n in _REALISM_FLAGS))
     duck = open_sim_duckdb()
     if duck is None:
@@ -571,16 +565,16 @@ def main() -> None:
             kw = sim_kwargs_from_state(state)
             spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kw))
             machine = production_machine_factory(0, spec)
-            # SIM-478: the fence counters live on the process-cached sampler
-            # (one object across games), so they accumulate over the run; the
-            # first machine zeroes them so the run reads its own.
+            # The fence counters live on the process-cached sampler (one object
+            # across games), so they accumulate over the run; the first machine
+            # zeroes them so the run reads its own.
             fp = getattr(machine, "full_pool_sampler", None)
             if fp is not None and hasattr(fp, "fence_counts"):
                 if fence_counts is None:
                     fp.fence_counts[:] = 0
                 fence_counts = fp.fence_counts
-            # SIM-478 §12.7: the wall-margin band's counters, the same way
-            # (an older sampler has none: the line is skipped).
+            # The wall-margin band's counters, the same way (a sampler without
+            # them skips the line).
             if fp is not None and hasattr(fp, "bb_margin_counts"):
                 if margin_counts is None:
                     fp.bb_margin_counts[:] = 0
@@ -608,8 +602,8 @@ def main() -> None:
     elapsed = time.perf_counter() - started
     agg = _aggregate(per_game)
     _print_report(agg, n_games=len(args.game_pks))
-    # SIM-478 (plan §7 D): the fence stage's counters and their read. A read,
-    # not a gate — the harness's exit code does not change.
+    # The fence stage's counters and their read (plan §7 D). A read, not a gate:
+    # the harness's exit code does not change.
     fence_text, fence_record = _fence_counter_summary(fence_counts)
     print("\n--- SIM-478 the fence stage ---")
     print("  " + fence_text)
@@ -620,8 +614,8 @@ def main() -> None:
             margin_counts, fence_record.get("fence_air_balls")
         )
         print("  " + margin_text)
-    # SIM-557: the outs check.  The credited and played outs are an identity,
-    # so this line is the script's one gate (the exit comes after the record).
+    # The outs check. The credited and played outs are an identity, so this line
+    # is the script's one gate (the exit comes after the record).
     outs_check = outs_credit_check(per_game)
     print("\n--- SIM-557 the outs check ---")
     print("  " + _outs_credit_line(outs_check))
@@ -635,17 +629,17 @@ def main() -> None:
             "elapsed_s": elapsed,
             "aggregate": agg,
             "per_game": per_game,
-            # SIM-449: the record names the park factor and the flag set that
-            # produced these numbers, so a later reader can tell a real effect
-            # from a neutral no-op.
+            # The record names the park factor and the flag set that produced
+            # these numbers, so a later reader can tell a real effect from a
+            # neutral no-op.
             "park_run_factors": {str(k): v for k, v in park_factors.items()},
             "env": {n: os.environ.get(n) for n in _REALISM_FLAGS},
-            # SIM-478: the fence stage's counters over the run, and the
-            # wall-margin band's when the sampler has them.
+            # The fence stage's counters over the run, and the wall-margin
+            # band's when the sampler has them.
             **fence_record,
             **margin_record,
-            # SIM-557: the outs check's three numbers (played is None on an
-            # older simulator).
+            # The outs check's three numbers (played is None when the results
+            # carry no ``outs_played``).
             "outs_credited_per_game": outs_check["credited_per_game"],
             "outs_played_per_game": outs_check["played_per_game"],
             "outs_mismatch_game_sims": outs_check["mismatch_game_sims"],

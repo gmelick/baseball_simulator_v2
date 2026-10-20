@@ -1,12 +1,12 @@
 #!/usr/bin/env sh
 # =============================================================================
 # scripts/weekly_refresh.sh — sweep the current season for any final game the
-# nightly window missed (SIM-519 Part D). Postgres only; safe while the app runs.
+# nightly window missed. Postgres only; safe while the app runs.
 # Ofelia runs it on Sunday through the crash wrapper.
 # =============================================================================
 set -eu
 
-# SIM-443b: no default password. The container composes the DSN from .env.
+# No default password: the container composes the DSN from .env.
 : "${BASEBALL_DB_DSN:?BASEBALL_DB_DSN is not set - the jobs service composes it from .env (see .env.example)}"
 export BASEBALL_DB_DSN
 export YEAR="$(date -u +%Y)"

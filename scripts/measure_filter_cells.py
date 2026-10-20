@@ -2,40 +2,42 @@
 """
 scripts/measure_filter_cells.py
 ===============================
-SIM-451 — measure how full the 2,880 hard-filter cells actually are.
+Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy
+measurement, SIM-451).
 
 WHAT THIS IS
 ------------
-The new sampling architecture replaces the similarity kernel over the situation
-with a HARD FILTER on the situation, then weights only the survivors. The filter
-is a cross-tab of five dimensions:
+The pitch draw's cell index (``SIM_PITCH_CELL_INDEX``) holds the situation fixed
+with a HARD FILTER, then weights only the rows that survive it. The filter is a
+cross-tab of five dimensions:
 
     base occupancy (8) x outs (3) x count (12) x score band (5) x home-or-away (2)
     = 2,880 cells
 
-Every downstream design choice depends on how many real plays land in each cell.
-Nobody measured it. This script measures it, on the LIVE pools, and writes the
-result as committed evidence.
+The minimum cell size and the widening order depend on how many real plays land
+in each cell. This script measures that on the LIVE pools and writes the result
+as evidence.
 
 THE HEADLINE NUMBER
 -------------------
 Counting thin cells is the WRONG metric. A cell that holds two rows does not
 matter if no game ever reaches it. So this script reports, for each candidate
 minimum cell size, the SHARE OF ALL DRAWS that land in an under-full cell: it
-weights each cell by how often real play reaches it. That share is the number
-SIM-475 needs to set ``MIN_CELL``.
+weights each cell by how often real play reaches it. That share is the
+evidence for the minimum cell size (``DEFAULT_MIN_CELL`` in
+``simulation/filter_cells.py``): the draw widens a cell that holds fewer rows.
 
     Assumption, stated plainly: one pool row IS one real occurrence of that
     situation, so pool frequency stands in for simulator reach frequency. That
     holds only while the simulator's base-out / count / score distribution
-    matches the historical one. It is close, not identical, and the SIM-449 /
-    SIM-450 work can move it. Do not read the share as exact.
+    matches the historical one. It is close, not identical, and a change to the
+    simulator's situation mix can move it. Do not read the share as exact.
 
 THE WIDENING LADDER (the second half of the deliverable)
 --------------------------------------------------------
-Knowing the under-full draw share is only half of what SIM-475 needs. SIM-475
-also widens a thin cell in a fixed order: it relaxes the score band first, then
-home-or-away, then the count (decision record
+The under-full draw share is half of the answer. The sampler also widens a thin
+cell in a fixed order: it relaxes the score band first, then home-or-away, then
+the count (decision record
 ``docs/audit/2026-08-10-sim-loop-remediation-decisions.md:422``).
 
 So this script measures the ladder. For each relaxation step it reports the
@@ -51,7 +53,7 @@ agrees.
 The ranking comes in two forms, and the difference matters. The ADMISSIBLE
 ranking covers only the three dimensions the ladder may relax — the score band,
 home-or-away and the count. The verdict on the decided order reads off that one,
-because it is a choice SIM-475 can make. The five-dimension ranking is a
+because it is a choice the ladder can make. The five-dimension ranking is a
 DIAGNOSTIC that says where the thin draw share sits; the base state and the
 number of outs appear in it and must never be relaxed, because they are the
 situation the hard filter exists to hold fixed.
@@ -71,8 +73,8 @@ of three things is true:
 The third check exists because the second one cannot see a per-configuration
 gap. A configuration that asks for 2024, 2025 and 2026 and finds rows in only
 two of them is a TWO-season measurement wearing a three-season label. The report
-now names the gap in ``configurations[key]["seasons_missing"]`` and the run exits
-``2``. It still writes the JSON first, so the evidence lands either way.
+names the gap in ``configurations[key]["seasons_missing"]`` and the run exits
+``2``. It writes the JSON first, so the evidence lands either way.
 
 WHAT IT MEASURES AND WHY
 ------------------------
@@ -81,30 +83,31 @@ seasons} x {batter hand L, R, both}.
 
   * ``sim.pitch_pool`` drives the pitch draw. ``sim.outcome_pool`` is the in-play
     subset and drives the batted-ball draw.
-  * recent vs all seasons is the evidence SIM-460 needs to decide the recency
-    floor. ``RECENCY_FLOOR_SEASONS`` is 4 since SIM-516 (the owner's window
-    ruling: the last three completed seasons plus the current one), so the
-    artifact holds 4 of the 10 swept seasons.
-  * hand L / R vs both is the evidence SIM-461 needs to decide whether to keep
-    the batter-hand partition. The pools are partitioned by batter hand today
-    (``pipeline/batch/engine_artifacts.py`` filters on ``stand``), so PER-HAND
-    row counts are what the sampler sees, not totals.
+  * recent vs all seasons measures what the recency floor costs.
+    ``RECENCY_FLOOR_SEASONS`` is 4 (the owner's pool-window ruling, SIM-516: the
+    last three completed seasons plus the current one), so the artifact holds 4
+    of the 10 swept seasons.
+  * hand L / R vs both measures what the batter-hand partition costs. The
+    pools are partitioned by batter hand (``pipeline/batch/engine_artifacts.py``
+    filters on ``stand``), so PER-HAND row counts are what the sampler sees, not
+    totals.
 
 It measures the POOL, not the on-disk engine artifact. The artifact is a cached
 copy and can lag a pool rebuild. A forward-looking design decision must read the
 source the next rebuild will use.
 
-THE DEFINITIONS ARE COPIED, NOT INVENTED
-----------------------------------------
+THE DEFINITIONS ARE THE CODE'S OWN
+----------------------------------
 A measurement that uses a different definition than the code measures nothing.
 So:
 
-  * :func:`count_bucket` copies ``simulation/full_pool_sampler.py:248``.
-  * :func:`score_band` copies the clamp at ``simulation/sim_loop.py:1348``.
-    The pool builder already clamps ``score_diff`` to -5..+5
-    (``pipeline/batch/player_profile_computor.py:4683``), so the clamp is a
-    verified no-op on pool data. The function applies it anyway so it is correct
-    standalone.
+  * :func:`count_bucket`, :func:`score_band` and :func:`cell_key` come from
+    ``simulation/filter_cells.py``, the module the sampler's cell index
+    imports. This script re-exports them; it never redefines them.
+  * :func:`score_band` applies the loop's +/-5 clamp. The pool builder already
+    clamps ``score_diff`` to -5..+5 (``pipeline/batch/player_profile_computor.py``),
+    so the clamp is a verified no-op on pool data. The function applies it
+    anyway so it is correct standalone.
   * The recent-season set comes from ``last_n_seasons()`` in
     ``pipeline/batch/engine_artifacts.py`` — the same call the artifact builder
     makes — never from a re-derivation.
@@ -112,11 +115,10 @@ So:
     ``build_battedball_pool_artifact``, so the measurement counts the rows the
     builder would keep.
 
-  * THE SCORE BAND IS THE ONE EXCEPTION. No score-band definition exists in the
-    code today; the design doc asserts "5 bands" without giving the edges.
-    SIM-451 ORIGINATES the definition here as :data:`SCORE_BAND_EDGES`.
-    SIM-475 must IMPORT that constant, never redefine it. Different edges make
-    every occupancy number in this report wrong.
+  * THE SCORE BAND HAS ONE DEFINITION: :data:`SCORE_BAND_EDGES` in
+    ``simulation/filter_cells.py``. This measurement originated it, and the
+    sampler's cell index reads it through :func:`score_band`. Different edges
+    make every occupancy number in this report wrong.
 
 HOME-OR-AWAY NEEDS A JOIN
 -------------------------
@@ -147,7 +149,7 @@ all.
 suite proves it in a clean subprocess. That needs TWO lazy imports, not one:
 :func:`open_connection` imports ``duckdb`` itself, and :func:`_engine_artifacts`
 imports ``pipeline.batch.engine_artifacts``, which imports ``duckdb`` at module
-scope (``engine_artifacts.py:38``). A direct module-scope import of
+scope. A direct module-scope import of
 ``engine_artifacts`` pulls ``duckdb`` in transitively and makes the claim false
 while every ``hasattr(module, "duckdb")`` check still passes.
 
@@ -237,31 +239,31 @@ def last_n_seasons(con: Any, n: int) -> list[int]:
 # ---------------------------------------------------------------------------
 # The cell definition (2,880 cells)
 # ---------------------------------------------------------------------------
-# SIM-467 moved the algebra into ``simulation/filter_cells.py`` so the sampler's
-# cell index and this measurement share ONE definition (``scripts/`` is not
+# The algebra lives in ``simulation/filter_cells.py``, so the sampler's cell
+# index and this measurement share ONE definition (``scripts/`` is not
 # importable from the container's ``simulation`` package). The names below are
 # re-exported unchanged; ``tests/unit/test_filter_cells.py`` reads them
 # from this module and ``tests/unit/test_pitch_cell_index.py`` pins that they
 # ARE the module's objects.
 from simulation.filter_cells import (  # noqa: E402
-    _BASE_LABELS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    CELL_KEY_FORMULA,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    DEFAULT_MIN_CELLS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    N_BAND,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    N_BASE,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    N_CELLS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    N_COUNT,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    N_HOME,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    N_OUTS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    SCORE_BAND_EDGES,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    SCORE_BAND_LABELS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    SCORE_CLAMP,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    CellCoords,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    _validate_score_band_edges,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    cell_key,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    count_bucket,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    decode_cell,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
-    score_band,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    _BASE_LABELS,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    CELL_KEY_FORMULA,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    DEFAULT_MIN_CELLS,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    N_BAND,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    N_BASE,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    N_CELLS,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    N_COUNT,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    N_HOME,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    N_OUTS,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    SCORE_BAND_EDGES,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    SCORE_BAND_LABELS,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    SCORE_CLAMP,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    CellCoords,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    _validate_score_band_edges,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    cell_key,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    count_bucket,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    decode_cell,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
+    score_band,  # noqa: F401 — re-exported for the filter-cell tests and the JSON report
 )
 
 #: Reported occupancy percentiles. 0 is the minimum, 100 the maximum.
@@ -280,10 +282,9 @@ def _score_band_sql(expr: str) -> str:
 
     The SQL is a term-by-term transcription of the Python: it ADDS one indicator
     per edge, exactly as ``sum(1 for edge in SCORE_BAND_EDGES if sd > edge)``
-    does. The earlier form was a first-match ``CASE`` ladder. A ladder reads the
-    edges in tuple order while the Python does not, so the two forms could
-    disagree the moment somebody reordered the tuple. A sum of indicators cannot
-    drift from a sum of indicators.
+    does. A first-match ``CASE`` ladder reads the edges in tuple order, and the
+    Python does not, so the two forms disagree on a reordered tuple. A sum of
+    indicators cannot drift from a sum of indicators.
     """
     clamped = f"GREATEST(-{SCORE_CLAMP}, LEAST({SCORE_CLAMP}, CAST({expr} AS INTEGER)))"
     terms = " + ".join(
@@ -395,7 +396,7 @@ def unreachable_cells(occ_reference: np.ndarray) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# The widening ladder (the evidence SIM-475 needs)
+# The widening ladder (the evidence for the widening order)
 # ---------------------------------------------------------------------------
 
 #: The five filter dimensions, most-significant first. The order matches
@@ -414,7 +415,8 @@ DIMENSION_SIZES: dict[str, int] = {
 #: The widening order the remediation decision record sets at line 422: relax
 #: the score band first, then home-or-away, then the count. Each entry lists the
 #: dimensions the step has dropped, CUMULATIVELY. Step 0 is the exact cell.
-#: SIM-475 must import this tuple instead of restating the order in prose.
+#: The sampler's cell index widens in the same order
+#: (``FullPoolSampler._subcell_rows``).
 WIDEN_LADDER: tuple[tuple[str, ...], ...] = (
     (),
     ("score_band",),
@@ -563,7 +565,7 @@ def widening_recovery(
       * ``admissible_first_drop_ranking`` covers only the three dimensions the
         ladder may relax (:data:`WIDEN_ADMISSIBLE`).
         ``score_band_is_the_best_first_drop`` reads off THIS ranking, so it is a
-        verdict on a choice SIM-475 can actually make.
+        verdict on a choice the ladder can make.
       * ``first_drop_ranking`` covers all five, including the base state and the
         outs. That is a DIAGNOSTIC. It says where the thin draw share sits. It
         is not a recommendation: relaxing the base state throws away the
@@ -698,9 +700,9 @@ def _redact_url_dsn(dsn: str) -> str:
 def _redact_keyword_dsn(dsn: str) -> str:
     """Redact a libpq keyword DSN, e.g. ``host=db port=5432 user=x password=pw dbname=y``.
 
-    The old redactor split on ``@``. A keyword DSN holds no ``@``, so the split
-    returned the WHOLE string and wrote the password into the committed report.
-    This form reads the keywords instead and emits only the allowlisted ones.
+    A keyword DSN holds no ``@``, so a split on ``@`` returns the WHOLE string
+    and writes the password into the committed report. This form reads the
+    keywords instead and emits only the allowlisted ones.
     """
     found: dict[str, str] = {}
     for match in _DSN_KEYWORD_PAIR.finditer(dsn):
@@ -796,8 +798,8 @@ def build_half_inning_map(con: Any, source: str) -> int:
 
     ``bat_is_home`` is 1 when the home team bats. Postgres marks that with
     ``inning_topbot = 'Bot'``; the DuckDB table stores the same convention in
-    ``top_or_bottom`` (``player_profile_computor.py:5037`` builds it from the
-    same expression), so the two sources are definitionally identical and only
+    ``top_or_bottom`` (``player_profile_computor.py`` builds it from the same
+    expression), so the two sources are definitionally identical and only
     their coverage differs.
 
     A TEMP TABLE works on a read-only connection: DuckDB keeps the temporary
@@ -860,8 +862,8 @@ def cell_occupancy(
     """Cross-tab one pool configuration into a length-2880 occupancy vector.
 
     ``hand`` is ``L``, ``R`` or ``ALL``. ``ALL`` removes the batter-hand
-    partition, which is the SIM-461 evidence. Cells with no rows read 0 rather
-    than dropping out, because a zero cell is the interesting case.
+    partition, which measures what the partition costs. Cells with no rows read
+    0 rather than dropping out, because a zero cell is the interesting case.
 
     The query also groups by season, so the caller learns which of the REQUESTED
     seasons actually delivered rows. Without that split a configuration asking
@@ -904,17 +906,16 @@ def health_report(
 ) -> dict[str, Any]:
     """Decide whether the measurement is sound, and say why when it is not.
 
-    The old ``coverage_ok`` flag answered ONE question: does every season the
-    pool holds join to a half-inning at the required rate? That question cannot
-    see a season the pool does not hold at all. The committed 2026-08-10 report
-    is the proof: ``sim.outcome_pool`` held no 2026 rows, the join-coverage loop
-    never visited 2026 because it iterates the seasons present, and three
-    configurations labelled ``[2024, 2025, 2026]`` measured two seasons under a
-    green flag.
+    Join coverage alone asks ONE question: does every season the pool holds
+    join to a half-inning at the required rate? That question cannot see a
+    season the pool does not hold at all, because the join-coverage loop
+    iterates only the seasons present. The 2026-08-10 report shows the trap:
+    ``sim.outcome_pool`` held no 2026 rows, and three configurations labelled
+    ``[2024, 2025, 2026]`` measured two seasons under a green flag.
 
     So this function asks three questions.
 
-    1. ``join_coverage_ok`` — the original one.
+    1. ``join_coverage_ok`` — the join-coverage question above.
     2. ``pools_hold_every_season`` — does every pool hold every season the pitch
        pool holds? The pitch pool is the reference because it is the widest.
     3. ``configurations_complete`` — did every configuration find rows in every

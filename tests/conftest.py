@@ -1,20 +1,17 @@
 """
-Root test configuration — shared fixtures and pytest hooks.
+Root test configuration: shared fixtures and pytest hooks.
 
 Fixtures defined here are available to ALL tests (unit, integration, backtesting).
 Heavy fixtures that require live infrastructure (PostgreSQL, Redis) live in
 tests/integration/conftest.py and are only instantiated when integration tests run.
 
-SIM-152 — Shared unit-test fixtures
------------------------------------
-The live-ingestion-pipeline tests (test_live_pipeline_bugs.py,
-test_odds_provider_ingestion.py, test_live_pipeline.py) all stand up the
-same handful of mocks: an AsyncMock asyncpg pool, an AsyncMock Redis client, a
-mock aiohttp session, a minimal feed/live payload, and a built game_state.
-SIM-152 hoists those into shared fixtures here so each module reuses them
-instead of re-rolling its own.  Existing modules that already define local
-helpers keep working — these fixtures are *additive* and opt-in (a test only
-gets one by naming it in its signature).
+Shared mock fixtures
+--------------------
+The live-ingestion-pipeline tests need the same handful of mocks: an
+AsyncMock asyncpg pool, an AsyncMock Redis client, a mock aiohttp session, a
+minimal feed/live payload, and a built game_state. The fixtures below provide
+them once. They are opt-in: a test gets one only by naming it in its
+signature. Some test modules define their own local helpers instead.
 """
 
 from __future__ import annotations
@@ -25,91 +22,85 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# (SIM-476, owner ruling 2026-08-30: the SIM-412 home-field flip is DELETED —
-# home advantage is the SIM-491 home kernel, pinned off below via
-# SIM_HOME_OFF_WEIGHT=1.0, so the unit suite keeps its symmetric run
-# environment.)
+# The flag pins. Production sets the SIM_* flags in the docker-compose `app`
+# env, and `docker compose run app pytest` inherits that env. Most pins below
+# set a flag to its OFF value, which skips that feature's code, so the unit
+# lane's output stays byte-identical (the same, bit for bit) to its baseline.
+# A test that wants a feature on sets it explicitly: with monkeypatch, or on
+# the sampler or the machine.
 
-# SIM-434: production enables the manager decision model via SIM_MANAGER=1 (set
-# in the docker-compose `app` env, which `docker compose run app pytest` inherits).
-# The unit suite asserts the flag-OFF (manager-is-None) byte-identical baseline,
-# so force it off here; the SIM-434 tests opt in explicitly via monkeypatch.
+# The manager (the intentional walk and the pitching change). Off = no
+# manager on the machine. The manager tests opt in with monkeypatch.
 os.environ["SIM_MANAGER"] = "0"
 
-# SIM-413: production enables the L-R platoon batted-ball reweight in the
-# docker-compose `app` env; the unit suite asserts the flag-off baseline, so
-# pin it off here so the env never leaks into `docker compose run app pytest`.
-# (SIM-476 deleted the SIM_PARK_FACTOR / SIM_FIELDER_RBF post-draw flips; the
-# fitted kernel sigmas pinned below replaced them.)
+# The batted-ball platoon: the fielding draw keys its pool on the batter's
+# hand against the pitcher's.
 os.environ["SIM_BB_PLATOON"] = "0"
 
-# SIM-491: the home-field DRAW weight (the SIM-412 rebuild). 1.0 disables the
-# reweight exactly (no weight multiplication runs), so pin it here so a dev
-# shell's env never leaks into `docker compose run app pytest`. The SIM-491
-# tests pass home_off_weight to the sampler directly, not via the env.
+# The home-field draw weight on a row of the other batting side. 1.0 skips the
+# weight multiplication exactly, so the unit suite keeps a symmetric run
+# environment. The home-field tests pass home_off_weight to the sampler
+# directly, not via the env.
 os.environ["SIM_HOME_OFF_WEIGHT"] = "1.0"
 
-# SIM-491 part 2: the park KERNEL bandwidth (the SIM-411 rebuild). 0 disables
-# the kernel exactly; the tests set the sampler's park_sigma directly.
+# The park kernel's bandwidth. 0 disables the kernel exactly; the tests set
+# the sampler's park_sigma directly.
 os.environ["SIM_PARK_KERNEL_SIGMA"] = "0"
 
-# SIM-523 part E: the catcher RECEIVING ratio (the SIM-517 kernel is deleted)
-# + SIM-517's got-away resolution. Both off = byte-identical; the tests
-# opt in explicitly.
+# The catcher receiving ratio, and the drawn pitch row's got-away fact (a wild
+# pitch or a passed ball). The tests opt in explicitly.
 os.environ["SIM_CATCHER_RECEIVING"] = "0"
 os.environ["SIM_GOT_AWAY"] = "0"
 
-# SIM-518: the draw-conditioning weights (fatigue + the batting side on the
-# pitch draw; the drawn pitch's similarity on the batted-ball draw). All off =
-# byte-identical; the SIM-518 tests set the sampler attributes directly.
+# The draw-conditioning weights: fatigue and the batting side on the pitch
+# draw, and the drawn pitch's similarity on the fielding draw. The tests set
+# the sampler attributes directly.
 os.environ["SIM_FATIGUE_PC_SIGMA"] = "0"
 os.environ["SIM_FATIGUE_TTO_SIGMA"] = "0"
 os.environ["SIM_PITCH_HOME_OFF_WEIGHT"] = "1.0"
 os.environ["SIM_BB_PITCH_SIGMA"] = "0"
 
-# SIM-467: the pitch-draw cell index. Off = the whole-pool weight assembly,
-# byte-identical; the SIM-467 tests set ``pitch_cell_index`` directly.
+# The pitch-draw cell index. Off = the whole-pool weight assembly; the tests
+# set ``pitch_cell_index`` directly.
 os.environ["SIM_PITCH_CELL_INDEX"] = "0"
 
-# SIM-523: the actor score matrices are the only actor factors (the kernels
-# are retired, 2026-09-09); a synthetic bundle without a matrix leaves that
-# actor neutral, and the tests set ``actor_power`` directly.
+# The actor score matrices are the only actor factors, and no flag gates them.
+# A synthetic bundle without a matrix leaves that actor neutral; the tests set
+# ``actor_power`` directly.
 
-# SIM-523 part B: the pitch / pitch-result split and the born-batted-ball
-# kernel. Both off = one draw per pitch, byte-identical; the part-B tests
-# set the sampler attributes directly.
+# The pitch / pitch-result split and the born-batted-ball kernel (a weight on
+# the batted ball the result row was born with). Both off = one draw per
+# pitch; the tests set the sampler attributes directly.
 os.environ["SIM_PITCH_RESULT_SPLIT"] = "0"
-os.environ["SIM_PITCH_PITCHER_POWER"] = "1.0"  # SIM-523 part F: the raw score
+os.environ["SIM_PITCH_PITCHER_POWER"] = "1.0"  # 1.0 = the raw score, no power step
 os.environ["SIM_BB_BORN_SIGMA"] = "0"
 
-# SIM-523 part C: the fielding draw's class filter and park wall-zone rule. All off = byte-identical; the part-C tests set the
-# sampler attributes directly.
+# The fielding draw's class filter, the park's wall-zone rule and the fence
+# stage. The tests set the sampler attributes directly.
 os.environ["SIM_BB_CLASS_FILTER"] = "0"
 os.environ["SIM_PARK_WALL_ZONE_ONLY"] = "0"
 os.environ["SIM_FENCE_STAGE"] = "0"
-# SIM-478 (the fence certification's amendments): the carry offset, the born
-# kernel's exponent per feature and the wall-margin band. All off =
-# byte-identical; the SIM-478 tests set the sampler attributes directly.
+# The fence amendments: the carry offset, the born kernel's exponent per
+# feature and the wall-margin band. The tests set the sampler attributes
+# directly.
 os.environ["SIM_CARRY_OFFSET"] = "0"
 os.environ["SIM_BB_BORN_PER_FEATURE"] = "0"
 os.environ["SIM_BB_MARGIN_BAND"] = "0"
-# SIM-563: a test never restarts PID 1 or reads a pinned bundle version left by
-# a lifespan, and a lock error in a test never waits 30 minutes.
+# The bundle watch: a test never restarts PID 1 and never reads a bundle
+# version that a lifespan pinned. A lock error in a test never waits 30 minutes.
 os.environ["SIM_RESTART_ON_NEW_BUNDLE"] = "0"
 os.environ.pop("BASEBALL_ENGINE_ARTIFACT_DIR", None)
 os.environ["SIM_BOOT_LOCK_WAIT_S"] = "0"
 
-# SIM-523 part D: the pitching change as a draw from the opportunity pool.
-# Off = the SIM-434 formula, production today and the OFF arm of the SIM-427
-# paired accuracy run (the flip deletes the formula; with SIM_MANAGER off there
-# is no manager at all). A test that wants the draw sets ``machine.manager_draw``.
+# The pitching change as a draw from the change opportunity pool. Off = no
+# pitching change. A test that wants the draw sets ``machine.manager_draw``.
 os.environ["SIM_MANAGER_DRAW"] = "0"
-# SIM-427: the live manager's usage weight on the change draw and the six
-# reliever-draw weights — every one at its OFF value, so a unit game keeps the
-# pool's own change rate and the positional reliever pick.
+# The live manager's usage weight on the change draw and the six reliever-draw
+# weights, every one at its OFF value. A unit game then keeps the pool's own
+# change rate and the positional reliever pick.
 os.environ["SIM_ACTOR_POWER_MANAGER_USAGE"] = "0"
-# The pen source: 'synthetic' = the no-DB seam's pen (production today);
-# 'box' = the MLB box's per-game listing (the flip).
+# The pen source: 'synthetic' = the no-DB seam's pen; 'box' = the MLB box's
+# per-game listing (production).
 os.environ["SIM_BULLPEN_SOURCE"] = "synthetic"
 os.environ["SIM_RELIEF_ROLE_SIGMA"] = "0"
 os.environ["SIM_RELIEF_PITCHER_POWER"] = "0"
@@ -118,37 +109,37 @@ os.environ["SIM_RELIEF_PITCHED2D_OFF_WEIGHT"] = "1.0"
 os.environ["SIM_RELIEF_PITCHES3D_SIGMA"] = "0"
 os.environ["SIM_RELIEF_HAND_OFF_WEIGHT"] = "1.0"
 
-# SIM-554: the running game on the pitch (SIM_STEAL_PITCH_CLASS) is NOT pinned,
-# on purpose. The flag defaults ON, in the sampler and in the factory. The unit
+# The running game on the pitch (SIM_STEAL_PITCH_CLASS) is NOT pinned, on
+# purpose. The flag defaults ON, in the sampler and in the factory. The unit
 # lane builds its samplers directly, so the environment never reaches them, and
-# a pin here would change nothing. The no-database tests run the new order on
-# purpose (plan §4.5): the pickoff draw before the pitch, the steal draw after
-# it in the pitch's class. A test that wants the old single pre-pitch draw sets
-# ``sampler.steal_pitch_class = False``, or builds a steal pool with no class.
+# a pin here would change nothing. The no-database tests run the production
+# order on purpose (plan §4.5): the pickoff draw before the pitch, the steal
+# draw after it in the pitch's class. A test that wants the single pre-pitch
+# draw sets ``sampler.steal_pitch_class = False``, or builds a steal pool with
+# no class.
 
-# SIM-443c: the API requires a login in every environment, and the one opt-out
-# is AUTH_DISABLED=1. The suite opts out here so the route tests that build a
+# The API requires a login in every environment, and the one opt-out is
+# AUTH_DISABLED=1. The suite opts out here so the route tests that build a
 # bare app or router need no credentials. setdefault (not a pin) keeps an
 # explicit value from the shell. The two files that test the enforcement
 # delete the variable with monkeypatch: tests/unit/test_api_auth_session.py
 # and tests/unit/test_route_auth_coverage.py.
 os.environ.setdefault("AUTH_DISABLED", "1")
 
-# SIM-567 (the test lane's odds provider): the app container reads the
-# stack's .env through env_file. The .env file names the vendor:
-# ODDS_PROVIDER=bettingpros. Twelve tests build the live pipeline with
-# __new__ (no constructor) and set no provider. The pipeline's lazy
-# fallback then reads the environment. Before this pin, those tests built
-# the vendor's provider. The MLB Stats API answered its reads with HTTP
-# 404. The pin is a hard one, not setdefault, because the explicit .env
-# value is the defect. A test that wants the vendor name sets it with
-# monkeypatch (tests/unit/test_odds_writers.py). The clean_env fixture
-# of tests/unit/test_odds_provider_seam.py deletes it. Monkeypatch
-# restores the pinned value on teardown. The pin removes the API key too.
-# A test that still builds the vendor's provider then sends no BettingPros
-# request. The provider's _bp_get raises "needs an API key" first. The
-# public methods catch that error and return empty rows. The MLB Stats
-# API reads (_mlb_get) need no key, so they still try the network.
+# The test lane's odds provider. The app container reads the stack's .env
+# through env_file, and that file names the vendor: ODDS_PROVIDER=bettingpros.
+# Twelve tests build the live pipeline with __new__ (no constructor) and set
+# no provider, so the pipeline's lazy fallback reads the environment. Without
+# the pin, those tests build the vendor's provider and its reads go to the
+# network. The pin is a hard one, because setdefault cannot beat the explicit
+# .env value. A test that wants the vendor name sets it with monkeypatch
+# (tests/unit/test_odds_writers.py). The clean_env fixture of
+# tests/unit/test_odds_provider_seam.py deletes it. Monkeypatch restores the
+# pinned value on teardown. The pin removes the API key too. A test that
+# still builds the vendor's provider then sends no BettingPros request. The
+# provider's _bp_get raises "needs an API key" first. The public methods
+# catch that error and return empty rows. The MLB Stats API reads (_mlb_get)
+# need no key, so they still try the network.
 os.environ["ODDS_PROVIDER"] = "mock"
 os.environ.pop("ODDS_API_KEY", None)
 
@@ -174,7 +165,7 @@ def sample_player_ids() -> dict[str, list[int]]:
 
 
 # ---------------------------------------------------------------------------
-# SIM-152: Mock infrastructure fixtures (no live DB / Redis / HTTP)
+# Mock infrastructure fixtures (no live DB / Redis / HTTP)
 # ---------------------------------------------------------------------------
 
 
@@ -364,7 +355,7 @@ def sample_game_state(sample_game_pk: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# SIM-378 — event-loop guard (Python 3.11+ / pytest-asyncio interaction)
+# The event-loop guard (Python 3.11+ / pytest-asyncio interaction)
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _ensure_current_event_loop():

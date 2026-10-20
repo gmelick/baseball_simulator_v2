@@ -1,36 +1,33 @@
 """
 tests/unit/test_sim_kwargs.py
 ====================================
-SIM-449 — the shared ``simulate_game`` kwargs builder + the park-factor resolver.
+The shared ``simulate_game`` kwargs builder + the park-factor resolver.
 
-THE DEFECT THESE TESTS GUARD
-----------------------------
-``scripts/sim_stats.py`` — the validation harness — held its OWN copy of the
-kwargs builder.  The copy dropped ``home_defense``, ``away_defense`` and
-``park_run_factor``.  SIM_FIELDER_RBF reads the two defense maps and
-SIM_PARK_FACTOR reads the park factor, so both flags ran as no-ops under the
-harness, and every A/B test of either flag reported "no effect".
+THE ONE BUILDER
+---------------
+Every caller that turns a GameState into ``simulate_game`` kwargs uses the one
+builder in ``simulation.sim_kwargs``. A private copy of the builder can drop a
+key. A copy without ``home_defense``, ``away_defense`` and ``park_run_factor``
+silently turns off the fielder factor and the park kernel, and every A/B read
+of either then reports "no effect".
 
-Two guards close that hole:
+Two guards hold the one builder in place:
 
   * :data:`SIM_KWARG_KEYS` pins the full key set, so a dropped key fails CI;
   * the identity checks below fail the moment somebody reintroduces a local copy
     of either function in ``api/routes/games.py``.
 
-WHAT SIM-449 LEFT OPEN — AND SIM-452 CLOSES
---------------------------------------------
-SIM-449 unified the BUILDER. It did not unify the park-factor RESOLUTION. Three
-call sites looked the venue up and put the factor on the GameState; five did not,
-and shipped the dataclass default 1.0. ``SIM_PARK_FACTOR`` was therefore inert for
-those five, one of which was ``scripts/accuracy_comparison.py`` — the Closing Line Value
-backtest, the fund's gold-standard metric.
+THE PARK-FACTOR RESOLUTION
+--------------------------
+Each caller must also look the venue up and put its park factor on the
+GameState. A caller that skips the lookup ships the dataclass default 1.0.
+``SIM_KWARG_KEYS`` cannot catch that: the key is present, just 1.0, and 1.0 is
+ALSO the right answer for a genuinely neutral park.
 
-``SIM_KWARG_KEYS`` could not catch it. The key was always present, just always 1.0,
-and 1.0 is ALSO the right answer for a genuinely neutral park.
-
-SIM-452 gives the unresolved case its own value, ``UNRESOLVED_PARK_FACTOR``, and
-makes the builder refuse it. The tests below prove the refusal FIRES — including
-against the exact two-line calling pattern that shipped in production.
+So the unresolved case carries its own value, ``UNRESOLVED_PARK_FACTOR``, and
+the builder refuses it. The tests below prove the refusal FIRES, including
+against the bare two-line calling pattern (build the state, then call the
+builder with no lookup between them).
 
 The tests use the project's in-memory mock pattern.  No live DB runs.
 """
@@ -38,12 +35,12 @@ The tests use the project's in-memory mock pattern.  No live DB runs.
 from __future__ import annotations
 
 import ast
-import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.script_loader import load_script
 
 from simulation.game_state import GameState
 from simulation.sim_kwargs import (
@@ -70,7 +67,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture(autouse=True)
 def _clean_park_factor_globals():
-    """SIM-453: the warn-once memo and the primed source are process-wide.
+    """The warn-once memo and the primed source are process-wide.
 
     Reset both around every test so no test in this file can pass because an
     earlier one primed a connection or swallowed a warning.
@@ -90,8 +87,6 @@ def test_builder_returns_the_whole_contract():
     assert set(sim_kwargs_from_state(state)) == SIM_KWARG_KEYS
     # The count is pinned too: an added key is a behaviour change and must be a
     # deliberate edit here, not a silent drift.
-    # SIM-486 deleted ``k``; SIM-523 added venue_id; SIM-427 added the two managers,
-    # the pen, its rest, usage and source, the profiles and the league means (8).
     assert len(SIM_KWARG_KEYS) == 24
 
 
@@ -208,8 +203,8 @@ class _BoomCon:
 
 
 #: Every way the two-source lookup can fail, with a phrase the reason must contain.
-#: SIM-453: each of these used to return a PLAIN 1.0, which cleared the sentinel one
-#: line later and made the failure invisible. Each now returns the sentinel.
+#: Each returns the sentinel, not a PLAIN 1.0: a plain 1.0 clears the sentinel one
+#: line later and makes the failure invisible.
 _UNAVAILABLE_CASES = [
     ("no duckdb", _FakePool(15), None, "no park-factor source"),
     ("unknown venue", _FakePool(None), _FakeCon(1.18), "no venue_id"),
@@ -227,10 +222,10 @@ _UNAVAILABLE_CASES = [
 async def test_every_unavailable_branch_reads_as_1_but_stays_UNRESOLVED(label, pool, con, phrase):
     f = await resolve_park_run_factor(pool, con, 777, 2024)
 
-    # A consumer that only wants the number is untouched. This is the original
-    # SIM-411/449 contract and it must not change.
+    # A consumer that only wants the number reads 1.0. That contract must not
+    # change.
     assert f == 1.0
-    # ... and the failure is no longer invisible.
+    # ... and the failure stays visible.
     assert park_factor_reason(f) is not None, f"{label}: an unavailable source returned a plain 1.0"
     assert phrase in park_factor_reason(f)
 
@@ -243,7 +238,7 @@ async def test_a_real_row_comes_back_a_PLAIN_float():
 
 
 async def test_a_genuinely_neutral_park_is_a_PLAIN_1_point_0():
-    """The case the whole ticket turns on: a real park that really measures 1.0."""
+    """The case the whole guard turns on: a real park that really measures 1.0."""
     f = await resolve_park_run_factor(_FakePool(15), _FakeCon(1.0), 777, 2024)
     assert f == 1.0
     assert park_factor_reason(f) is None  # resolved
@@ -298,10 +293,10 @@ def test_open_sim_duckdb_returns_none_on_failure(monkeypatch):
 
 
 # ===========================================================================
-# SIM-452 — the unresolved-park-factor sentinel
+# The unresolved-park-factor sentinel
 #
 # Every test in this section exists to prove the guard can go RED. A guard that
-# only passes on good input is the defect this whole round is about.
+# only passes on good input guards nothing.
 # ===========================================================================
 
 
@@ -318,7 +313,7 @@ def test_the_sentinel_equals_one_but_is_not_a_resolved_one():
     assert float(UNRESOLVED_PARK_FACTOR) == 1.0
     # ... and still be tellable apart from a resolved neutral park. This is the
     # whole point: 1.0 is a legitimate answer AND the "nobody looked" value, and
-    # SIM-449 could not separate the two.
+    # a plain float cannot separate the two.
     assert type(UNRESOLVED_PARK_FACTOR) is not float
 
 
@@ -378,19 +373,12 @@ async def test_entry_point_resolves_then_builds():
 
 
 async def test_entry_point_keeps_the_state_UNRESOLVED_when_no_duckdb():
-    """SIM-453 — this test used to PIN the defect.
+    """No DuckDB is an UNAVAILABLE source, not a neutral answer.
 
-    It read:
-
-        kw = await build_sim_kwargs(state, pool=_FakePool(15), con=None, game_pk=777)
-        assert park_factor_is_resolved(state) is True
-
-    with the comment "No DuckDB -> the lookup ANSWERS 'neutral'. That is a resolved
-    answer, not a skipped lookup." That comment was wrong, and asserting it is why
-    no test in this file could go red on the real defect. No DuckDB is an
-    UNAVAILABLE source. It answers nothing. Calling that "resolved" is the whole
-    bug: on the default stack, where api/main.py never opens app.state.sim_duckdb,
-    every route shipped a neutral 1.0 and this assertion said it was fine.
+    The source answers nothing, so the state stays UNRESOLVED. Calling that
+    "resolved" hides the failure: api/main.py never opens app.state.sim_duckdb,
+    so a route with no primed source ships a neutral 1.0, and a "resolved"
+    reading says that is fine.
 
     The kwargs still BUILD -- /simulate must keep answering with no sim DuckDB --
     but the state keeps the truth and the builder logs a warning.
@@ -401,7 +389,7 @@ async def test_entry_point_keeps_the_state_UNRESOLVED_when_no_duckdb():
 
     assert kw["park_run_factor"] == 1.0  # the number the sim runs with, unchanged
     assert type(kw["park_run_factor"]) is float  # a plain float reaches simulate_game
-    assert park_factor_is_resolved(state) is False  # <-- the line that used to be True
+    assert park_factor_is_resolved(state) is False  # <-- the source answered nothing
     assert "no park-factor source" in (park_factor_reason(state.park_run_factor) or "")
 
 
@@ -433,20 +421,16 @@ async def test_resolver_defaults_the_season_to_the_state():
 
 
 # ===========================================================================
-# SIM-452 — the historical defect, reproduced
+# The bare two-line pattern
 #
-# `api/routes/games.py::get_game_boxscore` shipped exactly two lines:
+# A caller that builds the state and then calls the builder, with no
+# park-factor lookup between them, is park-blind:
 #
 #     state = await _resolve_state_or_error(pool, game_pk)
 #     sim_kwargs = _sim_kwargs_from_state(state)
 #
-# No park-factor lookup between them. The same two lines ran in
-# `get_player_prop_edge`, in `api/routes/betting.py::_summary_and_winprob`, and —
-# through `_collect_game_results` — in `scripts/accuracy_comparison.py` and
-# `scripts/validate_props.py`. Five park-blind callers, all reporting success.
-#
 # These tests run that pattern against the REAL `_resolve_state_or_error` and
-# assert it now goes red.
+# assert it goes red.
 # ===========================================================================
 
 
@@ -461,7 +445,7 @@ def _stub_resolve_game_state(monkeypatch):
     """Make ``api.routes.games.resolve_game_state`` return a bare GameState.
 
     The lineup resolver needs a live Postgres. The code under test here is the
-    SIM-452 stamping in ``_resolve_state_or_error``, not the lineup SQL, so the
+    sentinel stamping in ``_resolve_state_or_error``, not the lineup SQL, so the
     resolver is stubbed and everything downstream of it stays real.
     """
     import api.routes.games as g
@@ -480,16 +464,16 @@ async def test_state_factory_stamps_every_state_unresolved(monkeypatch):
 
 
 async def test_PRE_FIX_boxscore_pattern_now_goes_RED(monkeypatch):
-    """The exact pre-fix two-liner. It used to return park-blind kwargs. It raises now."""
+    """The bare two-liner raises instead of returning park-blind kwargs."""
     g = _stub_resolve_game_state(monkeypatch)
 
     state = await g._resolve_state_or_error(_FakePool(15), 777)
     with pytest.raises(UnresolvedParkFactorError):
-        g._sim_kwargs_from_state(state)  # <-- the shipped line
+        g._sim_kwargs_from_state(state)  # <-- the bare builder call
 
 
 async def test_POST_FIX_boxscore_pattern_resolves_the_real_factor(monkeypatch):
-    """The same route, rewired. It resolves the venue factor and builds cleanly."""
+    """The resolving path looks the venue factor up and builds cleanly."""
     g = _stub_resolve_game_state(monkeypatch)
     pool = _FakePool(15)
     request = _StubRequest(_FakeCon(1.18))
@@ -502,16 +486,16 @@ async def test_POST_FIX_boxscore_pattern_resolves_the_real_factor(monkeypatch):
 
 
 async def test_the_pre_fix_and_post_fix_kwargs_actually_differ(monkeypatch):
-    """Name the size of the defect: the two paths send different park factors.
+    """Name the size of the failure: the two paths send different park factors.
 
-    A hitter's park at 1.18 versus the park-blind 1.0. That difference is what
-    SIM_PARK_FACTOR consumes, so under the old path the flag had nothing to act on.
+    A hitter's park at 1.18 versus the park-blind 1.0. The park kernel reads that
+    difference, so the bare path gives it nothing to act on.
     """
     g = _stub_resolve_game_state(monkeypatch)
     pool = _FakePool(15)
 
     pre_fix_state = await g._resolve_state_or_error(pool, 777)
-    pre_fix_state.park_run_factor = 1.0  # what the old code shipped: the default
+    pre_fix_state.park_run_factor = 1.0  # what the bare path sends: the default
     pre_fix = g._sim_kwargs_from_state(pre_fix_state)
 
     post_fix_state = await g._resolve_state_or_error(pool, 777)
@@ -522,7 +506,7 @@ async def test_the_pre_fix_and_post_fix_kwargs_actually_differ(monkeypatch):
 
 
 # ===========================================================================
-# SIM-452 — every call site resolves before it builds
+# Every call site resolves before it builds
 #
 # The runtime guard is the real enforcement: the API state factory stamps the
 # sentinel and the builder refuses it. This section adds a SOURCE-level guard on
@@ -538,13 +522,13 @@ async def test_the_pre_fix_and_post_fix_kwargs_actually_differ(monkeypatch):
 #: adding a call site of either kind is a deliberate edit here, not silent drift.
 _SIM_KWARGS_CALL_SITES: dict[str, dict[str, int]] = {
     # The routes -> _resolved_sim_kwargs -> build_sim_kwargs. No bare call at all.
-    # SIM-561 added the sample-game route (5 -> 6); SIM-519 the run job's
-    # POST /simulate (6 -> 7); SIM-562 the what-if's POST /what-if (7 -> 8).
+    # The eight resolving calls include the sample-game route, the run job's
+    # POST /simulate and the what-if's POST /what-if.
     "api/routes/games.py": {"bare": 0, "resolving": 8},
     # _summary_and_winprob -> _resolved_sim_kwargs.
     "api/routes/betting.py": {"bare": 0, "resolving": 1},
-    # _score_one_game resolves; _collect_game_results builds in the worker thread.
-    "scripts/accuracy_comparison.py": {"bare": 1, "resolving": 1},
+    # _score_one_game resolves; _replay_game builds in the worker thread.
+    "scripts/accuracy/replay.py": {"bare": 1, "resolving": 1},
     # run() resolves; _collect_game_results builds in the worker thread.
     "scripts/validate_props.py": {"bare": 1, "resolving": 1},
 }
@@ -606,10 +590,10 @@ def test_resolving_call_count_is_pinned(rel_path):
     )
 
 
-#: The eighth consumer. ``scripts/sim_stats.py`` and the acceptance lane build their
-#: GameState with ``resolve_game_state`` instead of the API's state factory, so they
-#: never carry the sentinel and the builder cannot reject them. They resolve by hand
-#: instead, and this guard reads their source to confirm they still do.
+#: The callers outside the API's state factory. ``scripts/sim_stats.py`` and the
+#: acceptance lane build their GameState with ``resolve_game_state``, so they never
+#: carry the sentinel and the builder cannot reject them. They resolve by hand
+#: instead, and this guard reads their source to confirm they do.
 _HAND_RESOLVING_CALLERS = ("scripts/sim_stats.py", "tests/acceptance/conftest.py")
 
 
@@ -629,11 +613,11 @@ def test_the_hand_resolving_callers_still_resolve(rel_path):
 
 
 # ===========================================================================
-# SIM-452 — the two offline jobs refuse to run park-blind
+# The two offline jobs refuse to run park-blind
 #
 # `open_sim_duckdb` returning None means every park factor becomes a neutral 1.0.
-# A resolved-looking 1.0 across a whole season is exactly the silent no-op this
-# round is about, so both jobs exit non-zero instead.
+# A resolved-looking 1.0 across a whole season is a silent no-op, so both jobs
+# exit non-zero instead.
 # ===========================================================================
 
 
@@ -641,22 +625,18 @@ _SCRIPT_CACHE: dict = {}
 
 
 def _load_script(name: str):
-    """Import a ``scripts/`` module by path (``scripts/`` is not a package).
+    """A ``scripts/`` module, loaded once per name (``tests/script_loader.py``)."""
+    if name not in _SCRIPT_CACHE:
+        _SCRIPT_CACHE[name] = load_script(name)
+    return _SCRIPT_CACHE[name]
 
-    Cached, because both jobs are ~1200-line modules and every test in this section
-    wants one. The module MUST land in ``sys.modules`` before ``exec_module`` so
-    ``@dataclass(slots=True)`` can resolve its own namespace.
-    """
-    if name in _SCRIPT_CACHE:
-        return _SCRIPT_CACHE[name]
-    path = _REPO_ROOT / "scripts" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    _SCRIPT_CACHE[name] = mod
-    return mod
+
+def _replay_stage():
+    """The accuracy comparison's replay stage (``scripts/accuracy/replay.py``)."""
+    _load_script("accuracy_comparison")
+    from accuracy import replay
+
+    return replay
 
 
 class _ClosableCon(_FakeCon):
@@ -679,7 +659,7 @@ def _fake_duckdb(monkeypatch):
 
 
 async def test_clv_backtest_EXITS_NONZERO_without_park_factors(monkeypatch, tmp_path):
-    """CAN IT FAIL: the CLV backtest refuses a park-blind run."""
+    """CAN IT FAIL: the accuracy comparison refuses a park-blind run."""
     clv = _load_script("accuracy_comparison")
     _no_duckdb(monkeypatch)
 
@@ -697,11 +677,10 @@ async def test_clv_backtest_runs_when_park_factors_are_available(monkeypatch, tm
     """The same run, with the park-factor source present, gets PAST the park gate —
     so the test above is measuring the precondition and not some unrelated breakage.
 
-    It then stops at a different gate: SIM-454 (a concurrent ticket, owner
-    ``scripts/accuracy_comparison.py``) made a run that priced nothing exit
+    It then stops at a different gate: a run that prices nothing exits
     ``EXIT_NOTHING_SCORED``, and ``_fetch_final_games`` is stubbed to return no
-    games here. The two codes are what this test cares about: the run no longer
-    stops for want of park factors.
+    games here. The two codes are what this test cares about: the run does not
+    stop for want of park factors.
     """
     clv = _load_script("accuracy_comparison")
     _fake_duckdb(monkeypatch)
@@ -737,7 +716,7 @@ async def test_clv_backtest_honours_the_explicit_opt_out(monkeypatch, tmp_path):
             "--allow-neutral-parks",
         ]
     )
-    # Past the park gate. It stops at SIM-454's empty-slate gate instead.
+    # Past the park gate. It stops at the empty-slate gate instead.
     rc = await clv.run(args)
     assert rc != clv.EXIT_NO_PARK_SOURCE
     assert rc == clv.EXIT_NOTHING_SCORED
@@ -773,20 +752,25 @@ async def test_validate_props_runs_when_park_factors_are_available(monkeypatch, 
 
 @pytest.mark.parametrize("script", ["accuracy_comparison", "validate_props"])
 def test_script_replay_REFUSES_an_unresolved_state(script):
-    """The exact function that ran park-blind, refusing to run park-blind.
+    """Each script's replay refuses to run park-blind.
 
-    ``_collect_game_results`` builds the kwargs before it simulates anything, so an
-    unresolved state stops it on the first line — no sim, no report, no number.
+    The replay (``_replay_game`` in the accuracy comparison,
+    ``_collect_game_results`` in validate_props) builds the kwargs before it
+    simulates anything, so an unresolved state stops it on the first line: no
+    sim, no report, no number.
     """
-    mod = _load_script(script)
+    if script == "accuracy_comparison":
+        replay = _replay_stage()._replay_game
+    else:
+        replay = _load_script(script)._collect_game_results
     state = _bare_state()
     mark_park_factor_unresolved(state)
 
     with pytest.raises(UnresolvedParkFactorError):
-        mod._collect_game_results(state, 1, 0)
+        replay(state, 1, 0)
 
 
-# --- the CLV worker must not swallow the guard -------------------------------
+# --- the accuracy worker must not swallow the guard --------------------------
 
 
 def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
@@ -796,15 +780,15 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
     that way would let a whole park-blind season finish looking healthy. It must
     propagate.
     """
-    clv = _load_script("accuracy_comparison")
-    monkeypatch.setattr(clv, "_worker_lazy_init", lambda *_a, **_k: None)
+    replay = _replay_stage()
+    monkeypatch.setattr(replay, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _BoomLoop:
         def run_until_complete(self, coro):
             coro.close()
             raise UnresolvedParkFactorError("simulated regression")
 
-    monkeypatch.setattr(clv, "_WORKER_LOOP", _BoomLoop())
+    monkeypatch.setattr(replay, "_WORKER_LOOP", _BoomLoop())
     params = {
         "do_game": True,
         "do_props": False,
@@ -814,20 +798,20 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
         "duckdb": "/nope.duckdb",
     }
     with pytest.raises(UnresolvedParkFactorError):
-        clv._process_one_game(777, params)
+        replay._process_one_game(777, params)
 
 
 def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
     """The contrast case: an ordinary failure is still one skipped game, not a stop."""
-    clv = _load_script("accuracy_comparison")
-    monkeypatch.setattr(clv, "_worker_lazy_init", lambda *_a, **_k: None)
+    replay = _replay_stage()
+    monkeypatch.setattr(replay, "_worker_lazy_init", lambda *_a, **_k: None)
 
     class _BoomLoop:
         def run_until_complete(self, coro):
             coro.close()
             raise RuntimeError("one bad game")
 
-    monkeypatch.setattr(clv, "_WORKER_LOOP", _BoomLoop())
+    monkeypatch.setattr(replay, "_WORKER_LOOP", _BoomLoop())
     params = {
         "do_game": True,
         "do_props": False,
@@ -836,12 +820,7 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
         "dsn": "postgresql://x/y",
         "duckdb": "/nope.duckdb",
     }
-    # SIM-541: the payload used to also carry a "bets" key (the SIM-429 CLV
-    # scoreboard's per-bet records). The owner retired that report — the
-    # platform no longer measures the entry-to-close line move at all — and
-    # its code was deleted from scripts/accuracy_comparison.py, so an ordinary
-    # skipped game's payload no longer has anything to put there.
-    assert clv._process_one_game(777, params) == {
+    assert replay._process_one_game(777, params) == {
         "status": "unresolved",
         "accuracy_records": [],
         "park_run_factor": 1.0,
@@ -849,12 +828,11 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
 
 
 # ===========================================================================
-# SIM-453 — THE INSTRUMENT, CALIBRATED AGAINST THIS REPOSITORY
+# THE INSTRUMENT, CALIBRATED AGAINST THIS REPOSITORY
 #
-# Two earlier rounds of this fix failed the same way: the instrument was
-# calibrated against a number somebody wrote in a brief instead of the number this
-# repository records. So every threshold below is read out of the repository, and
-# the source of each one is named beside it.
+# Every threshold below is read out of the repository, and the source of each one
+# is named beside it. A number somebody wrote in a brief is not a source: an
+# instrument calibrated against one measures the brief, not the data.
 #
 # MAGNITUDE 1 — the real park factors, from the DuckDB in the app container.
 #   docker compose run --rm app python -c "
@@ -864,24 +842,21 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
 #   -> 35 rows (2,952 across all seasons). Deviation from 1.0:
 #        smallest 0.0032 (venue 2, factor 1.0032)
 #        largest  0.1358 (venue 15, factor 1.1358); venue 680 is 0.8726
-#   (Re-read 2026-09-09 after the part-G profile recompute moved every 2024
-#   factor, the largest move 2.2% at venue 3949; the 2026-08-10 read had the
-#   smallest deviation 0.0025 and the largest 0.1339 at venue 19.)
+#   (read 2026-09-09)
 #
 # MAGNITUDE 2 — the run-conversion gap this project is chasing.
 #   CLAUDE.md §11: "Runs run ~7-8% low (down from ~12% pre-fix)".
-#   The owner ruled on 2026-08-10 that 7-8% is authoritative and that an older
-#   "runs sit ~10-12% low" line is stale. The repository wins over any number in
-#   a brief, so 7% is the figure used below.
+#   The owner ruled that 7-8% is the authoritative figure (2026-08-10). The
+#   repository wins over any number in a brief, so 7% is the figure used below.
 #
 # HOW THE TWO CALIBRATE THE INSTRUMENT.
-#   A silent neutral 1.0 at the WORST 2024 venue is a 13.4% error in the run
+#   A silent neutral 1.0 at the WORST 2024 venue is a 13.6% error in the run
 #   environment — nearly double the entire 7-8% residual the fund is trying to
 #   close. That is the stake, and one test states it.
-#   But the instrument does NOT key on 13.4%. It must red on the SMALLEST real
-#   magnitude in the table, 0.25%, because "the source did not answer" is a defect
-#   at every venue, not only the extreme ones. Passing on the small real cases
-#   while failing on a large invented one was exactly the round-2 failure.
+#   But the instrument does NOT key on 13.6%. It must red on the SMALLEST real
+#   magnitude in the table, 0.32%, because "the source did not answer" is a defect
+#   at every venue, not only the extreme ones. An instrument that passes the small
+#   real cases and fails only a large invented one proves nothing.
 # ===========================================================================
 
 #: Every ``derived.park_factors`` row for season 2024, factor_type='R', read from
@@ -944,10 +919,11 @@ def _repo_file_or_skip(rel_path: str) -> Path:
     """A repo-root file, or a skip naming why it is unreachable.
 
     ``docker-compose.yml`` bind-mounts only api/, pipeline/, similarity/,
-    simulation/ and db/, so a repo-ROOT file is absent when this suite runs inside
-    the app container. CI runs the unit lane on the host checkout, where every one
-    of these guards executes. The skip reason says which situation you are in, so a
-    skipped guard is never mistaken for a passing one.
+    simulation/ and db/, so a repo-ROOT file is absent when this suite runs in the
+    app container with no other mount. The make test targets mount the whole
+    checkout over /app, and CI runs the unit lane on the host checkout, so every
+    one of these guards executes there. The skip reason says which situation you
+    are in, so a skipped guard is never mistaken for a passing one.
     """
     path = _REPO_ROOT / rel_path
     if not path.is_file():
@@ -1043,15 +1019,15 @@ async def test_the_silent_neutral_error_exceeds_the_documented_run_gap():
     assert park_factor_reason(dark) is not None
 
 
-# --- CAN IT FAIL: run the PRE-FIX resolver through the same instrument -------
+# --- CAN IT FAIL: run a plain-1.0 resolver through the same instrument -------
 
 
 async def _pre_fix_resolve_park_run_factor(pool, con, game_pk, season):
-    """The shipped SIM-452 resolver, verbatim in behaviour.
+    """A copy, in behaviour, of the resolver without the sentinel.
 
-    Copied from ``simulation/sim_kwargs.py`` before this change: every failure
-    branch returns a PLAIN 1.0. Kept here so the instrument is proved against the
-    real old code and not against a guess about it.
+    Every failure branch returns a PLAIN 1.0. The copy matches real code from
+    ``simulation/sim_kwargs.py``, so the instrument is proved against that code
+    and not against a guess about it.
     """
     if con is None:
         return 1.0
@@ -1077,24 +1053,25 @@ async def _pre_fix_resolve_park_run_factor(pool, con, game_pk, season):
 async def test_PRE_FIX_resolver_FAILS_the_instrument_at_every_real_venue(venue_id, factor):
     """The proof the instrument can go red.
 
-    Run the OLD resolver through the exact assertion the new one passes. It fails
-    at all 35 real venues, including the most neutral. A guard that only passes on
-    the fixed code proves nothing; this one is shown failing on the broken code.
+    Run the plain-1.0 resolver through the exact assertion the production one
+    passes. It fails at all 35 real venues, including the most neutral. A guard
+    that only passes on correct code proves nothing; this one is shown failing on
+    the broken code.
     """
     dark = await _pre_fix_resolve_park_run_factor(_FakePool(venue_id), None, 777, 2024)
     assert dark == 1.0
-    assert park_factor_reason(dark) is None  # the old code: reads as resolved
-    assert factor != 1.0  # every real park differs from the neutral it shipped
+    assert park_factor_reason(dark) is None  # the plain-1.0 resolver: reads as resolved
+    assert factor != 1.0  # every real park differs from the neutral 1.0 it returns
 
     with pytest.raises(AssertionError):
         assert park_factor_reason(dark) is not None, "the pre-fix resolver hides the failure"
 
 
 async def test_PRE_FIX_onto_state_ERASED_the_sentinel_with_a_float_call():
-    """Name the single line that caused it: ``float(await resolve_park_run_factor(...))``.
+    """One call erases the sentinel: ``float(await resolve_park_run_factor(...))``.
 
-    ``float()`` on a float subclass returns a plain float, so that one call threw
-    the sentinel away one line after the resolver produced it.
+    ``float()`` on a float subclass returns a plain float, so that one call throws
+    the sentinel away one line after the resolver produces it.
     """
     erased = float(UNRESOLVED_PARK_FACTOR)
     assert erased == 1.0
@@ -1102,9 +1079,9 @@ async def test_PRE_FIX_onto_state_ERASED_the_sentinel_with_a_float_call():
 
     state = _bare_state()
     state.park_run_factor = erased
-    assert park_factor_is_resolved(state) is True  # the pre-fix outcome
+    assert park_factor_is_resolved(state) is True  # the erased outcome
 
-    # The fixed path writes the value through, so the state keeps the truth.
+    # The production path writes the value through, so the state keeps the truth.
     state2 = _bare_state()
     mark_park_factor_unresolved(state2)
     await resolve_park_factor_onto_state(state2, _FakePool(15), None, 777)
@@ -1112,10 +1089,10 @@ async def test_PRE_FIX_onto_state_ERASED_the_sentinel_with_a_float_call():
 
 
 def test_the_sentinel_survives_a_pickle_round_trip():
-    """A GameState crosses to a forkserver worker by pickle (SIM-430).
+    """A GameState crosses to a forkserver worker by pickle.
 
     Without ``__reduce__`` the sentinel comes back a plain 1.0 on the far side, and
-    the defect reappears inside the worker where nobody is looking.
+    the failure hides inside the worker where nobody is looking.
     """
     import pickle
 
@@ -1172,22 +1149,21 @@ async def test_build_sim_kwargs_rejects_an_unknown_mode():
 
 
 async def test_the_REAL_route_on_a_stack_with_no_sim_duckdb(monkeypatch, caplog):
-    """The documented-defect proof, as a test.
+    """The route, run with no park-factor source.
 
     ``api/routes/games.py::_resolved_sim_kwargs`` is the only way any route builds
-    sim kwargs, and it reads ``app.state.sim_duckdb`` — which the default stack
-    never sets. Run it exactly as production does, with that attribute None:
+    sim kwargs, and it reads ``app.state.sim_duckdb`` — which the app never sets.
+    Run it exactly as production does, with that attribute None and no primed
+    source:
 
       * it still returns kwargs, so /simulate does not become a 500;
       * the state still reports the park factor UNRESOLVED;
       * the log says so at WARNING.
-
-    Before SIM-453 the second and third points were false.
     """
     g = _stub_resolve_game_state(monkeypatch)
     caplog.set_level("WARNING", logger="simulation.sim_kwargs")
     pool = _FakePool(680)  # a real 2024 venue: its factor is 0.8726, not 1.0
-    request = _StubRequest(None)  # REPLAY_PERSISTENCE_ENABLED unset -> no connection
+    request = _StubRequest(None)  # no analytics connection on app.state
 
     state = await g._resolve_state_or_error(pool, 777)
     kw = await g._resolved_sim_kwargs(request, pool, state, 777)
@@ -1211,7 +1187,7 @@ async def test_the_REAL_route_with_a_source_resolves_the_venue(monkeypatch):
     assert park_factor_is_resolved(state) is True
 
 
-# --- the primed read-only source (requirement 3) -----------------------------
+# --- the primed read-only source ---------------------------------------------
 
 
 class _PrimedRows:
@@ -1225,8 +1201,8 @@ class _PrimedRows:
 class _PrimedCon:
     """A read-only DuckDB stand-in that answers the row count and the factors.
 
-    SIM-524: the prime reads every run factor at once (``fetchall``) and closes
-    the connection. The one factor belongs to venue 680, season 2024.
+    The prime reads every run factor at once (``fetchall``) and closes the
+    connection. The one factor belongs to venue 680, season 2024.
     """
 
     def __init__(self, n_rows: int, factor: float | None) -> None:
@@ -1276,11 +1252,11 @@ def test_a_failed_open_is_reported_not_swallowed(monkeypatch):
 
 
 async def test_the_primed_source_serves_a_route_that_passes_con_None(monkeypatch):
-    """THE fix for requirement 3.
+    """The primed source is how a route resolves its venue factor.
 
     Every ``api/routes/games.py`` route passes ``con=app.state.sim_duckdb``, which
-    is None on the default stack. Once the lifespan primes the read-only source,
-    that same call resolves the real venue factor instead of shipping a neutral 1.0.
+    the app never sets. Once the lifespan primes the read-only source, that same
+    call resolves the real venue factor instead of shipping a neutral 1.0.
     """
     _prime_with(monkeypatch, _PrimedCon(2952, 0.8723846078))
     prime_park_factor_source("/data/baseball_sim.duckdb")
@@ -1296,7 +1272,7 @@ def test_nothing_is_primed_until_somebody_primes_it():
     assert park_factor_source_status() is None
 
 
-# --- requirement 3: the source open is SEPARATE from replay persistence ------
+# --- the source open is SEPARATE from replay persistence ---------------------
 
 
 def _lifespan_ast():
@@ -1318,11 +1294,11 @@ def _referenced_names(node) -> list[str]:
 
 
 def test_the_park_factor_source_is_primed_OUTSIDE_the_replay_gate():
-    """Requirement 3, as a source guard.
+    """A source guard: the prime runs whatever the replay flag says.
 
-    Reading park factors must not be gated on REPLAY_PERSISTENCE_ENABLED. If a
-    future edit moves the prime back inside that ``if``, the default stack goes
-    park-blind again in silence — so the guard reads the source, not the behaviour.
+    Reading park factors must not be gated on REPLAY_PERSISTENCE_ENABLED. If an
+    edit moves the prime inside that ``if``, a stack with the flag off goes
+    park-blind in silence — so the guard reads the source, not the behaviour.
     """
     lifespan = _lifespan_ast()
 
@@ -1357,14 +1333,12 @@ def _compose_env_value(compose: str, name: str) -> str | None:
 
 
 def test_docker_compose_keeps_the_replay_store_off_the_analytics_file():
-    """The writable replay store never opens the analytics file (SIM-453, SIM-561).
+    """The writable replay store never opens the analytics file.
 
-    Before SIM-561, REPLAY_PERSISTENCE_ENABLED opened the analytics file WRITABLE,
-    and that file has no replay tables, so SIM-453 kept the flag out of the
-    compose file. SIM-561 gave the replay store a file of its own
-    (REPLAY_DUCKDB_PATH), so the flag is on. The danger SIM-453 guarded is now a
-    replay path equal to the analytics path: that write lock would block the
-    nightly rebuilds and every read-only script.
+    The replay store has a file of its own (REPLAY_DUCKDB_PATH), and the compose
+    file turns it on. The danger is a replay path equal to the analytics path.
+    The app then holds a write lock on the analytics file, and that lock blocks
+    the nightly rebuilds and every read-only script.
     """
     compose = _repo_file_or_skip("docker-compose.yml").read_text(encoding="utf-8")
     analytics = _compose_env_value(compose, "BASEBALL_DUCKDB_PATH")
@@ -1382,7 +1356,7 @@ def test_docker_compose_keeps_the_replay_store_off_the_analytics_file():
     )
 
 
-# --- requirement 2: the caller can SEE it ------------------------------------
+# --- the caller can SEE it ---------------------------------------------------
 
 
 def _header_for(source):

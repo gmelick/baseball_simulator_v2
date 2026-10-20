@@ -2,8 +2,10 @@
 """
 scripts/boxscore_audit.py
 ================================
-The validation study for the official box-score ground truth (SIM-545, the
-sub-ticket of the unpriced-prop-markets work, SIM-421).
+The validation study for the official box-score ground truth: how far each
+per-player total the platform derives from ``raw.pitches`` sits from the
+official box score. Its read is the evidence for the owner decision to grade
+props on the box, never the derivation (SIM-545, 2026-09-12).
 
 WHY
 ---
@@ -12,7 +14,7 @@ Before the platform trusts a per-player total it DERIVES from ``raw.pitches``
 stolen base), it has to know how far that derivation sits from the official
 box score — over hundreds of games, never dozens (CLAUDE.md §2b: a 70-game
 sample reported "100%" on a metric that 950 games disproved). This script
-derives every prop total the platform can build today, compares it with
+derives every prop total the platform can build, compares it with
 ``raw.game_player_stats`` (Alembic 0023) for the same games, and prints
 per-stat: rows compared, the exact-match rate, the mean absolute difference
 and the ten worst players.
@@ -61,7 +63,7 @@ from simulation.prop_validation import real_props_from_boxscore_rows  # noqa: E4
 
 log = logging.getLogger("boxscore_audit")
 
-#: SIM-443b: no default password. A blank value is resolved in main() through
+#: No default password. main() resolves a blank value through
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
@@ -465,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
-    args.dsn = args.dsn or require_dsn()  # SIM-443b: fail loudly with no DSN
+    args.dsn = args.dsn or require_dsn()  # Fail loudly with no DSN
     return asyncio.run(run(args))
 
 

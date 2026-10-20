@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.util
+import importlib
 import json
 import os
 import sys
@@ -49,32 +49,27 @@ if str(_ROOT) not in sys.path:
 from simulation.prop_validation import OUTCOME_PROB_EPS  # noqa: E402
 
 
-def _load_backtest_module() -> Any:
-    """The backtest's statistics helpers, imported by path (scripts/ is not
-    a package) so the pairing uses the SAME clustered machinery SIM-539 built."""
-    if "accuracy_comparison" in sys.modules:
-        return sys.modules["accuracy_comparison"]
-    spec = importlib.util.spec_from_file_location(
-        "accuracy_comparison", str(_ROOT / "scripts" / "accuracy_comparison.py")
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["accuracy_comparison"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+def _confidence_module() -> Any:
+    """The accuracy comparison's statistics (``scripts/accuracy/confidence.py``),
+    so the pairing uses the same game-clustered bootstrap and minimum sample."""
+    scripts_dir = str(_ROOT / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.append(scripts_dir)
+    return importlib.import_module("accuracy.confidence")
 
 
 DEPTH_EDGES: tuple[int, ...] = (75, 100)
 DEPTH_LABELS: tuple[str, ...] = ("<75", "75-99", "100+")
-#: The Brier-difference floor the SIM-539 minimum sample is sized on — the
-#: plan's estimate of a fatigue-sized improvement (§6).
+#: The Brier-difference floor the minimum sample is sized on: the fatigue fit
+#: plan's estimate of a fatigue-sized improvement
+#: (``docs/audit/2026-09-12-sim518-fit-plan.md`` §6).
 DEFAULT_FLOOR = 0.0005
 DEFAULT_ALPHA = 0.05
 DEFAULT_BOOTSTRAP = 2000
 #: A start of at least this many real pitches is a DEEP start (the subset run).
 DEEP_START_PITCHES = 90
-#: SIM-555: the report stamps that say which odds rows a report was graded
-#: against (``scripts/accuracy_comparison.py`` writes them into ``params``).
+#: The report stamps that say which odds rows a report was graded against
+#: (``scripts/accuracy_comparison.py`` writes them into ``params``).
 ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")
 
 
@@ -87,11 +82,11 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     """Every reason the two reports must not be paired; [] when they may."""
     pa, pb = a.get("params", {}), b.get("params", {})
     out: list[str] = []
-    # SIM-549: "run_line_scoring" too — a run line scored as two bets and one
-    # scored as a pair carry different market probabilities.
-    # SIM-555: the three odds-row stamps too — a report graded against another
-    # book, another preference list or the old mixed rows (no stamp: before
-    # SIM-555) scores other lines on the same game.
+    # "run_line_scoring" too: a run line scored as two bets and one scored as a
+    # pair carry different market probabilities.
+    # The three odds-row stamps too: a report graded against another book or
+    # another preference list scores other lines on the same game. So does a
+    # report with no stamp: it graded the consensus rows, which mix books.
     for key in (
         "base_seed",
         "iterations",
@@ -103,16 +98,17 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     ):
         if pa.get(key) != pb.get(key):
             out.append(f"params.{key}: {pa.get(key)!r} vs {pb.get(key)!r}")
-    # SIM-549: a re-scored report holds the run lines' home bets only; a fresh
-    # run holds the away bets too, which would pair with nothing.
+    # A re-scored report holds the run lines' home bets only; a fresh run holds
+    # the away bets too, which would pair with nothing.
     if bool(pa.get("rescored")) != bool(pb.get("rescored")):
         out.append(
             f"params.rescored: {bool(pa.get('rescored'))} vs {bool(pb.get('rescored'))} "
             "(a re-scored report has no run-line away bets)"
         )
-    # SIM-555: a report re-scored onto the graded book
+    # A report re-scored onto the graded book
     # (scripts/probes/rescore_graded_book.py writes ``rescored_from``) keeps its
-    # totals, run lines and props on the old rows' prices; a fresh run does not.
+    # totals, run lines and props at the consensus rows' prices; a fresh run
+    # prices them from the graded book.
     if bool(pa.get("rescored_from")) != bool(pb.get("rescored_from")):
         out.append(
             f"params.rescored_from: {pa.get('rescored_from')!r} vs {pb.get('rescored_from')!r} "
@@ -204,7 +200,7 @@ def summarize(
     alpha: float,
 ) -> dict[str, Any]:
     """The paired read for one bucket of rows."""
-    bt = _load_backtest_module()
+    stats = _confidence_module()
     if not rows:
         return {"n": 0}
     d_brier = np.array([r["d_brier"] for r in rows], dtype=np.float64)
@@ -214,10 +210,10 @@ def summarize(
     by_game: dict[int, list[float]] = defaultdict(list)
     for r in rows:
         by_game[int(r["game_pk"])].append(float(r["d_brier"]))
-    lo, hi = bt._bootstrap_paired_diff_ci(d_brier, gp, n_bootstrap=n_bootstrap, seed=seed)
-    lo_ll, hi_ll = bt._bootstrap_paired_diff_ci(d_ll, gp, n_bootstrap=n_bootstrap, seed=seed + 1)
-    se = bt._clustered_se(by_game)
-    min_n = bt._minimum_observations_clustered(by_game, floor=floor, alpha=alpha)
+    lo, hi = stats._bootstrap_paired_diff_ci(d_brier, gp, n_bootstrap=n_bootstrap, seed=seed)
+    lo_ll, hi_ll = stats._bootstrap_paired_diff_ci(d_ll, gp, n_bootstrap=n_bootstrap, seed=seed + 1)
+    se = stats._clustered_se(by_game)
+    min_n = stats._minimum_observations_clustered(by_game, floor=floor, alpha=alpha)
     n = len(rows)
     lead_a = float(np.mean([r["brier_a"] - r["brier_market"] for r in rows]))
     lead_b = float(np.mean([r["brier_b"] - r["brier_market"] for r in rows]))

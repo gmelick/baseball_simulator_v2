@@ -1,7 +1,8 @@
-"""SIM-554 — every reader of a per-pitch result handles the no-pitch result.
+"""Every reader of a per-pitch result handles the no-pitch result.
 
-The running game on the pitch (``docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md``,
-§5.6 and test 12) draws the pickoff BEFORE the pitch. A pickoff that makes the
+The running game on the pitch (SIM-554;
+``docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md``, §5.6 and
+test 12) draws the pickoff BEFORE the pitch. A pickoff that makes the
 third out ends the half-inning with no pitch thrown. The loop then returns a
 result whose ``pitch_outcome`` is ``NO_PITCH``: it carries the out, but no
 pitch, no event and no plate appearance.
@@ -33,13 +34,12 @@ from __future__ import annotations
 
 import ast
 import copy
-import importlib.util
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from tests.script_loader import load_script
 
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult
 from simulation.linescore import InningLine, linescore_from_plays
@@ -193,17 +193,12 @@ def _half_before_each_thrown_pitch(plays: list[PlayResult]) -> list[tuple[int, H
 
 
 def _load_script(name: str):
-    """Load ``scripts/<name>.py`` as a module, or skip when ``scripts/`` is not
+    """``scripts/<name>.py`` as a fresh module, or a skip when ``scripts/`` is not
     reachable (it is not bind-mounted into the app container)."""
-    path = _ROOT / "scripts" / f"{name}.py"
-    if not path.is_file():
-        pytest.skip(f"{path} is not reachable (scripts/ is not bind-mounted)")
-    spec = importlib.util.spec_from_file_location(f"_sim554_{name}", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    try:
+        return load_script(name, module_name=f"no_pitch_readers_{name}")
+    except FileNotFoundError:
+        pytest.skip(f"scripts/{name}.py is not reachable (scripts/ is not bind-mounted)")
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +376,8 @@ class TestTheReplayBuilder:
         from simulation.play_recorder import RecordedGame
         from simulation.snapshots import PitchContext
 
-        # SIM-561: the builder reads record_game, which adds the state before
-        # each step; one context per result, no-pitch results included.
+        # The builder reads record_game, which adds the state before each
+        # step; one context per result, no-pitch results included.
         contexts = [PitchContext(inning=1, half="top", outs=0, batter_id=None) for _ in plays]
         monkeypatch.setattr(
             games_mod, "record_game", lambda **_kw: RecordedGame(game, plays, contexts)
@@ -537,7 +532,7 @@ class TestTheFlag:
     def test_the_unit_lane_does_not_pin_it(self):
         """``tests/conftest.py`` pins no value: the unit lane builds its
         samplers directly, so the environment never reaches them, and the
-        no-database tests run the new order on purpose (plan §4.5)."""
+        no-database tests run the four-draw order on purpose (plan §4.5)."""
         src = (_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
         assert 'os.environ["SIM_STEAL_PITCH_CLASS"]' not in src
 

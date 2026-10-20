@@ -1,12 +1,11 @@
 """Doc guard: the DuckDB schema version the prose cites is the one on disk.
 
-Why this test exists. ``CLAUDE.md``, ``WORKFLOW.md``, ``agent_team.md`` and the
-Phase-6 handoff all told the reader the DuckDB schema was "v13" for fifteen
-migrations after it moved on (the version file read 28 on 2026-09-16). An
-operator who follows the ``WORKFLOW.md`` check reads a correct ``28`` as a
-mismatch. ``tests/unit/test_docs_alembic_head.py`` guards the Alembic head the
-same way; this file guards the DuckDB number so the next DuckDB migration ticket
-updates the prose in the same commit as the version bump.
+``CLAUDE.md``, ``WORKFLOW.md``, ``agent_team.md`` and the technical reference
+tell the reader the DuckDB schema version. When that prose lags the version
+file, an operator who follows the ``WORKFLOW.md`` check reads a correct version
+as a mismatch. ``tests/unit/test_docs_alembic_head.py`` guards the Alembic head
+the same way; this file guards the DuckDB number so the next DuckDB migration
+ticket updates the prose in the same commit as the version bump.
 
 The truth is ``db/schemas/duckdb_schema_version.txt``, and
 ``tests/unit/test_sim_store.py`` already holds that file equal to the newest
@@ -47,17 +46,17 @@ def test_version_file_matches_the_newest_migration() -> None:
 @pytest.mark.parametrize(
     ("doc", "pattern"),
     [
-        # CLAUDE.md: the status line ("DuckDB schema **v28**, Alembic head ...").
+        # CLAUDE.md: the status line ("DuckDB schema **vNN**, Alembic head ...").
         ("CLAUDE.md", r"DuckDB schema \*\*v(\d+)\*\*"),
-        # CLAUDE.md: the architecture diagram ("DuckDB v28 / Alembic 0025").
+        # CLAUDE.md: the architecture diagram ("DuckDB vNN / Alembic NNNN").
         ("CLAUDE.md", r"DuckDB v(\d+) / Alembic"),
-        # CLAUDE.md: the repo map ("(numbered SQL, schema **v28**)").
+        # CLAUDE.md: the repo map ("(numbered SQL, schema **vNN**)").
         ("CLAUDE.md", r"numbered SQL, schema \*\*v(\d+)\*\*"),
-        # WORKFLOW.md: the header line and the phase note ("DuckDB v28").
+        # WORKFLOW.md: the header line and the phase note ("DuckDB vNN").
         ("WORKFLOW.md", r"DuckDB v(\d+)"),
         # WORKFLOW.md: the operator check's expected output.
         ("WORKFLOW.md", r":: Expected: (\d+)"),
-        # WORKFLOW.md: the troubleshooting row ("currently `28`").
+        # WORKFLOW.md: the troubleshooting row ("currently `NN`").
         ("WORKFLOW.md", r"latest migration \(currently `(\d+)`\)"),
         # agent_team.md: the tech-stack line.
         ("agent_team.md", r"DuckDB v(\d+) \(in-process\)"),

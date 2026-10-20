@@ -1,38 +1,28 @@
-"""SIM-450 — self-test of the band rule on synthetic inputs.
+"""The band rule of the acceptance lane (SIM-450), tested on synthetic inputs.
 
 The heavy lane needs a 3.2 GB DuckDB, an engine-artifact bundle and Postgres, so
-it runs on a schedule and nowhere else. The band ARITHMETIC needs none of that.
-These tests run everywhere, including in ``make test``, so the rule that decides
-red-or-green is itself covered.
+it runs on demand and nowhere else. The band ARITHMETIC needs none of that. These
+tests run everywhere, including in ``make test`` and the CI job
+``acceptance-arithmetic``, so the rule that decides red-or-green is itself covered.
 
 A band that cannot fail is worthless. A band that fails on noise is worse than
 worthless. These tests pin both edges of that statement.
 
-WHY THIS FILE WAS REWRITTEN ON 2026-08-10 (ROUND 3)
-===================================================
-Round 2 repaired two floors. A third review then found that it had sized both
-against numbers that were not the ones on record, and that a third hole was open
-underneath.
+THE CAN-IT-FAIL PROOFS
+======================
+  * ``R`` reds on a 7% run shortfall, the low end of the gap ``CLAUDE.md §11``
+    records ("Runs run ~7-8% low"). A floor of 7.5% would pass most of that range.
+  * ``home_win_pct`` reds across the structural-only baseline ``CLAUDE.md §11``
+    records (~.510-.515). A floor of 0.030 would reject a coin flip and nothing
+    else.
+  * A sample too short for a channel's floor to bind is UNDERPOWERED, never a
+    pass: two observations must not certify anything.
+  * The balance check reds on a game order sorted by park factor.
 
-Reproduced against the round-2 tree before anything changed:
-
-  * ``R`` at ``rel_floor=0.075`` PASSED at 7.0%, 7.2%, 7.4% and 7.5% low, and
-    first failed at 7.6%. ``CLAUDE.md §11`` records the live gap as "Runs run
-    ~7-8% low", so the band passed on most of the documented range. Round 2 had
-    sized the floor on an older CLAUDE.md line's "10-12%", which the owner ruled STALE
-    on 2026-08-10.
-  * ``home_win_pct`` at ``abs_floor=0.030`` failed ONLY at exactly 0.5000 and
-    PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md §11`` records the defect as
-    "stuck at the structural-only ~.510-.515", and this lane's own first
-    production run measured 0.5125.
-  * ``evaluate("H", [8.0, 8.0])`` returned ``passed=True``: two observations, 7%
-    off the MLB centre, reported as a certification.
-
-All three are fixed in ``bands.py`` and pinned below. Search for CAN-IT-FAIL
-PROOF. Deleting one of those tests puts the platform back where it was: an
+Search for CAN-IT-FAIL PROOF. Deleting one of those tests gives back an
 instrument that reports success on the defect it was built to find.
 
-Owner: QA / DevOps (SIM-450).
+Owner: QA / DevOps.
 """
 
 from __future__ import annotations
@@ -47,17 +37,18 @@ import pytest
 from tests.acceptance import bands
 from tests.acceptance.conftest import ACCEPTANCE_GAME_PKS
 
-#: The size at which the twelve box channels resolve under the round-3 floors:
-#: 5,100 game-sims x 2 team-games. ``bands.binding_requirement`` computes it; the
-#: literal is here only so a reader sees the number the fixtures use.
+#: The team-games at which the twelve box channels resolve (about two per
+#: game-sim). ``bands.binding_requirement`` computes the game-sims; the literal is
+#: here only so a reader sees the number the fixtures use.
 CERTIFYING_TEAM_GAMES = 11295
 
-#: The decisive games ``home_win_pct`` needs. About 16.3 hours serial.
+#: The decisive games ``home_win_pct`` needs: about 8.4 hours serial at 2.25 s
+#: per sim.
 CERTIFYING_DECISIVE_GAMES = 13365
 
-#: The size round 2 called "the nightly". Kept as a fixture size so the tests can
-#: show what that run length now reports: UNDERPOWERED on every channel.
-ROUND2_NIGHTLY_TEAM_GAMES = 2400
+#: A nightly-length run (12 games x 100 iterations = 2,400 team-games), a fixture
+#: size that shows such a run reports UNDERPOWERED on every channel.
+SHORT_NIGHTLY_TEAM_GAMES = 2400
 
 
 def _spread_sample(mean: float, sd: float, n: int) -> list[float]:
@@ -111,7 +102,7 @@ def _certifying_sample(channel: str, mean: float) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def test_every_channel_has_a_reference_sim450() -> None:
+def test_every_channel_has_a_reference() -> None:
     """Each asserted channel carries a centre, a floor, a spread and a source."""
     assert set(bands.CHANNELS) == set(bands.REFERENCES)
     for name in bands.CHANNELS:
@@ -125,11 +116,10 @@ def test_every_channel_has_a_reference_sim450() -> None:
         assert (ref.rel_floor is None) != (ref.abs_floor is None), name
 
 
-def test_every_floor_states_where_it_came_from_sim450() -> None:
+def test_every_floor_states_where_it_came_from() -> None:
     """No floor is a bare number. Each cites a defect or states a rationale.
 
-    This is the round-3 rule that stops a floor being chosen to make a channel
-    green. A channel either names the documented magnitude it must register, with
+    This rule stops a floor being chosen to make a channel green. A channel either names the documented magnitude it must register, with
     a file and a section, or it says in words why it carries the floor it carries.
     """
     for name in bands.CHANNELS:
@@ -152,7 +142,7 @@ def test_every_floor_states_where_it_came_from_sim450() -> None:
             assert "Rule B" in ref.floor_rationale, name
 
 
-def test_box_channels_and_home_win_pct_partition_the_lane_sim450() -> None:
+def test_box_channels_and_home_win_pct_partition_the_lane() -> None:
     """``home_win_pct`` is the one channel measured per game, not per team-game."""
     assert set(bands.BOX_CHANNELS) | {"home_win_pct"} == set(bands.CHANNELS)
     assert "home_win_pct" not in bands.BOX_CHANNELS
@@ -204,7 +194,7 @@ def _top_level_assignments(path: Path) -> dict[str, object]:
     return found
 
 
-def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
+def test_restated_mlb_constants_match_sim_stats() -> None:
     """The restated MLB rates equal the named constants of ``scripts/sim_stats.py``.
 
     ``bands.py`` restates ``_MLB_2025`` and ``_MLB_HOME_WIN_PCT`` instead of
@@ -243,7 +233,7 @@ def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
     )
 
 
-def test_the_reference_table_uses_the_restated_constants_sim450() -> None:
+def test_the_reference_table_uses_the_restated_constants() -> None:
     """Every ``_MLB_2025`` channel's centre IS the restated value, not a copy.
 
     Without this the drift test above would guard a dictionary nothing reads.
@@ -260,7 +250,7 @@ def test_the_reference_table_uses_the_restated_constants_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_floor_never_rises_to_meet_a_documented_defect_sim450() -> None:
+def test_a_floor_never_rises_to_meet_a_documented_defect() -> None:
     """A band must reject the defect it exists to reject, with margin.
 
     This is the machine-checked half of the "MOVING A BAND" policy in
@@ -282,12 +272,12 @@ def test_a_floor_never_rises_to_meet_a_documented_defect_sim450() -> None:
         assert bands.detection_power(margin) >= 0.99, name
 
 
-def test_the_round3_floors_hold_their_derived_values_sim450() -> None:
-    """Pin every floor the 2026-08-10 round-3 review derived, with its arithmetic.
+def test_the_floors_hold_their_derived_values() -> None:
+    """Pin every derived floor, with its arithmetic.
 
     A floor is not a taste. Each one below is either ``documented magnitude /
-    1.6`` or the tightest deviation 10,200 team-games resolves, and this test
-    fails if one drifts.
+    1.6`` or the tightest deviation the certifying run resolves (Rule B), and this
+    test fails if one drifts.
     """
     expected_rel = {
         "R": 0.027478,
@@ -310,7 +300,7 @@ def test_the_round3_floors_hold_their_derived_values_sim450() -> None:
     assert bands.Z == 4.0
 
 
-def test_every_rule_b_floor_is_the_tightest_the_run_resolves_sim450() -> None:
+def test_every_rule_b_floor_is_the_tightest_the_run_resolves() -> None:
     """A channel with no documented defect is as sensitive as the run allows.
 
     Rule B in ``bands.py``: the floor is ``Z * sd_ref / sqrt(11295)`` rounded up
@@ -340,15 +330,13 @@ def test_every_rule_b_floor_is_the_tightest_the_run_resolves_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
+def test_the_R_band_reds_on_the_documented_run_conversion_gap() -> None:
     """R must go RED on a 7% run shortfall.
 
     THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md §11``: "Runs run ~7-8% low (down from
-    ~12% pre-fix)". The owner ruled on 2026-08-10 that this line is authoritative
-    and that an older CLAUDE.md line's "runs sit ~10-12% low" is stale.
+    ~12% pre-fix)" (owner ruling 2026-08-10: this line is authoritative).
 
-    Round 2 sized the floor on the stale line and shipped ``rel_floor=0.075``,
-    which passed at 7.0%, 7.2%, 7.4% and 7.5% low. The band was green across most
+    A floor of 7.5% would pass at 7.0%, 7.2%, 7.4% and 7.5% low: green across most
     of the platform's own live gap, on the channel the whole betting surface
     rests on.
 
@@ -367,7 +355,7 @@ def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
         assert result.driver == "FLOOR", "the verdict must be about the model, not the noise"
 
 
-def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
+def test_the_R_band_reds_at_exactly_seven_percent() -> None:
     """The mandated boundary case, on its own so it cannot be lost in a loop.
 
     ``CLAUDE.md §11`` — "Runs run ~7-8% low". 7% is the EASIEST end of that range
@@ -395,7 +383,7 @@ def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
     assert abs(result.delta) / result.floor > 2.5
 
 
-def test_the_R_band_does_not_red_a_healthy_model_sim450() -> None:
+def test_the_R_band_does_not_red_a_healthy_model() -> None:
     """The R band is not trivially red. Small deviations still pass.
 
     Without this, "make it fail" could be satisfied by a floor of zero, and the
@@ -408,7 +396,7 @@ def test_the_R_band_does_not_red_a_healthy_model_sim450() -> None:
         assert result.passed, f"a {shortfall:.1%} deviation must stay green" + result.explain()
 
 
-def test_the_R_band_boundary_sits_where_the_floor_says_sim450() -> None:
+def test_the_R_band_boundary_sits_where_the_floor_says() -> None:
     """R flips from PASS to FAIL at its floor, 2.75% — under the documented 7%."""
     centre = bands.REFERENCES["R"].centre
     inside = bands.evaluate("R", _certifying_sample("R", centre * (1.0 - 0.027)))
@@ -422,20 +410,17 @@ def test_the_R_band_boundary_sits_where_the_floor_says_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> None:
+def test_home_win_pct_reds_on_the_documented_structural_baseline() -> None:
     """home_win_pct must go RED at 0.5125, and across the whole documented range.
 
     THE DOCUMENTED MAGNITUDE IS ``CLAUDE.md §11``: home_win_pct "stuck at the
     structural-only ~.510-.515". That is the value the channel reads when the
-    SIM-412 home-field bias does not act. This lane's own first production run
-    measured 0.5125 — the middle of that range — at 400 game-sims.
+    home-field bias does not act.
 
-    Round 2 shipped ``abs_floor=0.030``, which failed ONLY at exactly 0.5000 and
-    PASSED at 0.5100, 0.5125 and 0.5150. It rejected a coin flip and nothing
-    else, so it could not tell "the home-field model works" from "the home-field
-    model does nothing".
-
-    The floor is now 0.0173, sized on the HARDEST point of the documented range
+    A floor of 0.030 would fail only at exactly 0.5000 and pass at 0.5100, 0.5125
+    and 0.5150: it would reject a coin flip and nothing else, so it could not tell
+    "the home-field model works" from "the home-field model does nothing". The
+    floor is 0.0173, sized on the HARDEST point of the documented range
     (0.5428 - 0.515 = 0.0278) with the 1.6 detection margin.
     """
     ref = bands.REFERENCES["home_win_pct"]
@@ -449,7 +434,7 @@ def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> Non
         assert result.failed and not result.passed
 
 
-def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
+def test_home_win_pct_reds_at_exactly_0_5125() -> None:
     """The mandated boundary case, on its own.
 
     ``CLAUDE.md §11`` — home_win_pct "stuck at the structural-only ~.510-.515".
@@ -477,7 +462,7 @@ def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
     assert abs(result.delta) / result.floor > 1.7
 
 
-def test_home_win_pct_passes_a_correct_model_at_the_required_sample_sim450() -> None:
+def test_home_win_pct_passes_a_correct_model_at_the_required_sample() -> None:
     """The channel is not trivially red: MLB's own rate passes, once the run is long."""
     n = bands.REFERENCES["home_win_pct"].required_observations()
     good = bands.evaluate("home_win_pct", _home_win_sample(0.5428, n))
@@ -485,11 +470,11 @@ def test_home_win_pct_passes_a_correct_model_at_the_required_sample_sim450() -> 
     assert good.verdict == "PASS"
 
 
-def test_home_win_pct_reports_underpowered_at_every_shorter_run_sim450() -> None:
+def test_home_win_pct_reports_underpowered_at_every_shorter_run() -> None:
     """Below its own size the channel says so, and never reports success.
 
-    A coin flip and MLB's own rate both return UNDERPOWERED at the sizes this
-    lane used to call a nightly. Neither is a pass, and the message carries the
+    A coin flip and MLB's own rate both return UNDERPOWERED at nightly-length
+    sizes. Neither is a pass, and the message carries the
     run length the channel needs.
     """
     ref = bands.REFERENCES["home_win_pct"]
@@ -509,14 +494,13 @@ def test_home_win_pct_reports_underpowered_at_every_shorter_run_sim450() -> None
 # ---------------------------------------------------------------------------
 
 
-def test_a_two_observation_sample_is_never_a_pass_sim450() -> None:
-    """``evaluate("H", [8.0] * 2)`` returned ``passed=True`` before 2026-08-10.
+def test_a_two_observation_sample_is_never_a_pass() -> None:
+    """``evaluate("H", [8.0] * 2)`` is UNDERPOWERED, never a pass.
 
-    Two observations, a mean of 8.0 against an MLB centre of 8.60 — 7% off — and
-    the instrument called it a certification. The resolution rule could not catch
-    it: that rule asks the RUN's measured spread, and a constant sample reports
-    no spread, so the standard-error term was 0.0 and the floor "bound" on
-    nothing.
+    Two observations off the centre must not certify anything. The
+    resolution rule cannot catch them: it asks the RUN's measured spread, and a
+    constant sample reports no spread, so the standard-error term is 0.0 and the
+    floor "binds" on nothing.
 
     The minimum-sample gate asks the REFERENCE spread instead. A run cannot
     influence that number, so no sample can talk its way past it.
@@ -537,7 +521,7 @@ def test_a_two_observation_sample_is_never_a_pass_sim450() -> None:
     assert "too short" in result.explain()
 
 
-def test_no_channel_can_pass_on_a_degenerate_sample_sim450() -> None:
+def test_no_channel_can_pass_on_a_degenerate_sample() -> None:
     """The general form: a zero-spread sample is UNDERPOWERED on every channel.
 
     A constant list is the worst case for the resolution rule and the best case
@@ -554,7 +538,7 @@ def test_no_channel_can_pass_on_a_degenerate_sample_sim450() -> None:
             assert not result.passed and not result.failed
 
 
-def test_the_gate_opens_at_exactly_the_required_observations_sim450() -> None:
+def test_the_gate_opens_at_exactly_the_required_observations() -> None:
     """One observation short is UNDERPOWERED; exactly enough is a verdict.
 
     The boundary is asserted so nobody weakens the gate to "roughly enough".
@@ -569,12 +553,12 @@ def test_the_gate_opens_at_exactly_the_required_observations_sim450() -> None:
         assert exact.n == ref.required_observations()
 
 
-def test_a_short_run_reports_underpowered_rather_than_failing_sim450() -> None:
+def test_a_short_run_reports_underpowered_rather_than_failing() -> None:
     """A smoke run is not evidence in EITHER direction.
 
-    Before round 3 a 20-team-game smoke with a 1.5-run shortfall reported
-    UNRESOLVED, and a 1-observation sample reported FAIL. Both claimed more than
-    the sample supports. A run below the requirement now says only that.
+    A 20-team-game smoke with a 1.5-run shortfall, or a one-observation sample,
+    claims more than it supports whether it reads UNRESOLVED or FAIL. A run below
+    the requirement says only that it is too short.
     """
     smoke = bands.evaluate("R", _spread_sample(bands.REFERENCES["R"].centre - 1.5, 3.2468, 20))
     assert smoke.verdict == "UNDERPOWERED"
@@ -594,7 +578,7 @@ def test_a_short_run_reports_underpowered_rather_than_failing_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_tighter_floor_does_not_raise_the_false_positive_rate_sim450() -> None:
+def test_a_tighter_floor_does_not_raise_the_false_positive_rate() -> None:
     """The floor and the false-alarm rate are DECOUPLED by the resolution rule.
 
     The obvious objection to tightening a floor is that the lane starts crying
@@ -627,21 +611,17 @@ def test_a_tighter_floor_does_not_raise_the_false_positive_rate_sim450() -> None
     assert max(rates) / min(rates) < 1.03
 
 
-def test_the_round2_nightly_now_certifies_nothing_sim450() -> None:
-    """The run round 2 called "the nightly" is a smoke test under round-3 floors.
+def test_a_2400_team_game_run_certifies_nothing() -> None:
+    """A nightly-length run is a smoke test: it certifies none of the channels.
 
-    12 games x 100 iterations = 1,200 game-sims = 2,400 team-games. Round 2 said
-    that certified eleven of twelve channels. It certifies NONE of the thirteen
-    now, because every floor is 3x to 7x tighter.
-
-    This is asserted rather than left as prose so that an operator who kept the
-    old command finds out from a red test instead of from a green tick over an
-    empty measurement.
+    12 games x 100 iterations = 1,200 game-sims = 2,400 team-games. This is
+    asserted rather than left as prose, so an operator who runs that command finds
+    out from a red test instead of from a green tick over an empty measurement.
     """
     for name in bands.BOX_CHANNELS:
         ref = bands.REFERENCES[name]
         result = bands.evaluate(
-            name, _spread_sample(ref.centre, ref.sd_ref, ROUND2_NIGHTLY_TEAM_GAMES)
+            name, _spread_sample(ref.centre, ref.sd_ref, SHORT_NIGHTLY_TEAM_GAMES)
         )
         assert result.verdict == "UNDERPOWERED", name
         assert not result.conclusive, name
@@ -649,7 +629,7 @@ def test_the_round2_nightly_now_certifies_nothing_sim450() -> None:
     assert decisive.verdict == "UNDERPOWERED"
 
 
-def test_the_detection_margin_buys_the_power_it_claims_sim450() -> None:
+def test_the_detection_margin_buys_the_power_it_claims() -> None:
     """``DETECTION_MARGIN`` is a power decision, and the power is computable.
 
     At a channel's own resolving sample size ``sigma_m = floor / Z``, so the
@@ -667,8 +647,8 @@ def test_the_detection_margin_buys_the_power_it_claims_sim450() -> None:
         assert hi >= lo
 
 
-def test_the_certifying_run_cost_is_stated_not_hidden_sim450() -> None:
-    """Pin the run lengths the round-3 floors demand, in game-sims and in hours.
+def test_the_certifying_run_cost_is_stated_not_hidden() -> None:
+    """Pin the run lengths the floors demand, in game-sims and in hours.
 
     Requirement: if a floor cannot be both sensitive and quiet at a feasible
     sample size, say so. It can — the cost is time, and this test writes the time
@@ -686,12 +666,12 @@ def test_the_certifying_run_cost_is_stated_not_hidden_sim450() -> None:
     assert box_sims * seconds_per_sim / 3600.0 == pytest.approx(3.53, abs=0.05)
     assert lane_sims * seconds_per_sim / 3600.0 == pytest.approx(8.35, abs=0.05)
 
-    # The box lane grew 7.3x against the round-2 floors' 696 game-sims. That is
-    # the price of seeing a 7% run gap instead of a 15% one.
+    # The box lane needs 8.1x the 696 game-sims of a floor sized on a 15% gap:
+    # the price of seeing a 7% run gap instead.
     assert box_sims / 696 == pytest.approx(8.11, abs=0.05)
 
 
-def test_required_sample_sizes_match_the_published_table_sim450() -> None:
+def test_required_sample_sizes_match_the_published_table() -> None:
     """Pin the run lengths the ``bands.py`` docstring publishes.
 
     A reader plans a run from that table. If a floor moves and the table does
@@ -716,8 +696,8 @@ def test_required_sample_sizes_match_the_published_table_sim450() -> None:
     assert actual == expected
 
 
-def test_every_box_channel_resolves_inside_one_run_sim450() -> None:
-    """The twelve box channels are sized to land together at 5,100 game-sims.
+def test_every_box_channel_resolves_inside_one_run() -> None:
+    """The twelve box channels are sized to land together at ``bands.BOX_LANE_SIMS``.
 
     They are deliberately within 0.5% of each other, so one run certifies all
     twelve and no single channel silently drags the lane longer.
@@ -734,7 +714,7 @@ def test_every_box_channel_resolves_inside_one_run_sim450() -> None:
         )
 
 
-def test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450() -> None:
+def test_home_win_pct_costs_a_weekend_and_the_lane_says_so() -> None:
     """Record the one channel a nightly cannot certify at any honest floor.
 
     This is a limit, not a defect, and it is asserted so nobody rediscovers it by
@@ -745,7 +725,7 @@ def test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450() -> None:
     assert ref.required_sims() == CERTIFYING_DECISIVE_GAMES
     assert ref.required_sims() > 2 * bands.BOX_LANE_SIMS
 
-    # The floor a 5,100-sim run could resolve, and what it would cost in power.
+    # The floor a box-lane-sized run could resolve, and what it would cost in power.
     nightly_floor = bands.Z * ref.sd_ref / math.sqrt(bands.BOX_LANE_SIMS)
     assert nightly_floor > (ref.must_detect or 0.0) / bands.DETECTION_MARGIN, (
         "if a box-lane-sized run could resolve the margin-bound floor, this channel "
@@ -758,7 +738,7 @@ def test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_noisier_than_MLB_run_reports_unresolved_sim450() -> None:
+def test_a_noisier_than_MLB_run_reports_unresolved() -> None:
     """Long enough on paper, but the run's OWN spread is wider than the reference.
 
     The minimum-sample gate uses ``sd_ref``, a fixed MLB number. The resolution
@@ -781,7 +761,7 @@ def test_a_noisier_than_MLB_run_reports_unresolved_sim450() -> None:
         assert calm.verdict == "PASS", name
 
 
-def test_verdict_covers_every_case_exactly_once_sim450() -> None:
+def test_verdict_covers_every_case_exactly_once() -> None:
     """The four verdicts are exhaustive, and only PASS and FAIL are conclusive."""
     ref = bands.REFERENCES["R"]
     n = _even(ref.required_observations())
@@ -805,7 +785,7 @@ def test_verdict_covers_every_case_exactly_once_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_half_width_is_the_larger_of_the_two_terms_sim450() -> None:
+def test_half_width_is_the_larger_of_the_two_terms() -> None:
     """The rule is ``max(Z * sd / sqrt(n), floor)`` — both terms, larger wins."""
     ref = bands.REFERENCES["R"]
     half, se, floor = bands.half_width(ref, sd=3.2468, n=20)
@@ -816,7 +796,7 @@ def test_half_width_is_the_larger_of_the_two_terms_sim450() -> None:
     assert half == floor > se
 
 
-def test_band_tightens_as_the_run_grows_sim450() -> None:
+def test_band_tightens_as_the_run_grows() -> None:
     """More games must never widen a band. That is the point of the SE term."""
     ref = bands.REFERENCES["home_win_pct"]
     widths = [bands.half_width(ref, sd=0.4988, n=n)[0] for n in (50, 200, 1200, 26015, 100000)]
@@ -825,9 +805,9 @@ def test_band_tightens_as_the_run_grows_sim450() -> None:
     assert widths[-1] == pytest.approx(ref.floor(), rel=1e-9)
 
 
-def test_a_band_can_actually_fail_sim450() -> None:
+def test_a_band_can_actually_fail() -> None:
     """A band that cannot fail is worthless. Feed it a wrong model and it reds."""
-    # Stolen bases pinned at zero — the production behaviour BACKLOG.md:19 records.
+    # Stolen bases pinned at zero: a wrong model the band must red.
     n = bands.REFERENCES["SB"].required_observations()
     zeroed = bands.evaluate("SB", [0.0] * n)
     assert zeroed.sd == 0.0
@@ -838,7 +818,7 @@ def test_a_band_can_actually_fail_sim450() -> None:
     assert "the model is wrong" in zeroed.explain()
 
 
-def test_a_band_does_not_fail_on_a_correct_model_sim450() -> None:
+def test_a_band_does_not_fail_on_a_correct_model() -> None:
     """A model sitting on the MLB centre passes, once the run resolves it."""
     need = bands.REFERENCES["R"].required_observations()
     for n in (need, need * 2, need * 4):
@@ -847,14 +827,14 @@ def test_a_band_does_not_fail_on_a_correct_model_sim450() -> None:
         assert result.delta == pytest.approx(0.0, abs=1e-9)
 
 
-def test_sample_sd_handles_a_degenerate_sample_sim450() -> None:
+def test_sample_sd_handles_a_degenerate_sample() -> None:
     """Fewer than two observations gives sd 0.0 rather than an exception."""
     assert bands.sample_sd([]) == 0.0
     assert bands.sample_sd([1.0]) == 0.0
     assert bands.sample_sd([1.0, 3.0]) == pytest.approx(math.sqrt(2.0))
 
 
-def test_z_pins_the_false_alarm_rate_sim450() -> None:
+def test_z_pins_the_false_alarm_rate() -> None:
     """Z is a false-alarm-rate decision. Lowering it makes the lane flaky.
 
     At Z=4.0 and 13 two-sided channels the whole-run false-red probability is
@@ -874,13 +854,13 @@ def test_z_pins_the_false_alarm_rate_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
-    """SIM-496 needs two ROE channels, and only one of them can see the defect.
+def test_the_lane_carries_both_reach_on_error_channels() -> None:
+    """Two ROE channels, and only one of them sees whether the batter reached.
 
-    ``BACKLOG.md:20`` records it in as many words: the ``ROE`` probe counts the
-    DRAWN event at the ``_full_pool_fielding`` boundary, so it is taken before
-    the loop turns the reach on error into an out. No floor on that channel can
-    ever red on the defect — the measurement happens too early.
+    The ``ROE`` probe counts the DRAWN event at the ``_full_pool_fielding``
+    boundary, before the loop resolves the play. No floor on that channel can red
+    on a batter who never reached (the reach-on-error defect, SIM-496): the
+    measurement happens too early.
 
     ``ROE_reached`` counts batters who actually reached, at ``_commit_run_delta``.
     It is the channel with the ``must_detect``. Keep both: a green ROE beside a
@@ -897,7 +877,7 @@ def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
     assert drawn.centre == reached.centre, "the same MLB rate underlies both"
     assert drawn.floor() == reached.floor()
 
-    # The defect today: nothing reaches base on an error at all.
+    # The defect shape: nothing reaches base on an error at all.
     zeroed = bands.evaluate("ROE_reached", [0.0] * reached.required_observations())
     assert zeroed.verdict == "FAIL"
     assert zeroed.rel_delta == pytest.approx(-1.0, abs=1e-9)
@@ -908,7 +888,7 @@ def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The ROE_reached probe — the counter that has to see SIM-496
+# The ROE_reached probe: the counter that sees whether the batter reached
 # ---------------------------------------------------------------------------
 
 
@@ -916,9 +896,9 @@ class _StubMachine:
     """The six methods ``_install_probes`` wraps, and nothing else.
 
     The stub records every commit as the probe forwarded it, so the test below
-    can check the probe alters nothing. (A real ``StateMachine`` no longer needs
-    an artifact bundle: since SIM-486 the synthetic bundle builds one with no
-    database, and the SIM-484 test further down drives one through the probes.)
+    can check the probe alters nothing. (A real ``StateMachine`` needs no
+    database: the synthetic bundle builds one, and the dropped-third-strike test
+    further down drives one through the probes.)
     """
 
     def __init__(self) -> None:
@@ -961,17 +941,13 @@ class _StubState:
         self.offense = offense
 
 
-def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None:
-    """SIM-496's counter: a reach on error is a field_error commit whose
-    batter BECAME A RUNNER (the ``batter_reached`` transition fact).
+def test_the_roe_reached_probe_counts_only_a_batter_who_reached() -> None:
+    """A reach on error is a field_error commit whose batter BECAME A RUNNER
+    (the ``batter_reached`` transition fact).
 
-    ⚠ Re-pinned 2026-08-19 with the SIM-511 landing. The old condition
-    required ``result_hits >= 1`` — the ALIAS world's shape, where
-    field_error masqueraded as a single. A correct post-SIM-511 commit
-    carries ``result_hits = 0`` (a reach is NOT a hit) with
-    ``batter_reached=True``; the old condition read 0.0000 on a lane where
-    batters genuinely reached. The probe must count ZERO for a retired
-    batter and ONE for a reached one, whatever the hit column says.
+    A correct commit carries ``result_hits = 0`` (a reach is NOT a hit) with
+    ``batter_reached=True``. The probe counts ZERO for a retired batter and ONE
+    for a reached one, whatever the hit column says.
 
     The wrapper must also forward every argument unchanged. It sits on the single
     run-commit path of the whole simulator, so a probe that altered a commit
@@ -992,7 +968,7 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
 
     away, home = _StubState(0), _StubState(1)
 
-    # The old SIM-496 defect shape: retired on the bases, never a runner.
+    # The defect shape: retired on the bases, never a runner.
     machine._commit_run_delta(
         away,
         object(),
@@ -1008,7 +984,7 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
         "defect it exists to catch."
     )
 
-    # The corrected SIM-511 shape: the batter reaches, and it is NOT a hit.
+    # The correct shape: the batter reaches, and it is NOT a hit.
     machine._commit_run_delta(
         away,
         object(),
@@ -1056,15 +1032,13 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
     assert calls["_commit_run_delta"] == 8
 
 
-def test_the_roe_reached_probe_skips_a_dropped_third_strike_reach_sim484() -> None:
+def test_the_roe_reached_probe_skips_a_dropped_third_strike_reach() -> None:
     """A batter who reaches on a dropped third strike struck out; he did not
     reach on an error (SIM-484).
 
-    Until 2026-09-23 the loop committed that reach as ``field_error``, so this
-    probe counted it on the lane's reach-on-error channel, and the strikeout
-    channel missed it. The play now commits as a strikeout. This test drives
-    the real loop (the synthetic bundle, no database) through the probes: the
-    reach-on-error channel stays empty and the strikeout channels count it.
+    The play commits as a strikeout. This test drives the real loop (the
+    synthetic bundle, no database) through the probes: the reach-on-error
+    channel stays empty and the strikeout channels count it.
     """
     import numpy as np
 
@@ -1101,7 +1075,7 @@ def test_the_roe_reached_probe_skips_a_dropped_third_strike_reach_sim484() -> No
     assert calls["_commit_run_delta"] == 1
 
 
-def test_the_probe_tally_covers_every_channel_it_is_asked_for_sim450() -> None:
+def test_the_probe_tally_covers_every_channel_it_is_asked_for() -> None:
     """``TALLY_CHANNELS`` and the band channel list cannot drift apart.
 
     Every band channel is produced either by the per-game tally or by the result
@@ -1126,14 +1100,14 @@ def test_the_probe_tally_covers_every_channel_it_is_asked_for_sim450() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_balanced_game_order_covers_the_whole_set_sim450() -> None:
-    """The balanced order is a permutation of the twelve games, not a subset."""
+def test_balanced_game_order_covers_the_whole_set() -> None:
+    """The balanced order is a permutation of the game set, not a subset."""
     assert sorted(bands.BALANCED_GAME_ORDER) == sorted(bands.ACCEPTANCE_PARK_FACTORS)
     assert len(bands.BALANCED_GAME_ORDER) == 45  # SIM-523: the balanced 45-game set
     assert sorted(bands.BALANCED_GAME_ORDER) == sorted(ACCEPTANCE_GAME_PKS)
 
 
-def test_balanced_game_order_keeps_every_prefix_near_the_set_mean_sim450() -> None:
+def test_balanced_game_order_keeps_every_prefix_near_the_set_mean() -> None:
     """Any run of four or more games measures the whole set's run environment."""
     k, bias = bands.worst_prefix_park_bias(bands.BALANCED_GAME_ORDER)
     assert abs(bias) <= bands.MAX_PREFIX_PARK_BIAS, (
@@ -1146,16 +1120,13 @@ def test_balanced_game_order_keeps_every_prefix_near_the_set_mean_sim450() -> No
         ), length
 
 
-def test_the_prefix_check_rejects_an_ascending_order_sim450() -> None:
-    """CAN-IT-FAIL PROOF 4. The balance check reds on the order it replaced.
+def test_the_prefix_check_rejects_an_ascending_order() -> None:
+    """CAN-IT-FAIL PROOF 4. The balance check reds on an ascending order.
 
-    ``conftest.py`` listed the twelve games in ASCENDING park-factor order on
-    delivery, so an 8-game run took the eight most pitcher-friendly parks: mean
-    factor 0.96848 against 0.99874 for the full set (values re-pinned
-    2026-08-16 to the SIM-459-recomputed park factors, and the fifteen 2026
-    games again on 2026-09-18 as the season in progress moved; the rank
-    order and the verdict are unchanged). A check that could not reject that
-    order would protect nothing.
+    A game set in ASCENDING park-factor order hands an 8-game run the eight most
+    pitcher-friendly parks. A check that could not reject that order would
+    protect nothing. (The pins move as the season in progress accumulates games;
+    the rank order and the verdict do not.)
     """
     ascending = tuple(sorted(bands.ACCEPTANCE_PARK_FACTORS, key=bands.ACCEPTANCE_PARK_FACTORS.get))
     k, bias = bands.worst_prefix_park_bias(ascending)
@@ -1165,15 +1136,11 @@ def test_the_prefix_check_rejects_an_ascending_order_sim450() -> None:
     assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99384, abs=5e-5)
 
 
-def test_conftest_slices_the_balanced_game_order_sim450() -> None:
-    """The acceptance game set IS the balanced order (round 3).
+def test_conftest_slices_the_balanced_game_order() -> None:
+    """The acceptance game set IS the balanced order.
 
-    Round 2 shipped ``BALANCED_GAME_ORDER`` in ``bands.py`` and left this test
-    ``xfail(strict=True)``, because ``conftest.py`` belonged to another agent that
-    round. The marker's reason text asked a future agent to make the fix — which
-    would have turned this into an XPASS and reddened the push lane the moment
-    anyone did what it asked. Round 3 owns both files, so the reorder landed and
-    the marker is gone.
+    The fixture slices ``[:n_games]``, so any other order hands a shortened run a
+    biased set of parks.
     """
     assert tuple(ACCEPTANCE_GAME_PKS) == bands.BALANCED_GAME_ORDER, (
         "conftest.ACCEPTANCE_GAME_PKS must BE bands.BALANCED_GAME_ORDER. The fixture "
@@ -1188,21 +1155,16 @@ def test_conftest_slices_the_balanced_game_order_sim450() -> None:
     )
 
 
-def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450() -> None:
-    """HONEST LIMIT: the round-3 R floor is no longer safely above park drift.
+def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band() -> None:
+    """HONEST LIMIT: the R floor sits close to the allowed park drift.
 
-    Under the round-2 floor of 0.3465 the 0.02 prefix tolerance was worth 0.0924
-    runs, 27% of the floor, and the balanced order's real worst prefix was 17% of
-    it. Both were comfortable.
-
-    The round-3 floor is 0.1275. The same tolerance is now 72% of it, and the
-    balanced order's real worst prefix bias of 0.0126 is worth 0.058 runs, or 46%
-    of the floor. Park selection alone still cannot push a correct model across
-    the threshold, but the headroom is gone.
+    The prefix tolerance (``bands.MAX_PREFIX_PARK_BIAS``) is worth about 72% of the
+    R floor in runs. Park selection alone cannot push a correct model across the
+    threshold, but the headroom is small.
 
     This test asserts the true state rather than a comfortable one. The operating
-    rule that follows is in ``bands.py``: run all twelve games for any certifying
-    run, and treat a shortened prefix as a smoke test.
+    rule that follows is in ``bands.py``: run the whole game set for any
+    certifying run, and treat a shortened prefix as a smoke test.
     """
     floor = bands.REFERENCES["R"].floor()
     centre = bands.REFERENCES["R"].centre
@@ -1216,30 +1178,28 @@ def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450() -> None
 
     _, worst = bands.worst_prefix_park_bias(bands.BALANCED_GAME_ORDER)
     actual_in_runs = abs(worst) * centre
-    # SIM-523 (2026-09-09): the 45-game set's greedy prefix order read 0.0024;
-    # 0.0033 after the 2026 pins were re-read on 2026-09-18 (the season in
-    # progress moved), still a sixth of the floor.
+    # The 45-game set's greedy prefix order reads about an eighth of the floor
+    # (the 2026 pins move as the season in progress accumulates games).
     assert actual_in_runs / floor == pytest.approx(0.12, abs=0.02)
     assert actual_in_runs < floor / 2.0
 
-    # The full twelve-game set has no prefix bias at all, which is why a
-    # certifying run uses it.
+    # The full set has no prefix bias at all, which is why a certifying run
+    # uses it.
     assert bands.prefix_park_bias(
         bands.BALANCED_GAME_ORDER, len(bands.BALANCED_GAME_ORDER)
     ) == pytest.approx(0.0, abs=1e-12)
 
 
 # ---------------------------------------------------------------------------
-# SIM-518 — the lane names the fatigue knobs and reports the cell index
+# The fatigue flags (SIM-518) and the cell-index report
 # ---------------------------------------------------------------------------
 
 
-def test_the_lane_grades_the_landed_fatigue_weight_sim518() -> None:
-    """The lane's flag map carries the SIM-518 fatigue weight as the owner
-    landed it on 2026-09-14 — the times-through term at bandwidth 0.5, the
-    pitch-count term OFF — and the two closed factors at their off values by
-    the 2026-09-12 rulings, so a shell that exported one cannot run another
-    arm unnoticed."""
+def test_the_lane_grades_the_landed_fatigue_weight() -> None:
+    """The lane's flag map carries the fatigue weight as landed (owner decision
+    2026-09-14): the times-through term at bandwidth 0.5, the pitch-count term
+    OFF; and the two closed factors at their off values (the rulings of
+    2026-09-12), so a shell that exported one cannot run another arm unnoticed."""
     from tests.acceptance.conftest import PRODUCTION_FLAGS
 
     assert PRODUCTION_FLAGS["SIM_FATIGUE_PC_SIGMA"] == "0"
@@ -1248,7 +1208,7 @@ def test_the_lane_grades_the_landed_fatigue_weight_sim518() -> None:
     assert PRODUCTION_FLAGS["SIM_BB_PITCH_SIGMA"] == "0"
 
 
-def test_the_compose_file_carries_the_same_fatigue_values_sim518() -> None:
+def test_the_compose_file_carries_the_same_fatigue_values() -> None:
     """The lane's fatigue bandwidths and the production environment must agree,
     or the lane certifies a simulator users do not get."""
     import yaml
@@ -1263,11 +1223,11 @@ def test_the_compose_file_carries_the_same_fatigue_values_sim518() -> None:
         assert str(env[key]) == PRODUCTION_FLAGS[key], key
 
 
-def test_the_compose_file_carries_the_same_split_values_sim548() -> None:
-    """The pitch / pitch-result split's switch and powers must agree between
-    the lane's flags and the production environment (flipped ON 2026-09-14 by
-    owner decision at the 2026-09-09 fit: pitcher 16 / 16, batter 8; every power
-    1 since the owner ruling of 2026-09-16, the sweep re-fits them)."""
+def test_the_compose_file_carries_the_same_split_values() -> None:
+    """The pitch / pitch-result split's switch and powers must agree between the
+    lane's flags and the production environment. The split is ON (owner decision
+    2026-09-14) and every power is 1 (owner ruling 2026-09-16) until the sweep
+    fits them together."""
     import yaml
 
     from tests.acceptance.conftest import PRODUCTION_FLAGS
@@ -1286,7 +1246,7 @@ def test_the_compose_file_carries_the_same_split_values_sim548() -> None:
     assert PRODUCTION_FLAGS["SIM_PITCH_RESULT_SPLIT"] == "1"
 
 
-def test_the_lane_flag_overrides_are_named_sim518() -> None:
+def test_the_fatigue_flag_overrides_are_named() -> None:
     """The other-arm overrides exist in the source under the SIM518_LANE_ names
     (the SIM523_LANE_ pattern), one per fatigue bandwidth."""
     src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
@@ -1294,7 +1254,7 @@ def test_the_lane_flag_overrides_are_named_sim518() -> None:
     assert 'os.environ.get("SIM518_LANE_FATIGUE_TTO_SIGMA", "0.5")' in src
 
 
-def test_the_report_states_the_cell_index_sim518() -> None:
+def test_the_report_states_the_cell_index() -> None:
     """The report line reads the sampler's ``cell_index_stats`` shape: the
     widening shares and the sides per hand — the batting-side record's
     evidence — and says so plainly when the stats are absent or the index is OFF."""
@@ -1310,17 +1270,17 @@ def test_the_report_states_the_cell_index_sim518() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-427 — the lane grades the flipped manager draw at its fitted values
+# The manager draw (SIM-427): the lane grades it at its production values
 # ---------------------------------------------------------------------------
 
 
-def test_the_lane_grades_the_flipped_manager_draw_sim427() -> None:
-    """Since the flip (2026-09-13; docs/audit/2026-09-13-sim427-build-plan.md §5)
-    the lane grades production: the pitching change as a draw, the real pen,
-    the manager weight and the reliever weights. The two POWERS read 1 since
-    the owner ruling of 2026-09-16 (every similarity power is 1 until the sweep
-    fits them together; the manager weight was fitted at 4, reliever stuff was
-    OFF at 0); the bandwidths and mismatch weights keep their fitted values."""
+def test_the_lane_grades_the_manager_draw() -> None:
+    """The lane grades production's manager draw (flipped on 2026-09-13;
+    docs/audit/2026-09-13-sim427-build-plan.md §5): the pitching change as a draw,
+    the real pen, the manager weight and the reliever weights. The two POWERS read
+    1 (owner ruling 2026-09-16: every similarity power is 1 until the sweep fits
+    them together; the fitted 4 and 0 are the sweep's starting points); the
+    bandwidths and mismatch weights keep their fitted values."""
     from tests.acceptance.conftest import PRODUCTION_FLAGS
 
     assert PRODUCTION_FLAGS["SIM_MANAGER_DRAW"] == "1"
@@ -1337,7 +1297,7 @@ def test_the_lane_grades_the_flipped_manager_draw_sim427() -> None:
         assert PRODUCTION_FLAGS[key] == fitted, key
 
 
-def test_the_compose_file_carries_the_same_fitted_values_sim427() -> None:
+def test_the_compose_file_carries_the_same_manager_values() -> None:
     """The lane's flags and the production environment must agree, or the lane
     certifies a simulator users do not get."""
     import yaml
@@ -1362,7 +1322,7 @@ def test_the_compose_file_carries_the_same_fitted_values_sim427() -> None:
         assert str(env[key]) == PRODUCTION_FLAGS[key], key
 
 
-def test_the_lane_flag_overrides_are_named_sim427() -> None:
+def test_the_manager_flag_overrides_are_named() -> None:
     """The ON-arm overrides exist under the SIM427_LANE_ names: the draw switch,
     the pen source, the manager power and one per reliever weight."""
     src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
@@ -1381,7 +1341,7 @@ def test_the_lane_flag_overrides_are_named_sim427() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-554 — the running game on the pitch: the lane's flag and its probes
+# The running game on the pitch (SIM-554): the lane's flag and its probes
 # ---------------------------------------------------------------------------
 
 
@@ -1425,7 +1385,7 @@ def _runner_on_first(outs: int = 0) -> object:
     )
 
 
-def test_the_lane_grades_the_running_game_on_the_pitch_sim554() -> None:
+def test_the_lane_grades_the_running_game_on_the_pitch() -> None:
     """The lane grades production: the pickoff draw before the pitch and the
     steal draw after it, in the pitch's class (landed ON 2026-10-01)."""
     from tests.acceptance.conftest import PRODUCTION_FLAGS
@@ -1433,7 +1393,7 @@ def test_the_lane_grades_the_running_game_on_the_pitch_sim554() -> None:
     assert PRODUCTION_FLAGS["SIM_STEAL_PITCH_CLASS"] == "1"
 
 
-def test_the_compose_file_carries_the_same_running_game_flag_sim554() -> None:
+def test_the_compose_file_carries_the_same_running_game_flag() -> None:
     """The lane's flag and the production environment must agree, or the lane
     certifies a simulator users do not get."""
     import yaml
@@ -1447,18 +1407,19 @@ def test_the_compose_file_carries_the_same_running_game_flag_sim554() -> None:
     assert str(env["SIM_STEAL_PITCH_CLASS"]) == PRODUCTION_FLAGS["SIM_STEAL_PITCH_CLASS"]
 
 
-def test_the_lane_flag_override_is_named_sim554() -> None:
+def test_the_running_game_flag_override_is_named() -> None:
     """The other arm (the single pre-pitch draw) is one variable away, under
     the SIM554_LANE_ name."""
     src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
     assert 'os.environ.get("SIM554_LANE_STEAL_PITCH_CLASS", "1")' in src
 
 
-def test_the_lane_refuses_a_bundle_that_cannot_run_the_new_order_sim554() -> None:
+def test_the_lane_refuses_a_bundle_that_cannot_run_the_new_order() -> None:
     """The flag alone does not run the running game on the pitch: the bundle's
     steal pool must carry the classes. The lane fails rather than grade the
-    single pre-pitch draw under the new order's name (the fence stage ran
-    inert for two weeks of lanes, 2026-09; the same class of defect)."""
+    single pre-pitch draw under the new order's name (a stage graded under a
+    name it does not run is the defect class that once let the fence stage run
+    inert)."""
     import numpy as np
 
     from simulation.full_pool_sampler import FullPoolSampler
@@ -1489,11 +1450,11 @@ def test_the_lane_refuses_a_bundle_that_cannot_run_the_new_order_sim554() -> Non
                     check_running_game_order(machine, env)
 
 
-def test_the_steal_probe_passes_the_pitch_class_through_sim554() -> None:
+def test_the_steal_probe_passes_the_pitch_class_through() -> None:
     """The loop calls ``_steal_opportunity_draw(state, pitch_class=...)`` after
-    the pitch. The probe used to take the state alone, so the lane's first
-    pitch raised a TypeError. It now passes every argument through, and the
-    steal draw reads the class of the pitch that came out."""
+    the pitch. The probe passes every argument through (a probe that took the
+    state alone would raise a TypeError on the lane's first pitch), and the steal
+    draw reads the class of the pitch that came out."""
     machine, _tally, calls, pc = _running_game_lane_machine()
     fp = machine.full_pool_sampler
     seen: list[object] = []
@@ -1514,7 +1475,7 @@ def test_the_steal_probe_passes_the_pitch_class_through_sim554() -> None:
     assert result.steal_attempted and state.bases.second == 101
 
 
-def test_the_lane_counters_skip_a_no_pitch_third_out_sim554() -> None:
+def test_the_lane_counters_skip_a_no_pitch_third_out() -> None:
     """A pickoff that makes the third out before the pitch throws no pitch.
     No lane counter may read it as a pitch, a plate appearance or a steal
     opportunity: the pitch draw, the steal draw and the plate-appearance

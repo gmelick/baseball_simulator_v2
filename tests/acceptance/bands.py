@@ -1,4 +1,5 @@
-"""SIM-450 — the reference rates, the band rule, and the contract that governs both.
+"""The reference rates, the band rule, and the contract that governs both (the
+acceptance lane, SIM-450).
 
 This module is pure arithmetic. It imports nothing from the simulator, so a
 reviewer can read the numbers and a test can check the rule without a database,
@@ -7,21 +8,23 @@ an artifact bundle or a Docker container.
 WHAT A BAND IS
 ==============
 A band is a statement of the form "the simulator's mean for this channel must sit
-within ``half_width`` of the real MLB rate". A channel is one box-score quantity
-per team per game: R, H, HR, 2B, 3B, BB, K, SB, CS, the double-play rate, two
-reach-on-error rates, plus the home-team win percentage.
+within ``half_width`` of the reference rate". A game channel is one box-score
+quantity per team per game: R, H, HR, 2B, 3B, BB, K, SB, CS, the double-play rate,
+two reach-on-error rates, plus the home-team win percentage. A pool channel (the
+second half of this file) is a per-opportunity frequency graded against the play
+pool's own totals.
 
 WHY A BAND AND NOT A GOLDEN FIXTURE
 ===================================
-A golden fixture asserts byte-identical output. The SIM-448..SIM-496 remediation
-programme changes the run environment ON PURPOSE, so a golden fixture generated
-today would fail on every intended change AND would freeze today's confirmed sim
-defects into the baseline as "correct". A band survives an intended model change
-and still catches a regression.
+A golden fixture asserts byte-identical output. The model changes ON PURPOSE, so a
+golden fixture would fail on every intended change AND would freeze today's
+defects into the baseline as "correct" (owner ruling 2026-09-10: no golden
+snapshots). A band survives an intended model change and still catches a
+regression.
 
 THE BAND RULE
 =============
-For every channel::
+For every game channel::
 
     half_width = max( Z * sd / sqrt(n) , floor )
 
@@ -52,37 +55,38 @@ size each one needs.
 
 WHY THE MINIMUM-SAMPLE GATE EXISTS — A WORKED HOLE
 ==================================================
-Before 2026-08-10 (round 3) the rule had only the last two conditions, and the
-standard error was computed from the run's own measured spread. A short run whose
-spread happens to measure ZERO then has a zero standard-error term, so the floor
-binds trivially and the channel reports PASS on two observations::
+Without the first condition, the standard error comes from the run's own measured
+spread alone. A short run whose spread happens to measure ZERO then has a zero
+standard-error term, the floor binds trivially, and a loose enough floor reports
+PASS on two observations::
 
     evaluate("H", [8.0, 8.0])
-      n = 2, sd = 0.0, se = 0.0, floor = 0.1359
-      |8.0 - 8.60| = 0.60 > 0.1359                    -> FAIL today
-      (under the pre-round-3 floor of 0.8600 it read  -> PASS)
+      n = 2, sd = 0.0, se = 0.0, floor = 0.1299
+      |8.0 - 8.26| = 0.26 > 0.1299                    -> FAIL on the floor alone,
+      but the run is far too short to say anything   -> UNDERPOWERED
 
 Two observations cannot support any conclusion, whatever the floor. The
-resolution rule could not catch this because it asks the RUN's spread, and a
+resolution rule cannot catch this because it asks the RUN's spread, and a
 degenerate run reports no spread. The minimum-sample gate asks the REFERENCE
 spread instead — a fixed, measured MLB number the run cannot influence — so no
 sample, however degenerate, can talk its way past it.
 
 WHY Z = 4.0
 ===========
-The lane asserts 13 channels, each two-sided. The per-channel false-failure
+The lane asserts 13 game channels, each two-sided. The per-channel false-failure
 probability and the resulting whole-run false-red rate are::
 
-    z=3.0   p=2.700e-03   run=3.453e-02   1 false red per     29 nights
-    z=3.5   p=4.653e-04   run=6.034e-03   1 false red per    166 nights
-    z=4.0   p=6.334e-05   run=8.234e-04   1 false red per  1,215 nights
-    z=4.5   p=6.795e-06   run=8.834e-05   1 false red per 11,320 nights
+    z=3.0   p=2.700e-03   run=3.453e-02   1 false red per     29 runs
+    z=3.5   p=4.653e-04   run=6.034e-03   1 false red per    166 runs
+    z=4.0   p=6.334e-05   run=8.234e-04   1 false red per  1,215 runs
+    z=4.5   p=6.795e-06   run=8.834e-05   1 false red per 11,320 runs
 
 (Reproduce with ``p = 2 * (1 - NormalDist().cdf(z))`` and
 ``run = 1 - (1 - p) ** 13``.)
 
-z=3.0 gives a false red every month, and a lane that cries wolf monthly gets
-muted. z=4.0 gives roughly one false red every 3.3 years. Take z=4.0.
+z=3.0 gives a false red about once a month of nightly runs, and a lane that cries
+wolf monthly gets muted. z=4.0 gives roughly one false red in 1,215 runs. Take
+z=4.0.
 
 THE TENSION EVERY FLOOR CHOICE FACES, AND WHY IT IS NOT THE TENSION IT LOOKS LIKE
 ================================================================================
@@ -126,7 +130,8 @@ So the margin ``d / floor`` alone fixes the power::
 
 ``DETECTION_MARGIN`` is 1.6, giving **99.2% power** at the minimum resolving run
 and more at any longer one. ``Reference.must_detect`` carries ``d`` and
-``test_band_arithmetic.py`` fails if any floor rises above ``d / 1.6``.
+``test_band_arithmetic.py`` fails if any floor rises above ``d / 1.6``. A fixed
+defect keeps its ``must_detect``: the band still rejects a regression to it.
 
 **Rule B — a channel with no documented defect.** There is no magnitude to aim
 at, so the only non-arbitrary choice is "as sensitive as the run allows". The
@@ -138,70 +143,56 @@ A Rule-B floor is a MEASUREMENT LIMIT, not a tolerance. A red Rule-B channel
 means "the model differs from MLB by more than this run can attribute to noise".
 It does not mean a ticket exists.
 
-THE DOCUMENTED-DEFECT TABLE — EVERY FLOOR TRACED TO A FILE AND A LINE
-=====================================================================
+THE DOCUMENTED-DEFECT TABLE — EVERY FLOOR TRACED TO A SOURCE
+============================================================
 "first fails" is the smallest relative deviation the band rejects once the run
-resolves. It equals the floor as a fraction of the centre::
-
-The floors below are the SIM-508 set, recomputed 2026-08-18 against the 2025
-centres and spreads (the "round-3" 2023-era floors are in git history)::
+resolves. It equals the floor as a fraction of the centre. The floors are
+computed against the 2025 centres and spreads (SIM-508); each ``source`` string
+below names its evidence::
 
   channel  documented magnitude          source             floor   first
                                                                     fails
   R        runs ~7-8% low                CLAUDE.md §11      0.0275  2.7%
-  H        +0.2078/team-game: a drawn    BACKLOG.md:20      0.0157  1.6%
-           field_error is aliased to a   (SIM-496) +
-           single, so a retired batter   constants.py:177
-           is credited a hit
+  H        +0.2078/team-game: a reach    SIM-496            0.0157  1.6%
+           on error credited as a hit
   HR       none with a magnitude         Rule B             0.0381  3.8%
   2B       none with a magnitude         Rule B             0.0318  3.2%
   3B       none with a magnitude         Rule B             0.1071 10.7%
   BB       none with a magnitude         Rule B             0.0226  2.3%
   K        none with a magnitude         Rule B             0.0132  1.3%
-  SB       0.0000 = -100% (re-zeroed)    BACKLOG.md:19      0.0537  5.4%
-                                         (SIM-495)
-  CS       0.0000 = -100% (re-zeroed)    BACKLOG.md:19      0.0772  7.7%
-                                         (SIM-495)
-  DP       -80.4% of centre              BACKLOG.md:18      0.0420  4.2%
-                                         (SIM-494)
-  ROE      none — see the warning below  Rule B             0.0822  8.2%
-  ROE_     nothing reaches base on an    BACKLOG.md:20      0.0822  8.2%
-  reached  error at all = -100%          (SIM-496)
+  SB       0.0000 = -100% (zeroed)       SIM-495            0.0537  5.4%
+  CS       0.0000 = -100% (zeroed)       SIM-495            0.0772  7.7%
+  DP       -80.4% of centre              SIM-494            0.0420  4.2%
+  ROE      none — see the note below     Rule B             0.0822  8.2%
+  ROE_     nothing reaches base on an    SIM-496            0.0822  8.2%
+  reached  error at all = -100%
   home_    stuck at the structural-only  CLAUDE.md §11      0.0173  3.2%
   win_pct  ~.510-.515 baseline                              (abs)
 
 Two entries need their reasoning written out.
 
-**R.** ``CLAUDE.md §11`` reads "Runs run ~7-8% low (down from ~12% pre-fix)". The
-owner ruled on 2026-08-10 that this line is authoritative and that
-an older CLAUDE.md line's "runs sit ~10-12% low" is STALE. The band is therefore sized
-on the HARDER end of the live range, 7%: ``d = 0.07 * 4.4473 = 0.3113``. A floor
-of 0.027478 x 4.4473 = 0.1222 clears the 1.6 margin with room (``d/floor = 2.55``).
+**R.** ``CLAUDE.md §11`` reads "Runs run ~7-8% low (down from ~12% pre-fix)"
+(owner ruling 2026-08-10: this line is authoritative). The band is sized on the
+HARDER end of the live range, 7%: ``d = 0.07 * 4.4473 = 0.3113``. A floor of
+0.027478 x 4.4473 = 0.1222 clears the 1.6 margin with room (``d/floor = 2.55``).
 
 **home_win_pct.** ``CLAUDE.md §11`` records the defect as "stuck at the
 structural-only ~.510-.515". The band is sized on the HARDEST point of that
 range, 0.515, so ``d = 0.5428 - 0.515 = 0.0278`` and the floor is the margin
 bound 0.0278 / 1.6 rounded down to 0.0173 (``d/floor = 1.61``). It also reds
-0.5125 — the value this lane's own first production run measured — at
-``delta/floor = 1.75``. The 2025 centre nearly HALVED this channel's cost:
-13,365 decisive games against the old 26,015.
+0.5125, the value this lane's first production run measured, at
+``delta/floor = 1.75``.
 
-WARNING — ONE CHANNEL CANNOT SEE ITS OWN DEFECT AT ANY FLOOR
-============================================================
-``ROE`` counts the reach-on-error events the pool DRAWS. ``BACKLOG.md:20``
-(SIM-496) records that the loop then converts every one of them into an out:
-``_full_pool_fielding`` infers ``outs = 0 if int(rh) > 0 else 1``
-(``sim_loop.py:1432``) and a pool ``field_error`` row carries ``result_hits = 0``.
-So the batter is retired, and ``constants.py:177`` credits him a hit anyway.
+WHY THERE ARE TWO REACH-ON-ERROR CHANNELS
+=========================================
+``ROE`` counts the reach-on-error events the pool DRAWS, at the
+``_full_pool_fielding`` boundary, before the loop resolves the play. No floor on
+the drawn channel can register a loop that then retires the batter anyway (the
+SIM-496 defect): the measurement is taken before the play is decided.
+``ROE_reached`` counts batters who actually reached, at the single commit point
+``_commit_run_delta``.
 
-No floor on the DRAWN channel can register that. The measurement is taken before
-the defect happens. ``BACKLOG.md:20`` states the fix in as many words: "The lane
-cannot register this failure and must gain a second ROE channel counted after
-resolution". ``ROE_reached`` is that channel. It counts batters who actually
-reached, at the single commit point ``_commit_run_delta``, and it reads 0.0
-today.
-
-Keep BOTH. Together they localise the defect: a green ROE with a red ROE_reached
+Keep BOTH. Together they localise a defect: a green ROE with a red ROE_reached
 says the pool is right and the loop is wrong. Neither channel says that alone.
 
 HOW LONG THE RUN MUST BE
@@ -229,66 +220,62 @@ decisive game for ``home_win_pct``::
     home_win_pct  0.0173    0.5000         13,365               13,365
 
 The twelve box channels are sized to land together, so **5,648 game-sims
-certify all twelve** — 12 games x 471 iterations, about 3.5 hours at the
-measured 2.25 s per sim. ``H`` anchors the set: its floor is BOUND by the 1.6x
-detection margin on the SIM-496 magnitude, and every other floor is the
-tightest that resolves beside it. ``home_win_pct`` needs **13,365 decisive
-games**, about 8.4 hours. Call ``required_sims`` / ``binding_requirement``
-rather than copying these numbers.
+certify all twelve**; the default lane, 45 games x 130 iterations = 5,850, clears
+it in about 3.7 hours at the measured 2.25 s per sim. ``H`` anchors the set: its
+floor is BOUND by the 1.6x detection margin on the SIM-496 magnitude, and every
+other floor is the tightest that resolves beside it. ``home_win_pct`` needs
+**13,365 decisive games**, about 8.4 hours. Call ``required_sims`` /
+``binding_requirement`` rather than copying these numbers.
 
 THE COST, STATED PLAINLY
 ========================
-The old floors certified the box channels in 696 game-sims. The new ones need
-5,648 — **8.1x the run**, about 3.5 hours instead of 26 minutes. That is the
-price of an instrument that can see a 7% run-conversion gap instead of a 15% one.
+A floor sized on a 15% run gap certifies the box channels in 696 game-sims. These
+floors need 5,648: **8.1x the run**, about 3.5 hours instead of 26 minutes. That
+is the price of an instrument that can see a 7% run-conversion gap instead of a
+15% one.
 
-``home_win_pct`` is worse. Certifying it at 26,015 decisive games takes about
-16.3 hours serial, which is a WEEKEND run, not a nightly. I am not proposing a
-looser floor to make it fit: a floor loose enough for a nightly cannot reject the
-0.515 baseline ``CLAUDE.md §11`` documents, and a band that cannot reject the
-documented defect is the exact failure this round exists to end. So the honest
+``home_win_pct`` needs its own longer run: a floor loose enough for the default
+lane cannot reject the 0.515 baseline ``CLAUDE.md §11`` documents. So the honest
 statement is:
 
-    **The nightly certifies twelve channels. ``home_win_pct`` is certifiable
-    only on a weekend run, and reports UNDERPOWERED every other night.**
-
-SIM-467 (the 2,880-cell filter index, ~1000x less per-draw work) would make both
-numbers routine. Until it lands, the hours above are real.
+    **The default lane certifies the twelve box channels. ``home_win_pct`` is
+    certifiable only on a run of 13,365 decisive games, and reports UNDERPOWERED
+    on every shorter one.**
 
 WHAT THE SE TERM DOES NOT CAPTURE
 =================================
 The iterations of one game share a lineup, a park and two starting pitchers. The
 run therefore estimates the mean over THOSE matchups, not the mean over MLB. The
 within-run standard error says nothing about that matchup-selection error. The
-floor absorbs it, and ``BALANCED_GAME_ORDER`` below keeps the matchup set from
-biasing the run environment in the first place.
+floor absorbs it, the balanced game set is chosen so its actor-matched expectation
+sits on the pool's totals, and ``BALANCED_GAME_ORDER`` below keeps a shortened run
+from biasing the run environment.
 
-This is a real limit on the tight Rule-B floors. A 1.4% K floor is finer than the
-matchup-selection error of a twelve-game set almost certainly is. Read a red
-Rule-B channel as "look here", not as "the model is broken".
+This is a real limit on the tight Rule-B floors. A 1.3% K floor may be finer than
+the game set's matchup-selection error. Read a red Rule-B channel as "look here",
+not as "the model is broken".
 
 REFERENCE RATES — WHERE THE NUMBERS COME FROM
 =============================================
-SIM-508 (owner decision, 2026-08-18): every reference is THIS PROJECT'S OWN
-ingested 2025 season — 2,430 regular-season Final games, 4,860 team-games,
-measured 2026-08-18 — replacing the hand-written 2023 constants. The artifact's
-recency floor draws from 2024-2026, so 2025 grades the sim against the era it
-actually plays. Definitional notes that keep the reference matching what the
-probes count: BB includes intentional walks (595 in ``raw.play_events`` 2025 —
-the probe counts both canonical walk classes); CS includes every scored class —
-pitch-steal CS, K+CS double plays, and 149 advancing pickoffs (Rule 9.07(h),
-the SIM-507 channel).
+Every reference is THIS PROJECT'S OWN ingested 2025 season (owner decision
+2026-08-18, SIM-508): 2,430 regular-season Final games, 4,860 team-games, measured
+2026-08-18. 2025 sits inside the pool window, so the sim is graded against the era
+it draws from, and the centre and the data are the same measurement: a red channel
+is about the model. Definitional notes that keep the reference matching what the
+probes count: BB includes intentional walks (595 in ``raw.play_events`` 2025; the
+probe counts both canonical walk classes); CS includes every scored class:
+pitch-steal CS, K+CS double plays, and 149 advancing pickoffs (Rule 9.07(h)).
 
 The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py``
-verbatim, and ``home_win_pct`` restates ``_MLB_HOME_WIN_PCT`` from
-the same file. The citation names the constant, not a line.
-``test_restated_mlb_constants_match_sim_stats_sim450`` parses that file and
-fails when a value drifts.
+verbatim, and ``home_win_pct`` restates ``_MLB_HOME_WIN_PCT`` from the same file.
+The citation names the constant, not a line.
+``test_restated_mlb_constants_match_sim_stats`` parses that file and fails when a
+value drifts.
 
 ⚠ ``scripts/`` is baked into the app image and is NOT bind-mounted (CLAUDE.md
-section 2a). Run the lane in a container with ``-v "$PWD:/app"``,
-or the drift test reads whatever that file looked like when the image was last
-built. The REPO is the source of truth for a citation.
+§2a). Run the lane in a container with ``-v "$PWD:/app"``, or the drift test reads
+whatever that file looked like when the image was last built. The REPO is the
+source of truth for a citation.
 
 They are RESTATED, not imported, for three reasons. ``scripts/`` has no
 ``__init__.py`` and is not bind-mounted into the app container, so a test that
@@ -297,8 +284,8 @@ script whose module-level imports pull in asyncpg and the whole simulator. The
 lane needs four channels the dict does not carry, so restating gives one table
 with one provenance block instead of two imports and four loose literals.
 
-``DP``, ``ROE`` and ``ROE_reached`` have no entry in ``_MLB_2025``. I derived
-them from the same 2025 games. Reproduce with::
+``DP``, ``ROE`` and ``ROE_reached`` have no entry in ``_MLB_2025``. They come from
+the same 2025 games. Reproduce with::
 
     WITH g AS (SELECT game_pk FROM raw.games
                WHERE season=2025 AND game_type='R' AND status='Final'),
@@ -313,8 +300,8 @@ them from the same 2025 games. Reproduce with::
 
 Measured 2026-08-18 against the live database: 2,430 regular-season Final games
 = 4,860 team-games, dp=3,625, roe=1,010. So DP = 0.7459 and ROE = 0.2078 per team
-per game. ``ROE_reached`` shares the ROE centre: in MLB every reach on error
-does put the batter on base, so the two rates are the same number.
+per game. ``ROE_reached`` shares the ROE centre: in MLB every reach on error does
+put the batter on base, so the two rates are the same number.
 
 THE sd_ref COLUMN — MEASURED, NOT ASSUMED
 =========================================
@@ -322,70 +309,45 @@ Every ``sd_ref`` below is the real per-team-game standard deviation, measured
 against the live Postgres on 2026-08-18 over the same 4,860 team-games of 2025.
 The R value came from ``raw.games`` final scores; the rest grouped
 ``raw.pitches`` by ``(game_pk, inning_topbot)``. Two sd_ref values are measured
-on the pitch-row classes alone and documented as such at their entries: BB
-(the 0.12/team-game IBB stream) and CS (the 0.03/team-game pickoff stream) —
-both streams are too small and too flat to move a spread.
+on the pitch-row classes alone and documented as such at their entries: BB (the
+0.12/team-game IBB stream) and CS (the 0.03/team-game pickoff stream); both
+streams are too small and too flat to move a spread.
 
-``sd_ref`` does two jobs. It sizes the floors and the run length, as before.
-Since round 3 it ALSO drives the minimum-sample gate, so a run cannot report a
-verdict on a spread it never measured. The lane still takes ``sd`` from its own
-sample for the standard-error term.
-
-THE OLD DICT-VS-DATA DISAGREEMENT — RESOLVED BY SIM-508
-=======================================================
-Until 2026-08-18 the nine box centres were hand-written 2023 MLB constants that
-disagreed with this project's own 2023 data by 2.3-5.5% on four channels (H,
-2B, BB, SB), and the file carried a standing warning not to treat a red on
-those four as proof about the simulator. SIM-508 ended that: the centre and the
-data are now the SAME measurement (own ingested 2025), so a red channel is
-about the model, full stop. The old comparison table is in git history.
+``sd_ref`` does two jobs. It sizes the floors and the run length, and it drives
+the minimum-sample gate, so a run cannot report a verdict on a spread it never
+measured. The lane takes ``sd`` from its own sample for the standard-error term.
 
 THE GAME SET AND WHY ITS ORDER MATTERS
 ======================================
-``tests/acceptance/conftest.py`` holds twelve 2024 games, one per venue, and
-slices ``[:n_games]`` when the operator shortens the run. The set as a whole is
-unbiased — its mean 2024 park run factor is 0.99952 against a league mean of
-1.0014 — but the ORDER decides what a shortened run measures.
+``tests/acceptance/conftest.py`` holds the balanced 45-game set and slices
+``[:n_games]`` when the operator shortens the run. The set as a whole is chosen on
+expectation (``scripts/balanced_game_set.py``), but the ORDER decides what a
+shortened run measures: a set sorted by park factor would make every prefix a
+pitcher's (or a hitter's) park set.
 
-The order shipped on 2026-08-10 was ASCENDING by park factor, so every prefix
-was a pitcher's park set. Measured prefix means, against the full-set 0.99952::
+``BALANCED_GAME_ORDER`` holds every prefix of four or more games within
+``MAX_PREFIX_PARK_BIAS`` of the full-set mean, and ``conftest.ACCEPTANCE_GAME_PKS``
+IS this tuple. Prefixes of one and three games cannot balance (one game has no
+partner, and three splits the widest pair), so no certifiable run is that short.
 
-    games   ascending order   balanced order
-        4         0.93112          0.99410
-        6         0.95350          0.99528
-        8         0.96844          0.99640
-       10         0.98081          0.99825
-       12         0.99952          0.99952
-
-An 8-game run therefore sampled a run environment 3.1% below the set it claimed
-to represent, and the day-one 400-sim measurement in
-``test_production_bands.py`` was taken on exactly that prefix.
-
-``BALANCED_GAME_ORDER`` fixes it by pairing extremes: the widest pair first, each
-pair written low-then-high. ``conftest.ACCEPTANCE_GAME_PKS`` now IS this tuple,
-so every prefix of four or more games sits within ``MAX_PREFIX_PARK_BIAS`` of the
-full-set mean. Prefixes of one and three games still cannot balance — one game
-has no partner, and three splits the widest pair — so no certifiable run is that
-short.
-
-Every park factor in ``ACCEPTANCE_PARK_FACTORS`` was read from
-``derived.park_factors`` (the game's season, ``factor_type='R'``, ``regressed_factor``)
-in the live DuckDB on 2026-08-10. The season in progress moves: its factors are
-recomputed as its games accumulate, so the fifteen 2026 games were re-read on
-2026-09-18 (they had drifted by 0.0013 to 0.0247). Re-read them again after the
-2026 season ends; the 2024 and 2025 pins are final.
+Every park factor in ``ACCEPTANCE_PARK_FACTORS`` is read from
+``derived.park_factors`` (the game's season, ``factor_type='R'``,
+``regressed_factor``). The season in progress moves: its factors are recomputed as
+its games accumulate, so the 2026 pins were re-read on 2026-09-18. Re-read them
+again after the 2026 season ends; the 2024 and 2025 pins are final.
 
 MOVING A BAND
 =============
-THESE BANDS WILL MOVE. The remediation programme changes the run environment on
-purpose. A band that no longer fits a deliberately changed model is not a bug.
+THESE BANDS WILL MOVE. The model changes on purpose. A band that no longer fits a
+deliberately changed model is not a bug.
 
 Move a band only under these rules:
 
   1. Name the ticket that changed the model.
   2. State the measured new value and the sample size behind it.
-  3. Change the FLOOR. Never change Z. Never change the MLB centre.
-  4. Record the old floor, the new floor and the date in the changelog below.
+  3. Change the FLOOR. Never change Z. Never change the reference centre.
+  4. Record the old floor, the new floor, the date and the measurement in
+     ``CHANGES.md`` (the floors' history before 2026-10-19 is in git).
   5. Never raise a floor above ``must_detect / DETECTION_MARGIN``. That field
      records a defect the band is REQUIRED to register, and
      ``test_band_arithmetic.py`` fails if a floor crosses it.
@@ -394,75 +356,7 @@ Widening a band to turn a red lane green, with no model change behind it, is a
 defect in this file. If a channel is red and nobody changed the model, the model
 is wrong.
 
-FLOOR CHANGELOG
-===============
-2026-08-10 (SIM-450) — initial floors. Chosen so the floor binds at 12 games x
-100 iterations, then checked against a real 400-sim run of the production
-configuration.
-
-2026-08-10 (SIM-450 remediation round 2, same day) — R 0.15 -> 0.075 and the
-resolution rule added, after a review found two bands could not fail on the
-defect they exist to catch.
-
-2026-08-10 (SIM-450 remediation round 3, same day) — **a third review found that
-round 2 sized both repaired floors against numbers that were not the ones on
-record.** Every floor is re-derived here from a magnitude with a file and a place
-behind it. Reproduced before changing anything:
-
-  * ``evaluate("R", ...)`` at rel_floor 0.075 PASSED at 7.0%, 7.2%, 7.4% and
-    7.5% low, and first failed at 7.6%. ``CLAUDE.md §11`` records the live gap as
-    "Runs run ~7-8% low", so the band passed on most of the documented range.
-    Round 2 had sized it against an older CLAUDE.md line's "10-12%", which the owner
-    ruled STALE on 2026-08-10.
-  * ``evaluate("home_win_pct", ...)`` at floor 0.030 failed ONLY at exactly
-    0.5000 and PASSED at 0.5100, 0.5125 and 0.5150. ``CLAUDE.md §11`` records the
-    defect as "stuck at the structural-only ~.510-.515", and this lane's own
-    first production run measured 0.5125
-    (``test_production_bands.py``). The band passed on the whole
-    documented range and on the lane's own reading.
-  * ``evaluate("H", [8.0, 8.0])`` returned ``passed=True`` — two observations,
-    7% off the MLB centre.
-
-The changes:
-
-  * **R: rel_floor 0.075 -> 0.0276.** Sized on ``CLAUDE.md §11``, harder end:
-    ``d = 0.07 * 4.62 = 0.3234``; floor = 0.1275; margin 2.54; power > 0.9999.
-    Cost: 5,098 game-sims, up from 691.
-  * **H: rel_floor 0.10 -> 0.0158.** Sized on ``BACKLOG.md:20`` (SIM-496) with
-    ``simulation/constants.py:177``: every drawn ``field_error`` is credited as a
-    hit although the batter was retired, worth ``d = 0.2193`` per team-game.
-    Floor 0.1359; margin 1.61; power 0.992. **H binds the box lane at 5,096
-    game-sims.**
-  * **HR 0.15 -> 0.0382, 2B 0.15 -> 0.0333, 3B 0.30 -> 0.1109, BB 0.12 -> 0.0243,
-    K 0.10 -> 0.0137, ROE 0.35 -> 0.0857.** No documented magnitude. Rule B: the
-    tightest deviation team-games resolves (11,295).
-  * **SB 0.25 -> 0.0611, CS 0.35 -> 0.0648, DP 0.20 -> 0.0421.** Each has a
-    documented magnitude (``BACKLOG.md:19`` SIM-495, ``BACKLOG.md:18`` SIM-494)
-    that the OLD floor already rejected. Rule A did not force a change here;
-    Rule B did, and it applies because these channels share the lane's run.
-    Tightening them costs nothing (they resolve inside the 5,648-sim box run) and
-    keeps the band meaningful after the defect is fixed.
-  * **home_win_pct: abs_floor 0.030 -> 0.0124.** Sized on ``CLAUDE.md §11``,
-    hardest point: ``d = 0.535 - 0.515 = 0.020``; margin 1.61; power 0.992. It
-    reds 0.5125 at 1.81x the floor. Cost: **26,015 decisive games, about 16.3
-    hours** — a weekend run. Stated, not hidden. No nightly-sized floor can
-    reject the documented baseline.
-  * **NEW CHANNEL ``ROE_reached``**, floor 0.0857, ``must_detect`` 0.2193.
-    ``BACKLOG.md:20`` requires it in as many words: the DRAWN ROE channel is
-    measured before the defect happens, so no floor on it can ever red.
-  * **The minimum-sample gate** (``BandResult.underpowered``) closes the
-    zero-variance hole. A channel with fewer than ``required_observations()``
-    observations returns UNDERPOWERED, which is neither a pass nor a failure.
-  * **``ACCEPTANCE_GAME_PKS`` in ``conftest.py`` now IS ``BALANCED_GAME_ORDER``.**
-    Round 2 shipped the balanced tuple here and a strict xfail there, because it
-    did not own that file. Round 3 owns it, so the reorder landed and the xfail
-    is deleted.
-  * **The ``scripts/sim_stats.py`` citations name the constants**, and a test
-    parses that file so value drift fails.
-
-  Nothing was widened. Z is unchanged at 4.0. No MLB centre moved.
-
-Owner: QA / DevOps (SIM-450).
+Owner: QA / DevOps.
 """
 
 from __future__ import annotations
@@ -907,12 +801,10 @@ BALANCED_GAME_ORDER: tuple[int, ...] = (
 )
 
 #: How far a prefix's mean park run factor may sit from the full set's mean.
-#: 0.02 is about 0.09 runs per team-game at the R centre. That is NO LONGER small
-#: against the round-3 R floor of 0.1275 — it is 72% of it. The balanced order's
-#: worst real prefix bias is 0.0126, worth 0.058 runs or 46% of the floor, which
-#: is still uncomfortable. Run all twelve games for any certifying run; the
-#: shortened prefixes are for smoke runs only. See
-#: ``test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450``.
+#: 0.02 is about 0.09 runs per team-game at the R centre, about 72% of the R
+#: floor: not small. Run the whole game set for any certifying run; the shortened
+#: prefixes are for smoke runs only. See
+#: ``test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band``.
 MAX_PREFIX_PARK_BIAS: float = 0.02
 
 #: The shortest prefix that can be balanced. One game has no partner and three
@@ -1205,7 +1097,7 @@ def detection_power(margin: float) -> float:
 
 
 # ===========================================================================
-# SIM-516 — the POOL-REFERENCED frequency bands (owner ruling 2026-08-20)
+# The POOL-REFERENCED frequency bands (owner ruling 2026-08-20, SIM-516)
 # ===========================================================================
 #
 # THE RULING. The sim is a similarity-weighted sampler of the play pool. The
@@ -1215,7 +1107,7 @@ def detection_power(margin: float) -> float:
 # defect (a kernel tilt, a decision model off its data), never an era gap.
 # The game-level channels the pool cannot state (R — the emergent integration
 # of everything — and home_win_pct) stay game-graded above. The superseded
-# per-team-game box channels stay MEASURED and REPORTED but no longer certify;
+# per-team-game box channels stay MEASURED and REPORTED but do not certify;
 # their per-opportunity replacements below do.
 #
 # THE WINDOW. Full seasons 2023-2026 (the owner's same-day ruling: the last
@@ -1355,11 +1247,10 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         floor_rationale="Rare-channel sizing, as TRIPLES_BIP.",
     ),
     # --- per opportunity ---------------------------------------------------
-    # SIM-476 (step 0): the steal bands. Centres are the artifact steal
-    # pools' OWN recency-weighted rates (printed by
-    # the SIM-476 steal probe, now in git history, from the loaded bundle — the exact object
-    # the draw samples). The -15% deficit these guard was the aggression
-    # multiplier's leverage factor, deleted 2026-08-30.
+    # The steal bands (SIM-476). Centres are the artifact steal pools' OWN
+    # recency-weighted rates, read from the loaded bundle (the exact object the
+    # draw samples) by the SIM-476 steal probe, in git history. The -15% deficit
+    # the 2B band must detect is the measured magnitude of an attempt defect.
     "STEAL_ATT_OPP_2B": PoolReference(
         0.0214,
         "the W1 artifact steal pool [2B], recency-weighted (sim476_steal_probe)",
@@ -1381,9 +1272,8 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         ),
     ),
     "STEAL_SAFE_2B": PoolReference(
-        # SIM-554 (2026-10-03): 0.7989 -> 0.7982, read by the steal-pool
-        # rebuild over pitch rows only; the export added the 2026 games of
-        # 08-14 to 08-29. The two attempt centres held at the fourth decimal.
+        # Read by the steal-pool rebuild over pitch rows only (2026-10-03, the
+        # running game on the pitch, SIM-554).
         0.7982,
         "the W1 artifact steal pool [2B] safe share (rebuild_steal_pool)",
         rel_floor=0.03,
@@ -1403,7 +1293,7 @@ POOL_REFERENCES: dict[str, PoolReference] = {
             "The diagnosis measured the live draw at +1.9%."
         ),
     ),
-    # ---- SIM-517: the catcher receiving channels (2026-09-03) -------------
+    # ---- the catcher receiving channels (SIM-517) -------------------------
     "CALLED_STRIKE_TAKEN": PoolReference(
         0.31373,
         "the W1 artifact pitch pool: called strikes / taken pitches, "
@@ -1434,12 +1324,11 @@ POOL_REFERENCES: dict[str, PoolReference] = {
 POOL_CHANNELS: tuple[str, ...] = tuple(POOL_REFERENCES)
 
 #: Box channels SUPERSEDED as certification by the pool bands (the 2026-08-20
-#: ruling). They stay measured and reported — a reader still sees them — but
-#: their per-team-game asserts no longer gate the lane; the per-opportunity
-#: bands above do. R and home_win_pct are NOT here: the pool cannot state
-#: them, so they stay game-graded. SB and CS joined on 2026-08-30 (SIM-476
-#: step 0): their per-opportunity replacements (STEAL_ATT_OPP_2B/3B +
-#: STEAL_SAFE_2B) now gate the running game.
+#: ruling). They stay measured and reported, so a reader still sees them, but
+#: their per-team-game asserts do not gate the lane; the per-opportunity bands
+#: above do. R and home_win_pct are NOT here: the pool cannot state them, so they
+#: stay game-graded. SB and CS are gated by STEAL_ATT_OPP_2B/3B and
+#: STEAL_SAFE_2B.
 SUPERSEDED_BY_POOL: tuple[str, ...] = (
     "H",
     "HR",

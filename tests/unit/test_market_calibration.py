@@ -1,10 +1,9 @@
 """
-SIM-548 — the calibration layer's fit and the composite objective, after the
-2026-09-15 fixes (no DB, no bundle):
+The calibration layer's fit and the composite objective (no DB, no bundle):
 
   * fit_logistic takes Newton steps with step-halving and reports a converged
     flag; it recovers a shrink of 0.15 (the strikeout market's own regime),
-    where a plain Newton step diverged;
+    where a plain Newton step diverges;
   * a fit that cannot converge (outcomes all one value) reports
     converged=False, and fit_market never passes it;
   * fit_isotonic groups tied probabilities, so the map does not depend on the

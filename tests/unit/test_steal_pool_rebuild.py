@@ -1,10 +1,10 @@
-"""SIM-554 — the run book's two scripts, on in-memory fixtures (no live DB, no bundle).
+"""The steal-pool rebuild (``scripts/rebuild_steal_pool.py`` and its steps in
+``scripts/steal_pool_rebuild/``), on in-memory fixtures (no live DB, no bundle).
 
-``scripts/rebuild_steal_pool.py`` rebuilds the steal opportunity pool
-with the pitch class and the pickoff rows, then exports the steal pool alone.
-``scripts/probes/running_game_census.py`` reads where the simulator's steals
-and pickoffs land, two arms side by side. These tests pin the scripts' own
-logic:
+Plan: docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md.
+
+The rebuild rebuilds the steal opportunity pool with the pitch class and the
+pickoff rows, then exports the steal pool alone. These tests pin its own logic:
 
   * the migration's statement splitter, and the migration applied twice;
     what the log says of its two columns after a rollback, also when they
@@ -19,10 +19,10 @@ logic:
   * the pickoff rows counted from the play records, independently of the
     builder: which outcomes fit a pair, which are tagged, which become rows,
     which are listed;
-  * the band centres over pitch rows only, and the export's round-trip;
-  * the census's reading of one step (opportunity, attempt, class, no-pitch
-    third out, intentional walk, dropped-third-strike reach) and the
-    report's stop rules.
+  * the band centres over pitch rows only, and the export's round-trip.
+
+``tests/unit/test_running_game_census.py`` tests the census of where the
+simulator's steals and pickoffs land.
 """
 
 from __future__ import annotations
@@ -43,6 +43,25 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 rb = load_script("rebuild_steal_pool")
+
+from steal_pool_rebuild.bundle import (  # noqa: E402
+    _export_replaces,
+    backup_plan,
+    compare_hashes,
+    steal_pool_problem,
+)
+from steal_pool_rebuild.checks import matches_snapshot  # noqa: E402
+from steal_pool_rebuild.common import EXPECT, FALLBACK_CENTRES, POOL, STEAL_POOL_FILES  # noqa: E402
+from steal_pool_rebuild.export import (  # noqa: E402
+    band_centres,
+    class_codes,
+    roundtrip_target,
+    steal_centres,
+)
+from steal_pool_rebuild.migration import migration_statements  # noqa: E402
+from steal_pool_rebuild.preflight import bundle_problems  # noqa: E402
+
+from pipeline.batch.engine_artifacts import build_steal_pool_artifact  # noqa: E402
 
 WINDOW = [2023, 2024, 2025, 2026]
 
@@ -209,7 +228,7 @@ def _pickoff_row(
     pitcher=901,
     score_diff=2,
 ):
-    """A pickoff row the way the builder writes one (the design's §4.2)."""
+    """A pickoff row the way the builder writes one (the plan's §4.2)."""
     c.execute(
         "INSERT INTO sim.steal_opportunity_pool VALUES "
         "(?, ?, ?, 0, DATE '2024-06-01', ?, ?, ?, 902, ?, 1, ?, 0, 0, ?, FALSE, FALSE, 1.0, "
@@ -246,13 +265,13 @@ class TestTheMigration:
             "-- a whole comment line\n"
             "ALTER TABLE sim.t ADD COLUMN IF NOT EXISTS b BOOLEAN DEFAULT FALSE;\n"
         )
-        assert rb.migration_statements(text) == [
+        assert migration_statements(text) == [
             "ALTER TABLE sim.t ADD COLUMN IF NOT EXISTS a VARCHAR(20)",
             "ALTER TABLE sim.t ADD COLUMN IF NOT EXISTS b BOOLEAN DEFAULT FALSE",
         ]
 
     def test_the_real_file_is_two_add_column_statements(self):
-        stmts = rb.migration_statements(rb.MIGRATION.read_text(encoding="utf-8"))
+        stmts = migration_statements(rb.MIGRATION.read_text(encoding="utf-8"))
         assert len(stmts) == 2
         assert all("ADD COLUMN IF NOT EXISTS" in s for s in stmts)
         assert "pitch_class" in stmts[0] and "is_pickoff_row" in stmts[1]
@@ -434,21 +453,21 @@ class TestThePreflight:
 class TestTheRollbackPoint:
     def test_no_copy_means_copy_the_bundle(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
-        plan = rb.backup_plan(art, backup, force=False)
+        plan = backup_plan(art, backup, force=False)
         assert plan.action == "copy" and not plan.problems
 
     def test_a_whole_copy_equal_to_the_bundle_is_kept(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
         assert rb.take_backup(art, backup, force=False) == backup
-        assert rb.backup_plan(art, backup, force=False).action == "keep"
+        assert backup_plan(art, backup, force=False).action == "keep"
 
     def test_a_copy_the_bundle_moved_on_from_stops_unless_forced(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
         rb.take_backup(art, backup, force=False)
-        _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2})  # a later old-shape export
-        plan = rb.backup_plan(art, backup, force=False)
+        _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2})  # a later pre-0031 export
+        plan = backup_plan(art, backup, force=False)
         assert plan.problems and "changed after the copy" in plan.problems[0]
-        forced = rb.backup_plan(art, backup, force=True)
+        forced = backup_plan(art, backup, force=True)
         assert forced.action == "replace" and not forced.problems
 
     def test_a_started_export_keeps_the_copy_over_a_half_written_bundle(self, tmp_path):
@@ -456,9 +475,9 @@ class TestTheRollbackPoint:
         rb.take_backup(art, backup, force=False)
         Path(rb.export_marker(backup)).write_text("started")
         _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2}, sit_rows={"2": 1})
-        plan = rb.backup_plan(art, backup, force=False)
+        plan = backup_plan(art, backup, force=False)
         assert plan.action == "keep" and not plan.problems
-        problems = rb.bundle_problems(art, backup, WINDOW, force=False)
+        problems = bundle_problems(art, backup, WINDOW, force=False)
         assert problems == []  # the export rewrites the half-written pool
 
     @pytest.mark.parametrize(
@@ -483,9 +502,9 @@ class TestTheRollbackPoint:
         pool_dir = Path(art) / "steal_pool"
         for name in strays:
             (pool_dir / name).write_bytes(b"half-written")
-        assert all(rb._export_replaces(name) for name in strays)
-        assert rb.steal_pool_problem(str(pool_dir)) is None  # the old five files are whole
-        assert rb.backup_plan(art, backup, force=False).action == "keep"
+        assert all(_export_replaces(name) for name in strays)
+        assert steal_pool_problem(str(pool_dir)) is None  # the old five files are whole
+        assert backup_plan(art, backup, force=False).action == "keep"
         assert _preflight(c, art, backup) == []
 
     def test_every_staging_file_of_the_export_is_one_the_rerun_accepts(self, tmp_path, monkeypatch):
@@ -498,20 +517,20 @@ class TestTheRollbackPoint:
         left: list[str] = []
 
         def killed(tmp: str, _final: str) -> None:
-            left.extend(sorted(set(os.listdir(os.path.dirname(tmp))) - rb.STEAL_POOL_FILES))
+            left.extend(sorted(set(os.listdir(os.path.dirname(tmp))) - STEAL_POOL_FILES))
             raise RuntimeError("killed before the move")
 
         with monkeypatch.context() as m:
             m.setattr(os, "replace", killed)
             with pytest.raises(RuntimeError, match="killed before the move"):
-                rb.build_steal_pool_artifact(c, str(tmp_path), [2024])
+                build_steal_pool_artifact(c, str(tmp_path), [2024])
         assert left == [
             "tmp_2.meta.parquet",
             "tmp_2.sit.npy",
             "tmp_3.meta.parquet",
             "tmp_3.sit.npy",
         ]
-        assert all(rb._export_replaces(name) for name in left)
+        assert all(_export_replaces(name) for name in left)
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +573,7 @@ class TestThePickoffCount:
         assert (got.fit, got.with_pitch, got.tag_groups, got.folded, got.rows) == (5, 2, 1, 1, 2)
         assert [item[0] for item in got.no_id] == [7]
         rows = c.execute(
-            f"SELECT id, pair, is_out, is_adv, is_err FROM {rb.EXPECT} "
+            f"SELECT id, pair, is_out, is_adv, is_err FROM {EXPECT} "
             "WHERE NOT has_pitch AND has_ids ORDER BY id"
         ).fetchall()
         assert rows == [(2, 2, True, True, False), (3, 3, False, False, True)]
@@ -606,7 +625,7 @@ class TestTheChecks:
         assert not rb.check_snapshot_back(c)
 
     def test_the_example_names_the_changed_pitch_row_not_the_renumbered_pickoff_rows(self, capsys):
-        """Check a fails on a changed pitch row. A reloaded game also renumbered
+        """Check a fails on a changed pitch row. A reloaded game also renumbers
         an earlier run's pickoff rows, which check a reports for information
         only, so its example line must list the pitch row alone."""
         c = _db()
@@ -701,7 +720,7 @@ class TestTheChecks:
         c.execute("BEGIN TRANSACTION")
         c.execute("DELETE FROM sim.steal_opportunity_pool")
         _rebuilt(c)
-        assert not rb.matches_snapshot(c, [2024], before, versions)
+        assert not matches_snapshot(c, [2024], before, versions)
         assert rb.rollback(c, [2024], before, versions)
 
 
@@ -772,8 +791,8 @@ class TestAgainstTheBuilder:
         c = _db()
         _builder_game(c)
         _build(c)
-        # Turn the pool back into what an old builder wrote: no pickoff rows,
-        # no class.
+        # Turn the pool back into what a builder before migration 0031 writes:
+        # no pickoff rows, no class.
         c.execute("DELETE FROM sim.steal_opportunity_pool WHERE is_pickoff_row")
         c.execute("UPDATE sim.steal_opportunity_pool SET pitch_class = NULL")
         rb.take_snapshot(c, [2024])
@@ -830,7 +849,7 @@ class TestTheCentres:
     def test_the_centres_read_pitch_rows_only(self):
         # Four pitch rows (two attempts, one safe; one tagged pickoff) and two
         # pickoff rows. Recency 2, 2, 1, 1 on the pitch rows.
-        got = rb.steal_centres(
+        got = steal_centres(
             attempted=np.array([1, 1, 0, 0, 0, 0]),
             success=np.array([1, 0, 0, 0, 0, 0]),
             recency=np.array([2.0, 2.0, 1.0, 1.0, 9.0, 9.0]),
@@ -845,33 +864,33 @@ class TestTheCentres:
         assert got["pickoff_per_pitch_row"] == pytest.approx(3 / 4)
 
     def test_a_pool_without_classes_is_all_pitch_rows(self):
-        got = rb.steal_centres(
+        got = steal_centres(
             np.array([1, 0]), np.array([1, 0]), np.ones(2), np.zeros(2), np.zeros(2), None
         )
         assert got["pitch_rows"] == 2 and got["pickoff_rows"] == 0 and got["att_rate"] == 0.5
 
     def test_the_class_strings_map_to_codes(self):
-        codes = rb.class_codes(["ball", "", "hit_by_pitch", "in_play", "nonsense", None])
+        codes = class_codes(["ball", "", "hit_by_pitch", "in_play", "nonsense", None])
         assert codes.tolist() == [1, 0, 6, 5, -1, 0]
 
     def test_the_band_centres_load(self):
         """The centres come from ``tests/acceptance/bands.py`` itself, not from
-        the script's fallback copy (which holds the same 2026-09 values, so
-        only the source and a fresh read of the file tell the two apart)."""
+        the script's fallback copy (which can hold the same values, so only
+        the source and a fresh read of the file tell the two apart)."""
         path = REPO / "tests" / "acceptance" / "bands.py"
-        centres, source = rb.band_centres()
+        centres, source = band_centres()
         assert Path(source) == path
         spec = importlib.util.spec_from_file_location("_sim554_test_bands", path)
         assert spec is not None and spec.loader is not None
         bands = importlib.util.module_from_spec(spec)
         sys.modules["_sim554_test_bands"] = bands  # the dataclasses resolve their module
         spec.loader.exec_module(bands)
-        assert set(centres) == set(rb.FALLBACK_CENTRES)
-        assert centres == {k: float(bands.POOL_REFERENCES[k].centre) for k in rb.FALLBACK_CENTRES}
+        assert set(centres) == set(FALLBACK_CENTRES)
+        assert centres == {k: float(bands.POOL_REFERENCES[k].centre) for k in FALLBACK_CENTRES}
 
 
 def _export_like(c, pool_dir: Path, target: str) -> None:
-    """Write one target's files the way the SIM-554 export does (pitch-id order)."""
+    """Write one target's files the way the steal-pool export does (pitch-id order)."""
     pool_dir.mkdir(parents=True, exist_ok=True)
     w = f"target_base = {int(target)}"
     d = c.execute(
@@ -900,17 +919,17 @@ class TestTheRoundTrip:
 
     def test_a_faithful_export_passes(self, tmp_path):
         c, d = self._pool(tmp_path)
-        assert rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_a_label_unlike_duckdbs_fails(self, tmp_path):
         c, d = self._pool(tmp_path)
         c.execute("UPDATE sim.steal_opportunity_pool SET success = FALSE")
-        assert not rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert not roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_a_count_unlike_duckdbs_fails(self, tmp_path):
         c, d = self._pool(tmp_path)
         c.execute("UPDATE sim.steal_opportunity_pool SET count_strikes = 2 WHERE pitch_id > 0")
-        assert not rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert not roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_an_export_without_pitch_ids_fails(self, tmp_path):
         c, d = self._pool(tmp_path)
@@ -918,7 +937,7 @@ class TestTheRoundTrip:
             "COPY (SELECT runner_id, season, attempted FROM sim.steal_opportunity_pool) "
             f"TO '{(d / '2.meta.parquet').as_posix()}' (FORMAT parquet)"
         )
-        assert not rb.roundtrip_target(c, str(d), "2", [2024], 3, rb.POOL)
+        assert not roundtrip_target(c, str(d), "2", [2024], 3, POOL)
 
     def test_the_rest_of_the_bundle_is_hashed_and_compared(self, tmp_path):
         art = tmp_path / "bundle"
@@ -929,9 +948,9 @@ class TestTheRoundTrip:
         before = rb.bundle_hashes(str(art))
         assert list(before) == ["pitch_pool/L.sit.npy"]
         (art / "steal_pool" / "2.sit.npy").write_bytes(b"new")  # the export's own write
-        assert rb.compare_hashes(before, rb.bundle_hashes(str(art))) == []
+        assert compare_hashes(before, rb.bundle_hashes(str(art))) == []
         (art / "pitch_pool" / "L.sit.npy").write_bytes(b"abd")
-        assert rb.compare_hashes(before, rb.bundle_hashes(str(art))) == [
+        assert compare_hashes(before, rb.bundle_hashes(str(art))) == [
             "changed: pitch_pool/L.sit.npy"
         ]
 
@@ -950,8 +969,8 @@ def test_the_rebuild_refuses_a_missing_database(tmp_path, builder_554, quiet_log
 
 def _file_databases(tmp_path: Path) -> tuple[str, str]:
     """A DuckDB file holding the ``raw`` tables (attached as ``pg`` in place of
-    Postgres) and the main DuckDB file, its steal pool as an old builder left
-    it: no pickoff rows, no class, and no migration-0031 columns."""
+    Postgres) and the main DuckDB file, its steal pool in the shape before
+    migration 0031: no pickoff rows, no class, and no migration-0031 columns."""
     pg_path, main_path = str(tmp_path / "pg.duckdb"), str(tmp_path / "main.duckdb")
     c = _db()
     _builder_game(c)
@@ -1018,7 +1037,7 @@ class TestTheWholeRun:
             rb, "attach_pg", lambda con: con.execute(f"ATTACH '{pg_path}' AS pg (READ_ONLY)")
         )
         art = tmp_path / "engine_artifacts"
-        _write_steal_pool(art / "steal_pool", {"2": 2, "3": 1})  # the old export's counts
+        _write_steal_pool(art / "steal_pool", {"2": 2, "3": 1})  # the pre-rebuild export's counts
         (art / "pitch_pool").mkdir()
         (art / "pitch_pool" / "L.sit.npy").write_bytes(b"untouched")
         argv = ["--duckdb-path", main_path, "--art-dir", str(art)]
@@ -1040,8 +1059,8 @@ class TestTheWholeRun:
         self, tmp_path, builder_554, quiet_logging, monkeypatch, capsys
     ):
         """--apply-migration adds the two columns INSIDE the rebuild's
-        transaction, so a failed check leaves the table in its old shape: the
-        old code's positional INSERT keeps working until the merge."""
+        transaction, so a failed check leaves the table in its old shape, the
+        shape an un-migrated builder's positional INSERT expects."""
         pg_path, main_path = _file_databases(tmp_path)
         monkeypatch.setattr(
             rb, "attach_pg", lambda con: con.execute(f"ATTACH '{pg_path}' AS pg (READ_ONLY)")
@@ -1111,398 +1130,3 @@ class TestTheWholeRun:
         finally:
             con.close()
         assert {"pitch_class", "is_pickoff_row"} <= cols
-
-
-# ===========================================================================
-# The census
-# ===========================================================================
-
-census = load_script("running_game_census")
-
-
-from simulation.game_state import NO_PITCH, PlayResult  # noqa: E402
-
-
-def _snap(
-    *,
-    first=None,
-    second=None,
-    third=None,
-    outs=0,
-    balls=0,
-    strikes=0,
-    inning=1,
-    half="TOP",
-    batter=7,
-):
-    return census.Snap(
-        first=first,
-        second=second,
-        third=third,
-        outs=outs,
-        balls=balls,
-        strikes=strikes,
-        inning=inning,
-        half=half,
-        batter=batter,
-    )
-
-
-class TestTheCensusStep:
-    def test_a_thrown_pitch_with_a_stealable_runner_is_an_opportunity(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        pre = _snap(first=11)
-        res = PlayResult(pitch_outcome="ball", steal_attempted=True, steal_outcome="safe")
-        rec.observe(pre, res, pre)
-        assert rec.opp["2"]["ball"] == 1 and rec.att["2"]["ball"] == 1 and rec.safe["2"] == 1
-        rec.observe(_snap(first=11, second=12), PlayResult(pitch_outcome="foul"), pre)
-        assert rec.opp["3"]["foul"] == 1 and rec.att["3"]["foul"] == 0  # the lead runner
-        rec.observe(_snap(first=11, second=12, third=13), PlayResult(pitch_outcome="ball"), pre)
-        rec.observe(_snap(), PlayResult(pitch_outcome="in_play"), pre)
-        assert sum(rec.opp["2"].values()) + sum(rec.opp["3"].values()) == 2
-
-    def test_a_caught_steal_counts_an_attempt_and_no_safe(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(
-            pitch_outcome="called_strike", steal_attempted=True, steal_outcome="caught"
-        )
-        rec.observe(_snap(second=12), res, _snap(second=None, outs=1))
-        assert rec.att["3"]["called_strike"] == 1 and rec.safe["3"] == 0
-
-    def test_an_intentional_walk_is_skipped(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(pitch_outcome="ball", event="intentional_walk", pa_terminal=True)
-        rec.observe(_snap(first=11), res, _snap(first=7, second=11))
-        assert rec.ibb == 1 and sum(rec.opp["2"].values()) == 0
-
-    def test_a_no_pitch_third_out_and_the_same_batter_next_time(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        pre = _snap(first=11, outs=2, balls=3, strikes=2, batter=7)
-        res = PlayResult(pitch_outcome=NO_PITCH, pickoff_out=True, pa_voided="pickoff_third_out")
-        rec.observe(pre, res, _snap(inning=1, half="BOTTOM", batter=20))
-        assert rec.no_pitch == {"n": 1, "half_rolled": 1, "labelled": 1}
-        assert rec.pickoff_third_outs == 1 and rec.pickoff_third_outs_pa_credited == 0
-        assert rec.pickoffs_by_count == {"3-2": 1}
-        assert sum(rec.opp["2"].values()) == 0  # no pitch, no opportunity
-        # The other side bats, then the same batter leads off at 0-0.
-        rec.observe(_snap(half="BOTTOM", batter=20), PlayResult(pitch_outcome="ball"), pre)
-        rec.observe(_snap(inning=2, batter=7), PlayResult(pitch_outcome="ball"), pre)
-        assert rec.leadoff == {"same": 1, "other": 0, "unchecked": 0}
-
-    def test_a_different_leadoff_batter_is_counted_and_an_unread_one_is_unchecked(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(pitch_outcome=NO_PITCH, pickoff_out=True, pa_voided="pickoff_third_out")
-        rec.observe(_snap(first=11, outs=2, batter=7), res, _snap(half="BOTTOM"))
-        rec.observe(_snap(inning=2, batter=8), PlayResult(pitch_outcome="ball"), _snap())
-        assert rec.leadoff["other"] == 1
-        rec.observe(_snap(first=11, outs=2, batter=8), res, _snap(half="BOTTOM"))
-        rec.end_game_sim([], 1.0)  # the game ended before that side batted again
-        assert rec.leadoff["unchecked"] == 1
-
-    def test_the_old_order_credits_a_pickoff_third_out_as_a_plate_appearance(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(
-            pitch_outcome="called_strike", pa_terminal=True, event="strikeout", pickoff_out=True
-        )
-        rec.observe(_snap(first=11, outs=2, strikes=2), res, _snap(half="BOTTOM"))
-        assert rec.pickoff_third_outs == 1 and rec.pickoff_third_outs_pa_credited == 1
-        assert rec.opp["2"]["called_strike"] == 1  # a pitch was thrown
-
-    def test_a_voided_steal_is_counted_by_reason(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(
-            pitch_outcome="called_strike",
-            pa_terminal=True,
-            event="strikeout",
-            steal_voided="third_out_first",
-        )
-        rec.observe(_snap(first=11, outs=2, strikes=2), res, _snap(half="BOTTOM"))
-        assert rec.voided == {"third_out_first": 1}
-
-    def test_a_dropped_third_strike_reach_and_the_runners_it_moved(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        # A runner on second, first open: unforced. He goes to third.
-        res = PlayResult(
-            pitch_outcome="swinging_strike",
-            pa_terminal=True,
-            event="strikeout",
-            baserunner_advances={7: 1, 12: 3},
-        )
-        rec.observe(_snap(second=12, outs=1, strikes=2), res, _snap(first=7, third=12, outs=1))
-        # Bases loaded, two outs: every runner is forced; the one on third scores.
-        res2 = PlayResult(
-            pitch_outcome="swinging_strike",
-            pa_terminal=True,
-            event="strikeout",
-            baserunner_advances={8: 1, 11: 2, 12: 3, 13: 0},
-        )
-        rec.observe(
-            _snap(first=11, second=12, third=13, outs=2, strikes=2, batter=8),
-            res2,
-            _snap(first=8, second=11, third=12, outs=2),
-        )
-        # A plain strikeout reaches nobody.
-        rec.observe(
-            _snap(first=11, strikes=2),
-            PlayResult(pitch_outcome="swinging_strike", pa_terminal=True, event="strikeout"),
-            _snap(first=11, outs=1),
-        )
-        assert rec.d3k == {
-            "reaches": 2,
-            "runners_on": 4,
-            "runners_moved": 4,
-            "unforced_chances": 1,
-            "unforced_moved": 1,
-            "with_running_play": 0,
-        }
-
-    def test_a_reach_with_a_steal_on_the_pitch_is_set_aside(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(
-            pitch_outcome="swinging_strike",
-            pa_terminal=True,
-            event="strikeout",
-            steal_attempted=True,
-            steal_outcome="safe",
-            baserunner_advances={7: 1, 11: 2},
-        )
-        rec.observe(_snap(first=11, strikes=2), res, _snap(first=7, second=11))
-        assert rec.d3k["reaches"] == 1 and rec.d3k["with_running_play"] == 1
-        assert rec.d3k["runners_on"] == 0
-
-    def test_an_expected_attempt_lands_on_the_class_of_the_pitch(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        rec.stage_expected_attempt(2, 0.25)
-        rec.observe(_snap(first=11), PlayResult(pitch_outcome="foul"), _snap(first=11))
-        rec.stage_expected_attempt(2, 0.5)  # a no-pitch step drops it
-        rec.observe(
-            _snap(first=11, outs=2),
-            PlayResult(pitch_outcome=NO_PITCH, pickoff_out=True),
-            _snap(half="BOTTOM"),
-        )
-        assert rec.exp_attempt["2"]["foul"] == 0.25
-        assert sum(rec.exp_attempt["2"].values()) == 0.25
-
-    def test_the_box_and_the_seconds_close_a_game_sim(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        res = PlayResult(pitch_outcome="ball", steal_attempted=True, steal_outcome="safe")
-        rec.observe(_snap(first=11), res, _snap(second=11))
-
-        class Line:
-            def __init__(self, sb, cs):
-                self.sb, self.cs = sb, cs
-
-        rec.end_game_sim([Line(1, 0), Line(0, 1), Line(2, 0)], 0.9)
-        assert rec.per_sim == [
-            {
-                "sb": 3,
-                "cs": 1,
-                "pickoffs": 0,
-                "opp2": 1,
-                "att2": 1,
-                "opp3": 0,
-                "att3": 0,
-                "seconds": 0.9,
-            }
-        ]
-
-
-class _Pool:
-    def __init__(self):
-        self.pickoff_out = np.array([1, 0, 0, 0], dtype=np.int8)
-        self.pickoff_error = np.array([0, 0, 1, 0], dtype=np.int8)
-        self.attempted = np.array([0, 1, 0, 1], dtype=np.int8)
-
-
-class _FakeSampler:
-    """The sampler seams the census wraps, with fixed weights."""
-
-    def __init__(self):
-        self.calls: list[tuple[str, dict]] = []
-        self.pool = _Pool()
-
-    def steal_weights(self, *a, rows=None, aggression=1.0, **kw):
-        rows = np.arange(4) if rows is None else np.asarray(rows)
-        w = np.array([1.0, 1.0, 2.0, 0.0])[rows] * np.where(
-            self.pool.attempted[rows] > 0, aggression, 1.0
-        )
-        return self.pool, rows, w
-
-    def _steal_meta(self, target):
-        cells = {(0, 0, 0): np.arange(4)}
-        return {
-            "cells": cells,
-            "pickoff_cells": cells,
-            "pickoff_live": {(0, 0, 0)},
-            "class_cells": {(0, 0, 0, 1): np.array([1, 2])},
-        }
-
-    def steal_draw(self, *a, **kw):
-        self.calls.append(("steal_draw", kw))
-        return (False, False, True, True, False)
-
-    def pickoff_draw(self, *a, **kw):
-        self.calls.append(("pickoff_draw", kw))
-        return (True, False, False)
-
-
-class TestTheCensusSeams:
-    def test_the_expected_shares_read_the_weights(self):
-        fp = _FakeSampler()
-        kw = {"outs": 0, "balls": 0, "strikes": 0, "score_diff": 0}
-        got = census.expected_shares(fp, (2, "r", "p", None), kw, rows=None, aggression=1.0)
-        assert got == (0.75, 0.25)
-
-    def test_the_wrappers_go_on_once_and_feed_the_recorder(self):
-        fp = _FakeSampler()
-        rec = census.Recorder()
-        holder = {"rec": rec}
-        census.install_seams(fp, holder)
-        census.install_seams(fp, holder)  # the SIM-514 stacking trap
-        kw = {"outs": 0, "balls": 0, "strikes": 0, "score_diff": 0}
-        fp.steal_draw(2, "r", "p", None, aggression=1.0, **kw)  # the old pre-pitch draw
-        fp.pickoff_draw(2, "r", "p", None, **kw)  # the new order's pickoff draw
-        fp.steal_draw(2, "r", "p", None, aggression=1.0, pitch_class="ball", **kw)
-        assert [name for name, _ in fp.calls] == ["steal_draw", "pickoff_draw", "steal_draw"]
-        assert "pitch_class" not in fp.calls[0][1] and fp.calls[2][1]["pitch_class"] == "ball"
-        assert rec.exp_pickoff["2"] == [1.5, 2]  # 0.75 at each of the two pickoff reads
-        assert rec.seam_kind == {"out": 1, "out_advancing": 1, "error": 0}
-        # The class group holds rows 1 and 2: one attempted, of weights 1 and 2.
-        assert rec._staged_attempt == (2, pytest.approx(1.0 / 3.0))
-
-
-def _summary(
-    *,
-    arm,
-    opp=(1000, 300),
-    att=(21.0, 1.5),
-    misplaced=0.0,
-    exp_po=0.0010,
-    third_out_first=0,
-    se=0.002,
-):
-    """A planted arm summary in the shape ``census.summarize`` returns."""
-    return {
-        "arm": arm,
-        "att_per_opp": {"2": (att[0] / opp[0], se), "3": (att[1] / opp[1], se / 2)},
-        "n_att": int(att[0] + att[1]),
-        "misplaced_share": misplaced,
-        "exp_pickoff_per_draw": exp_po,
-        "third_out_first": third_out_first,
-    }
-
-
-class TestTheStopRules:
-    def _stops(self, off, on):
-        return [r.name for r in census.stop_rules(off, on) if not r.ok]
-
-    def test_a_clean_pair_passes_every_rule(self):
-        off = _summary(arm=0, misplaced=0.36, exp_po=0.0010)
-        on = _summary(arm=1, misplaced=0.01, exp_po=0.00128)
-        assert self._stops(off, on) == []
-
-    def test_a_misplaced_share_above_five_percent_stops(self):
-        off = _summary(arm=0, exp_po=0.0010)
-        on = _summary(arm=1, misplaced=0.06, exp_po=0.00128)
-        assert self._stops(off, on) == ["misplaced"]
-
-    def test_a_pickoff_ratio_outside_the_window_stops(self):
-        off = _summary(arm=0, exp_po=0.0010)
-        assert self._stops(off, _summary(arm=1, exp_po=0.0011)) == ["pickoff_ratio"]
-        assert self._stops(off, _summary(arm=1, exp_po=0.0015)) == ["pickoff_ratio"]
-
-    def test_an_attempt_volume_moved_beyond_two_standard_errors_stops(self):
-        off = _summary(arm=0, exp_po=0.0010, se=0.002)
-        # 0.021 -> 0.027: 0.006 against an unpaired SE of 0.0028.
-        on = _summary(arm=1, exp_po=0.00128, att=(27.0, 1.5), se=0.002)
-        assert self._stops(off, on) == ["volume_2"]
-
-    def test_a_third_out_first_on_the_new_arm_stops(self):
-        off = _summary(arm=0, exp_po=0.0010, third_out_first=3)
-        on = _summary(arm=1, exp_po=0.00128, third_out_first=1)
-        assert self._stops(off, on) == ["third_out_first"]
-
-    def test_no_attempt_on_the_new_arm_stops(self):
-        off = _summary(arm=0, exp_po=0.0010)
-        on = _summary(arm=1, exp_po=0.00128, att=(0.0, 0.0))
-        assert "misplaced" in self._stops(off, on)
-
-    def test_the_ratio_estimate_and_its_standard_error(self):
-        rate, se = census.ratio_se([(1, 10), (3, 10), (2, 10)])
-        assert rate == pytest.approx(0.2)
-        # The residuals a - r*o are -1, 1, 0: sqrt(2 * 3/2) / 30.
-        assert se == pytest.approx(np.sqrt(3.0) / 30.0)
-
-
-class TestThePoolReference:
-    def test_the_pool_reference_reads_pitch_rows_by_recency(self):
-        class P:  # one target's pool: five pitch rows and one pickoff row
-            attempted = np.array([1, 1, 0, 0, 1, 0])
-            success = np.array([1, 0, 0, 0, 1, 0])
-            recency = np.array([2.0, 1.0, 1.0, 1.0, 1.0, 5.0])
-            pickoff_out = np.array([0, 0, 1, 0, 0, 1])
-            pickoff_error = np.zeros(6)
-            pitch_class = np.array([1, 1, 2, 4, 5, 0])
-
-        ref = census.pool_reference({"2": P()})
-        t = ref["targets"]["2"]
-        assert (t["pitch_rows"], t["pickoff_rows"], t["tags"], t["pickoff_row_outcomes"]) == (
-            5,
-            1,
-            1,
-            1,
-        )
-        assert t["att_rate_rcy"] == pytest.approx(4.0 / 6.0)  # (2 + 1 + 1) / 6
-        assert t["safe_share"] == pytest.approx(3.0 / 4.0)  # (2 + 1) / (2 + 1 + 1)
-        assert ref["att_share"]["ball"] == pytest.approx(0.75)  # weights 2 + 1 of 4
-        assert ref["att_share"]["in_play"] == pytest.approx(0.25)
-        assert ref["att_share_raw"]["ball"] == pytest.approx(2.0 / 3.0)
-        assert ref["pickoff_ratio"] == pytest.approx(2.0)  # (1 tag + 1 row) / 1 tag
-
-
-class TestTheCensusSummary:
-    def test_the_summary_reads_shares_rates_and_the_misplaced_attempts(self):
-        rec = census.Recorder()
-        for _ in range(2):
-            rec.start_game_sim()
-            for cls, att in (
-                ("ball", True),
-                ("ball", False),
-                ("foul", True),
-                ("called_strike", False),
-            ):
-                res = PlayResult(
-                    pitch_outcome=cls, steal_attempted=att, steal_outcome="safe" if att else None
-                )
-                rec.observe(_snap(first=11), res, _snap(first=11))
-            rec.add_expected_pickoff(2, 0.002)
-            rec.end_game_sim([], 1.0)
-        s = census.summarize(rec.to_jsonable() | {"arm": 1, "game_pks": [1], "iters": 2})
-        assert s["game_sims"] == 2
-        assert s["att_per_opp"]["2"][0] == pytest.approx(0.5)
-        assert s["misplaced_share"] == pytest.approx(0.5)
-        assert s["att_share"]["ball"] == pytest.approx(0.5)
-        assert s["exp_pickoff_per_draw"] == pytest.approx(0.002)
-        assert s["safe_share"]["2"] == pytest.approx(1.0)
-
-    def test_the_report_names_every_rule_and_a_verdict(self):
-        rec = census.Recorder()
-        rec.start_game_sim()
-        rec.end_game_sim([], 1.0)
-        arm = rec.to_jsonable() | {"game_pks": [1], "iters": 1, "pool": {}}
-        lines, stops = census.report_lines(arm | {"arm": 0}, arm | {"arm": 1})
-        text = "\n".join(lines)
-        for name in ("misplaced", "pickoff_ratio", "volume_2", "volume_3", "third_out_first"):
-            assert name in text
-        assert "STOP" in text and stops  # an empty census stops: no attempt on either arm

@@ -1,12 +1,13 @@
-"""SIM-478/479/480 — the fence counters in the harness, the wall-play probe's
-arithmetic and the acceptance lane's JSON record.
+"""The fence counters in the harness, the wall-play probe's arithmetic and the
+acceptance lane's JSON record.
 
 Three pure functions, no live data:
 
 * ``scripts/sim_stats.py`` ``_fence_counter_summary`` (the one report line and
   the JSON record) on a six-entry and a five-entry counter array,
-  ``_fence_d_read`` (the §7 D thresholds), and ``_margin_counter_summary``
-  (the wall-margin band's line and record, the plan's §12.7).
+  ``_fence_d_read`` (the D thresholds of §7 of the fence certification plan,
+  SIM-478), and ``_margin_counter_summary`` (the wall-margin band's line and
+  record, the plan's §12.7).
 * ``scripts/probes/wall_zone_probe.py`` ``wall_zone_shares`` / ``verdict_lines``
   (the shares, their standard errors and the PASS / FAIL rule) on hand-made
   tallies.
@@ -303,8 +304,9 @@ class TestWallZoneShares:
 
 class TestTheTapReadsTheStagesCarry:
     """The probe's side is the fence stage's side: the tap reads the born
-    ball's carry in the LIVE park's air (SIM-478 §11), the number the
-    stage decides on, not the ball's own-park distance."""
+    ball's carry in the LIVE park's air (the fence certification plan,
+    SIM-478, §11), the number the stage decides on, not the ball's own-park
+    distance."""
 
     def _sampler(self, *, offsets: bool):
         import numpy as np

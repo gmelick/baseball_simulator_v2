@@ -54,7 +54,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
-import importlib.util
 import json
 import os
 import sys
@@ -82,21 +81,28 @@ _REFERENCE_MARKETS: tuple[str, ...] = ("total", "f5_total", "f1_total", "moneyli
 _PRICE_TOLERANCE = 1e-9
 
 
-def _load_backtest_module() -> Any:
-    """The backtest, imported by path (scripts/ is not a package)."""
-    if "accuracy_comparison" in sys.modules:
-        return sys.modules["accuracy_comparison"]
-    spec = importlib.util.spec_from_file_location(
-        "accuracy_comparison", str(_ROOT / "scripts" / "accuracy_comparison.py")
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["accuracy_comparison"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+# The accuracy comparison's stages live in scripts/accuracy/.
+if str(_ROOT / "scripts") not in sys.path:
+    sys.path.append(str(_ROOT / "scripts"))
 
+from accuracy.confidence import DEFAULT_BOOTSTRAP_SAMPLES  # noqa: E402
+from accuracy.grading import RUN_LINE_SCORING_VERSION, market_shape_tally  # noqa: E402
+from accuracy.hypothetical_return import (  # noqa: E402
+    DEFAULT_RETURN_EDGE_THRESHOLD,
+    aggregate_hypothetical_return,
+)
+from accuracy.pricing import (  # noqa: E402
+    BETTABLE_CLOSING,
+    _closing_prices,
+    _implied,
+    graded_book_filter_sql,
+    graded_query_args,
+    reference_margin,
+)
+from accuracy.records import RUN_LINE_MARKET_TYPES, AccuracyRecord  # noqa: E402
+from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
-bt = _load_backtest_module()
+from betting.clv_engine import run_line_is_pair  # noqa: E402
 
 
 class RescoreRefused(ValueError):
@@ -114,7 +120,7 @@ def run_line_games(report: dict[str, Any]) -> set[int]:
     return {
         int(r["game_pk"])
         for r in report.get("accuracy_records", [])
-        if r.get("market") in bt.RUN_LINE_MARKET_TYPES
+        if r.get("market") in RUN_LINE_MARKET_TYPES
     }
 
 
@@ -133,14 +139,14 @@ CLOSING_ROWS_SQL = f"""
             WHERE line_type = 'closing'
               AND game_pk = ANY($1::bigint[])
               AND market_type = ANY($2::text[])
-              AND {bt.graded_book_filter_sql("$3")}
+              AND {graded_book_filter_sql("$3")}
             ORDER BY game_pk, market_type, {graded_row_order_sql("$4")}
             """
 
 #: SIM-555: every sportsbook's latest closing row of the reference markets of
 #: many games. Each market's graded row is chosen on its own, so the graded
 #: total can be another book's than the graded run line.
-#: :func:`accuracy_comparison.reference_margin` reads the run-line row's OWN book's
+#: :func:`accuracy.pricing.reference_margin` reads the run-line row's OWN book's
 #: margin from these rows, as the backtest does. ``$1`` the games, ``$2`` the
 #: markets, ``$3`` the labels to keep (the listed sportsbooks).
 BOOK_CLOSES_SQL = f"""
@@ -151,7 +157,7 @@ BOOK_CLOSES_SQL = f"""
             WHERE line_type = 'closing'
               AND game_pk = ANY($1::bigint[])
               AND market_type = ANY($2::text[])
-              AND {bt.graded_book_filter_sql("$3")}
+              AND {graded_book_filter_sql("$3")}
             ORDER BY game_pk, market_type, book, fetched_at DESC
             """
 
@@ -182,11 +188,11 @@ async def fetch_closing_rows(dsn: str, game_pks: set[int]) -> dict[int, dict[str
     """
     import asyncpg
 
-    markets = list(bt.RUN_LINE_MARKET_TYPES) + list(_REFERENCE_MARKETS)
+    markets = list(RUN_LINE_MARKET_TYPES) + list(_REFERENCE_MARKETS)
     games = sorted(game_pks)
     conn = await asyncpg.connect(dsn, timeout=60)
     try:
-        rows = await conn.fetch(CLOSING_ROWS_SQL, games, markets, *bt.graded_query_args(None))
+        rows = await conn.fetch(CLOSING_ROWS_SQL, games, markets, *graded_query_args(None))
         book_rows = await conn.fetch(
             BOOK_CLOSES_SQL, games, list(_REFERENCE_MARKETS), bettable_labels()
         )
@@ -198,7 +204,7 @@ async def fetch_closing_rows(dsn: str, game_pks: set[int]) -> dict[int, dict[str
         by_market.setdefault(str(r["market_type"]), {})["closing"] = _odds_row(r)
     for r in book_rows:
         by_lt = out.setdefault(int(r["game_pk"]), {}).setdefault(str(r["market_type"]), {})
-        by_lt.setdefault(bt.BETTABLE_CLOSING, []).append(_odds_row(r))
+        by_lt.setdefault(BETTABLE_CLOSING, []).append(_odds_row(r))
     return out
 
 
@@ -215,7 +221,7 @@ def _report_margin(
     r = records_by_key.get((game_pk, market))
     if r is None or r.get("market_side_price") is None or r.get("market_other_price") is None:
         return None
-    return bt._implied(float(r["market_side_price"])) + bt._implied(float(r["market_other_price"]))
+    return _implied(float(r["market_side_price"])) + _implied(float(r["market_other_price"]))
 
 
 def _row_read(records: list[dict[str, Any]], market: str) -> dict[str, Any] | None:
@@ -267,11 +273,11 @@ def rescore_report(
     tally: Counter[str] = Counter()
     sources: Counter[str] = Counter()
     problems: list[str] = []
-    before = {m: _row_read(records, m) for m in bt.RUN_LINE_MARKET_TYPES}
+    before = {m: _row_read(records, m) for m in RUN_LINE_MARKET_TYPES}
     kept: list[dict[str, Any]] = []
     for r in records:
         market = r.get("market")
-        if market not in bt.RUN_LINE_MARKET_TYPES:
+        if market not in RUN_LINE_MARKET_TYPES:
             kept.append(r)
             continue
         game_pk = int(r["game_pk"])
@@ -292,21 +298,21 @@ def rescore_report(
             )
             kept.append(r)
             continue
-        cp = bt._closing_prices(
+        cp = _closing_prices(
             odds, market, "home_spread_ml", "away_spread_ml", "home_spread", "away_spread"
         )
         if cp is None or cp.line is None or cp.other_line is None:
             # the scorer gives such a row no record: its shape is unknown
             tally[f"{market}:dropped_no_away_spread"] += 1
             continue
-        if bt.run_line_is_pair(cp.line, cp.other_line):
+        if run_line_is_pair(cp.line, cp.other_line):
             tally[f"{market}:pairs"] += 1
             kept.append(r)
             continue
         segment = GAME_MARKET_SEGMENT[market]
         # SIM-555: the margin of the run-line row's own book, as the backtest
         # reads it
-        margin, margin_source = bt.reference_margin(odds, segment, book=row.get("book"))
+        margin, margin_source = reference_margin(odds, segment, book=row.get("book"))
         sources[margin_source] += 1
         # the report's record of the reference market was priced on that
         # market's graded row; it checks the margin only when that row is the
@@ -321,36 +327,34 @@ def rescore_report(
             tally["margin_checked_against_the_report"] += 1
             if abs(own - margin) > 1e-9:
                 tally["margin_differs_from_the_report"] += 1
-        r["market_prob"] = float(min(bt._implied(float(cp.side)) / margin, 1.0))
+        r["market_prob"] = float(min(_implied(float(cp.side)) / margin, 1.0))
         r["market_other_price"] = None
         tally[f"{market}:repriced"] += 1
         kept.append(r)
-    objs = [bt.AccuracyRecord.from_jsonable(r) for r in kept]
-    n_boot = int(params.get("bootstrap_samples", bt.DEFAULT_BOOTSTRAP_SAMPLES))
+    objs = [AccuracyRecord.from_jsonable(r) for r in kept]
+    n_boot = int(params.get("bootstrap_samples", DEFAULT_BOOTSTRAP_SAMPLES))
     seed = int(params.get("bootstrap_seed", 538))
     out = dict(report)
     # the records as they came: an untouched record stays byte-identical to
     # the original (a round trip through AccuracyRecord would add fields)
     out["accuracy_records"] = kept
-    out["accuracy_comparison"] = bt.aggregate_accuracy_comparison(
-        objs, n_bootstrap=n_boot, seed=seed
-    )
+    out["accuracy_comparison"] = aggregate_accuracy_comparison(objs, n_bootstrap=n_boot, seed=seed)
     if "hypothetical_return" in report:
-        out["hypothetical_return"] = bt.aggregate_hypothetical_return(
+        out["hypothetical_return"] = aggregate_hypothetical_return(
             objs,
-            edge_threshold=float(params.get("edge_threshold", bt.DEFAULT_RETURN_EDGE_THRESHOLD)),
+            edge_threshold=float(params.get("edge_threshold", DEFAULT_RETURN_EDGE_THRESHOLD)),
             n_bootstrap=n_boot,
             seed=seed,
         )
     counters = dict(report.get("counters") or {})
     counters["n_accuracy_records"] = len(objs)
-    counters["market_shapes"] = bt.market_shape_tally(objs)
+    counters["market_shapes"] = market_shape_tally(objs)
     out["counters"] = counters
     repriced = sum(v for k, v in tally.items() if k.endswith(":repriced"))
-    params["run_line_scoring"] = bt.RUN_LINE_SCORING_VERSION
+    params["run_line_scoring"] = RUN_LINE_SCORING_VERSION
     params["rescored"] = {
         "from": source,
-        "markets": list(bt.RUN_LINE_MARKET_TYPES),
+        "markets": list(RUN_LINE_MARKET_TYPES),
         "records": repriced,
         # records kept unchanged because their closing row was missing or their
         # price differed from the store's (written only with --accept-problems)
@@ -364,7 +368,7 @@ def rescore_report(
         "date": date,
     }
     out["params"] = params
-    after = {m: _row_read(out["accuracy_records"], m) for m in bt.RUN_LINE_MARKET_TYPES}
+    after = {m: _row_read(out["accuracy_records"], m) for m in RUN_LINE_MARKET_TYPES}
     summary = {
         "tally": dict(tally),
         "reference_margin_sources": dict(sources),
@@ -380,7 +384,7 @@ def _print_summary(path: str, summary: dict[str, Any]) -> None:
     for k, v in sorted(summary["tally"].items()):
         print(f"  {k}: {v}")
     print(f"  reference margin from: {summary['reference_margin_sources']}")
-    for m in bt.RUN_LINE_MARKET_TYPES:
+    for m in RUN_LINE_MARKET_TYPES:
         b, a = summary["before"].get(m), summary["after"].get(m)
         if b is None and a is None:
             continue

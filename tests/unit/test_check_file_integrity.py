@@ -1,8 +1,8 @@
 """
 test_check_file_integrity.py
 ============================
-Unit tests for ``scripts/check_file_integrity.py`` — the SIM-315 file-integrity
-guard that flags ``.py`` files corrupted by the Cowork/OneDrive file bridge
+Unit tests for ``scripts/check_file_integrity.py``, the file-integrity guard.
+The guard flags ``.py`` files that the Cowork/OneDrive file bridge corrupts
 (NUL bytes or truncated / un-parseable source).
 
 These tests are pure stdlib + ``tmp_path`` — no external services, no third-party
@@ -24,20 +24,11 @@ Owned by QA / DevOps.
 
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 
-# ---------------------------------------------------------------------------
-# Import the script-under-test by file path (scripts/ is not an importable
-# package — no __init__.py — so we load it directly from disk).
-# ---------------------------------------------------------------------------
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-_SCRIPT_PATH = _REPO_ROOT / "scripts" / "check_file_integrity.py"
+from tests.script_loader import load_script
 
-_spec = importlib.util.spec_from_file_location("check_file_integrity", _SCRIPT_PATH)
-assert _spec is not None and _spec.loader is not None
-cfi = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(cfi)
+cfi = load_script("check_file_integrity")
 
 
 # ---------------------------------------------------------------------------

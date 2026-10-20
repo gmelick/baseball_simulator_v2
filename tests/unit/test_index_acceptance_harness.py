@@ -1,40 +1,30 @@
-"""tests/unit/test_index_acceptance_harness.py — SIM-158
-=================================================
-Pure-string unit tests for the SIM-158 index-acceptance harness.  These tests
-do NOT require a live PostgreSQL — they exercise the harness's plan-parsing
-helpers against fixture EXPLAIN ANALYZE output captured from real plans.
+"""tests/unit/test_index_acceptance_harness.py
+===========================================
+Pure-string unit tests for the index-acceptance harness
+(``scripts/probes/run_index_acceptance.py``). These tests do NOT require a
+live PostgreSQL — they exercise the harness's plan-parsing helpers against
+fixture EXPLAIN ANALYZE output captured from real plans.
 
-Live-DB validation lives in tests/integration/ once a populated staging
-database is wired into CI.
+No test runs the harness against a live database.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.script_loader import load_script
 
 
 def _load_harness():
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    spec = importlib.util.spec_from_file_location(
-        "run_index_acceptance",
-        REPO_ROOT / "scripts" / "probes" / "run_index_acceptance.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The index-acceptance probe as a fresh module."""
+    return load_script("run_index_acceptance")
 
 
 # ---------------------------------------------------------------------------
 # Fixture EXPLAIN ANALYZE output
 # ---------------------------------------------------------------------------
 
-# Passing SIM-085 plan: Index Scan using idx_pitches_situation, 12 ms total
+# A passing situation-query plan: Index Scan using idx_pitches_situation, 12 ms total
 SITUATION_PASS_PLAN = """\
 Index Scan using idx_pitches_situation on raw.pitches  (cost=0.42..14.99 rows=120 width=64) (actual time=0.041..11.220 rows=143 loops=1)
   Index Cond: ((inning = 7) AND (outs = 1))
@@ -44,7 +34,7 @@ Planning Time: 0.182 ms
 Execution Time: 12.41 ms
 """
 
-# Failing SIM-085 plan: Seq Scan, 312 ms total
+# A failing situation-query plan: Seq Scan, 312 ms total
 SITUATION_FAIL_PLAN = """\
 Seq Scan on raw.pitches  (cost=0.00..49500.00 rows=120 width=64) (actual time=0.022..308.770 rows=143 loops=1)
   Filter: ((inning = 7) AND (outs = 1) AND (NOT data_quality_flag))
@@ -54,7 +44,7 @@ Planning Time: 0.067 ms
 Execution Time: 312.04 ms
 """
 
-# Passing SIM-089 plan: Index Scan using idx_pitches_pitcher_season_clean, 28 ms total
+# A passing pitcher-season plan: Index Scan using idx_pitches_pitcher_season_clean, 28 ms
 PITCHER_PASS_PLAN = """\
 Index Scan using idx_pitches_pitcher_season_clean on raw.pitches  (cost=0.42..96.78 rows=2980 width=72) (actual time=0.018..27.115 rows=3072 loops=1)
   Index Cond: ((pitcher = 605400) AND (season = 2024))
@@ -99,7 +89,7 @@ class TestPlanParsing(unittest.TestCase):
 
 class TestAcceptanceBudgets(unittest.TestCase):
     def test_locked_in_thresholds(self):
-        """Budgets must match the SIM-158 acceptance criteria text."""
+        """The budgets are the index acceptance criteria (SIM-158)."""
         h = _load_harness()
         self.assertEqual(h.SITUATION_LATENCY_MS_BUDGET, 30.0)
         self.assertEqual(h.PITCHER_LATENCY_MS_BUDGET, 50.0)
@@ -108,11 +98,11 @@ class TestAcceptanceBudgets(unittest.TestCase):
 
 
 class TestSituationQueryBuilder(unittest.TestCase):
-    """SIM-163: `_build_situation_query` must emit literal `IS NULL` for None
-    bases and `= $N` for real values.  Parameterized `IS NOT DISTINCT FROM $N`
-    was tried and caused the planner to pick a generic plan that bypassed
-    `idx_pitches_situation`'s base columns -- a 12x slowdown observed in the
-    live run on 2026-05-17.  This test exists to prevent regression.
+    """`_build_situation_query` emits a literal `IS NULL` for an empty base and
+    `= $N` for a runner. A parameterized `IS NOT DISTINCT FROM $N` lets the
+    planner pick a generic plan that bypasses the base columns of
+    `idx_pitches_situation`: the live run measured a 12x slowdown (2026-05-17,
+    SIM-163).
     """
 
     def test_all_bases_empty_uses_is_null(self):

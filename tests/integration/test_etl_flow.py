@@ -1,6 +1,6 @@
 """
-Integration test: ETL → raw.etl_data_freshness flow — SIM-083 / SIM-145
-========================================================================
+Integration test: the ETL → raw.etl_data_freshness flow
+=======================================================
 Verifies the end-to-end write path for the ETL freshness tracking system
 against the *canonical* schema created by Alembic migration 0003:
 
@@ -16,7 +16,6 @@ against the *canonical* schema created by Alembic migration 0003:
 Coverage:
 
   1. ``raw.etl_data_freshness`` exists and carries exactly the columns above
-     (previously this table only existed as a dead string constant — SIM-083)
   2. The production writer records one row per (entity_type, entity_id)
   3. A later game for the same entity upserts in place — no duplicate row
   4. The upsert's monotonicity guard holds: an *older* game must never
@@ -40,9 +39,6 @@ Both production writers own their own connection (a psycopg2 pool and an asyncpg
 pool respectively) and COMMIT, so they cannot ride the rolled-back
 ``pg_connection`` transaction.  The fixtures below delete the rows these tests
 create on teardown instead.
-
-Acceptance criteria (SIM-083):
-  "Integration test writes a freshness record and reads it back without error."
 
 Run:
     pytest tests/integration/test_etl_flow.py -v -m integration
@@ -198,14 +194,10 @@ def _freshness_row_count(conn: sa.Connection, entity_type: str, entity_id: int) 
 
 
 class TestEtlFreshnessTable:
-    """raw.etl_data_freshness DDL (migration 0003 / SIM-083) is correct."""
+    """raw.etl_data_freshness DDL (migration 0003) is correct."""
 
     def test_freshness_table_exists(self, pg_connection: sa.Connection) -> None:
-        """raw.etl_data_freshness must exist after migrations.
-
-        Before SIM-083 this table only existed as the dead string constant
-        FRESHNESS_TABLE_DDL which was defined but never executed.
-        """
+        """raw.etl_data_freshness must exist after migrations."""
         assert_table_exists(pg_connection, "raw", "etl_data_freshness")
 
     def test_freshness_table_has_expected_columns(self, pg_connection: sa.Connection) -> None:
@@ -260,9 +252,9 @@ class TestEtlFreshnessWritePath:
     ) -> None:
         """The production writer records one row per pitcher and per batter.
 
-        This was broken before SIM-083: _log_freshness() ran INSERT INTO
-        raw.etl_data_freshness against a table that was never created, so every
-        call raised UndefinedTable after the pitch rows had already been inserted.
+        _log_freshness() runs INSERT INTO raw.etl_data_freshness after the pitch
+        rows are in. Without the table, every call raises UndefinedTable at that
+        point, so this test also guards the migration that creates it.
         """
         pitcher = _TEST_ENTITY_ID_BASE + 1
         batter = _TEST_ENTITY_ID_BASE + 2

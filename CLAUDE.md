@@ -747,7 +747,10 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `--prop-stats` / `--line-types` / `--no-game-odds` for the eight-new-markets pass),
   `accuracy_comparison.py` (the SIM-538 sim-vs-closing-line accuracy comparison — the SIM-429 CLV scoreboard was
   deleted by SIM-544; `--workers` parallelizes across games — SIM-436; props graded on the official box
-  score since SIM-545), `validate_props.py`, `load_official_boxscores.py` (SIM-545: backfill
+  score since SIM-545; the command line only — its stages, from the game list to the report,
+  live in the package `scripts/accuracy/`, SIM-493), `rebuild_pitch_pool.py` and
+  `rebuild_steal_pool.py` (the two pool rebuilds; their steps live in `scripts/pitch_pool_rebuild/`
+  and `scripts/steal_pool_rebuild/`), `validate_props.py`, `load_official_boxscores.py` (SIM-545: backfill
   `raw.game_player_stats` from the MLB box-score endpoint), `boxscore_audit.py` (SIM-545: the
   derived-vs-official per-player totals study), `check_file_integrity.py`, `gen_secrets.py`
   (SIM-443b: writes the eight `.env` secrets; `--append` never changes a key that has a
@@ -757,7 +760,10 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   changes no output). One-off probes, rebuilds and backfills live in `scripts/probes/`;
   inputs a script reads by a fixed path in `scripts/data/`. Every run output goes to
   `results/` (ignored by git and Docker); a record a doc cites is committed to
-  `docs/audit/records/`. A test loads a script through `tests/script_loader.py`.
+  `docs/audit/records/`. A test loads a script through `tests/script_loader.py`, which also
+  puts `scripts/` on `sys.path` (`scripts_on_path()`) so a script's package imports by name.
+  `tests/unit/test_script_flag_names.py` fails on a `SIM_*` name in `scripts/` (less
+  `scripts/probes/`) that the flag registry does not hold.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.)*
 - `simulation/flags.py` (SIM-493) — the registry of every `SIM_*` flag (type, code default,

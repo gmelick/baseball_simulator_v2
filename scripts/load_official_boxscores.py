@@ -2,19 +2,18 @@
 """
 scripts/load_official_boxscores.py
 ==================================
-The official box-score backfill (SIM-545, the sub-ticket of the unpriced-prop-
-markets work, SIM-421): fetch the MLB Stats API box score for every completed
-game and store one row per player who appeared in ``raw.game_player_stats``.
+The official box-score backfill: fetch the MLB Stats API box score for every
+completed game and store one row per player who appeared in
+``raw.game_player_stats``.
 
 WHY
 ---
 A sportsbook grades a player prop against the official box score. The
 validation lanes and the closing-line-value backtest need that same ground
-truth for every prop the market offers (singles, doubles, triples, runs,
-stolen bases, hits+runs+RBI, outs recorded, hits allowed — as well as the
-seven markets the platform already priced). The historical loader writes the
-box for every game it loads from now on; this script backfills the games
-already in ``raw.games``.
+truth for every prop the market offers (all fifteen prop markets the platform
+prices; props grade on the box, owner decision 2026-09-12, SIM-545). The
+historical loader writes the box for every game it loads; this script
+backfills the games already in ``raw.games``.
 
 WHAT IT WRITES
 --------------
@@ -22,7 +21,9 @@ Per Final game (ordered by game_pk for reproducibility): one
 ``raw.game_player_stats`` row per player whose box batting or pitching block
 is non-empty, through ``INSERT … ON CONFLICT (game_pk, player_id) DO UPDATE``
 (a re-run refreshes). Season, game date and the two team ids come from
-``raw.games``; the box comes from ``/api/v1/game/{game_pk}/boxscore``.
+``raw.games``; the box comes from ``/api/v1/game/{game_pk}/boxscore``. The
+same fetch also writes the per-game bullpen listing (``raw.game_bullpen``);
+``--bullpen-only`` writes the listing alone.
 
 USAGE
 -----
@@ -68,14 +69,14 @@ from pipeline.etl.boxscore_ingest import (  # noqa: E402
 
 log = logging.getLogger("load_official_boxscores")
 
-#: SIM-443b: no default password. A blank value is resolved in main() through
+#: No default password. main() resolves a blank value through
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 #: Games between progress log lines.
 PROGRESS_EVERY = 100
 
-#: Failures in a row that stop the run (the historical loader's rule, SIM-441):
+#: Failures in a row that stop the run (the historical loader's rule):
 #: one bad game is survivable; an API outage or a schema mismatch is not,
 #: because the run would otherwise "succeed" having loaded nothing.
 DEFAULT_MAX_CONSECUTIVE_FAILURES = 5
@@ -120,7 +121,7 @@ def final_games_sql(
     """The completed-game query: Final, scored, ordered by game_pk.
 
     ``only_missing`` adds a NOT EXISTS against ``missing_table`` (the box rows
-    by default; ``raw.game_bullpen`` for the SIM-427 bullpen pass) so a re-run
+    by default; ``raw.game_bullpen`` for the bullpen pass) so a re-run
     skips games that already have rows. ``game_pks`` narrows to an explicit
     list; otherwise ``seasons`` selects.
     """
@@ -180,7 +181,7 @@ async def load_game(
 ) -> int:
     """Fetch + parse + persist one game. Returns rows written (0 = an empty box).
 
-    SIM-427: the same fetch also writes the per-game bullpen listing
+    The same fetch also writes the per-game bullpen listing
     (``raw.game_bullpen``); ``bullpen_only`` skips the player-stats upsert —
     the backfill pass over games whose box rows are already loaded.
     """
@@ -335,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
-    args.dsn = args.dsn or require_dsn()  # SIM-443b: fail loudly with no DSN
+    args.dsn = args.dsn or require_dsn()  # Fail loudly with no DSN
     return asyncio.run(run(args))
 
 

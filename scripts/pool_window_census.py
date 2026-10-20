@@ -1,16 +1,16 @@
 """
 scripts/pool_window_census.py — measure the three pool-window options + the
-pool-referenced frequency centres (the owner's 2026-08-20 questions).
+pool-referenced frequency centres (the owner's questions of 2026-08-20).
 
 WHAT THIS IS
 ============
-The owner asked two linked questions:
+Two linked owner rulings of 2026-08-20 frame this census:
 
-  1. **The grade**: the sim's frequencies should be graded against the play
+  1. **The grade**: the sim's frequencies are graded against the play
      pool's OWN totals (the data the sim draws from), not an external season.
   2. **The window**: for a 2026 game, which pool era? Three options:
-       W1  full seasons 2023-2026
-       W2  full seasons 2024-2026   (the current artifact export)
+       W1  full seasons 2023-2026   (the window production uses)
+       W2  full seasons 2024-2026
        W3  a rolling 3 years (game_date 2023-08-20 .. 2026-08-19)
 
 This script measures, per window:
@@ -19,8 +19,8 @@ This script measures, per window:
     chain -> the POOL-REFERENCED per-PA centres (BB, K, HBP, pitches/PA);
   * batted-ball (outcome-pool) volume, the per-BIP event mix (1B/2B/3B/HR/
     ROE), the per-cell DP-row rate, and the THINNEST hard-filter cells
-    (stand x runners_state x outs — the SIM-511 draw's 24-cell hard filter,
-    which never widens and RAISES on an empty cell);
+    (stand x runners_state x outs — the batted-ball draw's hard filter, 24
+    cells per batting side, which never widens and RAISES on an empty cell);
   * steal-opportunity volume, the thinnest (target, outs, balls, strikes)
     cells, attempt rate and safe share;
   * advancement-pool volume per decision.
@@ -29,17 +29,18 @@ It then GRADES the 2026-08-20 diagnosis run (12x150, the measured sim
 frequencies) against each window's pool centres, so the owner reads the same
 sim against all three references side by side.
 
-THE LABEL CHECK (SIM-553, 2026-09-23)
-=====================================
+THE LABEL CHECK
+===============
 Per window, the census also compares the pool's chain with REAL plate
 appearances counted from ``raw.pitches`` (Postgres): strikeouts, walks, hit by
 pitch and pitches per plate appearance, with the relative gap and a PASS or
 FAIL at 0.5% (``pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE``). The pool
 centres come from the pool's own labels, so a coding defect in the pool build
-moves the centre with the sim, and no band sees it. Two such defects hid that
-way: the hit-by-pitch rows coded as balls (SIM-509) and the two-strike foul
-tips coded as fouls (SIM-553; strikeouts -4.3% against real play). The real
-count shares no label with the pool, so a coding defect opens a gap here.
+moves the centre with the sim, and no band sees it. Two coding defects have
+hidden this way: the hit-by-pitch rows coded as balls (SIM-509) and the
+two-strike foul tips coded as fouls (SIM-553; strikeouts -4.3% against real
+play). The real count shares no label with the pool, so a coding defect opens
+a gap here.
 
 The label check reads the chain over the pool rows of real plate appearances
 only (``chain_rates(..., pa_only=True)``), so both sides count the same
@@ -47,16 +48,14 @@ groups. Its first line proves that: the pool's plate appearances
 (``pa_group_count``) must equal the real count, or the window FAILS, because
 the two sides no longer read the same plate appearances (for example,
 ``raw.pitches`` gained games the pool has not been rebuilt for). The centres
-stay on every pool row, because the simulator draws them all. A line after the check prints the all-rows centres' gap for the record;
-the groups cut short by a runner out put about +0.6 points on its walks
+stay on every pool row, because the simulator draws them all. A line after
+the check prints the all-rows centres' gap for the record; the groups cut
+short by a runner out put about +0.6 points on its walks
 (``pipeline/batch/pool_chain.py``, THE POPULATION RULE). On the window
-2023-2026 the corrected coding reads +0.09% / -0.25% / +0.08% / +0.07%
+2023-2026 the pool's coding reads +0.09% / -0.25% / +0.08% / +0.07%
 (strikeouts / walks / hit by pitch / pitches).
 
 The chain solver and the label check live in ``pipeline/batch/pool_chain.py``.
-This script imported the solver from ``scripts/sim429_chain_analysis.py``.
-Commit 6ab341c deleted that file on 2026-09-06, and the census failed on
-import until SIM-553 moved the solver into the pipeline package.
 
 USAGE
 -----
@@ -105,8 +104,9 @@ WINDOWS = {
 #: The short names ``--windows`` takes: "W1" -> "W1 2023-2026", and so on.
 _WINDOW_KEYS = {name.split()[0]: name for name in WINDOWS}
 
-#: The 2026-08-20 diagnosis run's measured sim frequencies (12x150, the JSONs
-#: in docs/audit/). Terminal-PA rates exclude IBB by construction.
+#: The 2026-08-20 diagnosis run's measured sim frequencies (12x150;
+#: docs/audit/2026-08-20-sim429-514-diagnosis-results.md). Terminal-PA rates
+#: exclude IBB by construction.
 SIM = {
     "BB/PA": 0.0850,
     "K/PA": 0.2160,
@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> None:
         print("ERROR: cannot open the sim DuckDB read-only.")
         raise SystemExit(2)
 
-    # SIM-553: the label check reads real plate appearances from Postgres. An
+    # The label check reads real plate appearances from Postgres. An
     # attach failure leaves the rest of the census intact and reports the check
     # as NOT RUN; --strict counts that as a failure.
     pg_error: str | None = None
@@ -164,9 +164,8 @@ def main(argv: list[str] | None = None) -> None:
         print("=" * 78)
 
         # --- pitch pool: volume + chain-implied per-PA centres -------------
-        # SIM-553: pool_count_matrix RAISES on a class outside the chain's six.
-        # The old loop skipped such a class, so it dropped out of the centres
-        # silently.
+        # pool_count_matrix RAISES on a class outside the chain's six, so no
+        # class drops out of the centres silently.
         mat = pool_count_matrix(con, pred)
         n_pitch = int(sum(sum(row) for row in mat))
         chain = solve_chain(mat)
@@ -182,7 +181,7 @@ def main(argv: list[str] | None = None) -> None:
             f"   pitches/PA {chain_rcy['pitches']:.3f}"
         )
 
-        # --- the label check: the chain vs real plate appearances (SIM-553) -
+        # --- the label check: the chain vs real plate appearances ---------
         # The check reads the chain over the pool rows of real plate
         # appearances only (pa_only), so both sides count the same groups.
         # The centres above stay on every row: the simulator draws them all.
@@ -192,7 +191,7 @@ def main(argv: list[str] | None = None) -> None:
         else:
             real = real_pa_rates(con, pred)
             n_real = int(real["n_pa"])
-            # SIM-553: both sides must read the same plate appearances. The
+            # Both sides must read the same plate appearances. The
             # pool's count comes from the SQL the pa_only chain reads.
             n_pool = pa_group_count(con, pred)
             chain_pa = chain_rates(con, pred, pa_only=True)
