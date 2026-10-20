@@ -1,6 +1,6 @@
 """
-SIM-532 — the recompute script for Savant's per-position outs above average and the
-outfield jump in the fielder profile.
+The recompute script for Savant's per-position outs above average and the outfield
+jump in the fielder profile.
 
 Plan: docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md (§5.5 the script).
 
@@ -42,8 +42,8 @@ TODAY = date(2026, 9, 17)
 STAMP = date(2026, 9, 17)
 
 #: The six columns, typed as migration 0030 declares them. The canonical DDL
-#: gains them in the same ticket (track B); the fixture adds them IF NOT EXISTS
-#: so it builds on either copy of the schema.
+#: carries them too; the fixture adds them IF NOT EXISTS so it builds on a
+#: schema with or without them.
 _SIX_COLUMNS = (
     ("savant_oaa", "INTEGER"),
     ("savant_oaa_per_100", "FLOAT"),

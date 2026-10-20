@@ -1,4 +1,4 @@
-"""SIM-443b — the secrets generator writes the eight secrets and never prints one."""
+"""The secrets generator writes the eight secrets; ``--append`` and ``--check`` never print one."""
 
 from __future__ import annotations
 

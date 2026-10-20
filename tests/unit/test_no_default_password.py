@@ -1,9 +1,6 @@
-"""SIM-443a/b/f — text guards on the deployment configuration.
+"""Text guards on the deployment configuration.
 
-The stack used to ship one default Postgres password in dozens of files, a
-literal DSN in the compose file and the scheduler INI, and every service port
-on every host interface. These tests read the committed files and fail when
-any of that comes back:
+These tests read the committed files and fail when any of these guards breaks:
 
 - no tracked file outside ``docs/`` and ``CHANGES.md`` holds the retired
   default password;
@@ -115,7 +112,7 @@ def test_compose_has_no_default_for_any_secret() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Published ports (SIM-443a)
+# Published ports
 # ---------------------------------------------------------------------------
 
 
@@ -138,7 +135,7 @@ def test_compose_publishes_only_nginx_on_every_interface() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The composed DSNs and the Redis password (SIM-443b, SIM-443f)
+# The composed DSNs and the Redis password
 # ---------------------------------------------------------------------------
 
 
@@ -189,7 +186,7 @@ def test_the_db_service_mounts_the_role_script() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The jobs container and the scheduler INI (SIM-443b)
+# The jobs container and the scheduler INI
 # ---------------------------------------------------------------------------
 
 
@@ -214,8 +211,8 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
     assert "environment =" not in text
     assert "postgresql://" not in text
     assert RETIRED_PASSWORD not in text
-    # The data backup (SIM-525) is the fourth job in the jobs container, and the
-    # off-site copy of the backup sets (SIM-568) the fifth.
+    # The data backup is the fourth job in the jobs container, and the
+    # off-site copy of the backup sets the fifth.
     assert text.count(f"container = {JOBS_CONTAINER}") == 5
     for job in (
         "nightly-finals",
@@ -226,7 +223,7 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
     ):
         section = text.split(f'[job-exec "{job}"]', 1)[1].split("\n[", 1)[0]
         assert f"container = {JOBS_CONTAINER}" in section, job
-        # Ofelia execs as root unless the job names a user (SIM-563).
+        # Ofelia execs as root unless the job names a user.
         assert "user = appuser" in section, job
     # The Postgres backup runs in the db container as the postgres OS user.
     # It logs in over the socket, so it needs no password.
@@ -236,7 +233,7 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The shell scripts (SIM-443b)
+# The shell scripts
 # ---------------------------------------------------------------------------
 
 

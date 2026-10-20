@@ -1,5 +1,5 @@
 """
-SIM-550 — the outfield arm block's recompute script and the fit probe's fielder read.
+The outfield arm block's recompute script and the fit probe's fielder read.
 
 Plan: docs/audit/2026-09-16-sim550-outfield-arm-block-plan.md (§5.4 the script,
 §5.5 the probe).
@@ -602,12 +602,12 @@ class TestFillArmBlock:
     def test_the_fill_clears_a_stale_block_on_a_row_the_pool_never_touches(
         self, tmp_path, small_floors
     ) -> None:
-        """The live table holds 23 outfield rows the old runner-view join
-        filled and the pool never touches (thin rows, 1 to 5 batted balls).
-        The computor's fill is a matched UPDATE, so alone it leaves them; the
-        script clears the block over the requested seasons first, as the
-        nightly aggregator does, and the verify checks come back green. A
-        row of a season outside the run keeps its block."""
+        """A row the pool never touches can carry a stale block (a thin row,
+        1 to 5 batted balls). The computor's fill is a matched UPDATE, so
+        alone it leaves such a row; the script clears the block over the
+        requested seasons first, as the nightly aggregator does, and the
+        verify checks come back green. A row of a season outside the run
+        keeps its block."""
         path = str(tmp_path / "sim550_fill.duckdb")
         _file_fixture(path)
         con = duckdb.connect(path)
@@ -872,11 +872,10 @@ class TestProbeFielderRead:
         )
 
     def test_the_tier_key_is_the_deviation_from_the_position_mean(self) -> None:
-        """The defect the review found: on a block whose expectation cell is
-        position-blind, every left fielder's raw prevention sits above every
-        right fielder's. A tercile over the raw value puts only left fielders
-        in the top tier, whatever their arms (the strongest right-field arm
-        lands in the middle). Centered per position-season, the strongest
+        """On a block whose expectation cell is position-blind, every left
+        fielder's raw prevention sits above every right fielder's. A tercile
+        over the raw value puts only left fielders in the top tier, whatever
+        their arms (the strongest right-field arm lands in the middle). Centered per position-season, the strongest
         arm of each position lands in the top tier and the weakest right
         fielder alone in the bottom; each position's keys average zero.
         (``_tiers`` splits six equal weights 1 / 2 / 3.)"""

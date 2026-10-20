@@ -1,43 +1,44 @@
 """
 tests/unit/test_filter_cells.py
 ======================================
-Unit tests for the SIM-451 filter-cell measurement (``scripts/measure_filter_cells.py``).
+Unit tests for the filter-cell measurement (``scripts/measure_filter_cells.py``).
 
 These run with NO database. The script imports ``duckdb`` lazily, so importing
 the module touches nothing. What they exercise is the PURE cell algebra that the
-whole measurement rests on:
+whole measurement rests on (``simulation/filter_cells.py``, which the script
+re-exports):
 
-  * :func:`score_band` — the -5..+5 clamp copied from ``sim_loop.py:1348`` plus
-    the 5-band split SIM-451 originates.
-  * :func:`count_bucket` — the 12-bucket count map copied from
-    ``full_pool_sampler.py:248``.
+  * :func:`score_band` — the -5..+5 clamp the sim loop applies (``sim_loop.py``)
+    plus the 5-band split.
+  * :func:`count_bucket` — the 12-bucket count map that the sampler's cell index
+    shares.
   * :func:`cell_key` / :func:`decode_cell` — the 2,880-cell encode and its exact
     inverse. A collision or a gap here silently mis-attributes rows.
   * :func:`occupancy_stats` — the DRAW-WEIGHTED under-full share. That share is
-    the number SIM-475 reads, so its arithmetic gets its own tests, including the
-    case that proves counting cells is the wrong metric.
+    the number the thin-cell widening ladder reads, so its arithmetic gets its
+    own tests, including the case that proves counting cells is the wrong metric.
   * :func:`widening_recovery` — how much under-full draw share each relaxation
-    step recovers. The second half of the SIM-451 deliverable.
+    step recovers.
   * :func:`emptiest_reachable` — the reachability filter on the emptiest-cell
     listing.
 
 FOUR INSTRUMENT TESTS CARRY THEIR OWN FAILURE CASE
 --------------------------------------------------
-An independent review found that the first version of this measurement reported
-success while measuring nothing. Four of its checks could not go red:
+A check that cannot go red reports success while it measures nothing. Four
+checks of this measurement each carry a case that proves they can fail:
 
-  * ``_redact_dsn`` claimed to strip the password and returned a libpq keyword
-    DSN whole. ``test_redact_dsn_strips_a_libpq_keyword_password`` is the case
-    that the old code FAILS.
-  * ``coverage_ok`` was true over a report whose outcome pool was missing a whole
-    season. ``test_health_report_fails_on_a_wholly_absent_season`` and
-    ``test_run_returns_non_zero_when_a_season_is_missing`` are the cases that the
-    old code FAILS.
-  * the lazy-``duckdb`` guard asserted ``not hasattr(mfc, "duckdb")``, which is
-    true whenever ``duckdb`` IS installed. ``test_duckdb_is_absent_from_a_clean_import``
-    checks ``sys.modules`` in a fresh subprocess instead, which the old
-    module-scope ``engine_artifacts`` import FAILS.
-  * the SQL that produces every number had no behavioural test.
+  * ``_redact_dsn`` must strip the password from a libpq keyword DSN, which
+    holds no '@'. ``test_redact_dsn_strips_a_libpq_keyword_password`` is that
+    case.
+  * ``coverage_ok`` must go false over a report whose outcome pool misses a
+    whole season. ``test_health_report_fails_on_a_wholly_absent_season`` and
+    ``test_run_returns_non_zero_when_a_season_is_missing`` are those cases.
+  * a bare import must not load ``duckdb``. ``not hasattr(mfc, "duckdb")``
+    cannot fail, because the script never binds the name itself.
+    ``test_duckdb_is_absent_from_a_clean_import`` checks ``sys.modules`` in a
+    fresh subprocess instead, which a module-scope ``engine_artifacts`` import
+    FAILS.
+  * the SQL that produces every number must match the Python.
     ``test_cell_key_sql_matches_python_on_every_legal_situation`` runs it in
     DuckDB and compares row by row, and
     ``test_the_sql_comparison_detects_an_injected_band_fault`` proves that
@@ -106,9 +107,9 @@ def test_score_band_edges(score_diff: int, expected: int) -> None:
 def test_score_band_clamp_collapses_blowouts() -> None:
     """The clamp makes a 9-run deficit the same situation as a 5-run deficit.
 
-    That is the ``sim_loop.py:1348`` behaviour: the sim compresses everything
-    beyond five runs onto the boundary. A measurement that skipped the clamp
-    would spread those rows across bands the sampler never separates.
+    That is the sim loop's own clamp (``sim_loop.py``): the sim compresses
+    everything beyond five runs onto the boundary. A measurement that skipped
+    the clamp would spread those rows across bands the sampler never separates.
     """
     assert score_band(-9) == score_band(-5) == score_band(-100)
     assert score_band(9) == score_band(5) == score_band(100)
@@ -366,9 +367,9 @@ def test_sql_helpers_build_from_the_python_constants() -> None:
     """The SQL is generated from SCORE_BAND_EDGES, so the two forms cannot drift.
 
     The score-band SQL is a SUM of one indicator per edge, exactly as the Python
-    is. The earlier form was a first-match CASE ladder, which reads the edges in
-    tuple order while the Python does not. This asserts the generated text holds
-    one ``> edge`` term per edge and the clamp.
+    is. A first-match CASE ladder would read the edges in tuple order, while the
+    Python does not. This asserts the generated text holds one ``> edge`` term
+    per edge and the clamp.
     """
     sql = mfc._score_band_sql("p.score_diff")
     for edge in mfc.SCORE_BAND_EDGES:
@@ -453,9 +454,10 @@ def test_cell_key_sql_matches_python_on_every_legal_situation() -> None:
     """The SQL cell key equals the Python cell key, row for row.
 
     The SQL computes 100% of the numbers in the report and the Python computes
-    100% of the numbers in these tests. Nothing checked that the two agree. This
-    runs the real generated expression in a real DuckDB over 8x3x4x3x15x2 = 8,640
-    situations, including score differences outside the +/-5 clamp.
+    100% of the numbers in these tests. Nothing else checks that the two agree.
+    This runs the real generated expression in a real DuckDB over
+    8x3x4x3x15x2 = 8,640 situations, including score differences outside the
+    +/-5 clamp.
     """
     rows = _legal_situation_rows()
     got = _run_cell_key_sql(mfc._cell_key_sql("p", "h"))
@@ -471,7 +473,7 @@ def test_the_sql_comparison_detects_an_injected_band_fault() -> None:
     """The comparison above can go red. Here is a fault that makes it.
 
     A first-match CASE ladder over the edges in a DIFFERENT order is exactly the
-    drift the shipped sum-of-indicators form removes. Injecting it must produce a
+    drift the sum-of-indicators form prevents. Injecting it must produce a
     mismatch. If this test passes with no mismatch, the comparison is decorative.
     """
     clamped = (
@@ -500,18 +502,17 @@ def test_the_sql_comparison_detects_an_injected_band_fault() -> None:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 1 — the credential leak into the committed report
+# _redact_dsn — no credential reaches the committed report
 # ---------------------------------------------------------------------------
 
 
 def test_redact_dsn_strips_a_libpq_keyword_password() -> None:
-    """A libpq keyword DSN holds no '@'. The old redactor returned it WHOLE.
+    """A libpq keyword DSN holds no '@', so a split on '@' cannot redact it.
 
     ``_redact_dsn`` writes the ``dsn_host`` field of a JSON file that is
-    committed as evidence, and the repository runs a CI secrets-check job. The
-    old body was ``dsn.rsplit("@", 1)[-1]``: with no '@' in the string, rsplit
-    returns the whole string, password included. This is the case that fails on
-    that body and passes on the fixed one.
+    committed as evidence, and the repository runs a CI secrets-check job. A
+    body of ``dsn.rsplit("@", 1)[-1]`` returns the whole string here, password
+    included. This case fails on that body.
     """
     dsn = "host=db port=5432 user=baseball_user password=hunter2SECRET dbname=baseball_sim"
     got = mfc._redact_dsn(dsn)
@@ -523,7 +524,7 @@ def test_redact_dsn_strips_a_libpq_keyword_password() -> None:
 @pytest.mark.parametrize(
     ("dsn", "expected"),
     [
-        # URL form — the shape docker-compose.yml:108 uses.
+        # URL form — the shape docker-compose.yml uses.
         ("postgresql://baseball_app:dummy_pw@db:5432/baseball_sim", "db:5432/baseball_sim"),
         ("postgres://u:p@localhost:5433/baseball_sim", "localhost:5433/baseball_sim"),
         ("postgresql://u:p@db/baseball_sim", "db/baseball_sim"),
@@ -535,7 +536,7 @@ def test_redact_dsn_strips_a_libpq_keyword_password() -> None:
         ("host=db port=5432 user=x password=SECRET dbname=y", "db:5432/y"),
         ("password=SECRET dbname=y host=db", "db/y"),
         # The quoted password is split across two EXPLICITLY concatenated
-        # literals so the SIM-153 secrets grep cannot match the SOURCE line;
+        # literals so the CI secrets-check grep cannot match the SOURCE line;
         # the runtime string is identical and the redaction under test still
         # runs. Explicit `+` because ruff-format re-joins IMPLICIT adjacent
         # literals, which would recreate the exact text the grep flags.
@@ -563,7 +564,7 @@ def test_redact_dsn_handles_both_dsn_forms(dsn: str, expected: str) -> None:
         "postgresql://u:LEAKME@db:5432/x?sslmode=require",
         "postgresql://u:LEAK://ME@db:5432/x",
         # Split like the fixture above (explicit `+`, see that comment): the
-        # SIM-153 secrets grep must not match this deliberately-fake
+        # CI secrets-check grep must not match this deliberately-fake
         # credential in SOURCE form.
         "dbname=y password=" + "'LEAKME' host=db",
         "sslpassword=LEAKME host=db dbname=y",
@@ -594,7 +595,7 @@ def test_redact_text_scrubs_a_dsn_out_of_an_attach_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 5 — the widening ladder
+# The widening ladder
 # ---------------------------------------------------------------------------
 
 
@@ -713,7 +714,7 @@ def test_widening_recovery_ranks_the_first_drop_from_the_data() -> None:
 
 
 def test_widening_verdict_ignores_the_dimensions_the_ladder_may_not_relax() -> None:
-    """The verdict must weigh only the drops SIM-475 is allowed to make.
+    """The verdict must weigh only the drops the widening ladder may make.
 
     Every row sits in count bucket 0, 15 rows a cell, MIN_CELL=100. Then:
 
@@ -726,8 +727,8 @@ def test_widening_verdict_ignores_the_dimensions_the_ladder_may_not_relax() -> N
 
     So the five-dimension diagnostic names ``base`` first, and the verdict on
     the decided order must ignore it. A verdict computed over all five would
-    read 'the data contradicts the order' and point SIM-475 at a relaxation the
-    design forbids.
+    read 'the data contradicts the order' and point the widening ladder at a
+    relaxation the design forbids.
     """
     occ = np.zeros(N_CELLS, dtype=np.int64)
     for cid in range(N_CELLS):
@@ -766,7 +767,7 @@ def test_widening_recovery_empty_pool_is_safe() -> None:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 6 — the false green and the missing exit code
+# health_report — the coverage verdict
 # ---------------------------------------------------------------------------
 
 
@@ -802,12 +803,12 @@ def test_health_report_passes_a_complete_measurement() -> None:
 
 
 def test_health_report_fails_on_a_wholly_absent_season() -> None:
-    """THE case the old flag could not see, taken from the real committed report.
+    """A season one pool holds and the other lacks fails ``coverage_ok``.
 
-    ``sim.outcome_pool`` held seasons 2017..2025 while ``sim.pitch_pool`` held
-    2017..2026. The old ``coverage_ok`` was the join-coverage loop alone, and
-    that loop iterates the seasons a pool HOLDS, so it never visited 2026 and
-    never went false. This is the reproduction, shrunk to two seasons.
+    The join-coverage loop iterates the seasons a pool HOLDS, so it never visits
+    a season the pool lacks and never goes false on it. ``coverage_ok`` also
+    checks that every pool holds every season. Here the pitch pool holds 2026
+    and the outcome pool does not.
     """
     inputs = _healthy_inputs()
     counts = inputs["season_counts"]
@@ -819,7 +820,7 @@ def test_health_report_fails_on_a_wholly_absent_season() -> None:
     assert got["missing_seasons"] == {"outcome_pool": [2026]}
     assert any("ZERO rows for season(s) [2026]" in p for p in got["problems"])
     # The join-coverage question on its own still answers "fine". That is the
-    # precise reason the old flag was green.
+    # reason ``coverage_ok`` needs the season check.
     assert got["join_coverage_ok"] is True
 
 
@@ -839,7 +840,7 @@ def test_health_report_fails_a_configuration_that_measured_fewer_seasons() -> No
 
 
 def test_health_report_still_fails_on_a_thin_join() -> None:
-    """The original check survives the rewrite."""
+    """A thin join still fails the report."""
     inputs = _healthy_inputs()
     inputs["coverage"]["pitch_pool"][0]["coverage_pct"] = 41.5  # type: ignore[index]
     got = health_report(**inputs, min_coverage=95.0)  # type: ignore[arg-type]
@@ -954,11 +955,10 @@ def _run_script(duckdb_path: str, output: str) -> subprocess.CompletedProcess[st
 @pytest.mark.slow
 @pytest.mark.timeout(300)
 def test_run_returns_non_zero_when_a_season_is_missing(tmp_path) -> None:
-    """The reproduction of the committed false green, end to end.
+    """A season missing from one pool fails the run, end to end.
 
     The outcome pool holds 2024 and 2025; the pitch pool also holds 2026. The
-    committed 2026-08-10 report called that ``coverage_ok: true`` and exited 0.
-    The script must now write the JSON, record the gap, and exit 2.
+    script must write the JSON, record the gap, and exit 2.
     """
     pytest.importorskip("duckdb")
     db = str(tmp_path / "gap.duckdb")
@@ -974,11 +974,11 @@ def test_run_returns_non_zero_when_a_season_is_missing(tmp_path) -> None:
     gaps = report["health"]["configuration_season_gaps"]
     assert "outcome_pool|recent|ALL" in gaps
     assert gaps["outcome_pool|recent|ALL"]["seasons_missing"] == [2026]
-    # The label no longer lies: the configuration says which seasons it measured.
+    # The configuration says which seasons it measured, beside the ones it names.
     cfg = report["configurations"]["outcome_pool|recent|ALL"]
     assert cfg["seasons"] == [2024, 2025, 2026]
     assert cfg["seasons_measured"] == [2024, 2025]
-    # The widening evidence is present, which it was not in the first report.
+    # The report carries the widening evidence.
     assert cfg["widening"]["decided_order"] == ["score_band", "home_or_away", "count"]
     assert [s["drops"] for s in cfg["widening"]["ladder"]] == [
         [],
@@ -1018,12 +1018,10 @@ def test_run_returns_zero_when_every_season_is_present(tmp_path) -> None:
 def test_duckdb_is_absent_from_a_clean_import() -> None:
     """Importing this script must not import ``duckdb``.
 
-    The old guard asserted ``not hasattr(mfc, "duckdb")``. That is true whenever
-    ``duckdb`` IS installed, because the script never binds the name itself — so
-    the guard could not fail. Meanwhile the module-scope
-    ``from pipeline.batch.engine_artifacts import ...`` pulled ``duckdb`` in
-    transitively (``engine_artifacts.py:38`` imports it at module scope), and the
-    docstring's promise was false.
+    A check of ``not hasattr(mfc, "duckdb")`` alone cannot fail, because the
+    script never binds the name itself. A transitive import can still load
+    ``duckdb``: ``pipeline.batch.engine_artifacts`` imports it at module scope,
+    so a module-scope import of that module breaks the promise.
 
     This checks ``sys.modules`` in a FRESH subprocess, which is the only place
     the answer is not polluted by whatever another test imported first.

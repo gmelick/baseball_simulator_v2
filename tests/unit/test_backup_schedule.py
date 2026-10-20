@@ -1,4 +1,4 @@
-"""The scheduled backups of the three data stores: the wiring (SIM-525).
+"""The scheduled backups of the three data stores: the wiring.
 
 The scheduler (deploy/ofelia/config.ini) runs two backup jobs at 10:00 UTC,
 after the nightly rebuild. The Postgres job runs inside the db container as
@@ -8,7 +8,7 @@ the db, jobs and app containers. These tests read the files and start no
 container. Two of them run a Makefile piece through sh or make, when the
 test host has them (the app image does).
 
-The off-site copy (SIM-568) is a third job at 10:30 UTC in the jobs container.
+The off-site copy is a third job at 10:30 UTC in the jobs container.
 It copies the newest sets from /backups to /offsite, the host folder
 OFFSITE_BACKUP_DIR (a OneDrive folder). The jobs container mounts that folder
 writable; the app mounts it read-only for the off-site age gauge.
@@ -100,7 +100,7 @@ def test_the_data_backup_runs_in_the_jobs_container_marked() -> None:
 
 
 def test_the_offsite_copy_runs_in_the_jobs_container_marked_at_10_30() -> None:
-    # SIM-568: after the two 10:00 backups; the module itself waits on them.
+    # The copy runs after the two 10:00 backups; the module itself waits on them.
     lines = _lines(_section("nightly-backup-offsite"))
     assert "schedule = 0 30 10 * * *" in lines
     assert f"container = {JOBS_CONTAINER}" in lines
@@ -134,7 +134,7 @@ def _prose(lines: list[str]) -> str:
 
 
 def test_the_offsite_comments_name_the_keep_setting_and_the_wait_limit() -> None:
-    # SIM-568: the count of the kept sets comes from OFFSITE_KEEP, not a fixed three.
+    # The count of the kept sets comes from OFFSITE_KEEP, not a fixed three.
     text = OFELIA.read_text(encoding="utf-8")
     job = _prose(_comment_paragraph(text, "; SIM-568: the off-site copy of the backup sets"))
     assert "OFFSITE_KEEP" in job
@@ -211,14 +211,14 @@ def test_a_missing_backup_dir_never_stops_compose() -> None:
 
 
 def test_the_jobs_service_mounts_the_offsite_folder_writable() -> None:
-    # SIM-568: the copy writes the sets into /offsite.
+    # The copy writes the sets into /offsite.
     volumes = _volumes("jobs")
     assert f"{OFFSITE_SOURCE}:/offsite" in volumes
     assert f"{OFFSITE_SOURCE}:/offsite:ro" not in volumes
 
 
 def test_the_app_reads_the_offsite_folder_read_only() -> None:
-    # SIM-568: the off-site age gauge reads the copies; the app never writes one.
+    # The off-site age gauge reads the copies; the app never writes one.
     assert f"{OFFSITE_SOURCE}:/offsite:ro" in _volumes("app")
     assert _services()["app"]["environment"]["OFFSITE_ROOT"] == "/offsite"
 
@@ -239,7 +239,7 @@ def test_git_and_docker_ignore_the_default_backup_folder() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert "/backups/" in [line.strip() for line in gitignore]
     assert "backups/" in [line.strip() for line in dockerignore]
-    # SIM-568: the default off-site copy folder.
+    # The default folder of the off-site copy.
     assert "/backups_offsite/" in [line.strip() for line in gitignore]
     assert "backups_offsite/" in [line.strip() for line in dockerignore]
 
@@ -248,7 +248,7 @@ def test_the_env_example_documents_the_backup_folder() -> None:
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert "# BACKUP_DIR=" in text
     assert "# BACKUP_KEEP=3" in text
-    # SIM-568: the off-site copy folder and its retention.
+    # The folder of the off-site copy and its retention.
     assert "# OFFSITE_BACKUP_DIR=" in text
     assert "# OFFSITE_KEEP=3" in text
 
@@ -286,8 +286,8 @@ def _offsite_guard() -> str:
 
 
 def test_the_makefile_runs_the_offsite_copy_marked() -> None:
-    # SIM-568: the manual copy leaves the same mark as the scheduled job. A
-    # guard line runs first and refuses while another copy holds a fresh mark.
+    # The manual copy leaves the same mark as the scheduled job. A guard
+    # line runs first and refuses while another copy holds a fresh mark.
     text = MAKEFILE.read_text(encoding="utf-8")
     recipe = _recipe(text, "backup-offsite")
     assert len(recipe) == 2, recipe
@@ -320,8 +320,8 @@ def _gnu_find() -> bool:
 
 @pytest.mark.skipif(not _gnu_find(), reason="needs sh and GNU find (the app image has both)")
 def test_the_offsite_guard_refuses_only_while_a_fresh_mark_exists(tmp_path: Path) -> None:
-    # SIM-568 review: a manual copy during another copy rewrote the same files
-    # and removed the other run's mark. The guard refuses while the mark is fresh.
+    # A manual copy during another copy rewrites the same files and removes
+    # the other run's mark. The guard refuses while the mark is fresh.
     script = _offsite_guard().replace(MARK_DIR, str(tmp_path))
 
     def run() -> subprocess.CompletedProcess[str]:
@@ -353,8 +353,8 @@ def test_the_backup_status_shows_the_offsite_copy() -> None:
 
 
 def test_the_backup_drill_restores_from_the_copy_on_offsite() -> None:
-    # SIM-568: `make backup-drill OFFSITE=1` passes --offsite to the drill. Only
-    # the value 1 does: OFFSITE=0 must not run the off-site drill.
+    # `make backup-drill OFFSITE=1` passes --offsite to the drill. Only the
+    # value 1 does: OFFSITE=0 must not run the off-site drill.
     text = MAKEFILE.read_text(encoding="utf-8")
     assert _recipe(text, "backup-drill") == [
         "py scripts/backup_drill.py --set $(or $(SET),latest) "

@@ -1,4 +1,4 @@
-"""SIM-427 — the per-game bullpen listing (Alembic 0025, ``raw.game_bullpen``).
+"""The per-game bullpen listing (Alembic 0025, ``raw.game_bullpen``).
 
 The MLB box lists, per side, the pitchers who did not pitch (``bullpen``) and
 those who did (``pitchers``, the starter first). The parser turns the two

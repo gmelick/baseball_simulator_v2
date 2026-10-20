@@ -1,14 +1,15 @@
 """
-SIM-533 — the pitcher arm-angle and spin-shape decision: the guard.
+The guard for the pitcher arm-angle and spin-shape decision.
 
-The owner decided on 2026-09-19 that neither of Savant's two numbers joins
-the pitcher model: not the arm angle (the release point measured from the
-shoulder), and not the spin shape (active spin and the measured-minus-inferred
-spin-axis deviation). The arsenal already reads the release point as three of
-its eight dimensions, and the spin numbers are formulas on the other five.
-The build is the record only: a decision block beside ``GMM_FEATURE_NAMES``
-in the pitcher engine, a paragraph in each of the two technical documents,
-and a probe script that re-runs the numbers.
+Neither of Savant's two numbers joins the pitcher model (the arm-angle and
+spin-shape decision, SIM-533, owner decision 2026-09-19). The first number is
+the arm angle (the release point measured from the shoulder). The second is
+the spin shape (active spin and the measured-minus-inferred spin-axis
+deviation). The arsenal already reads the release point as three of its eight
+dimensions, and the spin numbers are formulas on the other five. The record
+of the decision has three parts: a decision block beside
+``GMM_FEATURE_NAMES`` in the pitcher engine, a paragraph in each of the two
+technical documents, and a probe script that re-runs the numbers.
 
 Plan: docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md (§7).
 
@@ -16,7 +17,7 @@ What these tests hold:
 
 * the decision stays honest: ``GMM_FEATURE_NAMES`` and ``COMMAND_FEATURES``
   name none of the two numbers, and the arsenal's list is exactly the eight
-  dimensions that include the release point (the ticket's premise);
+  dimensions that include the release point (the decision's premise);
 * the engine carries the decision block, naming the plan, within 40 lines
   above the line that defines ``GMM_FEATURE_NAMES``, so a later edit that
   moves or drops the block fails here;
@@ -24,9 +25,9 @@ What these tests hold:
   sits inside the pitcher engine's own section;
 * no profile column reads the two numbers, no board landing table exists
   (canonical DDL and every Alembic migration), no Savant board is registered
-  for them (the plan's decision 3), and the per-pitch ``arm_angle`` that
-  migration 0020 carried into ``raw.savant_pitch_tracking`` for this ticket
-  stays unread by the profile computor, the engines and the artifact builder;
+  for them (the plan's decision 3), and the per-pitch ``arm_angle`` column
+  that migration 0020 adds to ``raw.savant_pitch_tracking`` stays unread by
+  the profile computor, the engines and the artifact builder;
 * the probe's offline checks pass on the bundled fixture, in process and as
   a subprocess, and the first check reads Savant's formula at r >= 0.999;
 * the probe's offline checks can fail: a corrupted spin-axis convention
@@ -181,8 +182,8 @@ def test_engine_carries_the_decision_block() -> None:
 
 
 def test_the_two_technical_documents_carry_the_record() -> None:
-    """Both documents mention SIM-533, and the reference's mention lies inside
-    the pitcher engine's section."""
+    """Both documents name the decision's tag, ``SIM-533``, and the reference's
+    mention lies inside the pitcher engine's section."""
     cheat_sheet = CHEAT_SHEET_MD.read_text(encoding="utf-8")
     assert "SIM-533" in cheat_sheet, f"{CHEAT_SHEET_MD.name} carries no SIM-533 record"
 
@@ -237,10 +238,10 @@ def test_no_profile_column_or_raw_table_for_the_two_numbers() -> None:
             "landing table for the arm-angle, spin-direction or active-spin boards"
         )
 
-    # Migration 0020 carried Savant's per-pitch arm angle into
-    # raw.savant_pitch_tracking for this ticket. It stays stored and unread: no
-    # reader names the column in code or in a SQL string (comments, such as the
-    # decision block itself, are dropped before the check).
+    # Migration 0020 stores Savant's per-pitch arm angle in
+    # raw.savant_pitch_tracking. The column stays unread: no reader names it
+    # in code or in a SQL string (comments, such as the decision block itself,
+    # are dropped before the check).
     for module in UNREADING_MODULES:
         code = _without_python_comments(module.read_text(encoding="utf-8"))
         assert "arm_angle" not in code, (
@@ -306,7 +307,7 @@ def test_probe_offline_checks_can_fail(probe: ModuleType) -> None:
     """A corrupted fixture fails the check named for the corruption, so the
     checks are not vacuous."""
     # Rotate our spin axis by 90 degrees on every row: the mirrored
-    # convention (360 minus ours) no longer matches Savant's measured axis.
+    # convention (360 minus ours) then fails to match Savant's measured axis.
     spin_rotated = [row[:14] + ((row[14] + 90.0) % 360.0,) for row in probe.SPIN_FIXTURE]
     checks = probe.offline_checks(probe.ARM_FIXTURE, spin_rotated)
     failed = _failed(checks)

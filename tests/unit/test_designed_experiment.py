@@ -1,6 +1,6 @@
 """
-SIM-548 — the designed-experiment runner (scripts/designed_experiment.py), on
-synthetic reports (no DB, no bundle). Four defects the first read found:
+The designed-experiment runner (scripts/designed_experiment.py), on synthetic
+reports (no DB, no bundle). The tests hold four rules:
 
   * a sparse market must not shrink a dense market's common game set;
   * the production repeats are baseline arms with their own seeds, and the

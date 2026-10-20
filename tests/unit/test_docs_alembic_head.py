@@ -1,11 +1,10 @@
 """Doc guard: the Alembic head the operator docs cite is the newest migration on disk.
 
-Why this test exists. The operator manual (``WORKFLOW.md``) told the operator that
-``alembic current`` prints ``0015`` for three months after the head moved to 0021,
-then to 0023 (the SIM-545 box-score table). An operator who follows that check reads
-a correct ``0023`` as a failure. ``CLAUDE.md`` and the technical reference cite the
-head too. This test reads the newest file under ``db/migrations/versions/`` and
-fails when any of those citations lags it, so the next migration ticket updates the
+The operator manual (``WORKFLOW.md``) tells the operator what ``alembic current``
+prints. When that prose lags the head, an operator who follows the check reads a
+correct head as a failure. ``CLAUDE.md`` and the technical reference cite the head
+too. This test reads the newest file under ``db/migrations/versions/`` and fails
+when any of those citations lags it, so the next migration ticket updates the
 prose in the same commit.
 
 The patterns are deliberately narrow: they match the sentences that state the
@@ -39,15 +38,15 @@ def test_newest_revision_is_a_four_digit_number() -> None:
 @pytest.mark.parametrize(
     ("doc", "pattern"),
     [
-        # WORKFLOW.md: the header line ("Alembic head 0023") and the summary line
-        # ("DuckDB v13 / Alembic 0023").
+        # WORKFLOW.md: the header line ("Alembic head NNNN") and the summary line
+        # ("DuckDB vNN / Alembic NNNN").
         ("WORKFLOW.md", r"Alembic (?:head )?(\d{4})"),
         # WORKFLOW.md: the two operator checks that quote what `alembic current` prints.
         ("WORKFLOW.md", r"`alembic current` print(?:s|ing)[^\n]*?`(\d{4})`"),
-        # CLAUDE.md: the status line ("Alembic head **0023**") and the repo-map line
-        # ("(Alembic, head **0023**").
+        # CLAUDE.md: the status line ("Alembic head **NNNN**") and the repo-map line
+        # ("(Alembic, head **NNNN**").
         ("CLAUDE.md", r"Alembic,? head \*\*(\d{4})\*\*"),
-        # CLAUDE.md: the architecture diagram ("DuckDB v13 / Alembic 0023)").
+        # CLAUDE.md: the architecture diagram ("DuckDB vNN / Alembic NNNN)").
         ("CLAUDE.md", r"/ Alembic (\d{4})\)"),
         # The technical reference's migration-system note.
         ("docs/technical/pipeline-betting-db.md", r"The Alembic head on disk is (\d{4})_"),

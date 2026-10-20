@@ -1,4 +1,4 @@
-"""The restore drill for the scheduled backups (SIM-525).
+"""The restore drill for the scheduled backups.
 
 ``scripts/backup_drill.py`` runs on the host. It restores the newest Postgres
 backup set into a scratch cluster, verifies the DuckDB and bundle copies, and
@@ -23,7 +23,7 @@ drill = load_script("backup_drill", module_name="backup_drill_under_test")
 
 @pytest.fixture(autouse=True)
 def _no_compose_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the two folder variables, so each test reads only its own .env (SIM-568).
+    """Clear the two folder variables, so each test reads only its own .env.
 
     The drill reads the shell environment before .env, as docker compose
     does, and the app container hands the owner's .env to every process.
@@ -522,7 +522,7 @@ def test_a_backup_dir_unlike_the_compose_folder_refuses_the_data_verify(
     assert backups.is_dir()
 
 
-# ---------------------------------------------------------------- the off-site copy (SIM-568)
+# ---------------------------------------------------------------- the off-site copy
 
 
 def _setup_offsite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeDocker) -> Path:
@@ -553,7 +553,7 @@ def test_the_offsite_dir_comes_from_the_flag_then_env_then_default(tmp_path: Pat
 def test_the_shell_environment_wins_over_the_env_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Compose reads the shell before .env, so the drill does too (SIM-568)."""
+    """Compose reads the shell before .env, so the drill does too."""
     (tmp_path / ".env").write_text(
         "BACKUP_DIR=env/local\nOFFSITE_BACKUP_DIR=env/copy\n", encoding="utf-8"
     )
@@ -705,7 +705,7 @@ def test_one_folder_for_both_settings_reads_local_unless_offsite_is_passed(
     source: str,
     root: str | None,
 ) -> None:
-    """BACKUP_DIR and OFFSITE_BACKUP_DIR name one folder: the local folder wins (SIM-568)."""
+    """BACKUP_DIR and OFFSITE_BACKUP_DIR name one folder: the local folder wins."""
     fake = FakeDocker()
     backups = _setup(tmp_path, monkeypatch, fake)
     (tmp_path / ".env").write_text(

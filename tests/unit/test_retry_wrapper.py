@@ -1,4 +1,4 @@
-"""SIM-519 Part D — the crash-retry wrapper (``scripts/with_retry.sh``)."""
+"""The crash-retry wrapper (``scripts/with_retry.sh``)."""
 
 from __future__ import annotations
 

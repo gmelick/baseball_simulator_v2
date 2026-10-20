@@ -1,4 +1,4 @@
-"""SIM-518 — the offline fatigue-kernel scan's arithmetic (scripts/probes/fatigue_kernel_scan.py).
+"""The arithmetic of the offline fatigue-kernel scan (scripts/probes/fatigue_kernel_scan.py).
 
 Three properties pin the scan before its read is trusted:
 

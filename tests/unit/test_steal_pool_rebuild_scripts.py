@@ -1,4 +1,7 @@
-"""SIM-554 — the run book's two scripts, on in-memory fixtures (no live DB, no bundle).
+"""The two run-book scripts of the steal-pool rebuild, on in-memory fixtures (no live DB,
+no bundle).
+
+Plan: docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md.
 
 ``scripts/rebuild_steal_pool.py`` rebuilds the steal opportunity pool
 with the pitch class and the pickoff rows, then exports the steal pool alone.
@@ -228,7 +231,7 @@ def _pickoff_row(
     pitcher=901,
     score_diff=2,
 ):
-    """A pickoff row the way the builder writes one (the design's §4.2)."""
+    """A pickoff row the way the builder writes one (the plan's §4.2)."""
     c.execute(
         "INSERT INTO sim.steal_opportunity_pool VALUES "
         "(?, ?, ?, 0, DATE '2024-06-01', ?, ?, ?, 902, ?, 1, ?, 0, 0, ?, FALSE, FALSE, 1.0, "
@@ -464,7 +467,7 @@ class TestTheRollbackPoint:
     def test_a_copy_the_bundle_moved_on_from_stops_unless_forced(self, tmp_path):
         _c, art, backup = _clean_state(tmp_path)
         rb.take_backup(art, backup, force=False)
-        _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2})  # a later old-shape export
+        _write_steal_pool(Path(art) / "steal_pool", {"2": 4, "3": 2})  # a later pre-0031 export
         plan = backup_plan(art, backup, force=False)
         assert plan.problems and "changed after the copy" in plan.problems[0]
         forced = backup_plan(art, backup, force=True)
@@ -625,7 +628,7 @@ class TestTheChecks:
         assert not rb.check_snapshot_back(c)
 
     def test_the_example_names_the_changed_pitch_row_not_the_renumbered_pickoff_rows(self, capsys):
-        """Check a fails on a changed pitch row. A reloaded game also renumbered
+        """Check a fails on a changed pitch row. A reloaded game also renumbers
         an earlier run's pickoff rows, which check a reports for information
         only, so its example line must list the pitch row alone."""
         c = _db()
@@ -791,8 +794,8 @@ class TestAgainstTheBuilder:
         c = _db()
         _builder_game(c)
         _build(c)
-        # Turn the pool back into what an old builder wrote: no pickoff rows,
-        # no class.
+        # Turn the pool back into what a builder before migration 0031 writes:
+        # no pickoff rows, no class.
         c.execute("DELETE FROM sim.steal_opportunity_pool WHERE is_pickoff_row")
         c.execute("UPDATE sim.steal_opportunity_pool SET pitch_class = NULL")
         rb.take_snapshot(c, [2024])
@@ -875,8 +878,8 @@ class TestTheCentres:
 
     def test_the_band_centres_load(self):
         """The centres come from ``tests/acceptance/bands.py`` itself, not from
-        the script's fallback copy (which holds the same 2026-09 values, so
-        only the source and a fresh read of the file tell the two apart)."""
+        the script's fallback copy (which can hold the same values, so only
+        the source and a fresh read of the file tell the two apart)."""
         path = REPO / "tests" / "acceptance" / "bands.py"
         centres, source = band_centres()
         assert Path(source) == path
@@ -890,7 +893,7 @@ class TestTheCentres:
 
 
 def _export_like(c, pool_dir: Path, target: str) -> None:
-    """Write one target's files the way the SIM-554 export does (pitch-id order)."""
+    """Write one target's files the way the steal-pool export does (pitch-id order)."""
     pool_dir.mkdir(parents=True, exist_ok=True)
     w = f"target_base = {int(target)}"
     d = c.execute(
@@ -969,8 +972,8 @@ def test_the_rebuild_refuses_a_missing_database(tmp_path, builder_554, quiet_log
 
 def _file_databases(tmp_path: Path) -> tuple[str, str]:
     """A DuckDB file holding the ``raw`` tables (attached as ``pg`` in place of
-    Postgres) and the main DuckDB file, its steal pool as an old builder left
-    it: no pickoff rows, no class, and no migration-0031 columns."""
+    Postgres) and the main DuckDB file, its steal pool in the shape before
+    migration 0031: no pickoff rows, no class, and no migration-0031 columns."""
     pg_path, main_path = str(tmp_path / "pg.duckdb"), str(tmp_path / "main.duckdb")
     c = _db()
     _builder_game(c)
@@ -1037,7 +1040,7 @@ class TestTheWholeRun:
             rb, "attach_pg", lambda con: con.execute(f"ATTACH '{pg_path}' AS pg (READ_ONLY)")
         )
         art = tmp_path / "engine_artifacts"
-        _write_steal_pool(art / "steal_pool", {"2": 2, "3": 1})  # the old export's counts
+        _write_steal_pool(art / "steal_pool", {"2": 2, "3": 1})  # the pre-rebuild export's counts
         (art / "pitch_pool").mkdir()
         (art / "pitch_pool" / "L.sit.npy").write_bytes(b"untouched")
         argv = ["--duckdb-path", main_path, "--art-dir", str(art)]
@@ -1059,8 +1062,8 @@ class TestTheWholeRun:
         self, tmp_path, builder_554, quiet_logging, monkeypatch, capsys
     ):
         """--apply-migration adds the two columns INSIDE the rebuild's
-        transaction, so a failed check leaves the table in its old shape: the
-        old code's positional INSERT keeps working until the merge."""
+        transaction, so a failed check leaves the table in its old shape, the
+        shape an un-migrated builder's positional INSERT expects."""
         pg_path, main_path = _file_databases(tmp_path)
         monkeypatch.setattr(
             rb, "attach_pg", lambda con: con.execute(f"ATTACH '{pg_path}' AS pg (READ_ONLY)")
@@ -1388,10 +1391,10 @@ class TestTheCensusSeams:
         rec = census.Recorder()
         holder = {"rec": rec}
         census.install_seams(fp, holder)
-        census.install_seams(fp, holder)  # the SIM-514 stacking trap
+        census.install_seams(fp, holder)  # a second install must not stack the wrappers
         kw = {"outs": 0, "balls": 0, "strikes": 0, "score_diff": 0}
-        fp.steal_draw(2, "r", "p", None, aggression=1.0, **kw)  # the old pre-pitch draw
-        fp.pickoff_draw(2, "r", "p", None, **kw)  # the new order's pickoff draw
+        fp.steal_draw(2, "r", "p", None, aggression=1.0, **kw)  # the single pre-pitch draw
+        fp.pickoff_draw(2, "r", "p", None, **kw)  # the pickoff draw before the pitch
         fp.steal_draw(2, "r", "p", None, aggression=1.0, pitch_class="ball", **kw)
         assert [name for name, _ in fp.calls] == ["steal_draw", "pickoff_draw", "steal_draw"]
         assert "pitch_class" not in fp.calls[0][1] and fp.calls[2][1]["pitch_class"] == "ball"

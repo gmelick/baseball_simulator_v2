@@ -1,8 +1,8 @@
 """
 test_check_file_integrity.py
 ============================
-Unit tests for ``scripts/check_file_integrity.py`` — the SIM-315 file-integrity
-guard that flags ``.py`` files corrupted by the Cowork/OneDrive file bridge
+Unit tests for ``scripts/check_file_integrity.py``, the file-integrity guard.
+The guard flags ``.py`` files that the Cowork/OneDrive file bridge corrupts
 (NUL bytes or truncated / un-parseable source).
 
 These tests are pure stdlib + ``tmp_path`` — no external services, no third-party

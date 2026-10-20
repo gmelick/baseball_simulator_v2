@@ -1,11 +1,10 @@
-"""SIM-446: ``scripts/resumable_sweep.py`` must STREAM its child's output.
+"""``scripts/resumable_sweep.py`` must STREAM its child's output.
 
-Why this file exists: the wrapper runs each sweep attempt as a subprocess and has
-to capture stdout (it reads the stream to spot the completion marker and the fatal
--error signature). An earlier version treated "capture" as licence to *swallow* —
-it printed only ``CHILD_SUMMARY`` and ``Fatal Python error`` lines. A season takes
-hours, so the operator saw nothing at all and could not tell a working run from a
-hung one. Silence is a real defect in a long-running operational tool.
+The wrapper runs each sweep attempt as a subprocess and has to capture stdout (it
+reads the stream to spot the completion marker and the fatal-error signature).
+Capture must not mean swallow. A season takes hours, so a wrapper that prints only
+the ``CHILD_SUMMARY`` and ``Fatal Python error`` lines shows the operator nothing,
+and a working run then looks like a hung one.
 
 These tests drive ``_run_attempt`` with a fake subprocess, so they assert on
 observable behaviour rather than on source text.
@@ -56,10 +55,9 @@ CHILD_LINES = [
     "CHILD_COMPLETE\n",
 ]
 
-# A season that reaches the end of its schedule with one game failed. This is the
-# shape that lost game 824014 in the 2026 sweep: the driver saw CHILD_COMPLETE and
-# stopped, but the failed game is deliberately NOT in the progress file, so nothing
-# ever went back for it.
+# A season that reaches the end of its schedule with one game failed. The failed
+# game is deliberately NOT in the progress file, so a driver that stops on
+# CHILD_COMPLETE never goes back for it (the 2026 sweep lost game 824014 this way).
 CHILD_LINES_WITH_FAILURE = [
     "INFO  === Season 2026 ===\n",
     "INFO    Reloading game 824014\n",
@@ -121,10 +119,10 @@ class TestChildOutputIsStreamed:
 
 
 class TestFailuresWithinACompletedSeason:
-    """SIM-447: reaching the end of the schedule is NOT the same as loading every
-    game. ``_dispatch_game`` contains per-game failures by design, so a season can
-    report COMPLETE with games still outstanding — and since the fix, those games
-    are deliberately absent from the progress file. The driver has to notice."""
+    """Reaching the end of the schedule is NOT the same as loading every game.
+    ``_dispatch_game`` contains per-game failures by design, so a season can
+    report COMPLETE with games still outstanding, and those games are
+    deliberately absent from the progress file. The driver has to notice."""
 
     def test_failed_count_is_reported_to_the_driver(self, run_attempt):
         _, _, complete, failed = run_attempt(lines=CHILD_LINES_WITH_FAILURE)
@@ -136,8 +134,9 @@ class TestFailuresWithinACompletedSeason:
         assert (complete, failed) == (True, 0)
 
     def test_a_missing_marker_is_not_mistaken_for_failures(self, run_attempt):
-        """Older children, or a crash before the marker prints, must default to 0
-        rather than to a truthy value that would retry a finished season forever."""
+        """A child without the marker, or a crash before the marker prints, must
+        default to 0 rather than to a truthy value that would retry a finished
+        season forever."""
         lines = [ln for ln in CHILD_LINES if "CHILD_FAILED" not in ln]
         _, _, complete, failed = run_attempt(lines=lines)
         assert complete is True
@@ -153,8 +152,8 @@ class TestFailuresWithinACompletedSeason:
         """The child runs as an embedded SOURCE STRING, so the producer and the
         consumer of ``CHILD_FAILED`` live in different halves of this file and can
         drift apart with nothing failing. If the child stops emitting it, the
-        driver silently reads 0 failures forever and we are back to the 824014 bug
-        — every canned-output test would still pass. Bind the two halves."""
+        driver silently reads 0 failures forever and never retries a failed game,
+        while every canned-output test still passes. Bind the two halves."""
         import inspect
 
         assert "CHILD_FAILED:" in sweep._CHILD, "the child must EMIT the marker"
@@ -167,7 +166,8 @@ class TestFailuresWithinACompletedSeason:
 
     def test_the_driver_retries_rather_than_breaking_on_a_failed_game(self):
         """Guards the actual control flow: `if complete and not failed` must gate
-        the break. `if complete` alone is what lost game 824014."""
+        the break. `if complete` alone stops on a season with a failed game, and
+        that game is never loaded."""
         import inspect
 
         src = inspect.getsource(sweep.main)

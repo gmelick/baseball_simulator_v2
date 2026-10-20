@@ -1,20 +1,20 @@
 """
 test_pool_index_reconcile.py
 ============================
-Unit test for SIM-337 - reconcile DuckDB sim-pool indexes to the SIM-111
-play-pool query contract (section 6.2) and add `stand`-bearing composites.
+Unit test for migration 0006, which reconciles the DuckDB sim-pool indexes to
+the play-pool query contract (SIM-111, section 6.2) and adds `stand`-bearing
+composites.
 
-LIVE BUG context: SIM-115 (migration 0005) pruned the sim-pool indexes but
-contradicted the contract it was supposed to act on. On sim.pitch_pool it KEPT
-idx_pp_outcome + idx_pp_count (the contract says DROP - those columns are
-projected / bulk-read, never filtered) and DROPPED idx_pp_pitcher +
-idx_pp_season + idx_pp_game_date (the contract says KEEP). Neither pool got a
-`stand` index even though `stand` (batter handedness) is half the pitch
-pre-filter and the sole batted-ball pre-filter.
+Migration 0005 prunes the sim-pool indexes against that contract. On
+sim.pitch_pool it KEEPS idx_pp_outcome + idx_pp_count (the contract says DROP -
+those columns are projected / bulk-read, never filtered) and DROPS
+idx_pp_pitcher + idx_pp_season + idx_pp_game_date (the contract says KEEP). It
+gives neither pool a `stand` index, although `stand` (batter handedness) is
+half the pitch pre-filter and the sole batted-ball pre-filter.
 
-This test seeds a DuckDB at the realistic post-0005 (shipped) state, applies
-migration 0006, and asserts the resulting index set on sim.pitch_pool /
-sim.outcome_pool matches the contract:
+This test seeds a DuckDB at the post-0005 state, applies migration 0006, and
+asserts the resulting index set on sim.pitch_pool / sim.outcome_pool matches
+the contract:
   * pitch_pool : idx_pp_pitcher_season, idx_pp_pitcher, idx_pp_season,
                  idx_pp_game_date, idx_pp_pitcher_stand_season  (KEEP/RESTORE/ADD)
                  idx_pp_outcome, idx_pp_count                   (DROPPED)
@@ -22,7 +22,7 @@ sim.outcome_pool matches the contract:
 
 It also asserts every DROP INDEX statement in 0006 is schema-qualified (sim.),
 because an unqualified DROP silently no-ops (indexes live in their table's
-schema) - which is exactly how the original contradiction could go unnoticed.
+schema) - so a DROP against the contract can go unnoticed.
 
 Run:
     pytest tests/unit/test_pool_index_reconcile.py -v
@@ -64,7 +64,7 @@ OUTCOME_KEEP = [
 
 
 def _seed_post_0005_state():
-    """Realistic starting point: the DB as SIM-115 (0005) actually shipped it."""
+    """The starting point: the DB as migration 0005 leaves it."""
     c = duckdb.connect(":memory:")
     c.execute("CREATE SCHEMA sim")
     c.execute(

@@ -1,9 +1,9 @@
-"""SIM-554 — the running-game replay's arithmetic, on synthetic inputs (no DB, no bundle).
+"""The running-game replay's arithmetic, on synthetic inputs (no DB, no bundle).
 
 ``scripts/running_game_replay.py`` replays real pitches through the
 sampler and scores eleven ways of sampling the steal. The sampler seams it reads
 are the production ones (``tests/unit/test_steal_weights_seam.py`` pins
-the new one). These tests pin the script's own arithmetic:
+the steal-weights seam). These tests pin the script's own arithmetic:
 
   * a jar of weighted rows becomes a probability table over (result x steal);
   * the two-step read lets the look-alike weights move ONLY the share of steals,
@@ -162,7 +162,8 @@ def _true_table() -> np.ndarray:
 
 def _blind_table() -> np.ndarray:
     """The same results and the same number of steals, but the steal does not
-    know the result (today's draw): a steal can land on a ball in play."""
+    know the result (the ``today`` design, a steal draw that reads only the
+    count): a steal can land on a ball in play."""
     go = sum(P_CLASS[c] * P_STEAL[c] for c in P_CLASS)
     j = np.zeros((NC, 3))
     for c, pc in P_CLASS.items():
@@ -225,7 +226,7 @@ class TestTheReport:
         assert single["pick"] == "single_reads_class"
         win = split["designs"]["steal_reads_class"]
         d = win["vs_baseline_joint"]
-        assert d["difference"] < -2.0 * d["standard_error"]  # better than today, beyond noise
+        assert d["difference"] < -2.0 * d["standard_error"]  # beats the baseline, beyond noise
         assert abs(win["vs_baseline_result"]["difference"]) < 1e-9  # the same pitch result
         # the blind draw puts steals on balls in play; the true table puts none there
         assert split["designs"]["today"]["test"]["steal_mix_predicted"][IN_PLAY] > 0.1
