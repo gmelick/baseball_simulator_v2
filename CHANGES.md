@@ -93,7 +93,7 @@ each code folder).
 | The unit lane with coverage (container) | GATE_UNIT |
 | The slow lane (container, `-m slow`) | 22 passed |
 | The regression lane (container) | 33 passed |
-| The integration lane (host Python, testcontainers) | All pass except `test_sim555_stamp_indexes_and_archives`, which fails on master `fe81d79` too: the odds archive tables lack `last_seen_at` (filed as SIM-582) |
+| The integration lane (host Python, testcontainers) | 31 passed, 1 failed: `test_sim555_stamp_indexes_and_archives`, which fails on master `fe81d79` too, because the odds archive tables lack `last_seen_at` (filed as SIM-582) |
 | `ruff check .` / `ruff format --check .` | pass |
 | mypy, the five packages | no issues in 211 source files |
 | The frontend: type-check, lint, build, Playwright (chromium, `API_TARGET=http://127.0.0.1:9`) | pass; 21 passed |
