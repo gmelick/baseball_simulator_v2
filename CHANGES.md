@@ -100,7 +100,10 @@ project's framing should read.
 **The unit lane** (container, the checkout mounted, `-m "not slow"`): 6,487 passed, 5 skipped,
 0 failed. The three file-index tests are among the skips: the app image has no git.
 
-**Defects found and not fixed.** The audit found these in the code; none is in `BACKLOG.xlsx` yet:
+**Defects found and not fixed.** The audit found these in the code. Each was checked in the code
+again and filed the same day as a P3 ticket (below). Item 11's favicon joined the small-fixes
+ticket; its other part, the hand-written response shapes, is not filed: it waits on an owner
+decision.
 
 1. **No scheduler runs the opening-line job or the venue backfill:** nothing calls
    `schedule_opening_line_job` or `schedule_venue_backfill_job`, so opening lines are not
@@ -143,8 +146,15 @@ Already filed, so not repeated: the acceptance roster (SIM-581), the 'C' game ty
 (SIM-600), the explorer's batter weights and `is_sharp_book` (SIM-610), the batter's empty
 xBA / xSLG (SIM-611), stale runtime texts (SIM-617), the stress test in CI (SIM-619).
 
-**The ticket row.** SIM-624 is this work, filed and closed here, so it has no row; the
-`BACKLOG.xlsx` subtitle now reads SIM-625 as the next free ID.
+**The ticket rows.** SIM-624 is this work, filed and closed here, so it has no row. The defects
+above are SIM-625 to SIM-634: the opening-line capture (625), the workflow triggers (626), the
+mock odds routes (627), the sweep's database address (628), the extra pitch past the inning
+limit (629), the Postgres schema file (630), the data nobody reads (631), the backup path name
+and the env templates (632), the test targets (633), and the small fixes (634: the favicon,
+`/ready`, the nginx headers, the explorer cache keys, the migration records, three stale texts).
+The opening-line capture was proposed at P2 and filed at P3: the check found that BettingPros
+serves the opener after the fact, so a backfill recovers a missed night. SIM-620's row now holds
+only the dead constants and the assert message. The `BACKLOG.xlsx` subtitle reads SIM-635.
 
 # CLOSED — the project-wide code clean-up: no hand-written file over 2,000 lines, every script and test named by purpose, 49 defects filed, the simulator byte-identical to master — SIM-493 (Phase C, the integration), 2026-10-20
 
