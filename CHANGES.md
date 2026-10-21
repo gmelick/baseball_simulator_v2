@@ -1,3 +1,48 @@
+# THE BACKLOG RE-RANKED — the 59 tickets filed on 2026-10-20 and 2026-10-21 put in priority order, five of them moved between bands — the tickets of SIM-493 and SIM-624, 2026-10-21
+
+**Why it matters.** The code clean-up (SIM-575 to SIM-623) and the documentation rebuild
+(SIM-625 to SIM-634) filed 59 tickets. Inside each band they sat in ticket-number order, which
+is the order of filing, not of importance. The owner asked for a check of the order; the check
+found no ranking inside a band and five tickets in the wrong band. No ticket's text changed.
+
+**The rule.** The one P1, the weight fit (SIM-548), fits every similarity weight together once
+the model is final, and any later change to the profiles, the score matrices or the draws
+invalidates it. So P2 holds the defects that change what the model computes and the decisions
+on its inputs, plus the instrument the fit relies on. P3 holds the rest, ranked by the cost of
+leaving it: wrong data, then a broken alarm, then a latent risk, then a small model effect,
+then the tools of a future run, the hygiene and the cosmetics.
+
+**The five band changes.**
+
+| Ticket | Was | Now | Why |
+|---|---|---|---|
+| SIM-606, the arsenal merge in standardized units | P3 | P2 | It changes the arsenals; it lands with SIM-580, so every arsenal changes once. |
+| SIM-611, four similarity design points | P3 | P2 | Its point 3 is a live defect: features that read 0.0 for every player hold weight in the batter and manager scores. |
+| SIM-587, which calibration values the draws use | P3 | P2 | It decides the values the score matrices are built from, before the fit tunes on them. |
+| SIM-581, the acceptance workflow's test list | P2 | P3 | The workflow runs only on a manual dispatch, and the fix changes nothing in production. |
+| SIM-582, the odds archives' column | P2 | P3 | The retirement it blocks was a one-off probe (SIM-555); its cost is the Monday integration run, red every week. |
+
+**The order.** P1: SIM-548. P2: SIM-575, SIM-580, SIM-606, SIM-578, SIM-577, SIM-576,
+SIM-579 (the four engine-input fixes share one matrix rebuild), SIM-611, SIM-587, SIM-583,
+SIM-584. P3: the owner's four in their places (SIM-547, SIM-526, SIM-556, SIM-574); wrong data
+(SIM-608, SIM-607, SIM-625, SIM-586); broken alarms (SIM-582, SIM-581, SIM-633, SIM-626,
+SIM-619, SIM-602, SIM-601, SIM-630); latent risk (SIM-585, SIM-632); small model effects
+(SIM-629, SIM-594, SIM-591, SIM-592, SIM-593, SIM-588, SIM-605); tools of a future run
+(SIM-628, SIM-614, SIM-613, SIM-616, SIM-589, SIM-590, SIM-618, SIM-621, SIM-612); hygiene
+(SIM-623, SIM-620, SIM-622, SIM-597, SIM-631, SIM-615, SIM-627, SIM-617, SIM-610); cosmetics
+(SIM-603, SIM-604, SIM-596, SIM-598, SIM-609, SIM-599, SIM-600, SIM-634, SIM-595).
+
+**Two facts the check found.** The live win-probability curve (`/data/calibration.json`) maps
+every raw home-win probability from 0.545 to 0.618 to exactly 0.50; it ends at 0 and 1, so the
+0-or-1 case of SIM-583 needs all 100 games to go one way. The odds writer's deduplication
+(SIM-608) ignores time, and the live closing promotion (`pipeline/live/ingestion/closing_rows.py`)
+takes the latest stored row, so a live closing row can carry a stale price; this is read from
+the code, not checked against stored rows.
+
+**The record.** `BACKLOG.xlsx` holds the new order and bands: 64 rows, every row's text and
+height unchanged, each band's priority colour kept. `CLAUDE.md` §2 no longer names the old P2
+range.
+
 # CLOSED — every living document rebuilt from the code, a code review path, and a generated file index of every source file — SIM-624, 2026-10-21
 
 **Why it matters.** The documents described a project that no longer exists: the README named

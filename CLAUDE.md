@@ -55,8 +55,10 @@
   Strikeouts and hit by pitch pass. No betting value is measured until every band is green
   (§2b).
 - **The open tickets are the rows of `BACKLOG.xlsx`** (§2b). The code clean-up (SIM-493)
-  filed 49 defects, SIM-575 to SIM-623; the ten P2 rows (SIM-575 to SIM-584) change what
-  production computes today.
+  filed 49 defects, SIM-575 to SIM-623, and the documentation rebuild (SIM-624) ten more,
+  SIM-625 to SIM-634. The P2 rows hold the defects that change what the model computes and
+  the decisions on its inputs: they land before the weight fit (SIM-548), because any later
+  change to the profiles, the matrices or the draws invalidates the fit.
 - **The documentation.** `docs/technical/` is the code reference: the architecture, the code
   review path, the generated file index, the loop cheat sheet and one page per area
   (`docs/technical/README.md`). `WORKFLOW.md` is the operator's manual. `docs/README.md` maps
