@@ -3,7 +3,7 @@ Audit raw.pitches.bat_hand coverage per season.
 
 Usage (cmd.exe):
     set BASEBALL_DB_DSN=postgresql://user:pass@host:5432/db
-    python scripts\check_bat_side_coverage.py ^
+    python scripts\probes\check_bat_side_coverage.py ^
         --out docs\data_quality\2026-05-20-bat-side-coverage.md
 """
 

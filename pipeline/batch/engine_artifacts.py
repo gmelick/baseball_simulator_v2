@@ -2,7 +2,7 @@
 
 The simulator runs in process-pool workers that cannot receive the app
 process's engine objects, so every engine's contribution reaches a worker as
-files on disk (the design: docs/architecture/2026-09-03-engine-wiring-and-full-pool-scoring.md).
+files on disk (the design: docs/technical/architecture.md).
 ``python -m pipeline.batch.engine_artifacts --what all`` builds the bundle;
 :class:`EngineArtifacts` loads it in a worker.
 
@@ -772,7 +772,7 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         nargs="+",
         default=None,
-        help="Override the recency-floor seasons (default: last 3).",
+        help="Override the recency-floor seasons (default: the last 4 in the pitch pool).",
     )
     ap.add_argument(
         "--what",

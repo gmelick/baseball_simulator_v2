@@ -3,9 +3,10 @@
 # scripts/nightly_rebuild.sh — rebuild the profiles and the engine bundle for
 # the current season (steps 2 and 3 of scripts/nightly_ingest.sh).
 #
-# Both steps write DuckDB and need its write lock. The running app holds no
-# handle on the file (the rebuild beside the app, SIM-524), so the scheduler
-# runs this at 08:00 UTC beside the app (deploy/ofelia/config.ini). By hand:
+# Step 1 writes DuckDB and needs its write lock; step 2 opens it read-only and
+# writes the bundle. The running app holds no handle on the file (the rebuild
+# beside the app, SIM-524), so the scheduler runs this at 08:00 UTC beside the
+# app (deploy/ofelia/config.ini). By hand:
 #   docker compose run --rm app sh /app/scripts/nightly_rebuild.sh
 # Step 2 publishes a new bundle version; the app then restarts itself
 # to load the new profiles and bundle (api/bundle_watch.py).

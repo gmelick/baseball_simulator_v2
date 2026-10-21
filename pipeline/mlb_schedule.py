@@ -11,9 +11,10 @@ are in. This module is the one place that knows the schedule's shape.
   draws: ``scheduled``, ``live``, ``final`` or ``postponed``. It is the only
   status mapper; the API's raw-status fallback uses :func:`card_state_from_raw`.
 * The app reads the endpoint through ``api.league_feed.LeagueFeed`` (async,
-  cached by the route). :func:`fetch_schedule_sync` reads it over ``urllib``
-  for the loader and the nightly jobs, which keep their ``urllib`` transport
-  (the crash-class finding, SIM-446).
+  cached by the route). :func:`fetch_schedule_sync` reads it over ``urllib``,
+  but nothing in the program calls it today: the historical loader reads the
+  schedule through its own transport, ``urllib`` by default (the crash-class
+  finding, SIM-446).
 
 The schedule needs no key. A field the response does not carry reads ``None``,
 and the card hides it.
@@ -319,7 +320,7 @@ def fetch_schedule_sync(
     hydrate: str = DEFAULT_HYDRATE,
     timeout_s: float = 30.0,
 ) -> list[ScheduleGame]:
-    """Read the schedule over ``urllib`` (the loader's and the nightly jobs' transport)."""
+    """Read the schedule over ``urllib``. Nothing in the program calls it today."""
     query = "&".join(f"{k}={v}" for k, v in schedule_params(start, end, hydrate).items())
     with urllib.request.urlopen(f"{SCHEDULE_URL}?{query}", timeout=timeout_s) as resp:
         payload = json.loads(resp.read().decode("utf-8"))

@@ -10,8 +10,8 @@ game and 30 s a 100-game batch.
 THE DESIGN
 ----------
   * **Concurrency.** A ``concurrent.futures.ProcessPoolExecutor`` with
-    ``max_workers = min(os.cpu_count() - 1, 10)`` (the parallelism decision,
-    ``docs/architecture/2026-05-27-parallelism.md``); ``SIM_RUNNER_WORKERS``
+    ``max_workers = min(os.cpu_count() - 1, 10)`` (the process model,
+    ``docs/technical/architecture.md``); ``SIM_RUNNER_WORKERS``
     overrides the count in the app. The pool starts each worker with
     ``forkserver``, from a lean server process, not as a copy of the
     engine-loaded parent: each worker holds about 575 MB private (measured

@@ -17,7 +17,7 @@ markers = [
     "unit: marks tests as unit tests (no external services required)",
     "slow: marks tests as slow (>1s) — excluded from default local run",
     "benchmark: marks tests that use pytest-benchmark",
-    "regression: marks tests as regression/golden-file tests (detect engine drift between commits)",
+    "regression: marks the engine invariant tests (bounded, symmetric, self-excluded scores; no snapshots)",
 ]
 
 addopts = [
@@ -34,7 +34,7 @@ src            = ["api", "pipeline", "similarity", "simulation", "betting", "db"
 
 # Markdown is prose, not source. Ruff 0.16 began formatting Python code blocks
 # INSIDE .md files, which would rewrite (a) illustrative snippets in README /
-# docs/architecture and (b) — the reason this matters — source quoted VERBATIM as
+# docs/technical and (b) — the reason this matters — source quoted VERBATIM as
 # evidence in docs/audit/*. An audit that quotes the code it is indicting must
 # reproduce it exactly; letting a formatter respace it falsifies the evidence.
 # Ruff's contract here is the codebase, so keep .md out of its file discovery.

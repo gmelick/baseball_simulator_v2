@@ -1,18 +1,17 @@
-"""Doc guard: the DuckDB schema version the prose cites is the one on disk.
+"""Doc guard: the DuckDB schema version the living docs cite is the one on disk.
 
-``CLAUDE.md``, ``WORKFLOW.md``, ``agent_team.md`` and the technical reference
-tell the reader the DuckDB schema version. When that prose lags the version
-file, an operator who follows the ``WORKFLOW.md`` check reads a correct version
-as a mismatch. ``tests/unit/test_docs_alembic_head.py`` guards the Alembic head
-the same way; this file guards the DuckDB number so the next DuckDB migration
-ticket updates the prose in the same commit as the version bump.
+The living docs state the current version with one phrase, ``DuckDB schema
+**vNN**``. The operator manual (``WORKFLOW.md``) also shows what its version check
+prints. When that prose lags the version file, an operator who follows the check
+reads a correct version as a mismatch. ``tests/unit/test_docs_alembic_head.py``
+guards the Alembic head the same way; this file guards the DuckDB number so the
+next DuckDB migration ticket updates the prose in the same commit as the bump.
 
-The truth is ``db/schemas/duckdb_schema_version.txt``, and
-``tests/unit/test_sim_store.py`` already holds that file equal to the newest
-numbered file under ``db/migrations/duckdb/``. This test only asks that the
-prose agree with it.
+The truth is ``db/schemas/duckdb_schema_version.txt``. The first test holds that
+file equal to the newest numbered file under ``db/migrations/duckdb/``
+(``tests/unit/test_sim_store.py`` checks it too). The rest ask that the prose agree.
 
-The patterns are deliberately narrow: they match the sentences that state the
+The patterns are deliberately narrow: they match the phrases that state the
 CURRENT schema version, not the historical mentions of the migration that
 shipped a column ("migration 0023 (schema v23)").
 """
@@ -46,22 +45,13 @@ def test_version_file_matches_the_newest_migration() -> None:
 @pytest.mark.parametrize(
     ("doc", "pattern"),
     [
-        # CLAUDE.md: the status line ("DuckDB schema **vNN**, Alembic head ...").
+        # The phrase every living doc uses for the current version.
         ("CLAUDE.md", r"DuckDB schema \*\*v(\d+)\*\*"),
-        # CLAUDE.md: the architecture diagram ("DuckDB vNN / Alembic NNNN").
-        ("CLAUDE.md", r"DuckDB v(\d+) / Alembic"),
-        # CLAUDE.md: the repo map ("(numbered SQL, schema **vNN**)").
-        ("CLAUDE.md", r"numbered SQL, schema \*\*v(\d+)\*\*"),
-        # WORKFLOW.md: the header line and the phase note ("DuckDB vNN").
-        ("WORKFLOW.md", r"DuckDB v(\d+)"),
-        # WORKFLOW.md: the operator check's expected output.
-        ("WORKFLOW.md", r":: Expected: (\d+)"),
-        # WORKFLOW.md: the troubleshooting row ("currently `NN`").
-        ("WORKFLOW.md", r"latest migration \(currently `(\d+)`\)"),
-        # agent_team.md: the tech-stack line.
-        ("agent_team.md", r"DuckDB v(\d+) \(in-process\)"),
-        # The technical reference's migration-system note.
-        ("docs/technical/pipeline-betting-db.md", r"duckdb_schema_version\.txt \((\d+) as of"),
+        ("WORKFLOW.md", r"DuckDB schema \*\*v(\d+)\*\*"),
+        ("docs/technical/architecture.md", r"DuckDB schema \*\*v(\d+)\*\*"),
+        ("docs/technical/database.md", r"DuckDB schema \*\*v(\d+)\*\*"),
+        # WORKFLOW.md: what the operator's version check prints.
+        ("WORKFLOW.md", r"(?m)^:: Expected: (\d+)$"),
     ],
 )
 def test_docs_cite_the_on_disk_duckdb_version(doc: str, pattern: str) -> None:
@@ -73,24 +63,4 @@ def test_docs_cite_the_on_disk_duckdb_version(doc: str, pattern: str) -> None:
         f"{doc} cites DuckDB schema {sorted({int(c) for c in cited})} but "
         f"duckdb_schema_version.txt reads {version}; update the prose in the same "
         "commit as the version bump"
-    )
-
-
-@pytest.mark.parametrize(
-    ("doc", "pattern"),
-    [
-        # WORKFLOW.md: the troubleshooting row names the newest migration file.
-        ("WORKFLOW.md", r"through `(\d{4})_\*`"),
-        # The technical reference names the newest migration file too.
-        ("docs/technical/pipeline-betting-db.md", r"newest file db/migrations/duckdb/(\d{4})_"),
-    ],
-)
-def test_docs_name_the_newest_duckdb_migration(doc: str, pattern: str) -> None:
-    text = (_REPO / doc).read_text(encoding="utf-8")
-    cited = re.findall(pattern, text)
-    assert cited, f"{doc}: nothing matches {pattern!r}; the sentence this guards was reworded"
-    newest = _newest_migration_number()
-    assert {int(c) for c in cited} == {newest}, (
-        f"{doc} names DuckDB migration {sorted({int(c) for c in cited})} but the newest "
-        f"file is {newest:04d}; update the prose in the same commit as the migration"
     )

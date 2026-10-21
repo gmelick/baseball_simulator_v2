@@ -1,3 +1,151 @@
+# CLOSED — every living document rebuilt from the code, a code review path, and a generated file index of every source file — SIM-624, 2026-10-21
+
+**Why it matters.** The documents described a project that no longer exists: the README named
+deleted engines, old routes and old numbers; the technical pages had been patched through every
+rename and still pointed at moved functions; `CLAUDE.md` had grown into a 1,066-line dated log.
+The owner asked for every outdated document to be deleted and rebuilt from the code, not
+patched, and for a way to review the codebase in a logical order. Every living document now
+describes the code as it is on branch `sim624-docs-rebuild` (off master `440ecb4`), and a
+reader can walk the whole codebase in fifteen stages with every file listed.
+
+**The audit and the verdicts.** Eleven agents audited one area each against the code, collected
+the evidence of staleness, deleted each outdated document and wrote its replacement from the
+code. Four independent agents then fact-checked the new pages (below).
+
+| Document | Verdict | The strongest evidence | Now |
+|---|---|---|---|
+| `README.md` | outdated | An eight-step loop with a steal-first order and a launch-angle home-run check; FAISS "flat index" engines; a `GET /simulate` route list; the 49% beat-close read; `frontend/components/`, `db/models/`, `tests/backtesting/` folders that hold nothing | rebuilt (138 lines) |
+| `CLAUDE.md` | outdated | §2/§2b contradicted each other and the latest lane (six non-passes vs the 2026-10-20 lane's seven); the manager-usage power read 4 against production's 1; "DO NOT run the profile recompute" against a nightly recompute; the conftest pins named two flags of twenty | rebuilt (612 lines); §10, §11 and §14 kept word for word, the section numbers kept for the citations; the old §2/§2b appended verbatim to `docs/archive/CLAUDE-md-history.md` |
+| `WORKFLOW.md` | outdated | `tests\regression\generate_fixtures.py` (gone); the loader's `--season`/`--dsn` (it takes none); a flag table of fitted powers with the split OFF | rebuilt (609 lines) |
+| `agent_team.md` | outdated | `BACKLOG.md` "the single source of truth"; "Next free ticket ID: SIM-437"; FAISS index ownership; the wrong repository | rebuilt (294 lines) |
+| `deploy/README.md` | outdated | `/` proxies the API (nginx serves the frontend there); a dev CORS of `*`; `theoddsapi` in production | rebuilt |
+| `db/roles/README.md` | outdated | The read-only role named for the console only; the Data Lab read routes also use it | rebuilt |
+| `deploy/monitoring/secrets/README.md` | **current** | — | kept |
+| `db/migrations/README` | outdated | Alembic's one-line boilerplate | replaced by `db/migrations/README.md` |
+| `docs/technical/README.md`, `mkdocs.yml` | outdated | Five pages; the cheat sheet missing from the site | rebuilt; the site lists every page |
+| `docs/technical/api.md` | outdated | 35 of 43 files; re-export lines that no longer exist; "FastAPI resolves by path, not order" | rebuilt (807 lines): a route table, the boot order, the login model |
+| `docs/technical/simulation.md` | outdated | Re-exports `sim_loop` does not make; callers in `api/` that do not import it | rebuilt (786 lines), all 46 files |
+| `docs/technical/sim-loop-cheat-sheet.md` | outdated | Reliever "stuff" OFF (production power 1); "until the matrix is rebuilt" (rebuilt nightly) | rebuilt (340 lines) |
+| `docs/technical/similarity.md` | outdated | `build_pitcher_sim_matrix` in the wrong module; 21 of 30 files; no draw or power per engine | rebuilt (506 lines) |
+| `docs/similarity_visualization_spec.md` | outdated | "Status: proposed"; a standalone Plotly page; the wrong diagnostic order | rebuilt as the explorer as built; §3, §5, §6 keep the numbers code cites |
+| `docs/technical/pipeline-betting-db.md` | outdated | Functions that moved or no longer exist; 20 files of about 160; no table inventory | retired; replaced by `pipeline-ingest.md`, `pipeline-batch.md`, `betting.md`, `database.md` |
+| `docs/technical/scripts-frontend.md` | outdated | A 07:00 `nightly-ingest` job that does not exist; a default DSN no script has; 30 scripts missing; `typed.ts` "the single source of truth" (nothing imports it) | retired; replaced by `scripts.md`, `frontend.md` |
+| `docs/architecture/2026-05-27-parallelism.md`, `2026-06-17-phase4-sim-loop-spec.md`, `2026-09-03-engine-wiring-and-full-pool-scoring.md` | outdated | FAISS tiles, the foul re-weight, `ScoreFusion` and `SIM_FULL_POOL`, all deleted | deleted; `docs/technical/architecture.md` replaces them; three code citations repointed |
+| `docs/architecture/2026-09-02-adr-frontend-framework.md` | current (a decision record) | — | kept |
+
+The dated records (`docs/audit/`, `docs/data_quality/`, `docs/perf/`, `docs/archive/`,
+`CHANGES.md`) describe one moment each and are not edited; `docs/README.md` now says which
+documents are living and which are records.
+
+**New.**
+
+- `docs/technical/code-review-path.md`: a one-hour tour of one simulation request (twelve
+  stops), then fifteen stages from the core outward, each with the files in reading order, the
+  questions to check and the tests that pin it, and a progress checklist.
+- `docs/technical/file-index.md`, written by `scripts/docs_file_index.py` from `git ls-files`:
+  789 source and config files in the review path's stages, each with its size, the first
+  sentence of its own docstring or header comment, and the tests that import it. The page's
+  first line carries a key (a hash of every file's stage, path and first sentence);
+  `tests/unit/test_docs_file_index.py` recomputes it and fails when a file is added, removed or
+  moved, or its first sentence changes, and holds the review path's stage headings equal to
+  the script's `STAGES`. The test skips without git (the app image), so CI runs it.
+- `docs/technical/architecture.md`, `pipeline-ingest.md`, `pipeline-batch.md`, `betting.md`,
+  `database.md` (every table with its writer and readers, every migration), `frontend.md`,
+  `scripts.md`, `tests.md` (every lane and its CI job), and `docs/README.md` (the map of every
+  document).
+
+**The doc guards.** The living docs state the versions with one phrase each, `Alembic head
+**0030**` and `DuckDB schema **v32**`. `test_docs_alembic_head.py` and
+`test_docs_duckdb_version.py` now read that phrase in `CLAUDE.md`, `WORKFLOW.md`,
+`architecture.md` and `database.md`, plus the two `:: Expected:` lines of the operator's checks;
+the retired page's sentences and `agent_team.md`'s version line are gone from them.
+
+**Prose inside code and config, corrected.** Each states something true now; a syntax-tree
+comparison against master shows no code change except the one help string.
+`.github/workflows/ci.yml` (the regression gate is invariants, not snapshots; a stale test
+count), the `regression` marker text in `pyproject.toml` (part of SIM-620; its dead constants
+and the assert message remain), `make help`, the `tests/conftest.py` docstring,
+the `scripts/nightly_rebuild.sh` header (the bundle step opens DuckDB read-only), the
+`--seasons` help of `engine_artifacts` (the last 4 seasons, not 3), the docstrings of
+`opening_line_job.py` and `mlb_schedule.py` (no scheduler or caller runs them), two probes'
+usage paths and `designed_experiment.py`'s example output folder (`results/`). Three module
+docstrings cite `docs/technical/architecture.md` in place of the deleted design records.
+
+**Gates.** ruff check and format clean on the whole tree. On host Python: the file-index, both
+version guards, the `CLAUDE.md` §11 citation test, the arm-angle record test, the band
+arithmetic, the default-password, flag-name, flag-registry, file-integrity and API-state tests
+pass; `test_secrets_baseline.py` fails one test on host Python only (no `sqlglot`, a known
+host gap). Every relative link and anchor in the rebuilt documents resolves (a checker over 24
+files: 0 problems).
+
+**QA cross-validation.** Four independent agents fact-checked the new pages against the
+code, about 840 specific claims in all (names, modules, callers, flags with their defaults and
+production values, commands, tables, counts), and fixed about 25 in place. The worst: the
+tour put `start_simulation_run` in `games_runs.py` (it is in `games.py`); the database page
+said the box-score parser writes the lineups (the historical loader does); the simulation page
+limited a walk-off to a home run; the migrations README said the computor applies the DuckDB
+schema on every run (only on a file with none). The cheat sheet, the API, frontend,
+similarity, explorer and operator pages held no error. The QA of `CLAUDE.md` found no owner
+ruling lost or changed in meaning; it restored three traps (never set `LIVE_PIPELINE_ENABLED`
+in the app; every "latest run" read takes `kind = 'pregame'`; the Storage Sense placeholders on
+the OneDrive folder), and four more facts went back after it listed them (the backup's
+`--new-set` rule, the vendor provider's keyless MLB reads, the replay file's five runs per
+game, the `SIM_STEAL_PITCH_CLASS=0` fallback). The sprint-narrative convention
+(`docs/SPRINT_<date>_<name>.md`) is gone with those files (commit `0003ec7`). **The framing
+follows the owner ruling of 2026-09-28:** closing line value describes the market and the model
+is not judged by it; the benchmark is the closing line through the accuracy comparison (owner
+decision 2026-09-10). The open owner-decision ticket SIM-611 (point 4) still asks how the
+project's framing should read.
+
+**The unit lane** (container, the checkout mounted, `-m "not slow"`): 6,487 passed, 5 skipped,
+0 failed. The three file-index tests are among the skips: the app image has no git.
+
+**Defects found and not fixed.** The audit found these in the code; none is in `BACKLOG.xlsx` yet:
+
+1. **No scheduler runs the opening-line job or the venue backfill:** nothing calls
+   `schedule_opening_line_job` or `schedule_venue_backfill_job`, so opening lines are not
+   captured on their own (the job's docstring calls the capture time-critical).
+2. **The two release workflows never run on a push:** `docker-release.yml` and
+   `frontend-release.yml` trigger on `main`, and `ci.yml`'s pull-request trigger targets
+   `main`; the default branch is `master`.
+3. `GET /api/odds/{game_pk}` and `/api/odds/today/all` serve the mock odds whatever
+   `ODDS_PROVIDER` says.
+4. `scripts/resumable_sweep.py:80` reads `BASEBALL_DB_DSN` from `.env`, which no longer
+   carries it, so a sweep raises `KeyError` (separate from SIM-614).
+5. `simulate_game` checks its inning ceiling only after a pitch that does not roll the half:
+   a game tied after the API's 12 innings throws one pitch of the 13th, with the
+   extra-innings runner on second.
+6. `db/schemas/01_postgres_schema.sql` lags the migrations (no `raw.savant_pitch_tracking`, no
+   `raw.game_bullpen`, no 0029 or 0030 columns), and several unit tests read it.
+7. Built and never read: `sim.stolen_base_pool`, the `catcher` composite actor matrix,
+   `sim.live_games`, `raw.savant_first_base_receiving`. Declared and never written:
+   `derived.outfield_play_detail`, `infield_play_detail`, `dp_play_detail`. Never called:
+   `sim.purge_expired_sessions()`; `EngineArtifacts.attach_shared_views` outside the tests.
+8. The API reads `BACKUPS_ROOT` (`api/routes/metrics.py:350`); the backup jobs read
+   `BACKUP_ROOT`.
+9. The staging and production env templates set `LIVE_PIPELINE_ENABLED=true` (a second
+   publisher) and `ODDS_PROVIDER=theoddsapi` (no such provider), and carry seven keys no code
+   reads.
+10. The test targets: `make test-unit` passes no `-m "not slow"`; `make test-integration` runs
+    in the app container, which has no Docker socket, so every test skips; the nightly
+    acceptance workflow's `games` input says "max 12" against the 45-game set (beside SIM-581).
+11. The frontend: `index.html` links a favicon (`/baseball.svg`) that does not exist; no module
+    imports `typed.ts`, so the hand-written response shapes can drift from the API unseen.
+12. Small: `/ready` adds no `redis` key when Redis is healthy; nginx's probe and docs blocks
+    send no `X-Real-IP`; the `simviz:*` cache keys outlive a nightly rebuild; 20 of the 32
+    DuckDB migrations record themselves in `migration_history`; the `api/state.py` registry
+    comment calls the situation engine a FAISS engine; the Makefile's `gen-secrets` comment
+    says blank keys stay blank; `scripts/probes/manager_profile_recompute.py` says the app must
+    be stopped.
+
+Already filed, so not repeated: the acceptance roster (SIM-581), the 'C' game type
+(SIM-586), the pitcher calibration fields (SIM-587, SIM-605), the API's phase strings
+(SIM-600), the explorer's batter weights and `is_sharp_book` (SIM-610), the batter's empty
+xBA / xSLG (SIM-611), stale runtime texts (SIM-617), the stress test in CI (SIM-619).
+
+**The ticket row.** SIM-624 is this work, filed and closed here, so it has no row; the
+`BACKLOG.xlsx` subtitle now reads SIM-625 as the next free ID.
+
 # CLOSED — the project-wide code clean-up: no hand-written file over 2,000 lines, every script and test named by purpose, 49 defects filed, the simulator byte-identical to master — SIM-493 (Phase C, the integration), 2026-10-20
 
 **Why it matters.** The code is easier to read and change, and it behaves exactly as before. The

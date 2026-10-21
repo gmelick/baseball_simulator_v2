@@ -1,424 +1,340 @@
-# The simulation loop on one page — every draw, its weights, and the similarity scores behind them
+# The simulation loop on one page
 
-*Written 2026-09-14 for the owner. Values are what production runs today (`docker-compose.yml`,
-the `app` service) after the manager-draw flip of 2026-09-13. Updated 2026-10-01 for the running
-game on the pitch (SIM-554): the pickoff draw before the pitch, the steal draw after it. Code:
-`simulation/sim_loop.py` (the loop) with its mixins in `simulation/loop/`,
-`simulation/full_pool_sampler.py` (the draws) with its mixins in `simulation/sampler/`
-(one file per draw since the code clean-up, SIM-493), `similarity/engines/` (the scores).*
+Every draw the simulator makes, in the order it makes them: the pool it draws from, the hard
+filter, each weight and its value, and the similarity scores behind the weights. The values are
+production's: the `app` service of [`docker-compose.yml`](../../docker-compose.yml). Where a code
+default in [`simulation/flags.py`](../../simulation/flags.py) differs, the table says so. The
+module-by-module reference is [Simulation](simulation.md).
 
 ## How to read this
 
-The simulator never uses a formula to decide what happens. Every decision is a **draw**: it
-takes a **pool** of real plays (2023–2026, about 2.8 million pitches), keeps only the rows
-that are legal for the live situation (the **hard filter**), gives each remaining row a
-**weight**, and draws one row at random in proportion to the weights. **The drawn row is the
-play.** A weight is either a **similarity score** — a 0-to-1 number from one of the engines in
-§3 saying how alike the live player and the row's player are — raised to a fitted **power**
-(a higher power makes the draw prefer look-alikes more strongly; 0 turns the factor off), or a
-**— every power is 1 since 2026-09-16** (owner ruling: the powers are fitted together in the
-sweep of the tunable parameters; at 1 the sampler skips the power step, and the fitted values
-the 1s replace are kept in §2's summary table) —
-**bandwidth** on a distance (a Gaussian: rows farther than about one bandwidth from the live
-value fade out; a smaller bandwidth is stricter). Every pool row also carries a **recency
-weight**: 2.0 for the two most recent seasons, ×0.75 per older season, floor 0.25.
+- **A draw.** The simulator never decides by formula. It takes a **pool** of real plays from
+  the engine-artifact bundle (the folder the nightly job builds), keeps only the rows that fit
+  the live situation (the **hard filter**), gives each row a **weight**, and picks one row at
+  random in proportion to the weights. **The drawn row is the play** (the owner's rulings of
+  2026-08-10 and 2026-08-29).
+- **The pool window.** The pools hold the last three completed seasons plus the current one
+  (2023–2026 today; `RECENCY_FLOOR_SEASONS = 4` in
+  [`pipeline/batch/artifacts/common.py`](../../pipeline/batch/artifacts/common.py)).
+- **Recency.** Every row carries a recency weight: 2.0 for the two newest seasons, then ×0.75
+  per older season, never below 0.25
+  ([`pipeline/batch/profiles/pool_meta.py`](../../pipeline/batch/profiles/pool_meta.py)).
+- **A similarity score** is a number from 0 (nothing alike) to 1 (the same player), read from
+  a nightly matrix (§5). The draw raises it to a **power**: a higher power prefers look-alikes
+  more strongly; 0 turns the factor off. **Every power is 1** (owner ruling 2026-09-16) until
+  one designed experiment fits all the weights together. At power 1 the sampler skips the power
+  step. §3 keeps the fitted values the experiment starts from.
+- **A bandwidth** belongs to a Gaussian weight on a distance: on a single feature, a row one
+  bandwidth from the live value keeps about 60% of its weight. A smaller bandwidth is stricter.
+- **The backtest cutoff.** A backtest sets a cutoff at the day before the game, and every draw
+  gives zero weight to later plays (`FullPoolSampler.set_asof`).
+- **A row with no score.** A pool row whose player has no profile reads as neutral (1.0 at
+  power 1; the mean scored weight at any other power).
 
 ## 1. The loop
 
-For each half-inning, for each plate appearance, for each pitch:
-
 ```
-plate appearance starts ─► ① pitching change?  (the fielding manager)
-                           ② which reliever?    (if a change was drawn)
-                           ③ intentional walk?
-each pitch ──────────────► ④a pickoff?         (BEFORE the pitch; a runner on first with second open,
-                                                  or on second with third open)
-   if the third out ─────► the half-inning ends with NO pitch thrown; the same batter leads off the next inning
-                           ⑤a the pitch thrown  (weighted toward the pitcher's look-alikes, power 1; was 16)
-                           ⑤b the pitch's result (ON since 2026-09-14: a second, batter-weighted draw among rows whose
-                                                  pitch resembles ⑤a's; ball, called strike, whiff, foul, in play, hit by pitch)
-                           ④b steal?            (AFTER the result: real pitches of the same count and the same class;
-                                                  no draw when ④a gave a pickoff outcome on this pitch)
-   if in play ───────────► ⑥ the batted ball's fate: the fence stage, then the fielding draw
-                           ⑦ the runners' extra bases (up to five discretionary decisions)
-   if the pitch got away ► ⑧ runners advance one base (wild pitch / passed ball / dropped third strike),
-                                                  unless a steal or pickoff already moved them on that pitch;
-                                                  on a dropped-third-strike reach they move first, then the batter takes first
+plate appearance starts ─► ① pitching change?   (the fielding manager; first pitch of the PA)
+                           ② which reliever?     (only when ① drew a change)
+                           ③ intentional walk?   (no pitch thrown when it fires)
+each pitch ──────────────► ④a pickoff?           (BEFORE the pitch; lead runner on 1B with 2B open,
+                                                   or on 2B with 3B open)
+   pickoff = third out ──► the half ends with NO pitch; the same batter leads off next inning
+                           ⑤a the pitch thrown
+                           ⑤b the pitch's result  (ball, called strike, swinging strike, foul,
+                                                   in play, hit by pitch)
+                           ④b steal?             (AFTER the result; skipped when ④a resolved)
+   in play ──────────────► ⑥ the fence stage, then the fielding draw (the play and every runner)
+                           ⑦ the extra bases     (up to five runner decisions)
+   pitch got away ───────► ⑧ runners move up one base; a dropped third strike may put the batter on
 ```
 
-The order ④a → ⑤a → ⑤b → ④b is the running game on the pitch (SIM-554, built 2026-10-01).
-Each step is a draw of real rows. The batter's result is drawn with no knowledge of the steal,
-and the steal never changes it. The switch is `SIM_STEAL_PITCH_CLASS` (default 1). The order
-needs a bundle whose steal pool carries the pitch class (DuckDB migration 0031). An older
-bundle, or the switch at 0, runs the single pre-pitch draw of 2026-08-17 (SIM-474): one row
-of the count group answers the steal and the pickoff together, before the pitch. Production
-runs the new order since 2026-10-03, when the run book rebuilt the steal pool (builder
-`sim554.1`, 394 pickoff rows) and exported it into the bundle.
+The order ④a → ⑤a → ⑤b → ④b is the running game on the pitch (SIM-554). The batter's result is
+drawn with no knowledge of the steal, and the steal never changes it. It needs a bundle whose
+steal pool carries each pitch's class; an older bundle, or `SIM_STEAL_PITCH_CLASS=0`, runs one
+draw before the pitch that answers the steal and the pickoff together.
 
 ## 2. The draws, one by one
 
-### ① The pitching change — `pitching_change_draw` (ON since 2026-09-13)
+### ① The pitching change — `pitching_change_draw`
+
+Runs on the first pitch of every plate appearance when `SIM_MANAGER=1` and `SIM_MANAGER_DRAW=1`
+(both default 0; production 1). With the draw off, no pitcher is ever changed.
 
 | | |
 |---|---|
-| pool | one row per real plate-appearance boundary while a pitcher was on the mound, changed or not (693,774 rows) |
-| hard filter | starter or reliever; a half-inning boundary or mid-inning; the pitch-count bucket (tens); times through the order (1–4). Under 20 rows the cell widens: drop times-through, then the bucket, then the boundary |
-| weights | recency · a Gaussian on the situation (pitch count, batters faced, inning, outs, runners, the fielding side's margin; z-scored, **bandwidth 1.0**) · the live pitcher's **pitcher similarity** to the row's pitcher (**power 1**) · the live manager's **manager-usage similarity** to the row's manager (**power 1**; fitted 4) |
-| the row answers | did the manager change pitchers here (yes / no) |
-| the cutoff | in a backtest, rows dated after the game are excluded |
+| pool | the change opportunity pool: one row per real plate-appearance boundary with a pitcher on the mound, changed or not |
+| hard filter | starter or reliever · a half-inning boundary or mid-inning · the pitch-count bucket (tens) · times through the order (1–4). Under 20 rows (`SIM_CHANGE_MIN_CELL`) the cell widens: drop the times through, then the bucket, then the boundary |
+| weights | recency · a Gaussian on the z-scored situation (pitch count, batters faced, inning, outs, runners, the fielding side's margin), bandwidth **1.0** (`SIM_CHANGE_SIT_SIGMA`) · the live pitcher's **pitcher similarity** to the row's pitcher, power **1** (`SIM_CHANGE_PITCHER_POWER`) · the fielding manager's **manager-usage similarity** to the row's manager, power **1** (`SIM_ACTOR_POWER_MANAGER_USAGE`; code default 0 = off) |
+| the row answers | did the manager change pitchers here |
 
-### ② Which reliever — `relief_arm_draw` (ON since 2026-09-13)
-
-| | |
-|---|---|
-| candidates | the real pen: the arms the MLB box listed as available for the game, minus the rotation (a start of 45+ pitches in the team's last five games) and today's starter, minus the arms already used |
-| weights, each a resemblance to the arm the drawn row brought in | **role** — Gaussian on the difference in high-leverage entry share, **bandwidth 0.1** · **rest** — Gaussian on days since the last outing (capped at five), **bandwidth 0.5 days** · **pitched in the last two days** — a mismatch multiplies by **0.25** · **pitches over the last three days** — Gaussian, **bandwidth 10 pitches** · stuff (pitcher similarity, **off**) · hand (**off**) |
-| every weight off / no sampler | the positional pick: the first listed arm in a high-leverage late spot, else the last |
-
-### ③ The intentional walk (SIM-515)
-
-A coin flip at the **real rate** of the plate appearance's cell: runners × outs × late (7th inning
-or later) × close (within one run), from `sim.ibb_rates`. No similarity weight.
-
-### ④a The pickoff — `pickoff_draw` (before the pitch; SIM-554)
+### ② Which reliever — `relief_arm_draw`
 
 | | |
 |---|---|
-| pool | the **steal opportunity pool**: one row per real pitch on which a steal was possible, attempted or not (~2.4 million), plus the **pickoff rows** — one per real pickoff outcome thrown before the plate appearance had any pitch with that runner situation (about 394 for 2023–2026; migration 0031) |
-| hard filter | the target base (second or third) and the exact outs-balls-strikes count. Every row of that **count group** is a candidate: the pitch rows and the pickoff rows |
-| weights | the steal draw's own (recency · the score-margin Gaussian · the steal-runner, pitcher-steal and catcher-throwing similarities, below) with **no manager weight**: the manager's weight acts on the steal's attempted rows only |
-| the row answers | picked off (an out; a caught stealing when the runner was breaking) · a pickoff throw that got away (the runner moves up one base) · neither. No steal credit either way |
-| when it resolves | at once, before the pitch: the pitch draw sees the bases the pickoff left. A count group with no pickoff outcome skips the draw (no random number) |
-| the third out | a pickoff that makes the third out ends the half-inning with **no pitch thrown**: no pitch count, no event, no plate appearance. The result reads `pitch_outcome = "no_pitch"` (`NO_PITCH`; `PlayResult.no_pitch` is True) and `pa_voided = "pickoff_third_out"`. The batting order does not move, so the same batter leads off the next inning at 0-0. Every reader of a per-pitch result must skip a no-pitch result; the game driver's pitch total and the served play-by-play do |
-| the timing | the count at a real throw is not stored. The pickoff rows sit at 0-0, and 97% of the tagged pitch rows are a plate appearance's first pitch, so the simulator's pickoffs happen at 0-0. The number per plate appearance is right; the count is not |
+| candidates | the real pen (`SIM_BULLPEN_SOURCE=box`; code default `synthetic`): the arms the MLB box score lists for the game, minus the rotation (anyone who started one of the team's last five games with 45 or more pitches) and today's starter, minus the arms already used |
+| weights | each a resemblance to the arm the drawn change row brought in, rescaled to a mean of 1: **role** (a Gaussian on the difference in high-leverage entry share, bandwidth **0.1**) · **stuff** (pitcher similarity, power **1**) · **rest** (a Gaussian on days of rest capped at five, bandwidth **0.5**) · **pitched in the last two days** (a mismatch × **0.25**) · **pitches over the last three days** (a Gaussian, bandwidth **10**) · **hand** (off, weight 1.0) |
+| code defaults | every reliever weight is off in code (`SIM_RELIEF_*`); with all off, the pick is positional: the first listed arm in a late high-leverage spot, else the last |
 
-**Why the pickoff rows.** The pool tags a real pickoff to one pitch row of its plate
-appearance. A throw before the plate appearance's first pitch has no such row, so the pool
-dropped it. The pool held about 72% of real pickoff outcomes: 22% of those with a stealable
-runner came before the first pitch, and 7% had no stealable runner (a runner held at third, a
-throw to first with first and second occupied) and stay out by design. The pickoff rows bring
-the dropped ones back, so the pool's pickoff outcomes rise from about 0.15 to about 0.19 a game.
+### ③ The intentional walk
 
-### ④b The steal — `steal_draw` (after the pitch's result; SIM-554)
+On a plate appearance's first pitch, with a manager wired: one random number against the **real
+rate** of the plate appearance's cell — runners × outs × seventh inning or later × within one run
+— from `sim.ibb_rates` (carried in the bundle's reference data). No similarity weight.
+
+### ④a The pickoff — `pickoff_draw` (before the pitch)
 
 | | |
 |---|---|
-| pool | the steal opportunity pool's pitch rows; the pickoff rows are never candidates |
-| hard filter | the target base (second or third), the exact outs-balls-strikes count, and the **class of the pitch ⑤b just drew** (ball, called strike, swinging strike, foul, in play, hit by pitch). A class group answers from its own rows however few; a group with no row stages no steal. Nothing falls back to the count group |
-| weights | recency · a Gaussian on the score margin (**bandwidth 2 runs**) · the live runner's **steal-runner similarity** to the row's runner (**power 1**; fitted 12) · the live pitcher's **pitcher-steal similarity** (**power 1**; fitted 12) · the live catcher's **catcher-throwing similarity** (**power 1**; fitted 2) · the batting manager's **aggression** on attempted rows only: his measured steal rate over the league mean, clamped 0.05–4 (a weight, never a gate) |
+| pool | the steal opportunity pool: one row per real pitch with a stealable runner, attempted or not, plus the **pickoff rows** (real pickoffs thrown before any pitch of their plate appearance) |
+| hard filter | the target base (second or third) and the exact outs-balls-strikes count. Every row of that count group is a candidate, pitch rows and pickoff rows alike. A group with no pickoff outcome skips the draw |
+| weights | the steal draw's own (④b) **without** the manager's aggression |
+| the row answers | picked off (an out; a caught stealing when the runner was breaking) · an errant throw (the runner moves up one base) · neither |
+| resolves | at once, before the pitch. A pickoff that makes the third out ends the half with no pitch thrown: the result reads `pitch_outcome = "no_pitch"` and `pa_voided = "pickoff_third_out"` |
+
+The pickoff rows sit at a 0-0 count, so the simulator's pickoffs happen mostly at 0-0.
+
+### ⑤a The pitch thrown — `draw`
+
+| | |
+|---|---|
+| pool | every pitch of the window, split by the batter's hand |
+| hard filter | the **cell**: runners (8) × outs (3) × count (12) × score band (≤−3, −2 to −1, 0, +1 to +2, ≥+3) × batting side (2) = 2,880 cells (`SIM_PITCH_CELL_INDEX`, code default 0, production 1). A sub-cell under 20 rows (`SIM_PITCH_MIN_CELL`) widens: the score bands, then the sides, then the counts. Off, the draw weighs the whole pool and conditions on the count alone |
+| weights | recency · the live pitcher's **pitcher similarity**, power **1** (`SIM_PITCH_PITCHER_POWER`) · the live batter's **batter similarity**, power **1** (`SIM_PITCH_BATTER_POWER`) · a Gaussian on the base-out columns (outs, runners, inning, margin), bandwidth **2.0** (`SIM_SIT_SIGMA`) · **fatigue**: a Gaussian on the gap between the live pitcher's times through the order and the row's, bandwidth **0.5** (`SIM_FATIGUE_TTO_SIGMA`, code default 0), normalized within each count so it changes which pitch is thrown, not how often |
+| the row answers | the pitch thrown (with the split off, also its result) |
+
+### ⑤b The pitch's result — `_result_draw`
+
+Production splits the pitch into two draws (`SIM_PITCH_RESULT_SPLIT`, code default 0, production
+1). The result draw runs over the same cell rows as ⑤a.
+
+| | |
+|---|---|
+| weights | ⑤a's weight before its batter power · a Gaussian on the **pitch-to-pitch distance** from the pitch just thrown (velocity, breaks, spin, release, plate location; z-scored and weighted as the pitch engine weights them), bandwidth **1.0** (`SIM_RESULT_PITCH_SIGMA`) · an inverse-density correction so crowded pitch regions are not over-drawn, power **1.0** (`SIM_RESULT_DENSITY_POWER`) · the pitcher factor re-raised to power **1** (`SIM_RESULT_PITCHER_POWER`) · the batter factor at power **1** (`SIM_RESULT_BATTER_POWER`) · the catcher receiving ratio (off) |
+| the row answers | the outcome class; whether the pitch got away (⑧); and, for a ball in play, the **born batted ball** — its exit velocity, launch angle, spray, distance, class and park — which ⑥ fields |
+| the class | the pool build reads it from the pitch code. A foul tip or a foul bunt with two strikes is strike three (the foul-tip coding, SIM-553) |
+
+### ④b The steal — `steal_draw` (after the result)
+
+| | |
+|---|---|
+| pool | the steal opportunity pool's pitch rows (the pickoff rows are never candidates) |
+| hard filter | the target base · the exact outs-balls-strikes count · the **class of the pitch ⑤b drew**. A class group answers from its own rows however few; an empty group stages no steal |
+| weights | recency · a Gaussian on the score margin, bandwidth **2 runs** (a sampler constant) · the live runner's **steal-runner similarity**, power **1** · the live pitcher's **pitcher-against-the-run similarity**, power **1** · the fielding catcher's **catcher-throwing similarity**, power **1** · the batting manager's **aggression** on attempted rows only: his steal-order rate over the league mean, clamped to 0.05–4 (a weight, never a gate) |
 | the row answers | went or stayed; safe or caught |
-| no draw | on a pitch whose pickoff draw gave an outcome (one mover per pitch) |
-| the third out first | with two outs, a third strike the catcher holds is the third out before any throw: a steal staged on that pitch is void — no stolen base, no caught stealing, `steal_voided = "third_out_first"` (the plan's decision 3, taken by the owner 2026-10-01; it holds in both orders). The real pool holds no attempt on such a pitch, so the class draw never stages one; the rule guards a steal that a test or the old order staged. With two outs, a caught stealing on ball four keeps today's path: the walk is credited and the caught stealing is the third out |
-
-**Why the class.** The old single draw read only the count, so 36% of its attempts landed on
-a foul, a ball in play or a hit by pitch, where real runners never earn one. Real attempts
-ride a ball 64% of the time, a called strike 25%, a swinging strike 10%, a foul 1%, and never
-a ball in play or a hit by pitch. Summed over the loop's own pitch mix, the class rates give
-the old attempt volume, so the change moves where the attempts land, not how many there are.
-A replay of 74,296 real pitches of 2026 picked this design among eleven (2026-09-30;
-`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`, §11).
-
-### ⑤ The pitch — two draws by design (`draw` through the cell index; `_result_draw`)
-
-The design (the play-picker redesign, part B, 2026-09-08) splits the pitch into two draws.
-**⑤a the pitch thrown** is weighted toward the live pitcher's look-alikes. **⑤b the pitch's
-result** is a second draw among rows whose pitch resembles the one just thrown, weighted toward
-the live batter. It is ⑤b's row, not ⑤a's, whose batted ball feeds the fielding draw. Both
-draws run in production (`SIM_PITCH_RESULT_SPLIT=1` since 2026-09-14, by owner decision): the
-split was fitted on the pool's own conditionals (pitcher 16 in both draws, batter 8 in the
-result draw), held OFF while the pool-totals lane read strikeouts 2.4% short (2026-09-09), and
-flipped on the accuracy comparison's read (the starter strikeout market −0.0155 Brier on 250
-games of 2024, the moneyline informative for the first time; the strikeout probabilities sit
-6.5 points low — the calibration layer's job). With the switch off, ⑤a's row supplies both the
-pitch and its result.
-
-| | |
-|---|---|
-| pool | every pitch of 2023–2026, split into two pools by the **batter's hand** (the one hard filter besides the cell) |
-| hard filter | the **cell**: runners (8) × outs (3) × count (12) × score band (5: ≤−3, −2..−1, 0, +1..+2, ≥+3) × batting side (2) = 2,880 cells; under **20 rows** the cell widens: the score band first, then the side, then the count |
-| ⑤a the pitch thrown — weights (production) | recency · the live pitcher's **pitcher similarity** to the row's pitcher (**power 1** since 2026-09-16, `SIM_PITCH_PITCHER_POWER`; fitted 16, in production 2026-09-14 → 16; power 1 reads nearly flat) · the live batter's **batter similarity** (**power 1**) · a Gaussian on the base-out situation (outs, runners, inning, margin; **bandwidth 2.0**) · the **fatigue weight**: a Gaussian on the gap between the live pitcher's times through the order and the row's (**bandwidth 0.5**, `SIM_FATIGUE_TTO_SIGMA`; landed 2026-09-14 by owner decision; the pitch-count term `SIM_FATIGUE_PC_SIGMA` OFF) · the batting side within the cell (weight 1.0 = neutral; the cell already filters it) |
-| ⑤b the pitch's result — weights (production) | over the same cell rows: the per-plate-appearance weight × a Gaussian on the **pitch-to-pitch distance** from the pitch just thrown (the pitch engine's metric over velocity, breaks, spin, release and location; **bandwidth 1.0**, `SIM_RESULT_PITCH_SIGMA`) × a density correction, so crowded pitch regions are not over-drawn (`SIM_RESULT_DENSITY_POWER` 1.0) × the pitcher re-raised to **power 1** (`SIM_RESULT_PITCHER_POWER`; fitted 16) × the batter at **power 1** (fitted 8; (`SIM_RESULT_BATTER_POWER`) × the catcher receiving ratio (off) |
-| also built and OFF | the fatigue weight's pitch-count term · the catcher receiving ratio |
-| the row answers | ⑤a: the pitch thrown. ⑤b: the pitch's outcome — and, for a ball in play, the **born batted ball**: its exit velocity, launch angle, spray and distance, which the fielding draw then fields |
-| the outcome class | the pool build reads it from the MLB feed's pitch code (`SQL_OUTCOME_TYPE`). **A foul tip or a foul bunt with two strikes is strike three** (`swinging_strike`, SIM-553, 2026-09-25); below two strikes it is a foul. The count machine then ends the plate appearance. Before SIM-553 the pool coded it as a foul the machine plays on, and the count chain put the simulator's loss at 4.4% of its strikeouts. An unknown code fails the pool build. The pool was rebuilt on this coding on 2026-09-25 (builder `sim553.1`, all ten seasons); `tests/acceptance/test_pool_label_check.py` checks the pool's labels against real plate appearances (within 0.5%) |
+| two outs | a third strike the catcher holds is the third out first, so a staged steal is void (`steal_voided = "third_out_first"`) |
 
 ### ⑥ The batted ball — the fence stage, then `battedball_draw`
 
 | | |
 |---|---|
-| the fence stage (ON) | for an air ball, the born ball's carry against the live park's real fence decides home run / not before any draw (`park_geometry.json`; the band is 0 feet). **The carry is read in the live park's air** (2026-09-22, `SIM_CARRY_OFFSET`): the ball's own distance plus the live park's carry offset minus the offset of the park it was hit in — one number per park from the pool's own home runs (Coors +21 ft, Kauffman +10, the rest within ±7), stored in the geometry document; the same number is the ball's distance in the draw below. The fence line is one number per park, ten-degree spray sector (eleven sectors over ±55°, so a ball down the line has its own) and **season group** (a wall that moved — Camden Yards' left field, 2025 — opens a new group; the live season picks it). A thin sector rests on the park's published fence distances plus the league's offset, blended toward its own balls at ten home runs. **Certified 2026-09-21 (SIM-478/479/480):** on every real air ball of the pool window the call is right on 91.7% of the balls it sends over and misses 7.8% of the home runs; `scripts/fence_check.py` re-runs it in two minutes. |
-| pool | one row per real ball in play with its whole base-out transition |
-| hard filters | the exact base-out cell (the drawn row must be legal here) · the born ball's **class** (ground ball, line drive, fly ball, popup, bunt) · for a wall-zone air ball (300+ ft in the live air) called short: the **wall margin** — rows whose ball landed within **15 ft** of the same distance from THEIR park's fence as the born ball is from the live one (`SIM_BB_MARGIN_BAND`, 2026-09-22; the cell's rows when fewer than 20 remain) · the **batting side** (the home weight is 0.0: rows of the other side are excluded — this is where home-field advantage comes from) |
-| weights | recency · a Gaussian on the born ball (exit velocity, launch angle, spray, distance; z-scored on the **born ball's class** — a fly ball against the fly balls' spread, 64 ft of distance, not the whole pool's 135 — with the exponent per feature, `SIM_BB_BORN_PER_FEATURE`; **bandwidth 1.0**; 2026-09-22) · the live batter's **batter similarity** (**power 1**; fitted 4) · a Gaussian on the situation's soft dimensions (balls, strikes, inning, margin; bandwidth 2.0) · the **platoon**: rows whose pitcher hand does not match the live matchup × **0.6** · the live defender at the row's fielded position: **fielder similarity** to the row's fielder (**power 1**; fitted 1.2, per position) · the park: a Gaussian on the run factor (**bandwidth 0.02**), only for wall-zone balls |
-| the row answers | the event and where every runner ends up (the transition) |
+| pool | one row per real ball in play, with its whole base-out transition (each runner's and the batter's destination) |
+| hard filters, in order | the exact base-out cell (always; the row must be legal here) · the born ball's **class** (ground ball, line drive, fly ball, popup, bunt; `SIM_BB_CLASS_FILTER`, production 1) · the **fence stage** (`SIM_FENCE_STAGE`, production 1): an air ball's carry against the live park's fence at its direction keeps the home-run rows (over) or drops them (short); a ground ball, popup or bunt is always short; the band is 0 feet (`SIM_FENCE_MARGIN`) · the **wall-margin band** (`SIM_BB_MARGIN_BAND`, production **15 ft**): a line drive or fly ball of 300+ feet the fence did not call over keeps only rows that landed as near their own park's fence; fewer than 20 survivors leave the rows unchanged |
+| the carry | the born ball's distance plus the live park's carry offset minus the offset of the park it was hit in (`SIM_CARRY_OFFSET`, production 1); the offsets and the fence lines (ten-degree sectors from −55° to +55°, one line per park and season group) live in `park_geometry.json` in the bundle |
+| weights | recency · the live batter's **batter similarity**, power **1** (`SIM_BB_BATTER_POWER`) · a Gaussian on the soft situation (balls, strikes, inning, margin), bandwidth **2.0** · the **platoon**: rows whose pitcher threw with the other hand × **0.6** (on with `SIM_BB_PLATOON=1`; the 0.6 is a constructor default) · the **batting side**: rows of the other side × **0.0** (`SIM_HOME_OFF_WEIGHT`, code default 1.0), so home-field advantage comes from the pool's own home and away rows · the live defender at the row's position: **fielder similarity**, power **1**, rescaled to a mean of 1 within each position · the **park**: a Gaussian on the run factor, bandwidth **0.02** (`SIM_PARK_KERNEL_SIGMA`), only for a wall-zone ball (`SIM_PARK_WALL_ZONE_ONLY=1`) · the **born ball**: a Gaussian on exit velocity, launch angle, spray and distance, z-scored on the born ball's own class, bandwidth **1.0** per feature (`SIM_BB_BORN_SIGMA`, `SIM_BB_BORN_PER_FEATURE`), times an inverse-density correction (power 1.0) |
+| the row answers | the event and where every runner ends up |
 
-### ⑦ The extra bases — `advancement_draw` (five decisions)
+### ⑦ The extra bases — `advancement_draw`
 
-First-to-third on a single; second-to-home on a single; first-to-home on a double; the tag-up
-from third (and second) on a fly out; the batter's stretch for the extra base. Lead runner
-first; a trailing runner cannot pass.
+Five decisions belong to the runners, so the fielding row does not decide them: first to third on
+a single, second to home on a single, first to home on a double, the tag-ups on a caught fly
+ball, and the batter's stretch for an extra base. The lead runner goes first; a trailing runner
+cannot pass him.
 
 | | |
 |---|---|
-| pool | one row per real opportunity for that exact decision, attempted or not |
-| hard filter | the decision itself (scenario, from-base, to-base) |
-| weights | recency · a Gaussian on the throw geometry (exit velocity, launch angle, spray, distance, outs; z-scored, **bandwidth 1.0**) · the live runner's **advancement-runner similarity** (**power 1**; fitted 20) · the live fielder's arm against the row fielder's: **fielder similarity** at the fielded position (**power 1**; fitted 1.2) |
-| the row answers | went or held; safe or out; an extra base on a bad throw |
+| pool | one pool per decision (scenario, from base, to base), one row per real opportunity, attempted or not |
+| weights | recency · a Gaussian on the z-scored throw geometry (exit velocity, launch angle, spray, distance, outs), bandwidth **1.0** (a sampler constant) · the live runner's **advancement-runner similarity**, power **1** · the live fielder's **fielder similarity** at his position, power **1** |
+| the row answers | went or held; safe or out; an extra base on a bad throw. A tag from third that scores makes the play a sacrifice fly |
 
-### ⑧ Got-away and dropped third strike (ON)
+### ⑧ Got-away and the dropped third strike
 
-The drawn pitch row's own fact: if that real pitch got away (wild pitch / passed ball /
-uncaught third strike), the runners advance one base and a striking-out batter may reach
-(first base open, or two outs). No weight; the row carries it.
+`SIM_GOT_AWAY` (code default 0, production 1). The result row's own fact: if that real pitch got
+away (a wild pitch, a passed ball or an uncaught third strike), every runner moves up one base and
+a runner on third scores with no RBI. No weight; the row carries it.
 
-- **The rule reads the bases at the pitch.** A steal runs on the pitch, so the loop reads
-  first base and the outs from before the steal resolved; a pickoff comes before the pitch,
-  so the loop reads the state after it. The steal is drawn after the result (④b), but it
-  still runs on the pitch.
-- **One mover per pitch.** When a steal or a pickoff resolved the pitch's baserunning, the
-  got-away moves nobody (the same rule on every pitch, terminal or not). A pickoff outcome
-  before the pitch also means no steal draw on that pitch.
-- **The runners on a dropped-third-strike reach (SIM-554; the plan's decision 4, taken by the
-  owner 2026-10-01).**
-  The got-away advance runs first: every runner moves up one base while the ball is loose,
-  and a runner on third scores. The batter then takes first, which is now open, so the reach
-  pushes nobody. Real runners moved on 28 of 32 such unforced chances (2023–2026). A steal or
-  a pickoff on the same pitch skips the advance; the reach then pushes forced runners, as a
-  walk does.
-- **The credits on a batter who reaches (SIM-484, 2026-09-23).** The play commits as a
-  strikeout: the pitcher's `k` and the batter's `so` (the batter's own strikeouts, on every
-  strikeout; `k` stays the pitcher's field). A run that scores on the reach — on the advance,
-  or forced home when a steal or a pickoff skipped the advance — pays no RBI. The run stays
-  earned, because the pool's got-away flag does not say wild pitch or passed ball.
-- **The outs on the pitcher's line (SIM-557, 2026-10-07).** The ledger (`_record_outs`) is
-  the one writer of a pitcher's outs. It credits every out when it records it, to the
-  pitcher on the mound. A caught stealing or a pickoff out on a pitch that does not end the
-  plate appearance is credited like any other out. The game result counts the outs played
-  (`outs_played`), and the pitchers' outs equal it on every game. Each play result names its
-  own pitcher and fielding side (`pitcher_id`, `fielding_team`); the win module reads them,
-  so the last out of a half goes to the pitcher who recorded it. The box line counts batters
-  faced (`bf`), and the box score lists a pitcher who records an out or faces a batter. No
-  play changes.
+- **One mover per pitch.** When a steal or a pickoff moved runners on the pitch, the got-away
+  moves nobody.
+- **The dropped third strike.** On a swinging strike three that got away, with first base open
+  or two outs (read as they stood at the pitch), the batter reaches first. The runners advance
+  first, then the batter takes first. The play still counts as a strikeout for the pitcher (`k`)
+  and the batter (`so`), and a run that scores on it pays no RBI.
 
-### Summary of the fitted values in production
+## 3. Production values at a glance
 
-**Every similarity POWER is 1 since 2026-09-16** (owner ruling: the powers are fitted
-together in the sweep of the tunable parameters; the table keeps the fitted values the 1s
-replace, because the sweep starts from them). The bandwidths and mismatch weights stand.
+The fitted values are the starting points of the designed experiment; they come from the
+comments in `docker-compose.yml`.
 
-| factor | where | value | fitted against |
-|---|---|---|---|
-| pitcher similarity | pitch draw / result draw | power 1 / 1 (fitted 16 / 16) | the pool's own per-pitcher conditionals (redesign part F; flipped 2026-09-14 on the accuracy comparison) |
-| batter similarity | pitch draw / result draw / fielding draw | power 1 / 1 / 1 (fitted 1 / 8 / 4) | the pool's mix by batter |
-| fielder similarity (per position) | fielding + advancement | power 1 (fitted 1.2) | the pool's per-opportunity conditionals |
-| steal-runner / pitcher-steal / catcher-throwing | pickoff + steal draws | 1 / 1 / 1 (fitted 12 / 12 / 2) | the pool's steal conditionals |
-| advancement-runner | advancement draws | 1 (fitted 20) | the pool's advancement conditionals |
-| manager-usage | pitching change | 1 (fitted 4) | the managers' own pull depth by tercile (2026-09-13) |
-| reliever weights | reliever draw | role 0.1 · rest 0.5 · two-day 0.25 · three-day 10 | the pool's entering arms (2026-09-13) |
-| situation Gaussians | pitch / fielding / change / pickoff + steal / advancement | 2.0 / 2.0 / 1.0 / 2.0 / 1.0 | code defaults (the change draw's fitted 1.0) |
-| born-ball Gaussian | fielding draw | 1.0 | the pool's conditionals (redesign part F) |
-| park Gaussian | fielding draw, wall zone only | 0.02 | SIM-476 |
-| platoon (pitcher hand) | fielding draw | opposite-hand rows × 0.6 | SIM-413 default |
-| batting side | fielding draw | hard (weight 0.0) | owner ruling 2026-08-30 |
-| fatigue (times through the order) | pitch draw | bandwidth 0.5; the pitch-count term OFF | the pool's own within-pitcher effect at the third time through (fitted 0.7; the owner landed 0.5 on 2026-09-14 — the accuracy comparison reads both flat) |
-| recency | every pool | 2.0 / ×0.75 per season / floor 0.25 | SIM-076 |
-| cell minimum | pitch draw / change draw / steal class group | 20 rows / 20 rows / none | the SIM-451 census; a steal class group answers from its own rows (SIM-554) |
-| the running game on the pitch (`SIM_STEAL_PITCH_CLASS`) | pickoff before the pitch, steal after it in the class group | 1 (0 = the single pre-pitch draw) | the replay of 74,296 real pitches of 2026, eleven designs (SIM-554, 2026-09-30) |
-| pitch-to-pitch Gaussian + density correction | result draw | bandwidth 1.0 / power 1.0 | the pool's conditionals (redesign part F) |
-| reliever stuff (pitcher similarity in the reliever draw) | reliever draw | power 1 since 2026-09-16 (was OFF at 0) | — |
-| OFF | the fatigue weight's pitch-count term, catcher receiving, pitch-similarity on the fielding draw, reliever hand | | |
+| Factor | Draw | Production | Code default | Fitted value |
+|---|---|---|---|---|
+| pitcher similarity | ⑤a / ⑤b | power 1 / 1 | 1 / 1 | 16 / 16 |
+| batter similarity | ⑤a / ⑤b / ⑥ | power 1 / 1 / 1 | 1 / 1 / 1 | 1 / 8 / 4 |
+| fielder similarity | ⑥, ⑦ | power 1 | 1 | 1.2 |
+| steal-runner · pitcher-against-the-run · catcher-throwing | ④a, ④b | power 1 · 1 · 1 | 1 · 1 · 1 | 12 · 12 · 2 |
+| advancement-runner | ⑦ | power 1 | 1 | 20 |
+| manager-usage | ① | power 1 | 0 (off) | 4 |
+| reliever stuff | ② | power 1 | 0 (off) | off |
+| reliever role · rest · two-day · three-day | ② | 0.1 · 0.5 · 0.25 · 10 | all off | as production |
+| Gaussian bandwidths: situation · change situation · score margin · throw geometry | ⑤a and ⑥ · ① · ④ · ⑦ | 2.0 · 1.0 · 2 runs · 1.0 | the same | — |
+| fatigue (times through the order) | ⑤a | 0.5 (owner decision) | 0 (off) | 0.7 ([the fatigue fit](../audit/2026-09-12-sim518-fit-plan.md)) |
+| pitch-to-pitch Gaussian · density power | ⑤b | 1.0 · 1.0 | the same | — |
+| born-ball Gaussian | ⑥ | 1.0, per feature | 0 (off) | — |
+| park Gaussian | ⑥, wall zone only | 0.02 | 0 (off) | — |
+| platoon | ⑥ | opposite hand × 0.6 | off (`SIM_BB_PLATOON=0`) | — |
+| batting side | ⑥ | × 0.0 (hard) | 1.0 (off) | — |
+| wall-margin band | ⑥ | 15 ft, at least 20 rows | 0 (off) | — |
+| cell minimum | ⑤a / ① / ④b | 20 / 20 / none | the same | — |
+| recency | every pool | 2.0, ×0.75 a season, floor 0.25 | the same | — |
 
-## 3. The similarity scores
+## 4. Built and OFF
 
-Each engine turns two players' season profiles into one number from 0 (nothing alike) to 1
-(the same player). The number is built from **sub-scores**, each a Gaussian ("RBF") on the
-standardized difference of a feature group with its own bandwidth (σ), combined with fixed
-weights. Feature-level numbers in brackets are the within-group weights. Thin profiles are
-shrunk toward the league average before scoring (the "EB prior": how many games of evidence
-it takes to trust a player's own number). Nightly, each engine scores every pair of profiles
-into a matrix the draws look up.
+| Factor | Switch | Note |
+|---|---|---|
+| catcher receiving ratio (⑤) | `SIM_CATCHER_RECEIVING=0` | moves weight between taken balls and called strikes by the catcher's framing; the enable is open work (the catcher receiving enable, SIM-526) |
+| fatigue's pitch-count term (⑤a) | `SIM_FATIGUE_PC_SIGMA=0` | |
+| pitch similarity on the fielding draw (⑥) | `SIM_BB_PITCH_SIGMA=0` | the born batted ball carries the pitch's effect instead |
+| batting-side weight on the pitch draw (⑤a) | `SIM_PITCH_HOME_OFF_WEIGHT=1.0` | the cell already filters the side |
+| reliever hand (②) | `SIM_RELIEF_HAND_OFF_WEIGHT=1.0` | |
 
-### Pitcher — `pitcher_similarity.py` (feeds the pitch draw, the pitching-change draw, reliever "stuff")
+## 5. The similarity scores
 
-- **Arsenal, weight 0.65** — a Gaussian-mixture fingerprint of every pitch he throws over
-  eight dimensions: velocity, induced vertical break, horizontal break, spin rate, spin axis,
-  release x, release z, release extension. Two arsenals are compared by the Wasserstein-2
-  distance (how much "work" it takes to move one pitch distribution onto the other), turned
-  into a score by exp(−W₂ / 4.10), calibrated so the median pair scores 0.50.
-- **Command, weight 0.35** — RBF (σ 1.05) over: walk rate, strikeout rate, called-plus-whiff
-  rate (CSW), zone take rate, chase rate, zone rate, whiff rate.
-- Shrinkage prior 5. Note: this composite is what the pitch draw raises to power 1 today; the
-  strikeout market's blindness (SIM-548) is the question of whether this score, at any power,
-  carries a pitcher's strikeout ability into the draw.
-- Not features, by owner decision (SIM-533, 2026-09-19): Savant's arm angle, active spin and
-  spin-axis deviation. The arsenal already reads the release point (three of its eight
-  dimensions), and the spin numbers are formulas on the other five. On 67,941 same-hand pairs
-  none adds more than 0.009 R² (the share of the pairs' outcome gap the fit explains) on the
-  four outcome rates the score does not read; on all nine rates the arm-angle gap adds 0.026
-  with a NEGATIVE coefficient (−0.17) — the gap is already in the score, and that coefficient
-  is the sweep's per-dimension W2-weight lead, not a feature. Savant's per-pitch arm angle
-  stays stored and unread in `raw.savant_pitch_tracking`. The record sits in the engine
-  beside `GMM_FEATURE_NAMES` and in `similarity.md`.
+Each engine in [`similarity/engines/`](../../similarity/engines/) turns two players' season
+profiles into one score from 0 to 1. A score is built from **sub-scores**: each is an RBF kernel
+(a similarity that falls off as a bell curve with distance) on the standardized gap over one
+feature group, with its own bandwidth σ; fixed weights combine them. A thin profile is first
+shrunk toward the league average: the shrinkage prior is the sample size at which a player keeps
+half of his own number.
 
-### Batter — `batter_similarity.py` (the pitch draw at power 1, the fielding draw at power 1 — fitted 4)
+The nightly rebuild (`python -m pipeline.batch.engine_artifacts --what all`) scores every pair of
+profiles into the bundle's matrices, with the weights and bandwidths written in the engine files.
+The app's calibration report (`/data/calibration.json`) recalibrates the API's own engines; it
+does not reach these matrices.
 
-- **Discipline 0.32** (σ 1.04): first-pitch take rate, chase rate, zone swing rate, contact
+### Pitcher — `pitcher_similarity.py` (matrix `pitcher_sim_matrix`; feeds ⑤a, ⑤b, ① and ②)
+
+- **Arsenal, weight 0.65.** A Gaussian-mixture fingerprint of every pitch he throws over eight
+  dimensions: velocity, induced vertical break, horizontal break, spin rate, spin axis, release
+  x, release z, extension. Two arsenals compare by the Wasserstein-2 distance W₂ (the work it
+  takes to move one pitch distribution onto the other), scored as exp(−W₂ / 4.10), so the median
+  pair scores 0.50.
+- **Command, weight 0.35** (σ 1.0453): walk rate, strikeout rate, called-plus-whiff rate, zone
+  take rate, chase rate, zone rate, whiff rate.
+- Shrinkage prior: 5 pitches. Pitchers compare within the same throwing hand.
+- **Not features, by owner decision (the arm-angle and spin-shape study, SIM-533):** Savant's arm
+  angle, active spin and spin-axis deviation. The arsenal already reads the release point, and
+  the spin numbers follow from the other dimensions; none adds more than 0.009 R² on the outcomes
+  the score does not read. `tests/unit/test_arm_angle_decision.py` guards the decision.
+
+### Batter — `batter_similarity.py` (matrix `batter`; feeds ⑤a, ⑤b and ⑥)
+
+- **Discipline 0.32** (σ 1.0389): first-pitch take rate, chase rate, zone swing rate, contact
   rate, whiff rate, strikeout rate, walk rate.
-- **Batted ball 0.28** (σ 1.08): ground-ball rate, fly-ball rate, pull rate, opposite-field
+- **Batted ball 0.28** (σ 1.0828): ground-ball rate, fly-ball rate, pull rate, opposite-field
   rate, average exit velocity, average launch angle, hard-hit rate, barrel rate.
-- **Platoon 0.12** (σ 1.09): the same-hand versions of chase, zone swing, whiff, walk,
-  strikeout, ground-ball and barrel rates (weight 0.28 when the matchup is a platoon one).
-- **Power 0.08** (σ 0.96): home-run rate, expected batting average, expected slugging, max
-  exit velocity.
-- **Physical 0.20** (σ 1.00; SIM-529): swing tilt, bat speed, stance depth, swing length,
-  distance off the plate, foot separation, stance angle, contact depth, attack angle, attack
-  direction. *Stored, but the nightly batter matrix production reads was built before these
-  were added, so the draws run on the older four-group weights (0.40 / 0.35 / 0.15 / 0.10)
-  until the matrix is rebuilt.*
-- Opposite-hand batters are penalized ×0.92; switch hitters resolve to the hand in play.
+- **Platoon 0.12** (σ 1.0866): chase, zone swing, whiff, walk, strikeout, ground-ball and barrel
+  rates against each pitcher hand.
+- **Power 0.08** (σ 0.9591): home-run rate, expected average, expected slugging, maximum exit
+  velocity. The profile computor writes no expected average or slugging, so both read 0.0 for
+  every batter.
+- **Physical 0.20** (σ 1.0; the batter's physical swing features, SIM-529): swing tilt, bat
+  speed, stance depth, swing length, distance off the plate, foot separation, stance angle,
+  contact depth, attack angle, attack direction.
+- The matrix scores each pair without a pitcher hand, so it uses the weights above. A
+  population with no physical data falls back to 0.40 / 0.35 / 0.15 / 0.10 over the other four.
+- A batter of the other side scores × 0.92; a switch hitter against a one-sided batter × 0.97.
+  Shrinkage prior: 5 plate appearances.
 
-### Fielder — `fielder_similarity.py` (per position; the fielding and advancement draws at power 1 — fitted 1.2)
+### Fielder — `fielder_similarity.py` (matrices `fielder_1B` … `fielder_RF`; feeds ⑥ and ⑦)
 
-- **Infield**: range 0.45 (σ 1.05, fitted 2026-09-17: outs above average to the glove side
-  0.620, arm side 0.548, charging 0.452, going back 0.535; catch percentage added 0.529;
-  **Savant's per-position outs above average per 100 of our chances at 0.356** — every weight
-  the fitted year-to-year repeat within a position; the plan started Savant's figure at 0.45)
-  · double play 0.30
-  (σ 0.37: DP above expected, DP attempt rate, DP success rate; the pivot for second basemen)
-  · errors 0.15 (fielding, throwing) · specialty 0.10 (bunt fielding; the first baseman's
-  scoop rate).
-- **Outfield**: range 0.40 (σ 1.06, fitted 2026-09-17; nine features: the same five OAA
-  components at 0.344 / 0.373 / 0.677 / 0.594 / 0.203; **Savant's per-position outs above
-  average per 100 of our chances at 0.472; the outfield jump — reaction 0.775, burst 0.658,
-  route 0.743**, feet against the league in the first three seconds after contact, each at
-  its fitted repeat (the plan started them at 0.50 / 0.81 / 0.69 / 0.77); the three jump
-  parts shrink on their own plays, prior 25, and a missing jump is the league mean) · arm
-  0.30 (σ 0.99, fitted
-  2026-09-17: the throw velocity from Savant's arm-strength board at weight 0.844; the
-  advancement prevention at 0.137 and the thrown-out rate at 0.240 from our own advancement
-  pool, per fielder × position, the two rates shrunk on the arm's own chances, prior 50) ·
-  star catches 0.15 (five-star, four-star, routine catch rates) · errors 0.15.
-  *The outfield arm block (SIM-550) landed on 2026-09-17, code and data: the fill from the
-  advancement pool replaced the runner-view figures the September Savant join wrote, the
-  three outfield matrices were rebuilt. The weights are the fitted year-to-year repeats
-  WITHIN a position; the plan's 0.60 for the prevention pooled the positions and was mostly
-  the position label.*
-  *Savant's outs above average and the outfield jump (SIM-532) landed on 2026-09-17, code
-  and data: the two boards loaded for 2016–2026, the fielder chain recomputed
-  (`scripts/probes/fielder_profile_recompute.py`), the calibration refitted, the seven fielder
-  matrices rebuilt. The fielder split by batter hand — a
-  fielder's outs above average against left-handed batters minus his figure against
-  right-handed batters — was measured and left out: within a position it repeats at 0.04
-  to 0.14 for outfielders and only at shortstop (0.36 to 0.38) on the infield. It is stored
-  in the raw table and read by nothing. Savant's figure repeats within a position at 0.38 to
-  0.61 in the outfield and 0.34 to 0.63 on the infield against 0.04 to 0.47 for our own
-  range components; the jump at 0.80 to 0.92.*
-- Shrinkage prior 15; never scored across positions.
+Scored within one position only; pitchers and catchers have no fielder matrix. Shrinkage prior:
+15 batted balls.
 
-### Catcher — `catcher_similarity.py` (the throwing sub-score feeds the pickoff and steal draws at power 1 — fitted 2; the full score fed the retired receiving kernel)
+- **Infield:** range 0.45 (σ 1.0549: outs above average to the glove side, to the arm side,
+  charging and going back; catch percentage added; Savant's outs above average per 100 chances)
+  · double play 0.30 (σ 0.372: double plays above expected, attempt rate, success rate; the
+  pivot for second basemen and shortstops) · errors 0.15 (fielding, throwing) · specialty 0.10
+  (bunt fielding; the first baseman's scoop).
+- **Outfield:** range 0.40 (σ 1.0614: the same five components, Savant's outs above average,
+  and the outfield jump — reaction, burst, route) · arm 0.30 (σ 0.9912: throw velocity, the
+  runner advances he prevents, the runners he throws out) · star catches 0.15 (σ 0.449: five-star,
+  four-star and routine catch rates) · errors 0.15.
+- Inside the range and arm groups, each feature's weight is its fitted year-to-year repeat
+  within a position; `make calibrate` refits them and the engine file holds the copy.
 
-- **Framing 0.53** (σ 0.92): called-strike rate above expected, framing runs, shadow-zone
-  strike rate, heart-zone strike rate.
-- **Blocking 0.24** (σ 1.05): block success rate, passed balls per nine, wild-pitch prevention.
-- **Throwing 0.14** (σ 0.98): pop time, caught-stealing rate, arm strength.
-- **Deterrence 0.09** (σ 1.00): the steal-attempt rate against him.
-- Shrinkage prior 15.
+### Catcher — `catcher_similarity.py` (matrix `catcher_throwing`; feeds ④a and ④b)
 
-### Steal runner — `baserunner_steal_similarity.py` (the pickoff and steal draws at power 1 — fitted 12)
+- The draws read the **throwing** sub-score alone (σ 0.98): pop time, caught-stealing rate, arm
+  strength.
+- The full score (framing 0.53, blocking 0.24, throwing 0.14, deterrence 0.09) goes into the
+  `catcher` matrix, which no draw reads. Shrinkage prior: 15 called pitches.
 
-*SIM-531 landed on 2026-09-16, code and data: the boards loaded, the profiles rebuilt, the
-bandwidths fitted (lead 0.9836), the `runner_steal` matrix rebuilt at 2,585 profiles.*
+### Steal runner — `baserunner_steal_similarity.py` (matrix `runner_steal`; feeds ④a and ④b)
 
 - **Tendency 0.45** (σ 1.05): steal-attempt rate from first, from second.
-- **Lead 0.45** (σ 0.9836, fitted 2026-09-16; SIM-531):
-  the runner's lead off the bag before the pitch, in feet, and his jump — the extra distance
-  he gets on the pitcher's delivery — from Savant's Basestealing Run Value board at n=1
-  (every runner with one chance). The jump repeats year to year at 0.80–0.85; the lead at
-  0.73. A runner with no Savant row is scored over tendency and success alone, never
-  against a lead of 0.0 ft.
-- **Success 0.10** (σ 1.02): steal success rate from first, from second — it repeats at
-  only 0.13–0.26, which is why its weight fell from 0.38.
-- Every runner who HAD a chance carries a profile, including the ones who never went. The
-  confidence, the tendency and the lead shrink on the runner's chances — plate appearances
-  begun on first plus those begun on second, never below his attempts (prior 50), so no
-  profile reads confidence 0; the success rate shrinks on attempts (prior 20). A runner
-  with no measured lead is not shrunk on the lead at all (his NaN stays out of the
-  normalizer). The `baserunner_steal` league-average row the shrinkage needs never
-  existed before the SIM-531 recompute of 2026-09-16 wrote it.
+- **Lead 0.45** (σ 0.9836): the lead off the bag before the pitch and the jump on the delivery,
+  in feet, from Savant's basestealing board. A runner with no Savant row is scored on tendency
+  and success alone.
+- **Success 0.10** (σ 1.02): success rate from first, from second.
+- Every runner who had a chance has a profile, including those who never ran (the matrix scores
+  thin profiles too). Shrinkage priors: 50 chances (tendency, lead), 20 attempts (success).
 
-### Pitcher against the run — `pitcher_steal_similarity.py` (the pickoff and steal draws at power 1 — fitted 12)
+### Pitcher against the run — `pitcher_steal_similarity.py` (matrix `pitcher_steal`; feeds ④a and ④b)
 
-*SIM-531 landed on 2026-09-16, code and data: the hold bandwidth fitted (0.9897), the
-`pitcher_steal` matrix rebuilt at 2,390 profiles.*
+- **Outcome 0.35** (σ 1.10): stolen bases allowed per nine, caught-stealing rate when runners
+  go, attempt rate allowed.
+- **Hold 0.65** (σ 0.9897): the lead and the jump he allows, in feet, from Savant's pitcher
+  running-game board. A pitcher with no Savant row is scored on the outcome group alone.
+- Shrinkage prior: 25 baserunner events.
 
-- **Outcome 0.35** (σ 1.10): stolen bases allowed per nine, caught-stealing rate when
-  challenged, the attempt rate allowed. (Delivery and pickoff mechanics were trimmed in
-  SIM-408 — the data does not carry them.)
-- **Hold 0.65** (σ 0.9897, fitted 2026-09-16; SIM-531): the lead the pitcher
-  allows before the pitch and the jump he gives up on the delivery, in feet, from Savant's
-  Pitcher Running Game board at n=1. The jump allowed repeats at 0.89–0.90 — the most
-  stable number either steal model holds. A pitcher with no Savant row is scored on the
-  outcome group alone.
-- Shrinkage prior 25 on baserunner events, both groups (an unmeasured hold is not shrunk);
-  the `pitcher_steal` league-average row never existed before the SIM-531 recompute of
-  2026-09-16 wrote it.
+### Advancement runner — `baserunner_similarity.py` (matrix `runner_adv`; feeds ⑦)
 
-### Advancement runner — `baserunner_similarity.py` (the advancement draws at power 1 — fitted 20)
+- **Speed 0.35** (σ 0.8171): sprint speed.
+- **Aggression 0.40** (σ 1.0478): extra-base attempt rates (overall, first to third, second to
+  home, first to home, tag-up), the stop rate, and how often he tried above a typical runner in
+  the same chances (from Savant's baserunning board; missing when he has no Savant row, and then
+  left out of the distance).
+- **Success 0.25** (σ 1.0): the matching success rates.
+- The matrix scores thin profiles too. Shrinkage prior: 15 extra-base chances.
 
-- **Speed 0.35** (σ 0.82): sprint speed.
-- **Aggression 0.40** (σ 1.05): extra-base attempt rate overall, first-to-third,
-  second-to-home, first-to-home, tag-up; the stop rate; and (SIM-531) how often the runner
-  tried for the extra base ABOVE how often a typical runner would have tried in the same
-  chances — Savant's baserunning board supplies the expectation (repeats at 0.75–0.77
-  against 0.50–0.59 for the raw rate). A runner with no Savant row has no value there: the
-  value stays missing through the shrinkage, and the kernel drops the feature from the
-  distance for that pair instead of reading it as a match. (SIM-531 landed on
-  2026-09-16, code and data; the `runner_adv` matrix was rebuilt at 2,486 profiles, and the
-  calibration file now carries seven aggression weights — the new feature's is the largest,
-  0.565.)
-- **Success 0.25** (σ 1.00): the matching success rates.
-- Shrinkage prior 15.
+### Manager — `manager_similarity.py` (matrix `manager_usage`; feeds ①)
 
-### Manager — `manager_similarity.py` (the USAGE sub-score alone feeds the pitching-change draw at power 1 — fitted 4)
+- The draw reads the **usage** sub-score alone (σ 1.0): the starter's average pitch count, the
+  share of starts ended before 100 pitches, the closer's entry leverage, the high-leverage
+  reliever share, opener rate, bulk-innings rate, the share of available relievers used.
+- The aggression and platoon groups (weights 0.35 and 0.25 of the full score) feed no draw. The
+  steal draw's aggression (④b) reads `steal_order_rate_per_1b_opp` from the manager's profile
+  directly. Shrinkage prior: 30 games managed.
 
-- **Usage 0.40** (σ 1.00): the starter's average pitch count, the share of starts ended
-  before 100 pitches, the closer's entry leverage, the high-leverage reliever share, opener
-  rate, bulk-innings rate, available-reliever usage rate.
-- **Aggression 0.35** (σ 1.05): steal orders per opportunity, hit-and-run rate, sacrifice
-  bunts in high and low leverage, squeeze rate. (The steal weight reads the first of these
-  directly, over the league mean.)
-- **Platoon 0.25** (σ 1.02): pinch-hit rates (same hand, high leverage), late defensive
-  substitutions, double switches, platoon exploitation.
-- Shrinkage prior 30 (games).
+### Pitch-to-pitch — `pitch_pitch_similarity.py` (feeds ⑤b)
 
-### Pitch-to-pitch — `pitch_pitch_similarity.py` (⑤b's pitch-to-pitch Gaussian, ON with the split since 2026-09-14)
+The sampler copies the engine's feature weights (`_PITCH_FEATURE_WEIGHTS` in
+[`simulation/sampler/kernels.py`](../../simulation/sampler/kernels.py); a unit test pins the two
+equal): velocity 1.2, induced vertical break 1.1, horizontal break 1.0, spin rate 0.7, spin axis
+0.5, release x and z 0.6, extension 0.4, plate x and z 0.9.
 
-Velocity 1.2, induced vertical break 1.1, horizontal break 1.0, spin rate 0.7, spin axis
-0.5, release x / z 0.6, extension 0.4, plate x / z 0.9 — the weighted distance between the
-pitch ⑤a drew and each candidate row's pitch, inside a Gaussian of bandwidth 1.0.
+### Engines that feed no draw
 
-### The two engines that do not feed a draw today
-
-- **Situation** — `situation_similarity.py`: a nearest-neighbour tree over inning, half, outs,
-  the three bases, margin, leverage, pitch count, times through, park factor (weights 0.4–1.2).
+- **Situation** (`situation_similarity.py`): a nearest-neighbour index over the inning, the
+  half, outs, the three bases, the margin, leverage, pitch count, times through and the park.
   The draws use their own hard cells and situation Gaussians instead.
-- **Batted ball** — `batted_ball_similarity.py`: exit velocity 1.3, launch angle 1.1, spray
-  angle 0.8. The fielding draw's born-ball Gaussian z-scores the same quantities (plus
-  distance) with equal weights rather than this engine's.
+- **Batted ball** (`batted_ball_similarity.py`): exit velocity 1.3, launch angle 1.1, spray 0.8.
+  The fielding draw's born-ball Gaussian (⑥) measures the same quantities, plus distance, with
+  equal weights.
 
-## 4. Where the values live
+## 6. Where the values live
 
-- Production values: `docker-compose.yml`, the `app` service's `SIM_*` lines (with the reason
-  each was set, in the comments).
-- The acceptance lane runs the same values: `tests/acceptance/conftest.py` `PRODUCTION_FLAGS`
-  (a test holds it equal to the compose file).
-- The unit lane pins every factor OFF: `tests/conftest.py`. The one exception is the running
-  game on the pitch (`SIM_STEAL_PITCH_CLASS`): the unit lane builds its samplers directly, and
-  they run the new order by default; a test that wants the single pre-pitch draw sets
-  `sampler.steal_pitch_class = False` or builds a steal pool with no class.
-- How each value was fitted: `docs/audit/2026-08-28-sim476-fit-plan.md` (the kernels),
-  `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md` (the powers),
-  `docs/audit/2026-09-13-sim427-build-plan.md` (the manager and reliever weights),
-  `docs/audit/2026-09-12-sim518-fit-plan.md` (fatigue, landed at 0.5), and the plan that will
-  re-fit against the betting-line accuracy comparison,
-  `docs/audit/2026-09-14-sim548-accuracy-fit-plan.md`.
+- **Production:** the `app` service's `SIM_*` lines in `docker-compose.yml`, each with the reason
+  in a comment.
+- **Code defaults and meanings:** `simulation/flags.py`.
+- **The unit lane:** `tests/conftest.py` pins nearly every factor off. It leaves
+  `SIM_STEAL_PITCH_CLASS` unpinned: the samplers the unit tests build run the running game on
+  the pitch.
+- **The acceptance lane:** `PRODUCTION_FLAGS` in `tests/acceptance/conftest.py`. Tests in
+  `tests/acceptance/test_band_arithmetic.py` and `tests/unit/test_fence_carry_and_margin.py`
+  check that the fatigue, split, manager, running-game and fence values match the compose file.
+- **The similarity weights and bandwidths:** the engine files in `similarity/engines/`.
+- **How the values were fitted:** [the kernel fit](../audit/2026-08-28-sim476-fit-plan.md),
+  [the play-picker redesign](../audit/2026-09-08-sim523-play-picker-redesign-plan.md),
+  [the manager and pen build](../audit/2026-09-13-sim427-build-plan.md),
+  [the fatigue fit](../audit/2026-09-12-sim518-fit-plan.md) and
+  [the joint accuracy fit](../audit/2026-09-14-sim548-joint-fit-plan.md).

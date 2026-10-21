@@ -4,7 +4,8 @@ opening_line_job.py
 Nightly Opening Line Ingestion Job
 MLB Baseball Simulation Platform
 
-Scheduled to run at 08:00 ET every morning via cron / scheduler.
+No scheduled job runs it today: schedule_opening_line_job registers it with an
+APScheduler scheduler at 08:00 ET, and nothing calls that function.
 
 Why this job is time-critical
 ------------------------------

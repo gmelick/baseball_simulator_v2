@@ -12,7 +12,8 @@
 #   regression ────────┘   (needs: unit-tests)
 #
 # Coverage gate: 80% line coverage required on similarity/ + pipeline/
-# Regression gate: golden-file snapshot comparison for all 9 similarity engines
+# Regression gate: the engine invariant tests (bounded, symmetric, self-excluded
+#   scores); no golden-file snapshots (owner ruling 2026-09-10)
 # =============================================================================
 
 name: CI
@@ -323,8 +324,8 @@ jobs:
   # (test_production_bands.py) needs a 3.2 GB DuckDB, the
   # engine-artifact bundle and Postgres, so it runs only in
   # acceptance-nightly.yml. The band ARITHMETIC half
-  # (test_band_arithmetic.py) needs none of that — 26 tests, pure maths,
-  # 0.6 s measured on 2026-08-10. Until this job existed, CI collected neither
+  # (test_band_arithmetic.py) needs none of that — pure maths, under a
+  # second. Until this job existed, CI collected neither
   # half, so the rule that decides red-or-green for every box-score channel was
   # itself untested on every push.
   #

@@ -1,7 +1,8 @@
 """
 Root test configuration: shared fixtures and pytest hooks.
 
-Fixtures defined here are available to ALL tests (unit, integration, backtesting).
+Fixtures defined here are available to ALL tests (unit, regression, acceptance,
+integration, performance).
 Heavy fixtures that require live infrastructure (PostgreSQL, Redis) live in
 tests/integration/conftest.py and are only instantiated when integration tests run.
 

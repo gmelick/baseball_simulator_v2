@@ -1,184 +1,216 @@
-# Similarity Score Visualization — Design Spec (v1: Pitcher Engine)
+# The Similarity Explorer
 
-*Status: proposed · Owner: Product Manager (Agent 1) · Drafted: 2026-05-09*
+The Similarity Explorer shows how the similarity engines see a player. You pick a
+player-season, and the page shows every other player-season the engine scored against it:
+the ranked comps, the spread of the scores, and the sub-scores behind any one comparison.
+It reads the engines the app builds at boot. It never touches the simulator, and the
+simulator never reads it. The engines themselves are in [Similarity Engines](technical/similarity.md).
 
-> **Scope of this document.** Defines the v1 cross-agent build of the Similarity Score Explorer — an interactive view that answers user questions like *"Which pitchers are most similar to 2025 Paul Skenes?"* and surfaces the engine's score distribution as a navigation aid. v1 is locked to the **Pitcher → Pitcher** engine; v2 generalizes to the other engines via the same component.
+The section numbers below are stable: code comments cite §3 (the API contract, its
+diagnostic logic and its caching) and §6 (what is out of scope), and a test cites §5.
 
----
+## 1. What the explorer does
 
-## 1. User story
+- It ranks the comps of one player-season under one engine and bins every score into a
+  histogram. A healthy engine gives a spread of scores around 0.5 with a thin tail of close
+  comps. A spike in one bin, or no spread at all, warns that the engine is not separating
+  players.
+- It breaks one comparison into its sub-scores (for the pitcher: the arsenal and the
+  command), so you can see why two players match.
+- It finds the historical game states nearest a state you describe (the Situation Finder).
 
-> *As a sports trader (or analyst), I want to see the full distribution of similarity scores against a query pitcher, hover any bin to preview the comps inside it, and click a bin to drill into a ranked list of those pitchers with their arsenal/command sub-score breakdown — so I can both find the obvious top comps and judge how well-separated the engine's signal is around them.*
+Eight engines give a 0–1 score with sub-scores: pitcher, batter, fielder, catcher,
+advancement runner (`baserunner`), steal runner (`baserunner_steal`), pitcher against the
+run (`pitcher_steal`) and manager. The other three (situation, pitch-to-pitch, batted ball)
+return a distance and are not keyed by a player; only the situation engine has a page.
 
-**Why a histogram-first design (not a top-N list).** A bare top-N list answers "who's most similar?" but hides whether the top-N is *meaningfully* separated from the next 50 candidates. The histogram makes calibration health visible: a healthy engine produces a bell-shaped distribution centered near 0.5 (the project-wide median target) with a thin right tail of true comps. A spike at 0.99 means COLLAPSED diagnostic. A flat distribution means NO_SPREAD. The same component therefore serves both the *user* ("who's similar?") and the *team* ("is this engine healthy?").
+## 2. Where the code lives
 
----
+| Part | Code |
+|---|---|
+| The pitcher distribution route | [api/routes/similarity.py](../api/routes/similarity.py) |
+| The explorer routes for every engine | [api/routes/similarity_explorer.py](../api/routes/similarity_explorer.py) |
+| The engine builds, the payload cache, the name resolver | [api/state.py](../api/state.py), called from `build_engines` in [api/startup.py](../api/startup.py) |
+| The browser client | [frontend/src/api/similarity.ts](../frontend/src/api/similarity.ts) |
+| The pages | [EngineIndexPage.tsx](../frontend/src/pages/EngineIndexPage.tsx), [EngineExplorerPage.tsx](../frontend/src/pages/EngineExplorerPage.tsx), [SituationFinderPage.tsx](../frontend/src/pages/SituationFinderPage.tsx), [PlayerDetailPage.tsx](../frontend/src/pages/PlayerDetailPage.tsx) |
+| The components | [CompTable.tsx](../frontend/src/components/similarity/CompTable.tsx), [ComponentScoreBars.tsx](../frontend/src/components/similarity/ComponentScoreBars.tsx), [PlayerSearchInput.tsx](../frontend/src/components/similarity/PlayerSearchInput.tsx) |
 
-## 2. Agent ownership map for this feature
+At boot the lifespan builds the pitcher engine as `app.state.pitcher_engine` and all eleven
+engines as `app.state.engines`. A failure of the pitcher build stops the boot; another
+engine that fails is logged and left out. `SIMILARITY_ENGINE_ENABLED=false` skips both
+builds: the pitcher, query, meta, pair and situation routes then answer 503, and the
+catalog lists every engine as not built. The app applies `/data/calibration.json`
+to `app.state.engines`. The two pitcher instances score alike, because the pitcher's
+calibration rewrites one module-wide value, the arsenal scale.
 
-| Slice | Primary agent | Why them | Secondary input |
+Every route below requires a login (the session cookie, `X-API-Key` or a Bearer key).
+
+## 3. The API contract
+
+### 3.1 The pitcher distribution route
+
+`GET /api/similarity/pitcher/{pitcher_id}/{season}`
+
+| Query parameter | Range | Default | Meaning |
 |---|---|---|---|
-| User story, acceptance criteria, prioritization vs. SIM-041/042 | **Product Manager** | Owns scope and definition-of-done | Betting Analyst (does this serve the trader workflow?) |
-| Histogram bin design, score-distribution semantics, calibration thresholds | **ML / Modeling Engineer** | Owns engine output, knows what a "healthy" distribution looks like, defines COLLAPSED / NO_SPREAD bands | Baseball Analyst (sniff-test the surfaced comps) |
-| Smell-test of comps surfaced for marquee pitchers (Skenes, deGrom, Kershaw, etc.) | **Baseball Analyst** | The primary defense against bugs that look like features | ML Engineer |
-| FastAPI endpoint, response shape, Redis caching, error paths | **Backend Developer** | Owns application-layer wiring of the engine into HTTP | ML Engineer (engine warmup), Performance Engineer (cache TTL) |
-| Histogram interaction design — hover preview, click drill-down panel, color coding for top-N, bin-width controls | **UX Designer** | Owns frontend interaction patterns | Baseball Analyst (which sub-scores are worth surfacing in the drill-down) |
-| First-query latency budget, arsenal-cache warmup, Redis TTL choice | **Performance Engineer** | The engine docstring warns first query pays a ~1.2s lazy-cache cost; subsequent queries are <1ms. Warmup + caching is in scope for this feature | Backend Developer |
-| Endpoint unit tests, frontend bin-logic tests, regression test for the JSON contract | **QA / DevOps** | Owns the test gate that prevents drift between API and frontend | Backend Developer |
+| `bins` | 4–100 | 20 | The number of histogram bins. |
+| `top_n` | 1–200 | 20 | The length of the ranked list. |
 
-**Agents *not* on this feature (and why):**
-- **Data Engineer** — no schema changes; engine reads existing `derived.pitcher_season_metrics` and `raw.players`.
-- **Betting Analyst** — v1 is a discovery/exploration view, not a betting signal. Wires in once the comp distribution is being used to weight prop-pricing pools.
+The route asks the pitcher engine for every same-hand pitcher-season (in a worker thread)
+and resolves the names from `raw.players`. Without a name resolver it writes
+`Pitcher #<id>` and logs a warning. The 200 response:
 
----
-
-## 3. API contract
-
-**Endpoint.** `GET /api/similarity/pitcher/{pitcher_id}/{season}`
-
-**Query params.**
-- `bins` *(int, default 20)* — histogram bin count. UX may expose 10/20/40 toggles.
-- `top_n` *(int, default 20)* — number of comps to flag in the top-N highlight band.
-
-**200 response shape.**
 ```json
 {
-  "query": {
-    "pitcher_id": 694973,
-    "season": 2025,
-    "p_throws": "R",
-    "full_name": "Paul Skenes"
-  },
+  "query": {"pitcher_id": 694973, "season": 2025, "p_throws": "R", "full_name": "..."},
   "engine": "pitcher_similarity",
   "engine_version": "0.1.0-phase2",
   "population_size": 2412,
-  "score_summary": {
-    "min": 0.04, "p25": 0.41, "median": 0.53, "p75": 0.66, "max": 0.94,
-    "mean": 0.52, "std": 0.18
-  },
-  "bins": [
-    {
-      "bin_index": 0,
-      "lo": 0.00, "hi": 0.05,
-      "count": 7,
-      "preview": [
-        {"pitcher_id": 111, "season": 2024, "full_name": "Pitcher Foo", "score": 0.043}
-      ],
-      "members": [ /* full list of pitchers in this bin, see member shape below */ ]
-    }
-  ],
-  "top_n": [ /* same member shape, ordered desc by score */ ],
-  "diagnostic": {
-    "status": "HEALTHY",   // HEALTHY | COLLAPSED | NO_SPREAD
-    "median_target": 0.50,
-    "median_observed": 0.53
-  }
+  "score_summary": {"min": 0.04, "p25": 0.41, "median": 0.53, "p75": 0.66,
+                    "max": 0.94, "mean": 0.52, "std": 0.18},
+  "bins": [{"bin_index": 0, "lo": 0.0, "hi": 0.05, "count": 7,
+            "preview": ["member", "..."], "members": ["member", "..."]}],
+  "top_n": ["member", "..."],
+  "diagnostic": {"status": "HEALTHY", "median_target": 0.5, "median_observed": 0.53}
 }
 ```
 
-**Member shape (used in `bins[*].members`, `bins[*].preview`, and `top_n`).**
-```json
-{
-  "pitcher_id": 594798,
-  "season": 2024,
-  "full_name": "Jacob deGrom",
-  "p_throws": "R",
-  "score": 0.91,
-  "arsenal_score": 0.94,
-  "command_score": 0.86,
-  "sample_pitches": 1842
-}
-```
+A member is `{pitcher_id, season, full_name, p_throws, score, arsenal_score,
+command_score, sample_pitches}`.
 
-**Bin design.**
-- Linear bins from 0.0 to 1.0. Default `bins=20` → bin width 0.05. This matches the project median target of 0.50 and gives the histogram a natural "midpoint" tick.
-- Bin edges: `[lo, hi)` except the rightmost bin which is `[lo, hi]` so score=1.0 has a home.
-- `preview` ⊂ `members` — the top 5 by score within the bin, used for the hover tooltip without forcing the frontend to sort the full bin client-side.
+- `population_size` counts the comps: every loaded pitcher-season of the same hand except
+  the query's own (the pitcher's other seasons are in).
+- `engine_version` is a fixed label.
+- `score_summary` is computed over every comp; `std` is the population standard deviation.
+- The bins are linear from 0 to 1. Each bin is [lo, hi), except the last, which includes 1.0.
+  The route returns every bin, empty ones too. A bin's `members` run highest score first,
+  and its `preview` is the first five of them.
+- `top_n` is the first `top_n` comps, highest score first.
 
-**Diagnostic logic** *(owned by ML Engineer; lives in the endpoint's response)*:
-- `COLLAPSED` if ≥80% of scores fall in a single bin.
-- `NO_SPREAD` if `std < 0.05` over the population.
-- `HEALTHY` otherwise.
+**Diagnostic logic.** The route classifies the scores in this order:
 
-**Error paths.**
-- `404 {"detail": "pitcher not in engine"}` — query (pitcher_id, season) not loaded.
-- `503 {"detail": "engine warming"}` — engine present but partition not yet built (startup race).
+1. `NO_SPREAD` when the standard deviation is under 0.05.
+2. `COLLAPSED` when one bin (at the request's bin count) holds 80% or more of the scores.
+3. `HEALTHY` otherwise.
 
-**Caching.**
-- Redis key: `simviz:pitcher:{pitcher_id}:{season}:bins={bins}:top_n={top_n}`.
-- TTL: 24 hours. The engine output is deterministic for a fixed (pitcher_id, season) until the next nightly profile rebuild — long TTL is safe and Performance Engineer-approved.
-- Cache invalidated on profile-rebuild via a Redis `DEL simviz:*` step in the nightly job (out of scope for v1; documented as a follow-on).
+`median_target` is the project-wide target, 0.50; `median_observed` is the comps' median.
+The thresholds are the constants `NO_SPREAD_STD_THRESHOLD`, `COLLAPSED_MAX_BIN_FRACTION`
+and `DIAGNOSTIC_MEDIAN_TARGET` in `api/routes/similarity.py`.
 
----
+**Errors.**
 
-## 4. Frontend component spec
+- 404 `{"detail": "pitcher not in engine"}`: the engine does not hold that pitcher-season.
+- 503 `{"detail": "engine warming"}`: `app.state.pitcher_engine` is not attached.
 
-**Form factor.** Self-contained HTML file at `frontend/similarity_explorer.html`. No build step, no React dependency — consistent with the Phase 6 "deferred decision" on React vs. vanilla in `agent_team.md` §UX. Plotly.js loaded via CDN for the histogram.
+**Caching.** The route caches the whole payload in Redis:
 
-**Layout.**
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Similarity Explorer · Pitcher → Pitcher                        │
-│  Query: [Paul Skenes  (2025, R)            ▾]   bins: 10·20·40 │
-├────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   ┃                                                             │
-│   ┃          ▆▆                                                 │
-│   ┃        ▆▆██▆▆                                               │
-│   ┃      ▆▆██████▆▆▆▆                                           │
-│   ┃    ▆▆████████████▆▆▆▆▃▃   ◄ TOP-N highlighted in green      │
-│   ┃▃▃▃██████████████████████▃▃                                  │
-│   └─────────────────────────────────────────────────             │
-│   0.0       0.25       0.50       0.75       1.0                │
-│                                                                 │
-│  HEALTH: HEALTHY · median 0.53 (target 0.50) · n=2,412          │
-├────────────────────────────────────────────────────────────────┤
-│  [drill-down panel — appears on bin click]                      │
-│  Bin 0.85–0.90 · 4 pitchers                                     │
-│   • Jacob deGrom 2024  ▰▰▰▰▰▰▰▰▰▱ 0.91   arsenal 0.94 cmd 0.86  │
-│   • Tyler Glasnow 2023 ▰▰▰▰▰▰▰▰▱▱ 0.88   arsenal 0.91 cmd 0.79  │
-│   • …                                                            │
-└────────────────────────────────────────────────────────────────┘
-```
+- The key is `simviz:pitcher:{pitcher_id}:{season}:bins={bins}:top_n={top_n}`
+  (`make_cache_key` in `api/state.py`).
+- The time to live is 24 hours (`CACHE_TTL_SECONDS`). A pitcher-season's scores change only
+  when the nightly rebuild changes the profiles and the app rebuilds its engines. Redis
+  outlives an app restart, so a cached payload can lag that rebuild by up to 24 hours (§6).
+- The route reads the cache first and writes through on a miss. A value that does not
+  decode reads as a miss. A failed write logs a warning and the route still answers.
+- With no cache attached, the route skips the cache.
 
-**Interactions.**
-1. **Hover a bar** → tooltip shows bin range, count, and the top 5 names in the bin (from `bins[i].preview`).
-2. **Click a bar** → drill-down panel below the chart populates with `bins[i].members` — full ranked list, with arsenal and command sub-scores rendered as inline mini-bars.
-3. **Top-N band** — bars whose right edge is ≥ the cutoff (the `top_n`-th-highest score) are colored green; the rest are neutral gray. Makes "the top comps" pop visually without requiring a separate chart.
-4. **Health badge** — colored chip in the header: green `HEALTHY`, yellow `NO_SPREAD`, red `COLLAPSED`.
+This route is the only cached one. The explorer routes of §3.2 query the engine on every
+call.
 
-**State persistence.** The bin-count toggle (10/20/40) persists in `localStorage` as `simviz.binCount`.
+### 3.2 The explorer routes for every engine
 
----
+| Route | What it returns |
+|---|---|
+| `GET /api/similarity/engines` | The catalog: one entry per engine with its kind (`score` or `distance`), method, partition, sub-score count, build status and profile count. A score engine counts as built when it holds profiles. |
+| `GET /api/similarity/{engine}/meta` | The engine's sub-score fields, labels and weights, its sample field and minimum sample, and whether it takes `position` or `vs_hand`. |
+| `GET /api/similarity/{engine}/query` | The ranked comps and the histogram of one subject: `entity_id`, `season` (2015–2027), `position` (required for the fielder), `vs_hand` (`L` or `R`; batter only), `bins` (4–100, default 20), `top_n` (1–200, default 25). |
+| `GET /api/similarity/{engine}/pair` | One comparison, `a_id`/`a_season` against `b_id`/`b_season`, with every sub-score. |
+| `POST /api/similarity/situation/query` | The `k` (default 25) historical plate appearances nearest a game state, with their distance, game, inning, outs, runners, leverage and score difference. |
 
-## 5. Acceptance criteria
+The query and pair routes reuse the pitcher route's helpers (`_BinSpec`,
+`compute_score_summary`, `classify_diagnostic`), so the bins and the diagnostic follow §3.1.
+A member is `{entity_id, season, name, score, sub_scores, sample, below_min_sample, extra}`.
+`below_min_sample` compares the comp's sample with the engine's minimum. A sub-score the pair
+could not score (a steal runner's lead or a pitcher's hold missing on one side) is left out
+of `sub_scores`.
 
-- [ ] `GET /api/similarity/pitcher/{pitcher_id}/{season}` returns the documented JSON shape against the live engine.
-- [ ] Endpoint serves a cached response in <50ms after the first call for a given pitcher.
-- [ ] First (uncached) call completes in <2s end-to-end (engine arsenal-cache warmup is the dominant cost).
-- [ ] 404 on unknown pitcher; 503 on engine-not-ready.
-- [ ] `frontend/similarity_explorer.html` renders against the live endpoint, supports hover preview and click drill-down on every bin, and displays the diagnostic health badge.
-- [ ] Unit tests cover: bin construction, top-N highlighting band, diagnostic classification, 404 path, the round-trip JSON contract.
-- [ ] Baseball Analyst sign-off on the comps surfaced for at least three marquee pitchers (Skenes 2025, deGrom 2019, Kershaw 2014).
-- [ ] Regression test snapshots the JSON contract — frontend won't drift away from the backend silently.
+The composite is not the weighted sum of the sub-scores. Every score engine multiplies by
+the pair confidence (a discount for a thin sample on either side), and the batter engine
+also applies its bats penalty. The response carries the weights and each comp's sample, so
+the page can explain the gap.
 
----
+Each engine's fields come from an `EngineAdapter` in `SCORE_ADAPTERS`:
 
-## 6. Out of scope (deliberately deferred)
+| Engine | Id field | Sample field (minimum) | Sub-scores (weight) |
+|---|---|---|---|
+| `pitcher` | `pitcher_id` | `sample_pitches` (200) | arsenal 0.65, command 0.35 |
+| `batter` | `batter_id` | `sample_pa` (100) | discipline 0.40, batted ball 0.35, platoon 0.15, power 0.10; with `vs_hand` 0.30 / 0.25 / 0.35 / 0.10 |
+| `fielder` | `player_id` | `sample_batted_balls` (50) | range, then double play / errors / specialty (infield, 0.45 / 0.30 / 0.15 / 0.10) or arm / star plays / errors (outfield, 0.40 / 0.30 / 0.15 / 0.15) |
+| `catcher` | `catcher_id` | `sample_pitches_received` (300) | framing 0.53, blocking 0.24, throwing 0.14, deterrence 0.09 |
+| `baserunner` | `player_id` | `sample_advancement_opps` (20) | speed 0.35, aggression 0.40, success 0.25 |
+| `baserunner_steal` | `player_id` | `sample_steal_attempts` (10) | tendency 0.45, lead 0.45, success 0.10 |
+| `pitcher_steal` | `pitcher_id` | `sample_baserunner_events` (30) | outcome 0.35, hold 0.65 |
+| `manager` | `manager_id` | `sample_games` (50) | bullpen usage 0.40, aggression 0.35, platoon 0.25 |
 
-- **v2 engine generalization** — applying the same component to batter, fielder, catcher, baserunner, manager, situation engines. Tracked as SIM-XXX (TBD).
-- **Cross-engine composite view** — "show me Skenes-similar pitchers AND in their similar situations" combinations. Phase 4+ once the simulator integrates.
-- **Comp pitcher's career arc** — clicking a comp opens that pitcher's full season-by-season trajectory. Nice-to-have for v1.5.
-- **Backtesting overlay** — "of the top-10 comps, how did their actual H2H performance vs. similar batters match?" — this is ML Engineer's domain and belongs in a separate `/api/similarity/pitcher/.../validation` view.
-- **Cache invalidation hook in the nightly profile job.** v1 ships with the 24h TTL only; the proper invalidation is a Data Engineer ticket.
+The batter row lags the engine; see §6.
 
----
+**Errors.** A distance engine on a score route answers 404 with a pointer to the Situation
+Finder or the Data Lab. An unknown engine answers 404. An engine that is not built answers
+503. A fielder query without `position` answers 400. A subject with no profile answers 404;
+a subject with a profile but no comparable population answers 200 with `population_size` 0.
+The situation route answers 503 when the situation engine is not built or its index is not
+ready.
 
-## 7. Sequencing
+## 4. The pages
 
-1. PM signs off on this spec (this doc).
-2. Backend Developer + ML Engineer pair on the endpoint + diagnostic logic.
-3. UX Designer signs off on the rendered Plotly chart against synthetic JSON before live wiring.
-4. Baseball Analyst smell-tests the live comps.
-5. QA/DevOps adds the regression test snapshot + 80% coverage gate compliance.
-6. Performance Engineer reviews the warmup + cache TTL choices in a stress run.
+The pages are React components under `frontend/src/pages/`. They call only the §3.2 routes;
+no page calls the pitcher distribution route of §3.1.
+
+- **`/similarity`, the engine chooser** (`EngineIndexPage`). It lists the eight score engines
+  with a build badge (the profile count, or "warming") and the three distance engines as
+  "pattern finder". A score engine links to its explorer, the situation engine to the
+  Situation Finder, the other two to the Data Lab summary.
+- **`/similarity/:engine`, the explorer** (`EngineExplorerPage`). A name type-ahead
+  (`PlayerSearchInput`, over `/api/players/search`), a season picker (2015–2027), a position
+  picker for the fielder (default 2B) and a platoon picker for the batter. The choices live
+  in the URL (`subject=<id>-<season>`, `pos`, `vs`, `compare=<id>-<season>`), so a link can
+  be shared. The page asks for 20 bins and the top 50. It shows:
+  - the score histogram, with the median, the 75th percentile, the maximum and the
+    diagnostic status;
+  - the engine's method, partition and note;
+  - the comps table (`CompTable`): rank, player (a link to `/player/:id`), season, the
+    composite bar, a small bar per sub-score and the sample size.
+  A row click opens a drawer with the pair route's answer: a radar chart when the engine has
+  three or more sub-scores, and `ComponentScoreBars` (one bar per sub-score, a tick at its
+  weight, and a note that the composite carries the confidence discount). A 503 shows the
+  "engine warming" state; a 404 shows "No profile for this subject".
+- **`/similarity/situation`, the Situation Finder** (`SituationFinderPage`). A form for the
+  eleven state features and a table of the nearest plate appearances, labelled as a
+  distance (lower means more similar), not a score.
+- **`/player/:playerId`, the player hub** (`PlayerDetailPage`). The player's identity and
+  seasons, and a card per engine that applies to him, each linking to the explorer seeded
+  with his latest season.
+
+## 5. What the tests check
+
+- [test_similarity_endpoint.py](../tests/unit/test_similarity_endpoint.py): the bin edges
+  (the last bin includes 1.0), the score summary, the bins and their previews, the top-N
+  cut, the three diagnostic classes, the route's payload shape, the 404 for an unknown
+  pitcher and the 503 when no engine is attached. A stub engine stands in; no database runs.
+- [test_similarity_explorer_adapters.py](../tests/unit/test_similarity_explorer_adapters.py):
+  each adapter's id, sample, sub-score and extra fields exist on its engine's result
+  dataclass; the fielder labels flip between infield and outfield; `vs_hand` re-weights the
+  batter.
+- [test_api_state.py](../tests/unit/test_api_state.py): the cache key format and the cache's
+  round trip, time to live and treatment of a bad value.
+
+## 6. Out of scope and known gaps
+
+- **No cache invalidation.** The nightly rebuild does not delete the `simviz:*` keys. A
+  cached payload lives out its 24 hours.
+- **The batter adapter lags the engine.** The engine scores five sub-scores (the physical
+  swing and stance group at 0.20; weights 0.32 / 0.28 / 0.12 / 0.08 / 0.20). The explorer's
+  adapter still lists four sub-scores with the older weights and shows no physical bar.
+- **No page for the pitch-to-pitch and batted-ball engines.** They are keyed by a pitch or a
+  batted ball, not a player.
+- **No cross-engine view** (a comp under two engines at once), no career view of a comp, and
+  no backtest overlay of how a comp's real results matched.

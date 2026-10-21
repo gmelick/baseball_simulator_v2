@@ -1,419 +1,471 @@
-# MLB Baseball Simulation Platform — End-to-End Workflow
+# Operator's manual
 
-*Last updated: 2026-10-09 (Alembic head 0030; DuckDB migration 0032; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v32 · full API surface live)*
+This manual tells you how to run the platform on this laptop: how to bring the
+stack up from a clean checkout, what runs each night, how to check each part,
+how to load and rebuild data, how to back up and restore, and what to do when
+something breaks.
 
-This document is the operator's manual.  It describes how to run the
-platform end-to-end from a clean checkout, and how to confirm each
-component is healthy.  Every command has a paired "what good looks
-like" check so you can verify the state, not just whether the command
-exited zero.
+The stack runs Python 3.13 in Docker. The analytics file is at
+DuckDB schema **v32**, and the statistics database is at
+Alembic head **0030**.
 
-> **Shell.** All commands below are formatted for **Windows Command
-> Prompt (cmd.exe)** — the user's primary shell.  PowerShell users can
-> substitute `$env:VAR=…` for `set VAR=…` and `Invoke-WebRequest` for
-> `curl`; bash users can substitute `export VAR=…` for `set VAR=…` and
-> forward slashes for paths.
+**Shell.** Every command here is for Windows Command Prompt (cmd.exe), the
+primary shell. Two cmd rules matter:
 
-> **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
-> bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
-> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v32 / Alembic 0030).  The
-> full API surface (games, simulate, betting, WebSocket, odds, similarity,
-> metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
-> reliability-curve), the full-pool sampler + all realism flags are ON in
-> production (§1.8), and the SIM-435 odds backfill + SIM-429 CLV backtest
-> chain is shipped + measured (§1.9).
+- cmd reads a bare `<` as a redirect, so the placeholders below are words in
+  capitals (`PASTE_ONE_KEY_HERE`), never `<...>`.
+- `&` separates commands in cmd, so every URL with a query string is in double
+  quotes.
 
----
-
-## API endpoint reference (currently shipping)
-
-The full Phase-5 API surface is live: the games router (`/api/games/*`,
-including `/simulate`), the betting/CLV surface, the typed WebSocket
-channel, the odds path, similarity, and metrics.  The **pitcher
-distribution** similarity endpoint (per `api/routes/similarity.py`) is:
-
-```
-GET /api/similarity/pitcher/{pitcher_id}/{season}
-  ?bins=20         (optional, 4-100, default 20)
-  &top_n=20        (optional, 1-200, default 20)
-```
-
-**Note the path style.**  `pitcher_id` and `season` are *path* segments,
-not query parameters.  An earlier draft of this doc had `/v1/similarity/pitcher?player_id=…`
-which returns `{"detail":"Not Found"}` because that route doesn't exist.
-
-Other endpoints (`/health`, `/ready`, `/`) are operational probes
-defined in `api/main.py`.
+**Git Bash rewrites container paths.** In Git Bash, a path such as
+`/app/scripts/x.py` in a `docker compose exec` or `docker compose run` command
+becomes `C:/Program Files/Git/app/scripts/x.py` before Docker sees it. The tell
+is `C:/Program Files/Git/` in the error. Run those commands from cmd.exe, or
+prefix them with `MSYS_NO_PATHCONV=1` in Git Bash.
 
 ---
 
-## Part 1 — End-to-end workflow
+## 1. The stack
 
-### 1.1 Prerequisites
+[`docker-compose.yml`](docker-compose.yml) defines ten services.
 
-| Requirement | Version | Notes |
+| Service | What it is | Host port | Memory cap |
+|---|---|---|---|
+| `db` | PostgreSQL 15, the statistics database (`raw` and `sim` schemas) | `127.0.0.1:5432` | none |
+| `redis` | Redis 7: the simulation cache and the live service's message bus | `127.0.0.1:6379` | 256 MB in Redis |
+| `app` | The FastAPI application (uvicorn with `--reload`) and its simulation worker pool | `127.0.0.1:8000` | 16 GB |
+| `live` | The live service: the schedule poll, the per-game push feeds, the posted-lineup writer, the pre-game odds | none (its own health check on 8001 inside) | 1 GB |
+| `jobs` | An idle container the scheduler runs the nightly data jobs in, as `appuser` | none | `JOBS_MEM_LIMIT`, default 10 GB |
+| `nginx` | The built frontend and the reverse proxy, the one service the LAN reaches | `0.0.0.0:80` | none |
+| `migrate` | A one-shot service that runs `alembic upgrade head` as the database owner | none | none |
+| `prometheus` | The metrics store | `127.0.0.1:9090` | none |
+| `grafana` | The dashboards | `127.0.0.1:3000` | none |
+| `scheduler` | Ofelia, the cron that runs the nightly jobs inside other containers | none | none |
+
+Every service except `migrate` restarts by itself (`restart: unless-stopped`).
+[`deploy/README.md`](deploy/README.md) explains nginx, the ports, the logins and
+the environment tiers.
+
+### Where the data lives
+
+| Store | Where | Who writes it |
 |---|---|---|
-| Docker Desktop | latest | Required by `make dev`.  Ensure WSL2 backend is healthy. |
-| Python | 3.13 | `pyproject.toml` pins 3.13 (SIM-431); CI + Docker + local unified. |
-| Git for Windows | any | Includes Git Bash if you prefer bash semantics. |
-| Make for Windows | GNU | `choco install make` or use the WSL2 alternative. |
-| `curl` | any | Ships with Windows 10+. |
-| `jq` (optional) | any | `choco install jq` — pretty-prints JSON. |
+| The statistics database | the `postgres_data` volume | the loaders, the live service, the app's run records |
+| The analytics file | `/data/baseball_sim.duckdb` on the `duckdb_data` volume | the nightly rebuild and the pool rebuild scripts |
+| The engine-artifact bundle (the files the simulator draws from) | `/data/play_pool/engine_artifacts`, a link to one folder under `engine_artifacts.versions/` | the bundle build |
+| The replay file (one simulated game per run, for the game page) | `/data/replay.duckdb` | the app only |
+| The calibration report | `/data/calibration.json` | `make calibrate`, `make validate-props` |
+| The job marks | `/data/ingest_marks/` | `scripts/with_mark.sh` |
 
-### 1.2 First-time setup
+### Which code a container runs
+
+The `app` service mounts five folders from the checkout: `api/`, `pipeline/`,
+`similarity/`, `simulation/` and `db/`. The `jobs` service mounts the same
+five. `scripts/`, `betting/` and `tests/` are baked into the image at build
+time.
+
+- A change to a mounted folder reaches the app after `docker compose restart app`.
+  uvicorn's `--reload` may restart it by itself, but a file event does not
+  always cross the Windows bind mount: check the log.
+- A change to `scripts/` or `betting/` reaches a container only after a rebuild:
+  `docker compose build app`, then `docker compose up -d app` (and the same for
+  `jobs`).
+- A change to a service's `environment:` block in `docker-compose.yml` needs a
+  recreate (`docker compose up -d app`). A restart keeps the old environment.
+- Do not edit an `api/` file to import a new name from `betting/` before the
+  image has that name. The reload then fails to import, and the app is down
+  until you rebuild.
+- Each image build adds to Docker's build cache on C:. The cache once filled the
+  disk. `docker builder prune -f` frees it.
+
+---
+
+## 2. Bring the stack up from a clean checkout
+
+### 2.1 What you need
+
+| Tool | Notes |
+|---|---|
+| Docker Desktop | with the WSL2 back end. The app alone may use 16 GB, so give the WSL VM about 20 GB (`.wslconfig`). |
+| Git for Windows | the checkout |
+| GNU Make | the `make` targets (`choco install make`) |
+| Python 3.13 with the `py` launcher | the Makefile's helper lines, `scripts/gen_secrets.py` and the restore drill run on the host |
+| curl | ships with Windows |
+
+### 2.2 The steps
 
 ```bat
-git clone <repo-url>
+git clone https://github.com/gmelick/baseball_simulator_v2.git
 cd baseball_simulator_v2
 copy .env.example .env
 py scripts\gen_secrets.py --append .env
 make dev-bg
 make migrate
-make test
 ```
 
-`gen_secrets.py` fills every secret `.env` lacks: the three Postgres
-passwords, the Redis password, the Grafana admin password, `SECRET_KEY`,
-`AUTH_PASSWORD` and `API_KEYS` (SIM-443). It prints key names only, never a
-value. Every compose command fails, naming the variable, until each is set.
-A fresh Postgres volume creates the two app roles on first start
-(`db/roles/README.md`); on an existing volume run `make db-roles`.
-
-Postgres, Redis, the app (:8000), Prometheus and Grafana listen on
-`127.0.0.1` only; another machine on the LAN reaches the site through nginx
-on :80. Every `/api/` route needs a credential: below, `%API_KEY%` is one of
-the comma-separated `API_KEYS` values in `.env` (`set API_KEY=<one key>`).
-`/health` and `/ready` stay open.
+1. `gen_secrets.py` fills the eight secrets `.env` lacks: the three database
+   passwords, the Redis and Grafana passwords, `SECRET_KEY`, `AUTH_PASSWORD`
+   and `API_KEYS`. It never changes a secret that has a value, and it prints
+   key names only. Every compose command fails, naming the variable, until
+   each password is set.
+2. Set `BACKUP_DIR` and `OFFSITE_BACKUP_DIR` in `.env` before the first night
+   (section 8). Without them the backups land inside the repository.
+3. `make dev-bg` builds the images and starts the stack in the background. The
+   first build takes several minutes: it builds the Python image and the
+   frontend.
+4. `make migrate` applies every Alembic migration once the database is
+   healthy.
+5. A new database volume creates the two app roles on its first start
+   ([`db/roles/README.md`](db/roles/README.md)). On an older volume, run
+   `make db-roles`.
+6. Give Prometheus its key: follow
+   [`deploy/monitoring/secrets/README.md`](deploy/monitoring/secrets/README.md).
 
 **What good looks like.**
-- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0030` as of 2026-10-09).
-- `make test` exits 0 (unit suite green at 89% coverage; ~22 slow/skipped).
-
-### 1.3 Local Python development (without Docker)
 
 ```bat
-py -3.13 -m venv .venv
-.venv\Scripts\activate.bat
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-pytest
-```
-
-You will still need PostgreSQL and Redis running somewhere — either
-via `docker compose up db redis` or installed locally.
-
-### 1.4 Loading data
-
-Host tools read `BASEBALL_DB_DSN`; none has a built-in default. Use the app
-role and replace the `<...>` placeholder with the value from `.env` (cmd
-reads a bare `<` as a redirect).
-
-```bat
-set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
-
-python pipeline\etl\etl_historical_loader.py --season 2024 --dsn %BASEBALL_DB_DSN%
-python pipeline\etl\etl_sprint_speed_loader.py --season 2024
-python pipeline\etl\venue_backfill_job.py
-python pipeline\etl\opening_line_job.py
-```
-
-After raw load, materialize derived profiles + simulation pools into DuckDB:
-
-```bat
-python pipeline\batch\player_profile_computor.py ^
-    --seasons 2022 2023 2024 ^
-    --full-rebuild ^
-    --dsn %BASEBALL_DB_DSN% ^
-    --duckdb-path db\schemas\baseball_simulator.duckdb
-```
-
-### 1.5 Live ingestion pipeline
-
-```bat
-set LIVE_GAME_PKS=745000,745001
-python pipeline\live\live_ingestion_pipeline.py
-```
-
-### 1.6 Hitting the API
-
-With `make dev-bg` running:
-
-```bat
-:: Liveness / readiness
+docker compose ps
+:: Expected: every service up; each one with a health check reads "(healthy)".
+:: The scheduler has no health check. migrate is not listed: it runs only when called.
+docker compose run --rm migrate alembic current
+:: Expected: 0030 (head)
 curl http://localhost:8000/health
-curl http://localhost:8000/ready
-
-:: OpenAPI surface
-curl http://localhost:8000/openapi.json > openapi.json
-:: With jq:
-::   curl http://localhost:8000/openapi.json | jq ".paths | keys"
-
-:: Pitcher similarity distribution (CORRECT ENDPOINT)
-:: Path: /api/similarity/pitcher/{pitcher_id}/{season}
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024"
-
-:: With histogram + top-N tuning:
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=30&top_n=10"
+:: Expected: {"status":"ok", ... "auth_enforced":true, "sql_console":{"ro_pool":true,"role":"baseball_ro"}}
 ```
 
-> **cmd URL gotcha.**  `&` is a command separator in cmd.exe.  Either
-> escape as `^&` or wrap the URL in double quotes (the doc uses
-> double-quoted URLs throughout).
+Until the first data load and bundle build finish (section 2.3), the app boots
+but cannot simulate: a simulation fails at its first game with no bundle.
 
-### 1.7 Run a simulation
+### 2.3 The first data load
 
-The simulation loop is live (Phase 4 complete).  Kick off a 100-iteration
-run for a game:
+The order matters: each step reads what the one before it wrote. The game load
+takes hours. A crash or a blue screen loses no data: the loader skips every game
+already loaded, so a rerun resumes.
+
+| Step | Command | What it fills |
+|---|---|---|
+| 1a. The completed seasons | `docker compose run -d --rm --name first-load app sh /app/scripts/with_retry.sh 6 python -m pipeline.etl.etl_historical_loader` | Every Final game from 2017 through last season: `raw.games`, `raw.pitches`, `raw.play_events`, the lineups, the official box score (`raw.game_player_stats`) and the bullpen listing (`raw.game_bullpen`). Follow it with `docker logs -f first-load`. |
+| 1b. The current season | `docker compose run --rm app sh /app/scripts/with_retry.sh 6 sh /app/scripts/weekly_refresh.sh` | The same tables for this season's Final games. The bare loader of step 1a stops at last season. |
+| 2. Sprint speed | `docker compose run --rm app python -m pipeline.etl.etl_sprint_speed_loader --seasons 2023 2024 2025 2026` | `raw.sprint_speed` |
+| 3. The Savant leaderboards | `docker compose run --rm app python -m pipeline.etl.savant_loader --seasons 2023 2024 2025 2026` | the `raw.savant_*` tables |
+| 4. The profiles and pools | `docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild` | the `derived.*` profiles and the `sim.*` play pools in the analytics file |
+| 5. The bundle | `make engine-artifacts` | a new bundle version; the app restarts itself on it |
+| 6. The calibration | section 6 | `/data/calibration.json` |
+| 7. The odds (optional) | `make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"` | `raw.game_odds`, `raw.prop_odds` (needs `ODDS_API_KEY`) |
+
+The simulator's pools read the last three completed seasons plus the current
+one, so steps 2 and 3 name those four seasons.
+
+### 2.4 Host tools and the database
+
+A script you run on the host (not in a container) reads `BASEBALL_DB_DSN`. No
+script has a default. Use the app role:
 
 ```bat
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/simulate"
-:: Returns win probabilities, the score spread and every iteration's score.
+set BASEBALL_DB_DSN=postgresql://baseball_app:PASTE_APP_PASSWORD@localhost:5432/baseball_sim
+:: To keep it for new windows (open a NEW cmd window afterwards):
+setx BASEBALL_DB_DSN "postgresql://baseball_app:PASTE_APP_PASSWORD@localhost:5432/baseball_sim"
 ```
 
-At 6 workers (forkserver + a 10 GB app `mem_limit`, SIM-430), an n=100
-batch runs in ~38 s with no OOM.
-
-**One game, pitch by pitch (SIM-561).** The game page's "Simulate a game"
-button, or this call, plays ONE game and stores it in the replay file
-(`/data/replay.duckdb`, which only the app opens):
-
-```bat
-curl -X POST -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/sample-game"
-:: Returns {game_pk, run_id, base_seed}; add ?base_seed=N to replay a game.
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/linescore"
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/745000/plays"
-:: Each play carries its inning, half, outs, batter, pitcher and the score after;
-:: "names" maps the player ids to names.
-```
-
-Loading projections (`/boxscore`) also stores its run's first game. The replay
-reads serve the newest stored game, and the file keeps the newest 5 per game.
-**What good looks like:** the boot log says `SIM-561: replay store OPEN at
-/data/replay.duckdb`; a sample game takes about 5 s.
-
-### 1.8 Production simulation flags
-
-The simulation path is the **full-pool similarity sampler** — the only
-path since SIM-486 deleted the per-tile fallback (2026-09-06) — and every
-realism factor is a DRAW WEIGHT with a fitted bandwidth, **ON** in the
-docker-compose `app` env.  The same knobs are **pinned OFF in
-`tests/conftest.py`** so the unit suite exercises the byte-identical
-baseline (each knob's own tests opt back in explicitly).  Do not change
-them ad hoc — they are a validated set.
-
-| Flag | Ticket | Default in compose | What it does |
-|---|---|---|---|
-| `SIM_MANAGER` | SIM-434/427 | `1` | Manager starter-pull + reliever-selection decisions (fatigue/leverage/TTO).  Enabled + validated 2026-06-04 (pitchers/game 2→9, runs unchanged). |
-| `SIM_BB_PLATOON` | SIM-413 | `1` | Batted-ball draw reweight by pitcher hand (L/R platoon). |
-| `SIM_HOME_OFF_WEIGHT` | SIM-491/476 | `0.0` | The home-field draw weight on batted-ball rows whose batting side mismatches the live one (`1.0` = off; `0.0` = hard conditioning, the owner ruling). |
-| `SIM_PARK_KERNEL_SIGMA` | SIM-491/476 | `0.02` | The park kernel bandwidth over the venue run factor (`0` = off). |
-| `SIM_ACTOR_POWER_FIELDER` | SIM-523 | `1.2` | The fielder factor: the live defender's engine score against the row's own fielder, raised to this power (`0` = off). The bell-curve kernels are retired (2026-09-09). |
-| `SIM_ACTOR_POWER_BATTER` / `_RUNNER_STEAL` / `_RUNNER_ADV` / `_CATCHER_THROWING` / `_PITCHER_STEAL` | SIM-523 | `1.0` / `12` / `20` / `2` / `12` | The other actor factors: each engine's 0-to-1 score matrix at its fitted power (`0` = off). |
-| `SIM_BB_BATTER_POWER` | SIM-523 | `4` | The fielding draw's batter factor: the batter engine's score raised to this power. |
-| `SIM_PITCH_RESULT_SPLIT` + `SIM_PITCH_PITCHER_POWER` / `SIM_RESULT_PITCHER_POWER` / `SIM_RESULT_BATTER_POWER` | SIM-523 | `0` + `1.0` / `1.0` / `1.0` | The pitch draw and the pitch-result draw as two draws with the pitcher and batter powers. Built and fitted (16 / 16 / 8) but OFF: at those powers the balanced lane reds strikeouts −2.4% (SIM-527). |
-| `SIM_CATCHER_RECEIVING` | SIM-523 | `0` | The catcher receiving ratio on taken pitches (enable = SIM-526). |
-| `SIM_GOT_AWAY` | SIM-517 | `1` | Honor the drawn pitch row's got-away fact (passed ball / wild pitch / uncaught third strike). |
-| `SIM_STEAL_PITCH_CLASS` | SIM-554 | `1` | The running game on the pitch: the pickoff draw before the pitch, the steal draw after it among real pitches of the same class. `0` = the single pre-pitch draw. A bundle exported before DuckDB migration 0031, or one with any pitch row that has no class, also runs the single draw. Not pinned in `tests/conftest.py`: the unit lane's samplers run the new order. |
-
-The old post-draw flips (`SIM_PARK_FACTOR`, `SIM_FIELDER_RBF`,
-`SIM_FRAMING`, `SIM_HOME_FIELD_BIAS`) and the `SIM_FULL_POOL` switch no
-longer exist.  Set a kernel to `0` (or the home weight to `1.0`) to turn
-just that effect off.
-
-### 1.9 Calibration, odds backfill, and the CLV backtest
-
-The calibration → odds → CLV chain (the gold-standard edge-validation
-loop).  All run inside the `app` container against the live Postgres +
-DuckDB:
-
-```bat
-:: Fit /data/calibration.json (arsenal W2 + per-engine sigmas + win-prob
-:: map). The API loads this at boot — see CALIBRATION_REPORT_PATH.
-make calibrate
-::   smoke run:  make calibrate FLAGS="--seasons 2024 --validate"
-
-:: Validate win-prob + prop PMFs against real Final games; --write-calibration
-:: fits the win-prob reliability curve back into the report.
-make validate-props FLAGS="--seasons 2024 --max-games 50"
-
-:: SIM-435 / SIM-555: backfill OPENING + CLOSING odds for Final games into
-:: raw.game_odds / raw.prop_odds, one row per book ('bp:<id>'), each row checked
-:: by the load guard (the closing lines the accuracy comparison scores against).
-:: Network-bound. Name the provider in FLAGS: --provider bettingpros for real
-:: lines, --provider mock for the wiring smoke (the loader refuses the mock
-:: unasked). The app container reads ODDS_PROVIDER and ODDS_API_KEY from the
-:: host's .env through env_file (bettingpros since 2026-10-09). A variable set
-:: only in your host shell never reaches the container. --book NAME
-:: (draftkings, bp:12, ...) loads one book.
-make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
-::   smoke run:  make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --provider bettingpros --book draftkings"
-```
-
-**SIM-429 CLV backtest (`scripts/accuracy_comparison.py`).**  Scores the model's
-entry prices against the closing line — the project's gold-standard edge
-metric.  The slate is fanned out **over games** (`--workers N`, default 6,
-each a `forkserver` worker holding its own ~373 MB sampler — ~2.2 GB at 6
-workers), giving ~6× throughput; `--workers 1` is the serial byte-identical
-reference.  A single game can't go below ~30 s (core-bound at ~6).
-
-> **`scripts/` is NOT bind-mounted into the `app` container** (only
-> `api/`, `pipeline/`, `similarity/`, `simulation/`, `db/` are).  The make
-> targets above run scripts that are already baked into the image, but a
-> *new or edited* script needs an explicit `-v` mount (or a rebuild).
-> Mount it for the CLV backtest:
-
-```bat
-:: Full 2024 season, 6 games at once (PowerShell/bash use $PWD; cmd uses %CD%):
-docker compose run --rm -v "%CD%\scripts:/app/scripts" app ^
-    python scripts/accuracy_comparison.py --seasons 2024 --workers 6 --iterations 100
-
-:: Smoke / byte-identical serial reference (no pool):
-docker compose run --rm -v "%CD%\scripts:/app/scripts" app ^
-    python scripts/accuracy_comparison.py --seasons 2024 --max-games 2 --workers 1
-```
-
-> bash/PowerShell users: substitute `-v "$PWD:/app"` for
-> the `-v "%CD%\scripts:..."` mount above.
-
-**What good looks like.**  The backtest writes a CLV scoreboard JSON
-report.  First full result (120 games, 2024): ~49% beat-close — i.e. **no
-demonstrable edge yet**; the gold-standard loop works end-to-end, the
-model still needs the run-conversion / calibration work to develop an edge.
+`PASTE_APP_PASSWORD` is the value of `BASEBALL_APP_DB_PASSWORD` in `.env`. The
+containers ignore this variable: compose builds their connection strings.
 
 ---
 
-## Part 2 — Per-component health checks
+## 3. What runs each day
 
-### 2.1 PostgreSQL (raw + sim schemas)
+[`deploy/ofelia/config.ini`](deploy/ofelia/config.ini) holds the schedule. The
+times are UTC; Eastern time is four hours earlier in summer and five in winter.
+
+| Time (UTC) | Job | Runs in, as | What it does | What it waits for |
+|---|---|---|---|---|
+| 07:00 daily | `nightly-finals` | `jobs`, `appuser` | `scripts/nightly_finals.sh`: loads the Final games of the last three days (Eastern dates). Postgres only. | nothing |
+| 08:00 Sunday | `weekly-refresh` | `jobs`, `appuser` | `scripts/weekly_refresh.sh`: sweeps the whole current season for a Final game the window missed. Postgres only. | nothing |
+| 08:00 daily | `nightly-rebuild` | `jobs`, `appuser` | `scripts/nightly_rebuild.sh`: rebuilds the current season's profiles and pools, then builds and publishes a new bundle version. Ends near 09:30. | the finals load and the Sunday sweep (see below) |
+| after the rebuild | the app's restart | `app` | When the bundle link moves, the app waits for its running simulation jobs (at most 10 minutes) and for any DuckDB writer, then restarts itself to load the new data ([`api/bundle_watch.py`](api/bundle_watch.py)). It is down for a few minutes. | the run jobs |
+| 10:00 daily | `nightly-backup-postgres` | `db`, `postgres` | `db/backup/pg_backup.sh`: dumps the statistics database. | its own lock |
+| 10:00 daily | `nightly-backup-data` | `jobs`, `appuser` | `python -m pipeline.backup.data_stores`: copies the analytics file, the bundle and the small `/data` files. | the rebuild, finals and sweep marks |
+| 10:30 daily | `nightly-backup-offsite` | `jobs`, `appuser` | `python -m pipeline.backup.offsite`: copies the newest backup sets into the OneDrive folder. Takes about 10 to 25 minutes. | the data backup's mark and the Postgres backup's lock |
+| 10:30 daily | `nightly-closing-lines` | `app`, root | `scripts/nightly_closing_lines.sh`: loads the closing odds of yesterday's and the day before's games, as the fallback to the live service. Runs only with `ODDS_PROVIDER=bettingpros` (the job sets it) and `ODDS_API_KEY` in `.env`. | nothing |
+
+Each data job runs inside two wrappers:
+
+- [`scripts/with_retry.sh`](scripts/with_retry.sh) reruns the command after a
+  crash (exit 139, or "Fatal Python error" in its output), 30 seconds apart.
+  Any other failure stops it at once.
+- [`scripts/with_mark.sh`](scripts/with_mark.sh) writes
+  `/data/ingest_marks/<job>.running` while the job runs, then
+  `<job>.last` with one line: `<UTC date> <exit code> <UTC timestamp>`.
+
+The waits read those marks. The rebuild waits 60 s, then waits while the finals
+load or the Sunday sweep runs (at most 2 hours). When the finals load has not
+run that day, the rebuild runs it first ([`scripts/wait_for_ingest.sh`](scripts/wait_for_ingest.sh)).
+A mark older than 6 hours counts as a dead run's.
+
+**The deploy window.** Recreate `jobs`, `app` or `scheduler` only after about
+11:00 UTC, and only when `/data/ingest_marks/` holds no `.running` mark. A
+stopped `jobs` container fails all five of its jobs; Ofelia logs the error.
+
+**Check last night.**
 
 ```bat
-docker compose exec db pg_isready -U %POSTGRES_USER% -d %POSTGRES_DB%
-:: The migrate service is the one service that logs in as the owner (SIM-443b).
-docker compose run --rm migrate alembic current
-
-docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT season, COUNT(*) AS pitch_count FROM raw.pitches GROUP BY season ORDER BY season;"
-
-:: SIM-160 bat-side coverage audit:
-set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
-python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md
-echo %ERRORLEVEL%
+docker compose exec -T jobs ls /data/ingest_marks
+docker compose exec -T jobs cat /data/ingest_marks/nightly-finals.last
+docker compose exec -T jobs cat /data/ingest_marks/nightly-rebuild.last
+:: Expected: today's UTC date, then 0, then the end time.
+docker compose logs --since 24h scheduler
 ```
 
-**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0030` as of 2026-10-09); `check_bat_side_coverage.py` exits 0.
+---
 
-### 2.2 DuckDB analytical layer
+## 4. Health checks
+
+Every `/api/` route needs a credential. In the commands below, `%API_KEY%` is
+one of the comma-separated values of `API_KEYS` in `.env`:
+
+```bat
+set API_KEY=PASTE_ONE_KEY_HERE
+```
+
+### 4.1 The app
+
+```bat
+curl http://localhost:8000/health
+:: Expected: "status":"ok", "auth_enforced":true and "sql_console":{"ro_pool":true,...}
+curl http://localhost:8000/ready
+:: Expected: "status":"ready"; "checks" holds "postgres":"ok", "live_service":"ok",
+:: "pitcher_engine":"ok". A failed Postgres or Redis check answers 503 "degraded".
+docker compose logs app | findstr /C:"build_all_engines" /C:"replay store OPEN" /C:"watching"
+:: Expected: "build_all_engines: 11/11 engines built.",
+::           "SIM-561: replay store OPEN at /data/replay.duckdb.",
+::           "SIM-563: watching /data/play_pool/engine_artifacts for a new bundle version."
+```
+
+### 4.2 The statistics database
+
+```bat
+docker compose exec db pg_isready -U baseball_user -d baseball_sim
+:: Expected: accepting connections
+docker compose run --rm migrate alembic current
+:: Expected: 0030 (head)
+docker compose exec db psql -U baseball_user -d baseball_sim -c "SELECT season, COUNT(*) FROM raw.games WHERE status = 'Final' GROUP BY season ORDER BY season;"
+```
+
+`alembic current` must print the newest file's revision under
+`db/migrations/versions/`.
+
+### 4.3 The analytics file
 
 ```bat
 type db\schemas\duckdb_schema_version.txt
 :: Expected: 32
-
-duckdb db\schemas\baseball_simulator.duckdb -c "SELECT * FROM migration_history ORDER BY applied_at;"
-
-duckdb db\schemas\baseball_simulator.duckdb -c "SELECT player_id, season, framing_runs, blocking_runs, cs_rate, steal_attempt_rate_against, below_minimum_sample FROM derived.catcher_season_metrics WHERE player_id = 592663 ORDER BY season;"
+docker compose exec -T app python -c "import duckdb; c = duckdb.connect('/data/baseball_sim.duckdb', read_only=True); print(c.execute('SELECT pool_name, season, builder_version FROM sim.pool_build_metadata ORDER BY 1, 2').fetchall())"
 ```
 
-**What good looks like.**  `steal_attempt_rate_against` ~ 0.03 for Realmuto.
+The version file must equal the newest file's number under
+`db/migrations/duckdb/`. The builder version of each pool must be the one in
+[`pipeline/batch/profiles/pool_meta.py`](pipeline/batch/profiles/pool_meta.py)
+(`POOL_BUILDER_VERSION`).
 
-### 2.3 Similarity engines
+A DuckDB writer opens the file only when no other process holds it, read-only
+handles included. A short read like the one above is safe, but never during the
+nightly rebuild (08:00 to about 09:30 UTC). The replay file
+`/data/replay.duckdb` is different: the app holds it open for writing, so no
+other process can open it while the app runs. Read a stored game through the
+API (`/linescore`, `/plays`).
 
-```bat
-pytest tests\unit\test_engine_build_smoke.py -v
-python similarity\engines\pitcher_similarity.py
-python similarity\engines\catcher_similarity.py
-pytest tests\unit\test_pitch_pitch_engine.py tests\unit\test_batted_ball_engine.py -v
-pytest tests\regression\ -v --timeout=60
-```
-
-If regression-gate fails after intentional engine change:
-
-```bat
-python tests\regression\generate_fixtures.py --force
-```
-
-### 2.4 Live ingestion pipeline
-
-```bat
-pytest "tests\unit\test_live_pipeline_bugs.py::TestMockOddsVig" -v
-
-docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT COUNT(*) AS null_hashes FROM raw.game_odds WHERE odds_hash IS NULL;"
-docker compose exec db psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT game_pk, source, odds_hash, COUNT(*) FROM raw.game_odds GROUP BY 1,2,3 HAVING COUNT(*) > 1 LIMIT 5;"
-
-:: If either gate fails, run SIM-157 backfill:
-set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
-python scripts\backfill_odds_hash.py
-```
-
-### 2.5 FastAPI app
-
-```bat
-curl http://localhost:8000/health
-:: Expected: {"status":"ok"}
-
-curl http://localhost:8000/ready
-:: Expected: {"status":"ready"}
-
-:: Pitcher similarity (CORRECT path-style URL):
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024"
-
-:: Surface inventory:
-curl http://localhost:8000/openapi.json > openapi.json
-:: Lists the full surface: /health, /ready, /api/games/* (incl. /simulate),
-:: the betting/CLV routes, /api/similarity/pitcher/{pitcher_id}/{season},
-:: /metrics, and the WebSocket channel.
-```
-
-### 2.6 Redis cache
+### 4.4 Redis, the live service and monitoring
 
 ```bat
 docker compose exec redis redis-cli ping
 :: Expected: PONG
+docker compose ps live
+:: Expected: running (healthy)
+make live-logs
 ```
 
-The similarity endpoint caches responses under
-`simviz:pitcher:{id}:{season}:bins={b}:top_n={n}` (24h TTL).
+- Prometheus: `http://127.0.0.1:9090/targets` shows `baseball-sim-app` UP.
+- Grafana: `http://127.0.0.1:3000`, folder "Baseball Sim", the platform dashboard.
+- The app's metrics:
 
-### 2.7 Index acceptance (SIM-085 / SIM-089 / SIM-158)
+  ```bat
+  curl -s -H "X-API-Key: %API_KEY%" http://localhost:8000/metrics | findstr baseball_sim_
+  ```
+
+  `baseball_sim_finals_age_hours` is the age of the newest Final game. The two
+  backup gauges are in section 8.
+
+### 4.5 A simulation
 
 ```bat
-set BASEBALL_DB_DSN=postgresql://staging-host:5432/baseball
-python scripts\run_index_acceptance.py ^
-    --season 2024 ^
-    --pitcher-id 605400 ^
-    --out docs\perf\2026-05-13-index-acceptance.md
-echo %ERRORLEVEL%
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/2026-09-27"
+:: The day's games, from the league schedule.
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/GAME_PK/simulate?n_iterations=100"
+:: Runs 100 games now and returns the summary: win shares, scores, the inning grids.
+curl -X POST -H "X-API-Key: %API_KEY%" -H "Content-Type: application/json" -d "{\"n_iterations\": 100}" "http://localhost:8000/api/games/GAME_PK/simulate"
+:: Queues a durable run and returns its run_id; poll it:
+curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/GAME_PK/simulate/runs/RUN_ID"
+curl -X POST -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/games/GAME_PK/sample-game"
+:: Plays ONE game and stores it in the replay file for /linescore and /plays.
 ```
 
-### 2.8 Tests, lint, types
+A 100-game run takes about 25 to 40 seconds on this laptop. The full route list
+is at `http://localhost:8000/docs`.
+
+### 4.6 Checks before a commit
 
 ```bat
-make lint
-make format
-make type-check
-
 make test-unit
+make lint
+make type-check
 make test-regression
-make test-integration
 ```
 
-**Local-dev dep gotchas.**  A handful of test modules need optional deps:
-`POT` (pitcher engine W₂), `scipy` (situation engine), `pybaseball`
-(ETL loader), `pytest-asyncio` (integration).  `pip install -r requirements-dev.txt` covers all.
+These targets mount the checkout over the image's copy, so they test your
+working tree. `make test-unit TESTS="tests/unit/test_x.py"` runs named files.
+Run them from the main checkout: from a worktree, compose builds a separate
+project. [`docs/technical/README.md`](docs/technical/README.md) leads to the
+test lanes and the rest of the code reference.
 
-**Python 3.13.**  `POT>=0.9.5` and `faiss-cpu>=1.9` both ship cp313
-manylinux wheels, so the pitcher engine (W₂) and FAISS engine run with
-full coverage on 3.13 — no source build required (SIM-431).
+---
 
-### 2.9 CI pipelines
+## 5. Data loads and rebuilds
 
-- `.github\workflows\ci.yml` — ruff, mypy, unit, regression, Docker build on every PR.
-- `.github\workflows\integration-weekly.yml` — testcontainers integration suite, Monday 03:00 UTC.
-- `.github\workflows\docker-release.yml` — push image to `ghcr.io` on main.
+### 5.1 Catch up on missed games
 
-### 2.10 Backups and restore
+```bat
+make ingest-catch-up DAYS=14
+```
 
-The scheduled backups (SIM-525) copy the three data stores to a host folder every day. A *store* is one of the three: the Postgres statistics database, the DuckDB analytics file (`/data/baseball_sim.duckdb`) and the engine-artifact bundle (the published version under `/data/play_pool/engine_artifacts`). A *set* is one store's backup from one run.
+It loads the Final games of the last 14 days through the crash wrapper. It
+writes Postgres only, so it is safe while the app runs. The next nightly rebuild
+picks the games up.
 
-**The folder.**  `BACKUP_DIR` in `.env` names it: `C:/Users/grego/Documents/baseball_backups`. Compose mounts it at `/backups`: read-write in the `db` and `jobs` containers, read-only in the app. The folder is outside Docker's disk image, on the laptop's only disk, C:. Each store keeps its newest 3 complete sets (`BACKUP_KEEP=3` in `.env`). Without `BACKUP_DIR`, compose uses `.\backups` in the repo, which git and Docker ignore.
+### 5.2 Rebuild the profiles and pools
+
+The nightly rebuild already does the current season. A bare
+`player_profile_computor` run also builds the current season only. For a full
+recompute, name every season:
+
+```bat
+docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild
+make engine-artifacts
+```
+
+- **Include the season in progress.** Each profile table carries one cutoff
+  date (`asof_date`), and the computor refuses a rebuild that would leave a
+  table with two. A partial rebuild on a later day must therefore include the
+  current season.
+- **Rebuild the bundle after the profiles.** The simulator reads the bundle, not
+  the analytics file. The app restarts itself when the new bundle version
+  publishes.
+- **Refit the calibration** after a full recompute (section 6).
+- The app holds no handle on the analytics file, so a rebuild runs while the app
+  serves. A second writer cannot: never run a rebuild during the nightly one.
+
+### 5.3 The bundle
+
+`make engine-artifacts` builds every part of the bundle (`--what all`). With no
+`--out-dir`, the build copies the current version, builds into the copy and
+then moves the link in one step. A failed build moves nothing. The build keeps
+three versions plus any version a running app marks as in use. An explicit
+`--out-dir` writes in place and publishes nothing. `FLAGS="--what pool"`
+rebuilds the pools alone.
+
+### 5.4 The pool rebuild scripts
+
+Two scripts rebuild one pool end to end, with checks before and after:
+[`scripts/rebuild_pitch_pool.py`](scripts/rebuild_pitch_pool.py) and
+[`scripts/rebuild_steal_pool.py`](scripts/rebuild_steal_pool.py). Each one's
+docstring is its run book. One rule: on a database without DuckDB migration
+0031, apply it only through `rebuild_steal_pool.py --apply-migration`. That flag
+applies the migration inside the rebuild's transaction. Never apply 0031 as a
+separate step: the old pool builder fails on a migrated table.
+
+### 5.5 Odds and box scores
+
+```bat
+make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
+make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --provider bettingpros --book draftkings"
+```
+
+The loader writes the opening and closing lines of Final games, one row per
+book, into `raw.game_odds` and `raw.prop_odds`. It needs `ODDS_API_KEY` in
+`.env`. It refuses the mock provider unless you name it. The historical loader
+writes each game's official box score as it loads the game;
+[`scripts/load_official_boxscores.py`](scripts/load_official_boxscores.py)
+backfills older games.
+
+### 5.6 Validate a data change at scale
+
+Check an ETL change on hundreds of games, never dozens. Two review rounds found
+defects only in real payloads at scale; a 70-game sample once read "100%" on a
+metric that 950 games disproved.
+
+---
+
+## 6. Calibration
+
+The app loads `/data/calibration.json` once, at boot. The report calibrates the
+similarity engines and carries the win-probability reliability curve. A missing
+file leaves the engines on their defaults and the win probabilities
+uncalibrated; the app still boots.
+
+```bat
+make calibrate
+make validate-props FLAGS="--seasons 2024 --iterations 100 --write-calibration"
+docker compose restart app
+```
+
+**The trap.** `make calibrate` rewrites the whole file, and it writes no
+reliability curve. A run therefore DROPS the curve. Write the curve back before
+the next boot: rerun `make validate-props` with `--write-calibration` (it
+simulates real games, so it is slow), or reuse the last validation report:
+
+```bat
+docker compose exec -T app python -c "from simulation.prop_validation import PropValidationReport, write_reliability_curve_to_calibration_report as w; r = PropValidationReport.from_json(open('/data/prop_validation.json').read()); print(w(r, '/data/calibration.json'))"
+:: Expected: True
+docker compose restart app
+```
+
+---
+
+## 7. Simulation flags
+
+Every simulator setting is a `SIM_*` environment variable.
+
+- The code default of each flag lives in
+  [`simulation/flags.py`](simulation/flags.py), the registry of every flag.
+- Production's values live in the `app` service's `environment:` block of
+  `docker-compose.yml`. A change there needs `docker compose up -d app`.
+- `tests/conftest.py` pins most simulation flags off, so the unit lane runs the
+  plain baseline.
+- [`docs/technical/sim-loop-cheat-sheet.md`](docs/technical/sim-loop-cheat-sheet.md)
+  explains each draw, its weights and the production value of each flag.
+
+Two owner rulings govern a change: every change lands ON at its best-known
+default (owner ruling 2026-09-16), and every similarity power stays at 1 until
+the sweep fits the weights together (owner ruling 2026-09-16). A change is gated
+by the unit and regression lanes and a ten-game smoke of the affected channels
+(`scripts/sim_stats.py`).
+
+---
+
+## 8. Backups, the off-site copy and the restore drill
+
+The scheduled backups copy three stores every night: the statistics database,
+the analytics file and the published bundle. A **set** is one backup of one
+store.
+
+### 8.1 Where the sets go
+
+| `.env` key | Value on this laptop | Mounted at |
+|---|---|---|
+| `BACKUP_DIR` | `C:/Users/grego/Documents/baseball_backups` | `/backups`: read-write in `db` and `jobs`, read-only in `app` |
+| `OFFSITE_BACKUP_DIR` | `C:/Users/grego/OneDrive/Documents/baseball_backups` | `/offsite`: read-write in `jobs`, read-only in `app` |
+
+Without the keys, compose uses `.\backups` and `.\backups_offsite` inside the
+repository. Git and Docker ignore both, and neither is off the machine.
 
 ```
 BACKUP_DIR\
@@ -423,202 +475,135 @@ BACKUP_DIR\
   drills\<TS>.json   one report per restore drill
 ```
 
-`<TS>` is the UTC start time of the run (`YYYYmmddTHHMMSSZ`). A run writes each set as `<TS>.partial`, syncs every file to disk, writes `manifest.json` last and then renames the folder. A set without `manifest.json` never counts. The next run deletes every `.partial` folder it finds. Each manifest records the bytes and the sha256 of every file.
+`<TS>` is the run's UTC start, `YYYYmmddTHHMMSSZ`. A local set is written as
+`<TS>.partial`, its `manifest.json` goes last, and then the folder is renamed. A
+set without a manifest never counts, and the next run deletes every `.partial`
+folder. Each store keeps 3 sets (`BACKUP_KEEP`). The off-site copy writes each
+file straight into `<store>\<TS>\`, manifest last, and keeps 3 sets per store
+(`OFFSITE_KEEP`, else `BACKUP_KEEP`). The replay file is not backed up.
 
-**What the sets protect against.**  They protect against the loss or a reset of Docker's disk image, `docker compose down -v` and `make nuke`, a bad migration or rebuild, a writer that dies in the middle of a rebuild, and accidental deletion. They do NOT protect against the laptop's disk dying or the loss of the laptop on their own: the sets sit on the same disk. The off-site copy (SIM-568) covers that loss (see **The off-site copy** below).
+**What the sets protect against.** The local sets survive a loss or a reset of
+Docker's disk image, `docker compose down -v` and `make nuke`, a bad migration
+or rebuild, a writer that dies in the middle of a rebuild, and an accidental
+deletion. They sit on C:, the only disk, so they do not survive the loss of the
+laptop. The off-site copy covers that loss once the OneDrive client has uploaded
+it. The job cannot see the upload: the OneDrive tray icon and Explorer's status
+column are the truth. Never point `OFFSITE_BACKUP_DIR` at `BACKUP_DIR`; the copy
+refuses one folder twice.
 
-**The off-site copy.**  A third job copies the newest complete sets of each store into a OneDrive folder, and the OneDrive client uploads them off the machine. `OFFSITE_BACKUP_DIR` in `.env` names the folder: `C:/Users/grego/OneDrive/Documents/baseball_backups`. Compose mounts it at `/offsite`: read-write in the `jobs` container, read-only in the app. Without the value, compose uses `.\backups_offsite` in the repo, which is NOT off the machine. Each store keeps its newest 3 sets there (`OFFSITE_KEEP`, else `BACKUP_KEEP`, else 3). The folder has the same store folders as `BACKUP_DIR`, and each set in it is a byte-for-byte copy of the local set. The copy writes no `.partial` folder: it writes each file straight into `<store>\<TS>\` and `manifest.json` last, so a folder with no manifest is not a complete set. The design and the run book are in `docs\audit\2026-10-17-sim568-offsite-copy.md`.
+**The free-space guard.** Each backup needs the larger of 10 GiB and 1.5 times
+the newest set free. When the disk is short, it deletes the oldest set while
+more than 2 remain; otherwise it refuses with exit 2.
 
-What OneDrive does and does not do for you:
+### 8.2 Back up now, and check
 
-- The copy is off the machine only once the OneDrive client has uploaded it. The job cannot see the upload: the OneDrive tray icon and Explorer's status column are the truth.
-- The folder is a cloud-files folder. Storage Sense (the Windows disk clean-up) can turn its files into online-only placeholders. A read of a placeholder through the Docker mount downloads the file.
-- Never point `OFFSITE_BACKUP_DIR` at `BACKUP_DIR`. The copy refuses to run when the two are one folder.
-
-**The schedule.**  Ofelia runs two jobs at 10:00 UTC, after the nightly rebuild (08:00 UTC, done at about 09:30), and the off-site copy at 10:30 UTC. The closing-lines pass also starts at 10:30 UTC, in the app container, so it never shares a container with the copy. Each job sets `no-overlap`.
-
-| Job | Container and user | What it does |
-|---|---|---|
-| `nightly-backup-postgres` (the Postgres job) | `db`, the `postgres` OS user | Runs `db/backup/pg_backup.sh` over the unix socket, with no password. It counts every `raw`, `sim` and `public` table, dumps the database (`pg_dump -Fd -j 4 -Z 3`), checks the dump with `pg_restore --list` and counts every table again. The live service can write during the dump, so a restore checks each count against the two counts. A lock folder (`postgres\.lock`) stops a second run. |
-| `nightly-backup-data` (the data job) | `jobs`, `appuser` | Runs `with_mark.sh nightly-backup with_retry.sh 2 python -m pipeline.backup.data_stores`. It copies the DuckDB file under a read-only handle and requires the same table counts on the copy. It copies the small files into the same set. It copies the bundle version without the app's `.in_use.*` marks. |
-| `nightly-backup-offsite` (the off-site copy, 10:30 UTC) | `jobs`, `appuser` | Runs `with_mark.sh nightly-backup-offsite with_retry.sh 2 python -m pipeline.backup.offsite`. It copies the newest 3 complete sets of each store from `/backups` to `/offsite`, file by file, the oldest set first. It checks each file's sha256 against the set's manifest, then copies the manifest last. It skips a set that is already off-site. |
-
-The data job waits 60 s. Then it waits while a `nightly-rebuild`, `nightly-finals` or `weekly-refresh` `.running` mark younger than 6 h exists in `/data/ingest_marks`, for up to 2 h. The rebuild runs inside `with_mark.sh`, so it leaves that mark while it writes the DuckDB file. When a writer still holds the file, the open retries every 60 s for 30 min. When either wait runs out, the data job skips the DuckDB store, still backs up the bundle and exits 1. A crash retry within one hour skips a store that already finished and reuses its set id, so the duckdb and bundle sets of one night share one `<TS>`. The data job does not back up `/data/replay.duckdb` (the app holds it writable, and its replays are disposable) or the `calibration.json.bak_*` files.
-
-The two 10:00 jobs guard the free space on `/backups` (the host disk C:). They need the larger of 10 GiB and 1.5 times the newest set. When the disk is short, they delete the oldest set while more than 2 remain. Otherwise they refuse with exit 2. A failed run prunes nothing.
-
-One off-site copy runs at a time. A run takes the copy lock `/data/ingest_marks/offsite-copy.lock` before it waits and deletes it at its end; a second run refuses with exit 2. The copy then waits while the data job's `nightly-backup.running` mark is younger than 6 h, or while the Postgres job's lock (`postgres\.lock\owner`) holds a start younger than 6 h. It polls every 60 s for up to 2 h. When the wait runs out, it logs that and copies anyway: a complete set is always safe to copy. A crash retry keeps each file that already matches and copies the rest. Before it writes, the copy needs the larger of 10 GiB and 1.5 times the bytes it will copy free on C:, else it refuses with exit 2. It cannot see the OneDrive quota. Each store prunes only after that store copied cleanly. It never prunes a set among the newest 3 local sets, and a pruned set loses its manifest first. A failed store prunes nothing; the other stores still copy.
-
-**Back up now.**  Run these from cmd.exe: Git Bash rewrites the container paths (CLAUDE.md §2a).
+Run these from cmd.exe. Do not run `make backup` and `make backup-offsite` at
+the same time: the backup can prune a local set the copy is reading.
 
 ```bat
 make backup
-:: The Postgres step prints:  BACKUP OK postgres <TS> <bytes> bytes <seconds> s
-:: The data step prints:      BACKUP OK duckdb <TS> ...  and  BACKUP OK bundle <TS> ...
-make backup-status
-```
-
-`make backup` runs the two steps one after the other. Its data step passes `--new-set`, so it always makes a fresh set, even within an hour of the scheduled run. On the first run (2026-10-15) the data step took 308 s: a 3.6 GiB DuckDB copy and a 561 MiB bundle copy.
-
-```bat
+:: Expected: BACKUP OK postgres <TS> ...   then   BACKUP OK duckdb <TS> ...   and   BACKUP OK bundle <TS> ...
 make backup-offsite
-:: Prints, per set:  COPY OK <store> <TS> <bytes> bytes <seconds> s
-::               or  COPY SKIP <store> <TS> (already off-site)
-docker compose exec -T jobs python -m pipeline.backup.offsite --dry-run
-:: Prints WOULD COPY / WOULD SKIP / WOULD PRUNE lines and writes nothing.
-```
-
-`make backup-offsite` runs the off-site copy now, inside `with_mark.sh nightly-backup-offsite`. It refuses with exit 2 while another copy runs: a `nightly-backup-offsite.running` mark under 6 h old, or a live copy lock. Do not run it while `make backup` runs: the backup can prune a local set that the copy reads, and that store then fails for the run.
-
-**Check last night's run.**
-
-```bat
+:: Expected per set: COPY OK <store> <TS> ...   or   COPY SKIP <store> <TS> (already off-site)
 make backup-status
-:: Expected: postgres, duckdb and bundle, each under 24 h old, with 3 sets each.
-:: The second block is the off-site copy, one line per store:
-::   postgres local <TS>  off-site <TS>  age 0.5 h  2.7 GiB  (3 sets)  MIRRORED
-
-type C:\Users\grego\Documents\baseball_backups\postgres\<TS>\manifest.json
-type C:\Users\grego\Documents\baseball_backups\duckdb\<TS>\manifest.json
-
+:: Expected: each store's newest set under 24 h old, 3 sets each; the off-site block ends MIRRORED per store.
 docker compose exec -T jobs cat /data/ingest_marks/nightly-backup.last
-:: Expected: <UTC date> 0 <UTC timestamp>   (the middle field is the data job's exit code)
 docker compose exec -T jobs cat /data/ingest_marks/nightly-backup-offsite.last
-:: Expected: the same shape; the middle field is the off-site copy's exit code
-
-docker compose logs scheduler | findstr nightly-backup
-:: (this also matches nightly-backup-offsite)
-
-set API_KEY=<one key from API_KEYS in .env>
+:: Expected: today's UTC date, then 0, then the end time.
 curl -s -H "X-API-Key: %API_KEY%" http://localhost:8000/metrics | findstr backup_age
-:: baseball_sim_backup_age_hours{store="postgres"} 1.2   (and duckdb, bundle)
-:: baseball_sim_offsite_backup_age_hours{store="postgres"} 0.7   (and duckdb, bundle)
+:: baseball_sim_backup_age_hours{store="..."} and baseball_sim_offsite_backup_age_hours{store="..."}:
+:: under 24; -1 means the store has no complete set.
 ```
 
-**What good looks like.**  Each store's newest set is under 24 h old, its folder holds `manifest.json`, and no `.partial` folder is left. `nightly-backup.last` reads exit 0. The gauge `baseball_sim_backup_age_hours{store}` reads the hours since each store's newest complete set, and -1 for a store with no set. The app reads the folder again at most every 600 s.
+`make backup` passes `--new-set`, so it always makes a fresh set.
+`docker compose exec -T jobs python -m pipeline.backup.offsite --dry-run` prints
+what the copy would do and writes nothing.
 
-For the off-site copy: each store's line in the second block of `make backup-status` ends `MIRRORED`, and `nightly-backup-offsite.last` reads exit 0. The gauge `baseball_sim_offsite_backup_age_hours{store}` reads the hours since each store's newest complete off-site copy: under 24, and -1 before the first copy. A background task in the app reads the off-site folder at most every 600 s; a scrape never reads it. On the host, Explorer's status column shows every file of the newest sets as synced. Only that shows the copy is off the machine.
+### 8.3 The restore drill
 
-**The restore drill.**  The drill proves that a set restores. It never touches the live database.
+The drill proves a set restores. It never touches the live database.
 
 ```bat
 make backup-drill
-make backup-drill SET=<TS>
+make backup-drill SET=20261015T100000Z
 make backup-drill OFFSITE=1
 ```
 
-`make backup-drill` runs `py scripts/backup_drill.py --set latest` on the host. The drill refuses to start while any `sim525_*` container or volume exists. It starts a scratch Postgres cluster (`postgres:15-alpine`, container `sim525_drill_pg`, no network, no port, the named volume `sim525_drill_pg`). It runs the real `pg_restore.sh` against the scratch cluster. It requires exit 0, no "errors ignored" line and `RESTORE OK` as the last line. Then it runs `--verify-set <TS>` in the jobs container on the newest set id that is complete in both `duckdb\` and `bundle\`: the DuckDB copy's counts and hashes, and a load of the bundle copy. It removes the scratch container and volume, and writes `BACKUP_DIR\drills\<TS>.json`. Postgres refuses a Windows folder as its data directory, so the scratch cluster lives on a Docker volume: it takes about 20 GB inside Docker's disk image while it runs. Check that the disk image has room first; `docker builder prune -f` frees the build cache.
+[`scripts/backup_drill.py`](scripts/backup_drill.py) runs on the host. It
+starts a scratch Postgres container (`sim525_drill_pg`, no network), restores
+the set with the real `pg_restore.sh`, verifies the analytics-file and bundle
+copies in the `jobs` container, removes the scratch container and writes a
+report to `drills\<TS>.json`. It refuses to start while any `sim525_*` container
+or volume exists. The scratch cluster lives on a Docker volume, so it needs
+about 20 GB inside Docker's disk image while it runs. `OFFSITE=1` restores from
+the off-site copy; a set that OneDrive made online-only downloads first.
 
-`make backup-drill OFFSITE=1` runs the same drill from the off-site copy (`--offsite`); only the value 1 turns it on. It reads the folder that `OFFSITE_BACKUP_DIR` names, from the shell environment first and then `.env`, as compose reads it. The data verify runs with `--backups-root /offsite`. The report says `"source": "offsite"` and lands in the off-site folder's `drills\`. A drill from online-only placeholders downloads the set first, so it takes longer and needs the OneDrive client online.
+### 8.4 Restore a store
 
-**The restore run book, in short.**  The full run book is `docs\audit\2026-10-14-sim525-backups-plan.md` §6. Pick the set with `make backup-status`. To restore from the off-site copy on this machine, first copy the set folder (for example `postgres\<TS>\`) from the OneDrive folder back into `BACKUP_DIR`: the `db` container has no `/offsite` mount. On a new machine, point `BACKUP_DIR` at the synced OneDrive folder instead. `docs\audit\2026-10-17-sim568-offsite-copy.md` §7 holds both cases.
+The full run books are
+[`docs/audit/2026-10-14-sim525-backups-plan.md`](docs/audit/2026-10-14-sim525-backups-plan.md)
+§6 and, for the off-site copy,
+[`docs/audit/2026-10-17-sim568-offsite-copy.md`](docs/audit/2026-10-17-sim568-offsite-copy.md)
+§7. Pick the set with `make backup-status`. The `db` container has no
+`/offsite` mount: to restore from the off-site copy, first copy the set folder
+back into `BACKUP_DIR`.
 
 ```bat
-:: Postgres: the target database must be empty (a new postgres_data volume).
-:: The script refuses a populated database with exit 3 ("target database is not empty").
-make restore-postgres SET=<TS>
-:: Expected last line: RESTORE OK /backups/postgres/<TS>
+:: The statistics database. The target must be empty (a new postgres_data volume);
+:: the script refuses a populated database with exit 3.
+make restore-postgres SET=PASTE_TS
+:: Expected last line: RESTORE OK /backups/postgres/PASTE_TS
 make db-roles
 docker compose run --rm migrate alembic current
-:: Expected: alembic prints 0030 (head)
+:: Expected: 0030 (head)
 
-:: DuckDB: checks the size and sha256, moves a live .wal aside, replaces the file.
+:: The analytics file: checks the size and sha256, moves a live .wal aside, replaces the file.
 docker compose stop scheduler
-docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-duckdb <TS> --yes
+docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-duckdb PASTE_TS --yes
 docker compose restart app
 docker compose start scheduler
 
-:: The bundle: copies the version back and publishes it; the app restarts itself on the link move.
-docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-bundle <TS> --yes
+:: The bundle: copies the version back and publishes it; the app restarts itself.
+docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-bundle PASTE_TS --yes
 ```
 
-`pg_restore.sh` drops the empty `raw` and `sim` schemas that the image's init creates. Then it restores with `pg_restore -j 4 --no-owner --no-acl --exit-on-error` and checks every table's count against the set's two counts. The restore carries no owners or grants, so `make db-roles` puts the grants back. `--restore-bundle` refuses a version folder that exists already; `--force` copies over it. No command restores the small files: copy them from the DuckDB set's `data_files\` folder into `/data` by hand.
+The Postgres restore carries no owners or grants, so `make db-roles` puts the
+grants back. `--restore-bundle` refuses a version folder that exists; `--force`
+copies over it. No command restores the small files: copy them from the
+analytics set's `data_files\` folder into `/data` by hand.
 
 ---
 
-## Part 3 — End-to-end run (sprint-kickoff health checklist)
+## 9. Troubleshooting
 
-Run this from a clean checkout to confirm the full system boots and
-every component is exercised once:
-
-```bat
-git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb
-copy .env.example .env
-py scripts\gen_secrets.py --append .env
-make dev-bg
-make migrate
-make test
-make test-integration
-
-pytest tests\unit\test_engine_build_smoke.py -v
-
-curl http://localhost:8000/health
-curl http://localhost:8000/ready
-
-:: SIM-443c: every data route needs a key. Use one value of API_KEYS in .env.
-set API_KEY=<one API_KEYS value from .env>
-:: CORRECT URL (path-style, /api/similarity, no /v1):
-curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=20&top_n=10"
-
-set BASEBALL_DB_DSN=postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim
-python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md
-python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 ^
-    --out docs\perf\2026-05-13-index-acceptance.md
-
-make down
-```
-
-### 3.1 Single-line `&&`-chained equivalent
-
-```bat
-git clean -fdx -e .env -e db\schemas\baseball_simulator.duckdb && copy .env.example .env && py scripts\gen_secrets.py --append .env && make dev-bg && make migrate && make test && pytest tests\unit\test_engine_build_smoke.py -v && curl http://localhost:8000/health && curl http://localhost:8000/ready && set "API_KEY=<one API_KEYS value from .env>" && curl -H "X-API-Key: %API_KEY%" "http://localhost:8000/api/similarity/pitcher/605400/2024" && python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat-side-coverage.md && python scripts\run_index_acceptance.py --season 2024 --pitcher-id 605400 --out docs\perf\2026-05-13-index-acceptance.md && make down
-```
-
-### 3.2 Persisting `BASEBALL_DB_DSN`
-
-```bat
-setx BASEBALL_DB_DSN "postgresql://baseball_app:<BASEBALL_APP_DB_PASSWORD from .env>@localhost:5432/baseball_sim"
-:: Open a NEW cmd window after setx — current windows don't see the new value.
-echo %BASEBALL_DB_DSN%
-```
-
----
-
-## Part 4 — Where to look when something breaks
-
-| Symptom | Where to look |
+| Symptom | Cause and fix |
 |---|---|
-| `{"detail":"Not Found"}` on similarity curl | URL is wrong — use `/api/similarity/pitcher/{id}/{season}`, NOT `/v1/similarity/pitcher?…`. |
-| `make migrate` fails | `db\migrations\versions\` — chain integrity; `alembic current` output. |
-| Engine builds but scores degenerate | `similarity\similarity_diagnostics.py` reports COLLAPSED / NO_SPREAD flags. |
-| Regression-gate fails after engine change | `python tests\regression\generate_fixtures.py --force` then commit. |
-| API returns 5xx on similarity | `docker compose logs app` — engine load errors surface first. |
-| Live pipeline misses pitches | Check `raw.etl_errors` — SIM-093 audits skipped rows. |
-| Vig flake | Fixed in SIM-159; check `_VIG_LOWER`/`_VIG_UPPER` in `test_live_pipeline_bugs.py`. |
-| Mock odds returns NULL hash | Run `python scripts\backfill_odds_hash.py`. |
-| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0032_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `32`). On the live DuckDB, apply 0031 only through `scripts/rebuild_steal_pool.py --apply-migration` (app stopped): it applies the migration inside the steal-pool rebuild's transaction, and the old pool builder fails on a migrated table. |
-| `curl` truncates URL | Escape `&` as `^&` or wrap the URL in double quotes. |
-| `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
-| `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |
-| Pitcher engine smoke fails with `import ot` | POT isn't installed — `pip install -r requirements.txt` (pins `POT>=0.9.5`, which ships a cp313 wheel). |
-| `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "baseball_user"` (or `"baseball_app"` / `"baseball_ro"`) even though `.env` and `docker compose exec db env` agree | **Stale `postgres_data` volume.**  `POSTGRES_PASSWORD` only takes effect on the volume's first init.  Reset the passwords in-band from `.env` over the db container's socket (no password needed):<br>`make db-roles ROTATE_ADMIN_PASSWORD=1`<br>It sets `baseball_user`'s password from `POSTGRES_PASSWORD` and both app roles' passwords from `.env`, and re-applies the grants.<br>Nuclear option (loses all data): `docker compose down -v && docker compose up -d db && make migrate`. Take a backup first (`make backup`); the restore run book in §2.10 brings the data back from a set. |
-| `required variable POSTGRES_PASSWORD is missing a value` (or another secret) on any `docker compose` or `make` command | `.env` lacks a secret (SIM-443): `py scripts\gen_secrets.py --append .env`, then `py scripts\gen_secrets.py --check .env` exits 0. A worktree needs its own `.env`. |
-| `401 Unauthorized` from an `/api/` route | Every route needs a credential in every environment (SIM-443c): `X-API-Key: <key>` or `Authorization: Bearer <key>` with a key from `API_KEYS`, or the browser's login with `AUTH_PASSWORD`. `curl http://localhost:8000/health` shows `"auth_enforced"`. |
-| The SQL console answers 503 | The read-only pool is missing or refused (SIM-443e). `curl http://localhost:8000/health` shows `"sql_console"`; `docker compose logs app \| findstr SIM-443e` names the reason. Run `make db-roles` if `baseball_ro` does not exist yet. |
-| `permission denied for table ...` from the app or a loader | The table is outside `raw`/`sim`, or a new schema has no grants: add its lines to `db\roles\setup_roles.sql`, then `make db-roles`. |
-| Ofelia logs `No such container: baseball_simulator_v2-jobs-1` | The nightly data jobs exec into the `jobs` container (SIM-443b): `docker compose up -d jobs`, then `docker compose ps jobs` shows it healthy. A worktree's or a renamed project's container has another name: edit the `container =` lines in `deploy\ofelia\config.ini`. |
-| A store is lost or corrupt (the Postgres database, `/data/baseball_sim.duckdb` or the published bundle) | Restore it from its newest good set with the scheduled backups (SIM-525): the restore run book in §2.10, in full in `docs\audit\2026-10-14-sim525-backups-plan.md` §6. `make backup-status` lists the sets. To test a set before you restore it, run `make backup-drill SET=<TS>`. |
-| A backup set is missing this morning (`make backup-status` shows a store over 24 h old, or the gauge `baseball_sim_backup_age_hours` reads over 24 or -1) | 1. `docker compose logs scheduler \| findstr nightly-backup` shows each job's output and exit. An exec error means the `db` or `jobs` container was stopped at 10:00 UTC. 2. The Postgres job: exit 2 is a refusal before any write (the backup root is missing or read-only, the free space is short, or another run holds `postgres\.lock`); exit 1 is a failed dump, and the job prunes nothing. 3. The data job: `docker compose exec -T jobs cat /data/ingest_marks/nightly-backup.last` holds its exit code in the middle field. Exit 2 is a refusal (the root or the free space). Exit 1 means a store failed. One cause: a writer mark such as `nightly-rebuild.running` stayed fresh for 2 h, or a writer held the DuckDB file for 30 min, so the job skipped the DuckDB store. 4. A `<TS>.partial` folder is a run that died; the next run deletes it. 5. With no `BACKUP_DIR` in `.env`, the sets go to `.\backups` in the repo. Then run `make backup` from cmd.exe. |
+| `required variable POSTGRES_PASSWORD is missing a value` (or another secret) on any `docker compose` or `make` command | `.env` lacks a secret. Run `py scripts\gen_secrets.py --append .env`; then `py scripts\gen_secrets.py --check .env` exits 0. A worktree needs its own `.env`. |
+| `password authentication failed for user "baseball_user"` (or `baseball_app`, `baseball_ro`) although `.env` looks right | The volume is older than the password: Postgres reads `POSTGRES_PASSWORD` only when it creates a volume. Run `make db-roles ROTATE_ADMIN_PASSWORD=1`; it resets all three passwords from `.env` over the socket. |
+| `401 Unauthorized` from an `/api/` route | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` with a key from `API_KEYS`, or log in in the browser. |
+| The SQL console, the assistant or a Data Lab page answers 503 | The read-only pool is missing or refused. `/health` shows `"sql_console"`; `docker compose logs app \| findstr SIM-443e` names the reason. Run `make db-roles` if `baseball_ro` does not exist. |
+| `permission denied for table ...` | The table is in a schema the roles do not cover. Add its lines to `db\roles\setup_roles.sql`, then run `make db-roles`. |
+| The simulation fails with no bundle | No bundle is published yet. Run `make engine-artifacts`. |
+| `Could not set lock on file "/data/baseball_sim.duckdb"` | Another process holds the analytics file. The nightly rebuild runs 08:00 to about 09:30 UTC; a script with a read-only handle also blocks a writer. Wait, or close the other process. |
+| The app boots uncalibrated (identity win probabilities) | `/data/calibration.json` is missing, or `make calibrate` dropped the reliability curve. Section 6. |
+| The site answers 502 for a few seconds after an app recreate, or a few minutes near 09:30 UTC | nginx re-resolves the app's new address within 10 s. Near 09:30 UTC the app restarts itself on the new bundle. Both are expected. |
+| `Fatal Python error: Segmentation fault` (exit 139) in a container | A known, random crash of this image's Python. Treat it as a retry: the nightly jobs rerun by themselves (`with_retry.sh`), and the loaders resume. |
+| Ofelia logs `No such container: baseball_simulator_v2-jobs-1` | The `jobs` container is stopped. Run `docker compose up -d jobs`; `docker compose ps jobs` shows it healthy. A stack under another project name needs its own `container =` lines in `deploy\ofelia\config.ini`. |
+| A backup set is missing this morning (`make backup-status` shows a store over 24 h old, or a gauge reads -1) | 1. `docker compose logs scheduler \| findstr nightly-backup` shows each job's exit; an exec error means the `db` or `jobs` container was down at 10:00 UTC. 2. Exit 2 is a refusal before any write: the root is missing or read-only, the disk is short, or another run holds the lock. 3. The data job's exit 1 can mean a writer mark stayed fresh for 2 hours, or a writer held the analytics file for 30 minutes, so it skipped that store. 4. A `.partial` folder is a dead run's; the next run deletes it. Then run `make backup`. |
+| The app fails to import after an `api/` edit | The edit imports a `betting/` name the image does not have. Rebuild: `docker compose build app`, then `docker compose up -d app`. |
+| `C:/Program Files/Git/` in an error | Git Bash rewrote a container path. Use cmd.exe, or prefix the command with `MSYS_NO_PATHCONV=1`. |
+| The disk fills during image builds | Run `docker builder prune -f`. |
+
+**Do not** run interpreter-wide memory tracing (`PYTHONTRACEMALLOC=1`) on the
+live app boot: it wedged Docker Desktop once. Profile memory in a separate,
+memory-capped container.
 
 ---
 
-## Companion documents
+## 10. Where to read more
 
-- `BACKLOG.xlsx` — the open tickets, ranked by priority.
-- `CHANGES.md` — every shipped change with per-ticket detail.
-- `agent_team.md` — 9-agent role definitions.
-- `docs\technical\README.md` — the per-subsystem code reference.
-- `docs\archive\architecture\2026-05-20-play-pool.md` — Phase 3 sampler spec.
-- `docs\similarity_visualization_spec.md` — similarity-explorer design + endpoint contract.
-- `docs\perf\2026-05-13-index-acceptance.md` — SIM-158 acceptance harness.
-- `docs\data_quality\2026-05-20-bat-side-coverage.md` — SIM-160 audit.
+- [`deploy/README.md`](deploy/README.md): nginx, the ports, the logins, the monitoring, the scheduler and the environment tiers.
+- [`db/roles/README.md`](db/roles/README.md): the three database roles.
+- [`docs/technical/README.md`](docs/technical/README.md): the code reference.
+- [`docs/audit/2026-10-13-sim443-security-hardening.md`](docs/audit/2026-10-13-sim443-security-hardening.md): the security design and its cutover run book.
+- `BACKLOG.xlsx`: the open tickets. `CHANGES.md`: what changed and when.

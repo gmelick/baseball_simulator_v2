@@ -1,588 +1,807 @@
 # API Layer
 
-The FastAPI application: the app factory and its lifespan, the routes, the response models and the auth.
+The API is a FastAPI app in `api/`. It serves the game slate, the real game from the league
+feed, the simulations, the betting prices, the Data Lab and the similarity explorer. The
+frontend calls it over REST and one WebSocket; Prometheus scrapes its `/metrics`. Every
+route except the login, the health probes and the API docs needs a login.
 
-*35 files documented — use the page outline (right sidebar) to jump to one.*
+## How it fits together
 
-### `api/__init__.py`
+### The boot
 
-Empty package marker for the api/ package. No code.
+`uvicorn api.main:app` imports [main.py](../../api/main.py), whose `create_app()` builds the
+app without opening any connection. When the server starts, `lifespan()` runs these steps
+in order:
 
-**Used by:** `every api.* import`
+1. `validate_environment()` ([env_check.py](../../api/env_check.py)) stops the boot when
+   `BASEBALL_DB_DSN`, `REDIS_URL`, `SECRET_KEY` or `AUTH_PASSWORD` is missing
+   (`AUTH_DISABLED=1` skips the last two).
+2. `open_pg_pool()` ([state.py](../../api/state.py)) opens the main Postgres pool. The name
+   resolver and the run registry (`SimJobRegistry`, [sim_jobs.py](../../api/sim_jobs.py))
+   attach to it. The registry marks every run a dead process left queued or running as
+   `failed('restart')`.
+3. `open_redis_cache()` opens Redis and pings it. A failure stops the boot.
+4. `LeagueFeed()` ([league_feed.py](../../api/league_feed.py)) attaches unless
+   `SLATE_SCHEDULE_ENABLED=0`.
+5. `startup.build_engines()` ([startup.py](../../api/startup.py)) builds the pitcher engine
+   (a failure stops the boot) and all eleven similarity engines (a failure skips that
+   engine).
+6. `startup.load_calibration()` applies `/data/calibration.json` to the engines and sets the
+   win-probability map. A missing file leaves the identity map.
+7. `startup.open_assistant_client()`, `startup.open_read_only_pool()` and
+   `startup.start_live_feed()` attach the optional resources.
+8. The replay store opens when `REPLAY_PERSISTENCE_ENABLED` is on (`/data/replay.duckdb`).
+9. `prime_park_factor_source()` (in `simulation/sim_kwargs.py`) reads the venue run factors
+   into memory and closes the analytics file.
+10. `startup.build_sim_runner()` pins the engine-artifact bundle version, loads the bundle's
+    large arrays for shared memory and builds the one `BatchRunner`.
+11. `_background_prewarm()` warms the worker pool as a background task. The boot never waits
+    for it.
+12. `startup.start_bundle_watch()` starts the task that restarts the app when the nightly
+    rebuild publishes a new bundle version.
 
-> **Notes for anyone changing this file:** File is literally empty (0 bytes) — just makes api/ a package.
+Shutdown runs `startup.close_resources()` (the reverse order), then closes the park-factor
+source.
 
----
+### A simulation request
+
+1. The browser calls `POST /api/games/{game_pk}/simulate`. The router-level `require_auth`
+   ([auth.py](../../api/auth.py)) checks the cookie or the key.
+2. `start_simulation_run()` ([games.py](../../api/routes/games.py)) calls
+   `_resolve_state_or_error()`, which resolves the lineup into a `GameState` and marks its
+   park factor unresolved.
+3. `_resolved_sim_kwargs()` looks the venue's park factor up and builds the simulator's
+   keyword arguments.
+4. `resolve_factory_ref()` names the machine factory. The `GameSpec` carries the factory and
+   the kwargs.
+5. `SimJobRegistry.submit()` writes a queued `sim.sim_runs` row, or returns the active run
+   with the same key.
+6. The job runs `BatchRunner.run_job()` in a worker thread. The runner plays the games in
+   chunks on the worker pool and reports progress after each chunk.
+7. `_persist_replay_artifacts()` records the run's representative game on the worker pool
+   and stores it in the replay file.
+8. The job writes the summary, the prop set and the inning grids on the row. The browser
+   polls `GET /simulate/runs/{run_id}` and then reads `/boxscore`, `/props`, `/card` and
+   `/plays`.
+
+### The other request paths
+
+- **The slate and the real game.** `GET /api/games/{date}` reads the league schedule through
+  `LeagueFeed` and adds our stored data ([games_slate.py](../../api/routes/games_slate.py)).
+  `/feed`, `/feed/plays` and `/feed/state` read one cached copy of the league's per-game feed
+  ([games_feed.py](../../api/routes/games_feed.py)).
+- **The prices.** `/api/betting/games/{game_pk}/edges` and `/signals` run (or read from the
+  cache) a simulation, then price every side of the fifteen game markets
+  ([betting.py](../../api/routes/betting.py), [betting_pricing.py](../../api/routes/betting_pricing.py)).
+- **The Data Lab.** The SQL console, the assistant, the analytics, the player search and the
+  schema tree run only on the read-only pool ([sql_safety.py](../../api/routes/sql_safety.py)).
+- **The live socket.** `/ws/games/{game_pk}` forwards the `live` service's messages, which
+  arrive on Redis through `RedisBridge`.
+
+## The routes
+
+The OpenAPI snapshot is [frontend/openapi.json](../../frontend/openapi.json). "Login" means a
+valid session cookie, `X-API-Key` header or `Authorization: Bearer` key. "Read-only pool"
+means the route answers 503 when the lifespan has no read-only pool.
+
+### The game routes (`/api/games`, [games.py](../../api/routes/games.py) and its sub-routers)
+
+| Method | Path | Returns | Access |
+|---|---|---|---|
+| GET | `/api/games/{date}` | The day's games (`GamesOnDateResponse`): the schedule, the lineup flag, the newest run's summary; `source` = `schedule`, `schedule_cached` or `db` | Login |
+| GET | `/api/games/{game_pk}/status` | One game's identity, state, records, final score and newest summary | Login |
+| GET | `/api/games/{game_pk}/feed` | The real game for a slate card: linescore, box scores, lineups, the live field | Login |
+| GET | `/api/games/{game_pk}/feed/plays` | The real game's plate appearances and their pitches | Login |
+| GET | `/api/games/{game_pk}/feed/state?at_bat=` | The real game at the start of a plate appearance (the what-if's base) | Login |
+| GET | `/api/games/{game_pk}/live` | The live service's stored game state (`sim.lineup_state`) | Login |
+| GET | `/api/games/{game_pk}/simulate` | An N-game Monte-Carlo summary, run now (or from the cache) | Login |
+| POST | `/api/games/{game_pk}/simulate` | Queues a durable run (202, `SimRunModel`) | Login |
+| GET | `/api/games/{game_pk}/simulate/runs/latest` | The game's newest pregame run, any state | Login |
+| GET | `/api/games/{game_pk}/simulate/runs/{run_id}` | One run's state, progress and summary | Login |
+| DELETE | `/api/games/{game_pk}/simulate/runs/{run_id}` | Cancels a run (409 once it finished) | Login |
+| POST | `/api/games/{game_pk}/what-if` | Queues two runs from a plate appearance: as played and with the changes (202) | Login |
+| GET | `/api/games/{game_pk}/what-if/{base_run_id}/{change_run_id}` | Both what-if runs, the real final and the score at the start | Login |
+| POST | `/api/games/{game_pk}/sample-game` | Simulates and stores one game for the game page | Login |
+| POST | `/api/games/{game_pk}/simulate/with_override` | A baseline batch and a roster-override batch at one seed, and their difference | Login |
+| GET | `/api/games/{game_pk}/boxscore` | Every player's prop means over a run | Login |
+| GET | `/api/games/{game_pk}/props/{player_id}/{prop}` | One player's prop distribution, the over / under at a line, and an edge report | Login |
+| GET | `/api/games/{game_pk}/plays` | The stored game's pitch-by-pitch play stream (paged with `limit` / `offset`) | Login |
+| GET | `/api/games/{game_pk}/state/{at_bat}/{pitch}` | The stored game's field at one pitch | Login |
+| GET | `/api/games/{game_pk}/linescore` | The stored game's linescore | Login |
+| GET | `/api/games/{game_pk}/decisions` | The stored game's winning, losing and saving pitchers | Login |
+| GET | `/api/games/{game_pk}/card` | The linescore and the decisions together, with the run id and seed | Login |
+
+### The betting routes (`/api/betting`, [betting.py](../../api/routes/betting.py) and its sub-routers)
+
+| Method | Path | Returns | Access |
+|---|---|---|---|
+| GET | `/api/betting/games/{game_pk}/edges` | The edge report of every side of each requested game market; `result` once the game is final | Login |
+| GET | `/api/betting/games/{game_pk}/signals` | The +EV bets (positive expected value), ranked by EV and sized by fractional Kelly | Login |
+| GET | `/api/betting/games/{game_pk}/line-movement` | The opening-to-closing series per side and book | Login |
+| GET | `/api/betting/games/{game_pk}/clv` | The series that carry a closing-line value | Login |
+| GET | `/api/betting/games/{game_pk}/card-odds` | The graded book's stored moneyline, run line and total for a slate card | Login |
+| GET | `/api/odds/{game_pk}` | Mock odds for one game (`MockOddsAPI`) | Login |
+| GET | `/api/odds/today/all` | Mock odds for every game on today's league schedule | Login |
+
+### The Data Lab and the similarity explorer
+
+| Method | Path | Returns | Access |
+|---|---|---|---|
+| POST | `/api/sql/run` | The rows of one validated read-only query on `raw.*` | Login; read-only pool |
+| GET | `/api/schema` | The `raw.*` tables and columns | Login; read-only pool |
+| GET | `/api/players/search?q=` | The name typeahead over `raw.players` | Login; read-only pool |
+| GET | `/api/players/{player_id}` | A player's identity and the seasons on file | Login; read-only pool |
+| GET | `/api/analytics/kpis`, `/by-season` | The store's coverage counts | Login; read-only pool |
+| GET | `/api/analytics/pitch-type-mix`, `/pa-outcomes`, `/count-state`, `/velo-distribution`, `/zone`, `/leaderboard/pitchers`, `/leaderboard/batters` | Season-bounded summaries of `raw.pitches` | Login; read-only pool |
+| GET | `/api/data/freshness` | The ingest watermark and the coverage per season | Login; read-only pool |
+| GET | `/api/assistant/status` | Whether the assistant has an Anthropic client, and its model | Login |
+| POST | `/api/assistant/ask` | A server-sent event stream of the assistant's text, queries and results | Login; read-only pool |
+| GET | `/api/similarity/pitcher/{pitcher_id}/{season}` | The pitcher engine's score distribution, binned, with the top matches | Login |
+| GET | `/api/similarity/engines` | The eleven engines and their build status | Login |
+| GET | `/api/similarity/{engine}/meta` | One score engine's sub-scores and weights | Login |
+| GET | `/api/similarity/{engine}/query` | One subject's ranked matches and score histogram | Login |
+| GET | `/api/similarity/{engine}/pair` | One subject-versus-match breakdown | Login |
+| POST | `/api/similarity/situation/query` | The nearest historical game states | Login |
+
+### The session, the probes and the socket
+
+| Method | Path | Returns | Access |
+|---|---|---|---|
+| POST | `/auth/login` | Sets the `sim_session` cookie for the right password | Open |
+| GET | `/auth/me` | The caller's login state; never 401 | Open |
+| POST | `/auth/logout` | Clears the cookie | Open |
+| GET | `/health` | Liveness: `status`, `auth_enforced` and the read-only pool's state | Open |
+| GET | `/ready` | Readiness: Postgres, Redis, the live service's heartbeat and the pitcher engine | Open |
+| GET | `/` | The service name | Open |
+| GET | `/docs`, `/redoc`, `/openapi.json` | FastAPI's own API docs | Open |
+| GET | `/metrics` | The Prometheus series (not in the OpenAPI schema) | Login |
+| WS | `/ws/games/{game_pk}` | The live game's messages; a ping every 30 seconds | Handshake check |
+
+## Logging in
+
+[auth.py](../../api/auth.py) holds the one credential check. `require_auth` and
+`authenticate_websocket` both call `_authenticate()`, which tries the session cookie first,
+then an API key.
+
+- **The session cookie.** `POST /auth/login` compares the password with `AUTH_PASSWORD` and
+  sets an httpOnly `sim_session` cookie, SameSite strict. The cookie holds a token signed
+  with HMAC-SHA256 (a keyed hash) under `SECRET_KEY`, so the server keeps no session store.
+  The token expires after `SESSION_TTL_HOURS` (default 8). The cookie is `Secure` outside
+  `ENVIRONMENT=development`, so plain HTTP needs the development setting.
+- **The API key.** A key from `API_KEYS` (comma-separated) arrives in `X-API-Key`, or as
+  `Authorization: Bearer <key>`. Prometheus sends its key the second way. The comparison
+  checks every configured key in constant time.
+- **The opt-out.** `AUTH_DISABLED=1` turns every check off. The boot logs a warning, and
+  `/health` reports `auth_enforced: false`. The test suite runs this way.
+- **The WebSocket.** FastAPI gives a WebSocket handler no `Request`, so `require_auth` cannot
+  guard the socket. The handler calls `authenticate_websocket()` first; it closes a refused
+  handshake with code 1008 before it accepts it.
+
+Every data router carries `require_auth` at the router level, so a new route on one of them
+is gated with no line of its own. `auth_router` and `ws_router` are open on purpose.
+
+The rate limiter (`RateLimitMiddleware`) is off unless `RATE_LIMIT_PER_MINUTE` is above 0. It
+counts a request against a configured API key, else against the client address. Behind a
+proxy that `TRUSTED_PROXY_HOSTS` names (compose sets `nginx`), the client address comes from
+`X-Real-IP`. The limiter keeps its counts in process memory, so it suits one server process.
+
+## The data handles
+
+| Handle | Opened by | Role and scope | Used by |
+|---|---|---|---|
+| `app.state.pg_pool` | `open_pg_pool(BASEBALL_DB_DSN)` | `baseball_app`: reads and writes `raw` and `sim`, no DDL (schema changes) | The game and betting routes, the run registry, the name resolver, `/metrics` |
+| `app.state.pg_pool_ro` | `startup.open_read_only_pool(BASEBALL_DB_RO_DSN)` | `baseball_ro`: reads `raw` only; `search_path = raw`; refused when the role is a superuser, can use `sim` or can insert into `raw.pitches` | The SQL console, the assistant, the analytics, the player search, the schema tree, the data freshness |
+| The analytics DuckDB file | The engine builds and the park-factor prime | Opened read-only, read, and closed. The app never holds the file, so the nightly rebuild can write it | `api.state.build_*`, `simulation.sim_kwargs.prime_park_factor_source` |
+| `app.state.replay_duckdb` | `db.sim_store.open_replay_store(REPLAY_DUCKDB_PATH)` | A DuckDB file of its own (`/data/replay.duckdb`), held writable by the app alone | The replay writes and reads in `games.py` |
+| `app.state.redis_client` | `open_redis_cache(REDIS_URL)` | The similarity payload cache, the live bridge, the live heartbeat | `similarity.py`, `startup.start_live_feed`, `/ready` |
+| `app.state.sim_cache` | `create_app()` through `simulation.batch_runner.make_cache()` | Redis when a server answers, else an in-process cache; typed JSON only | `BatchRunner` (summaries for 60 s), the slate and feed caches |
+
+## The app.state map
+
+The lifespan and `create_app()` attach every shared resource to `app.state`; a route reads it
+off `request.app.state`. A renamed attribute breaks its routes with no import error.
+
+| Attribute | Set by | Read by |
+|---|---|---|
+| `pg_pool`, `player_name_resolver` | `lifespan` | Most game and betting routes; `similarity.get_name_resolver` |
+| `sim_jobs` | `lifespan` | `games_runs._get_sim_jobs`, `startup.start_bundle_watch` |
+| `redis_client`, `similarity_cache` | `lifespan` | `/ready`, `similarity.get_similarity_cache` |
+| `league_feed` | `lifespan` | `games_slate._slate_schedule_payload`, `games_feed._league_game_payload` |
+| `pitcher_engine`, `engines` | `startup.build_engines` | `similarity.get_pitcher_engine`, `similarity_explorer._engines` |
+| `calibration_report`, `calibration_map` | `startup.load_calibration` | `betting._summary_and_winprob` |
+| `anthropic_client` | `startup.open_assistant_client` | `ai_assistant._client` |
+| `pg_pool_ro`, `sql_console_role` | `startup.open_read_only_pool` | `_common._get_ro_pool`, `ai_assistant._pool`, `/health` |
+| `pipeline` or `live_bridge` | `startup.start_live_feed` | The WebSocket handler (`live_bridge.retain` / `release`) |
+| `replay_duckdb` | `lifespan` | `games._get_replay_store` |
+| `park_factor_source` | `lifespan` | `ParkFactorSourceMiddleware` |
+| `sim_runner`, `bundle_version`, `bundle_in_use_marker` | `startup.build_sim_runner` | `games._build_runner`, `startup.close_resources` |
+| `prewarm_task`, `bundle_watch_task` | `lifespan`, `startup.start_bundle_watch` | `startup.close_resources` |
+| `sim_cache` | `create_app` | `_common._get_sim_cache` |
+| `api_p95_seconds`, `request_count`, `sim_latency_last_seconds` | `LatencyMiddleware`, `metrics.record_request`, `metrics.record_sim_latency` | `/metrics` |
+| `finals_newest_date`, `live_heartbeat_ts`, `backup_ages` and their check times | `metrics._schedule_finals_refresh`, `metrics._backup_ages` | `/metrics` |
+
+A test sets two more: `sim_factory_ref` (the machine factory) and `sim_duckdb` (a fake
+analytics connection for the park-factor lookup). Production sets neither.
+
+## The app and its boot
 
 ### `api/main.py`
 
-The FastAPI app: `create_app()` builds it (the middleware, every router, `/health`, `/ready`, `/` and the SPA mount) and `lifespan` opens and closes its resources. The lifespan's steps that tests patch or read stay here: the Postgres pool and the name resolver, the run registry, the Redis cache, the league reader, the replay store (`app.state.replay_duckdb`, its own file `REPLAY_DUCKDB_PATH`; the analytics file stays read-only), the park-factor prime and the background pre-warm. The other steps live in `api/startup.py`, the environment check in `api/env_check.py`, the park-factor header in `api/middleware.py`.
+[Source](../../api/main.py) · 461 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py), [test_replay_store.py](../../tests/unit/test_replay_store.py), [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_openapi_snapshot.py](../../tests/unit/test_openapi_snapshot.py)
 
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `lifespan(app)` | Async context manager. Startup, in order: `validate_environment()`, the pg pool and the name resolver, the run registry (`SimJobRegistry`, which marks a previous process's unfinished runs `failed('restart')`), the Redis cache, the league reader (unless `SLATE_SCHEDULE_ENABLED=0`), then `startup.build_engines`, `load_calibration`, `open_assistant_client`, `open_read_only_pool` (passed this module's `open_pg_pool`, so a test's patch reaches it), `start_live_feed`, the replay store, the park-factor prime, `startup.build_sim_runner`, the background pre-warm and `startup.start_bundle_watch`. Shutdown: `startup.close_resources`, then the park-factor source. | `FastAPI(app, lifespan=lifespan) inside create_app()` | `api.state.open_pg_pool / make_pg_name_resolver / open_redis_cache`<br>`api.startup`<br>`api.env_check.validate_environment`<br>`api.sim_jobs.SimJobRegistry`<br>`api.league_feed.LeagueFeed`<br>`db.sim_store.open_replay_store`<br>`simulation.sim_kwargs.prime_park_factor_source / close_park_factor_source` |
-| `_background_prewarm(runner, pool_dir)` | Runs `BatchRunner.prewarm()` as a background task, so a slow or stalled warm-up never holds the boot. | `lifespan()` | `simulation.batch_runner.BatchRunner.prewarm` |
-| `create_app()` | Builds the app: the CORS, rate-limit, latency and park-factor middleware; every router (auth, similarity, games, betting, data_health, ws/odds, metrics, sql_runner, analytics, players, schema, similarity_explorer, ai_assistant); the SPA mount; `/health`, `/ready`, `/`; the exception handlers. It attaches `app.state.sim_cache` (`make_cache()`). It opens no connection. | `module bottom: app = create_app()`<br>`the tests that build an app per case` | `api.auth`<br>`api.middleware.ParkFactorSourceMiddleware`<br>`api.errors.install_exception_handlers`<br>`every api.routes router`<br>`pipeline.live.live_ingestion_pipeline.ws_router / odds_router` |
+The app factory and the lifespan. `app = create_app()` at the bottom is what uvicorn serves.
 
-**Depends on:** `api.auth`, `api.env_check`, `api.errors`, `api.middleware`, `api.startup`, `api.state`, `api.sim_jobs`, `api.league_feed`, `db.sim_store`, `simulation.sim_kwargs`, `simulation.batch_runner`, every `api.routes` router
+| Function / class | What it does | Called from |
+|---|---|---|
+| `create_app()` | Adds the CORS, rate-limit, latency and park-factor middleware; includes every router (auth, similarity, games, betting, data freshness, the WebSocket and odds routers, metrics, the Data Lab, the similarity explorer, the assistant); adds `/health`, `/ready` and `/`; mounts the built frontend when `frontend/dist` exists; installs the 500 handler. Opens no connection. | Module bottom; `scripts/export_openapi.py`; the tests |
+| `lifespan(app)` | The boot steps and the shutdown above. | FastAPI, when the server starts |
+| `_background_prewarm(runner, pool_dir)` | Runs `BatchRunner.prewarm` in a thread and logs the outcome. With a pinned bundle version it passes no pool folder, so the workers find the bundle through the pin. | `lifespan` |
+| `health()` / `ready()` / `root()` | The probes. `/ready` answers 503 when Postgres or Redis fails; the live heartbeat and the pitcher engine are informational. | The compose health check (`/health`); nginx proxies both probes |
 
-**Used by:** `Dockerfile CMD (uvicorn api.main:app)`, the whole test suite through `create_app()`, `scripts/export_openapi.py` (`app.openapi()`)
+**Flags:** `SLATE_SCHEDULE_ENABLED` (default on), `REPLAY_PERSISTENCE_ENABLED` (default off;
+production 1), `REPLAY_DUCKDB_PATH`, `BASEBALL_PLAY_POOL_DIR`.
 
-**Environment flags read here:** `BASEBALL_DB_DSN`, `REDIS_URL`, `ENVIRONMENT`, `SLATE_SCHEDULE_ENABLED`, `REPLAY_PERSISTENCE_ENABLED`, `REPLAY_DUCKDB_PATH`, `BASEBALL_PLAY_POOL_DIR`, `AUTH_DISABLED` (the `/health` payload)
-
-> **Notes for anyone changing this file:** `app.state` is the wiring between the lifespan and the routes: pg_pool, pg_pool_ro, sql_console_role, redis_client, similarity_cache, league_feed, sim_jobs, pitcher_engine, engines, calibration_report, calibration_map, anthropic_client, pipeline or live_bridge, replay_duckdb, park_factor_source, sim_runner, sim_cache, prewarm_task, bundle_version, bundle_watch_task. A route reads them off `request.app.state`; a renamed attribute breaks a route with no error at import. Tests patch `open_pg_pool`, `make_pg_name_resolver`, `open_redis_cache` and `_background_prewarm` on this module, and two source guards read this file: `tests/unit/test_replay_store.py` (the lifespan assigns `app.state.replay_duckdb` and never `app.state.sim_duckdb`) and `tests/unit/test_sim_kwargs.py` (the lifespan primes the park-factor source outside the `replay_enabled` branch). Keep those steps here. The SPA catch-all `/{full_path:path}` must stay after every API route, or it shadows them.
-
----
+**Watch out:** Tests patch `open_pg_pool`, `open_redis_cache` and `_background_prewarm` on
+this module, so those calls stay here. `test_replay_store.py` reads this file's AST: the
+lifespan sets `app.state.replay_duckdb` and never `app.state.sim_duckdb`.
+`test_sim_kwargs.py` reads it too: the park-factor prime stays outside the
+`if replay_enabled:` branch. The SPA catch-all `/{full_path:path}` must stay after every API
+route; Starlette matches routes in registration order.
 
 ### `api/startup.py`
 
-The lifespan's steps that no test patches, one function per step, in the order the lifespan calls them. They log as `api.main`, the lifespan's logger, so the boot reads as one log and the tests' `caplog` filters still match.
+[Source](../../api/startup.py) · 457 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py)
 
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `build_engines(app)` | Builds the pitcher engine (`app.state.pitcher_engine`; a failure stops the boot) and all eleven engines (`app.state.engines`; a failing engine is skipped). `SIMILARITY_ENGINE_ENABLED=false` skips both and leaves `engines` empty. | `api.main.lifespan` | `api.state.build_pitcher_engine / build_all_engines` |
-| `load_calibration(app)` | Loads the calibration report once, applies it to every engine that supports it, and sets `app.state.calibration_map` (the identity map without a report). | `api.main.lifespan` | `api.state.load_calibration_report / apply_calibration_to_engines`<br>`simulation.win_probability.CalibrationMap` |
-| `open_assistant_client(app)` | Creates `app.state.anthropic_client` when `ANTHROPIC_API_KEY` is set; else None. | `api.main.lifespan` | `anthropic.AsyncAnthropic (lazy import)` |
-| `open_read_only_pool(app, open_pg_pool)` | Opens the `BASEBALL_DB_RO_DSN` pool (`search_path = raw`), checks its role (`check_read_only_role`) and keeps it as `app.state.pg_pool_ro` only when the role is not a superuser and cannot write; else closes it and leaves None (the read routes answer 503). | `api.main.lifespan` | `api.routes.sql_safety.check_read_only_role`<br>`api.state.redact_dsn` |
-| `start_live_feed(app, dsn, redis_url)` | With `LIVE_PIPELINE_ENABLED`, starts the live pipeline in this process; otherwise attaches `app.state.live_bridge`, which forwards the `live` service's Redis messages to the WebSocket clients. | `api.main.lifespan` | `pipeline.live.live_ingestion_pipeline.LiveIngestionPipeline / connection_manager`<br>`pipeline.live.broadcast.RedisBridge` |
-| `build_sim_runner(app)` | Pins the bundle version (`api.bundle_watch.pin_bundle_version`), loads the bundle's large arrays for shared memory, and builds the one long-lived `BatchRunner` (`app.state.sim_runner`; `SIM_RUNNER_WORKERS` sets its worker count). A missing bundle never stops the boot. | `api.main.lifespan` | `simulation.batch_runner.BatchRunner / default_max_workers / make_cache`<br>`pipeline.batch.engine_artifacts.EngineArtifacts.load`<br>`api.bundle_watch` |
-| `start_bundle_watch(app)` | With `SIM_RESTART_ON_NEW_BUNDLE` on and a pinned version, starts the task that restarts the app on a new bundle version. | `api.main.lifespan` | `api.bundle_watch.watch_for_new_bundle` |
-| `close_resources(app)` | The shutdown: the bundle watch and its pin, the pre-warm task, the runner, the run jobs, the live bridge, the league reader, Redis, the read-only and main pools, the in-process pipeline and the replay store, each close guarded. | `api.main.lifespan` | — |
+The lifespan's steps that no test patches, one function per step. They log under `api.main`,
+so the boot reads as one log.
 
-**Environment flags read here:** `SIMILARITY_ENGINE_ENABLED`, `ANTHROPIC_API_KEY`, `ASSISTANT_MODEL` (the log line), `BASEBALL_DB_RO_DSN`, `LIVE_PIPELINE_ENABLED`, `SIM_RUNNER_WORKERS`
+| Function / class | What it does | Called from |
+|---|---|---|
+| `build_engines(app)` | Builds the pitcher engine and all eleven engines in a thread. `SIMILARITY_ENGINE_ENABLED=false` skips both; the similarity routes then answer 503. | `lifespan` |
+| `load_calibration(app)` | Loads the calibration report, applies it to every engine with `apply_calibration`, and builds `CalibrationMap.from_report`. | `lifespan` |
+| `open_assistant_client(app)` | Creates `anthropic.AsyncAnthropic()` when `ANTHROPIC_API_KEY` is set. | `lifespan` |
+| `open_read_only_pool(app, open_pg_pool)` | Opens the read-only pool with `search_path = raw`, runs `check_read_only_role`, and keeps the pool only when the role is acceptable. Logs a warning when the role cannot read `raw.pitches`. | `lifespan` |
+| `start_live_feed(app, dsn, redis_url)` | With `LIVE_PIPELINE_ENABLED` (default off) it runs the live pipeline in this process. Otherwise it attaches `RedisBridge`, which forwards the `live` service's Redis messages to the browsers. | `lifespan` |
+| `build_sim_runner(app)` | Pins the bundle version (`pin_bundle_version`) before the pool starts, loads `EngineArtifacts` and publishes its large arrays to shared memory, then builds the `BatchRunner`. A missing bundle never stops the boot; each worker then fails at its first game. | `lifespan` |
+| `start_bundle_watch(app)` | Starts `watch_for_new_bundle` when `SIM_RESTART_ON_NEW_BUNDLE` is on and a version is pinned. | `lifespan` |
+| `close_resources(app)` | Stops the watch and undoes the pin, cancels the pre-warm wait, closes the runner, the jobs, the bridge, the league reader, Redis, both pools, the in-process pipeline and the replay store. Each close is guarded. | `lifespan` |
 
-> **Notes for anyone changing this file:** The test patches reach the lazy imports here because each step imports at call time (`api.bundle_watch.bundle_link`, `simulation.batch_runner.BatchRunner`, `api.routes.sql_safety.check_read_only_role`). Keep those imports inside the functions.
+**Flags:** `SIM_RUNNER_WORKERS` (default unset = min(CPU count − 1, 10); `1` runs in this
+process), `SIM_RESTART_ON_NEW_BUNDLE` (default off; production 1), `SIMILARITY_ENGINE_ENABLED`,
+`LIVE_PIPELINE_ENABLED`, `ANTHROPIC_API_KEY`, `BASEBALL_DB_RO_DSN`.
 
----
+**Watch out:** Each step imports its heavy modules inside the function, so a test's patch of
+the source module reaches it. Never set `LIVE_PIPELINE_ENABLED` on the compose stack: the
+`live` service is the one publisher.
 
 ### `api/env_check.py`
 
-The environment check the lifespan runs first.
+[Source](../../api/env_check.py) · 68 lines · Tests: [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py)
 
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `validate_environment()` | Raises when `BASEBALL_DB_DSN` or `REDIS_URL` is missing, then when `SECRET_KEY` or `AUTH_PASSWORD` is blank in any environment; the error names `scripts/gen_secrets.py`. With `AUTH_DISABLED=1` it logs one WARNING and skips the auth check. It logs as `api.main`. | `api.main.lifespan` | `api.auth._auth_disabled` |
-
----
-
-### `api/middleware.py`
-
-The app's own response middleware.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `ParkFactorSourceMiddleware.dispatch()` | Stamps `X-Park-Factor-Source` (`duckdb:<n>`, `unavailable` or `unknown`) on every response, so a caller sees whether the venue park factors were real. It reads the module's live verdict first (`park_factor_source_status()`), then `app.state.park_factor_source`. | `the Starlette middleware stack (every request)` | `simulation.sim_kwargs.park_factor_source_status` |
-
----
+| Function / class | What it does | Called from |
+|---|---|---|
+| `validate_environment()` | Raises `RuntimeError` when `BASEBALL_DB_DSN` or `REDIS_URL` is missing, then when `SECRET_KEY` or `AUTH_PASSWORD` is blank. A blank value counts as missing. With `AUTH_DISABLED=1` it logs one warning and skips the auth check. | `lifespan` (first step) |
 
 ### `api/state.py`
 
-Boot-time resource builders for app.state: the 11 similarity engines, the calibration report and its application, the Postgres-backed player-name resolver, the Redis-backed similarity cache, and the asyncpg pool opener. Each builder is a plain function so a unit test can call it directly without booting the app.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `build_pitcher_engine(duckdb_path=None)` | Constructs and build()s a PitcherSimilarityEngine from DuckDB, waiting out a DuckDB writer (`retry_on_duckdb_lock`); fatal on failure. | `api.startup.build_engines (via asyncio.to_thread)` | `similarity.engines.pitcher_similarity.PitcherSimilarityEngine` |
-| `build_all_engines(duckdb_path=None, registry=None, loader=None)` | Builds all 11 engines named in ENGINE_REGISTRY, skipping (with a WARNING log) any engine that fails to construct or build() so one bad profile table never blocks boot. | `api.startup.build_engines` | `_default_engine_loader (importlib)`<br>`each similarity.engines.*.{Class}(duckdb_path=...).build()` |
-| `load_calibration_report(path=None)` | Loads a persisted CalibrationReport JSON (CALIBRATION_REPORT_PATH env or arg); returns None on any missing/corrupt file (never raises). | `api.startup.load_calibration` | `similarity.similarity_calibration.CalibrationReport.from_json` |
-| `apply_calibration_to_engines(engines, report)` | Calls apply_calibration(report) on every engine that supports it (the 8 RBF/GMM engines); returns the list of engine names it succeeded on. | `api.startup.load_calibration` | `engine.apply_calibration (duck-typed)` |
-| `make_pg_name_resolver(pool)` | Builds an async closure resolving a set of player_ids to full names in one round trip against raw.players. | `api.main.lifespan (assigned to app.state.player_name_resolver)` | `asyncpg pool.fetch on raw.players` |
-| `open_redis_cache(redis_url)` | Opens an aioredis client, pings it (fail-fast), and wraps it in RedisSimilarityCache. | `api.main.lifespan` | `redis.asyncio.from_url` |
-| `open_pg_pool(dsn, min_size=2, max_size=10, server_settings=None)` | Opens an asyncpg connection pool. `server_settings` sets session parameters on every connection (the read-only pool sets `search_path` to `raw`). | `api.main.lifespan (the main pool) and api.startup.open_read_only_pool (when BASEBALL_DB_RO_DSN is set, the read-only pool; the read-only pool serves the SQL console, the assistant and the Data Lab read routes: schema, analytics, players and data freshness)` | `asyncpg.create_pool` |
-| `redact_dsn(dsn)` | Returns the DSN as `scheme://user:***@host:port/db` for a log line: the password masked, any query string dropped, `<redacted>` when the DSN does not parse. | `api.startup.open_read_only_pool (the one INFO line that names the console pool)` | `urllib.parse.urlsplit` |
-
-**Depends on:** `similarity.engines.* (11 engine classes, lazily imported)`, `similarity.similarity_calibration.CalibrationReport`, `simulation.win_probability.CalibrationMap / IDENTITY_CALIBRATION`, `asyncpg`, `redis.asyncio`
-
-**Used by:** `api.main`, `api.startup`
-
-**Environment flags read here:** `BASEBALL_DUCKDB_PATH`, `CALIBRATION_REPORT_PATH`
-
-> **Notes for anyone changing this file:** ENGINE_REGISTRY (name -> (module_path, class_name)) is the single source of truth for app.state.engines' keys; api/routes/similarity_explorer.py's SCORE_ADAPTERS dict must stay in sync with these names or a route 404s with 'unknown engine'. build_all_engines is resilient per-engine (partial dict on failure) while build_pitcher_engine is NOT (crashes boot) — the two engines can therefore end up out of sync (pitcher_engine attached but 'pitcher' missing from engines, or vice versa is not possible since pitcher always builds first, but a caller must not assume engines['pitcher'] exists just because app.state.pitcher_engine does elsewhere). CACHE_TTL_SECONDS / make_cache_key are the contract api/routes/similarity.py uses for its Redis key scheme.
-
----
-
-### `api/auth.py`
-
-Baseline security primitives: session-cookie + API-key authentication (the require_auth dependency and its WebSocket twin authenticate_websocket; SIM-443c: enforced in every environment, with `AUTH_DISABLED=1` the one opt-out), a stdlib in-memory rate limiter, a rolling p95 latency middleware, and the CORS-origin resolution logic. Dependency-light by design (no slowapi, no Redis) so tests and the dev environment work without extra services.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `require_auth(request)` | FastAPI dependency on every data router (SIM-443c). It passes with no credential only when `_auth_disabled()`; else it accepts a valid sim_session cookie, an `X-API-Key` header or `Authorization: Bearer <key>`; otherwise it raises 401 with a `WWW-Authenticate` header. `ENVIRONMENT` plays no part. | The router-level `dependencies=[Depends(require_auth)]` of `api/routes/games.py`, `betting.py`, `similarity.py`, `similarity_explorer.py`, `players.py`, `schema_introspect.py`, `data_health.py`, `sql_runner.py`, `ai_assistant.py`, `metrics.py`, `analytics.py`<br>`pipeline/live/live_ingestion_pipeline.py odds_router` | `_auth_disabled`<br>`_authenticate` |
-| `authenticate_websocket(websocket)` | The WebSocket gate: the same check over the handshake's cookies and headers. On failure it closes the socket with code 1008 BEFORE accept and returns None. A router-level dependency gets nothing in a WebSocket scope, so the handler calls this itself. | `pipeline/live/live_ingestion_pipeline.py game_state_ws (first line)` | `_auth_disabled`<br>`_authenticate` |
-| `_auth_disabled()` | The ONE opt-out: true when `AUTH_DISABLED=1`. To remove the opt-out, delete this helper and its call sites. | `require_auth`, `authenticate_websocket`, `api/routes/auth.py me()`, `api/env_check.py validate_environment()` and `/health` (`api/main.py`) | `_env_flag` |
-| `Principal` / `_authenticate(cookies, headers)` | The shared core: a valid session cookie first, else an API key. It returns a `Principal(mode, subject, expires_at)` or None, and never raises. | `require_auth`, `authenticate_websocket`, `api/routes/auth.py me()` | `_verify_session_token`<br>`_presented_api_key`<br>`_key_matches` |
-| `_presented_api_key(headers)` / `_key_matches(presented, keys)` | Reads `X-API-Key`, else `Authorization: Bearer <key>`. Compares the key against EVERY configured key with `hmac.compare_digest` (no early exit). | `_authenticate`<br>`RateLimitMiddleware._client_key (SIM-564)` | `_configured_api_keys` |
-| `_mint_session_token(subject='user') / _verify_session_token(token)` | Stateless HMAC-SHA256-signed session token (mint) and its verification (signature + expiry check, never raises). | `api/routes/auth.py login() (mint)`<br>`require_auth() and api/routes/auth.py me() (verify)` | `_get_secret_key`<br>`hmac/hashlib/base64 stdlib` |
-| `cookie_kwargs(max_age=None)` | Builds the response.set_cookie/delete_cookie kwargs (httponly, secure-outside-dev, samesite=strict). | `api/routes/auth.py login()/logout()` | `_is_development`<br>`_session_ttl_seconds` |
-| `RateLimitMiddleware.dispatch(request, call_next)` | Sliding-window limiter per bucket: a configured API key, else the client address (SIM-564; behind a trusted proxy, the real client's address from `X-Real-IP`, SIM-569); 429 + Retry-After when the window's request count hits the configured limit. Disabled unless RATE_LIMIT_PER_MINUTE > 0. | `ASGI middleware stack, registered in api.main.create_app` | `_presented_api_key`<br>`_key_matches`<br>`_configured_api_keys`<br>`hashlib.sha256 (the bucket name)`<br>`_client_address` |
-| `_client_address(request)` / `_trusted_proxy_addresses()` | The address a request comes from (SIM-569): the connection's own, or the value of `X-Real-IP` when the connection comes from a proxy named in `TRUSTED_PROXY_HOSTS`. nginx sets that header to the connection's address on every request, so a browser cannot forge it. The names resolve through `socket.getaddrinfo` at most once a minute; a name that does not resolve trusts nothing. | `RateLimitMiddleware._client_key` | `_resolve_proxy_host`<br>`socket.getaddrinfo` |
-| `LatencyMiddleware.dispatch(request, call_next)` | Times every non-exempt request, keeps a 200-entry ring buffer, computes p95 and stores it on app.state.api_p95_seconds; also bumps the /metrics request counter. | `ASGI middleware stack, registered in api.main.create_app` | `api.routes.metrics.record_request` |
-| `resolve_cors_origins()` | Resolves the CORS allowlist: CORS_ORIGINS env, else FRONTEND_URL, else (dev only) a fixed localhost list, else a single safe localhost fallback. No default is the wildcard; only an explicit `CORS_ORIGINS=*` gives it. | `api.main.create_app (CORSMiddleware allow_origins)` | `_is_development` |
-
-**Depends on:** `fastapi`, `starlette.middleware.base.BaseHTTPMiddleware`
-
-**Used by:** `api.main (middleware registration, /health)`, `api.env_check (validate_environment)`, `api.routes.auth`, every data router in `api.routes.*`, `pipeline.live.live_ingestion_pipeline (odds_router, game_state_ws)`
-
-**Environment flags read here:** `ENVIRONMENT` (the cookie `secure` flag and the CORS defaults only), `AUTH_DISABLED`, `SECRET_KEY`, `AUTH_PASSWORD`, `SESSION_TTL_HOURS`, `API_KEYS`, `TRUSTED_PROXY_HOSTS` (SIM-569: the proxies whose `X-Real-IP` the limiter believes), `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_ENABLED`, `CORS_ORIGINS`, `FRONTEND_URL`
-
-> **Notes for anyone changing this file:** The rate limiter is PROCESS-LOCAL (an in-memory dict) — correct only for a single worker; a multi-worker deployment would under-count. Since SIM-443c require_auth fails CLOSED: there is no development pass-through, no 'nothing configured' pass-through and no dev sentinel secret. _get_secret_key()/_get_auth_password() raise RuntimeError naming scripts/gen_secrets.py when the variable is blank. The only way to turn the check off is AUTH_DISABLED=1; the app logs it at boot and /health reports "auth_enforced": false. The cookie `secure` flag still follows ENVIRONMENT: on plain HTTP keep ENVIRONMENT=development, or the browser drops the cookie and the login loops. Behind nginx the connection's address is nginx's: `TRUSTED_PROXY_HOSTS` (compose sets `nginx`) names the proxies whose `X-Real-IP` gives the limiter the real client address (SIM-569). uvicorn's own `FORWARDED_ALLOW_IPS` stays at its default: it takes addresses, not names, and nginx's compose address is not fixed.
-
----
-
-### `api/errors.py`
-
-Installs a single catch-all FastAPI exception handler that turns any unhandled exception into a structured JSON envelope with a correlating request_id, instead of leaking a traceback to the client.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `install_exception_handlers(app)` | Registers an @app.exception_handler(Exception) that logs the full traceback server-side and returns {detail, error_type: 'internal_error', request_id} with a fresh uuid. | `api.main.create_app (last step before returning app)` | `logging.getLogger(...).exception` |
-
-**Depends on:** `fastapi`
-
-**Used by:** `api.main`
-
-> **Notes for anyone changing this file:** HTTPException and RequestValidationError are untouched by this handler (FastAPI's own shapes still apply) — only a genuinely unhandled exception (bug) gets this envelope. Extracted from main.py specifically so it's unit-testable against a tiny app with no DB-dependent lifespan.
-
----
-
-### `api/schemas/` (a package)
-
-The API's response models: one Pydantic v2 model per simulation or betting output dataclass, each with a `from_dataclass()` classmethod that strips numpy, so the wire JSON holds plain Python types only. The package `__init__` re-exports every public model, so `from api.schemas import X` works for each; the modules group the models by source: `summary` (`ConfidenceIntervalModel`, `GameSimSummaryModel`, `GameSimSummaryLite`), `snapshots` (the player reference, the field, the play-by-play, the override delta), `game_card` (the linescore and the pitcher decisions), `props` (the boxscore card, `GENERIC_PEN_IDS`, `PropEdgeResponse`), `markets` (CLV, the edge report, the bet signal, the line movement) and `live` (`LiveGameStateResponse`). `_base._ApiModel` forbids extra fields.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `GameSimSummaryModel.from_dataclass(summary, include_raw_arrays=True)` | A GameSimSummary as JSON-safe fields, optionally without the three per-iteration score arrays. | `api/routes/games.py simulate_game_endpoint / simulate_with_override_endpoint` | `ConfidenceIntervalModel.from_dataclass` |
-| `GameSimSummaryLite` | The array-free summary on a slate card, the status card and a run row. | `api/routes/games_models.py _sim_summary_lite_from_stored` (`model_validate`) | — |
-| `LinescoreModel.from_jsonable / PitcherDecisionsModel.from_jsonable` | The model rebuilt from a stored `to_jsonable()` dict (the replay store's game card), the derived properties recomputed. | `api/routes/games.py get_game_linescore / get_game_decisions / get_game_card` | — |
-| `BoxscoreCardRowModel / BoxscoreCardModel.from_prop_set` | One `{prop_name -> mean}` map per player, in BATTER_PROPS / PITCHER_PROPS order, with the name, side, slot and starter flag; a side's placeholder relievers fold into one "Bullpen (generic)" row (`GENERIC_PEN_IDS`). The card carries the run's `base_seed`. | `api/routes/games.py get_game_boxscore` | `simulation.prop_distributions.PropDistributionSet` |
-| `EdgeReportModel / BetSignalModel / LineMovementModel / CLVModel .from_dataclass` | The betting dataclasses as wire-safe models; a MarketSide becomes its string value, and `price_book` adds the book's display name. | `api/routes/betting.py`, `betting_lines.py`<br>`api/routes/games.py get_player_prop_edge` | `pipeline.odds_provider.book_display_name` |
-
-**Depends on:** `api.serialization.to_jsonable` (LineQuoteModel's `fetched_at`), `pipeline.odds_provider`, `pydantic`
-
-**Used by:** `api.routes.games` and its sub-routers, `api.routes.betting` and its sub-routers
-
-> **Notes for anyone changing this file:** Every model forbids extra fields (`_ApiModel`): a field added to a source dataclass does not reach the wire until its model gains it. A model's docstring and fields are the OpenAPI schema; regenerate the frontend snapshot after an edit (`scripts/export_openapi.py` in the app image, then `npm run gen:api`).
-
----
-
-### `api/serialization.py`
-
-The single recursive numpy-to-JSON conversion helper (to_jsonable) used everywhere a Phase-4 dataclass or a raw asyncpg/DuckDB value needs to become plain Python types before hitting json.dumps or a Pydantic model.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `to_jsonable(obj)` | Recursively converts numpy scalars/arrays, datetimes, enums, dataclass instances, mappings, and other iterables into JSON-native int/float/str/bool/None/list/dict; anything unrecognized falls back to str(obj). | `api/routes/games.py (_build_replay_artifacts, _store_history_run)`<br>`api/schemas/markets.py (LineQuoteModel.from_dataclass)`<br>`api/routes/sql_safety.py (run_read_only_sql cell conversion)` | `itself, recursively` |
-| `_jsonable_key(key)` | Coerces a mapping key (numpy scalar / enum) to a JSON-object-key-safe Python value before to_jsonable stringifies it. | `to_jsonable (dict branch)` | — |
-
-**Depends on:** `numpy`
-
-**Used by:** `api.schemas`, `api.routes.games`, `api.routes.sql_safety`
-
-> **Notes for anyone changing this file:** Deliberately lossless — never rounds, truncates, or drops elements (a consumer that wants a summary trims at the call site, not here). np.float64 subclasses Python float and np.str_ subclasses str, so the isinstance check at the top explicitly excludes np.generic first — removing that exclusion would silently let numpy scalars leak onto the wire again.
-
----
-
-### `api/routes/__init__.py`
-
-The routers package; its docstring names the aggregate routers (`games`, `betting`) and their sub-routers, `_common` and `sql_safety`. `api/main.py`'s `create_app()` holds the router list.
-
-**Used by:** `every api.routes.* import`
-
----
-
-### `api/routes/_common.py`
-
-The small helpers and the one constant the route modules share, so no module keeps its own copy: the main-pool accessor, the read-only-pool accessor, the one 503 text for a missing read-only pool, the sim-cache accessor, and the row readers that work on an asyncpg Record or a plain dict.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `_get_pool(request)` | Returns request.app.state.pg_pool, or raises 503 if the lifespan never attached one. The main pool logs in as `baseball_app`, which can write; only the routes that write or read `sim.*` use it. | `api/routes/games.py`<br>`api/routes/betting.py` | — |
-| `_get_ro_pool(request)` | Returns request.app.state.pg_pool_ro (the `baseball_ro` pool the lifespan checked), or raises 503 with `RO_POOL_UNAVAILABLE_DETAIL`. It never falls back to the main pool, because the main pool's role can write. The read-only pool sets `search_path = raw` and can read `raw.*` and nothing else. | `api/routes/sql_runner.py`<br>`api/routes/analytics.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py`<br>`api/routes/data_health.py` | `RO_POOL_UNAVAILABLE_DETAIL` |
-| `RO_POOL_UNAVAILABLE_DETAIL` | The one 503 text for a missing read-only pool. The constant lives here, not in sql_safety.py, so the route modules do not import `sqlglot`. | `_get_ro_pool`<br>`api/routes/sql_safety.py (re-export)`<br>`api/routes/ai_assistant.py (through sql_safety)` | — |
-| `_get_sim_cache(request)` | Returns `app.state.sim_cache`, or None (the BatchRunner then picks its own cache). | `api/routes/games.py`, `games_slate.py`, `games_feed.py` | — |
-| `_opt_str(row, key)` / `_opt_int(row, key)` / `_iso(v)` | A column as text, as an integer or as ISO-8601 text, or None. | `api/routes/games_slate.py`, `games_runs.py`, `data_health.py` | `_row_get` |
-| `_row_get(row, key, default=None)` | Reads key from an asyncpg Record OR a plain dict uniformly, collapsing a present-but-None value to default. | `api/routes/games.py`<br>`api/routes/data_health.py`<br>`api/routes/players.py`<br>`api/routes/schema_introspect.py` | — |
-
-**Depends on:** `fastapi`
-
-**Used by:** `api.routes.games`, `api.routes.betting`, `api.routes.data_health`, `api.routes.players`, `api.routes.schema_introspect`, `api.routes.analytics`, `api.routes.sql_runner`, `api.routes.sql_safety`
-
-> **Notes for anyone changing this file:** Do not put a per-file copy of any of these helpers back into a route module; import from here. A new route that only reads `raw.*` uses `_get_ro_pool`, never `_get_pool` (the Data Lab read routes on the read-only pool, SIM-566). `metrics.py` reads `app.state.pg_pool` directly and imports neither helper.
-
----
-
-### `api/routes/auth.py`
-
-Browser session-auth HTTP endpoints: POST /auth/login (password -> httpOnly cookie), GET /auth/me (probe auth state, always 200), POST /auth/logout (clear cookie). Registered with no router prefix so the paths are exactly /auth/*.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `login(body, response)` | Validates the posted password against AUTH_PASSWORD (constant-time compare) and, on success, mints and sets a signed session cookie. A blank AUTH_PASSWORD or SECRET_KEY answers 503 ("Login is not configured on this server"), not a 500. | `frontend login form (POST /auth/login)` | `api.auth._get_auth_password / _mint_session_token / cookie_kwargs` |
-| `me(request)` | Never raises 401 — reports authenticated/mode/expires_in so the frontend can decide whether to show the login page on boot. `mode` is `cookie`, `api_key`, `disabled` or `none` (SIM-443c); `authenticated` is true exactly when require_auth would pass. | `frontend app-boot check (GET /auth/me)` | `api.auth._auth_disabled / _authenticate` |
-| `logout(response)` | Idempotently clears the session cookie. | `frontend logout action (POST /auth/logout)` | `api.auth.cookie_kwargs` |
-
-**Depends on:** `api.auth`
-
-**Used by:** `api.main.create_app (registered first)`
-
-> **Notes for anyone changing this file:** No server-side session store — the cookie IS the session (HMAC-signed, self-expiring). Programmatic clients bypass this router entirely and send an API key (X-API-Key or Authorization: Bearer) to require_auth directly. This router carries NO auth gate on purpose: the login page must reach it.
-
----
-
-### `api/routes/metrics.py`
-
-The /metrics Prometheus scrape endpoint (SIM-374). Uses the real prometheus_client library when importable, else a hand-rolled text-exposition writer emitting the identical series names, so the scrape config and Grafana dashboards bind either way.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `record_sim_latency(app_state, seconds)` | Public instrumentation seam: stores the last simulation wall-clock on app.state and updates the Prometheus gauge if available. | `api/routes/games.py simulate_game_endpoint (after a non-cached batch run)` | — |
-| `record_request(app_state)` | Increments app.state.request_count on every non-exempt request. | `api.auth.LatencyMiddleware.dispatch` | — |
-| `metrics(request)` | The GET /metrics handler: refreshes gauges from app.state and returns either the real Prometheus exposition or the hand-rolled fallback text. | `Prometheus scraper` | `_collect`<br>`_render_fallback (fallback path) or prometheus_client.generate_latest` |
-
-**Depends on:** `api.auth.require_auth`, `prometheus_client (optional)`
-
-**Used by:** `api.main.create_app`, `api.routes.games (record_sim_latency)`, `api.auth.LatencyMiddleware (record_request)`
-
-**Environment flags read here:** `APP_VERSION`
-
-> **Notes for anyone changing this file:** Guarded by require_auth on the router (SIM-443c). Prometheus sends one API_KEYS value as a Bearer token, read from deploy/monitoring/secrets/app_api_key. The module keeps a single hand-rolled fallback scrape counter at module scope (_FALLBACK_SCRAPE_COUNT) which resets on process restart — expected, not a bug. Only requests_total/sim_latency/api_p95/pipeline_freshness are 'live'; the rest of the app never calls these seams unless another route explicitly imports them (record_sim_latency is currently called from exactly one place).
-
----
-
-### `api/routes/games.py`
-
-The aggregate router of `/api/games` (the prefix, the `games` tag and the login) and every route that runs a simulation, with the seam they share: the factory ref, the game state, the sim kwargs, the batch runner and the replay store. It includes the three sub-routers (`games_slate`, `games_feed`, `games_runs`); each is a bare `APIRouter()`, so the OpenAPI contract does not depend on where a route lives.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `resolve_factory_ref(request)` | The StateMachine factory's dotted ref: `app.state.sim_factory_ref`, else `$SIM_MACHINE_FACTORY_REF`, else `PRODUCTION_FACTORY_REF` ('simulation.production_factory:production_machine_factory'). | every simulation route here<br>`api/routes/betting.py _summary_and_winprob` | `simulation.flags.read_str` |
-| `_resolve_state_or_error(pool, game_pk, fallback_rows=None)` | Resolves a game's GameState from its lineup and marks its park factor unresolved. `LineupNotIngestedError` and `LineupIncompleteError` (a side with no pitcher, an empty batting order; the incomplete-lineup answer, SIM-559) are a 503 with `Retry-After: 900`; `LineupResolutionError` (an unknown game) is a 404. `fallback_rows` are lineup rows from the league feed, for a what-if on a game with no stored lineup. | every simulation route here<br>`api/routes/betting.py _summary_and_winprob`<br>`scripts/accuracy/`, `scripts/validate_props.py` | `simulation.lineup_resolver.resolve_game_state`<br>`simulation.sim_kwargs.mark_park_factor_unresolved` |
-| `_resolved_sim_kwargs(request, pool, state, game_pk)` | The one way a route builds sim kwargs: it looks the venue's park factor up first, then calls `simulation.sim_kwargs.build_sim_kwargs` (the bare builder raises `UnresolvedParkFactorError` on a marked state; the park-factor resolution, SIM-452). | every simulation route here<br>`api/routes/betting.py _summary_and_winprob` | `simulation.sim_kwargs.build_sim_kwargs` |
-| `_build_runner(request)` / `_run_batch(runner, spec, ...)` | The shared `app.state.sim_runner`, else a one-worker runner on the app's cache (a test app without the lifespan); and the sync wrapper the routes run in a worker thread. | every simulation route here<br>`api/routes/betting.py _summary_and_winprob` | `simulation.batch_runner.BatchRunner` |
-| `simulate_game_endpoint` | GET /{game_pk}/simulate — an N-game batch; records the latency metric, stores one game in the replay file and the summary in the sim-run history, and returns the GameSimSummary. | the API's clients; the tests | `_persist_replay_artifacts`<br>`api.routes.metrics.record_sim_latency` |
-| `start_simulation_run` | POST /{game_pk}/simulate (202) — queues a durable run (`api.sim_jobs`), or returns the queued or running one with the same key; the run's representative game goes to the replay file. Before Alembic 0029, 503. | `frontend Simulation card` | `api.routes.games_runs._get_sim_jobs / _run_model`<br>`_lineup_source` |
-| `start_what_if` | POST /{game_pk}/what-if (202) — the plate appearance's start state (`games_feed._start_state`), the changes applied (`simulation.whatif.apply_changes`; an illegal change is 422), and two runs at one seed: `whatif_base` and `whatif_change`. A game with no stored lineup builds its base state from the feed's starting lineup. Before Alembic 0030, 503. | `frontend WhatIfPanel` | `api.sim_jobs.SimJobRegistry`<br>`api.routes.games_feed._start_state / _league_game_payload / _feed_lineup_rows` |
-| `simulate_sample_game` | POST /{game_pk}/sample-game — simulates ONE game at `base_seed` (random when omitted) and stores it; returns `{game_pk, run_id, base_seed}`. 503 with the store off or an unusable lineup, 404 for an unknown game, 500 when the store failed. | `frontend game page "Simulate a game"` | `_persist_replay_artifacts` |
-| `simulate_with_override_endpoint` | POST /{game_pk}/simulate/with_override — a baseline batch and an override batch at one seed, and their `OverrideDelta`. | the API's clients (no frontend caller) | `_apply_override`<br>`simulation.snapshots.OverrideDelta.from_summaries` |
-| `get_game_boxscore` | GET /{game_pk}/boxscore — each player's prop means over an N-game batch on the worker pool (`_build_prop_set`), with the name, side, slot and starter flag; `run_id=` or `latest_run=true` reads a stored run instead. With the replay store on, the batch's first game is stored for /linescore and /plays. | `frontend BoxscorePanel` | `_build_prop_set`<br>`_player_tags`<br>`_player_names`<br>`api.routes.games_runs._stored_prop_set` |
-| `get_player_prop_edge` | GET /{game_pk}/props/{player_id}/{prop} — one player's PMF of one prop, the over / under at a line, and the edge report when both prices are given. With the boxscore's seed and N it reads the cached run. The valid props are `simulation.prop_distributions.ALL_PROPS` (fifteen). | `frontend BoxscorePanel` | `_build_prop_set`<br>`betting.prop_edge_report` |
-| `get_game_plays / get_game_state_at_pitch / get_game_linescore / get_game_decisions / get_game_card` | The replay reads: the newest complete run (a run with a game card) unless /plays names `run_id`. /plays carries the run id, the seed and a `names` map (`raw.players`, and "Generic reliever N" for a placeholder arm); /card carries the run id and the seed, so the page reads the card and then that run's plays. 404 with nothing stored, 503 with the store off. | `frontend game page` | `db.sim_store`<br>`_replay_call`<br>`_state_at_pitch_model_from_snapshot` |
-| `_persist_replay_artifacts(...)` | Records one game on the worker pool (`BatchRunner.record_game`; the API process never loads the bundle), builds its artifacts and stores them under the replay file's next run id; a /simulate batch also writes its summary to the Postgres history (`_store_history_run`). Never raises: None on any failure. | `simulate_game_endpoint`, `start_simulation_run`, `simulate_sample_game`, `get_game_boxscore` | `_build_replay_artifacts`<br>`_store_replay_run`<br>`_resolve_lineup_best_effort` |
-| `_build_replay_artifacts(recorded, resolved=None)` | One recorded game as a `ReplayArtifacts`: the play-by-play, a state per thrown pitch (with the fielding side's nine fielders when a lineup is resolved), the linescore, the pitcher decisions and the result. The routes record on the worker pool (`BatchRunner.record_game`); no route module imports the in-process recorder. | `_persist_replay_artifacts` | `simulation.play_recorder.record_game`<br>`simulation.linescore.linescore_from_plays`<br>`simulation.pitcher_decisions.decisions_from_plays` |
-| `_store_replay_run(cur, ...)` / `_replay_call(con, fn, **kw)` | One replay write under `_REPLAY_WRITE_LOCK` (the run id is the file's max + 1, and two prunes of one game conflict in DuckDB): the play stream, the states and the game card in one transaction, then the prune. `_replay_call` runs a store call on a cursor of its own. | `_persist_replay_artifacts` and the replay reads | `db.sim_store` |
-| `_build_prop_set` / `_player_tags` / `_player_names` | The run's PropDistributionSet from `BatchRunner.run_prop_set` (a seeded set is cached); each player's side, slot and starter flag from the sim kwargs, the placeholder pen included; the players' names from `raw.players` (a failed lookup returns `{}`). | `get_game_boxscore`, `get_player_prop_edge` | `simulation.batch_runner.BatchRunner.run_prop_set`<br>`simulation.production_factory._default_bullpen_for_spec` |
-
-**Depends on:** `api.auth.require_auth`, `api.routes._common`, `api.routes.games_slate / games_feed / games_runs / games_models`, `api.schemas`, `api.serialization.to_jsonable`, `betting`, `db.sim_store`, `simulation.batch_runner`, `simulation.linescore`, `simulation.lineup_resolver`, `simulation.pitcher_decisions`, `simulation.play_recorder`, `simulation.production_factory`, `simulation.prop_distributions`, `simulation.sim_kwargs`, `simulation.snapshots`
-
-**Used by:** `api.main.create_app`, `api.routes.betting` (`_build_runner`, `_resolve_state_or_error`, `_resolved_sim_kwargs`, `_run_batch`, `resolve_factory_ref`)
-
-**Environment flags read here:** `SIM_MACHINE_FACTORY_REF`
-
-> **Notes for anyone changing this file:** Tests patch this module's `resolve_game_state`, `record_game`, `linescore_from_plays`, `decisions_from_plays`, `_build_replay_artifacts`, `_query_player_names`, `_build_prop_set`, `_resolve_state_or_error`, `PRODUCTION_FACTORY_REF` and `sim_store` (the replay reads), so the code that calls them stays here. `tests/unit/test_sim_kwargs.py` counts the sim-kwarg calls in this file (8: the seven simulation routes and `_resolved_sim_kwargs`); a route that runs a simulation lives here. `PRODUCTION_FACTORY_REF` stays a dotted string: it is part of the result and prop-set cache keys. A route description (`description=`) or a model docstring is part of the OpenAPI contract: change one and regenerate `frontend/openapi.json` and `schema.d.ts` (`scripts/export_openapi.py` in the app image, then `npm run gen:api`; `tests/unit/test_openapi_snapshot.py` fails on drift). Lines marked `# re-export: removed in the integration pass` keep the names other areas' callers still read here.
-
----
-
-### `api/routes/games_slate.py`
-
-The day slate and one game's status card. The league's schedule says which games exist and their state; the database adds the lineup flag and source, the venue city and the newest simulation run.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_games_on_date(date, request, use_cache)` | GET /{date} — the schedule's games (one card per game; a suspended game appears on its resume day too) merged with the stored data in two queries (`_slate_merge_rows`). The schedule is cached by date class (`_slate_ttl`: 20 s today, 10 min ahead, 24 h past). On a league error, the last good schedule (`slate:last:{date}`), else the stored listing (memoized for `POOL_QUERY_TTL_S`) mapped by `card_state_from_raw`; `source` says which. The records come from the schedule. | `frontend Daily Diamond slate` | `_slate_schedule_payload`<br>`_schedule_card`<br>`_slate_from_db`<br>`pipeline.mlb_schedule` |
-| `get_game_status_card(game_pk, request)` | GET /{game_pk}/status — the game's identity, names, venue and season records (`_GAME_CARD_SQL`), its state, the final score, the newest stored summary (`_sim_summary_lite_from_stored`), and the schedule's fields for the page header (`_schedule_game_for`). 404 for an unknown game, 503 with no pool. | `frontend game page header` | `db.sim_store.load_latest_sim_run`<br>`_schedule_game_for` |
-
-**Used by:** `api.routes.games` (included in the aggregate router)
-
-> **Notes for anyone changing this file:** The tests patch `sim_store` on this module for /status. The two record-bearing queries share `_team_records_cte` and `_TEAM_RECORDS_JOIN_TAIL`; only the cutoff differs.
-
----
-
-### `api/routes/games_feed.py`
-
-The real game: the league's per-game feed (one cached copy, `_league_game_payload`) and the live service's stored state.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_game_feed(game_pk, request, use_cache)` | GET /{game_pk}/feed — the feed reduced to the slate card's detail (`parse_game_feed` to `GameFeedCardModel`). Cached 10 s live, 10 min before the game, 24 h final (`FEED_TTL_BY_STATE_S`); the last good copy on an error (`source = feed_cached`), else 503 with `Retry-After: 30`. | `frontend open slate card` | `_league_game_payload`<br>`pipeline.mlb_game_feed` |
-| `get_real_plays(game_pk)` / `get_pa_state(game_pk, at_bat)` | GET /feed/plays — the real game's plate appearances and a names map. GET /feed/state — the game at the start of one plate appearance (no `at_bat`: first pitch): the field in `FeedLive`'s shape, each side's lineup, pitcher, defense, bench and pen. An unknown plate appearance is 404, no feed 503. | `frontend ActualPlayByPlay, WhatIfPanel` | `pipeline.mlb_game_feed.parse_plays / state_at_pa` |
-| `get_live_game_state(game_pk, request)` | GET /{game_pk}/live — the live service's game state from `sim.lineup_state`; 404 with no live row, 503 with no pool. | `frontend game page (the fallback while the socket is closed)` | `db.sim_store.load_live_game_state` |
-| `_league_game_payload` / `_start_state` / `_feed_lineup_rows` | The cached raw feed (also read by the what-if result and the betting card's grading); the start state of a plate appearance, or an HTTP error; both starting lineups from a feed as `raw.game_lineups` rows. | the routes here<br>`api.routes.games start_what_if`<br>`api.routes.games_runs get_what_if`<br>`api.routes.betting _actual_result` | `pipeline.mlb_game_feed`<br>`pipeline.etl.etl_historical_loader._build_starting_lineup_rows` |
-
-**Used by:** `api.routes.games` (included in the aggregate router)
-
-> **Notes for anyone changing this file:** The tests patch `sim_store` on this module for /live.
-
----
-
-### `api/routes/games_runs.py`
-
-The reads of a game's durable simulation runs (`sim.sim_runs`). The routes that start a run live in `games.py`.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_latest_simulation_run / get_simulation_run / cancel_simulation_run` | GET /simulate/runs/latest (404 with none), GET and DELETE /simulate/runs/{run_id} (409 once the run finished). `runs/latest` stays before `runs/{run_id}`: the router matches in order. | `frontend Simulation card` | `_get_sim_jobs`<br>`_run_model` |
-| `get_what_if(game_pk, base_run_id, change_run_id)` | GET /what-if/{base}/{change} — both runs, the real final and the score at the start. | `frontend WhatIfPanel` | `api.routes.games_feed._league_game_payload`<br>`pipeline.mlb_game_feed.state_at_pa` |
-| `_get_sim_jobs` / `_run_model` / `_stored_prop_set` | The run registry (503 with none), a row as `SimRunModel`, and a run's prop set (404 with a hint when none). | the routes here<br>`api.routes.games` | `api.sim_jobs`<br>`simulation.prop_distributions.PropDistributionSet` |
-
-**Used by:** `api.routes.games` (included in the aggregate router)
-
----
-
-### `api/routes/games_models.py`
-
-The request and response models of `/api/games`, by the routes that use them, and `_sim_summary_lite_from_stored`: a stored summary as `GameSimSummaryLite`. The stored JSON lacks each interval's `half_width` (`to_jsonable` writes fields only, and `half_width` is a property), so the helper fills it from `(high - low) / 2`; it drops the per-iteration arrays and the inning grids, which the lite model forbids.
-
-**Used by:** `api.routes.games`, `api.routes.games_slate`, `api.routes.games_feed`, `api.routes.games_runs`
-
-> **Notes for anyone changing this file:** A model's docstring and fields are the OpenAPI schema; regenerate the frontend snapshot after an edit (see `games.py`).
-
----
-
-### `api/routes/betting.py`
-
-The aggregate router of `/api/betting` (the prefix, the `betting` tag and the login), /edges and /signals, the simulation they price from, and the grading on the real final. It includes `betting_lines` and `betting_card`; the prices and the edge math live in `betting_pricing`, the stored lines in `betting_stored_odds`. Every betting module logs as `api.routes.betting`.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `_summary_and_winprob(request, game_pk, n_iterations, base_seed, use_cache)` | The game routes' seam: the game state, the sim kwargs, the batch (cached by spec, seed and N), and the WinProbability through the app's calibration map. | `get_game_edges`, `get_game_signals` | `api.routes.games` (five helpers)<br>`simulation.win_probability.win_probability` |
-| `get_game_edges` | GET /games/{game_pk}/edges — the edge reports of the fifteen game markets by default (`?markets=` narrows; 422 on an unknown market). The response lists the priced markets in vocabulary order, `odds_source` per market, the graded book per stored market (`fair_book`, `fair_book_name`), each side's offered-price book (`price_book`), `market_names` and every run line's pricing. Once the game is final, each edge's `result` and the `final` score (`_actual_result`, `_grade`). | `frontend BettingCard` | `api.routes.betting_pricing`<br>`api.schemas.EdgeReportModel` |
-| `get_game_signals` | GET /games/{game_pk}/signals — the same reports gated to +EV and ranked by EV (`bet_signals_from_edges`); the signals fire on all fifteen markets, the uncalibrated segment and team markets included. | `frontend BettingCard` | `betting.bet_signal` |
-| `_actual_result` / `_grade` | The real final as a one-game `SegmentRuns` and its score (the stored grid, else the league feed's linescore); one side's "won" / "lost" / "push". | `get_game_edges` | `simulation.game_market_distributions.SegmentRuns / market_outcome`<br>`api.routes.games_feed._league_game_payload` |
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** `tests/unit/test_segment_edges.py` patches `_summary_and_winprob` on this module, so /edges and /signals stay here. The lines marked `# re-export: removed in the integration pass` keep the stored-odds names other areas' tests read here. `betting/` is baked into the app image while `api/` hot-reloads: rebuild the image before an `api/` edit that imports a new `betting/` name reaches the running app (CLAUDE.md §2a).
-
----
-
-### `api/routes/betting_pricing.py`
-
-The edge math: where a market's prices come from (injected, stored, mock), the run line as a pair or two separate bets, and the twelve segment and team markets.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `_build_edge_reports(summary, win_prob, *, game_pk, markets, ...)` | The reports of every side of each requested market: the moneyline off the WinProbability, the total off the totals, the run line off the score margin (a pair de-vigs its two prices; two separate bets read the book's two-way margin: the total, then the moneyline, then a flat 1.05), and the segment and team markets off the summary's inning grid (`_price_segment_market`). A side with a sim probability of exactly 0 or 1 is skipped (`_safe_report`). A summary with no grid prices the full-game markets only and logs one INFO line. Returns an `_EdgeBuild`. | `_priced_edge_reports` | `betting.clv_engine`<br>`simulation.game_market_distributions` |
-| `_parse_prices` / `_split_prices` | The `prices` document: a JSON object keyed by market type, each entry its kind's fields; any fault is a 422 naming the market (an owner ruling on the segment markets, SIM-546). A full-game market's entry becomes its named params. | `api.routes.betting` | `pipeline.odds_provider.GAME_MARKET_KIND / GAME_MARKET_TYPES` |
-| `_priced_edge_reports` | Reads the stored lines when a requested market needs them, then builds the reports. | `api.routes.betting` | `api.routes.betting_stored_odds._read_stored_rows / _stored_read_markets` |
-| `_mock_odds` / `_resolve_price` / `_at_offered_price` | The deterministic mock (`MockOddsAPI`, seeded on game_pk, imported lazily); an injected price else the mock's; a report re-read at the offered price (the EV moves, the edge stays). | `_build_edge_reports` | `pipeline.live.live_ingestion_pipeline.MockOddsAPI` |
-
----
-
-### `api/routes/betting_stored_odds.py`
-
-The stored price source: each sportsbook's latest usable one-book row (`bp:<id>`) of each market of a game (one book per odds row, SIM-555). A game in `Preview` reads its closing and current rows; any other game its closing rows only. The fair probability de-vigs the graded book's row (`GRADED_BOOK_PREFERENCE`); each side's offered price is the best stored price at that line. A current row not seen within `CURRENT_ROW_MAX_AGE_S` (20 min) of the game's newest sighting is a withdrawn price and drops out (`last_seen_at`, Alembic 0029). A failed read logs a WARNING and the markets fall to the mock.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `_read_stored_rows` / `_fetch_stored_rows` | The game's status, then the latest usable row per (market, book) (`_SQL_STORED_GAME_ODDS_SEEN`, else `_SQL_STORED_GAME_ODDS` before 0029). | `api.routes.betting_pricing`, `api.routes.betting_card` | `pipeline.odds_provider.bettable_labels` |
-| `_latest_pregame_rows` / `_stored_rows_by_market` / `_stored_market` | The rules again in Python (the allowed line types, one row per book, the withdrawn rows out); the usable rows by market in the graded order (every price present, none 0, `check_row` passed); the graded row and each side's best offered price. | `_read_stored_rows`, `api.routes.betting_pricing` | `pipeline.odds_row_guard.check_row` |
-| `_stored_reference_margin` / `_reference_order` / `_stored_read_markets` | One book's two-way margin (a segment run line reads its segment's total first); the markets the read asks for. | `api.routes.betting_pricing` | `betting.clv_engine.reference_margin_from_prices` |
-
----
-
-### `api/routes/betting_lines.py`
-
-GET /games/{game_pk}/line-movement and /clv: the stored `raw.game_odds` history as the opening-to-closing series per side and book, and the series that carry an entry-versus-close CLV. One-book rows only; a run-line side whose spread moved has no CLV (the run lines scored by shape, SIM-549). With no pool, 503; there is no mock. 422 on a market type outside the three full-game markets.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_game_line_movement / get_game_clv` | The two reads. | the API's clients | `betting.line_movement.fetch_line_movement` |
-
----
-
-### `api/routes/betting_card.py`
-
-GET /games/{game_pk}/card-odds: the graded book's moneyline, run line and total for one slate card, from the stored rows only (never the mock); on a final game, `settled` says how each line settled. 404 when the game has no stored row for any of the three.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_card_odds` / `_card_odds_from_rows` / `_card_settlement` | The route; the graded row of each market as the card's lines; the winner side of each priced market on the final score. | `frontend CardDetail` | `api.routes.betting_stored_odds._read_stored_rows`<br>`pipeline.odds_provider.book_display_name` |
-
----
-
-### `api/routes/similarity.py`
-
-v1 Similarity Score Explorer: the pitcher-vs-pitcher engine's histogram/top-N distribution endpoint. Thin route handler over pure, separately-unit-tested helpers (binning, score-summary stats, diagnostic classification).
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_pitcher_similarity_distribution(pitcher_id, season, bins, top_n, engine, name_resolver, cache)` | GET /api/similarity/pitcher/{pitcher_id}/{season} — queries the engine (with a 24h Redis cache), resolves names, and returns the score summary, histogram bins, top-N, and a diagnostic classification. | `frontend Similarity Explorer (pitcher view)` | `engine.query (PitcherSimilarityEngine)`<br>`compute_score_summary`<br>`build_bins`<br>`build_top_n`<br>`classify_diagnostic` |
-| `get_pitcher_engine(request) / get_name_resolver(request) / get_similarity_cache(request)` | FastAPI dependencies pulling pitcher_engine / player_name_resolver / similarity_cache off app.state, with graceful degradation (placeholder names, no cache) and a 503 when the engine isn't attached. | `get_pitcher_similarity_distribution (Depends)`<br>`api/routes/similarity_explorer.py (_resolve_names reuses get_name_resolver)` | — |
-| `compute_score_summary(scores) / classify_diagnostic(scores, n_bins) / build_bins / build_top_n / _BinSpec` | Pure, numpy-free statistics and binning helpers (min/percentiles/mean/std, COLLAPSED/NO_SPREAD/HEALTHY classification, histogram bucketing). | `get_pitcher_similarity_distribution`<br>`api/routes/similarity_explorer.py (reused directly for all other engines)` | — |
-
-**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.state (CACHE_TTL_SECONDS, NameResolver, SimilarityCache, make_cache_key)`, `similarity.engines.pitcher_similarity`
-
-**Used by:** `api.main.create_app`, `api.routes.similarity_explorer (imports _BinSpec, classify_diagnostic, compute_score_summary, get_name_resolver)`
-
-> **Notes for anyone changing this file:** similarity_explorer.py deliberately reuses this module's pure helpers rather than re-implementing binning/diagnostics — keep them numpy-free (no import of numpy/scipy here) so both routers stay importable in a lint-only CI job. Both routers mount at the SAME prefix '/api/similarity' — FastAPI resolves by path pattern, not registration order, but a new route added to either file must not collide with '/pitcher/{pitcher_id}/{season}' vs '/{engine}/meta|query|pair'.
-
----
-
-### `api/routes/similarity_explorer.py`
-
-Generalizes the Similarity Explorer to all 8 score-producing engines (batter, fielder, catcher, baserunner, baserunner_steal, pitcher_steal, manager, plus pitcher) using each engine's real component sub-scores, and separately exposes the 3 distance engines' catalog entries plus the situation (nearest-game-state) query.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `SCORE_ADAPTERS / DISTANCE_ENGINES (module dicts)` | Per-engine metadata: method name, partition rule, id/sample field names, weighted sub-score list, and special-casing flags (position_keyed for fielder, supports_vs_hand for batter). | `every route handler in this file via _require_score_engine/_subscores_meta` | — |
-| `engine_query(request, engine, entity_id, season, position, vs_hand, bins, top_n)` | GET /api/similarity/{engine}/query — ranked comps + histogram, calling the correct engine.query() signature per engine (fielder needs position, batter needs vs_hand). | `frontend Similarity Explorer (generalized engine view)` | `_require_score_engine`<br>`_call_query`<br>`_call_get_profile`<br>`compute_score_summary/classify_diagnostic/_build_bins (from api.routes.similarity)` |
-| `engine_pair(request, engine, a_id, a_season, b_id, b_season, position, vs_hand)` | GET /api/similarity/{engine}/pair — a single subject-vs-comparison breakdown via engine.query_pair. | `frontend head-to-head comparison view` | `_call_pair`<br>`_member` |
-| `situation_query(request, body)` | POST /api/similarity/situation/query — nearest historical game states from the KDTree situation engine. | `frontend Situation Finder` | `similarity.engines.situation_similarity.SituationVector`<br>`engine.query` |
-| `list_engines(request)` | GET /api/similarity/engines — catalog of all 11 engines with build status + profile counts, for the UI's engine picker. | `frontend Similarity Explorer landing page` | — |
-
-**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes.similarity (_BinSpec, classify_diagnostic, compute_score_summary, get_name_resolver)`, `similarity.engines.situation_similarity.SituationVector (lazy import)`
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** SCORE_ADAPTERS' keys MUST exactly match api.state.ENGINE_REGISTRY's keys (both dicts are hand-maintained separately) — adding a 12th engine to state.py without adding an adapter here means the new engine is buildable but never exposed through this explorer. The composite score is explicitly NOT a literal weighted sum of the listed sub-scores (each engine applies its own confidence discount) — the module's own docstring calls this out as an honesty requirement, so a UI author must not reconstruct the score bar-by-bar from the weights shown.
-
----
-
-### `api/routes/data_health.py`
-
-SIM-417 data-freshness endpoint for the UI's 'data as of...' badge: aggregate ingest watermark and per-season game/pitch coverage from raw.etl_data_freshness / raw.games / raw.pitches.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_data_freshness(request)` | GET /api/data/freshness — runs one aggregate query plus a per-season GROUP BY on the read-only pool and returns last_ingest_at, latest_game_date, totals, and per-season SeasonCoverage rows. It answers 503 when the read-only pool is not open. | `frontend header/data-status badge` | `api.routes._common._get_ro_pool/_row_get` |
-
-**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before; only /health, /ready, /, /auth/* and the docs stay open). The route reads the read-only pool since SIM-566 and answers 503 without it; it never falls back to the main pool. An empty store returns zeros, never an error.
-
----
-
-### `api/routes/sql_safety.py`
-
-The single shared read-only SQL validation + execution path used by BOTH the SQL Console and the AI Assistant, so the assistant is physically incapable of running anything the console couldn't. Defense-in-depth: statement validation before the DB, a read-only transaction, a statement timeout, and a hard SQL-enforced row cap.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `validate_read_only_sql(sql, max_len=MAX_SQL_LEN)` | Strips comments/string/dollar/quoted-identifier noise, rejects empty/oversized input, anything not starting with SELECT/WITH, any forbidden write/DDL/session keyword anywhere (even inside a CTE), multiple statements, and a blocklist of dangerous functions (including inside double-quoted identifiers). Last, it runs the relation allowlist. Returns the executable (semicolon-stripped) SQL string. | `run_read_only_sql (this file)`<br>`tests/unit/test_sql_safety.py` | `_strip_sql_noise`<br>`validate_relation_allowlist` |
-| `validate_relation_allowlist(sql)` | SIM-443d. Parses the query with sqlglot (Postgres dialect) and rejects it unless every table is `raw.<name>` or a CTE in scope at that point (a non-recursive CTE sees only the CTEs before it). Also rejects: a parse error, more than one statement, a statement that is not a query, `SELECT ... INTO`, the `TABLE name` shorthand, a three-part name, and any function in a FROM clause (plain or LATERAL) that is not on `_TABLE_FUNCTIONS_ALLOWED`. Fails closed. | `validate_read_only_sql` | `sqlglot.parse`<br>`_ctes_in_scope`<br>`_strip_sql_noise` |
-| `check_read_only_role(pool)` / `ReadOnlyRoleCheck` | SIM-443e. One query reads the pool's role, whether it is a superuser, whether it can use the `sim` schema, and whether it can INSERT into / SELECT from `raw.pitches`. `acceptable` is true when it is not a superuser, has no `sim` usage and no `raw` insert. | `api.startup.open_read_only_pool` | `pool.fetchrow` |
-| `run_read_only_sql(pool, sql, max_rows=DEFAULT_MAX_ROWS, timeout_ms=DEFAULT_TIMEOUT_MS)` | Validates the query, wraps it in a row-capped subquery, executes it inside a read-only transaction with SET LOCAL statement_timeout, and returns a JSON-safe {columns, rows, row_count, truncated, elapsed_ms} payload. | `api/routes/sql_runner.py run_sql`<br>`api/routes/ai_assistant.py _run_conversation` | `validate_read_only_sql`<br>`_execute`<br>`api.serialization.to_jsonable` |
-| `RO_POOL_UNAVAILABLE_DETAIL` | The 503 text for a missing read-only pool. sql_safety.py no longer defines it: it imports the constant from `api.routes._common` and keeps the name in `__all__`, so `from api.routes.sql_safety import RO_POOL_UNAVAILABLE_DETAIL` still works. | `api/routes/ai_assistant.py`<br>`tests/unit/test_sql_console_pool.py` | `api.routes._common.RO_POOL_UNAVAILABLE_DETAIL` |
-| `_strip_sql_noise(sql, keep_identifiers=False)` | Blanks out comments and string literals (and, unless keep_identifiers, quoted identifiers) while preserving character offsets, so keyword/function scans never trip on literal text — but preserves quoted-identifier TEXT when keep_identifiers=True because a quoted identifier is executable code (Postgres folds unquoted names to lower case, so \"pg_read_file\" IS pg_read_file). | `validate_read_only_sql (called twice: once blanking identifiers for the keyword scan, once preserving them for the dangerous-function scan)` | — |
-
-**Depends on:** `api.serialization.to_jsonable`, `sqlglot` (imported at module top: a missing package fails the boot)
-
-**Used by:** `api.routes.sql_runner`, `api.routes.ai_assistant`, `api.startup.open_read_only_pool (check_read_only_role)`
-
-**Environment flags read here:** `SQL_RUNNER_MAX_ROWS`, `SQL_RUNNER_TIMEOUT_MS`, `SQL_RUNNER_MAX_LEN`
-
-> **Notes for anyone changing this file:** SECURITY-CRITICAL FILE (documented inline as SIM-442): the double-quoted-identifier handling was previously a real vulnerability — blanking a quoted identifier's contents let `SELECT \"pg_read_file\"('/etc/passwd')` slip past every entry in _DANGEROUS_TOKENS because the scanned copy no longer contained the function name, while the ORIGINAL (unblanked) string still executed. Any future edit to _strip_sql_noise or the two validate_read_only_sql scan passes must preserve the keep_identifiers=True pass for the dangerous-function scan or this bug reopens. raw.* is the ONLY readable schema, and two layers enforce it (SIM-443d/e): the relation allowlist rejects any other table before the database is touched, and the console's pool runs as the baseball_ro role, which can SELECT raw.* and nothing else. Postgres also holds a `sim` schema (sim.sim_runs); the allowlist rejects it like any other schema. An unqualified name is rejected even though the pool's search_path is raw, so the rule never depends on a session setting. A new set-returning function in FROM needs a line in `_TABLE_FUNCTIONS_ALLOWED`; never widen the rule to accept unknown functions. _HARD_MAX_ROWS/_HARD_MAX_TIMEOUT_MS are ceilings the env-var tunables can never exceed even if misconfigured.
-
----
-
-### `api/routes/sql_runner.py`
-
-POST /api/sql/run — the Data Lab SQL Console's HTTP endpoint. A thin wrapper that delegates all safety/execution to api.routes.sql_safety, and carries require_auth on its router (SIM-443c, as every data router does).
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `run_sql(request, body)` | Runs body.sql through run_read_only_sql on the read-only pool and maps SqlValidationError / any DB exception to a 400 with the message verbatim in detail. It answers 503 when the read-only pool is not open; it never falls back to the main pool, whose role can write. | `frontend SQL Console` | `api.routes._common._get_ro_pool`<br>`api.routes.sql_safety.run_read_only_sql` |
-
-**Depends on:** `api.auth.require_auth`, `api.routes._common`, `api.routes.sql_safety`
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** Never re-implements validation — any safety change belongs in sql_safety.py, not here, to keep the console and the assistant on one path.
-
----
-
-### `api/routes/players.py`
-
-Player name typeahead + identity lookup for the Data Lab / Similarity UI, backed by raw.players (pg_trgm similarity ranking with an ILIKE fallback). Both routes read the read-only pool and answer 503 without it.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `search_players(request, q, limit)` | GET /api/players/search — ranks raw.players by pg_trgm `public.similarity()`; degrades to plain ILIKE ordering (logged once) if the extension/function is unavailable. | `frontend player search boxes (Data Lab, Similarity Explorer)` | `_fetch`<br>`api.routes._common._get_ro_pool/_row_get` |
-| `get_player(request, player_id)` | GET /api/players/{player_id} — identity + the distinct seasons the player appears in raw.pitches as pitcher or batter. | `frontend player detail panel` | `_fetch`<br>`api.routes._common._get_ro_pool` |
-
-**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** Gated by require_auth on the router since SIM-443c (it was open before). The pg_trgm fallback path means a search that silently ISN'T similarity-ranked (alphabetical ILIKE instead) is possible in an environment missing the extension — worth checking server logs if search relevance looks off. The typeahead query calls `public.similarity(full_name, $1)` with the schema named. The read-only pool's session sets `search_path = raw`, and the pg_trgm extension lives in `public`, so an unqualified `similarity()` fails there and the route falls into the ILIKE fallback. Keep the schema name.
-
----
-
-### `api/routes/schema_introspect.py`
-
-GET /api/schema — the raw.* table/column tree consumed by the SQL Console's schema browser and the AI assistant's grounding. Process-lifetime cached on app.state since the schema is static between deploys.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `get_schema(request)` | Queries information_schema.columns for table_schema='raw' on the read-only pool, groups into TableInfo/ColumnInfo, caches the built SchemaResponse on request.app.state._schema_cache. It answers 503 when the read-only pool is not open. The `baseball_ro` role sees the same 33 tables and 586 columns as the owner. | `frontend SQL Console schema browser` | `api.routes._common._get_ro_pool/_row_get` |
-
-**Depends on:** `api.auth.require_auth (router-level dependency, SIM-443c)`, `api.routes._common`
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** The cache is never invalidated except by process restart — a Postgres migration that adds/removes a raw.* column will not show up until the app restarts. Only 'raw' is exposed on purpose; derived.*/sim.* are DuckDB-only and cannot be cross-joined.
-
----
-
-### `api/routes/analytics.py`
-
-Curated, parameterised (never ad-hoc) descriptive-analytics endpoints over raw.pitches for the Data Lab dashboard: KPIs, per-season coverage, pitch-mix, PA outcomes, count-state swing/whiff, velo histogram, zone whiff/called-strike, and pitcher/batter leaderboards.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| (every route) | Each of the nine routes reads the read-only pool and answers 503 when that pool is not open. Every query names only `raw.*` tables, plus `pg_class` for the KPIs row estimate. | — | `api.routes._common._get_ro_pool` |
-| (the rate filters) | Seven module constants hold the pitch-result filters. `_SWING`, `_WHIFF` and `_CALLED_STRIKE` serve the one-table queries. `_SWING_P`, `_WHIFF_P`, `_CSW_P` and `_IN_PLAY_P` serve the two leaderboards. Each constant renders from a helper in `pipeline/statcast_events.py`. Every filter reads the `type` code (the Data Lab vocabulary fix, SIM-571). The whiff is Baseball Savant's (the public Statcast site): a foul tip counts as a whiff. A ball in play is `type IN ('X', 'D', 'E')`, so the hits count too. | `count_state`<br>`zone`<br>`pitcher_leaderboard`<br>`batter_leaderboard` | `pipeline.statcast_events.sql_swing/sql_savant_whiff/sql_called_strike/sql_csw/sql_in_play` |
-| `GameType` / `REGULAR_SEASON` / `_filter_game_type(where, args, game_type, prefix)` | The game-type filter (the Data Lab game-type filter, SIM-572). A season of `raw.pitches` holds the regular season and the postseason. `raw.games.game_type` marks each game: 'R' is the regular season, and 'F', 'D', 'L' and 'W' are the four postseason rounds. Each of the seven routes that take `season` takes `game_type`, typed `'R' \| 'all'`. 'R', the default, adds the filter `game_pk IN (SELECT g.game_pk FROM raw.games g WHERE g.game_type = $n)`, with the type as the next query argument. 'all' adds no filter and reads every game of the season, as the routes did before. The filter keeps a pitch when its game has the type; a plain join would clash on `season`, which both tables hold. The leaderboards pass the prefix `p.`. In 2025 the postseason holds 47 games and 14,085 of the 723,055 clean pitches; the batter board reads Ohtani at 55 home runs by default and at 63 with 'all'. | `pitch_type_mix`<br>`pa_outcomes`<br>`count_state`<br>`velo_distribution`<br>`zone`<br>`pitcher_leaderboard`<br>`batter_leaderboard` | — |
-| `get_kpis(request)` | GET /api/analytics/kpis — fast top-line coverage using pg_class.reltuples as a row-count estimate instead of COUNT(*) on a ~10^7-row table. It and `by_season` (GET /api/analytics/by-season, games and pitches per season) describe the whole store, so they take no `season` and no `game_type`. | `frontend Data Lab dashboard header` | `_fetch` |
-| `pitch_type_mix / pa_outcomes / count_state / velo_distribution / zone` | Season-bounded, optionally player/hand-filtered GROUP BY queries returning usage/velocity/movement/outcome/whiff breakdowns; each defaults to excluding data_quality_flag=TRUE rows unless include_flagged is set. Each reads the regular season alone unless `game_type=all` (SIM-572). | `frontend dashboard cards` | `_fetch`<br>`_dicts`<br>`_quality_clause`<br>`_filter_game_type` |
-| `pitcher_leaderboard / batter_leaderboard` | Rate-stat leaderboards (K%/BB%/CSW%/whiff% for pitchers; hard-hit%/EV/K%/BB%/HR for batters) with a minimum-PA HAVING floor, joined to raw.players for names. Each reads the regular season alone unless `game_type=all` (SIM-572). | — (no frontend caller) | `_fetch`<br>`_SWING_P/_WHIFF_P/_CSW_P/_IN_PLAY_P`<br>`_filter_game_type` |
-
-**Depends on:** `api.auth.require_auth (router-level dependency)`, `api.routes._common`, `pipeline.statcast_events` (the pitch-result code sets and their SQL helpers)
-
-**Used by:** `api.main.create_app`
-
-> **Notes for anyone changing this file:** Every query hard-requires a `season` query param specifically so an indexed predicate always bounds the ~10^7-row raw.pitches scan — do not add an endpoint here that omits it. _PITCHER_METRICS/_BATTER_METRICS are allow-lists for the `metric` sort column (an unrecognized metric silently falls back to a default rather than erroring or allowing SQL injection via the ORDER BY column name). The swing, whiff, CSW (called strikes plus whiffs), called-strike and ball-in-play rates filter on the `type` code. The code sets and the helpers live in `pipeline/statcast_events.py` (the Data Lab vocabulary fix, SIM-571). The pool build and the pitcher profile read the same sets. `description` holds the feed's display text ("Called Strike", "In play, out(s)"), never Statcast's snake_case names (lower case, with underscores: "called_strike"). No query reads it: before the fix, a snake_case match found no row, so the swing rate read 0. The Data Lab's whiff is Savant's: `SAVANT_WHIFF_TYPES` is the model's `WHIFF_TYPES` plus the foul tips (`FOUL_TIP_TYPES`, 'T' and 'O'). The model's whiff set excludes the foul tip. The profiles and the pool build count a foul tip as contact. Two unit tests pin that rule. Do not import the profile computor here: it imports duckdb, numpy, pandas and sklearn, and it calls `logging.basicConfig` at import. A new route that takes `season` must take `game_type` too and call `_filter_game_type` after its own WHERE arguments; `tests/unit/test_game_type_filter.py` fails until it does. The summary page's "Games" choice (`frontend/src/pages/SummaryPage.tsx`) sends the parameter.
-
----
-
-### `api/routes/ai_assistant.py`
-
-The optional (ANTHROPIC_API_KEY-gated) natural-language Data Lab assistant. Streams a Claude tool-use conversation over SSE where the only tool available is run_sql, executed through the exact same api.routes.sql_safety path as the manual SQL console.
-
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `status_probe(request)` | GET /api/assistant/status — reports whether app.state.anthropic_client is set (configured:true/false) and the model name, so the UI can show a setup card instead of failing a call. | `frontend Data Lab assistant panel (on mount)` | `_client` |
-| `ask(request, body)` | POST /api/assistant/ask — 503 JSON if unconfigured or when the read-only pool is not open (SIM-443e), else returns a StreamingResponse of SSE frames from _run_conversation. | `frontend assistant chat input` | `_client`<br>`_pool`<br>`_run_conversation` |
-| `_pool(request)` | Returns app.state.pg_pool_ro or None. SIM-443e: no fallback to the main pool. | `ask`<br>`_run_conversation` | — |
-| `_run_conversation(request, body)` | Drives up to MAX_STEPS turns of the Anthropic tool-use loop: sends the system prompt + schema catalog + RUN_SQL_TOOL, for each tool_use block runs the SQL through api.routes.sql_safety.run_read_only_sql (validation errors and DB errors are fed back to the model as a tool_result rather than raised), and yields typed SSE frames (text/query/result/error/done) as it goes. | `ask` | `client.messages.create (anthropic SDK)`<br>`api.routes.sql_safety.run_read_only_sql`<br>`_sse`<br>`_block_to_dict` |
-
-**Depends on:** `api.auth.require_auth (router-level dependency since SIM-443c; covers /status too)`, `api.routes.sql_safety`, `pipeline.statcast_events` (the system prompt renders its swing, whiff, called-strike and ball-in-play filters from the shared code sets, the Data Lab vocabulary fix, SIM-571), `anthropic SDK (only via app.state.anthropic_client, never imported directly here)`
-
-**Used by:** `api.main.create_app`
-
-**Environment flags read here:** `ASSISTANT_MODEL`, `MAX_ASSISTANT_STEPS`
-
-> **Notes for anyone changing this file:** Never imports the `anthropic` package at module load — the client instance lives only on app.state (built in api.startup.open_assistant_client when ANTHROPIC_API_KEY is set), so this module and the whole app boot/import fine without the package installed or the key set. The model is fed a TRUNCATED row view (_MODEL_ROW_CAP=60) while the UI gets up to _UI_ROW_CAP=200 rows — a 'truncated' flag in the SSE result event reflects the UI cap, but the tool_result content sent back to the model is separately re-truncated/flagged at 60. Any change to the read-only guarantee belongs in sql_safety.py — this file must never call the database directly.
-
----
+[Source](../../api/state.py) · 471 lines · Tests: [test_api_state.py](../../tests/unit/test_api_state.py), [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py), [test_calibration_fit_and_apply.py](../../tests/unit/test_calibration_fit_and_apply.py), [test_similarity_endpoint.py](../../tests/unit/test_similarity_endpoint.py)
+
+The builders of the resources the lifespan attaches. Each is a plain function, so a test runs
+it without the app.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `ENGINE_REGISTRY` | The eleven engines: name → (module, class). The names key `app.state.engines`. | `build_all_engines` |
+| `build_pitcher_engine(duckdb_path)` | Builds `PitcherSimilarityEngine` from `BASEBALL_DUCKDB_PATH`. A failure is fatal. | `startup.build_engines` |
+| `build_all_engines(duckdb_path, registry, loader)` | Builds every registry engine; an engine that fails is logged and left out. | `startup.build_engines` |
+| `retry_on_duckdb_lock(fn, what)` | Retries a build every 15 seconds while a DuckDB writer holds the file, up to `SIM_BOOT_LOCK_WAIT_S` (default 1,800). Any other error rises at once. | The two engine builders |
+| `load_calibration_report(path)` | Reads `CALIBRATION_REPORT_PATH` into `similarity.calibration.report.CalibrationReport`; None when the file is missing or bad. | `startup.load_calibration` |
+| `apply_calibration_to_engines(engines, report)` | Calls `apply_calibration(report)` on each engine that has it; returns the names. The three distance engines have none. | `startup.load_calibration` |
+| `make_pg_name_resolver(pool)` | An async closure: player ids → names from `raw.players`, in one query. | `lifespan` |
+| `RedisSimilarityCache`, `make_cache_key`, `CACHE_TTL_SECONDS` | The similarity payload cache: JSON under `simviz:pitcher:...`, 24 hours. A value that does not decode reads as a miss. | `similarity.py` |
+| `open_redis_cache(redis_url)` | Opens the Redis client and pings it. | `lifespan` |
+| `open_pg_pool(dsn, ...)` | An asyncpg pool (2 to 10 connections); `server_settings` sets session parameters. | `lifespan`, `startup.open_read_only_pool` |
+| `redact_dsn(dsn)` | A DSN with its password masked, for a log line. | `startup.open_read_only_pool` |
+
+**Flags:** `SIM_BOOT_LOCK_WAIT_S` (default 1,800 seconds), `BASEBALL_DUCKDB_PATH`,
+`CALIBRATION_REPORT_PATH` (production `/data/calibration.json`).
+
+**Watch out:** `similarity_explorer.SCORE_ADAPTERS` and `DISTANCE_ENGINES` repeat the registry
+names by hand; an engine added here and not there is built but never shown.
+
+### `api/bundle_watch.py`
+
+[Source](../../api/bundle_watch.py) · 153 lines · Tests: [test_bundle_versions.py](../../tests/unit/test_bundle_versions.py), [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py), [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py)
+
+The app picks up a nightly rebuild by restarting itself. The bundle path
+`/data/play_pool/engine_artifacts` is a link to a version folder
+(`pipeline/batch/bundle_versions.py`).
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `pin_bundle_version(link)` | Resolves the link, sets `BASEBALL_ENGINE_ARTIFACT_DIR` for the workers and marks the version in use, so pruning keeps it. | `startup.build_sim_runner` |
+| `watch_for_new_bundle(link, loaded, active_jobs, ...)` | Looks at the link every 60 seconds. On a new version it waits for the run jobs (at most 600 seconds), then for any DuckDB writer, then calls `restart_container()`. | `startup.start_bundle_watch` |
+| `restart_container()` | Sends SIGTERM to PID 1; Docker's `restart: unless-stopped` starts the app again. | `watch_for_new_bundle` |
+| `duckdb_writer_free(path)` | True when a read-only open of the analytics file succeeds. | `watch_for_new_bundle` |
+
+**Watch out:** A restart, not an in-place swap, is an owner ruling (the nightly rebuild that
+reaches users, SIM-563). The pin must happen before the worker pool starts: the forkserver's
+workers inherit the environment.
 
 ### `api/league_feed.py`
 
-The app's one reader of the league's public endpoints: the schedule of a date (the slate) and one game's live feed (the open card), over one lazy `aiohttp` session. The lifespan attaches it as `app.state.league_feed` unless `SLATE_SCHEDULE_ENABLED=0`; a test attaches a fake with the same two coroutines, or none (the slate then serves the stored listing).
+[Source](../../api/league_feed.py) · 65 lines · Tests: [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
 
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `LeagueFeed.schedule_payload(start, end)` / `game_feed_payload(game_pk)` | The raw responses; they raise on any failure (the routes degrade). Timeout `SLATE_FEED_TIMEOUT_S` (5 s). | `api.routes.games_slate`, `api.routes.games_feed` | `pipeline.mlb_schedule.schedule_params` |
+The app's reader of the league's public endpoints, over one lazy `aiohttp` session.
 
----
+| Function / class | What it does | Called from |
+|---|---|---|
+| `LeagueFeed.schedule_payload(start, end)` | The raw schedule response for a date range. Raises on any failure. | `games_slate._slate_schedule_payload` |
+| `LeagueFeed.game_feed_payload(game_pk)` | One game's live feed with `hydrate=alignment` (the fielders at every plate appearance). | `games_feed._league_game_payload` |
+
+**Flags:** `SLATE_FEED_TIMEOUT_S` (default 5 seconds).
 
 ### `api/sim_jobs.py`
 
-One simulation run per game (the run jobs of the live slate, SIM-519). A run is a `sim.sim_runs` row: queued, running, then done, failed or cancelled. One active run per key (the SHA-256 of the runner's cache key; a partial unique index holds it across processes); `SIM_JOB_MAX_CONCURRENT` (1) runs at a time; `BatchRunner.run_job` writes progress per chunk and stops on a cancel; a done row stores the summary, the prop set (`PropDistributionSet.to_json`), the inning grids and `replay_run_id`. `recover_orphans` marks a previous process's unfinished rows `failed('restart')` at boot.
+[Source](../../api/sim_jobs.py) · 365 lines · Tests: [test_sim_jobs.py](../../tests/unit/test_sim_jobs.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
 
-| Function / class | What it does | Called from | Depends on |
-|---|---|---|---|
-| `SimJobRegistry.submit / get / latest / cancel / prop_set_row / recover_orphans` | The registry `app.state.sim_jobs`. | `api.routes.games` (POST /simulate, POST /what-if, `/boxscore`, `/props`), `api.routes.games_runs`; the `api.main` lifespan | `simulation.batch_runner.BatchRunner.run_job` |
+The run registry (the run jobs of the live slate, SIM-519). A run is a `sim.sim_runs` row
+whose state goes queued → running → done, failed or cancelled.
 
----
+| Function / class | What it does | Called from |
+|---|---|---|
+| `SimJobRegistry.submit(...)` | Keys the run by the SHA-256 of `kind` plus the runner's cache key (spec, seed, N). An active run with the key comes back with `existing = True`; a partial unique index holds the rule across processes. Otherwise it inserts a queued row and starts a task. `kind` is `pregame`, `whatif_base` or `whatif_change`. | `games.start_simulation_run`, `games.start_what_if` |
+| `SimJobRegistry._run` / `_play` | Waits on a semaphore of `SIM_JOB_MAX_CONCURRENT` slots, marks the row running, runs `BatchRunner.run_job` in a thread with a progress callback and a cancel check, records the representative game, and writes the summary, the prop set and the inning grids. | `submit` |
+| `SimJobRegistry.get` / `latest` / `prop_set_row` | Row reads. `latest` and the newest prop set read `kind = 'pregame'` only. | `games_runs`, `games` |
+| `SimJobRegistry.cancel` | A queued run stops at once; a running run stops after its current chunk and keeps what it played. | `games_runs.cancel_simulation_run` |
+| `SimJobRegistry.recover_orphans` | Marks every queued or running row `failed('restart')`. | `lifespan` |
+| `SimJobRegistry.active_count` | The jobs in flight in this process; the bundle restart waits for 0. | `startup.start_bundle_watch` |
+
+**Flags:** `SIM_JOB_MAX_CONCURRENT` (default 1).
+
+### `api/auth.py`
+
+[Source](../../api/auth.py) · 655 lines · Tests: [test_api_auth.py](../../tests/unit/test_api_auth.py), [test_api_auth_session.py](../../tests/unit/test_api_auth_session.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py), [test_trusted_proxy.py](../../tests/unit/test_trusted_proxy.py)
+
+The security primitives: the login check, the rate limit, the latency window and the CORS
+list. The section [Logging in](#logging-in) explains the model.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `require_auth(request)` | The router-level dependency: returns `cookie:<sub>` or `api_key:key`, else raises 401 with `WWW-Authenticate`. | Every data router |
+| `authenticate_websocket(websocket)` | The same check on a handshake; closes with 1008 on failure. | `game_state_ws` in `pipeline/live/live_ingestion_pipeline.py` |
+| `_authenticate(cookies, headers)` / `Principal` | The shared core: cookie first, then key. Never raises. | `require_auth`, `authenticate_websocket`, `routes/auth.me` |
+| `_auth_disabled()` | The one opt-out, `AUTH_DISABLED`. | `require_auth`, `authenticate_websocket`, `env_check`, `/health`, `routes/auth.me` |
+| `_mint_session_token` / `_verify_session_token` | The signed token: `<payload>.<signature>`, with `sub`, `iat` and `exp`. | `routes/auth.login`, `_authenticate` |
+| `cookie_kwargs(max_age)` | The cookie settings: httpOnly, SameSite strict, `Secure` outside development. | `routes/auth.login` / `logout` |
+| `RateLimitMiddleware` | The sliding-window limiter; 429 with `Retry-After`. `/health`, `/ready` and `/` are exempt. | `create_app` |
+| `_client_address(request)` / `_trusted_proxy_addresses()` | The client address, from `X-Real-IP` only when the connection comes from a trusted proxy. The proxy names resolve at most once a minute. | `RateLimitMiddleware._client_key` |
+| `LatencyMiddleware` | Keeps the p95 latency of the last 200 requests on `app.state.api_p95_seconds` and counts each request. `/metrics` is exempt. | `create_app` |
+| `resolve_cors_origins()` | `CORS_ORIGINS`, else `FRONTEND_URL`, else three localhost origins in development, else one. Never the wildcard by default. | `create_app` |
+
+**Flags:** `AUTH_DISABLED`, `SECRET_KEY`, `AUTH_PASSWORD`, `SESSION_TTL_HOURS` (default 8),
+`API_KEYS`, `RATE_LIMIT_PER_MINUTE` (default 0 = off), `RATE_LIMIT_ENABLED`,
+`TRUSTED_PROXY_HOSTS` (production `nginx`), `CORS_ORIGINS`, `FRONTEND_URL`, `ENVIRONMENT`.
+
+**Watch out:** There is no default secret or password: `_get_secret_key` and
+`_get_auth_password` raise when the variable is blank. `tests/unit/test_route_auth_coverage.py`
+walks `app.routes` and fails on any data route without the gate.
+
+### `api/middleware.py`
+
+[Source](../../api/middleware.py) · 49 lines · Tests: [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `ParkFactorSourceMiddleware` | Stamps `X-Park-Factor-Source` on every response: `duckdb:<n>` (real venue factors, `n` rows), `unavailable` (every simulation ran at a neutral 1.0) or `unknown` (no lifespan ran). It reads the live verdict of `simulation.sim_kwargs` first, so the header follows a later re-read. | `create_app` |
+
+### `api/errors.py`
+
+[Source](../../api/errors.py) · 59 lines · Tests: [test_api_error_envelope.py](../../tests/unit/test_api_error_envelope.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `install_exception_handlers(app)` | Turns an unhandled exception into `{detail, error_type: "internal_error", request_id}` with status 500 and logs the traceback under that id. `HTTPException` and validation errors keep FastAPI's own shapes. | `create_app` |
+
+### `api/serialization.py`
+
+[Source](../../api/serialization.py) · 140 lines · Tests: [test_api_schemas.py](../../tests/unit/test_api_schemas.py), [test_api_game_card.py](../../tests/unit/test_api_game_card.py), [test_cache_codec.py](../../tests/unit/test_cache_codec.py), [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `to_jsonable(obj)` | Walks any object graph and returns JSON-native types: numpy scalars and arrays, datetimes, enums, dataclass instances, mappings and sequences. Lossless; an unknown type falls back to `str`. | `api.schemas`, `games._build_replay_artifacts`, `sim_jobs._json`, `sql_safety.run_read_only_sql` |
+
+**Watch out:** `np.float64` subclasses `float`, so the fast path excludes `np.generic` first.
+Removing that check lets numpy scalars reach the wire.
+
+## The response models
+
+### `api/schemas/` (a package)
+
+[Source](../../api/schemas/__init__.py) · 1,285 lines in 8 files · Tests: [test_api_schemas.py](../../tests/unit/test_api_schemas.py), [test_api_game_card.py](../../tests/unit/test_api_game_card.py), [test_inning_grid.py](../../tests/unit/test_inning_grid.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py)
+
+One Pydantic model per simulation or betting dataclass, with JSON-native fields. Each has a
+`from_dataclass` (or `from_jsonable`, `from_prop_set`) builder, so no numpy value reaches the
+wire. `__init__.py` re-exports every public model: `from api.schemas import X`.
+
+| Module | Models | Source dataclasses |
+|---|---|---|
+| [`_base.py`](../../api/schemas/_base.py) (20 lines) | `_ApiModel`: the base; forbids extra fields | — |
+| [`summary.py`](../../api/schemas/summary.py) (171) | `ConfidenceIntervalModel`, `GameSimSummaryModel` (the per-iteration score arrays by default; `include_raw_arrays=False` drops them), `GameSimSummaryLite` (no arrays) | `simulation.results` |
+| [`snapshots.py`](../../api/schemas/snapshots.py) (267) | `PlayerRefModel`, `FieldSnapshotModel`, `PlayByPlayEntryModel`, `PlayByPlayModel`, `StateAtPitchModel`, `MetricDeltaModel`, `OverrideDeltaModel` | `simulation.snapshots` |
+| [`game_card.py`](../../api/schemas/game_card.py) (181) | `InningLineModel`, `LinescoreModel`, `PitcherDecisionsModel` (`from_jsonable` rebuilds a stored card) | `simulation.linescore`, `simulation.pitcher_decisions` |
+| [`props.py`](../../api/schemas/props.py) (180) | `BoxscoreCardRowModel`, `BoxscoreCardModel` (`from_prop_set`; a side's placeholder relievers fold into one row, `GENERIC_PEN_IDS`), `PropEdgeResponse` | `simulation.prop_distributions` |
+| [`markets.py`](../../api/schemas/markets.py) (313) | `CLVModel`, `EdgeReportModel` (with `price_book` and `result`), `BetSignalModel`, `LineQuoteModel`, `LineMovementModel` | `betting.clv_engine`, `betting.bet_signal`, `betting.line_movement` |
+| [`live.py`](../../api/schemas/live.py) (57) | `LiveGameStateResponse` | The live service's `game_state` JSON |
+
+**Watch out:** A model's docstring and fields are the OpenAPI schema. A change to either, or
+to a route's `description=`, needs `scripts/export_openapi.py` run in the app image and
+`npm run gen:api` in the same commit; `tests/unit/test_openapi_snapshot.py` fails on drift.
+
+## The game routes
+
+### `api/routes/games.py`
+
+[Source](../../api/routes/games.py) · 1,673 lines · Tests: [test_api_games.py](../../tests/unit/test_api_games.py), [test_api_game_card.py](../../tests/unit/test_api_game_card.py), [test_api_games_plays.py](../../tests/unit/test_api_games_plays.py), [test_projections_on_pool.py](../../tests/unit/test_projections_on_pool.py), [test_api_end_to_end.py](../../tests/integration/test_api_end_to_end.py)
+
+The aggregate `/api/games` router (prefix, tag, login), every route that runs a simulation,
+the replay reads, and the seam those routes share. It includes `games_slate`, `games_feed` and
+`games_runs`; each is a bare `APIRouter()`, so the OpenAPI contract does not depend on a
+route's module.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `resolve_factory_ref(request)` | The machine factory's dotted name: `app.state.sim_factory_ref`, else `SIM_MACHINE_FACTORY_REF`, else `PRODUCTION_FACTORY_REF` (`simulation.production_factory:production_machine_factory`). | Every simulation route; `betting._summary_and_winprob` |
+| `_resolve_state_or_error(pool, game_pk, fallback_rows)` | Resolves the lineup into a `GameState` and marks its park factor unresolved. An unpublished or incomplete lineup is 503 with `Retry-After: 900`; an unknown game is 404. | Every simulation route; `betting._summary_and_winprob`; `scripts/accuracy/` |
+| `_resolved_sim_kwargs(request, pool, state, game_pk)` | Looks the venue's park factor up, then builds the sim kwargs (`simulation.sim_kwargs.build_sim_kwargs`). The one way a route gets kwargs. | Every simulation route; `betting._summary_and_winprob` |
+| `_build_runner(request)` / `_run_batch(...)` | The shared `app.state.sim_runner` (else a one-process runner for a test app), and the sync batch call a route runs in a thread. | Every simulation route; `betting._summary_and_winprob` |
+| `simulate_game_endpoint` | `GET /simulate`: a batch now, the latency gauge, one stored game and a history row. | Clients, scripts |
+| `start_simulation_run` | `POST /simulate`: queues a run job (503 before the run-job columns exist). | The game page |
+| `start_what_if` | `POST /what-if`: the real game's state at the plate appearance, the changes applied (`simulation.whatif.apply_changes`; an illegal change is 422), and two runs at one random seed. A game with no stored lineup builds its base state from the feed. | The what-if panel |
+| `simulate_sample_game` | `POST /sample-game`: one game at a seed, stored; returns the run id and seed. 503 with the replay store off; 500 when the store fails. | The game page |
+| `simulate_with_override_endpoint` | `POST /simulate/with_override`: two batches at one seed and their `OverrideDelta`. | Clients only |
+| `get_game_boxscore` | `GET /boxscore`: the prop means of every player from `BatchRunner.run_prop_set` on the worker pool, with name, side, batting slot and starter flag. `run_id` or `latest_run=true` reads a stored run instead. The batch's first game is stored at the same time. | The projections panel |
+| `get_player_prop_edge` | `GET /props/{player_id}/{prop}`: one PMF (probability of each count), the over / under at `line`, and an edge report when both prices are given. A seeded run is cached, so it reads the `/boxscore` run. | The projections panel |
+| `get_game_plays` / `get_game_state_at_pitch` / `get_game_linescore` / `get_game_decisions` / `get_game_card` | The replay reads: the newest complete run (a run with a game card) unless `/plays` names `run_id`. 404 when nothing is stored; 503 with the store off. | The game page |
+| `_persist_replay_artifacts(...)` | Records one game with `BatchRunner.record_game` on the worker pool, builds its artifacts and stores them under the replay file's next run id. A `/simulate` batch also writes a Postgres history row. Never raises. | The four storing routes |
+| `_build_replay_artifacts(recorded, resolved)` | One `RecordedGame` → the play-by-play, one state per thrown pitch (with the fielders when a lineup resolves), the linescore and the decisions. A pickoff that ends a half with no pitch makes no play-by-play entry. | `_persist_replay_artifacts` |
+| `_store_replay_run(cur, ...)` | Writes the play stream, the states and the card in one transaction under `_REPLAY_WRITE_LOCK`, then prunes the game to its newest five runs. | `_persist_replay_artifacts` |
+| `_player_tags` / `_player_names` / `_placeholder_names` | Each player's side, slot and starter flag from the sim kwargs; names from `raw.players`; "Generic reliever N" for the placeholder pen of a game with no box pen. | `/boxscore`, `/props`, `/plays` |
+
+**Flags:** `SIM_MACHINE_FACTORY_REF` (default unset = production).
+
+**Watch out:** Tests patch `resolve_game_state`, `_resolve_state_or_error`, `_build_prop_set`,
+`_query_player_names`, `_build_replay_artifacts`, `PRODUCTION_FACTORY_REF` and `sim_store` on
+this module, so those calls stay here. `test_sim_kwargs.py` counts the resolving sim-kwarg
+calls in this file (8) and in `betting.py` (1); a new park-blind call site fails it.
+`PRODUCTION_FACTORY_REF` stays a string: it is part of the cache keys.
+
+### `api/routes/games_slate.py`
+
+[Source](../../api/routes/games_slate.py) · 650 lines · Tests: [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_api_games.py](../../tests/unit/test_api_games.py)
+
+The day slate and one game's status card. The league schedule says which games exist; the
+database adds the lineup flag and its source, the venue city and the newest run.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_games_on_date(date, request, use_cache)` | `GET /{date}`: the schedule's games (one card per game), merged with two stored reads (`_slate_merge_rows`). | The Daily Diamond slate |
+| `_slate_schedule_payload(request, day, use_cache)` | The cache (`slate:v2:{date}`: 20 s today, 10 min ahead, 24 h past), then the feed, then the last good copy (`slate:last:{date}`). With all three missing, the stored listing from `raw.games` serves (`source = "db"`). | `get_games_on_date`, `_schedule_game_for` |
+| `_schedule_card(g, enrich, run)` | One schedule game and our stored data as a `GameCard`. | `get_games_on_date` |
+| `get_game_status_card(game_pk, request)` | `GET /{game_pk}/status`: identity, records, state, final score, the newest summary and the schedule's header fields. 404 for an unknown game. | The game page header |
+
+**Watch out:** Each stored read falls back to its older form before the migration that added
+its columns. A suspended game appears on its resume day too; the route keeps one card.
+
+### `api/routes/games_feed.py`
+
+[Source](../../api/routes/games_feed.py) · 397 lines · Tests: [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py), [test_api_games.py](../../tests/unit/test_api_games.py)
+
+The real game: one cached copy of the league's per-game feed, and the live service's stored
+state.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `_league_game_payload(request, game_pk, use_cache)` | The raw feed, cached by the game's state (10 s live, 10 min scheduled, 24 h final). On a league error the last good copy serves (`feed_cached`); with none, the payload is None. | The feed routes; `games.start_what_if`; `games_runs.get_what_if`; `betting._actual_result` |
+| `get_game_feed` | `GET /feed`: `pipeline.mlb_game_feed.parse_game_feed` → `GameFeedCardModel`. 503 with `Retry-After: 30` when no copy exists. | The open slate card |
+| `get_real_plays` | `GET /feed/plays`: `parse_plays` → `RealPlaysModel`. | The real play-by-play panel |
+| `get_pa_state` / `_start_state` / `_pa_state_model` | `GET /feed/state`: `pipeline.mlb_game_feed.state_at_pa` at a plate appearance (none = first pitch), as lineups, pitchers, defense, bench and pen. An unknown plate appearance is 404. | The what-if panel |
+| `_feed_lineup_rows(payload)` | Both starting lineups as `raw.game_lineups` rows, built by `pipeline.etl.historical.game_values._build_starting_lineup_rows`. | `games.start_what_if` |
+| `get_live_game_state` | `GET /live`: `db.sim_store.load_live_game_state` from `sim.lineup_state`. 404 with no live row. | The game page |
+
+### `api/routes/games_runs.py`
+
+[Source](../../api/routes/games_runs.py) · 172 lines · Tests: [test_sim_jobs.py](../../tests/unit/test_sim_jobs.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
+
+The reads of a game's runs. The routes that start a run live in `games.py`.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_latest_simulation_run` / `get_simulation_run` / `cancel_simulation_run` | `GET /simulate/runs/latest` (404 with none), `GET` and `DELETE /simulate/runs/{run_id}`. | The game page |
+| `get_what_if` | `GET /what-if/{base}/{change}`: both runs, the real final when the game is final, and the score at the start. | The what-if panel |
+| `_get_sim_jobs` / `_run_model` / `_stored_prop_set` | The registry (503 with none), a row as `SimRunModel`, a run's `PropDistributionSet` (404 with a hint). | The routes here; `games` |
+
+**Watch out:** `runs/latest` stays above `runs/{run_id}`; the router matches in order.
+
+### `api/routes/games_models.py`
+
+[Source](../../api/routes/games_models.py) · 592 lines · Tests: [test_api_games.py](../../tests/unit/test_api_games.py), [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_inning_grid.py](../../tests/unit/test_inning_grid.py)
+
+The request and response models of `/api/games`: the slate (`GameCard`,
+`GamesOnDateResponse`, `GameCardAggregateResponse`), the feed (`GameFeedCardModel`,
+`RealPlaysModel`, `PaStateModel` and their parts), the simulations (`SimulateResponse`,
+`SampleGameResponse`, `RosterOverride`, `WithOverrideResponse`, `GameCardResponse`) and the
+runs (`SimRunRequest`, `SimRunModel`, `WhatIfRequest`, `WhatIfStarted`, `WhatIfResult`).
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `_sim_summary_lite_from_stored(summary)` | A stored summary → `GameSimSummaryLite`: drops the per-iteration arrays and inning grids, and fills each interval's `half_width` from its bounds. None on any failure. | `games_slate`, `games_runs` |
+
+## The betting routes
+
+### `api/routes/betting.py`
+
+[Source](../../api/routes/betting.py) · 610 lines · Tests: [test_api_betting.py](../../tests/unit/test_api_betting.py), [test_segment_edges.py](../../tests/unit/test_segment_edges.py), [test_game_page_grading.py](../../tests/unit/test_game_page_grading.py), [test_live_run_lines.py](../../tests/unit/test_live_run_lines.py)
+
+The aggregate `/api/betting` router, `/edges`, `/signals`, the simulation they price from and
+the grading on the real final. It includes `betting_lines` and `betting_card`.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `_summary_and_winprob(request, ...)` | The game routes' seam: state, kwargs, batch (cached by spec, seed and N), and the win probability through `app.state.calibration_map`. | `get_game_edges`, `get_game_signals` |
+| `get_game_edges` | `GET /edges`: the reports of the requested markets (all fifteen by default), with `odds_source`, the graded book, each side's offered-price book, the market names and each run line's pricing. Once final, each edge's `result` and the `final` score. | The Betting card |
+| `get_game_signals` | `GET /signals`: the same reports gated to +EV by `betting.bet_signal.bet_signals_from_edges`, ranked by EV. The gate's knobs are query parameters. | The Betting card |
+| `_actual_result` / `_grade` | The real final from `raw.games.inning_scores`, else the feed's linescore; one side's "won", "lost" or "push". | `get_game_edges` |
+
+**Watch out:** `test_segment_edges.py` patches `_summary_and_winprob` here. `betting/` is baked
+into the app image while `api/` hot-reloads: rebuild the image before an `api/` edit imports a
+new `betting/` name.
+
+### `api/routes/betting_pricing.py`
+
+[Source](../../api/routes/betting_pricing.py) · 891 lines · Tests: [test_segment_edges.py](../../tests/unit/test_segment_edges.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py)
+
+The edge math. A market's prices come from, in order: the injected query parameters or the
+`prices` document, the stored lines, then the deterministic mock (`MockOddsAPI`, seeded on
+the game).
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `_build_edge_reports(summary, win_prob, ...)` | Prices every side of each market: the moneyline from the win probability, the total from the totals, the run line from the score margin, and the twelve segment and team markets from the inning grid. A run line is a pair when the away spread is the negative of the home spread; otherwise each side is a separate bet priced over the book's two-way margin (the run lines scored by shape, SIM-549). A side with a simulated probability of 0 or 1 is skipped. | `_priced_edge_reports` |
+| `_priced_edge_reports(request, ...)` | Reads the stored rows when an uninjected market needs them, then builds the reports. | `betting.get_game_edges` / `get_game_signals` |
+| `_parse_prices` / `_split_prices` | The `prices` JSON document: any fault is a 422 naming the market. A full-game market in it becomes its named parameters. | `betting` |
+| `_parse_markets(markets)` | The comma-separated `markets` parameter; an unknown market is a 422. | `betting` |
+| `_mock_odds` / `_at_offered_price` | The mock's prices (imported lazily from `pipeline.live.ingestion.mock_odds`); a report re-read at the best offered price (the EV moves, the edge stays). | `_build_edge_reports` |
+
+**Watch out:** None of the twelve segment and team markets is calibrated. The signals still
+fire on them (an owner ruling on the segment markets, SIM-546).
+
+### `api/routes/betting_stored_odds.py`
+
+[Source](../../api/routes/betting_stored_odds.py) · 467 lines · Tests: [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py), [test_segment_edges.py](../../tests/unit/test_segment_edges.py)
+
+The stored price source: each sportsbook's latest usable one-book row (`bp:<id>`) in
+`raw.game_odds` (one book per odds row, SIM-555).
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `_read_stored_rows(request, game_pk, markets)` | Reads the game's status, then the latest row per market and book. A `Preview` game reads `closing` and `current` rows; any other game reads `closing` rows only. A failed read logs and returns nothing; the markets then use the mock. | `betting_pricing`, `betting_card` |
+| `_latest_pregame_rows` / `_drop_withdrawn` | The same rules in Python: a closing row beats a current row of the same book; a current row not seen within 20 minutes (`CURRENT_ROW_MAX_AGE_S`) of the game's newest sighting is withdrawn. | `_read_stored_rows` |
+| `_stored_market(stored, market)` | The graded book's row (the first book on `GRADED_BOOK_PREFERENCE`) gives the fair probability; each side's offered price is the best stored price at that line. | `betting_pricing` |
+| `_stored_reference_margin` | One book's two-way margin for a run line listed as two separate bets; a segment run line reads its own segment's total first. | `betting_pricing` |
+
+### `api/routes/betting_lines.py`
+
+[Source](../../api/routes/betting_lines.py) · 172 lines · Tests: [test_api_betting.py](../../tests/unit/test_api_betting.py), [test_line_movement.py](../../tests/unit/test_line_movement.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_game_line_movement` | `GET /line-movement`: `betting.line_movement.fetch_line_movement` over the stored history, one series per side and book. `market_type` is `moneyline`, `runline` or `total` (else 422). 503 with no pool; there is no mock. | Clients |
+| `get_game_clv` | `GET /clv`: the series that carry a closing-line value (CLV: the opening price against the closing price). A run-line side whose spread moved has none. | Clients |
+
+### `api/routes/betting_card.py`
+
+[Source](../../api/routes/betting_card.py) · 177 lines · Tests: [test_slate_card_odds.py](../../tests/unit/test_slate_card_odds.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_card_odds` | `GET /card-odds`: the graded book's moneyline, run line and total from the stored rows only, never the mock. 404 when none exists. On a final game, `settled` says how each line settled. | The slate card |
+| `_card_odds_from_rows` / `_card_settlement` | The graded row of each market as the card's lines; the winning side of each line on the final score. | `get_card_odds` |
+
+## The Data Lab and the similarity explorer
+
+### `api/routes/sql_safety.py`
+
+[Source](../../api/routes/sql_safety.py) · 699 lines · Tests: [test_sql_safety.py](../../tests/unit/test_sql_safety.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py)
+
+The one read-only SQL path. The console and the assistant both run their SQL through it, so
+the assistant can do nothing the console cannot.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `validate_read_only_sql(sql)` | Accepts one `SELECT` or `WITH … SELECT`. Rejects writes and DDL anywhere (a CTE included), stacked statements, dangerous functions (inside quoted identifiers too) and long text, then runs the relation allowlist. | `run_read_only_sql` |
+| `validate_relation_allowlist(sql)` | Parses the query with sqlglot (a SQL parser). Every table must be `raw.<table>` or a CTE in scope. An unqualified name, a system catalog, `SELECT … INTO` and an unlisted table function are rejected. Fails closed. | `validate_read_only_sql` |
+| `run_read_only_sql(pool, sql, max_rows, timeout_ms)` | Validates, wraps the query in a row-capped subquery, and runs it in a read-only transaction with `SET LOCAL statement_timeout`. Returns columns, rows, `truncated` and the time. | `sql_runner.run_sql`, `ai_assistant._run_conversation` |
+| `check_read_only_role(pool)` / `ReadOnlyRoleCheck` | One query: the role, superuser, `sim` usage, insert and select on `raw.pitches`. `acceptable` = not a superuser, no `sim` usage, no insert. | `startup.open_read_only_pool` |
+
+**Flags:** `SQL_RUNNER_MAX_ROWS` (1,000; ceiling 5,000), `SQL_RUNNER_TIMEOUT_MS` (5,000;
+ceiling 30,000), `SQL_RUNNER_MAX_LEN` (20,000).
+
+**Watch out:** A security-critical file. The dangerous-function scan must keep quoted
+identifiers (`keep_identifiers=True`): `"pg_read_file"(...)` runs as `pg_read_file`. sqlglot
+imports at the top on purpose: a missing package fails the boot instead of turning the
+allowlist off.
+
+### `api/routes/sql_runner.py`
+
+[Source](../../api/routes/sql_runner.py) · 104 lines · Tests: [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `run_sql(request, body)` | `POST /api/sql/run` on the read-only pool. A rejected query and a database error are both 400 with the message as `detail`. | The SQL console |
+
+### `api/routes/ai_assistant.py`
+
+[Source](../../api/routes/ai_assistant.py) · 367 lines · Tests: [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py)
+
+The optional Data Lab assistant. It writes read-only SQL, runs it through `sql_safety`, and
+narrates the result over server-sent events.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `status_probe` | `GET /status`: `configured` and the model name. | The assistant panel |
+| `ask` | `POST /ask`: 503 without the client or the read-only pool; else a `text/event-stream` of `text`, `query`, `result`, `error` and `done` frames. | The assistant panel |
+| `_run_conversation(request, body)` | Up to `MAX_ASSISTANT_STEPS` tool-use turns with one tool, `run_sql`. A rejected or failed query goes back to the model as a tool result. The model sees at most 60 rows; the user sees up to 200. | `ask` |
+
+**Flags:** `ASSISTANT_MODEL` (default `claude-sonnet-5`), `MAX_ASSISTANT_STEPS` (default 4).
+
+**Watch out:** The module never imports `anthropic`; the client lives on `app.state`, so the app
+boots without the package or the key.
+
+### `api/routes/analytics.py`
+
+[Source](../../api/routes/analytics.py) · 469 lines · Tests: [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py), [test_game_type_filter.py](../../tests/unit/test_game_type_filter.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py)
+
+Nine parameterised summaries of `raw.pitches` on the read-only pool. Each query is bounded by
+`season` (an indexed filter on a table of about ten million rows) and leaves out the flagged
+rows unless `include_flagged` is set.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_kpis` / `by_season` | The store's coverage; `kpis` reads `pg_class` for a row estimate. Neither takes `season`. | The Data Lab summary |
+| `pitch_type_mix` / `pa_outcomes` / `count_state` / `velo_distribution` / `zone` | Season summaries with optional player and hand filters. | The Data Lab summary |
+| `pitcher_leaderboard` / `batter_leaderboard` | Rate leaderboards with a minimum-PA floor; `metric` is checked against an allowlist. | Clients |
+| `_filter_game_type(where, args, game_type, prefix)` | The Data Lab game-type filter (SIM-572): `R` (the default) keeps the regular season, `all` keeps the postseason too. Every route that takes `season` takes it. | The seven season routes |
+
+**Watch out:** The swing, whiff, called-strike, CSW (called strikes plus whiffs) and in-play
+filters read the pitch-result `type` code through `pipeline/statcast_events.py` (the Data Lab
+vocabulary, SIM-571), never the `description` display text. The whiff here is Baseball
+Savant's: a foul tip counts. A new season route without `_filter_game_type` fails
+`test_game_type_filter.py`.
+
+### `api/routes/players.py`
+
+[Source](../../api/routes/players.py) · 155 lines · Tests: [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `search_players(request, q, limit)` | `GET /search`: an `ILIKE` match ranked by `public.similarity()` (the pg_trgm trigram score); without the extension it falls back to alphabetical order. | The player pickers |
+| `get_player(request, player_id)` | `GET /{player_id}`: identity and the seasons the player appears in `raw.pitches`. | The similarity explorer |
+
+**Watch out:** Keep the `public.` prefix: the read-only pool's `search_path` is `raw`, so a bare
+`similarity()` fails and the search silently loses its ranking.
+
+### `api/routes/schema_introspect.py`
+
+[Source](../../api/routes/schema_introspect.py) · 95 lines · Tests: [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_schema(request)` | `GET /api/schema`: the `raw` tables and columns from `information_schema.columns`, cached on `app.state` for the life of the process. | The SQL console, the assistant |
+
+**Watch out:** A migration that changes a `raw` column shows here only after an app restart.
+
+### `api/routes/data_health.py`
+
+[Source](../../api/routes/data_health.py) · 118 lines · Tests: [test_api_data_health.py](../../tests/unit/test_api_data_health.py), [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_data_freshness(request)` | `GET /api/data/freshness`: the newest ingest from `raw.etl_data_freshness`, the totals and the games and pitches per season. An empty store returns zeros. | The data badge |
+
+### `api/routes/similarity.py`
+
+[Source](../../api/routes/similarity.py) · 490 lines · Tests: [test_similarity_endpoint.py](../../tests/unit/test_similarity_endpoint.py)
+
+The pitcher similarity explorer. The route is thin; the binning and the diagnostic are pure
+helpers that `similarity_explorer.py` reuses.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `get_pitcher_similarity_distribution` | `GET /pitcher/{pitcher_id}/{season}`: the engine's scores against every same-hand pitcher-season, binned, with the top matches and a diagnostic. Cached 24 hours in Redis. 404 when the pitcher is not in the engine. | The similarity explorer |
+| `get_pitcher_engine` / `get_name_resolver` / `get_similarity_cache` | Dependencies that read `app.state`. No engine is 503 ("engine warming"); no resolver gives placeholder names. | The route; `similarity_explorer` |
+| `compute_score_summary` / `classify_diagnostic` / `build_bins` / `build_top_n` | The summary statistics, the HEALTHY / COLLAPSED / NO_SPREAD verdict (median target 0.50) and the histogram. | The route; `similarity_explorer` |
+
+**Watch out:** Keep this module free of numpy, so both routers import in a lint-only job.
+`docs/similarity_visualization_spec.md` is the route's design.
+
+### `api/routes/similarity_explorer.py`
+
+[Source](../../api/routes/similarity_explorer.py) · 726 lines · Tests: [test_similarity_explorer_adapters.py](../../tests/unit/test_similarity_explorer_adapters.py)
+
+The explorer across all eleven engines. Eight score engines return a 0-to-1 composite with
+sub-scores; three distance engines (situation, pitch-to-pitch, batted ball) return a distance
+and are not keyed by a player.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `SCORE_ADAPTERS` / `DISTANCE_ENGINES` | Each engine's method, partition rule, id and sample fields, minimum sample and sub-score weights. | Every route here |
+| `list_engines` / `engine_meta` | `GET /engines` and `GET /{engine}/meta`. | The explorer |
+| `engine_query` / `engine_pair` | `GET /{engine}/query` (ranked matches and a histogram) and `GET /{engine}/pair`. The fielder engine needs `position` (else 400); the batter engine takes `vs_hand`. A distance engine is 404. | The explorer |
+| `situation_query` | `POST /situation/query`: the nearest game states from the KD-tree situation engine; 503 when it is not built. | The situation finder |
+
+**Watch out:** The composite is not the weighted sum of the sub-scores: each engine applies a
+confidence discount. The adapter weights are copies of the engines' weights.
+
+### `api/routes/metrics.py`
+
+[Source](../../api/routes/metrics.py) · 633 lines · Tests: [test_metrics_endpoint.py](../../tests/unit/test_metrics_endpoint.py), [test_backup_age_gauge.py](../../tests/unit/test_backup_age_gauge.py)
+
+`GET /metrics` in the Prometheus text format. It uses `prometheus_client` when it imports, else
+a hand-written writer with the same series names.
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `metrics(request)` | Reads `app.state` only, so a cold app never fails the scrape. Series: `baseball_sim_app_info`, `_metrics_scrapes_total`, `_requests_total`, `_latency_seconds` (the newest `GET /simulate` batch), `_api_p95_seconds`, `_pipeline_freshness_seconds`, `_finals_age_hours`, `_backup_age_hours{store}`, `_offsite_backup_age_hours{store}`. | Prometheus |
+| `record_sim_latency` / `record_request` | The two write seams. | `games.simulate_game_endpoint`; `LatencyMiddleware` |
+| `_schedule_finals_refresh(app_state)` | Starts background refreshes of the newest final game (every 10 minutes), the live heartbeat (every 15 seconds) and the off-site backup ages (every 10 minutes). The off-site read runs on its own daemon thread, because a OneDrive file can stall it. | `metrics` |
+| `_backup_ages(app_state)` | The local backup ages, read from disk at most once in 10 minutes. | `metrics` |
+
+**Flags:** `APP_VERSION`, `BACKUPS_ROOT` (production `/backups`), `OFFSITE_ROOT` (production
+`/offsite`).
+
+### `api/routes/auth.py`
+
+[Source](../../api/routes/auth.py) · 181 lines · Tests: [test_api_auth_session.py](../../tests/unit/test_api_auth_session.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `login(body, response)` | Compares the password in constant time and sets the cookie. 401 on a wrong password; 503 when `AUTH_PASSWORD` or `SECRET_KEY` is blank. | The login page |
+| `me(request)` | `authenticated`, `mode` (`cookie`, `api_key`, `disabled` or `none`) and `expires_in`. Always 200. | The frontend at boot |
+| `logout(response)` | Clears the cookie. | The logout button |
+
+**Watch out:** The router has no gate on purpose: the login page must reach it.
+
+### `api/routes/_common.py`
+
+[Source](../../api/routes/_common.py) · 112 lines · Tests: [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py), [test_api_data_health.py](../../tests/unit/test_api_data_health.py)
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `_get_pool(request)` | The main pool, or 503. | The game and betting routes |
+| `_get_ro_pool(request)` / `RO_POOL_UNAVAILABLE_DETAIL` | The read-only pool, or 503 with the one shared message. No fallback to the main pool. | The Data Lab routes |
+| `_get_sim_cache(request)` | `app.state.sim_cache`, or None. | The game routes |
+| `_row_get` / `_opt_str` / `_opt_int` / `_iso` | One column from an asyncpg record or a dict, with a default for a missing or NULL value. | Most route modules |
+
+**Watch out:** A new route that reads only `raw.*` uses `_get_ro_pool`, never `_get_pool`.
+
+### Package markers
+
+| File | Lines | What it holds |
+|---|---|---|
+| [`api/__init__.py`](../../api/__init__.py) | 0 | Empty; makes `api` a package. |
+| [`api/routes/__init__.py`](../../api/routes/__init__.py) | 12 | A docstring naming the aggregate routers and their sub-routers. |
+
+## Routes defined outside `api/`
+
+`create_app()` includes two routers from the live pipeline package:
+
+- `ws_router` (`/ws/games/{game_pk}`, in
+  [live_ingestion_pipeline.py](../../pipeline/live/live_ingestion_pipeline.py)): the handler
+  checks the handshake, registers the socket with `connection_manager`, asks the bridge to
+  subscribe to the game's Redis channel, and answers `ping` with `pong`. With no message for
+  30 seconds it sends a `ping`.
+- `odds_router` (`/api/odds/*`, in
+  [odds_routes.py](../../pipeline/live/ingestion/odds_routes.py)): both routes return the
+  mock provider's odds, never stored or live lines. The Betting card reads `/api/betting`
+  instead.

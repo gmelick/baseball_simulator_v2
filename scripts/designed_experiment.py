@@ -38,10 +38,10 @@ its own noise) and the surface's best corner.
     MSYS_NO_PATHCONV=1 docker compose run -d --rm --name designed_experiment \\
         -v "$PWD:/app" app python scripts/designed_experiment.py \\
         --factors '{"SIM_PITCH_PITCHER_POWER": ["16", "8"], "SIM_RESULT_BATTER_POWER": ["8", "4"]}' \\
-        --game-pks-file scripts/data/games_2024_design.txt --out-dir /app/scripts/designed_experiment
+        --game-pks-file scripts/data/games_2024_design.txt --out-dir /app/results/designed_experiment
 
     # read existing reports only
-    python scripts/designed_experiment.py --analyze-only --out-dir scripts/designed_experiment
+    python scripts/designed_experiment.py --analyze-only --out-dir results/designed_experiment
 """
 
 from __future__ import annotations

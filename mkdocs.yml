@@ -1,7 +1,7 @@
 site_name: Baseball Simulator — Technical Reference
 site_description: >-
-  Per-subsystem code map for the MLB baseball simulation platform: what each
-  file does, what calls it, and what it depends on.
+  The code reference for the MLB baseball simulation platform: the architecture, an
+  order to review the code in, every source file, and one page per area.
 docs_dir: docs/technical
 site_dir: site
 
@@ -37,14 +37,32 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.highlight
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+# The pages link to source files outside docs/technical/. Those links work in an
+# editor and on GitHub; the site does not serve the files, so it only notes them.
+validation:
+  links:
+    not_found: info
 
 nav:
   - Home: README.md
-  - API Layer: api.md
-  - Simulation Engine: simulation.md
-  - Similarity Engines: similarity.md
-  - Data Pipeline, Betting, and Database: pipeline-betting-db.md
-  - Operational Scripts and Frontend: scripts-frontend.md
+  - Architecture: architecture.md
+  - Code review path: code-review-path.md
+  - File index: file-index.md
+  - Loop cheat sheet: sim-loop-cheat-sheet.md
+  - Area pages:
+      - Simulation: simulation.md
+      - Similarity engines: similarity.md
+      - "Pipeline: the nightly builds": pipeline-batch.md
+      - "Pipeline: getting data in": pipeline-ingest.md
+      - Database: database.md
+      - Betting: betting.md
+      - API: api.md
+      - Frontend: frontend.md
+      - Scripts: scripts.md
+      - Tests and CI: tests.md
 
 extra:
   generator: false

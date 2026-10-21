@@ -1,39 +1,72 @@
-# Technical Reference — start here
+# Technical reference
 
-This is the code map for the MLB baseball simulation platform: what each file does, what calls it, and what it depends on. It exists so that if you need to change one piece of logic — say, the steal-attempt sampling logic — you can find it, see what calls it, and see what it depends on, without reading the whole codebase.
+This is the code reference for the MLB baseball simulation platform. It tells you what
+each part of the code does, where a piece of logic lives, what calls it and what it
+depends on. You can find and change one piece of logic without reading the whole
+codebase.
 
-## How to read this
+## Start here
 
-These are plain Markdown files — read them directly here, on GitHub, or in any editor. No setup needed.
+1. **[Architecture](architecture.md)**: the system on one page. The services, the data
+   stores, the process model, and the three paths data takes: a simulation request,
+   game day and the nightly builds.
+2. **[Code review path](code-review-path.md)**: an order to read the whole codebase in.
+   A one-hour tour of one simulation request, then fifteen stages from the core
+   outward.
+3. **[File index](file-index.md)**: every source file, in the order of the review path,
+   with its size, its purpose and the tests that import it. A script writes it.
+4. **[Loop cheat sheet](sim-loop-cheat-sheet.md)**: every draw the simulator makes, its
+   filters, its weights and their production values, on one page.
 
-For a nicer, searchable website built from these same pages, run from the repo root:
+## The area pages
+
+| Page | Covers |
+|---|---|
+| [Simulation](simulation.md) | The pitch-by-pitch state machine, the sampler that makes every draw, the runner that plays 100 games, and the outputs: win odds, prop distributions, market prices. |
+| [Similarity engines](similarity.md) | The eleven engines that score how alike two players or situations are, how a score becomes a draw weight, calibration and backtesting. |
+| [Pipeline: the nightly builds](pipeline-batch.md) | The profile computor, the pools of real plays, the engine-artifact bundle the sampler reads, and the backups. |
+| [Pipeline: getting data in](pipeline-ingest.md) | The historical loaders, the Savant loaders, the odds providers and the live game-day service. |
+| [Database](database.md) | Every Postgres and DuckDB table, the migrations, the database roles, backup and restore. |
+| [Betting](betting.md) | The pricing math: implied probability, margin removal, edge, expected value, closing line value, the bet signal. |
+| [API](api.md) | The FastAPI app: its boot, the login, every route, the run jobs. |
+| [Frontend](frontend.md) | The React app: its pages, components, API client, login and design tokens. |
+| [Scripts](scripts.md) | The nightly jobs, the loaders, the pool rebuilds, the measurement tools and the probes. |
+| [Tests and CI](tests.md) | The test lanes, what each proves, how to run it, and what CI runs. |
+
+The operator's manual is [WORKFLOW.md](../../WORKFLOW.md) at the repository root. The
+project guide, with the owner's standing rulings, is [CLAUDE.md](../../CLAUDE.md).
+[docs/README.md](../README.md) lists every document in the repository and says which
+ones are kept current.
+
+## How to read these pages
+
+They are plain Markdown. Read them in the Claude app, in VS Code or on GitHub. In all
+three, a link to a source file opens the file.
+
+The same pages also build into a searchable website:
 
 ```bash
 pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
-then open the printed `http://127.0.0.1:8000/` link. `mkdocs build` produces a static `site/` folder you can host anywhere.
+Then open `http://127.0.0.1:8000/`. The website does not serve the source files, so a
+link to a source file goes nowhere there.
 
-## How this is organized
+## Keeping the pages current
 
-| Subsystem | Covers | Reference |
-|---|---|---|
-| **API Layer** | The FastAPI application: routes, request/response schemas, auth, and the engine-build lifespan. | [api.md](api.md) |
-| **Simulation Engine** | The pitch-by-pitch simulator: the state machine, the similarity-weighted sampler, the batch runner, and everything that turns one plate appearance into a play. | [simulation.md](simulation.md) |
-| **Similarity Engines** | The eleven similarity engines that compare the live matchup to real history, plus calibration and backtesting. | [similarity.md](similarity.md) |
-| **Data Pipeline, Betting, and Database** | ETL and live ingestion, the nightly profile/artifact builders, the CLV and betting-signal engines, and the migration system. | [pipeline-betting-db.md](pipeline-betting-db.md) |
-| **Operational Scripts and Frontend** | The scripts that are still run operationally (not one-off probes), plus a map of the frontend structure. | [scripts-frontend.md](scripts-frontend.md) |
-| **The loop on one page** | The owner's cheat sheet (2026-09-14): every draw in the simulation loop, its hard filters, the similarity scores and bandwidths that weight it and their production values, and the feature groups inside each similarity score. | [sim-loop-cheat-sheet.md](sim-loop-cheat-sheet.md) |
+The pages describe the code as it is today. History belongs in `CHANGES.md`.
 
-## Worked example: "where is the steal-attempt sampling logic?"
-
-This is the kind of question this reference is built to answer quickly. Short answer: `FullPoolSampler.steal_draw` (`simulation/sampler/steal.py`, see [`simulation.md`](simulation.md#simulationfull_pool_samplerpy-and-simulationsampler)) decides whether a runner attempts a steal and whether it succeeds. It is called from `StateMachine._steal_opportunity_draw` in `simulation/loop/running_game.py`, one of the mixins of the `StateMachine` class in `simulation/sim_loop.py`, and it draws from the steal-opportunity pool built by the nightly artifact pipeline, weighted by the runner, pitcher, and catcher similarity engines. See the full entry in `simulation.md` for the exact call chain, the pool it reads, and every helper function involved.
-
-## Conventions used on these pages
-
-- Every file gets a one-paragraph **purpose**, a table of its important functions, and, where relevant, the environment-variable flags it reads.
-- **Called from** lists the other functions in the codebase that call this one, found by searching the whole repository, not just this file's own subsystem.
-- **Depends on** lists what this function calls into or relies on.
-- A **Notes** callout flags anything a new engineer must know before changing the file — a gotcha, an invariant, or a non-obvious coupling to another part of the system.
-- This reference describes the code as of 2026-09-10. Re-generate the affected page after any change to the functions or call chains it documents.
+- **A new, moved or deleted source file:** run `python scripts/docs_file_index.py`.
+  The unit test `tests/unit/test_docs_file_index.py` fails until you do. If no stage
+  claims the file, add a pattern to `STAGES` in that script.
+- **A file's purpose:** the file index shows the first sentence of the file's own
+  docstring or header comment. Fix the docstring, then rerun the script.
+- **A new module or function that holds a rule:** add it to its area page, in the
+  page's own format.
+- **A schema version:** the pages state it as `Alembic head **NNNN**` and
+  `DuckDB schema **vNN**`. Two tests fail when a page lags the newest migration.
+- **An API contract change:** ship a fresh `frontend/openapi.json` and `schema.d.ts`
+  in the same commit (see the [API](api.md) page).
+- **A page that no longer matches the code:** rewrite the page from the code. Do not
+  patch a stale page line by line.

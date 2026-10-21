@@ -25,7 +25,7 @@ the index claim from ``CHANGES.md`` per AC #4.
 Usage (cmd.exe):
 
     set BASEBALL_DB_DSN=postgresql://USER:PASS@host:5432/db
-    python scripts\\run_index_acceptance.py ^
+    python scripts\\probes\\run_index_acceptance.py ^
         --season 2024 --pitcher-id 605400 ^
         --out docs\\perf\\2026-05-13-index-acceptance.md
 """

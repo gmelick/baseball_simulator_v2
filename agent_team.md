@@ -1,377 +1,294 @@
-# MLB Baseball Simulation Platform — Agent Team
+# The agent team
 
-This document defines the 9-agent team for the MLB Baseball Simulation Platform. Any chat in this project can invoke any agent by name to get a response grounded in that agent's defined scope, responsibilities, and collaboration model.
+The project runs as a team of nine roles. Each role owns a part of the codebase and a set
+of standing decisions. Any chat in this project can call a role by name and get an answer
+grounded in that role's scope.
 
-**How to invoke:** Address an agent directly by role name, followed by the request.
-> Example: *"Baseball Analyst: review the current pitcher similarity engine feature set and flag anything redundant or Statcast-biased."*
-> Example: *"ML Engineer: design the walk-forward validation pipeline for the batter similarity engine."*
-> Example: *"Backend Developer: write the technical spec for the Phase 4 game state manager."*
+**How to call a role.** Name the role, then give the request.
 
----
+> *"Baseball Analyst: check the steal draw's attempt volume against real play."*
+>
+> *"ML Engineer: explain how the fielder score becomes a weight in the fielding draw."*
+>
+> *"QA / DevOps: cross-validate the change on this branch."*
 
-## Roster at a Glance
+**How the team works.** A sprint has four steps:
 
-| # | Agent | Status | Primary Domain |
-|---|-------|--------|----------------|
-| 1 | Product Manager | Original | Requirements, user stories, phase planning |
-| 2 | Baseball Analyst | New | Domain validation, feature selection, methodology |
-| 3 | ML / Modeling Engineer | New | Similarity engines, GMMs, backtesting, calibration |
-| 4 | Data Engineer | Original | Schema, ETL pipelines, live ingestion, profiles |
-| 5 | Backend Developer | Renamed (was "Software Developer") | Simulation loop, FastAPI, WebSocket, Redis |
-| 6 | Performance Engineer | New | Simulation throughput, FAISS tuning, vectorization |
-| 7 | UX Designer | Original | Wireframes, design system, frontend components |
-| 8 | Betting / Markets Analyst | New | CLV, odds integration, edge identification, props |
-| 9 | QA / DevOps | Original | Tests, CI/CD, Docker, deployment, monitoring |
+1. The role agents implement their tickets. They split the work by file ownership, so
+   no two agents edit the same file at the same time.
+2. QA / DevOps runs an independent cross-validation pass and the full test suite. QA
+   never certifies its own work.
+3. The Product Manager consolidates the results.
+4. The team records the work: `CHANGES.md` gets the entry, `BACKLOG.xlsx` loses the
+   closed rows and gains the new tickets.
 
----
-
-## Agent 1 — Product Manager
-
-**Scope:** Functional requirements, user stories, backlog prioritization, phase sequencing, and definition of done across all 7 project phases.
-
-**Owns:**
-- Functional requirements and acceptance criteria for all phases
-- User story backlog covering simulation features, frontend UX, and betting integration
-- Phase dependency management across all agents
-- Prioritization decisions when scope conflicts arise
-
-**Collaborates with:**
-- Betting Analyst — to define which simulation outputs are actionable for prop betting
-- Baseball Analyst — to validate what "realistic" simulation behavior looks like from a domain perspective
-
-**Invoke for:**
-- Prioritized sprint backlog and next-step recommendations
-- Writing or refining user stories for any feature
-- Phase sequencing and dependency decisions
-- Acceptance criteria for any deliverable
+`CLAUDE.md` holds the owner's standing rulings and the working conventions. Every role
+follows them. The [architecture overview](docs/technical/architecture.md) shows how the
+parts fit together.
 
 ---
 
-## Agent 2 — Baseball Analyst
+## Roster
 
-**Scope:** Baseball domain expertise that bridges statistical models and on-field reality. Validates that model outputs make sense from a baseball perspective before formal backtesting catches errors. This role is the primary defense against model bugs that look like features.
-
-**Owns:**
-- Validation of all similarity engine nearest-neighbor outputs against baseball intuition (e.g., does a pitcher's top comp return stylistically similar pitchers?)
-- Feature selection rationale for each similarity engine — what to include, what is redundant, what is Statcast classification-biased
-- Sanity checks on simulated game distributions — run environment calibration, park factor application, platoon split realism
-- Methodology sourcing — Tango Tiger, Baseball Prospectus, FanGraphs, Statcast research to ground all defensive metrics and run values
-- Identifying when simulation outputs fail the "sniff test" before backtesting catches it formally
-- Manager decision logic design — starter pull timing, pinch-hit frequency, bullpen usage by leverage index
-- Key run-value constants used throughout: 0.75 runs/out saved (infielders), 0.90 (outfielders), 0.25 runs/block saved, 0.125 runs/strike above average
-
-**Collaborates with:**
-- ML Engineer — on GMM feature engineering and which pitch attributes cluster meaningfully
-- Data Engineer — on ETL data quality: flagging bad Statcast rows, null handling for edge cases
-- Betting Analyst — on which player archetypes produce consistent simulation signal for prop markets
-
-**Invoke for:**
-- Reviewing feature sets for any similarity engine
-- Validating nearest-neighbor outputs for specific players
-- Grounding defensive metric methodology in published research
-- Diagnosing simulation outputs that seem off before formal validation runs
-- Manager decision logic design
+| # | Role | Owns | Reference |
+|---|------|------|-----------|
+| 1 | Product Manager | The ticket list, priorities, acceptance criteria, the plans | `BACKLOG.xlsx`, `CHANGES.md` |
+| 2 | Baseball Analyst | Baseball realism: the draws' filters, the acceptance bands, the domain checks | [Loop cheat sheet](docs/technical/sim-loop-cheat-sheet.md) |
+| 3 | ML / Modeling Engineer | The similarity engines, the weights, calibration, the designed experiment | [Similarity](docs/technical/similarity.md) |
+| 4 | Data Engineer | The schemas, migrations, loaders, nightly builds and backups | [Database](docs/technical/database.md), [Pipeline: ingest](docs/technical/pipeline-ingest.md), [Pipeline: nightly builds](docs/technical/pipeline-batch.md) |
+| 5 | Backend Developer | The simulation loop, the runner, the API | [Simulation](docs/technical/simulation.md), [API](docs/technical/api.md) |
+| 6 | Performance Engineer | Throughput: the worker pool, the sampler's hot paths, memory | [Architecture](docs/technical/architecture.md) |
+| 7 | UX Designer | The frontend and its design system | [Frontend](docs/technical/frontend.md) |
+| 8 | Betting / Markets Analyst | Odds, pricing, edges, closing line value, the accuracy comparison | [Betting](docs/technical/betting.md) |
+| 9 | QA / DevOps | Tests, CI, Docker, deployment, scheduled jobs, monitoring | [Tests and CI](docs/technical/tests.md), [WORKFLOW.md](WORKFLOW.md) |
 
 ---
 
-## Agent 3 — ML / Modeling Engineer
+## 1. Product Manager
 
-**Scope:** All statistical modeling and machine learning work. The similarity engines are the core IP of this platform — this role owns their architecture, math, calibration, and validation. Distinct from the Backend Developer, who handles application-layer wiring.
+**Scope.** What gets built, in what order, and when it counts as done.
 
-**Owns:**
-- All 11 similarity engine implementations: pitcher (GMM W₂), batter (RBF), fielder (position-partitioned RBF), baserunner extra-base (RBF), baserunner steal (RBF), catcher (RBF), pitcher-steal (RBF), manager (RBF), situation (KDTree), pitch-to-pitch (FAISS), batted ball (FAISS)
-- GMM pipeline: BIC-based component selection (2–7 components), minimum cluster size enforcement, population-level standardization of means and covariances, W₂ distance computation
-- RBF kernel calibration: sigma values, reliability weighting, empirical Bayes shrinkage toward league/positional average for players with < 50–100 samples
-- Backtesting framework: MAE on simulated prop distributions, calibration curves (ECE), Brier Score, log-loss on held-out historical data
-- Ablation test suite: swap each engine against league-average baseline to isolate signal contribution
-- Walk-forward validation as the primary pipeline evaluation structure
-- Recency weighting strategy: 2× weight on last 2 seasons, decay schedule for older data
-- FAISS index design and rebuild strategy for pitch-to-pitch and batted ball engines
+**Owns.**
 
-**Key modeling decisions (established, do not relitigate without strong justification):**
-- GMM covariances stored in standardized space with `feature_means` / `feature_stds` in model JSON
-- Arsenal W₂ distances calibrated to real Statcast distributions (range ~0.5–12, median ~2.84); linear exponential `exp(-W₂ / 4.10)` used over squared exponential
-- EB_N_PRIOR=15 for fielder engine (defensive metrics stabilize more slowly); EB_N_PRIOR lower for pitcher/batter engines
-- Target median similarity score: 0.50 across all engines
-- Release point sub-score excluded from pitcher engine (already captured per-pitch-type inside GMM components)
-- Compositionally redundant batter features removed: ld_rate, iffb_rate, center_rate
-- Position-partitioned architecture for fielder engine — no cross-position scoring
+- `BACKLOG.xlsx`: one row per open ticket, ranked, with a plain-English description, a
+  definition of done and a proposed solution. Row 2 carries only the updated date, the
+  two doc pointers and the next free ticket ID (owner ruling 2026-09-12).
+- `CHANGES.md`: the record of every closed ticket and every data run.
+- The plans and run books in `docs/audit/`.
 
-**Collaborates with:**
-- Baseball Analyst — on feature selection and nearest-neighbor sanity checks
-- Data Engineer — on player profile schema and derived metrics tables
-- Performance Engineer — on FAISS query speed and multiprocessing GMM fitting
-- Betting Analyst — on ensuring validation metrics are calibrated to the betting use case
+**Guards.**
 
-**Invoke for:**
-- Designing or building any similarity engine
-- Diagnosing calibration issues (COLLAPSED, NO_SPREAD diagnostics)
-- Designing the backtesting or ablation framework
-- Walk-forward validation pipeline design
-- Any question about W₂ distances, RBF kernels, empirical Bayes, or FAISS indexing
+- Every change maps to a ticket. File the ticket when you use its number.
+- A closed ticket's row leaves `BACKLOG.xlsx`; its record goes to `CHANGES.md`.
+- No betting-value measurement until every band the lanes grade is green (owner ruling
+  2026-09-08).
+
+**Call for.** Prioritising the backlog, writing a definition of done, sequencing work
+across roles, consolidating a sprint.
 
 ---
 
-## Agent 4 — Data Engineer
+## 2. Baseball Analyst
 
-**Scope:** Database layer, all ETL pipelines, live data ingestion, and nightly player profile pre-computation. The authoritative owner of the hybrid PostgreSQL/DuckDB architecture.
+**Scope.** Does the simulated game look like real baseball? This role catches a model
+error that looks like a feature before a formal lane does.
 
-**Owns:**
-- PostgreSQL schema (`raw`, `sim` schemas) and DuckDB schema (`derived`, `sim` schemas) with Alembic migrations
-- Historical ETL loader: Statcast CSV/API ingestion, type coercion, FK prerequisite checking, freshness tracker
-- Live ingestion pipeline: MLB WebSocket (change signal only) + REST API re-fetch, mock odds API, re-simulation triggering at plate appearance completion
-- Nightly batch player profile pre-computation via DuckDB postgres extension (bulk aggregation without loading data into Python memory)
-- Sprint speed loader: Savant CSV endpoint with custom User-Agent header, ON CONFLICT upserts
-- Defensive metrics computor: OAA, DP conversion, catcher framing, catcher blocking
-- Data quality monitoring: null rates, outlier detection, ETL freshness alerts
+**Owns.**
 
-**Key architectural decisions (established):**
-- DuckDB operates as an in-process library — no Docker container
-- MLB WebSocket treated as pure signal; all state fetched from REST API
-- `raw.game_lineups` deferred until pre-game lineup display and manager decision logic phases
-- All `CREATE TABLE` statements use `IF NOT EXISTS` guards
+- The hard filters of every draw: which facts of the situation a pool cell must match
+  ([loop cheat sheet](docs/technical/sim-loop-cheat-sheet.md)).
+- The domain checks of the acceptance bands (`tests/acceptance/bands.py`) and of the
+  short smoke run (`scripts/sim_stats.py`).
+- The rules of baseball in the loop: the count, the dropped third strike, the running
+  game on the pitch, the ghost runner, the walk-off.
+- The run-value constants: 0.75 runs per out saved by an infielder, 0.90 by an
+  outfielder, 0.25 runs per block, 0.125 runs per strike.
 
-**Migration workflow (mandatory — SIM-084):**
-- Every PostgreSQL schema change ticket MUST include an Alembic migration in `db/migrations/versions/` as part of its acceptance criteria. Naming convention: `{revision_id}_{short_slug}.py`.
-- Every DuckDB schema change ticket MUST include a numbered SQL migration file in `db/migrations/duckdb/` (e.g. `0002_add_column.sql`) and must increment `db/schemas/duckdb_schema_version.txt`.
-- Run `alembic upgrade head` (with `BASEBALL_DB_DSN` set) to apply all pending PostgreSQL migrations.
-- Alembic is initialized in `db/migrations/`; `alembic.ini` is at the repo root. The DSN is read from `BASEBALL_DB_DSN` env var — never commit credentials.
+**Guards.**
 
-**Known bugs to avoid:**
-- DuckDB ART index corruption on DELETE: drop and recreate secondary indexes around DELETE operations
-- `INSERT OR REPLACE` column count mismatches if `updated_at` defaults are not handled explicitly
-- DuckDB schema re-application errors: always use `IF NOT EXISTS` on all `CREATE TABLE` statements
+- The architecture rule: every decision is a similarity-weighted draw from a filtered
+  pool of real plays, and the drawn row IS the play (owner rulings 2026-08-10 and
+  2026-08-29).
+- Validate data work on hundreds of games, never dozens.
 
-**Collaborates with:**
-- ML Engineer — on derived metrics tables and profile schema the engines require
-- Baseball Analyst — on data quality edge cases and Statcast schema quirks (null launch stats on non-contact, extreme outlier spin rates)
-- Backend Developer — on live ingestion pipeline integration with the FastAPI layer
-
-**Invoke for:**
-- Schema design or migration questions
-- ETL pipeline design or debugging
-- Data quality issues in Statcast data
-- Player profile pre-computation architecture
-- Any question about PostgreSQL/DuckDB integration
+**Call for.** Reviewing a draw's filters, judging a band that reads red, checking an
+engine's nearest neighbours for a player, designing a domain check.
 
 ---
 
-## Agent 5 — Backend Developer
+## 3. ML / Modeling Engineer
 
-**Scope:** Application-layer engineering. Owns the Phase 4 simulation loop wiring, Phase 5 FastAPI backend, and all supporting infrastructure (Redis, WebSocket channels). Distinct from the ML Engineer, who owns the similarity engine implementations that this role calls.
+**Scope.** The statistics: the eleven similarity engines, how their scores become draw
+weights, calibration and validation.
 
-**Owns:**
-- Phase 4 simulation loop: game state manager, pitch selection integration, outcome determination, fielding resolution integration, baserunner advancement integration, state update, loop control
-- Phase 5 backend API: all REST endpoints, WebSocket live channel, 100-iteration runner with `ProcessPoolExecutor(max_workers=CPU_count - 1)`
-- Redis TTL caching: simulation results (60s TTL), play pool queries (5-min TTL), odds data (5-min TTL)
-- Managerial override endpoint: `POST /api/games/{game_pk}/simulate/with_override`
-- Game state snapshot storage for pitch-level replay
-- Unit test suites for all pipeline and API components (TDD: tests first, then implementation)
+**Owns.**
 
-**Key API endpoints (Phase 5):**
-- `GET /api/games/{date}` — all games for a date
-- `GET /api/games/{game_pk}/simulate` — run 100 simulations from current state
-- `GET /api/games/{game_pk}/state/{at_bat}/{pitch}` — game state at specific pitch
-- `GET /api/games/{game_pk}/plays` — full play-by-play at pitch-level granularity
-- `POST /api/games/{game_pk}/simulate/with_override` — re-simulate with modified roster
-- `WS /ws/games/{game_pk}` — live game state push channel
+- `similarity/`: the engines, the calibration fit and the backtester.
+- The actor score matrices in the bundle (`build_actor_sim_matrices` in
+  `pipeline/batch/engine_artifacts.py`; `pipeline/batch/artifacts/actor_embeddings.py`
+  maps the pool rows onto their columns) and the powers that turn a score into a weight
+  (`SIM_ACTOR_POWER_*`).
+- The weight functions in `simulation/sampler/kernels.py`.
+- The arsenal model (`pipeline/batch/profiles/gmm.py`).
+- Calibration: `make calibrate`, `make validate-props`, `/data/calibration.json`.
+- The designed experiment (`scripts/designed_experiment.py`): the one fit of every
+  weight together.
 
-**Collaborates with:**
-- ML Engineer — to wire similarity engine outputs into the simulation loop correctly
-- Performance Engineer — on parallelization architecture and shared state design
-- Data Engineer — on live ingestion pipeline integration
+**Guards.**
 
-**Invoke for:**
-- Simulation loop step design and implementation
-- FastAPI endpoint design and implementation
-- Redis caching strategy
-- WebSocket architecture
-- TDD unit test design for any backend component
+- Every similarity power is 1 until the designed experiment fits the weights together
+  (owner ruling 2026-09-16). The fitted values are its starting points.
+- Every change lands ON at its best-known default; no change waits on a per-change
+  accuracy run (owner ruling 2026-09-16).
+- The established engine decisions in `CLAUDE.md` §10: the arsenal distance in
+  standardized space, the linear form `exp(-W2 / 4.10)`, empirical-Bayes shrinkage
+  (prior 15 for the fielder engine), the position-partitioned fielder engine, a target
+  median score of 0.50.
 
----
-
-## Agent 6 — Performance Engineer
-
-**Scope:** Simulation throughput optimization. Owns the hard SLA: single game simulation under 2 seconds, 100-game batch under 30 seconds on target hardware. Profiles before bottlenecks happen rather than debugging after.
-
-**Owns:**
-- Simulation throughput profiling and the 2s / 30s SLA targets
-- FAISS index tuning: flat vs. IVF vs. HNSW selection, nprobe calibration, memory layout optimization
-- NumPy vectorization of inner loop hot paths — replacing Python loops with vectorized probability sampling
-- `ProcessPoolExecutor` configuration: max_workers, process pool reuse, shared memory for play pool
-- DuckDB query optimization: explain plans, index coverage, batching strategy for profile lookups
-- Memory profiling: play pool footprint, FAISS index RAM sizing for target hardware
-- Infrastructure sizing recommendations for Phase 7 deployment
-- Cython or compiled extension evaluation for core probability sampling if Python is the bottleneck
-
-**Collaborates with:**
-- ML Engineer — on FAISS index rebuild cadence and batching strategy
-- Backend Developer — on parallelization architecture and shared state design
-- QA/DevOps — on stress tests (100 simulations × 30 concurrent games, no race conditions or memory leaks)
-
-**Invoke for:**
-- Identifying simulation bottlenecks
-- FAISS index design decisions
-- NumPy vectorization of specific hot paths
-- Memory sizing and hardware recommendations
-- Parallelization architecture advice
+**Call for.** Designing or changing an engine, diagnosing calibration, planning a fit,
+explaining how a score reaches a draw.
 
 ---
 
-## Agent 7 — UX Designer
+## 4. Data Engineer
 
-**Scope:** All frontend user experience work. Produces wireframes, mockups, design system components, and interaction patterns. Frontend implementation begins at Phase 6; design decisions can be made earlier.
+**Scope.** The data layer: where the data comes from, how it is stored, and the nightly
+builds that turn it into what the simulator reads.
 
-**Owns:**
-- Design system: color tokens, typography, spacing, card/panel styles, shared component library
-- Day Summary page: date navigation (back/forward/today/date picker), game count badge, 3-state game cards
-- 3-state game card designs:
-  - *In progress*: teams + records + venue + score, full linescore, simulation summary (avg scores + win %), field graphic with live player positions, current count/outs/pitcher/batter, both team lineups with current stats
-  - *Completed*: teams + records + venue + final score, full linescore, winning/losing/save pitchers, moneyline/spread/total odds with winning side highlighted
-  - *Not started*: teams + records + venue, starting lineups if announced, 100-simulation summary, betting odds (moneyline/spread/total)
-- `LinescoreGraphic` component: inning-by-inning grid + R/H/E, handles in-progress partial innings and extra innings
-- `BaseballFieldGraphic` SVG: 9 defensive positions + batter + baserunners with player name labels
-- Game page: play-by-play scroll list, pitch-level drill-down, simulation result panels per player
-- Managerial override UI: substitute pitcher/hitter/runner/fielder and see simulation results shift in real time
-- Boxscore with per-player simulation averages across 100 iterations (AB/H/HR/RBI for batters, IP/K/BB/ER for pitchers)
+**Owns.**
 
-**Key deferred decision:** React migration vs. vanilla JS + WebSocket extension — decided at Phase 6 kickoff based on override UI complexity.
+- `db/`: the Postgres schema and its Alembic migrations, the DuckDB schema and its
+  numbered migrations with the version file, the database roles, the backup scripts.
+- `pipeline/etl/` and `pipeline/live/`: the historical loaders and the live service.
+- `pipeline/batch/`: the profile computor, the pools and the engine-artifact bundle.
+- `pipeline/backup/`: the nightly backups and the off-site copy.
+- The odds providers (`pipeline/odds_provider.py`, `pipeline/bettingpros/`) and the
+  loaders in `scripts/`.
 
-**Collaborates with:**
-- Betting Analyst — on how betting odds and CLV signal should be surfaced in the UI
-- Baseball Analyst — on which game-state information is most meaningful to display
-- Backend Developer — on what data the API can provide for each UI component
+**Guards.**
 
-**Invoke for:**
-- Wireframes or mockups for any frontend component
-- Design system decisions
-- Interaction design for the managerial override feature
-- Component specs for the linescore, field graphic, or boxscore
+- Every Postgres schema change ships an Alembic migration. Every DuckDB schema change
+  ships a numbered SQL file and bumps `db/schemas/duckdb_schema_version.txt`.
+- One cutoff date per profile table: a partial recompute must include the season in
+  progress.
+- The MLB WebSocket is a change signal only; all state comes from REST.
+- DuckDB runs in-process. Every `CREATE TABLE` uses `IF NOT EXISTS`.
+
+**Call for.** A schema change, a loader, a data-quality question, a rebuild, a restore.
 
 ---
 
-## Agent 8 — Betting / Markets Analyst
+## 5. Backend Developer
 
-**Scope:** The translation layer between simulation outputs and actionable betting edge. Closing Line Value is the gold-standard validation metric for this platform — this role owns the full CLV framework and ensures simulation outputs are expressed in terms the betting market can validate.
+**Scope.** The application: the simulation loop, the runner that plays many games, and
+the API.
 
-**Owns:**
-- CLV framework: how closing line value is measured across moneyline, spread, totals, and player props
-- Odds API integration spec: which markets to ingest, at what cadence, from which books
-- Edge identification methodology: converting a simulated win probability or prop distribution into a +EV signal
-- Line movement analysis: tracking opening-to-closing line to validate simulation-derived edge
-- Prop-specific model requirements — what simulation outputs each prop type requires:
-  - *Pitcher strikeouts*: PA count, whiff rate, chase rate, platoon split, opponent lineup quality
-  - *Batter hits*: BABIP, batted ball profile, exit velocity, park factor, pitcher matchup
-  - *Home runs*: exit velocity, launch angle, park HR factor, pitcher HR rate, spray angle
-  - *RBIs*: lineup position context, baserunner state distribution from simulation
-- Betting odds display spec for the frontend: moneyline/spread/total layout, winning side highlighting
-- Market timing guidance: when to generate a bet signal relative to line movement and game time
+**Owns.**
 
-**Collaborates with:**
-- ML Engineer — on ensuring ECE/Brier are calibrated to the betting use case, not just academic accuracy
-- UX Designer — on how betting odds and CLV signals should be surfaced in the game card and game page UI
-- Baseball Analyst — on which player archetypes produce the most consistent simulation signal
+- `simulation/sim_loop.py` and `simulation/loop/`: the state machine.
+- `simulation/full_pool_sampler.py` and `simulation/sampler/`, with the ML Engineer for
+  the weights.
+- The runner and the outputs: `batch_runner.py`, `production_factory.py`, `results.py`,
+  `prop_distributions.py`, `game_market_distributions.py`, `whatif.py`.
+- `api/`: the routes, the login, the run jobs, the Redis cache; and `db/sim_store.py`.
 
-**Invoke for:**
-- Defining the CLV measurement framework
-- Specifying which prop markets to target and why
-- Converting simulation output distributions into bet recommendations
-- Odds API integration requirements
-- Line movement and market timing strategy
+**Guards.**
+
+- Tests first, then the code. Unit tests use the `__new__` constructor bypass and
+  in-memory data, never a live database.
+- Make surgical edits to the loop. The run ledger (`_commit_run_delta`) and the one
+  writer of a pitcher's outs (`_record_outs`) have source-reading tests.
+- A change to the API's contract ships a fresh `frontend/openapi.json` and
+  `schema.d.ts` in the same commit.
+
+**Call for.** A change to the loop or a draw, a new route, the run-job flow, caching.
 
 ---
 
-## Agent 9 — QA / DevOps
+## 6. Performance Engineer
 
-**Scope:** Test coverage, CI/CD pipeline, Docker infrastructure, deployment hardening, and production monitoring. Owns the validation framework that confirms the system works end-to-end before each phase ships.
+**Scope.** Speed and memory. The targets are 2 seconds for one game and 30 seconds for a
+batch of 100.
 
-**Owns:**
-- End-to-end integration test: replay historical games through simulation loop, chi-squared goodness-of-fit vs. actual run distributions (target p > 0.05)
-- Invalid state detection: 1,000 complete game simulations with zero invalid states (negative scores, >3 outs in an inning, impossible baserunner advancement)
-- Stress test: 100 simulations × 30 concurrent games with no race conditions or memory leaks
-- CI pipeline: GitHub Actions (.github/workflows/ci.yml) — lint, type-check, unit tests + 80% coverage gate, regression gate, Docker build check on every push/PR; weekly integration run; Docker push to ghcr.io on main (SIM-146 ✅)
-- Docker Compose stack validation: PostgreSQL, Redis, FastAPI confirmed healthy; DuckDB confirmed in-process (no container)
-- Cross-browser frontend testing: Chrome, Firefox, Safari (desktop and mobile)
-- Phase 7 deployment: nginx reverse proxy with WebSocket support, environment configs (dev/staging/prod), Prometheus + Grafana monitoring
-- Monitoring targets: simulation latency, API response times, data pipeline freshness alerts
+**Owns.**
 
+- The worker pool (`simulation/batch_runner.py`): forkserver workers, the bundle in
+  shared memory, the pinned bundle version.
+- The sampler's hot paths: the pitch draw's cell index, the skipped power step at
+  power 1, the per-plate-appearance weight caches.
+- The performance benchmarks (`tests/performance/`) and the weekly performance workflow.
+- Memory sizing on the host (24 cores, 32 GB; Docker's WSL limit of 16 CPUs and 20 GB).
 
-**CI/CD infrastructure (SIM-146):**
-- `.github/workflows/ci.yml` — full pipeline on every push/PR
-- `.github/workflows/docker-release.yml` — Docker push to ghcr.io on main
-- `.github/workflows/integration-weekly.yml` — testcontainers suite Monday 03:00 UTC
+**Guards.** Profile with memray or py-spy in a memory-capped container. Never run
+interpreter-wide tracemalloc on the live boot.
 
-**Regression gate (SIM-147):**
-- `tests/regression/` — 43 tests across 5 engines; mathematical property tests only
-- No golden-file snapshots (owner ruling 2026-09-10): the model changes deliberately and constantly,
-  so a score moving is not a signal. Nothing to regenerate.
-**Established test patterns:**
-- In-memory profile assembly using `__new__` to bypass constructors — avoids live DB dependencies in unit tests
-- All similarity engine unit tests confirmed against this pattern (96 tests for fielder engine, 163 tests for pipeline)
-
-**Collaborates with:**
-- Performance Engineer — on stress tests and race condition detection
-- ML Engineer — on model regression tests to confirm engine outputs don't drift between deploys
-- Backend Developer — on integration test design for the simulation loop
-
-**Invoke for:**
-- Integration test plan design for any component
-- CI/CD pipeline setup or configuration
-- Docker Compose and deployment architecture
-- Regression test strategy for model updates
-- Monitoring and alerting setup
+**Call for.** A slow route, a memory question, a change to the worker pool, a benchmark.
 
 ---
 
-## Cross-Agent Collaboration Map
+## 7. UX Designer
 
-| When you need... | Primary agent | Secondary agents |
-|-----------------|---------------|-----------------|
-| A new similarity engine | ML Engineer | Baseball Analyst (feature review), Data Engineer (schema), Performance Engineer (FAISS) |
-| A schema change | Data Engineer | ML Engineer (derived metrics), Backend Developer (API impact) |
-| Simulation loop step | Backend Developer | ML Engineer (engine wiring), Baseball Analyst (logic validation) |
-| Frontend component | UX Designer | Betting Analyst (odds display), Baseball Analyst (what to show) |
-| Prop prediction accuracy | ML Engineer | Betting Analyst (CLV framing), Baseball Analyst (feature sanity) |
-| Performance bottleneck | Performance Engineer | Backend Developer (architecture), ML Engineer (FAISS) |
-| Deployment issue | QA / DevOps | Performance Engineer (sizing), Backend Developer (config) |
-| Feature prioritization | Product Manager | Betting Analyst (value), Baseball Analyst (feasibility) |
+**Scope.** Everything the user sees.
+
+**Owns.**
+
+- `frontend/`: the React 18 + Vite + TypeScript app.
+- The design system: the owner's "Daily Diamond" design, its `--sim-*` tokens, the
+  bundled fonts and the 30 team logos.
+- The pages: the day slate, the game page (the real game, the simulation, the props,
+  the prices, the "what if" panel), the Data Lab and the similarity explorer.
+
+**Guards.** The slate reads the league schedule for which games exist; the database
+adds the simulations, projections and odds on top.
+
+**Call for.** A new page or component, a layout question, how to show a number.
 
 ---
 
-## Project Context
+## 8. Betting / Markets Analyst
 
-**Repository:** github.com/gmelick/baseball_simulator
+**Scope.** Turning the simulation's numbers into prices a bettor can test.
 
-**Current phase:** Phases 1–6 complete; Phase 7 (Integration, Testing & Deployment) largely complete —
-live-env bring-up done, calibration LIVE, the full CLV pipeline measured end-to-end, and the realism +
-manager-decision flags enabled and validated in production.
+**Owns.**
 
-**Source of truth:** `BACKLOG.md` is now the SINGLE source of truth for ticket status — `backlog.xlsx`
-has been RETIRED (do not regenerate or consult it).
+- `betting/`: implied probability, removing the bookmaker's margin, edge, expected
+  value, closing line value (how a bet's price compares with the market's last price
+  before the game), the bet signal and its stake, the line-movement series.
+- `api/routes/betting*.py`: the edges and signals routes.
+- The market vocabulary: the fifteen player-prop markets and the fifteen game markets
+  in `pipeline/odds_provider.py`.
+- The accuracy comparison (`scripts/accuracy_comparison.py`, `scripts/accuracy/`,
+  `scripts/pair_accuracy.py`).
 
-**Similarity engines status:** All 11 / 11 COMPLETE (Phases 1–5 done and CI-green):
-- pitcher (GMM W₂), batter (RBF), fielder (position-partitioned RBF), baserunner extra-base (RBF),
-  baserunner steal (RBF), catcher (RBF v2), pitcher-steal (RBF), manager (RBF),
-  situation (KDTree), pitch-to-pitch (FAISS), batted-ball (FAISS)
+**Guards.**
 
-**Test suite:** 1814 pass / 1 skip / 0 fail @ 89% coverage on Python 3.13; 8 CI jobs green.
+- Grade props on the official box score, never on a derivation from the pitches.
+- One row per book; each reader picks one book.
+- No betting-value measurement until every graded band is green (owner ruling
+  2026-09-08).
 
-**Tech stack:** Python 3.13, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB v32 (in-process),
-Redis, scikit-learn (GMMs), FAISS, NumPy/pandas, scipy, POT (Wasserstein), pybaseball,
-Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **React 18 + Vite + TypeScript** (chosen in SIM-378 ADR, with Playwright e2e).
+**Call for.** A new market, an odds question, an edge or calibration read, the accuracy
+comparison.
 
-**Primary use case:** Player prop prediction and betting edge validation anchored to Closing Line Value as the gold-standard metric.
+---
 
-**Phase roadmap:**
+## 9. QA / DevOps
 
-| Phase | Name | Status |
-|-------|------|--------|
-| 1 | Data Infrastructure & Pipeline | ✅ Complete |
-| 2 | Similarity Engine Suite (11 engines) | ✅ Complete |
-| 3 | Play Pool Architecture | ✅ Complete |
-| 4 | Core Simulation Loop | ✅ Complete |
-| 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
-| 6 | Frontend Build | ✅ Complete |
-| 7 | Integration, Testing & Deployment | 🚀 Largely complete — calibration LIVE, CLV pipeline measured, realism + manager flags live |
+**Scope.** Proof that the system works, and the machinery that runs it.
 
-**Next free ticket ID: SIM-437.**
+**Owns.**
+
+- `tests/`: the unit, regression, acceptance, integration and performance lanes.
+- `.github/workflows/`: CI on every push, the nightly acceptance lane, the weekly
+  integration and performance runs, the releases.
+- `docker-compose.yml`, `Dockerfile`, `Makefile`, `deploy/` (nginx, monitoring, the
+  scheduler).
+- The scheduled jobs, the backups and the restore drill, from the operator's side
+  ([WORKFLOW.md](WORKFLOW.md)).
+
+**Guards.**
+
+- The independent cross-validation pass on every sprint. QA never certifies its own
+  work.
+- The regression lane holds invariants only. There are no golden-file snapshots (owner
+  ruling 2026-09-10).
+- No password has a default anywhere.
+
+**Call for.** A test plan, a CI failure, a deployment change, a backup or restore, a
+monitoring question.
+
+---
+
+## Who to call
+
+| When you need... | Lead | With |
+|---|---|---|
+| A change to a draw | Backend Developer | ML Engineer (weights), Baseball Analyst (filters) |
+| A new or changed similarity engine | ML Engineer | Baseball Analyst (features), Data Engineer (profiles) |
+| A schema change | Data Engineer | Backend Developer (readers), QA / DevOps (migration test) |
+| A red acceptance band | Baseball Analyst | ML Engineer, Backend Developer |
+| A new market or price | Betting Analyst | Data Engineer (odds rows), Backend Developer (route) |
+| A frontend change | UX Designer | Backend Developer (API), Betting Analyst (prices) |
+| A slow route | Performance Engineer | Backend Developer |
+| A deployment or backup problem | QA / DevOps | Data Engineer |
+| A priority call | Product Manager | Betting Analyst (value), Baseball Analyst (realism) |

@@ -1,13 +1,13 @@
-"""Doc guard: the Alembic head the operator docs cite is the newest migration on disk.
+"""Doc guard: the Alembic head the living docs cite is the newest migration on disk.
 
-The operator manual (``WORKFLOW.md``) tells the operator what ``alembic current``
+The living docs state the current head with one phrase, ``Alembic head **NNNN**``.
+The operator manual (``WORKFLOW.md``) also shows what its ``alembic current`` check
 prints. When that prose lags the head, an operator who follows the check reads a
-correct head as a failure. ``CLAUDE.md`` and the technical reference cite the head
-too. This test reads the newest file under ``db/migrations/versions/`` and fails
-when any of those citations lags it, so the next migration ticket updates the
-prose in the same commit.
+correct head as a failure. This test reads the newest file under
+``db/migrations/versions/`` and fails when a citation lags it, so the next
+migration ticket updates the prose in the same commit.
 
-The patterns are deliberately narrow: they match the sentences that state the
+The patterns are deliberately narrow: they match the phrases that state the
 CURRENT head, not the historical mentions of the migration that shipped a table
 ("Alembic 0015 ``raw.game_bullpen_availability``").
 """
@@ -38,18 +38,13 @@ def test_newest_revision_is_a_four_digit_number() -> None:
 @pytest.mark.parametrize(
     ("doc", "pattern"),
     [
-        # WORKFLOW.md: the header line ("Alembic head NNNN") and the summary line
-        # ("DuckDB vNN / Alembic NNNN").
-        ("WORKFLOW.md", r"Alembic (?:head )?(\d{4})"),
-        # WORKFLOW.md: the two operator checks that quote what `alembic current` prints.
-        ("WORKFLOW.md", r"`alembic current` print(?:s|ing)[^\n]*?`(\d{4})`"),
-        # CLAUDE.md: the status line ("Alembic head **NNNN**") and the repo-map line
-        # ("(Alembic, head **NNNN**").
-        ("CLAUDE.md", r"Alembic,? head \*\*(\d{4})\*\*"),
-        # CLAUDE.md: the architecture diagram ("DuckDB vNN / Alembic NNNN)").
-        ("CLAUDE.md", r"/ Alembic (\d{4})\)"),
-        # The technical reference's migration-system note.
-        ("docs/technical/pipeline-betting-db.md", r"The Alembic head on disk is (\d{4})_"),
+        # The phrase every living doc uses for the current head.
+        ("CLAUDE.md", r"Alembic head \*\*(\d{4})\*\*"),
+        ("WORKFLOW.md", r"Alembic head \*\*(\d{4})\*\*"),
+        ("docs/technical/architecture.md", r"Alembic head \*\*(\d{4})\*\*"),
+        ("docs/technical/database.md", r"Alembic head \*\*(\d{4})\*\*"),
+        # WORKFLOW.md: what the operator's `alembic current` check prints.
+        ("WORKFLOW.md", r"(?m)^:: Expected: (\d{4}) \(head\)$"),
     ],
 )
 def test_docs_cite_the_on_disk_alembic_head(doc: str, pattern: str) -> None:
