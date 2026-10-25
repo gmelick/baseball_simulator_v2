@@ -179,11 +179,11 @@ def resolve_factory_ref(request: Request) -> str:
 def _get_sim_duckdb(request: Request) -> Any:
     """The analytics DuckDB connection on ``app.state.sim_duckdb``, or None.
 
-    The park-factor lookup (:func:`_resolved_sim_kwargs`) reads the venue's run
-    factor through it. The lifespan never attaches one: with None the lookup
-    reads the snapshot that the lifespan primed (``prime_park_factor_source``),
-    so the app never holds the analytics file open. A test attaches a fake
-    connection to feed the lookup.
+    :func:`_resolved_sim_kwargs` reads the venue's run factor and both managers'
+    profiles through it. The lifespan never attaches one. With None, both
+    lookups read the snapshot that the lifespan primed
+    (``prime_park_factor_source``), so the app never holds the analytics file
+    open. A test attaches a fake connection to feed the lookups.
     """
     return getattr(request.app.state, "sim_duckdb", None)
 
@@ -236,8 +236,9 @@ def _build_runner(request: Request) -> BatchRunner:
 # ---------------------------------------------------------------------------
 # The game state and its sim kwargs
 #
-# ``_resolved_sim_kwargs`` is the one way a route gets sim kwargs, and it looks
-# the venue's park factor up first (the park-factor resolution, SIM-452). The
+# ``_resolved_sim_kwargs`` is the one way a route gets sim kwargs. It looks the
+# venue's park factor up first (the park-factor resolution, SIM-452), then both
+# managers' profiles (the manager profiles in the API's runs, SIM-575). The
 # builder itself lives in ``simulation/sim_kwargs.py``.
 # ---------------------------------------------------------------------------
 
@@ -245,17 +246,20 @@ def _build_runner(request: Request) -> BatchRunner:
 async def _resolved_sim_kwargs(
     request: Request, pool: Any, state: Any, game_pk: int
 ) -> dict[str, Any]:
-    """Resolve the venue's park factor onto ``state``, then build the sim kwargs.
+    """Resolve the venue's park factor and both managers' profiles onto ``state``,
+    then build the sim kwargs.
 
     Every route uses this. ``_resolve_state_or_error`` marks the factor as
     unresolved, and ``simulation.sim_kwargs.build_sim_kwargs`` replaces the mark
     with the looked-up factor. A route that called the bare builder instead
     would raise ``UnresolvedParkFactorError``.
 
-    The lookup reads ``app.state.sim_duckdb`` (:func:`_get_sim_duckdb`) when a test
-    sets it. The app sets none, so the lookup reads the snapshot that the lifespan
-    primed. With neither, the resolver returns the unresolved sentinel (it equals
-    1.0), and ``build_sim_kwargs`` builds the kwargs anyway with a WARNING.
+    The lookups read ``app.state.sim_duckdb`` (:func:`_get_sim_duckdb`) when a
+    test sets it. The app sets none, so the lookups read the snapshot that the
+    lifespan primed: the venue's run factor, each side's manager profile and the
+    season's manager league means. With neither, the park resolver returns the
+    unresolved sentinel (it equals 1.0), the manager profiles stay empty, and
+    ``build_sim_kwargs`` builds the kwargs anyway with a WARNING.
     """
     return await _build_sim_kwargs(
         state,

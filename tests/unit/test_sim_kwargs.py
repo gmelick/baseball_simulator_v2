@@ -1174,6 +1174,8 @@ async def test_the_REAL_route_on_a_stack_with_no_sim_duckdb(monkeypatch, caplog)
     assert kw["park_run_factor"] == 1.0
     assert park_factor_is_resolved(state) is False
     assert any("PARK-BLIND" in r.getMessage() for r in caplog.records)
+    # Nothing primed: no manager profile either, and no error.
+    assert kw["manager_profiles"] == {0: {}, 1: {}}
 
 
 async def test_the_REAL_route_with_a_source_resolves_the_venue(monkeypatch):
@@ -1201,20 +1203,36 @@ class _PrimedRows:
 
 
 class _PrimedCon:
-    """A read-only DuckDB stand-in that answers the row count and the factors.
+    """A read-only DuckDB stand-in for the prime: it answers each query by its text.
 
-    The prime reads every run factor at once (``fetchall``) and closes the
-    connection. The one factor belongs to venue 680, season 2024.
+    The prime counts the park factors, reads every run factor at once
+    (``fetchall``), reads the manager tables in the same open, and closes the
+    connection. The one factor belongs to venue 680, season 2024. The manager
+    rows are ``(manager_id, season, <the tendency columns>)``; the league rows are
+    ``(season, profile_json)``. Both default to empty tables.
     """
 
-    def __init__(self, n_rows: int, factor: float | None) -> None:
+    def __init__(
+        self,
+        n_rows: int,
+        factor: float | None,
+        *,
+        manager_rows: list[tuple] | None = None,
+        league_rows: list[tuple] | None = None,
+    ) -> None:
         self._n_rows = n_rows
         self._factor = factor
+        self._manager_rows = list(manager_rows or [])
+        self._league_rows = list(league_rows or [])
         self.closed = False
 
     def execute(self, sql, params=None):
         if "count(*)" in sql:
             return _FakeDuckRes((self._n_rows,))
+        if "manager_season_metrics" in sql:
+            return _PrimedRows(self._manager_rows)
+        if "league_averages" in sql:
+            return _PrimedRows(self._league_rows)
         return _PrimedRows([(680, 2024, self._factor)])
 
     def close(self) -> None:
@@ -1266,6 +1284,57 @@ async def test_the_primed_source_serves_a_route_that_passes_con_None(monkeypatch
     f = await resolve_park_run_factor(_FakePool(680), None, 777, 2024)
     assert f == pytest.approx(0.8723846078)
     assert park_factor_reason(f) is None
+
+
+def _manager_values(steal_rate: float) -> tuple[float, ...]:
+    """One manager-season's tendency values, with the steal-order rate set."""
+    from simulation.sim_kwargs import MANAGER_TENDENCY_COLUMNS
+
+    return tuple(
+        steal_rate if c == "steal_order_rate_per_1b_opp" else 0.5 for c in MANAGER_TENDENCY_COLUMNS
+    )
+
+
+async def test_the_REAL_route_with_no_connection_carries_both_managers_profiles(monkeypatch):
+    """The definition of done for the manager profiles (SIM-575).
+
+    The route runs exactly as production does: no connection on ``app.state``,
+    a prime at boot. The kwargs must carry each side's manager profile and the
+    season's manager league means, so the steal draw's manager weight is not flat.
+    """
+    import api.routes.games as g
+    from simulation.sim_kwargs import MANAGER_TENDENCY_COLUMNS
+
+    con = _PrimedCon(
+        2952,
+        0.8723846078,
+        manager_rows=[
+            (11, 2024, *_manager_values(0.08)),
+            (22, 2024, *_manager_values(0.03)),
+        ],
+        league_rows=[(2024, '{"steal_order_rate_per_1b_opp": 0.05}')],
+    )
+    assert len(con._manager_rows[0]) == 2 + len(MANAGER_TENDENCY_COLUMNS)
+    _prime_with(monkeypatch, con)
+    prime_park_factor_source("/data/baseball_sim.duckdb")
+    assert con.closed is True
+
+    async def _fake(_conn, _game_pk, *_a, **_k):
+        s = _bare_state()
+        s.home_manager_id, s.away_manager_id = 11, 22
+        return s
+
+    monkeypatch.setattr(g, "resolve_game_state", _fake)
+    pool = _FakePool(680)
+    request = _StubRequest(None)  # no analytics connection on app.state
+
+    state = await g._resolve_state_or_error(pool, 777)
+    kw = await g._resolved_sim_kwargs(request, pool, state, 777)
+
+    assert kw["manager_profiles"][1]["steal_order_rate_per_1b_opp"] == pytest.approx(0.08)
+    assert kw["manager_profiles"][0]["steal_order_rate_per_1b_opp"] == pytest.approx(0.03)
+    assert kw["manager_league_profile"]["steal_order_rate_per_1b_opp"] == pytest.approx(0.05)
+    assert kw["park_run_factor"] == pytest.approx(0.8723846078)
 
 
 def test_nothing_is_primed_until_somebody_primes_it():

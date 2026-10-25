@@ -148,8 +148,9 @@ async def lifespan(app: FastAPI):
 
     # The park-factor source, primed on its own: reading the park factors is a
     # read, the replay store a write, so the prime is not gated on the replay
-    # flag. The prime reads the factors into memory and closes the file
-    # (simulation/sim_kwargs.py holds the reasoning).
+    # flag. In one open the prime reads the run factors and the manager
+    # profiles into memory, then closes the file (simulation/sim_kwargs.py
+    # holds the reasoning).
     from simulation.sim_kwargs import (
         close_park_factor_source,
         prime_park_factor_source,
@@ -171,6 +172,31 @@ async def lifespan(app: FastAPI):
             "X-Park-Factor-Source: unavailable. This is reported, not hidden.",
             park_source.path,
             park_source.detail,
+        )
+    if park_source.n_manager_profiles > 0:
+        log.info(
+            "SIM-575: manager profiles READ with the park factors — %d manager-seasons "
+            "and %d league rows held in memory; the file is closed.",
+            park_source.n_manager_profiles,
+            park_source.n_manager_league_seasons,
+        )
+    elif not park_source.available:
+        # The park source is unavailable: the open failed, or the park table
+        # held no rows or could not be read. The refresh re-reads the file on
+        # its next check and reads the manager profiles with the park factors.
+        log.warning(
+            "SIM-575: no manager profiles held from %s (the park-factor source is "
+            "unavailable: %s); every steal draw's manager weight is 1.0 until the next "
+            "check reads the file again, together with the park factors.",
+            park_source.path,
+            park_source.detail,
+        )
+    else:
+        # The file opened and holds no manager rows: only a rebuild changes it.
+        log.warning(
+            "SIM-575: no manager profiles in %s — every steal draw's manager weight "
+            "is 1.0 until the next rebuild.",
+            park_source.path,
         )
 
     await startup.build_sim_runner(app)

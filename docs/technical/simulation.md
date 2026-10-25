@@ -544,11 +544,15 @@ real game reads as "game not found".
 
 ### `simulation/sim_kwargs.py`
 
-[Source](../../simulation/sim_kwargs.py) · 971 lines · Tests: [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_pool_cutoff.py](../../tests/unit/test_pool_cutoff.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py)
+[Source](../../simulation/sim_kwargs.py) · 1,183 lines · Tests: [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_pool_cutoff.py](../../tests/unit/test_pool_cutoff.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_manager_profile_snapshot.py](../../tests/unit/test_manager_profile_snapshot.py)
 
 The one builder that turns a resolved `GameState` into sim kwargs, plus the park-factor lookup and
 the managers' profiles. One builder serves the API and every script, so the two cannot send
-different inputs.
+different inputs. A script passes its own read-only connection. The API passes none: the app
+reads the park factors and the manager tables into one in-memory snapshot at boot, closes the
+file, and every lookup reads that snapshot. The app keeps the `park_factor` names for the
+prime, the refresh and the source, because the middleware header and the tests name them; the
+prime carries the manager profiles too (SIM-575).
 
 | Function / class | What it does | Called from |
 |---|---|---|
@@ -556,8 +560,9 @@ different inputs.
 | `sim_kwargs_from_state` | The kwargs dict: the keys of `SIM_KWARG_KEYS` (lineups, season, hands, pitchers, catchers, defenses, park factor, venue, `max_innings` 12, the managers, the pen, the profiles) plus `_asof_ymd` when the state carries a cutoff. It refuses an unresolved park factor unless the caller allows it. | `build_sim_kwargs`, `scripts/accuracy/replay.py`, `scripts/validate_props.py`, `scripts/sim_stats.py`, the probes |
 | `UNRESOLVED_PARK_FACTOR` | A float equal to 1.0 that `isinstance` tells apart from a looked-up 1.0, so "nobody looked" never reads as "neutral park". | `api/routes/games.py`, `resolve_park_run_factor` |
 | `resolve_park_run_factor` | The venue from `raw.games`, then its regressed run factor from `derived.park_factors` (through a connection, or the in-memory snapshot). | `resolve_park_factor_onto_state` |
-| `prime_park_factor_source` / `refresh_park_factor_snapshot` | Read the run factors into memory and close the DuckDB file; the lookup re-reads them when the file changes, at most once a minute. | `api/main.py` (the prime); `resolve_park_run_factor` (the refresh) |
-| `resolve_manager_profiles_onto_state` | Each side's manager tendencies (`derived.manager_season_metrics`, this season then the last) and the season's league means (`derived.league_averages`). | `build_sim_kwargs` |
+| `prime_park_factor_source` / `refresh_park_factor_snapshot` | Read the run factors (`derived.park_factors`), the manager-seasons (`derived.manager_season_metrics`) and the manager rows of `derived.league_averages` into memory in one open, then close the DuckDB file. The lookup re-reads all three when the file changes, at most once a minute. A missing or unreadable manager table leaves the manager snapshot empty and logs one warning per cause in the process; the park factors stay available. A failed re-read keeps both old snapshots. `ParkFactorSource` counts the kept manager-seasons (`n_manager_profiles`) and league seasons (`n_manager_league_seasons`). | `api/main.py` (the prime); `resolve_park_run_factor` (the refresh) |
+| `resolve_manager_profiles_onto_state` | Each side's manager tendencies (`derived.manager_season_metrics`, this season then the last; a row below the minimum sample is skipped, a None column dropped) and the season's league means (`derived.league_averages`). It reads through a connection, or through the primed snapshot when the caller passes None. With nothing primed it leaves both sides `{}`, so the unit lane never reads a file. `build_sim_kwargs` resolves the park factor first, so the manager read sees a snapshot refreshed after a rebuild. | `build_sim_kwargs` |
+| `ManagerProfileSnapshot` | The manager half of the boot snapshot: `profiles` maps (manager, season) to that manager-season's tendency columns; `league` maps a season to its league means. An empty snapshot means the prime ran and found no manager rows. | `prime_park_factor_source`, `resolve_manager_profiles_onto_state` |
 | `open_sim_duckdb` | Opens the analytics file read-only (`BASEBALL_DUCKDB_PATH`, default `/data/baseball_sim.duckdb`), or returns None. | `production_factory`, `api/bundle_watch.py`, scripts |
 
 **Watch out:** `test_sim_kwargs.py` pins the builder's output to `SIM_KWARG_KEYS`, so a dropped

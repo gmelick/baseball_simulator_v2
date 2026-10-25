@@ -1,4 +1,4 @@
-<!-- file-index-key: 7095a83d27bb4169 -->
+<!-- file-index-key: ac9981355a560d24 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -18,15 +18,15 @@ Every source and config file in the repository, in the order of the [code review
 | [5. The similarity scores](#stage-5) | 30 | 14,365 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,551 |
 | [7. Getting data in: the raw tables](#stage-7) | 56 | 12,996 |
-| [8. Running many games and reading the results](#stage-8) | 18 | 9,473 |
+| [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 16 | 6,281 |
-| [10. The API](#stage-10) | 42 | 14,125 |
+| [10. The API](#stage-10) | 42 | 14,155 |
 | [11. Game day: the live service](#stage-11) | 18 | 6,023 |
 | [12. The frontend](#stage-12) | 82 | 27,244 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
 | [14. Measurement and maintenance tools](#stage-14) | 77 | 39,270 |
-| [15. Tests and CI](#stage-15) | 313 | 125,771 |
-| **All** | **789** | **289,005** |
+| [15. Tests and CI](#stage-15) | 314 | 126,301 |
+| **All** | **790** | **289,777** |
 
 <a id="stage-1"></a>
 
@@ -36,7 +36,7 @@ The state of a game, the count machine, the constants and the flags every other 
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`simulation/game_state.py`](../../simulation/game_state.py) | 779 | The game state and the play result: the data the simulation loop reads and writes. | 71: `test_game_state_contract.py`, `test_sim_jobs.py`, `test_api_games.py` +68 |
+| [`simulation/game_state.py`](../../simulation/game_state.py) | 779 | The game state and the play result: the data the simulation loop reads and writes. | 72: `test_game_state_contract.py`, `test_sim_jobs.py`, `test_api_games.py` +69 |
 | [`simulation/loop/values.py`](../../simulation/loop/values.py) | 290 | The loop's constants, value objects and count machine. | 21: `test_pool_chain.py`, `test_run_ledger.py`, `test_fence_stage.py` +18 |
 | [`simulation/constants.py`](../../simulation/constants.py) | 159 | The simulator's shared vocabularies and defensive run values. | 3: `test_simulation_constants.py`, `test_run_resolution.py`, `test_validate_props.py` |
 | [`simulation/flags.py`](../../simulation/flags.py) | 544 | The registry of the `SIM_*` environment flags. | 2: `test_flag_registry.py`, `test_script_flag_names.py` |
@@ -281,7 +281,7 @@ The worker pool and the code that turns 100 games into win odds, prop distributi
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`simulation/sim_kwargs.py`](../../simulation/sim_kwargs.py) | 971 | The ONE builder that turns a resolved GameState into `simulate_game` kwargs, plus the venue park-factor resolver it depends on. | 14: `test_sim_kwargs.py`, `test_sim_jobs.py`, `test_fence_stage.py` +11 |
+| [`simulation/sim_kwargs.py`](../../simulation/sim_kwargs.py) | 1,183 | The ONE builder that turns a resolved GameState into `simulate_game` kwargs, plus the venue park-factor resolver it depends on. | 15: `test_sim_kwargs.py`, `test_sim_jobs.py`, `test_fence_stage.py` +12 |
 | [`simulation/lineup_resolver.py`](../../simulation/lineup_resolver.py) | 1,021 | simulation.lineup_resolver — the lineup and substitution resolver. | 9: `test_lineup_resolver.py`, `test_api_games.py`, `test_api_betting.py` +6 |
 | [`simulation/production_factory.py`](../../simulation/production_factory.py) | 633 | The production machine factory for the batch runner. | 18: `test_ibb_rates.py`, `test_fence_stage.py`, `test_pool_cutoff.py` +15 |
 | [`simulation/batch_runner.py`](../../simulation/batch_runner.py) | 1,261 | The parallel Monte-Carlo batch runner. | 31: `test_batch_runner.py`, `test_batch_runner_stress.py`, `test_batch_runner_hit_rate.py` +28 |
@@ -333,7 +333,7 @@ The FastAPI app: its boot, the login, the routes the frontend calls and the run 
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`api/main.py`](../../api/main.py) | 461 | The FastAPI app of the MLB Baseball Simulation Platform: the app factory and its lifespan. | 6: `test_api_main_wiring.py`, `test_sim_kwargs.py`, `test_api_auth_session.py` +3 |
+| [`api/main.py`](../../api/main.py) | 487 | The FastAPI app of the MLB Baseball Simulation Platform: the app factory and its lifespan. | 6: `test_api_main_wiring.py`, `test_sim_kwargs.py`, `test_api_auth_session.py` +3 |
 | [`api/startup.py`](../../api/startup.py) | 457 | The startup and shutdown steps of the app's lifespan (`api/main.py`) that no test patches. | — |
 | [`api/env_check.py`](../../api/env_check.py) | 68 | The environment check the app runs first at startup. | 1: `test_route_auth_coverage.py` |
 | [`api/middleware.py`](../../api/middleware.py) | 49 | The app's own response middleware. | — |
@@ -345,7 +345,7 @@ The FastAPI app: its boot, the login, the routes the frontend calls and the run 
 | [`api/bundle_watch.py`](../../api/bundle_watch.py) | 153 | The app picks up a nightly rebuild by restarting itself. | 3: `test_api_main_wiring.py`, `test_bundle_versions.py`, `test_bundle_worker_and_boot.py` |
 | [`api/routes/__init__.py`](../../api/routes/__init__.py) | 12 | The API's routers. | 8: `test_segment_edges.py`, `test_backup_age_gauge.py`, `test_game_type_filter.py` +5 |
 | [`api/routes/_common.py`](../../api/routes/_common.py) | 112 | The small helpers that several route modules share. | 2: `test_api_data_health.py`, `test_read_only_routes.py` |
-| [`api/routes/games.py`](../../api/routes/games.py) | 1,673 | The game routes (prefix `/api/games`) and the simulation seam they share. | 22: `test_api_games.py`, `test_api_games_plays.py`, `test_sim_jobs.py` +19 |
+| [`api/routes/games.py`](../../api/routes/games.py) | 1,677 | The game routes (prefix `/api/games`) and the simulation seam they share. | 22: `test_api_games.py`, `test_api_games_plays.py`, `test_sim_jobs.py` +19 |
 | [`api/routes/games_slate.py`](../../api/routes/games_slate.py) | 650 | The day slate and the status card of one game. | 2: `test_api_games.py`, `test_slate_endpoint.py` |
 | [`api/routes/games_feed.py`](../../api/routes/games_feed.py) | 397 | The real game: the league's per-game feed and the live service's stored state. | 2: `test_api_games.py`, `test_game_feed.py` |
 | [`api/routes/games_runs.py`](../../api/routes/games_runs.py) | 172 | The reads of a game's simulation runs (the durable `sim.sim_runs` rows). | — |
@@ -786,6 +786,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_manager_defensive_subs.py`](../../tests/unit/test_manager_defensive_subs.py) | 168 | `defensive_sub` is a per-pitch column on `raw.pitches`, but how MANY pitch rows carry the flag is a property of the ETL parser, not of the manager: | — |
 | [`tests/unit/test_manager_draw.py`](../../tests/unit/test_manager_draw.py) | 656 | The manager decisions at the START of a plate appearance: the pitching change as a DRAW from an opportunity pool (the play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md). | — |
 | [`tests/unit/test_manager_model.py`](../../tests/unit/test_manager_model.py) | 383 | The manager plumbing around the pitching-change draw: the **pitch count** and the **SIM_MANAGER gate** (the manager wiring in the production factory and the `simulate_game` passthrough). | — |
+| [`tests/unit/test_manager_profile_snapshot.py`](../../tests/unit/test_manager_profile_snapshot.py) | 461 | Tests that the API's runs read each manager's profile from the boot snapshot. | — |
 | [`tests/unit/test_manager_similarity.py`](../../tests/unit/test_manager_similarity.py) | 134 | The manager similarity engine's scores: range, symmetry, the three sub-scores, the usage weight and the empirical-Bayes prior. | — |
 | [`tests/unit/test_manager_usage_score.py`](../../tests/unit/test_manager_usage_score.py) | 89 | The manager profile's USAGE columns: computed from real pitching changes, never NULL placeholders, and carried through the engine and the calibrator. | — |
 | [`tests/unit/test_market_calibration.py`](../../tests/unit/test_market_calibration.py) | 255 | The calibration layer's fit and the composite objective (no DB, no bundle): | — |
@@ -893,7 +894,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_shared_memory_attach.py`](../../tests/unit/test_shared_memory_attach.py) | 285 | The **shared-memory zero-copy ATTACH** of the read-only payload (the engine-artifact arrays) into worker processes: :func:`simulation.batch_runner.publish_shared_arrays` (parent) + :func:`~simulation.batch_runner._wor... | — |
 | [`tests/unit/test_shell_dsn_guards.py`](../../tests/unit/test_shell_dsn_guards.py) | 67 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/test_sim_jobs.py`](../../tests/unit/test_sim_jobs.py) | 419 | The simulation run jobs: the runner's chunked job, the registry and the routes. | 1: `test_game_page_whatif.py` |
-| [`tests/unit/test_sim_kwargs.py`](../../tests/unit/test_sim_kwargs.py) | 1,428 | The shared `simulate_game` kwargs builder + the park-factor resolver. | — |
+| [`tests/unit/test_sim_kwargs.py`](../../tests/unit/test_sim_kwargs.py) | 1,497 | The shared `simulate_game` kwargs builder + the park-factor resolver. | — |
 | [`tests/unit/test_sim_store.py`](../../tests/unit/test_sim_store.py) | 467 | SIM-356 -- unit tests for db/sim_store.py (durable sim-result + pitch-snapshot persistence) and its two migrations (Alembic 0014 / DuckDB 0008). | — |
 | [`tests/unit/test_similarity_endpoint.py`](../../tests/unit/test_similarity_endpoint.py) | 561 | The pitcher similarity explorer endpoint (api/routes/similarity.py). | — |
 | [`tests/unit/test_similarity_explorer_adapters.py`](../../tests/unit/test_similarity_explorer_adapters.py) | 81 | The Similarity Explorer's engine adapters (`api/routes/similarity_explorer.py`). | — |

@@ -32,7 +32,8 @@ in order:
    `startup.start_live_feed()` attach the optional resources.
 8. The replay store opens when `REPLAY_PERSISTENCE_ENABLED` is on (`/data/replay.duckdb`).
 9. `prime_park_factor_source()` (in `simulation/sim_kwargs.py`) reads the venue run factors
-   into memory and closes the analytics file.
+   and the manager profiles into memory and closes the analytics file. The lifespan logs the
+   manager counts.
 10. `startup.build_sim_runner()` pins the engine-artifact bundle version, loads the bundle's
     large arrays for shared memory and builds the one `BatchRunner`.
 11. `_background_prewarm()` warms the worker pool as a background task. The boot never waits
@@ -50,8 +51,8 @@ source.
 2. `start_simulation_run()` ([games.py](../../api/routes/games.py)) calls
    `_resolve_state_or_error()`, which resolves the lineup into a `GameState` and marks its
    park factor unresolved.
-3. `_resolved_sim_kwargs()` looks the venue's park factor up and builds the simulator's
-   keyword arguments.
+3. `_resolved_sim_kwargs()` looks the venue's park factor and both managers' profiles up and
+   builds the simulator's keyword arguments.
 4. `resolve_factory_ref()` names the machine factory. The `GameSpec` carries the factory and
    the kwargs.
 5. `SimJobRegistry.submit()` writes a queued `sim.sim_runs` row, or returns the active run
@@ -213,7 +214,7 @@ off `request.app.state`. A renamed attribute breaks its routes with no import er
 | `pg_pool_ro`, `sql_console_role` | `startup.open_read_only_pool` | `_common._get_ro_pool`, `ai_assistant._pool`, `/health` |
 | `pipeline` or `live_bridge` | `startup.start_live_feed` | The WebSocket handler (`live_bridge.retain` / `release`) |
 | `replay_duckdb` | `lifespan` | `games._get_replay_store` |
-| `park_factor_source` | `lifespan` | `ParkFactorSourceMiddleware` |
+| `park_factor_source` | `lifespan`, through `prime_park_factor_source`, which also loads the manager profiles; the lifespan logs the manager-season and league-row counts, or a warning when it finds none | `ParkFactorSourceMiddleware` |
 | `sim_runner`, `bundle_version`, `bundle_in_use_marker` | `startup.build_sim_runner` | `games._build_runner`, `startup.close_resources` |
 | `prewarm_task`, `bundle_watch_task` | `lifespan`, `startup.start_bundle_watch` | `startup.close_resources` |
 | `sim_cache` | `create_app` | `_common._get_sim_cache` |
@@ -221,13 +222,14 @@ off `request.app.state`. A renamed attribute breaks its routes with no import er
 | `finals_newest_date`, `live_heartbeat_ts`, `backup_ages` and their check times | `metrics._schedule_finals_refresh`, `metrics._backup_ages` | `/metrics` |
 
 A test sets two more: `sim_factory_ref` (the machine factory) and `sim_duckdb` (a fake
-analytics connection for the park-factor lookup). Production sets neither.
+analytics connection for the park-factor and manager-profile lookups). Production sets neither,
+so a production route reads both lookups from the boot snapshot.
 
 ## The app and its boot
 
 ### `api/main.py`
 
-[Source](../../api/main.py) · 461 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py), [test_replay_store.py](../../tests/unit/test_replay_store.py), [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_openapi_snapshot.py](../../tests/unit/test_openapi_snapshot.py)
+[Source](../../api/main.py) · 487 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py), [test_replay_store.py](../../tests/unit/test_replay_store.py), [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_openapi_snapshot.py](../../tests/unit/test_openapi_snapshot.py)
 
 The app factory and the lifespan. `app = create_app()` at the bottom is what uvicorn serves.
 
@@ -442,7 +444,7 @@ to a route's `description=`, needs `scripts/export_openapi.py` run in the app im
 
 ### `api/routes/games.py`
 
-[Source](../../api/routes/games.py) · 1,673 lines · Tests: [test_api_games.py](../../tests/unit/test_api_games.py), [test_api_game_card.py](../../tests/unit/test_api_game_card.py), [test_api_games_plays.py](../../tests/unit/test_api_games_plays.py), [test_projections_on_pool.py](../../tests/unit/test_projections_on_pool.py), [test_api_end_to_end.py](../../tests/integration/test_api_end_to_end.py)
+[Source](../../api/routes/games.py) · 1,677 lines · Tests: [test_api_games.py](../../tests/unit/test_api_games.py), [test_api_game_card.py](../../tests/unit/test_api_game_card.py), [test_api_games_plays.py](../../tests/unit/test_api_games_plays.py), [test_projections_on_pool.py](../../tests/unit/test_projections_on_pool.py), [test_api_end_to_end.py](../../tests/integration/test_api_end_to_end.py)
 
 The aggregate `/api/games` router (prefix, tag, login), every route that runs a simulation,
 the replay reads, and the seam those routes share. It includes `games_slate`, `games_feed` and
@@ -453,7 +455,7 @@ route's module.
 |---|---|---|
 | `resolve_factory_ref(request)` | The machine factory's dotted name: `app.state.sim_factory_ref`, else `SIM_MACHINE_FACTORY_REF`, else `PRODUCTION_FACTORY_REF` (`simulation.production_factory:production_machine_factory`). | Every simulation route; `betting._summary_and_winprob` |
 | `_resolve_state_or_error(pool, game_pk, fallback_rows)` | Resolves the lineup into a `GameState` and marks its park factor unresolved. An unpublished or incomplete lineup is 503 with `Retry-After: 900`; an unknown game is 404. | Every simulation route; `betting._summary_and_winprob`; `scripts/accuracy/` |
-| `_resolved_sim_kwargs(request, pool, state, game_pk)` | Looks the venue's park factor up, then builds the sim kwargs (`simulation.sim_kwargs.build_sim_kwargs`). The one way a route gets kwargs. | Every simulation route; `betting._summary_and_winprob` |
+| `_resolved_sim_kwargs(request, pool, state, game_pk)` | Looks the venue's park factor and both managers' profiles up, then builds the sim kwargs (`simulation.sim_kwargs.build_sim_kwargs`). With no `app.state.sim_duckdb` (production) both lookups read the boot snapshot. The one way a route gets kwargs. | Every simulation route; `betting._summary_and_winprob` |
 | `_build_runner(request)` / `_run_batch(...)` | The shared `app.state.sim_runner` (else a one-process runner for a test app), and the sync batch call a route runs in a thread. | Every simulation route; `betting._summary_and_winprob` |
 | `simulate_game_endpoint` | `GET /simulate`: a batch now, the latency gauge, one stored game and a history row. | Clients, scripts |
 | `start_simulation_run` | `POST /simulate`: queues a run job (503 before the run-job columns exist). | The game page |

@@ -1,3 +1,94 @@
+# CLOSED — the API's runs read each manager's profile from the boot snapshot, so the steal draw's manager weight is no longer flat — SIM-575, 2026-10-25
+
+**Why it matters.** The steal draw weighs each attempted row by the batting manager's
+steal-order rate over the season's league mean. Every API run carried empty manager profiles:
+`manager_profiles` read `{0: {}, 1: {}}` and the league profile read `{}`. The route passed the
+resolver `app.state.sim_duckdb`, which production never sets, so the resolver returned at once.
+The steal draw's manager weight was 1.0 for every team in the product: `/simulate`, the runs,
+the what-if, the sample game, the override, the box-score projections, the prop edge and the
+betting edges. The lanes (`scripts/sim_stats.py`, `scripts/accuracy/replay.py`, the acceptance
+conftest) open their own connection and DO read the profiles. So the users and the lanes ran
+different simulators. The code clean-up (SIM-493, part B1) found the defect.
+
+**What changed.**
+
+- `simulation/sim_kwargs.py`: a new snapshot type, `ManagerProfileSnapshot`. Its `profiles`
+  map (manager, season) to the manager-season's tendency columns; its `league` maps a season to
+  the league means. The boot prime (`prime_park_factor_source`) now reads
+  `derived.manager_season_metrics` and the manager rows of `derived.league_averages` in the
+  same open as the park factors, then closes the file. The reader skips a row below the
+  minimum sample and drops a None column, as the connection path does. A missing or unreadable
+  manager table gives an empty manager snapshot and one warning per cause in the process;
+  the park factors stay available. The mtime refresh re-reads both snapshots after a rebuild;
+  a failed re-read keeps both old ones; `close_park_factor_source` clears both.
+  `ParkFactorSource` counts the kept manager-seasons and league seasons.
+- `resolve_manager_profiles_onto_state` reads through a connection, or through the primed
+  snapshot when the caller passes None. With nothing primed it leaves both sides `{}`, so the
+  unit lane still reads no file.
+- `api/main.py`: the lifespan logs the manager counts after the prime. Otherwise it logs a
+  warning that names the cause: the park-factor source is unavailable, with its detail (the
+  next check reads both snapshots again), or the file holds no manager rows (only a rebuild
+  changes that).
+- The docstrings of the module, the prime, the two resolvers, the builder and the two route
+  helpers in `api/routes/games.py` say the prime carries both tables. The pages
+  `docs/technical/simulation.md` and `docs/technical/api.md` say the same.
+- The park-factor names stay (`prime_park_factor_source`, `refresh_park_factor_snapshot`,
+  `close_park_factor_source`, `ParkFactorSource`). The middleware's `X-Park-Factor-Source`
+  header, four test files and three docs name them, and a rename changes no behaviour.
+- No new sim kwarg (`SIM_KWARG_KEYS` stays 24), no new flag, no schema change and no API
+  contract change.
+
+I chose the boot snapshot over a new read-only open per request. A per-request open reads the
+multi-GB file on every run, blocks the event loop, and finds nothing for the whole nightly
+rebuild (the writer holds the lock). The snapshot holds across a rebuild and refreshes after it.
+
+**The tests.**
+
+- New `tests/unit/test_manager_profile_snapshot.py`, on a real DuckDB file: the prime keeps
+  the sampled rows and counts them; the resolver writes both sides and the league means from
+  the snapshot, with the season-before fallback; the snapshot and a read-only connection give
+  equal dicts; a file with no manager table keeps the park factors available; a rebuilt file
+  is re-read without a restart; a failed re-read keeps the old snapshot; a failed boot prime
+  recovers the manager snapshot on a later check; a park read that keeps failing logs the
+  manager warning once; a writer in a second
+  process opens the file after the prime; nothing primed leaves `{}`; the close clears the
+  snapshot.
+- The definition-of-done test,
+  `test_the_REAL_route_with_no_connection_carries_both_managers_profiles` in
+  `tests/unit/test_sim_kwargs.py`, next to `test_the_REAL_route_on_a_stack_with_no_sim_duckdb`:
+  it primes the snapshot, builds the
+  kwargs through the real `_resolved_sim_kwargs` with no connection on `app.state`, and finds
+  each side's manager profile and the season's league mean. The test's fake connection now
+  answers each table's query with that table's rows. The no-source route test also checks that
+  the kwargs carry `{0: {}, 1: {}}` when nothing is primed.
+
+**The lanes.**
+
+- **The unit lane** (container, the checkout mounted, `-m "not slow"`, in three pieces): the
+  a-f piece reads `2355 passed, 4 skipped, 8 deselected, 8 warnings in 106.21s`, the g-m
+  piece reads `652 passed, 1 deselected, 2 warnings in 44.52s`, and the n-z piece reads
+  `3504 passed, 1 skipped, 13 deselected, 4 warnings in 148.01s`. Together: 6,511 passed,
+  5 skipped, 0 failed, in 5 min 0 s. The skips include the file-index tests, because the app
+  image has no git.
+- **The random crash (CLAUDE.md §2a) hit six runs, all in collection.** Two whole-lane runs
+  died: one with exit 139, and one with `required field "value" missing from Subscript` in
+  pytest's assertion rewriter. Two a-m runs died, one with exit 139 inside
+  `inspect.iscoroutinefunction` and one with `Fatal Python error: Aborted`. Two a-f runs
+  died: one with exit 139 inside `ast.copy_location`, and one with a collection error that
+  sound code cannot raise (`'slice' object is n...` in `test_accuracy_comparison.py`). Each
+  piece passed on its rerun.
+- **Lint:** `make lint` reads "All checks passed!". **Format:** `ruff format --check .` reads
+  "627 files already formatted". **Types:** `make type-check` reads "Success: no issues
+  found in 211 source files".
+- **The file index** is regenerated (`python scripts/docs_file_index.py`: 790 files in 15
+  stages).
+
+**The record.** The backlog row "Read each manager's profile in the API's runs, so the steal
+draw's manager weight is not flat" (SIM-575) stays in `BACKLOG.xlsx` until Excel releases the
+workbook; the deletion is the next step on `master` after the merge. I filed no ticket; the
+next free ID stays SIM-635. The change reaches the app on its next recreate, inside the deploy
+window, and the boot log then shows the manager counts.
+
 # THE BACKLOG RE-RANKED — the 59 tickets filed on 2026-10-20 and 2026-10-21 put in priority order, five of them moved between bands — the tickets of SIM-493 and SIM-624, 2026-10-21
 
 **Why it matters.** The code clean-up (SIM-575 to SIM-623) and the documentation rebuild
