@@ -84,10 +84,10 @@ rebuild (the writer holds the lock). The snapshot holds across a rebuild and ref
   stages).
 
 **The record.** The backlog row "Read each manager's profile in the API's runs, so the steal
-draw's manager weight is not flat" (SIM-575) stays in `BACKLOG.xlsx` until Excel releases the
-workbook; the deletion is the next step on `master` after the merge. I filed no ticket; the
-next free ID stays SIM-635. The change reaches the app on its next recreate, inside the deploy
-window, and the boot log then shows the manager counts.
+draw's manager weight is not flat" (SIM-575) is deleted from `BACKLOG.xlsx` (2026-10-26, once Excel
+released the workbook). I filed no ticket; the next free ID stays SIM-635. The app was recreated
+on 2026-10-26 at 16:00 UTC, and its boot log reads 308 manager-seasons and 10 league rows held
+in memory.
 
 # THE BACKLOG RE-RANKED — the 59 tickets filed on 2026-10-20 and 2026-10-21 put in priority order, five of them moved between bands — the tickets of SIM-493 and SIM-624, 2026-10-21
 
