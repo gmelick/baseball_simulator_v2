@@ -1,4 +1,4 @@
-<!-- file-index-key: ac9981355a560d24 -->
+<!-- file-index-key: 547ea636f74a2a91 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -25,8 +25,8 @@ Every source and config file in the repository, in the order of the [code review
 | [12. The frontend](#stage-12) | 82 | 27,244 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
 | [14. Measurement and maintenance tools](#stage-14) | 77 | 39,270 |
-| [15. Tests and CI](#stage-15) | 314 | 126,301 |
-| **All** | **790** | **289,777** |
+| [15. Tests and CI](#stage-15) | 315 | 126,504 |
+| **All** | **791** | **289,980** |
 
 <a id="stage-1"></a>
 
@@ -155,12 +155,12 @@ The nightly computor that turns raw pitches into player profiles and pools of re
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`pipeline/batch/player_profile_computor.py`](../../pipeline/batch/player_profile_computor.py) | 435 | The nightly profile build: the player profiles, the defensive metrics and the simulation pools. | 27: `test_player_profile_computor.py`, `test_ibb_rates.py`, `test_steal_draw.py` +24 |
+| [`pipeline/batch/player_profile_computor.py`](../../pipeline/batch/player_profile_computor.py) | 435 | The nightly profile build: the player profiles, the defensive metrics and the simulation pools. | 28: `test_player_profile_computor.py`, `test_ibb_rates.py`, `test_steal_draw.py` +25 |
 | [`pipeline/batch/profiles/base.py`](../../pipeline/batch/profiles/base.py) | 305 | The state and the shared helpers every profile-computor mixin uses. | — |
 | [`pipeline/batch/profiles/constants.py`](../../pipeline/batch/profiles/constants.py) | 61 | The profile build's sample floors, shrinkage priors and positional-insert column orders. | 7: `test_lead_distance.py`, `test_outfield_arm_block.py`, `test_outfield_arm_model.py` +4 |
 | [`pipeline/batch/profiles/sql.py`](../../pipeline/batch/profiles/sql.py) | 378 | The SQL fragments the profile and pool builds share: the pitch-result classes, the swing and stance columns, the out labels, the barrel band, the fielding-credit mask and the fatigue window expressions. | 10: `test_hit_by_pitch.py`, `test_barrel_definition.py`, `test_draw_conditioning.py` +7 |
-| [`pipeline/batch/profiles/pitcher.py`](../../pipeline/batch/profiles/pitcher.py) | 390 | The pitcher season profiles, with the arsenal mixture fit. | — |
-| [`pipeline/batch/profiles/gmm.py`](../../pipeline/batch/profiles/gmm.py) | 369 | The pitcher arsenal mixture fit: one Gaussian mixture per pitcher-season, fitted in a process pool, and the writes of its results. | 2: `test_gmm_batch_pipeline.py`, `test_player_profile_computor.py` |
+| [`pipeline/batch/profiles/pitcher.py`](../../pipeline/batch/profiles/pitcher.py) | 390 | The pitcher season profiles, with the arsenal mixture fit. | 1: `test_arsenal_fit_reproducible.py` |
+| [`pipeline/batch/profiles/gmm.py`](../../pipeline/batch/profiles/gmm.py) | 369 | The pitcher arsenal mixture fit: one Gaussian mixture per pitcher-season, fitted in a process pool, and the writes of its results. | 3: `test_gmm_batch_pipeline.py`, `test_player_profile_computor.py`, `test_arsenal_fit_reproducible.py` |
 | [`pipeline/batch/profiles/batter.py`](../../pipeline/batch/profiles/batter.py) | 504 | The batter season profiles, with the physical swing and stance block. | — |
 | [`pipeline/batch/profiles/fielder.py`](../../pipeline/batch/profiles/fielder.py) | 621 | The fielder season profile: the aggregate of the per-play metrics and the outfield arm block. | — |
 | [`pipeline/batch/profiles/fielder_plays.py`](../../pipeline/batch/profiles/fielder_plays.py) | 925 | The per-play fielder metrics: outfield catch probability, infield outs above average, double plays, bunt defense, first-base scooping and errors. | — |
@@ -674,6 +674,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_api_state.py`](../../tests/unit/test_api_state.py) | 313 | The boot-time builders in api/state.py that the lifespan attaches to `app.state`. | — |
 | [`tests/unit/test_arm_angle_decision.py`](../../tests/unit/test_arm_angle_decision.py) | 333 | The guard for the pitcher arm-angle and spin-shape decision. | — |
 | [`tests/unit/test_arsenal_cache_vectorized.py`](../../tests/unit/test_arsenal_cache_vectorized.py) | 370 | The matrix row lookup of the arsenal distance cache. | — |
+| [`tests/unit/test_arsenal_fit_reproducible.py`](../../tests/unit/test_arsenal_fit_reproducible.py) | 203 | The pitcher arsenal fit gives the same arsenal whatever order the pitch rows arrive in. | — |
 | [`tests/unit/test_arsenal_w2_standardization.py`](../../tests/unit/test_arsenal_w2_standardization.py) | 351 | The arsenal W₂ distance reads a GMM's mean and covariance on one scale. | — |
 | [`tests/unit/test_backfill_odds_hash.py`](../../tests/unit/test_backfill_odds_hash.py) | 145 | Unit tests for the odds_hash backfill script (`scripts/probes/backfill_odds_hash.py`). | — |
 | [`tests/unit/test_backup_age_gauge.py`](../../tests/unit/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
