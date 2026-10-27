@@ -176,12 +176,6 @@ docstring, and the wording of this entry and of the five new tickets. Each one i
   refits them. It runs after three fixes land: the small-component merge in standardized units
   (SIM-606) and the two league-row fixes (SIM-576, SIM-577). The owner decided this on
   2026-10-26.
-- The 2026 arsenals change once, at the next nightly rebuild (08:00 UTC). They then stay the
-  same while the data does not change.
-- The after-deploy check: `/data/ingest_marks/nightly-rebuild.last` records exit code 0; the
-  rebuild's log reads "GMM fitting complete" with no crashed chunk; a ten-game
-  `scripts/sim_stats.py` smoke on the new bundle passes. A smoke before the nightly proves
-  nothing, because the bundle does not change until then.
 
 **Tickets filed.** A sweep looked for the same defect class across the code, and a skeptical
 reader checked each finding.
@@ -217,13 +211,72 @@ reader checked each finding.
 - The line-movement reader (`betting/line_movement.py`) breaks a tie on `fetched_at` by
   database order. The tie reaches only one API value: the two-bet run line's closing line
   value, when the quote's own book has no usable margin.
+- A host pause can stop the job scheduler's timer, so the morning's jobs start late (the
+  after-deploy check below).
 
 **The record.** The backlog row "Make the pitcher arsenal fit reproducible: order the pitch
 rows before the mixture fit" (SIM-580) is deleted from `BACKLOG.xlsx`. Five rows are filed,
 SIM-635 to SIM-639, at the places listed above. The next free ID is SIM-640. The branch
 merged into master at 8b83584 on 2026-10-27 at 05:44 UTC, and master is pushed. The app
 hot-reloaded on the `pitcher.py` change and answered `/health` at 05:45 UTC. The jobs
-container mounts `pipeline/`, so the 08:00 UTC nightly rebuild runs the ordered read.
+container mounts `pipeline/`, so the nightly rebuild (scheduled at 08:00 UTC) runs the ordered
+read.
+
+**The after-deploy check (2026-10-27).** The nightly rebuild started late, at 09:34 UTC. All
+three checks passed: the rebuild's exit code, the arsenal fit's log line and a smoke on the new
+bundle. A smoke is a short simulation run that looks for a collapse: a rate far from its usual
+value. The audit record (`docs/audit/records/sim580_arsenal_reproducibility.txt`) holds the
+evidence.
+
+- **The rebuild's exit.** `/data/ingest_marks/nightly-rebuild.last` reads
+  `2026-10-27 0 2026-10-27T11:11:09Z`. The rebuild exited 0 on its first attempt.
+- **The arsenal fit.** The rebuild's log reads "GMM fitting complete: 635 fitted, 0 fell back
+  to minimum-sample flag". No worker chunk crashed. The night before gave the same counts. The
+  2026 arsenals now come from the ordered read. They stay the same by content while the 2026
+  data does not change. A crashed fit worker still changes them: the pitchers of every
+  unfinished chunk lose their fit (SIM-639).
+- **The new bundle.** The rebuild published bundle version `20261027T094856Z` at 11:11 UTC. The
+  app restarted on the new bundle and answered `/health` at 11:12 UTC.
+- **The smoke.** `scripts/sim_stats.py` played each of ten games 50 times, with seeds 0 to 49.
+  It ran once on the old bundle (`20261026T081340Z`) and finished at 05:59 UTC. It ran again on
+  the new bundle and finished at 11:26 UTC. Both runs exited 0. In every game-sim, the pitchers'
+  outs equal the outs played. The fence stage passed.
+- **What the smoke shows.** The new bundle also holds one more game of data and new park
+  factors. So the smoke cannot isolate the arsenals. It finds no collapse. A standard error is
+  the size of the noise between two runs of 500 game-sims. Each rate moved by less than 1.7
+  standard errors. Runs a game went from 8.76 to 8.88, strikeouts from 16.71 to 17.06 and walks
+  from 6.69 to 6.63. The home-win share went from .518 to .558 (1.3 standard errors).
+- **Why the jobs started late.** The job scheduler (Ofelia) started the 07:00 finals load and
+  the 08:00 rebuild together at 09:34:04 UTC. The finals load started 2 h 34 m late, and the
+  rebuild 1 h 34 m late. The 10:00 and 10:30 jobs started on time. On 2026-10-26 the host
+  entered Modern Standby (a low-power idle state) at 13:20 UTC. It hibernated from 13:36 to
+  15:55 UTC.
+- **The cause.** Docker runs the containers in a virtual machine (VM). While the host pauses,
+  the VM can stop, and so does its clock of running time. The scheduler (Ofelia 0.3.22, on the
+  cron library robfig/cron v1) waits for its next job on one timer. That timer counts the VM's
+  running time, so a stopped VM delays it. The timer set at 10:30 UTC on 2026-10-26 fired
+  2 h 34 m 04 s late. The VM's uptime is its clock of running time. It is 2 h 34 m 01 s short of
+  the real time since the VM booted. The two agree to 3 seconds. I did not read the scheduler's
+  code; the cause rests on this timing.
+- **Earlier nights.** The finals load also started late on 2026-10-19 (by 17 minutes) and on
+  2026-10-22 (by 10 minutes). Both nights followed host standby, and the rebuild started on
+  time. A standby stretch stops the VM for none, part or all of its length.
+- **What the late start cost.** The data backup waits while a running mark
+  (`/data/ingest_marks/<job>.running`) of the rebuild, the finals load or the weekly refresh
+  exists. Tonight it waited for the rebuild's mark. It ended at 11:15 UTC; the night before it
+  ended at 10:07. The off-site copy ended at 11:23 UTC (10:39 the night before). Every job
+  exited 0. On 2026-10-27 the deploy window (CLAUDE.md §2a) opened at 11:23 UTC, not at about
+  11:00.
+- **The risk.** A host pause between 10:30 and 07:00 UTC delays the 07:00 finals load by the
+  time the VM stands still. The scheduler then starts every job that is due at once. So the
+  08:00 rebuild starts late only by the part of that delay past one hour. The 10:00 backups start
+  late by the part past three hours. The data backup's two-hour wait starts with the backup. So
+  a pause alone does not make it skip the DuckDB file. The backup skips that file, and exits 1,
+  when the rebuild ends more than two hours after the backup starts. The rebuild took 1 h 32 m
+  and 1 h 37 m on the last two nights. So only a slow rebuild reaches that limit, for example
+  one with a crash retry. After the 7 h 28 m sleep of 2026-10-25, Docker started afresh at
+  05:14 UTC. The jobs then ran on time. I did not test a long pause with a VM that survives it.
+  No ticket covers this yet.
 
 # CLOSED — the API's runs read each manager's profile from the boot snapshot, so the steal draw's manager weight is no longer flat — SIM-575, 2026-10-25
 
