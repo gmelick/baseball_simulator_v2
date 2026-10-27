@@ -1,4 +1,4 @@
-<!-- file-index-key: 547ea636f74a2a91 -->
+<!-- file-index-key: 2dd0d16fd613b872 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -24,9 +24,9 @@ Every source and config file in the repository, in the order of the [code review
 | [11. Game day: the live service](#stage-11) | 18 | 6,023 |
 | [12. The frontend](#stage-12) | 82 | 27,244 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
-| [14. Measurement and maintenance tools](#stage-14) | 77 | 39,270 |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 39,484 |
 | [15. Tests and CI](#stage-15) | 315 | 126,504 |
-| **All** | **791** | **289,987** |
+| **All** | **792** | **290,201** |
 
 <a id="stage-1"></a>
 
@@ -606,6 +606,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/trace_game.py`](../../scripts/trace_game.py) | 183 | scripts/trace_game.py — a per-pitch trace of one simulated game. | — |
 | [`scripts/probes/actor_concentration_check.py`](../../scripts/probes/actor_concentration_check.py) | 86 | scripts/probes/actor_concentration_check.py — SIM-523 part F: the concentration check at the FITTED powers. | — |
 | [`scripts/probes/arm_angle_probe.py`](../../scripts/probes/arm_angle_probe.py) | 1,223 | scripts/probes/arm_angle_probe.py — the evidence behind the arm-angle decision (SIM-533): what Savant's arm angle, active spin and spin-axis deviation add to the pitcher model. | 1: `test_arm_angle_decision.py` |
+| [`scripts/probes/arsenal_reproducibility_check.py`](../../scripts/probes/arsenal_reproducibility_check.py) | 214 | scripts/probes/arsenal_reproducibility_check.py — two pitcher profile builds of one season from the same data, compared by content: do they write the same arsenals (SIM-580)? | — |
 | [`scripts/probes/backfill_odds_hash.py`](../../scripts/probes/backfill_odds_hash.py) | 279 | One-shot backfill that fills `raw.game_odds.odds_hash` for every legacy row that predates SIM-092 (which began populating the column at write time but left history alone). | 1: `test_backfill_odds_hash.py` |
 | [`scripts/probes/backfill_start_positions.py`](../../scripts/probes/backfill_start_positions.py) | 352 | Repair the starters' positions in `raw.game_lineups` (SIM-559). | — |
 | [`scripts/probes/book_sharpness.py`](../../scripts/probes/book_sharpness.py) | 921 | scripts/probes/book_sharpness.py — SIM-555: which book's closing line forecasts the real outcome best? | 1: `test_book_sharpness.py` |
