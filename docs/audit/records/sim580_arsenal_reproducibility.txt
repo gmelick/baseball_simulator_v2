@@ -1,0 +1,96 @@
+SIM-580: two pitcher profile builds of season 2025 from the same data, compared by content
+(scripts/probes/arsenal_reproducibility_check.py, run 2026-10-27, as of 2026-10-01, --workers 6,
+Postgres attached read-only, each build into a new scratch DuckDB file under /tmp).
+The comparison: each pitcher-season's gmm_model without fit_diagnostics.fit_date, and its
+derived.pitcher_gmm_components rows by (pitcher_id, season, component_id).
+
+== Master's code (f88d556), the probe's summary lines ==
+code: /app/pipeline/batch/profiles/pitcher.py; key order in the query: False
+build A: 859 pitcher-seasons, 639 fitted, 0 fallbacks, 0 errors, 607 s
+build B: 859 pitcher-seasons, 639 fitted, 0 fallbacks, 0 errors, 560 s
+season 2025: 859 pitcher-seasons; identical 227; differing 632; different K 171; valid True
+first differing: 434378:2025, 445276:2025, 450203:2025, 453286:2025, 455119:2025, 458677:2025, 471911:2025, 472610:2025, 477132:2025, 489446:2025
+exit 1 (some arsenals differ)
+
+== The fix (branch sim580-arsenal-row-order), the probe's summary lines ==
+code: /app/pipeline/batch/profiles/pitcher.py; key order in the query: True
+build A: 859 pitcher-seasons, 639 fitted, 0 fallbacks, 0 errors, 574 s
+build B: 859 pitcher-seasons, 639 fitted, 0 fallbacks, 0 errors, 560 s
+season 2025: 859 pitcher-seasons; identical 859; differing 0; different K 0; valid True
+exit 0 (the same arsenals)
+
+Reading: 859 pitcher-seasons, of which 639 reach the 200-pitch minimum and get a fit;
+the other 220 carry the placeholder model in both builds. On master's code 632 of the 639
+fits differ between two builds, 171 of them in the number of components. With the key
+order, all 639 fits are identical. Neither run had a crashed worker chunk or a fallback.
+
+== The JSON summary of each run ==
+-- base.json
+{
+  "asof": "2026-10-01",
+  "builds": [
+    {
+      "errors": [],
+      "fallbacks": [],
+      "fitted": 639,
+      "pitcher_seasons": 859,
+      "seconds": 607
+    },
+    {
+      "errors": [],
+      "fallbacks": [],
+      "fitted": 639,
+      "pitcher_seasons": 859,
+      "seconds": 560
+    }
+  ],
+  "different_k": 171,
+  "differing": 632,
+  "first_differing": [
+    "434378:2025",
+    "445276:2025",
+    "450203:2025",
+    "453286:2025",
+    "455119:2025",
+    "458677:2025",
+    "471911:2025",
+    "472610:2025",
+    "477132:2025",
+    "489446:2025"
+  ],
+  "identical": 227,
+  "key_order_in_query": false,
+  "pitcher_py": "/app/pipeline/batch/profiles/pitcher.py",
+  "pitcher_seasons": 859,
+  "season": 2025,
+  "valid": true
+}
+-- fix.json
+{
+  "asof": "2026-10-01",
+  "builds": [
+    {
+      "errors": [],
+      "fallbacks": [],
+      "fitted": 639,
+      "pitcher_seasons": 859,
+      "seconds": 574
+    },
+    {
+      "errors": [],
+      "fallbacks": [],
+      "fitted": 639,
+      "pitcher_seasons": 859,
+      "seconds": 560
+    }
+  ],
+  "different_k": 0,
+  "differing": 0,
+  "first_differing": [],
+  "identical": 859,
+  "key_order_in_query": true,
+  "pitcher_py": "/app/pipeline/batch/profiles/pitcher.py",
+  "pitcher_seasons": 859,
+  "season": 2025,
+  "valid": true
+}
