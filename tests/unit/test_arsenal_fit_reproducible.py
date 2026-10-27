@@ -97,7 +97,8 @@ def _pitch_rows() -> list[tuple]:
                     *(float(v) for v in values),
                 )
             )
-    return rows
+    # The two pitchers' at-bats interleave; sort the whole list by the key.
+    return sorted(rows, key=lambda r: (r[3], r[4], r[5]))
 
 
 def _conn(rows: list[tuple]) -> duckdb.DuckDBPyConnection:

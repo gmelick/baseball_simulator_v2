@@ -1,7 +1,7 @@
 # Tests and CI
 
 The test suite checks the platform in layers, from one function to the production
-simulator on real data. It holds 341 tracked files under `tests/`: 282 unit-test
+simulator on real data. It holds 343 tracked files under `tests/`: 284 unit-test
 modules, the acceptance, regression, integration and performance lanes, their
 conftests (the pytest setup files of a folder) and the recorded payloads they read.
 Four Playwright specs (browser tests) under `frontend/e2e/` test the web app. Six
@@ -44,7 +44,7 @@ GitHub Actions workflows under `.github/workflows/` run the lanes.
 | Lane | What runs | What it proves | Run it here | CI job |
 |---|---|---|---|---|
 | Unit (fast) | `tests/unit/ -m "not slow"` | Every module's rules, on fakes and the synthetic bundle | `make test-unit` | `unit-tests` (with the 80% coverage gate) |
-| Unit (slow) | `tests/unit/ -m slow` (20 marks in 9 files) | Volume variants: whole-game batches, the worker pool, the replay harness | `make test-unit` runs them too | `slow-tests` |
+| Unit (slow) | `tests/unit/ -m slow` (21 marks in 10 files) | Volume variants: whole-game batches, the worker pool, the replay harness | `make test-unit` runs them too | `slow-tests` |
 | Regression | `tests/regression/` | Score invariants of five similarity engines | `make test-regression` | `regression` |
 | Acceptance arithmetic | `tests/acceptance/test_band_arithmetic.py` | The band rule that decides red or green, and its flag parity with compose | `make test-unit TESTS=tests/acceptance/test_band_arithmetic.py` | `acceptance-arithmetic` |
 | Acceptance (heavy) | `tests/acceptance/ -m acceptance` with `SIM_ACCEPTANCE=1` | The production simulator against the play pool's own totals, and the pool's labels against real plate appearances | the command in [The acceptance lane](#the-acceptance-lane) | `acceptance` in `acceptance-nightly.yml` (manual dispatch) |
@@ -391,7 +391,7 @@ in the same commit as the change.
 
 ## Unit tests by code area
 
-The tables group the 282 modules by the code they cover. "slow" marks a module with
+The tables group the 284 modules by the code they cover. "slow" marks a module with
 `@pytest.mark.slow` tests.
 
 ### The simulation loop (`simulation/sim_loop.py`, `simulation/loop/`)
@@ -442,7 +442,7 @@ The tables group the 282 modules by the code they cover. "slow" marks a module w
 | [test_worker_forkserver.py](../../tests/unit/test_worker_forkserver.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py) (slow) | The forkserver start method; the worker prewarm contracts |
 | [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py) | Workers read only the bundle; the app restarts on a new version and waits for a DuckDB writer at boot |
 | [test_cache_codec.py](../../tests/unit/test_cache_codec.py) | The Redis cache stores typed JSON, never a pickle |
-| [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py) | The one `simulate_game` kwargs builder; the defense and park inputs; the app holds no DuckDB handle |
+| [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_manager_profile_snapshot.py](../../tests/unit/test_manager_profile_snapshot.py) | The one `simulate_game` kwargs builder; the defense and park inputs; the app holds no DuckDB handle; the API's runs read each manager's profile from the boot snapshot (SIM-575) |
 | [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py) | The lineup resolver; the starter from the official box (SIM-558); the per-position fielder map |
 | [test_game_sim_summary.py](../../tests/unit/test_game_sim_summary.py), [test_win_probability.py](../../tests/unit/test_win_probability.py) | The multi-game summary; the calibrated win probability |
 | [test_prop_distributions.py](../../tests/unit/test_prop_distributions.py), [test_prop_wrappers.py](../../tests/unit/test_prop_wrappers.py) | The fifteen prop distributions |
@@ -478,7 +478,7 @@ The tables group the 282 modules by the code they cover. "slow" marks a module w
 | [test_player_profile_computor.py](../../tests/unit/test_player_profile_computor.py), [test_league_average_profiles.py](../../tests/unit/test_league_average_profiles.py) | The profile computor's helpers; the league-average rows |
 | [test_one_cutoff_per_table.py](../../tests/unit/test_one_cutoff_per_table.py), [test_delete_seasons_coverage.py](../../tests/unit/test_delete_seasons_coverage.py), [test_profile_index_recreate.py](../../tests/unit/test_profile_index_recreate.py) | One `asof_date` per profile table (SIM-551); a full rebuild deletes every season-keyed table; the index recreate |
 | [test_point_in_time_batter.py](../../tests/unit/test_point_in_time_batter.py), [test_point_in_time_pitcher_manager.py](../../tests/unit/test_point_in_time_pitcher_manager.py), [test_point_in_time_runner_catcher_fielder.py](../../tests/unit/test_point_in_time_runner_catcher_fielder.py) | No profile reads data dated after its cutoff |
-| [test_gmm_batch_pipeline.py](../../tests/unit/test_gmm_batch_pipeline.py), [test_arsenal_fit_reproducible.py](../../tests/unit/test_arsenal_fit_reproducible.py), [test_barrel_definition.py](../../tests/unit/test_barrel_definition.py) | The pitch-mix model (GMM) batch; the same pitches in any stored order give the same arsenal (SIM-580); the barrel definition |
+| [test_gmm_batch_pipeline.py](../../tests/unit/test_gmm_batch_pipeline.py), [test_arsenal_fit_reproducible.py](../../tests/unit/test_arsenal_fit_reproducible.py) (slow), [test_barrel_definition.py](../../tests/unit/test_barrel_definition.py) | The pitch-mix model (GMM) batch; the same pitches in any stored order give the same arsenal (SIM-580); the barrel definition |
 | [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_out_label.py](../../tests/unit/test_out_label.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py) | The pitch-code sets, the out label and the steal labels agree across the profile SQL and the pool build |
 | [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_hit_by_pitch.py](../../tests/unit/test_hit_by_pitch.py) | A two-strike foul tip is strike three (SIM-553); a hit by pitch is its own outcome |
 | [test_fielder_oaa_jump_profile.py](../../tests/unit/test_fielder_oaa_jump_profile.py), [test_fielder_placeholder_schema.py](../../tests/unit/test_fielder_placeholder_schema.py), [test_outfield_arm_block.py](../../tests/unit/test_outfield_arm_block.py) | The fielder profile's Savant columns, its temp-table placeholders, the outfield arm block |

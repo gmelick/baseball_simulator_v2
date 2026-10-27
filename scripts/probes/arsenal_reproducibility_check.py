@@ -17,15 +17,31 @@ What it does, in order:
      ``(pitcher_id, season, component_id)``.
 
 Exit 0: the two builds wrote the same arsenals. Exit 1: some arsenals differ. Exit 2: a
-build is not valid (a crashed chunk, or a different fallback set): run it again.
+build is not valid (a crashed chunk, a different fallback set, or fewer than MIN_FITTED
+fitted arsenals): run it again. The probe also exits 2 when BASEBALL_DB_DSN is not set.
+
+From the repository root (Git Bash):
+
+    MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps -T -v "$PWD:/app" \\
+        app python scripts/probes/arsenal_reproducibility_check.py \\
+        --season 2025 --asof 2026-10-01 --workers 6 --out results/sim580/fix.json
+
+A worktree has no .env, so use the main checkout's compose file and mount the worktree's
+code. Set M to the main checkout and WT to the worktree, both as C:/... paths:
 
     MSYS_NO_PATHCONV=1 docker compose -f "$M/docker-compose.yml" --project-directory "$M" \\
-        run --rm --no-deps -T -v "$WT:/app" -v "$M/results:/app/results" [the five code -v] \\
-        app python scripts/probes/arsenal_reproducibility_check.py \\
-        --season 2025 --asof 2026-10-01 --out results/sim580/fix.json
+        run --rm --no-deps -T -v "$WT:/app" -v "$WT/api:/app/api" \\
+        -v "$WT/pipeline:/app/pipeline" -v "$WT/similarity:/app/similarity" \\
+        -v "$WT/simulation:/app/simulation" -v "$WT/db:/app/db" \\
+        -v "$M/results:/app/results" app python scripts/probes/arsenal_reproducibility_check.py \\
+        --season 2025 --asof 2026-10-01 --workers 6 --out results/sim580/fix.json
 
-The scratch files hold one season of pitcher rows (tens of MB). Each build takes about
-12 minutes on 15 workers. Run it outside the nightly window (07:00 to 11:00 UTC).
+Without the five code mounts, compose mounts the main checkout's code over /app, and the
+probe runs that checkout's pitcher.py. The ``code:`` line shows which query ran.
+
+The scratch files hold one season of pitcher rows (tens of MB). Each build took 9 to 10
+minutes on 6 workers (docs/audit/records/sim580_arsenal_reproducibility.txt). Run the probe
+outside the nightly window (07:00 to 11:00 UTC).
 """
 
 from __future__ import annotations
