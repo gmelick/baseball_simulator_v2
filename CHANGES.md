@@ -133,7 +133,12 @@ reader checked each finding.
   database order. The tie reaches only one API value: the two-bet run line's closing line
   value, when the quote's own book has no usable margin.
 
-**The record.** {{RECORD}}
+**The record.** The backlog row "Make the pitcher arsenal fit reproducible: order the pitch
+rows before the mixture fit" (SIM-580) is deleted from `BACKLOG.xlsx`. Five rows are filed,
+SIM-635 to SIM-639, at the places listed above. The next free ID is SIM-640. The branch
+merged into master at 8b83584 on 2026-10-27 at 05:44 UTC, and master is pushed. The app
+hot-reloaded on the `pitcher.py` change and answered `/health` at 05:45 UTC. The jobs
+container mounts `pipeline/`, so the 08:00 UTC nightly rebuild runs the ordered read.
 
 # CLOSED — the API's runs read each manager's profile from the boot snapshot, so the steal draw's manager weight is no longer flat — SIM-575, 2026-10-25
 
