@@ -1,3 +1,125 @@
+# CLOSED — the arsenal fit reads its pitches in key order, so two profile builds from the same data write the same arsenals — SIM-580, 2026-10-27
+
+**Why it matters.** The profile computor fits each pitcher's arsenal: a Gaussian mixture, one
+bell curve per pitch shape, over one season of pitches. The pitch-vector query that feeds the
+fit (`_compute_pitcher_profiles`, `pipeline/batch/profiles/pitcher.py`) had no `ORDER BY`.
+DuckDB's parallel scan of `pg.raw.pitches` returns the rows in a new order on every read, and
+the seeded fit (`random_state=42`) depends on the row order. So every profile build wrote a
+different arsenal for nearly every pitcher, and the nightly build gave a different pitcher
+similarity matrix every night. The pitcher matrix weights the pitch draw, the pitch-result
+draw, the pitching-change draw and the reliever draw. The weight fit (SIM-548) needs a model
+that rebuilds to the same state, so this lands before it. The code clean-up (SIM-493, part B2)
+found the defect.
+
+**What changed.**
+
+- `pipeline/batch/profiles/pitcher.py`: the Pass-2 query ends with
+  `ORDER BY game_pk, at_bat_number, pitch_number`, the primary key of `raw.pitches`, so the
+  order is total. A SQL comment and one docstring sentence say why. Nothing between the query
+  and the fit reorders the rows: the per-pitcher split is a boolean mask, and the float32 cast
+  and the worker's `dropna` keep the order.
+- The fit day stays in each model (`fit_diagnostics.fit_date`): it records when the fit ran.
+  Every by-content comparison here leaves it out.
+- New `scripts/probes/arsenal_reproducibility_check.py`: it builds one season's pitcher
+  profiles twice, each into a new scratch DuckDB file under `/tmp`, and compares every
+  pitcher-season by content (the model without its fit day, and the component rows). It prints
+  which `pitcher.py` it loaded and whether the query carries the key order. A crashed worker
+  chunk or a different fallback set makes the run not valid (exit 2).
+- The docs: the `pitcher.py` row of `docs/technical/pipeline-batch.md`, the GMM row of
+  `docs/technical/tests.md`, the probes table of `docs/technical/scripts.md`, and the
+  regenerated file index.
+- No schema change, no migration, no flag, no API contract change.
+
+**The tests.** New `tests/unit/test_arsenal_fit_reproducible.py` runs the real method over an
+in-memory DuckDB with a stub `pg.raw.pitches` and the real DDL of the two derived tables. A
+thread pool stands in for the process pool.
+
+- `test_two_stored_orders_of_the_same_pitches_give_the_same_arsenals` (the definition of done,
+  marked slow, about 4 s): the same 500 pitches of two pitchers, stored once in key order and
+  once shuffled, give the same arsenals by content. Guards: the two stored orders differ, and
+  both pitchers get a real fit.
+- `test_the_fit_receives_each_pitchers_rows_in_key_order` (0.6 s): the fit receives each
+  pitcher's 250 rows sorted by the key, whatever the stored order.
+- Both tests failed on the code before the fix (commit 7d384f7): the components came out
+  permuted and the standard deviations differed, and the recorded arrays were in the stored
+  order. Both pass after it.
+
+**The real-data proof** (`docs/audit/records/sim580_arsenal_reproducibility.txt`). The probe
+built season 2025 twice per run, as of 2026-10-01, with Postgres attached read-only:
+
+- **Master's code:** 859 pitcher-seasons, 639 fitted in each build, no crashed chunk, no
+  fallback. 632 of the 639 fitted arsenals differ between the two builds; 171 differ in their
+  number of components. (The 220 identical rows below the minimum sample carry no fit.)
+- **The fix:** the same 859 pitcher-seasons and 639 fits, no crashed chunk, no fallback. All
+  859 are identical between the two builds; 0 differ.
+- The probe printed which code each run loaded: the query carried the key order on the fix's
+  run and not on master's. Each build took 9 to 10 minutes on 6 workers.
+
+**The lanes.**
+
+- **The unit lane** (the container, the worktree mounted over `/app` and the five code
+  folders, `-m "not slow" --timeout=30`, in three pieces): a-f reads `2356 passed, 4 skipped,
+  9 deselected`; g-m reads `652 passed, 1 deselected`; n-z reads `3504 passed, 1 skipped,
+  13 deselected`. Together: 6,512 passed, 5 skipped, 0 failed. The new fast test is the one
+  more than the SIM-575 lane's 6,511.
+- **The random crash (CLAUDE.md §2a) hit one run.** The first n-z run died in collection: inside
+  pydantic, `isinstance(obj, dict)` raised `int() argument must be ... not 'type'` while it
+  imported `api/routes/games_models.py`, which this change does not touch. Sound code cannot
+  raise that. The rerun passed.
+- **The slow test:** `1 passed` (`-m slow --timeout=120`, 10 s with the container's start).
+- **The regression lane:** `33 passed`.
+- **Types:** `mypy similarity/ pipeline/ api/ simulation/ betting/` reads "Success: no issues
+  found in 211 source files". **Lint:** `ruff check .` reads "All checks passed!".
+  **Format:** `ruff format --check .` reads "629 files already formatted".
+- **The file index** is regenerated (792 files in 15 stages), and
+  `tests/unit/test_docs_file_index.py` passes on the host, which has git (3 passed).
+
+**What is not done.**
+
+- The stored arsenals of 2017 to 2025 keep their old fits. One shared all-season recompute
+  refits them after the merge in standardized units (SIM-606) and the league-row fixes
+  (SIM-576, SIM-577) land (owner decision 2026-10-26).
+- The 2026 arsenals change once, at the next nightly rebuild (08:00 UTC), and then stay the same
+  while the data does not change.
+- The after-deploy check: the nightly rebuild's mark exits 0; its log reads "GMM fitting
+  complete" with no crashed chunk; a ten-game `scripts/sim_stats.py` smoke on the new bundle
+  passes. A smoke before the nightly proves nothing, because the bundle does not change until
+  then.
+
+**Tickets filed** (the sweep of the same defect class, each finding checked by a skeptical
+reader):
+
+- The pitch pool's export order, so the pitch-result draw's density weights stay the same
+  between pool builds (SIM-635, P2, after the four engine-input fixes). The draw picks its 256
+  density reference rows by position in the candidate set, and the pool's stored order changes
+  with each pool build.
+- The batted-ball pool's export order, for the fielding draw's born-ball density weights
+  (SIM-636, P2, after SIM-635).
+- The batter's and the runner's reliability-weight fit pairs each player's first two stored
+  rows, whatever their seasons (SIM-637, P3, the latent-risk group).
+- Seven calibrators draw their bandwidth pairs by row index over an unordered read (SIM-638,
+  P3, after SIM-637). Only the API's similarity engines read either calibration value today;
+  both tickets move to P2 if the decision on which calibration values the draws use (SIM-587)
+  routes the report into the matrix build.
+- A crashed arsenal-fit worker marks its pitchers below the minimum sample and the step still
+  exits 0, so no retry runs (SIM-639, P3, the wrong-data group). Two builds then differ on a
+  crash day.
+
+**Found, not filed.**
+
+- The pitcher engine loads its profiles with no `ORDER BY`
+  (`similarity/engines/pitcher_similarity.py`, `_load_profiles`), so the population mean and
+  spread of the arsenals sum in another order. That can move the pitcher matrix in its last bit
+  even when the arsenals are equal.
+- No container caps the OpenMP threads of scikit-learn's k-means start (no `OMP_NUM_THREADS`).
+  The probe's fix run shows no effect on the arsenals; each worker still runs many threads on a
+  16-CPU VM.
+- The line-movement reader (`betting/line_movement.py`) breaks a tie on `fetched_at` by
+  database order. The tie reaches only the two-bet run-line closing line value on the API, when
+  the quote's own book has no usable margin.
+
+**The record.** {{RECORD}}
+
 # CLOSED — the API's runs read each manager's profile from the boot snapshot, so the steal draw's manager weight is no longer flat — SIM-575, 2026-10-25
 
 **Why it matters.** The steal draw weighs each attempted row by the batting manager's
