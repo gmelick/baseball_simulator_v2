@@ -94,3 +94,163 @@ order, all 639 fits are identical. Neither run had a crashed worker chunk or a f
   "season": 2025,
   "valid": true
 }
+
+== The after-deploy check of the nightly rebuild, 2026-10-27 ==
+
+-- the job marks (/data/ingest_marks/, read at 11:26 UTC; date, exit code, end time)
+nightly-backup-offsite.last: 2026-10-27 0 2026-10-27T11:23:12Z
+nightly-backup.last: 2026-10-27 0 2026-10-27T11:15:57Z
+nightly-finals.last: 2026-10-27 0 2026-10-27T09:34:09Z
+nightly-rebuild.last: 2026-10-27 0 2026-10-27T11:11:09Z
+weekly-refresh.last: 2026-10-25 0 2026-10-25T08:00:04Z
+
+-- the scheduler log (docker logs --timestamps baseball_simulator_v2-scheduler-1), the lines that matter
+2026-10-27T09:34:04.265Z  [Job "nightly-rebuild" (1b9ef6fc4c28)] Started - sh /app/scripts/with_mark.sh nightly-rebuild sh /app/scripts/with_retry.sh 3 sh /app/scripts/nightly_rebuild.sh
+2026-10-27T09:34:04.265Z  [Job "nightly-finals" (7d81601c6fb4)] Started - sh /app/scripts/with_mark.sh nightly-finals sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
+2026-10-27T09:34:09.911Z  [Job "nightly-finals" (7d81601c6fb4)] StdOut: [with-retry] attempt 1/6: sh /app/scripts/nightly_finals.sh
+2026-10-27T09:34:09.912144694Z [with-retry] attempt 1 exited 0
+2026-10-27T09:34:09.912Z  [Job "nightly-finals" (7d81601c6fb4)] Finished in "5.647347525s", failed: false, skipped: false, error: none
+2026-10-27T10:00:00.083Z  [Job "nightly-backup-data" (3374676a4940)] Started - sh /app/scripts/with_mark.sh nightly-backup sh /app/scripts/with_retry.sh 2 python -m pipeline.backup.data_stores
+2026-10-27T10:00:00.083Z  [Job "nightly-backup-postgres" (8d2af613fea5)] Started - sh /opt/baseball/backup/pg_backup.sh
+2026-10-27T10:05:40.197165831Z BACKUP OK postgres 20261027T100000Z 2900941676 bytes 339 s
+2026-10-27T10:05:40.197Z  [Job "nightly-backup-postgres" (8d2af613fea5)] Finished in "5m40.140090421s", failed: false, skipped: false, error: none
+2026-10-27T10:30:00.005Z  [Job "nightly-closing-lines" (4439b54fe068)] Started - env ODDS_PROVIDER=bettingpros sh /app/scripts/nightly_closing_lines.sh
+2026-10-27T10:30:00.005Z  [Job "nightly-backup-offsite" (9dc46ba0e195)] Started - sh /app/scripts/with_mark.sh nightly-backup-offsite sh /app/scripts/with_retry.sh 2 python -m pipeline.backup.offsite
+2026-10-27T10:30:24.011Z  [Job "nightly-closing-lines" (4439b54fe068)] Finished in "24.009708119s", failed: false, skipped: false, error: none
+2026-10-27T11:11:09.236Z  [Job "nightly-rebuild" (1b9ef6fc4c28)] StdOut: [with-retry] attempt 1/3: sh /app/scripts/nightly_rebuild.sh
+2026-10-27T11:11:09.238260244Z [nightly-rebuild 2026-10-27T09:34:04Z] 0/2 wait for the finals load
+2026-10-27T11:11:09.238263942Z [wait-for-ingest 2026-10-27T09:35:04Z] the finals load ran today (2026-10-27 0 2026-10-27T09:34:09Z); the rebuild goes on
+2026-10-27T11:11:09.238265097Z [nightly-rebuild 2026-10-27T09:35:04Z] 1/2 player_profile_computor --seasons 2026
+2026-10-27 09:35:25  INFO        Pitcher command metrics inserted (GMM pending).
+2026-10-27 09:35:25  INFO        Fitting GMMs for 635 pitcher/season pairs …
+2026-10-27 09:35:33  INFO        Fitting GMMs: 635 pitchers across 15 workers (15 chunks) …
+2026-10-27 09:47:01  INFO        GMM fitting complete: 635 fitted, 0 fell back to minimum-sample flag.
+2026-10-27T11:11:09.238335240Z [nightly-rebuild 2026-10-27T09:48:55Z] 2/2 engine_artifacts --what all
+2026-10-27 11:11:08,488 INFO SIM-563: published bundle version /data/play_pool/engine_artifacts.versions/20261027T094856Z
+2026-10-27 11:11:08,515 INFO SIM-563: pruned bundle version /data/play_pool/engine_artifacts.versions/20261024T081334Z
+2026-10-27T11:11:09.238387925Z [nightly-rebuild 2026-10-27T11:11:09Z] done
+2026-10-27T11:11:09.238388392Z [with-retry] attempt 1 exited 0
+2026-10-27T11:11:09.236Z  [Job "nightly-rebuild" (1b9ef6fc4c28)] Finished in "1h37m5.46781678s", failed: false, skipped: false, error: none
+2026-10-27T11:15:57.913Z  [Job "nightly-backup-data" (3374676a4940)] StdOut: [with-retry] attempt 1/2: python -m pipeline.backup.data_stores
+2026-10-27T11:15:57.915535601Z BACKUP OK duckdb 20261027T100003Z 4464336018 bytes 186.191 s
+2026-10-27T11:15:57.915536162Z BACKUP OK bundle 20261027T100003Z 588751330 bytes 46.001 s
+2026-10-27T11:15:57.915537645Z [with-retry] attempt 1 exited 0
+2026-10-27T11:15:57.915Z  [Job "nightly-backup-data" (3374676a4940)] Finished in "1h15m58.233194046s", failed: false, skipped: false, error: none
+2026-10-27T11:23:12.547Z  [Job "nightly-backup-offsite" (9dc46ba0e195)] StdOut: [with-retry] attempt 1/2: python -m pipeline.backup.offsite
+2026-10-27T11:23:12.547941608Z [with-retry] attempt 1 exited 0
+2026-10-27T11:23:12.547Z  [Job "nightly-backup-offsite" (9dc46ba0e195)] Finished in "53m12.818360237s", failed: false, skipped: false, error: none
+crashed-chunk lines in the log: 0
+
+-- the night before, 2026-10-26 (the same scheduler log)
+2026-10-26 08:12:42  INFO        GMM fitting complete: 635 fitted, 0 fell back to minimum-sample flag.
+2026-10-26T10:07:21.199Z  [Job "nightly-backup-data" (de19e1e94e0b)] Finished in "7m21.233564053s", failed: false, skipped: false, error: none
+2026-10-26T10:39:17.435Z  [Job "nightly-backup-offsite" (dcaf593878fc)] Finished in "9m17.491406817s", failed: false, skipped: false, error: none
+
+-- the app's restart on the new bundle (docker logs --timestamps baseball_simulator_v2-app-1)
+2026-10-27 11:11:30  WARNING   SIM-563: restarting the app to load bundle version /data/play_pool/engine_artifacts.versions/20261027T094856Z.
+2026-10-27 11:12:35  INFO      SIM-563: bundle version pinned for this boot: /data/play_pool/engine_artifacts.versions/20261027T094856Z
+2026-10-27 11:12:38  INFO:     Application startup complete.
+2026-10-27 11:12:42  first GET /health after the restart: 200 OK
+
+-- the clock: why the 07:00 and 08:00 jobs both started at 09:34:04 UTC
+scheduler image: mcuadros/ofelia:latest, label org.opencontainers.image.version 0.3.22; the binary holds the package github.com/robfig/cron (v1)
+the VM's boot: the scheduler's PID 1 started at 2026-10-26T05:14:46.33Z (docker StartedAt), 1034 ticks = 10.34 s after the boot
+  so the VM booted at 2026-10-26T05:14:35.99Z
+the VM's uptime: /proc/uptime read 100371.09 s at epoch 1793101288 (2026-10-27T11:41:28Z)
+  wall time since the boot minus the uptime = 9240.9 s = 2 h 34 m 01 s of running time lost
+  the 07:00 finals load started 9244.3 s = 2 h 34 m 04 s late; the two agree to 3.3 s
+host power log (Windows System log, times in UTC):
+  2026-10-26 13:20:24  Kernel-Power 506  entering Modern Standby (Idle Timeout)
+  2026-10-26 13:20:38, 13:21:29  Kernel-Power 507 then 506 in the same second (the host stays in standby)
+  2026-10-26 13:36:29  Kernel-Power 507  exiting Modern Standby (to sleep)
+  2026-10-26 13:36:36  Kernel-Power 42   entering sleep: Hibernate from Sleep - Fixed Timeout
+  2026-10-26 15:55:09  Kernel-General 1  system time changed to 15:55:09.5 from 13:36:42.2 (delta 8307325 ms)
+  2026-10-26 15:55:12  Power-Troubleshooter 1  wake; Sleep Time 13:36:29Z, Wake Time 15:55:10Z
+  the host logged no sleep, standby or hibernate event between 2026-10-26 15:55 and the 09:34 start
+  the live service logged about 38 lines in every ten minutes from 05:00 to 10:30 UTC on 2026-10-27: the VM did not pause tonight
+the earlier late starts of the 07:00 finals load (scheduler log since 2026-10-18; standby from 10:30 UTC the day before);
+the 08:00 rebuild started on time both nights:
+  2026-10-19 07:17:09.98 (17 m 10 s late)  standby 10-18 23:54:17-10-19 00:12:02 and 10-19 03:35:07-03:47:53 (30 m 31 s)
+  2026-10-22 07:09:43.19 (9 m 43 s late)   standby 10-21 13:06:12-13:15:32 and 10-22 05:01:46-05:02:47 (10 m 21 s)
+  standby 10-18 05:18-05:20, 10-24 04:45 and 10-25 05:49-05:52 left the 07:00 start on time
+  a standby stretch stops the VM for none, part or all of its length; the VM's uptime is the measure
+
+-- the smokes: scripts/sim_stats.py --iters 50, the same ten games and seeds 0-49
+before: the old bundle 20261026T081340Z, finished 05:59 UTC
+after:  the new bundle 20261027T094856Z (the link read the same before and after the run), finished 11:26 UTC
+
+--- smoke_before.txt
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=500  R sd=4.416  R se=0.1975
+========================================================================
+--- Both-teams per game ---
+  R=  8.76  H= 16.24  HR=  2.27  2B=  3.27  3B=  0.29  BB=  6.69  K= 16.71  SB=  1.13  CS=  0.30
+--- Per-team (both-teams / 2) vs MLB-2025 ---
+  R   sim=  4.38   mlb=  4.45   delta=  -1.6%
+  H   sim=  8.12   mlb=  8.26   delta=  -1.7%
+  HR  sim=  1.14   mlb=  1.16   delta=  -2.2%
+  2B  sim=  1.63   mlb=  1.59   delta=  +2.5%
+  3B  sim=  0.14   mlb=  0.13   delta= +10.7%
+  BB  sim=  3.34   mlb=  3.17   delta=  +5.6%
+  K   sim=  8.36   mlb=  8.35   delta=  +0.0%
+  SB  sim=  0.56   mlb=  0.63   delta=  -9.8%
+  CS  sim=  0.15   mlb=  0.19   delta= -22.0%
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.518   (target MLB ~0.543)
+  home R/g     =  4.34   away R/g =  4.41   delta = -0.068  (target +0.13)
+  home H/g     =  7.90   away H/g =  8.34   delta = -0.446
+  home HR/g    =  1.15   away HR/g =  1.13  (no bias here — should be ~0)
+--- precision: R standard error = 0.1975  (NOISY — bump iters above this read) ---
+--- SIM-478 the fence stage ---
+  fence stage: over 1126 (8.7% of air balls) · short 24399 · band 0 · passed 0 (0.00%) · no matching rows 0 (0.00%) · not an air ball 12535
+  D: passed 0.00% (<= 0.1%), no rows 0.00% (<= 0.5%), over share 8.7% (9 ± 1%) — PASS
+  wall-margin band: applied 4574 (35.2% of air balls) · fallback 14 · skipped 20937
+--- SIM-557 the outs check ---
+  pitcher outs a game: credited 53.33, played 53.33; game-sims where they differ: 0
+elapsed: 527.5s
+exit 0
+
+--- smoke_after.txt
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=500  R sd=4.309  R se=0.1927
+========================================================================
+--- Both-teams per game ---
+  R=  8.88  H= 16.28  HR=  2.36  2B=  3.31  3B=  0.28  BB=  6.63  K= 17.06  SB=  1.10  CS=  0.36
+--- Per-team (both-teams / 2) vs MLB-2025 ---
+  R   sim=  4.44   mlb=  4.45   delta=  -0.2%
+  H   sim=  8.14   mlb=  8.26   delta=  -1.5%
+  HR  sim=  1.18   mlb=  1.16   delta=  +1.7%
+  2B  sim=  1.66   mlb=  1.59   delta=  +3.9%
+  3B  sim=  0.14   mlb=  0.13   delta=  +6.8%
+  BB  sim=  3.31   mlb=  3.17   delta=  +4.7%
+  K   sim=  8.53   mlb=  8.35   delta=  +2.1%
+  SB  sim=  0.55   mlb=  0.63   delta= -12.2%
+  CS  sim=  0.18   mlb=  0.19   delta=  -6.3%
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.559   (target MLB ~0.543)
+  home R/g     =  4.46   away R/g =  4.41   delta = +0.048  (target +0.13)
+  home H/g     =  8.06   away H/g =  8.22   delta = -0.164
+  home HR/g    =  1.19   away HR/g =  1.18  (no bias here — should be ~0)
+--- precision: R standard error = 0.1927  (NOISY — bump iters above this read) ---
+--- SIM-478 the fence stage ---
+  fence stage: over 1164 (9.1% of air balls) · short 24121 · band 0 · passed 0 (0.00%) · no matching rows 0 (0.00%) · not an air ball 12442
+  D: passed 0.00% (<= 0.1%), no rows 0.00% (<= 0.5%), over share 9.1% (9 ± 1%) — PASS
+  wall-margin band: applied 4467 (34.8% of air balls) · fallback 11 · skipped 20807
+--- SIM-557 the outs check ---
+  pitcher outs a game: credited 53.24, played 53.24; game-sims where they differ: 0
+elapsed: 565.0s
+exit 0
+
+--- both-teams rate per game, before vs after (z = the change over its unpaired standard error)
+R           8.756   8.876  +0.120  se 0.276  z +0.44
+H          16.238  16.276  +0.038  se 0.299  z +0.13
+HR          2.274   2.364  +0.090  se 0.101  z +0.89
+2B          3.266   3.312  +0.046  se 0.116  z +0.40
+3B          0.286   0.276  -0.010  se 0.034  z -0.29
+BB          6.686   6.628  -0.058  se 0.172  z -0.34
+K          16.712  17.060  +0.348  se 0.229  z +1.52
+SB          1.128   1.098  -0.030  se 0.069  z -0.43
+CS          0.300   0.360  +0.060  se 0.037  z +1.62
+home_win    0.518   0.558  +0.040  se 0.032  z +1.27
+home_win here is the share of all 500 game-sims. smoke_after.txt prints 0.559, the share of the
+decided game-sims: one of the 500 ended tied.
