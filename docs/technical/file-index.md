@@ -15,7 +15,7 @@ Every source and config file in the repository, in the order of the [code review
 | [2. One pitch: the loop](#stage-2) | 9 | 3,546 |
 | [3. The draws: the sampler](#stage-3) | 13 | 4,583 |
 | [4. The sampler's data: the bundle](#stage-4) | 15 | 4,772 |
-| [5. The similarity scores](#stage-5) | 30 | 14,365 |
+| [5. The similarity scores](#stage-5) | 30 | 14,375 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
 | [7. Getting data in: the raw tables](#stage-7) | 56 | 12,996 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
@@ -25,8 +25,8 @@ Every source and config file in the repository, in the order of the [code review
 | [12. The frontend](#stage-12) | 82 | 27,244 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 39,500 |
-| [15. Tests and CI](#stage-15) | 315 | 126,505 |
-| **All** | **792** | **290,218** |
+| [15. Tests and CI](#stage-15) | 315 | 126,560 |
+| **All** | **792** | **290,283** |
 
 <a id="stage-1"></a>
 
@@ -117,7 +117,7 @@ The eleven engines that score how alike two players or two situations are, and t
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`similarity/engines/rbf_kernel.py`](../../similarity/engines/rbf_kernel.py) | 51 | The weighted Gaussian kernel the profile engines score a sub-score with. | — |
-| [`similarity/engines/pitcher_similarity.py`](../../similarity/engines/pitcher_similarity.py) | 1,534 | The pitcher similarity engine: how alike two pitcher-seasons are. | 9: `test_pitcher_similarity.py`, `test_pitcher_engine_calibration.py`, `test_pitcher_similarity_contract.py` +6 |
+| [`similarity/engines/pitcher_similarity.py`](../../similarity/engines/pitcher_similarity.py) | 1,544 | The pitcher similarity engine: how alike two pitcher-seasons are. | 9: `test_pitcher_similarity.py`, `test_pitcher_engine_calibration.py`, `test_pitcher_similarity_contract.py` +6 |
 | [`similarity/engines/arsenal_cache.py`](../../similarity/engines/arsenal_cache.py) | 437 | The cache of pairwise arsenal distances for the pitcher engine. | 3: `test_arsenal_cache_vectorized.py`, `test_pitcher_similarity.py`, `test_pitcher_engine_calibration.py` |
 | [`similarity/engines/batter_similarity.py`](../../similarity/engines/batter_similarity.py) | 1,350 | Batter-to-batter similarity: one score in [0, 1] between two batter-seasons. | 4: `test_batter_similarity.py`, `test_batter_physical_features.py`, `test_engine_build_smoke.py` +1 |
 | [`similarity/engines/fielder_similarity.py`](../../similarity/engines/fielder_similarity.py) | 1,576 | The fielder engine: how alike two fielders are at one position. | 5: `test_fielder_similarity.py`, `test_fielder_oaa_jump_model.py`, `test_engine_build_smoke.py` +2 |
@@ -837,7 +837,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_pitcher_engine_calibration.py`](../../tests/unit/test_pitcher_engine_calibration.py) | 396 | The pitcher engine's arsenal calibration and its no-arsenal path. | — |
 | [`tests/unit/test_pitcher_outs_credit.py`](../../tests/unit/test_pitcher_outs_credit.py) | 479 | Every out on a pitcher's line (the plan's tests 1 to 18). | — |
 | [`tests/unit/test_pitcher_sim_matrix.py`](../../tests/unit/test_pitcher_sim_matrix.py) | 233 | tests/unit/test_pitcher_sim_matrix.py — the dense pitcher similarity matrix. | — |
-| [`tests/unit/test_pitcher_similarity.py`](../../tests/unit/test_pitcher_similarity.py) | 840 | Tests of the pitcher engine (`similarity/engines/pitcher_similarity.py`) and its arsenal cache (`similarity/engines/arsenal_cache.py`). | — |
+| [`tests/unit/test_pitcher_similarity.py`](../../tests/unit/test_pitcher_similarity.py) | 895 | Tests of the pitcher engine (`similarity/engines/pitcher_similarity.py`) and its arsenal cache (`similarity/engines/arsenal_cache.py`). | — |
 | [`tests/unit/test_pitcher_similarity_contract.py`](../../tests/unit/test_pitcher_similarity_contract.py) | 87 | The pitcher engine's shape contract: `_score_pair` returns three scores (composite, arsenal, command), `SimilarityResult` carries no release-point score (the release point lives inside the GMM components), and `Arsena... | — |
 | [`tests/unit/test_pitcher_steal_similarity.py`](../../tests/unit/test_pitcher_steal_similarity.py) | 137 | The pitcher steal-prevention similarity engine's scores and its group weights. | — |
 | [`tests/unit/test_play_events.py`](../../tests/unit/test_play_events.py) | 456 | SIM-502: the non-pitch play events `raw.pitches` cannot represent. | — |

@@ -326,6 +326,61 @@ class TestMinClusterSize(unittest.TestCase):
         cleaned = enforce_min_cluster_size(gmm)
         self.assertEqual(cleaned.n_components, 1)
 
+    def test_merge_target_is_nearest_in_standardized_units(self):
+        """The merge measures the gap over the fit's own standard deviations
+        (SIM-606). A is 100 rpm of spin away (raw 100, standardized 0.85); B is
+        5 mph of velocity away (raw 5, standardized 2.5). Raw units pick B, so
+        spin rate decides; standardized units pick A."""
+        stds = np.array([2.0, 3.0, 1.5, 118.0, 40.0, 0.5, 0.4, 0.3])
+        base = [90.0, 10.0, -5.0, 2300.0, 200.0, -1.5, 6.0, 6.3]
+        spin_away = list(base)
+        spin_away[GMM_FEATURE_NAMES.index("spin_rate")] += 100.0
+        velo_away = list(base)
+        velo_away[GMM_FEATURE_NAMES.index("velo")] += 5.0
+        small = _make_component(0, 0.02, base, n_pitches=15)
+        a = _make_component(1, 0.42, spin_away, n_pitches=300)
+        b = _make_component(2, 0.56, velo_away, n_pitches=400)
+        gmm = GMMModel(
+            n_components=3,
+            feature_names=GMM_FEATURE_NAMES,
+            feature_means=np.zeros(GMM_FEATURE_DIM),
+            feature_stds=stds,
+            components=[small, a, b],
+        )
+        cleaned = enforce_min_cluster_size(gmm)
+        self.assertEqual(sorted(c.n_pitches for c in cleaned.components), [315, 400])
+
+    def test_zero_feature_std_counts_as_one(self):
+        """A zero standard deviation counts as 1, as in ``standardize_gmm``.
+        Both candidates sit 10 degrees of spin axis away, where the standard
+        deviation is 0; B is nearer in velocity. Without the rule both gaps
+        are infinite and the first candidate, A, wins the tie."""
+        stds = np.ones(GMM_FEATURE_DIM)
+        axis = GMM_FEATURE_NAMES.index("spin_axis")
+        velo = GMM_FEATURE_NAMES.index("velo")
+        stds[axis] = 0.0
+        base = [90.0, 10.0, -5.0, 2300.0, 200.0, -1.5, 6.0, 6.3]
+        far = list(base)
+        far[axis] += 10.0
+        far[velo] += 10.0
+        near = list(base)
+        near[axis] += 10.0
+        near[velo] += 1.0
+        small = _make_component(0, 0.02, base, n_pitches=15)
+        a = _make_component(1, 0.42, far, n_pitches=300)
+        b = _make_component(2, 0.56, near, n_pitches=400)
+        gmm = GMMModel(
+            n_components=3,
+            feature_names=GMM_FEATURE_NAMES,
+            feature_means=np.zeros(GMM_FEATURE_DIM),
+            feature_stds=stds,
+            components=[small, a, b],
+        )
+        cleaned = enforce_min_cluster_size(gmm)
+        self.assertEqual(sorted(c.n_pitches for c in cleaned.components), [300, 415])
+        for c in cleaned.components:
+            self.assertTrue(np.all(np.isfinite(c.mean)))
+
 
 # ============================================================================
 # Tests: Feature Normalization

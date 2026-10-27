@@ -200,7 +200,7 @@ feature missing on either side. Do not merge the two.
 
 ### `similarity/engines/pitcher_similarity.py`
 
-[Source](../../similarity/engines/pitcher_similarity.py) · 1,534 lines · Tests: [test_pitcher_similarity.py](../../tests/unit/test_pitcher_similarity.py), [test_pitcher_similarity_contract.py](../../tests/unit/test_pitcher_similarity_contract.py), [test_pitcher_engine_calibration.py](../../tests/unit/test_pitcher_engine_calibration.py), [test_arsenal_w2_standardization.py](../../tests/unit/test_arsenal_w2_standardization.py), [test_arm_angle_decision.py](../../tests/unit/test_arm_angle_decision.py)
+[Source](../../similarity/engines/pitcher_similarity.py) · 1,544 lines · Tests: [test_pitcher_similarity.py](../../tests/unit/test_pitcher_similarity.py), [test_pitcher_similarity_contract.py](../../tests/unit/test_pitcher_similarity_contract.py), [test_pitcher_engine_calibration.py](../../tests/unit/test_pitcher_engine_calibration.py), [test_arsenal_w2_standardization.py](../../tests/unit/test_arsenal_w2_standardization.py), [test_arm_angle_decision.py](../../tests/unit/test_arm_angle_decision.py)
 
 Compares two pitcher-seasons of the same throwing hand. Each pitcher-season's arsenal is a
 Gaussian mixture model (GMM: one Gaussian per pitch cluster) over eight dimensions, fitted by
@@ -213,7 +213,7 @@ shrinkage prior is 5 pitches, and the load keeps profiles of 200 pitches or more
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `PitcherSimilarityEngine.build(seasons=None)` | Loads the league averages and the profiles, shrinks the command rates, merges GMM components under 30 pitches (`enforce_min_cluster_size`), moves every GMM into z-score space (`standardize_gmm`) and builds the two hand partitions. None loads every season. | `api.state.build_pitcher_engine`, `api.state.build_all_engines`, `build_pitcher_sim_matrix`, `scripts/fit_calibration.py` |
+| `PitcherSimilarityEngine.build(seasons=None)` | Loads the league averages and the profiles, shrinks the command rates, merges each GMM component under 30 pitches into the component nearest in the fit's own standard deviations (`enforce_min_cluster_size`; in raw units spin rate decided), moves every GMM into z-score space (`standardize_gmm`) and builds the two hand partitions. None loads every season. | `api.state.build_pitcher_engine`, `api.state.build_all_engines`, `build_pitcher_sim_matrix`, `scripts/fit_calibration.py` |
 | `PitcherSimilarityEngine.query(pitcher_id, season, n=None)` | Scores one pitcher-season against every same-hand profile, highest first. | `api/routes/similarity.py`, `api/routes/similarity_explorer.py`, `build_pitcher_sim_matrix` |
 | `PitcherSimilarityEngine.query_pair` | Scores one pair. | `api/routes/similarity_explorer.py` |
 | `PitcherSimilarityEngine.apply_calibration` | Converts the report's `arsenal_gamma` and median W₂ into the linear scale (`arsenal_scale_from_gamma`: scale = 1 / (γ · median)) and rewrites the module global `ARSENAL_SCALE`. It reads only the arsenal fields. | `api.state.apply_calibration_to_engines` |

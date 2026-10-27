@@ -199,7 +199,8 @@ DEFAULT_ARSENAL_SCALE = 4.10
 EB_N_PRIOR = 5
 
 # A GMM component with fewer assigned pitches merges into its nearest other
-# component (enforce_min_cluster_size).
+# component, measured in the fit's own standard deviations
+# (enforce_min_cluster_size).
 MIN_CLUSTER_SIZE = 30
 
 # The minimum sample of a profile, as in player_profile_computor.py. The engine
@@ -668,21 +669,29 @@ def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
     A tiny component (say, ten pitches of an experimental pitch) sits in an
     odd spot of the feature space and can dominate the W₂ distance. Each pass
     takes the smallest such component and merges it into the component with
-    the nearest mean (the Euclidean distance, in the units the GMM holds;
-    ``build`` runs this before the standardization, so original units). That
-    component can be small too. The passes stop when no small component is
-    left, or one component remains.
+    the nearest mean. The gap is the Euclidean distance between the means,
+    each feature divided by the fit's own standard deviation (``feature_stds``;
+    a zero counts as 1). In raw units spin rate (hundreds of rpm) decides the
+    target over velocity and movement (SIM-606). The merged component can be
+    small too. The passes stop when no small component is left, or one
+    component remains.
 
-    A merge keeps the first two moments: the merged mean and covariance blend
-    the two by weight, and the covariance adds the spread between the two
-    means. At the end the weights are renormalized to sum to 1, and the
-    components are renumbered from 0.
+    The GMM must hold its means in original units and the fit's own
+    ``feature_stds``, as ``GMMModel.from_json`` loads it. ``build`` runs this
+    before ``standardize_gmm``, which replaces both.
+
+    A merge keeps the first two moments, in original units: the merged mean
+    and covariance blend the two by weight, and the covariance adds the
+    spread between the two means. At the end the weights are renormalized to
+    sum to 1, and the components are renumbered from 0.
 
     Returns a new GMMModel.
     """
     if not gmm.components:
         return gmm
 
+    scale = gmm.feature_stds.copy()
+    scale[scale == 0] = 1.0
     components = list(gmm.components)
 
     changed = True
@@ -703,7 +712,7 @@ def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
             if not large:
                 break
 
-            dists = [np.linalg.norm(s.mean - c.mean) for c in large]
+            dists = [np.linalg.norm((s.mean - c.mean) / scale) for c in large]
             nearest = large[int(np.argmin(dists))]
 
             total_w = s.weight + nearest.weight
@@ -1086,7 +1095,8 @@ class PitcherSimilarityEngine:
 
         self._apply_shrinkage()
 
-        # Merge the small GMM components (in original units).
+        # Merge the small GMM components. The target is the nearest in the
+        # fit's own standard deviations; the merge keeps original units.
         for key, profile in self._profiles.items():
             if profile.gmm is not None:
                 self._profiles[key].gmm = enforce_min_cluster_size(profile.gmm)

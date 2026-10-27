@@ -1,3 +1,88 @@
+# CLOSED — a small arsenal component merges into the component nearest in standardized units, not raw units — SIM-606, 2026-10-27
+
+**Why it matters.** Each pitcher's arsenal is a Gaussian mixture: one bell curve (a component)
+per pitch shape. The pitcher engine merges each component with fewer than 30 pitches into its
+nearest other component (`enforce_min_cluster_size`, `similarity/engines/pitcher_similarity.py`).
+The merge measured "nearest" in raw feature units, before the engine's standardization. Spin
+rate spans hundreds of rpm; velocity spans a few mph. So spin rate decided the merge target: a
+100-rpm gap counted twenty times a 5-mph gap. The merged arsenals feed the arsenal score and
+the pitcher similarity matrix. That matrix weights the pitch draw, the pitch-result draw, the
+pitching-change draw and the reliever draw. The code clean-up (SIM-493, part B4) found the
+defect. The owner ruled on 2026-10-26 that this fix lands alone, after the arsenal row order
+(SIM-580).
+
+**What changed.**
+
+- `enforce_min_cluster_size` divides each feature's gap by the fit's own standard deviation,
+  then takes the Euclidean distance. The profile computor stores these standard deviations in
+  each pitcher's `gmm_model` JSON (`feature_stds`). A zero counts as 1, as in `standardize_gmm`.
+- Only the choice of target changes. The merge still blends the two means and covariances in
+  original units, so the merged component keeps the first two moments.
+- The docstring states the contract: the function takes a GMM in original units with the fit's
+  own `feature_stds`, as `GMMModel.from_json` loads it. `build` calls it before
+  `standardize_gmm`, which replaces both. The constant's comment and the `build` comment say
+  the same.
+- The docs: the `build` row and the line count of the pitcher engine's section in
+  `docs/technical/similarity.md`; the regenerated file index.
+- No schema change, no migration, no flag and no API contract change. The stored arsenals do
+  not change: the engine merges in memory each time it builds.
+
+**The tests.** Two new tests in `TestMinClusterSize` (`tests/unit/test_pitcher_similarity.py`).
+
+- `test_merge_target_is_nearest_in_standardized_units` is the definition of done. A 15-pitch
+  component sits 100 rpm of spin from component A (0.85 standard deviations) and 5 mph of
+  velocity from component B (2.5 standard deviations). Raw units pick B; the fix picks A. The
+  test failed on the code before the fix (`[300, 415] != [315, 400]`) and passes after it.
+- `test_zero_feature_std_counts_as_one` guards the zero rule. Both candidates sit 10 degrees of
+  spin axis away, where the standard deviation is 0; B is nearer in velocity. Without the rule
+  both gaps are infinite, and the first candidate wins the tie. A scratch copy of the module
+  without the rule failed the test.
+
+**The real-data count.** A read-only script (not committed) ran both merges on every stored
+arsenal in `derived.pitcher_season_metrics`, as the 2026-10-27 nightly left it.
+
+- 6,137 fitted arsenals, 2017 to 2026. 2,179 of them hold a component under 30 pitches (2,588
+  such components in all).
+- 738 arsenals merge differently: 12% of all, 34% of those with a small component. By season,
+  2017 to 2026: 92, 87, 109, 99, 82, 80, 48, 61, 38, 42.
+
+**The lanes.**
+
+- **The unit lane** ran in the container, with the worktree mounted over `/app` and the five
+  code folders (`-m "not slow" --timeout=30`, in three pieces). The a-f piece reads
+  `2356 passed, 4 skipped, 9 deselected`. The g-m piece reads `652 passed, 1 deselected`. The
+  n-z piece reads `3506 passed, 1 skipped, 13 deselected`. Together: 6,514 passed, 5 skipped,
+  0 failed. The two new tests are the two more than the 6,512 of the arsenal row order's lane
+  (SIM-580).
+- **The random crash (CLAUDE.md §2a) hit the n-z piece twice, both times in test collection.**
+  The first run died with a segmentation fault inside pytest-asyncio's fixture scan
+  (`functools._unwrap_partialmethod`). The second raised `ValueError: not enough values to
+  unpack` inside pytest's assertion rewriter while it parsed `test_receiving_ratio.py`, a file
+  this change does not touch. Sound code raises neither. The third run passed.
+- **The regression lane:** `33 passed`.
+- **Types:** `mypy similarity/ pipeline/ api/ simulation/ betting/` reads "Success: no issues
+  found in 211 source files". **Lint:** `ruff check .` reads "All checks passed!".
+  **Format:** `ruff format --check .` reads "629 files already formatted".
+- **The file index** is regenerated, and `tests/unit/test_docs_file_index.py` passes on the
+  host, which has git. The arm-angle decision's doc guard (`test_arm_angle_decision.py`) reads
+  the edited section and passes (9 passed together).
+
+**The QA pass.** An independent reviewer read the diff and the callers, and worked the two
+tests' arithmetic. It found no defect. `build` is the only caller, and it passes each GMM
+before the standardization, as the contract says. Every other test GMM uses unit standard
+deviations, where the new gap equals the old one.
+
+**What is not done.**
+
+- No profile recompute and no manual bundle rebuild (owner ruling 2026-10-26). The jobs and app
+  containers mount `similarity/`, so the change reaches the pitcher similarity matrix at the
+  next nightly bundle (2026-10-28, 08:00 UTC). The app's engines take it when the app reloads.
+- The shared all-season recompute still waits for the two league-average-row fixes: the
+  catcher's row (SIM-576) and the extra-base runner's row (SIM-577). It refits every arsenal
+  once, and this merge then runs on the new fits.
+- The after-deploy check: `/data/ingest_marks/nightly-rebuild.last` records exit code 0, and a
+  ten-game `scripts/sim_stats.py` smoke on the new bundle passes.
+
 # CLOSED — the arsenal fit reads its pitches in key order, so two profile builds from the same data write the same arsenals — SIM-580, 2026-10-27
 
 **Why it matters.** The profile computor fits each pitcher's arsenal over one season of
