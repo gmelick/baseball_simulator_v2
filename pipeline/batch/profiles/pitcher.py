@@ -41,6 +41,9 @@ class PitcherProfilesMixin(ComputorBase):
           Pass 2 (Python): fit GMM for each pitcher/season, write model JSON
                            and component rows.
 
+        Pass 2 reads each season's pitches in key order (game, at-bat, pitch),
+        because the seeded fit depends on the row order (SIM-580).
+
         ``asof`` is the date the profile's data runs through, the same rule
         as the batter profiles. Every source here (``raw.pitches`` in both
         passes and ``raw.play_events`` in the pickoff-out CTE) is our own data,
@@ -278,6 +281,10 @@ class PitcherProfilesMixin(ComputorBase):
                       AND release_speed IS NOT NULL
                       -- SIM-537: the cutoff, same rule as Pass 1's pitch_stats CTE.
                       {date_cutoff}
+                    -- SIM-580: the seeded fit depends on the row order, and the
+                    -- parallel scan returns a new order on every read. The key
+                    -- is the table's primary key, so the order is total.
+                    ORDER BY game_pk, at_bat_number, pitch_number
                     """
             ).df()
 

@@ -16,7 +16,7 @@ Every source and config file in the repository, in the order of the [code review
 | [3. The draws: the sampler](#stage-3) | 13 | 4,583 |
 | [4. The sampler's data: the bundle](#stage-4) | 15 | 4,772 |
 | [5. The similarity scores](#stage-5) | 30 | 14,365 |
-| [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,551 |
+| [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
 | [7. Getting data in: the raw tables](#stage-7) | 56 | 12,996 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 16 | 6,281 |
@@ -26,7 +26,7 @@ Every source and config file in the repository, in the order of the [code review
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
 | [14. Measurement and maintenance tools](#stage-14) | 77 | 39,270 |
 | [15. Tests and CI](#stage-15) | 315 | 126,504 |
-| **All** | **791** | **289,980** |
+| **All** | **791** | **289,987** |
 
 <a id="stage-1"></a>
 
@@ -159,7 +159,7 @@ The nightly computor that turns raw pitches into player profiles and pools of re
 | [`pipeline/batch/profiles/base.py`](../../pipeline/batch/profiles/base.py) | 305 | The state and the shared helpers every profile-computor mixin uses. | — |
 | [`pipeline/batch/profiles/constants.py`](../../pipeline/batch/profiles/constants.py) | 61 | The profile build's sample floors, shrinkage priors and positional-insert column orders. | 7: `test_lead_distance.py`, `test_outfield_arm_block.py`, `test_outfield_arm_model.py` +4 |
 | [`pipeline/batch/profiles/sql.py`](../../pipeline/batch/profiles/sql.py) | 378 | The SQL fragments the profile and pool builds share: the pitch-result classes, the swing and stance columns, the out labels, the barrel band, the fielding-credit mask and the fatigue window expressions. | 10: `test_hit_by_pitch.py`, `test_barrel_definition.py`, `test_draw_conditioning.py` +7 |
-| [`pipeline/batch/profiles/pitcher.py`](../../pipeline/batch/profiles/pitcher.py) | 390 | The pitcher season profiles, with the arsenal mixture fit. | 1: `test_arsenal_fit_reproducible.py` |
+| [`pipeline/batch/profiles/pitcher.py`](../../pipeline/batch/profiles/pitcher.py) | 397 | The pitcher season profiles, with the arsenal mixture fit. | 1: `test_arsenal_fit_reproducible.py` |
 | [`pipeline/batch/profiles/gmm.py`](../../pipeline/batch/profiles/gmm.py) | 369 | The pitcher arsenal mixture fit: one Gaussian mixture per pitcher-season, fitted in a process pool, and the writes of its results. | 3: `test_gmm_batch_pipeline.py`, `test_player_profile_computor.py`, `test_arsenal_fit_reproducible.py` |
 | [`pipeline/batch/profiles/batter.py`](../../pipeline/batch/profiles/batter.py) | 504 | The batter season profiles, with the physical swing and stance block. | — |
 | [`pipeline/batch/profiles/fielder.py`](../../pipeline/batch/profiles/fielder.py) | 621 | The fielder season profile: the aggregate of the per-play metrics and the outfield arm block. | — |
