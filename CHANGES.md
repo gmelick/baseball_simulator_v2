@@ -72,6 +72,12 @@ tests' arithmetic. It found no defect. `build` is the only caller, and it passes
 before the standardization, as the contract says. Every other test GMM uses unit standard
 deviations, where the new gap equals the old one.
 
+**The record.** The backlog row "Pick the small-mixture-component merge target in standardized
+units" (SIM-606) is deleted from `BACKLOG.xlsx`; no ticket is filed, and the next free ID stays
+SIM-640. The branch merged into master at 504734f on 2026-10-27 at 17:28 UTC, outside the
+nightly window. The app hot-reloaded on the `pitcher_similarity.py` change and answered
+`/health` with 200.
+
 **What is not done.**
 
 - No profile recompute and no manual bundle rebuild (owner ruling 2026-10-26). The jobs and app
