@@ -76,7 +76,8 @@ deviations, where the new gap equals the old one.
 
 - No profile recompute and no manual bundle rebuild (owner ruling 2026-10-26). The jobs and app
   containers mount `similarity/`, so the change reaches the pitcher similarity matrix at the
-  next nightly bundle (2026-10-28, 08:00 UTC). The app's engines take it when the app reloads.
+  next nightly bundle (2026-10-28, scheduled at 08:00 UTC). The app's engines take it when the
+  app reloads.
 - The shared all-season recompute still waits for the two league-average-row fixes: the
   catcher's row (SIM-576) and the extra-base runner's row (SIM-577). It refits every arsenal
   once, and this merge then runs on the new fits.
