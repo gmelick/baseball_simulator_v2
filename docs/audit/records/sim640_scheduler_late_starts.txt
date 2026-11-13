@@ -1,0 +1,174 @@
+== The scheduled jobs start late after a pause of the laptop: the evidence, 2026-10-18 to 2026-11-12 (SIM-640) ==
+
+Every time is UTC. The laptop's own clock read UTC-4 until 2026-11-01 06:00 UTC, and UTC-5 after.
+A pause is a standby or a hibernate of the laptop. Windows' Sleep command starts a standby here:
+powercfg /a lists Standby (S0 Low Power Idle), Hibernate and Fast Startup. Modern Standby is that
+standby: the screen goes off and the laptop idles. Fast Startup makes a Start-menu shut down save
+the system to disk, so the next start is a resume. Docker's virtual machine (VM) can stand still
+during a pause.
+
+-- the scheduler
+compose service 'scheduler', image mcuadros/ofelia:latest
+  label org.opencontainers.image.version 0.3.22, built 2026-04-11
+  digest mcuadros/ofelia@sha256:efcbe2c5cf658a25de6443c1462d653f9cc03791d642e01fc6c638a00f97e492
+  the binary's Go build info: go1.25.9; mod github.com/mcuadros/ofelia; dep github.com/robfig/cron v1.2.0
+  container created 2026-10-17T15:21:18Z, log driver 'local' (a recreate starts an empty log)
+the cron run loop, robfig/cron v1.2.0 cron.go, Cron.run (lines 170-202):
+  it arms ONE timer for the earliest job: time.NewTimer(c.entries[0].Next.Sub(now))
+  a Go timer counts the monotonic clock: the clock that counts only the time that the VM runs
+  on a fire: now = now.In(c.location) (In drops the monotonic reading), then every job whose
+  Next is not after now runs; each Next becomes Schedule.Next(now); the loop re-sorts and re-arms
+  at the start, each Next = Schedule.Next(c.now()): a job whose time passed before a start never runs
+the VM's lost running time = (now - the VM's boot) - /proc/uptime, read in the scheduler container;
+  the VM's boot = the scheduler's PID 1 StartedAt (docker inspect) - /proc/1/stat field 22 / 100
+  (CLK_TCK is 100). The figure adds up every pause since the boot: compare a reading before a
+  pause with one after it.
+the heartbeat (the proposed fix): a job that does nothing every five minutes, so the scheduler
+  wakes and starts each overdue job.
+
+-- the schedule (deploy/ofelia/config.ini, 6-field cron)
+  07:00  nightly-finals
+  08:00  nightly-rebuild
+  08:00  weekly-refresh (Sundays)
+  10:00  nightly-backup-postgres
+  10:00  nightly-backup-data
+  10:30  nightly-backup-offsite
+  10:30  nightly-closing-lines
+
+-- every job start more than 60 s after its due time (the scheduler log since 2026-10-18)
+  2026-10-19 07:17:09  nightly-finals           0 h 17 m 10 s late
+  2026-10-22 07:09:43  nightly-finals           0 h 09 m 43 s late
+  2026-10-27 09:34:04  nightly-rebuild          1 h 34 m 04 s late
+  2026-10-27 09:34:04  nightly-finals           2 h 34 m 04 s late
+  2026-11-01 07:21:09  nightly-finals           0 h 21 m 10 s late
+  2026-11-02 08:19:25  nightly-rebuild          0 h 19 m 25 s late
+  no other job started more than 60 s late; each job due after a late start started on time
+
+-- the pauses before each late start (Windows System log)
+   506 / 507: the laptop enters / leaves standby. 42: the laptop enters a sleep; each 42 here then
+   hibernates ('Hibernate from Sleep - Fixed Timeout'). 107: stamped seconds after its 42, before
+   the wake. 27 with boot type 0x2, and Power-Troubleshooter 1: the wake from a hibernate.
+  nightly-finals at 2026-10-19 07:17:09, 0 h 17 m 10 s late; the previous job start 2026-10-18 10:30:00
+    2026-10-18 23:54:17  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-18 23:57:43  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-18 23:57:43  Kernel-Power          506  enters standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-19 00:12:02  Kernel-Power          507  leaves standby Reason: Lid.
+    2026-10-19 03:35:07  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-19 03:35:10  Kernel-Power          507  leaves standby Reason: Input Keyboard.
+    2026-10-19 03:35:40  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-19 03:35:46  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst.
+    2026-10-19 03:35:52  Kernel-Power          506  enters standby Reason: AC/DC Display Burst.
+    2026-10-19 03:47:53  Kernel-Power          507  leaves standby Reason: Input Keyboard.
+  nightly-finals at 2026-10-22 07:09:43, 0 h 09 m 43 s late; the previous job start 2026-10-21 10:30:00
+    2026-10-21 13:06:12  Kernel-Power          506  enters standby Reason: SC_MONITORPOWER.
+    2026-10-21 13:07:16  Kernel-Power          507  leaves standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-10-21 13:07:16  Kernel-Power          506  enters standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-10-21 13:07:54  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst.
+    2026-10-21 13:07:59  Kernel-Power          506  enters standby Reason: AC/DC Display Burst.
+    2026-10-21 13:15:32  Kernel-Power          507  leaves standby Reason: Lid.
+    2026-10-22 05:01:46  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-22 05:02:36  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst.
+    2026-10-22 05:02:42  Kernel-Power          506  enters standby Reason: AC/DC Display Burst.
+    2026-10-22 05:02:47  Kernel-Power          507  leaves standby Reason: Input Keyboard.
+  nightly-rebuild at 2026-10-27 09:34:04, 1 h 34 m 04 s late; the previous job start 2026-10-26 10:30:00
+    2026-10-26 13:20:24  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-26 13:20:38  Kernel-Power          507  leaves standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-10-26 13:20:38  Kernel-Power          506  enters standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-10-26 13:21:29  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-26 13:21:29  Kernel-Power          506  enters standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-26 13:36:29  Kernel-Power          507  leaves standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-26 13:36:36  Kernel-Power           42  enters sleep: Sleep Reason: Hibernate from Sleep - Fixed Timeout
+    2026-10-26 13:36:42  Kernel-Power          107  resumed (stamped before the wake)
+    2026-10-26 15:55:10  Kernel-Boot            27  boot type 0x2 (the resume from a hibernate)
+    2026-10-26 15:55:10  Kernel-Power          506  enters standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-26 15:55:11  Kernel-Power          507  leaves standby Reason: Lid.
+    2026-10-26 15:55:12  Power-Troubleshooter    1  wake: sleep 2026-10-26T13:36:29, wake 2026-10-26T15:55:10
+  nightly-finals at 2026-10-27 09:34:04, 2 h 34 m 04 s late; the previous job start 2026-10-26 10:30:00
+    2026-10-26 13:20:24  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-26 13:20:38  Kernel-Power          507  leaves standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-10-26 13:20:38  Kernel-Power          506  enters standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-10-26 13:21:29  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-26 13:21:29  Kernel-Power          506  enters standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-26 13:36:29  Kernel-Power          507  leaves standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-26 13:36:36  Kernel-Power           42  enters sleep: Sleep Reason: Hibernate from Sleep - Fixed Timeout
+    2026-10-26 13:36:42  Kernel-Power          107  resumed (stamped before the wake)
+    2026-10-26 15:55:10  Kernel-Boot            27  boot type 0x2 (the resume from a hibernate)
+    2026-10-26 15:55:10  Kernel-Power          506  enters standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-26 15:55:11  Kernel-Power          507  leaves standby Reason: Lid.
+    2026-10-26 15:55:12  Power-Troubleshooter    1  wake: sleep 2026-10-26T13:36:29, wake 2026-10-26T15:55:10
+  nightly-finals at 2026-11-01 07:21:09, 0 h 21 m 10 s late; the previous job start 2026-10-31 10:30:00
+    2026-10-31 13:26:10  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-31 13:41:29  Kernel-Power          507  leaves standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-31 13:41:37  Kernel-Power           42  enters sleep: Sleep Reason: Hibernate from Sleep - Fixed Timeout
+    2026-10-31 13:41:45  Kernel-Power          107  resumed (stamped before the wake)
+    2026-10-31 13:48:01  Kernel-Boot            27  boot type 0x2 (the resume from a hibernate)
+    2026-10-31 13:48:01  Kernel-Power          506  enters standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-31 13:48:02  Kernel-Power          507  leaves standby Reason: Lid.
+    2026-10-31 13:48:03  Power-Troubleshooter    1  wake: sleep 2026-10-31T13:41:29, wake 2026-10-31T13:48:01
+  nightly-rebuild at 2026-11-02 08:19:25, 0 h 19 m 25 s late; the previous job start 2026-11-02 07:00:00
+    2026-11-02 07:29:48  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-11-02 07:29:49  Kernel-Power          507  leaves standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-11-02 07:29:49  Kernel-Power          506  enters standby Reason: Austerity Battery Drain Budget Exceeded.
+    2026-11-02 07:44:49  Kernel-Power          507  leaves standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-11-02 07:44:54  Kernel-Power           42  enters sleep: Sleep Reason: Hibernate from Sleep - Fixed Timeout
+    2026-11-02 07:45:04  Kernel-Power          107  resumed (stamped before the wake)
+    2026-11-02 07:49:33  Kernel-Boot            27  boot type 0x2 (the resume from a hibernate)
+    2026-11-02 07:49:33  Kernel-Power          506  enters standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-11-02 07:49:33  Kernel-Power          507  leaves standby Reason: Resume from Hibernate.
+    2026-11-02 07:49:37  Power-Troubleshooter    1  wake: sleep 2026-11-02T07:44:49, wake 2026-11-02T07:49:33
+
+-- a late job that never started: nightly-finals due 2026-10-29 07:00; the previous job start 2026-10-28 10:30:00
+    2026-10-28 12:37:40  Kernel-Power          506  enters standby Reason: Idle Timeout.
+    2026-10-28 12:38:23  Kernel-Power          507  leaves standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-28 12:38:23  Kernel-Power          506  enters standby Reason: AC/DC Display Burst Suppressed.
+    2026-10-28 12:53:23  Kernel-Power          507  leaves standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-28 12:53:29  Kernel-Power           42  enters sleep: Sleep Reason: Hibernate from Sleep - Fixed Timeout
+    2026-10-28 12:53:38  Kernel-Power          107  resumed (stamped before the wake)
+    2026-10-28 19:37:08  Kernel-Boot            27  boot type 0x2 (the resume from a hibernate)
+    2026-10-28 19:37:08  Kernel-Power          506  enters standby Reason: Sleep, Hibernate, or Shutdown.
+    2026-10-28 19:37:09  Kernel-Power          507  leaves standby Reason: Lid.
+    2026-10-28 19:37:19  Power-Troubleshooter    1  wake: sleep 2026-10-28T12:53:23, wake 2026-10-28T19:37:09
+  the hibernate ran about 6 h 44 m, so the timer pointed at about 13:44 or later on 10-29
+  the VM ran at 07:00: the live service logged a /health line every 30 s from 06:55 to 07:29
+  Docker Desktop stopped at 07:29:31 for two restarts of a Windows update (07:31 and 07:33)
+  the fresh scheduler start at 13:08:57 dropped the held run; the 10-30 three-day load caught its games
+  a heartbeat would have started this job at about 07:00; it would not have run the 08:00 to 10:30 jobs
+
+-- how long each pause before a late start stopped the VM (from the event times)
+  10-27 finals: 2 h 34 m 04 s late; the hibernate 2 h 18 m 42 s; the whole pause 2 h 34 m 47 s
+  11-01 finals: 0 h 21 m 09 s late; the hibernate 0 h 06 m 33 s; the whole pause 0 h 21 m 52 s
+  11-02 rebuild: 0 h 19 m 25 s late; the hibernate 0 h 04 m 45 s; the whole pause 0 h 19 m 46 s
+  each delay is longer than its hibernate and falls short of its whole pause by under a minute:
+  a hibernate stops the VM for its whole length, and these standbys stopped it too
+  10-19 (17 m 09 s late) matches the 10-18 23:54 to 10-19 00:12 standby (17 m 45 s) alone;
+  the 03:35 to 03:47 standby of the same night cost the VM nothing
+
+-- pauses of ten minutes or more that left the next job on time, with no scheduler start between
+  2026-11-01 16:25:05 to 16:45:22 (20 min, standby); next job nightly-finals at 2026-11-02 07:00:00
+  2026-11-04 03:22:47 to 04:22:32 (60 min, standby); next job nightly-finals at 2026-11-04 07:00:00
+  so a standby stops the VM for none, part or all of its length
+
+-- the nights with no job start at all (the scheduler log), and the scheduler's starts
+  2026-10-29  no job started
+  2026-11-06  no job started
+  2026-11-07  no job started
+  2026-11-08  no job started
+  2026-11-09  no job started
+  2026-11-10  no job started
+  2026-11-11  no nightly-finals start (other jobs started: 5); the rebuild ran the finals load first
+  'Starting scheduler' at 2026-10-20 13:25:29
+  'Starting scheduler' at 2026-10-26 05:14:47
+  'Starting scheduler' at 2026-10-29 13:08:57
+  'Starting scheduler' at 2026-11-11 07:09:00
+  'Starting scheduler' at 2026-11-12 23:32:08
+
+-- Docker Desktop's backend (Docker Desktop.exe.log): every stop and start since 2026-10-18
+  10-20 13:22:04 stop, 13:25:15 start: a Start-menu restart; the logon at 13:23
+  10-25 21:43:39 stop, 10-26 05:14:32 start: a Start-menu shut down; the logon at 05:11
+  10-29 07:29:31 stop, 13:08:43 start: two restarts of a Windows update (07:31, 07:33); the logon at 13:05
+  11-05 16:13:15 stop, 11-11 07:08:46 start: a Start-menu shut down (Fast Startup)
+    logons at 11-07 03:46, 11-08 17:28, 11-09 07:01 and 11-10 03:31; Docker Desktop did not start
+  11-12 23:04:28 stop, 23:31:56 start: two restarts of a Windows update (23:05, 23:06); the logon at 23:11
+  Docker Desktop's AutoStart setting reads false today (%APPDATA%/Docker/settings-store.json)
+  a job whose time passes while Docker Desktop is down never runs; the heartbeat does not cover that
+

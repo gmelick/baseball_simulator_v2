@@ -1,3 +1,81 @@
+# FILED AND CHECKED — the scheduled jobs start late after a pause of the laptop (SIM-640); the weekly integration lane, the arsenal merge's smoke and six days without Docker read — 2026-11-12
+
+**Why it matters.** Three checks show where the platform stands before the next ticket. The
+job scheduler starts the nightly jobs late after the laptop pauses, so I filed a ticket. The
+weekly integration lane is red on one known defect. The arsenal merge (SIM-606) passed its
+after-deploy smoke, a short run that catches a collapse.
+
+**The scheduler's late starts, filed.** The new row is "Start each scheduled job on time after
+the laptop stands by or hibernates" (SIM-640, P3). It sits after the backup path row (SIM-632). A pause
+is a standby or a hibernate of the laptop. The scheduler (Ofelia 0.3.22, with the cron library
+robfig/cron v1.2.0) waits on one timer. That timer counts only the time that Docker's virtual
+machine runs. So a pause delays the next job by the time that the virtual machine stands still.
+Six late job starts on five nights since 2026-10-18 each follow a pause. A hibernate on
+10-28 also held the 10-29 finals load, and a restart of the laptop then dropped it. Every job
+that started exited 0. The proposed fix is a heartbeat, a job that does nothing every five
+minutes. It wakes the scheduler, which then starts each overdue job.
+
+- The record `docs/audit/records/sim640_scheduler_late_starts.txt` holds every late start and its
+  pause. It also holds the cron library's run loop and the method that measures the lost time. The 11-01 and 11-02 cases were only in the scheduler's container log, and a
+  recreate empties that log.
+- Two independent QA rounds checked the row. The first round found two blockers in my draft.
+  The draft told the implementer to recreate the scheduler outside the deploy window; the rule
+  is inside it. Its no-code alternative was a power plan that keeps the laptop awake from 06:30
+  to 11:00 UTC. That plan would have prevented the late start of one night in five. The round also found an
+  overstated cost and evidence that no committed file held. The second round found time limits
+  that the heartbeat could miss and the missing 10-29 case. I applied every finding.
+- The next free ID is SIM-641. The table's filter range in `BACKLOG.xlsx` now equals the table's
+  range, A4:F13. The merge-target edit of 2026-10-27 had left the filter at A4:F14.
+
+**The weekly integration lane is red on one known defect.** The lane
+(`.github/workflows/integration-weekly.yml`) has failed on every Monday run since 2026-10-12:
+10-12, 10-19, 10-26, 11-02 and 11-09. The last green run was 10-05. Each run fails the same one
+test, `test_sim555_stamp_indexes_and_archives`, and passes the other 31.
+
+- The cause is the open ticket on the odds archives' columns (SIM-582). Migration 0029 added
+  `last_seen_at` to `raw.game_odds` and `raw.prop_odds`, and not to their archives.
+- The live database agrees: `raw.game_odds` has 22 columns and its archive 21; `raw.prop_odds`
+  has 16 and its archive 15. Alembic stands at 0030. The archives hold 370,986 and 4,045,103 rows.
+- A local run on host Python on 2026-11-12 gives the same result: 1 failed, 31 passed.
+- No row is lost. The retirement script (`scripts/probes/retire_consensus_odds.py`) checks that
+  the archive holds every live column. So the next retirement refuses its season.
+- The cost: while the lane is red, it cannot report a new failure.
+- The row of SIM-582 and the test's docstring say that the script copies with
+  `INSERT ... SELECT *`. The script names the live columns after its check (`archive_columns`).
+- The lane leaves out 17 tests that carry no integration marker. The end-to-end file (12) runs
+  in the CI e2e job. The stress test (5) has its own open ticket (SIM-619).
+
+**The arsenal merge's after-deploy smoke (SIM-606).** `scripts/sim_stats.py` played the same ten
+games 50 times each, with seeds 0 to 49, on bundle `20261112T081316Z`. The bundle link read the
+same before and after the run. The baseline is the smoke of 2026-10-27 on bundle
+`20261027T094856Z`, the last bundle before the merge change.
+
+- The run exited 0 in 562 s. The pitchers' outs equal the outs played (53.242 a game; 0
+  game-sims differ). The fence stage sent 9.0% of air balls over.
+- Every rate moved by less than 1.6 standard errors, the normal noise between two such runs.
+  Runs a game went from 8.876 to 8.884, and strikeouts from 17.060 to 16.992. Walks went from
+  6.628 to 6.744, doubles from 3.312 to 3.386, and home runs from 2.364 to 2.332. The home-win
+  share went from .558 to .508 (1.59 standard errors).
+- The bundle also holds two more weeks of games and new park factors. So the smoke shows only
+  that nothing collapsed; it cannot isolate the merge change.
+- Every nightly rebuild since 10-28 logged "635 fitted, 0 fell back", and the 11-12 rebuild
+  exited 0. The run files are in `results/sim606/`, which git ignores.
+
+**Six days without Docker, not filed.** A Start-menu shut down on 2026-11-05 at 16:13 UTC
+stopped Docker Desktop. Docker Desktop started again only on 11-11 at 07:08 UTC. Someone logged
+on four times in between (11-07, 11-08, 11-09, 11-10), and Docker Desktop did not start.
+
+- No job ran from 11-06 to 11-10. On 11-11 the 07:00 finals load did not run; the rebuild ran
+  it first. The Sunday weekly refresh of 11-08 did not run.
+- No backup ran in that time. The newest set before the gap is from 11-05 at 10:00 UTC. The
+  backups and the off-site copy ran again on 11-11 at 10:00 and 10:30 UTC, and each exited 0.
+- On 10-29 two restarts of a Windows update stopped Docker Desktop at 07:29 UTC. It started
+  again at 13:08, and no job ran that day.
+- Docker Desktop's AutoStart setting reads false today (`%APPDATA%/Docker/settings-store.json`).
+  I did not change it.
+- The off-season means no game was lost. The heartbeat does not cover these nights, because a
+  fresh scheduler start never runs a job whose time passed. No ticket covers this yet.
+
 # CLOSED — a small arsenal component merges into the component nearest in standardized units, not raw units — SIM-606, 2026-10-27
 
 **Why it matters.** Each pitcher's arsenal is a Gaussian mixture: one bell curve (a component)
@@ -219,7 +297,7 @@ reader checked each finding.
   database order. The tie reaches only one API value: the two-bet run line's closing line
   value, when the quote's own book has no usable margin.
 - A host pause can stop the job scheduler's timer, so the morning's jobs start late (the
-  after-deploy check below).
+  after-deploy check below). Filed on 2026-11-12 as SIM-640.
 
 **The record.** The backlog row "Make the pitcher arsenal fit reproducible: order the pitch
 rows before the mixture fit" (SIM-580) is deleted from `BACKLOG.xlsx`. Five rows are filed,
@@ -283,7 +361,7 @@ evidence.
   and 1 h 37 m on the last two nights. So only a slow rebuild reaches that limit, for example
   one with a crash retry. After the 7 h 28 m sleep of 2026-10-25, Docker started afresh at
   05:14 UTC. The jobs then ran on time. I did not test a long pause with a VM that survives it.
-  No ticket covers this yet.
+  On 2026-11-12 this became the ticket on the scheduler's late starts (SIM-640).
 
 # CLOSED — the API's runs read each manager's profile from the boot snapshot, so the steal draw's manager weight is no longer flat — SIM-575, 2026-10-25
 
