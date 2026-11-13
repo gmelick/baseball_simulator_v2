@@ -12,7 +12,7 @@ offense, outs/K/BB/ER on defense).  A run keeps every game's box score, not a
 pre-binned histogram, so this module can build full distributions.  For **each
 player and each prop** it builds a full integer-support **probability mass
 function** (PMF): value -> probability, summing to 1, not just a mean.  The
-betting layer (``betting/clv_engine.py``) prices an over/under against a book
+betting layer (``betting/bet_signal.py``) prices an over/under against a book
 line from these PMFs; a mean alone cannot answer ``P(K >= 6.5)``.
 
 THE PROPS

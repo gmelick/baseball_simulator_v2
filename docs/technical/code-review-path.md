@@ -99,7 +99,7 @@ calls yet. The deep review does that.
     prices each game market from the inning-by-inning scores.
 11. **The edge.** `get_game_edges` in [api/routes/betting.py](../../api/routes/betting.py)
     compares the model's probabilities with the bookmaker's prices through
-    [betting/clv_engine.py](../../betting/clv_engine.py).
+    [betting/bet_signal.py](../../betting/bet_signal.py).
 12. **The screen.** The game page shows the run in
     [SimulationCard.tsx](../../frontend/src/components/games/SimulationCard.tsx) and
     the prices in [BettingCard.tsx](../../frontend/src/components/games/BettingCard.tsx).
@@ -441,10 +441,8 @@ price with the model's probability, and reports the edge and the expected value.
    and the provider interface.
 2. [pipeline/bettingpros_odds_provider.py](../../pipeline/bettingpros_odds_provider.py)
    and [pipeline/bettingpros/](../../pipeline/bettingpros/): the vendor's provider.
-3. [betting/clv_engine.py](../../betting/clv_engine.py): implied probability, margin
-   removal, edge, expected value and closing line value.
-4. [betting/bet_signal.py](../../betting/bet_signal.py) and
-   [betting/line_movement.py](../../betting/line_movement.py).
+3. [betting/bet_signal.py](../../betting/bet_signal.py): implied probability, margin
+   removal, edge and expected value, then the bet signal's gate, stake and rank.
 
 **Check.**
 
@@ -453,7 +451,7 @@ price with the model's probability, and reports the edge and the expected value.
 - Does any number reach a bet signal before it is calibrated? (Owner ruling
   2026-09-08: no betting-value measurement until every graded band is green.)
 
-**Tests.** `test_clv_engine.py`, `test_clv_engine_run_line.py`, `test_bet_signal.py`,
+**Tests.** `test_bet_signal_pricing.py`, `test_bet_signal_run_line.py`, `test_bet_signal.py`,
 `test_odds_one_book_per_row.py`, `test_odds_readers.py`, `test_bettingpros_provider.py`.
 
 **Reference.** [Betting](betting.md) and [Pipeline: getting data in](pipeline-ingest.md).

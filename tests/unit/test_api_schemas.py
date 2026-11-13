@@ -10,7 +10,7 @@ which plain ``json.dumps`` cannot write. Each response model has a
   (a) build the source dataclass with numpy-bearing data, through the
       dataclass's own factory where it has one (``GameSimSummary.from_results``,
       ``win_probability(...)``, ``PlayByPlay.from_play_results``,
-      ``OverrideDelta.from_summaries``, the ``betting.clv_engine`` report
+      ``OverrideDelta.from_summaries``, the ``betting.bet_signal`` report
       builders), else a minimal instance;
   (b) convert it with ``from_dataclass`` and check ``model.model_dump_json()``;
   (c) ``json.loads`` the JSON and check that it holds plain Python types only,
@@ -28,7 +28,6 @@ import numpy as np
 import pytest
 
 from api.schemas import (
-    CLVModel,
     ConfidenceIntervalModel,
     EdgeReportModel,
     FieldSnapshotModel,
@@ -42,11 +41,10 @@ from api.schemas import (
     StateAtPitchModel,
 )
 from api.serialization import to_jsonable
-from betting.clv_engine import (
+from betting.bet_signal import (
     MarketSide,
     OddsQuote,
     TwoWayMarket,
-    clv_from_odds,
     moneyline_edge_report,
     prop_edge_report,
 )
@@ -313,29 +311,15 @@ def test_metric_delta_model_roundtrips_standalone():
 
 
 # ===========================================================================
-# clv_engine.py -- CLV, EdgeReport
+# bet_signal.py -- EdgeReport
 # ===========================================================================
 
 
-def test_clv_model_roundtrips():
-    clv = clv_from_odds(
-        entry_side_american=+150,
-        entry_other_american=-170,
-        close_side_american=+120,
-        close_other_american=-140,
-    )
-    model = CLVModel.from_dataclass(clv)
-    loaded = _roundtrip(model)
-    assert loaded["clv_prob"] == pytest.approx(clv.clv_prob)
-    assert loaded["beat_close"] == clv.beat_close
-
-
-def test_edge_report_model_roundtrips_moneyline_with_clv():
+def test_edge_report_model_roundtrips_moneyline():
     wp = win_probability(_summary())
     market = TwoWayMarket(
         side=MarketSide.HOME,
         entry=OddsQuote(side=-110, other=-110),
-        close=OddsQuote(side=-130, other=+110),
     )
     report = moneyline_edge_report(wp, market, side=MarketSide.HOME)
     model = EdgeReportModel.from_dataclass(report)
@@ -345,12 +329,11 @@ def test_edge_report_model_roundtrips_moneyline_with_clv():
     assert loaded["sim_prob"] == pytest.approx(report.sim_prob)
     assert loaded["edge"] == pytest.approx(report.edge)
     assert loaded["positive_edge"] == report.positive_edge
-    # closing quote supplied -> nested CLV present and JSON-safe.
-    assert loaded["clv"] is not None
-    assert loaded["clv"]["clv_prob"] == pytest.approx(report.clv.clv_prob)
+    # The report carries no closing line value (SIM-642).
+    assert "clv" not in loaded
 
 
-def test_edge_report_model_roundtrips_prop_without_clv():
+def test_edge_report_model_roundtrips_prop():
     dist = PropDistribution.from_samples(900, "K", [6, 8, 5, 7, 6, 8])
     market = TwoWayMarket(
         side=MarketSide.OVER,
@@ -362,4 +345,4 @@ def test_edge_report_model_roundtrips_prop_without_clv():
     assert loaded["label"] == "prop:K"
     assert loaded["side"] == "over"
     assert loaded["line"] == pytest.approx(6.5)
-    assert loaded["clv"] is None  # no closing quote supplied
+    assert "clv" not in loaded

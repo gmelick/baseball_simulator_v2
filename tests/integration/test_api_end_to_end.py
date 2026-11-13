@@ -26,7 +26,7 @@ and attaches the app.state contract the routes read:
 
   * ``pg_pool``          -- a fake asyncpg pool/connection. ``fetch`` serves
     canned ``raw.games`` rows (for GET /{date}) or canned ``raw.game_odds`` rows
-    (for /line-movement + /clv); ``fetchval`` answers the Postgres sim-run
+    (for the stored-odds read of /edges); ``fetchval`` answers the Postgres sim-run
     history INSERT ... RETURNING run_id. The replay file numbers its own runs,
     so that id never reaches the play-stream / state / card rows.
   * ``replay_duckdb``    -- a REAL in-memory DuckDB with migrations 0008 (play
@@ -54,9 +54,8 @@ THE FLOWS (each a clear test; fixtures reused)
      same stream).
   2. Override flow: POST /{pk}/simulate/with_override -> baseline + override +
      delta (and a real, non-trivial override actually moves the win pct).
-  3. Betting flow: /edges -> /signals -> /line-movement -> /clv are coherent
-     (signals are the +EV subset of edges; the CLV snapshot is the subset of the
-     line-movement series carrying a CLV).
+  3. Betting flow: /edges -> /signals are coherent (signals are the +EV subset
+     of edges).
   4. WebSocket: ``TestClient.websocket_connect("/ws/games/{pk}")`` connects, the
      ws_router's ping/pong protocol round-trips, and a graceful disconnect cleans
      up the connection_manager subscription -- a REAL connect test (the route
@@ -129,9 +128,9 @@ CANNED_GAMES_ROWS = [
 ]
 
 # raw.game_odds moneyline history for one game/book: opening (-120/+100) ->
-# closing (-150/+130). Home odds shorten (implied prob rises) so the line moved
-# TOWARD home; both rows carry both sides so the series de-vigs into an
-# entry-vs-close CLV -- the /line-movement + /clv flow's backing.
+# closing (-150/+130). The fake pool serves these rows to any raw.game_odds
+# read; the "pinnacle" label is not a bettable book, so /edges never prices
+# from them.
 CANNED_ODDS_ROWS = [
     {
         "fetched_at": "2024-08-15T10:00:00+00:00",
@@ -177,7 +176,7 @@ class _FakePool:
     """A fake asyncpg pool/connection serving canned rows.
 
     ``fetch`` returns whatever canned rows it was built with (raw.games for the
-    date listing, raw.game_odds for line-movement). ``fetchval`` answers the
+    date listing, raw.game_odds for the stored-odds read). ``fetchval`` answers the
     Postgres sim-run history ``INSERT ... RETURNING run_id``. The replay file
     numbers its own runs, so the play-stream / state / card rows never carry
     that id. No ``acquire`` is exposed, so the routes use the pool directly as
@@ -194,7 +193,7 @@ class _FakePool:
     async def fetch(self, sql, *args):
         self.fetch_calls.append((sql, args))
         # Route the canned rows by which table the SQL reads -- the date listing
-        # hits raw.games, line-movement/clv hit raw.game_odds.
+        # hits raw.games, the stored-odds read hits raw.game_odds.
         if "raw.game_odds" in sql or "game_odds" in sql:
             return list(self._odds_rows)
         return list(self._games_rows)
@@ -477,7 +476,7 @@ class TestOverrideFlow:
 
 
 # ===========================================================================
-# FLOW 3 -- the betting flow (/edges -> /signals -> /line-movement -> /clv)
+# FLOW 3 -- the betting flow (/edges -> /signals)
 # ===========================================================================
 
 
@@ -518,46 +517,6 @@ class TestBettingFlow:
             # to /edges (same sim_prob shape).
             assert "report" in s and "sim_prob" in s["report"]
         json.dumps(sig_body)
-
-    def test_line_movement_to_clv_are_coherent(self, e2e):
-        client, _pool = e2e
-
-        # /line-movement from the canned raw.game_odds history.
-        lm = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
-        assert lm.status_code == 200, lm.text
-        lm_body = lm.json()
-        assert lm_body["game_pk"] == 745001
-        assert lm_body["count"] == 2  # home + away series for one book
-        sides = {s["side"] for s in lm_body["series"]}
-        assert sides == {"home", "away"}
-        home = next(s for s in lm_body["series"] if s["side"] == "home")
-        # Opening -120 -> closing -150: home implied prob rises (steam to home).
-        assert home["direction"] == "toward"
-        assert home["has_movement"] is True
-        assert home["implied_prob_series"][1] > home["implied_prob_series"][0]
-        json.dumps(lm_body)
-
-        # /clv is the SUBSET of the line-movement series that carry a CLV -- its
-        # count must not exceed the line-movement count, and every clv series
-        # has a non-null clv (the coherence invariant).
-        clv = client.get("/api/betting/games/745001/clv?market_type=moneyline")
-        assert clv.status_code == 200, clv.text
-        clv_body = clv.json()
-        assert clv_body["count"] <= lm_body["count"]
-        assert clv_body["count"] == 2  # both sides have both prices -> both CLV
-        for s in clv_body["series"]:
-            assert s["clv"] is not None
-            assert "beat_close" in s["clv"]
-        json.dumps(clv_body)
-
-    def test_line_movement_empty_when_no_odds(self, duck_con, patch_resolver):
-        """A game with no persisted odds -> an empty (but valid) series."""
-        pool = _FakePool(games_rows=CANNED_GAMES_ROWS, odds_rows=[])
-        app = _build_e2e_app(pool=pool, duck=duck_con, cache=InMemoryCache())
-        client = TestClient(app)
-        resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["count"] == 0
 
 
 # ===========================================================================

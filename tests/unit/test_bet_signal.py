@@ -3,7 +3,7 @@
 The subject is :mod:`betting.bet_signal`. EV is the expected value of a bet.
 The Kelly stake is the bankroll share that maximizes long-run growth; the
 module stakes a fraction of it. These tests build SYNTHETIC
-:class:`~betting.clv_engine.EdgeReport` objects with the REAL constructor (no
+:class:`~betting.bet_signal.EdgeReport` objects with the REAL constructor (no
 live provider, no DB, no RNG, no simulation run) and check the contract:
 
   * a clearly +EV report (sim_prob 0.60 at +100: a positive edge, a positive
@@ -26,20 +26,16 @@ from betting.bet_signal import (
     DEFAULT_MAX_STAKE_FRACTION,
     BetSignal,
     BetSignalConfig,
-    bet_signals_from_edges,
-    kelly_fraction_full,
-    stake_fraction,
-)
-from betting.clv_engine import (
     EdgeReport,
     MarketSide,
     american_to_decimal,
+    bet_signals_from_edges,
     expected_value,
+    kelly_fraction_full,
     prob_to_american,
+    stake_fraction,
 )
-from betting.clv_engine import (
-    edge as edge_fn,
-)
+from betting.bet_signal import edge as edge_fn
 
 # ===========================================================================
 # Synthetic EdgeReport factory (real constructor, hand-set probabilities)
@@ -57,7 +53,7 @@ def _edge_report(
 ) -> EdgeReport:
     """Build a real EdgeReport with consistent edge/EV derived from the inputs.
 
-    The factory computes edge and ev the SAME way the CLV engine does
+    The factory computes edge and ev the SAME way the report builders do
     (edge = sim - fair; ev at the offered price), so the synthetic report is
     internally consistent without a live simulation.
     """
@@ -71,7 +67,6 @@ def _edge_report(
         ev=expected_value(sim_prob, offered_american),
         offered_american=offered_american,
         sim_fair_american=prob_to_american(sim_prob),
-        clv=None,
     )
 
 

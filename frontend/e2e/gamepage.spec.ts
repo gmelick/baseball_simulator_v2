@@ -209,7 +209,6 @@ async function mockFinalGame(page: Page): Promise<{ whatIfBody: () => unknown }>
     ev: 0.04,
     offered_american: offered,
     sim_fair_american: -122,
-    clv: null,
     positive_edge: true,
     price_book: null,
     price_book_name: null,

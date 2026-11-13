@@ -312,9 +312,8 @@ def create_app() -> FastAPI:
     app.state.sim_cache = make_cache()
     app.include_router(games_router)
 
-    # The betting routes (/api/betting): the edges, the signals, the line
-    # movement, the CLV and the slate card's lines. /edges and /signals use the
-    # game routes' simulation seam.
+    # The betting routes (/api/betting): the edges, the signals and the slate
+    # card's lines. /edges and /signals use the game routes' simulation seam.
     from api.routes.betting import router as betting_router
 
     app.include_router(betting_router)

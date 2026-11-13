@@ -27,7 +27,7 @@ codebase.
 | [Pipeline: the nightly builds](pipeline-batch.md) | The profile computor, the pools of real plays, the engine-artifact bundle the sampler reads, and the backups. |
 | [Pipeline: getting data in](pipeline-ingest.md) | The historical loaders, the Savant loaders, the odds providers and the live game-day service. |
 | [Database](database.md) | Every Postgres and DuckDB table, the migrations, the database roles, backup and restore. |
-| [Betting](betting.md) | The pricing math: implied probability, margin removal, edge, expected value, closing line value, the bet signal. |
+| [Betting](betting.md) | The pricing math: implied probability, margin removal, edge, expected value, the bet signal. |
 | [API](api.md) | The FastAPI app: its boot, the login, every route, the run jobs. |
 | [Frontend](frontend.md) | The React app: its pages, components, API client, login and design tokens. |
 | [Scripts](scripts.md) | The nightly jobs, the loaders, the pool rebuilds, the measurement tools and the probes. |

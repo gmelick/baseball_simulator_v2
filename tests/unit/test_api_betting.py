@@ -1,8 +1,7 @@
 """The betting routes under ``/api/betting``.
 
-The routes give the edges, the +EV bet signals, the line movement and the closing
-line value (CLV). /edges and /signals live in api/routes/betting.py; /line-movement
-and /clv live in api/routes/betting_lines.py, which the betting router includes.
+The routes give the edges and the +EV bet signals. /edges and /signals live in
+api/routes/betting.py.
 
 ISOLATION STRATEGY (as in test_api_games.py)
 --------------------------------------------
@@ -13,15 +12,13 @@ router's simulation seam (``sim_factory_ref``). The tests attach both directly:
 
   * ``pg_pool`` -- a fake asyncpg pool and connection. For /edges and /signals, the
     route hands it to a monkeypatched ``resolve_game_state``, so the simulation
-    runs with no live Postgres or DuckDB. For /line-movement and /clv, its
-    ``fetch`` serves canned ``raw.game_odds`` rows.
+    runs with no live Postgres or DuckDB.
   * ``sim_factory_ref`` -- the no-DB factory, so the BatchRunner runs a real, fast,
     in-process batch over the in-memory synthetic bundle.
 
 So /edges and /signals run the real simulation loop, the real betting math and the
 real serializers. The odds default to the deterministic MockOddsAPI, or to the
-injected query parameters. /line-movement and /clv run the real
-``fetch_line_movement`` over the canned odds rows.
+injected query parameters.
 """
 
 from __future__ import annotations
@@ -49,9 +46,9 @@ NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 class _FakePool:
     """A fake asyncpg pool/connection.
 
-    Exposes ``fetch`` (for the line-movement raw.game_odds read) returning canned
-    rows. /edges + /signals do not call fetch (resolve_game_state is monkeypatched)
-    but the pool must be present so the route's ``_get_pool`` does not 503.
+    Exposes ``fetch`` returning canned rows. /edges + /signals do not depend on
+    them (resolve_game_state is monkeypatched), but the pool must be present so
+    the route's ``_get_pool`` does not 503.
     """
 
     def __init__(self, rows=None):
@@ -76,46 +73,6 @@ def _small_game_state() -> GameState:
     state.batter_id = 101
     state.throw_hand = "R"
     return state
-
-
-# Two raw.game_odds moneyline rows for one game/book: opening (-120/+100) ->
-# closing (-150/+130). The home implied prob rises (odds shorten) so the line
-# moved TOWARD home; the away side moved away. Both rows carry both sides so the
-# series de-vigs into an entry-vs-close CLV.
-CANNED_ODDS_ROWS = [
-    {
-        "fetched_at": "2024-08-15T10:00:00+00:00",
-        "line_type": "opening",
-        "book": "pinnacle",
-        "is_sharp_book": True,
-        "market_type": "moneyline",
-        "home_ml": -120,
-        "away_ml": 100,
-        "home_spread": None,
-        "home_spread_ml": None,
-        "away_spread": None,
-        "away_spread_ml": None,
-        "total_line": None,
-        "over_ml": None,
-        "under_ml": None,
-    },
-    {
-        "fetched_at": "2024-08-15T12:00:00+00:00",
-        "line_type": "closing",
-        "book": "pinnacle",
-        "is_sharp_book": True,
-        "market_type": "moneyline",
-        "home_ml": -150,
-        "away_ml": 130,
-        "home_spread": None,
-        "home_spread_ml": None,
-        "away_spread": None,
-        "away_spread_ml": None,
-        "total_line": None,
-        "over_ml": None,
-        "under_ml": None,
-    },
-]
 
 
 # ---------------------------------------------------------------------------
@@ -308,84 +265,16 @@ def test_signals_no_pool_is_503():
 
 
 # ===========================================================================
-# GET /api/betting/games/{game_pk}/line-movement
+# The retired line-movement and CLV routes (SIM-642)
 # ===========================================================================
 
 
-def test_line_movement_returns_series_from_canned_odds():
-    app = _build_app(pool=_FakePool(rows=CANNED_ODDS_ROWS))
-    client = TestClient(app)
-
-    resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["game_pk"] == 745001
-    assert body["market_type"] == "moneyline"
-    # Two sides (home/away) for one book -> 2 series.
-    assert body["count"] == 2
-    sides = {s["side"] for s in body["series"]}
-    assert sides == {"home", "away"}
-
-    home = next(s for s in body["series"] if s["side"] == "home")
-    # Opening -120 -> closing -150: home implied prob rises (steam toward home).
-    assert home["direction"] == "toward"
-    assert home["has_movement"] is True
-    assert len(home["quotes"]) == 2
-    assert len(home["implied_prob_series"]) == 2
-    assert home["implied_prob_series"][1] > home["implied_prob_series"][0]
-    # Both endpoints carry the opposite price -> an entry-vs-close CLV is computed.
-    assert home["clv"] is not None
-    assert isinstance(home["clv"]["clv_prob"], int | float)
-    json.dumps(body)  # numpy-free
-
-
-def test_line_movement_book_filter_passes_through():
-    pool = _FakePool(rows=CANNED_ODDS_ROWS)
-    app = _build_app(pool=pool)
-    client = TestClient(app)
-    resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline&book=pinnacle")
-    assert resp.status_code == 200, resp.text
-    # The book-filtered SQL was used (3 args: game_pk, market_type, book).
-    assert pool.fetch_calls
-    assert len(pool.fetch_calls[-1][1]) == 3
-
-
-def test_line_movement_bad_market_type_is_422():
+@pytest.mark.parametrize("path", ["line-movement", "clv"])
+def test_the_retired_line_routes_are_gone(path):
     app = _build_app(pool=_FakePool(rows=[]))
     client = TestClient(app)
-    resp = client.get("/api/betting/games/745001/line-movement?market_type=parlay")
-    assert resp.status_code == 422
-
-
-def test_line_movement_no_pool_is_503():
-    app = FastAPI()
-    app.include_router(betting_router)
-    app.state.pg_pool = None
-    app.state.sim_cache = None
-    client = TestClient(app)
-    resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
-    assert resp.status_code == 503
-
-
-def test_line_movement_empty_when_no_odds():
-    app = _build_app(pool=_FakePool(rows=[]))
-    client = TestClient(app)
-    resp = client.get("/api/betting/games/745001/line-movement?market_type=total")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["count"] == 0
-    assert body["series"] == []
-
-
-# ===========================================================================
-# GET /api/betting/games/{game_pk}/clv  (the CLV snapshot)
-# ===========================================================================
-
-
-def test_clv_snapshot_returns_only_series_with_clv():
-    app = _build_app(pool=_FakePool(rows=CANNED_ODDS_ROWS))
-    client = TestClient(app)
-    client.get("/api/betting/games/745001/clv?market_type=moneyline")
+    resp = client.get(f"/api/betting/games/745001/{path}?market_type=moneyline")
+    assert resp.status_code == 404
 
 
 # ===========================================================================

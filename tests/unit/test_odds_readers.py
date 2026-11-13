@@ -81,7 +81,7 @@ from accuracy.records import (  # noqa: E402
 from accuracy.replay import _process_one_game  # noqa: E402
 from accuracy.report import aggregate_accuracy_comparison, format_accuracy_comparison  # noqa: E402
 
-from betting.clv_engine import DEFAULT_ONE_SIDED_MARGIN  # noqa: E402
+from betting.bet_signal import DEFAULT_ONE_SIDED_MARGIN  # noqa: E402
 
 # The book ids the tests use (BettingPros' ids).
 BLEND = "bp:0"
@@ -495,7 +495,7 @@ def test_a_three_way_candidate_must_list_the_tie():
 
 
 def _implied(american: float) -> float:
-    from betting.clv_engine import implied_prob_from_american
+    from betting.bet_signal import implied_prob_from_american
 
     return float(implied_prob_from_american(float(american)))
 

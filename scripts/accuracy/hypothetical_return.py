@@ -6,7 +6,7 @@ market's by at least ``--edge-threshold`` (default
 :data:`DEFAULT_RETURN_EDGE_THRESHOLD`), the table prices a 1-unit bet on the side
 the simulator favours, at the CLOSING price, and reports two numbers per market:
 
-* ``mean_model_ev`` / ``total_model_ev``: :func:`betting.clv_engine.expected_value`
+* ``mean_model_ev`` / ``total_model_ev``: :func:`betting.bet_signal.expected_value`
   on the simulator's own probability. It never reads the real outcome: it is the
   model grading its own confidence.
 * ``mean_realized_return`` / ``total_realized_return``: what the same bet paid on
@@ -42,7 +42,7 @@ WHAT THIS DOES NOT CLAIM
   return-scale quantity, with no scale check.
 * That the fade side's probability is exact on a line that can push (an integer
   total, run line or prop line). ``sim_prob`` excludes the push mass from both
-  sides (the convention of ``betting.clv_engine.total_over_under_edge_report``,
+  sides (the convention of ``betting.bet_signal.total_over_under_edge_report``,
   ``spread_cover_prob`` and ``PropDistribution.p_over``), so ``1 - sim_prob``
   includes it and overstates a fade bet's ``model_ev`` by about the push
   probability. A fix needs the push probability on :class:`AccuracyRecord`.
@@ -60,8 +60,7 @@ from typing import Any
 
 import numpy as np
 
-from betting.bet_signal import DEFAULT_MIN_EDGE
-from betting.clv_engine import american_to_decimal, expected_value
+from betting.bet_signal import DEFAULT_MIN_EDGE, american_to_decimal, expected_value
 
 from .confidence import (
     DEFAULT_ALPHA,
@@ -101,7 +100,7 @@ class ReturnRecord:
     disagreement: float
     favored_side: str  # "reference" | "fade"
     #: The expected value per unit at the favoured side's closing price, under the
-    #: simulator's own probability (``betting.clv_engine.expected_value``). It
+    #: simulator's own probability (``betting.bet_signal.expected_value``). It
     #: never reads the real outcome.
     model_ev: float
     #: The profit per unit of placing the bet, graded on the real outcome: a win

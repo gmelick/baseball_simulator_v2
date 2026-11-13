@@ -31,7 +31,7 @@ The modules, by the source of their models:
   * ``snapshots`` -- ``simulation.snapshots``: the field, the play-by-play, the override delta
   * ``game_card`` -- ``simulation.linescore`` and ``simulation.pitcher_decisions``
   * ``props``     -- the boxscore card and the prop-edge response
-  * ``markets``   -- ``betting``: CLV, the edge report, the bet signal, the line movement
+  * ``markets``   -- ``betting``: the edge report and the bet signal
   * ``live``      -- the live service's stored game state
 
 Every model derives from ``_base._ApiModel``, which forbids extra fields.
@@ -39,13 +39,7 @@ Every model derives from ``_base._ApiModel``, which forbids extra fields.
 
 from api.schemas.game_card import InningLineModel, LinescoreModel, PitcherDecisionsModel
 from api.schemas.live import LiveGameStateResponse
-from api.schemas.markets import (
-    BetSignalModel,
-    CLVModel,
-    EdgeReportModel,
-    LineMovementModel,
-    LineQuoteModel,
-)
+from api.schemas.markets import BetSignalModel, EdgeReportModel
 from api.schemas.props import (
     GENERIC_PEN_IDS,
     BoxscoreCardModel,
@@ -86,11 +80,8 @@ __all__ = [
     "GENERIC_PEN_IDS",
     "PropEdgeResponse",
     # markets
-    "CLVModel",
     "EdgeReportModel",
     "BetSignalModel",
-    "LineQuoteModel",
-    "LineMovementModel",
     # live
     "LiveGameStateResponse",
 ]

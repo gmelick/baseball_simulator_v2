@@ -28,7 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from betting.clv_engine import american_to_decimal, reference_margin_from_prices
+from betting.bet_signal import american_to_decimal, reference_margin_from_prices
 from pipeline.odds_provider import (
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
@@ -493,7 +493,7 @@ def _closing_prices(
 
 def _implied(american: float) -> float:
     """The raw (vig-included) implied probability of one American price."""
-    from betting.clv_engine import implied_prob_from_american
+    from betting.bet_signal import implied_prob_from_american
 
     return float(implied_prob_from_american(float(american)))
 
@@ -507,7 +507,7 @@ def _implied(american: float) -> float:
 # markets. Here "margin" means a two-way market's two implied probabilities added
 # up: about 1.05, never below 1. DEFAULT_ONE_SIDED_MARGIN (1.05, the last-resort
 # margin), REFERENCE_MARGIN_BAND (1.00-1.15) and run_line_is_pair live in
-# betting.clv_engine, which the live /edges and line-movement reads share.
+# betting.bet_signal, which the live /edges route shares.
 
 #: The two-way total of each segment, the first reference market.
 _SEGMENT_TOTAL_OF: dict[str, str] = {"game": "total", "f5": "f5_total", "f1": "f1_total"}

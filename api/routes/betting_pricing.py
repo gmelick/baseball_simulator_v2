@@ -29,7 +29,7 @@ only when the away spread is the negative of the home spread (home -1.5 / away
 +1.5); the two prices then de-vig against each other. Otherwise the book
 listed two separate bets, such as home -1.5 / away -1.5, and each bet prices
 from its own price over the book's two-way margin: the game's total, then its
-moneyline, then a flat 1.05 (``betting.clv_engine.devig_one_sided``; the run
+moneyline, then a flat 1.05 (``betting.bet_signal.devig_one_sided``; the run
 lines scored by shape, SIM-549). Those reference prices are the injected
 over_ml / under_ml and home_ml / away_ml, else the mock's, so an injected run
 line can rest on the mock's total. Every run-line report carries its own
@@ -76,7 +76,7 @@ from api.routes.betting_stored_odds import (
     _stored_reference_margin,
     _StoredMarket,
 )
-from betting.clv_engine import (
+from betting.bet_signal import (
     EdgeReport,
     MarketSide,
     OddsQuote,

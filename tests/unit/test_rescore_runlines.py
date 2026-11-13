@@ -24,7 +24,7 @@ from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
 
 def _implied(american: float) -> float:
-    from betting.clv_engine import implied_prob_from_american
+    from betting.bet_signal import implied_prob_from_american
 
     return implied_prob_from_american(american)
 
@@ -47,7 +47,7 @@ def _toy_report() -> dict:
     """Game 1: a pair (-0.5 / +0.5). Game 2: two separate bets (-1.5 / -1.5)
     with its first-five total in the report. Game 3: a moneyline only. Game 4:
     a full-game run line listed as two bets. Game 5: a first-inning one."""
-    from betting.clv_engine import devig_two_way
+    from betting.bet_signal import devig_two_way
 
     pair_mkt = devig_two_way(105.0, -125.0)[0]
     paired_two_bets = devig_two_way(350.0, 150.0)[0]  # a pair's de-vig: wrong for two bets

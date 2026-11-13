@@ -237,7 +237,7 @@ calibration's reliability curve
 every game market from the inning grids
 ([`simulation/game_market_distributions.py`](../../simulation/game_market_distributions.py)).
 It then compares each price with the book's stored line
-([`betting/clv_engine.py`](../../betting/clv_engine.py)).
+([`betting/bet_signal.py`](../../betting/bet_signal.py)).
 
 `GET /simulate` and `POST /what-if` use the same runner. The what-if queues two runs with
 one seed from a real plate appearance: the game as it stood, and the game with the

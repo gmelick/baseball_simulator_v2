@@ -216,7 +216,6 @@ async function mockBetting(page: Page): Promise<void> {
       ev: -0.05,
       offered_american: 120,
       sim_fair_american: 150,
-      clv: null,
       positive_edge: false,
       price_book: null,
       price_book_name: null,

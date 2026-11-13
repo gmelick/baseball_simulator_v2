@@ -5,17 +5,14 @@ The betting routes (prefix ``/api/betting``).
 
     GET /api/betting/games/{game_pk}/edges          the edge report of every side of each market
     GET /api/betting/games/{game_pk}/signals        the +EV bets, ranked by EV
-    GET /api/betting/games/{game_pk}/line-movement  the opening-to-closing series per side and book
-    GET /api/betting/games/{game_pk}/clv            the entry-versus-close CLV of each series
     GET /api/betting/games/{game_pk}/card-odds      the book's pregame lines for a slate card
 
 This module holds the aggregate ``router`` (a login on every route), /edges,
 /signals and the simulation they price from (:func:`_summary_and_winprob`).
-The routers it includes add the rest: ``betting_lines`` (line movement and
-CLV) and ``betting_card`` (the card's lines). The prices and the edge math
-live in ``betting_pricing``, the stored lines in ``betting_stored_odds``. Each
-sub-router is a bare ``APIRouter()``: the aggregate's prefix, tag and login
-apply to its routes.
+The router it includes adds the rest: ``betting_card`` (the card's lines).
+The prices and the edge math live in ``betting_pricing``, the stored lines in
+``betting_stored_odds``. The sub-router is a bare ``APIRouter()``: the
+aggregate's prefix, tag and login apply to its routes.
 
 THE SIMULATION BEHIND THE EDGES
 -------------------------------
@@ -46,7 +43,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
-from api.routes import betting_card, betting_lines
+from api.routes import betting_card
 from api.routes._common import _get_pool
 from api.routes.betting_pricing import (
     _books_by_market,
@@ -75,9 +72,8 @@ from simulation.win_probability import IDENTITY_CALIBRATION, WinProbability, win
 log = logging.getLogger("api.routes.betting")
 
 #: The aggregate router: every route under /api/betting requires a login
-#: (cookie or API key). The two sub-routers join it here.
+#: (cookie or API key). The card's sub-router joins it here.
 router = APIRouter(prefix="/api/betting", tags=["betting"], dependencies=[Depends(require_auth)])
-router.include_router(betting_lines.router)
 router.include_router(betting_card.router)
 
 

@@ -118,8 +118,6 @@ means the route answers 503 when the lifespan has no read-only pool.
 |---|---|---|---|
 | GET | `/api/betting/games/{game_pk}/edges` | The edge report of every side of each requested game market; `result` once the game is final | Login |
 | GET | `/api/betting/games/{game_pk}/signals` | The +EV bets (positive expected value), ranked by EV and sized by fractional Kelly | Login |
-| GET | `/api/betting/games/{game_pk}/line-movement` | The opening-to-closing series per side and book | Login |
-| GET | `/api/betting/games/{game_pk}/clv` | The series that carry a closing-line value | Login |
 | GET | `/api/betting/games/{game_pk}/card-odds` | The graded book's stored moneyline, run line and total for a slate card | Login |
 | GET | `/api/odds/{game_pk}` | Mock odds for one game (`MockOddsAPI`) | Login |
 | GET | `/api/odds/today/all` | Mock odds for every game on today's league schedule | Login |
@@ -433,7 +431,7 @@ wire. `__init__.py` re-exports every public model: `from api.schemas import X`.
 | [`snapshots.py`](../../api/schemas/snapshots.py) (267) | `PlayerRefModel`, `FieldSnapshotModel`, `PlayByPlayEntryModel`, `PlayByPlayModel`, `StateAtPitchModel`, `MetricDeltaModel`, `OverrideDeltaModel` | `simulation.snapshots` |
 | [`game_card.py`](../../api/schemas/game_card.py) (181) | `InningLineModel`, `LinescoreModel`, `PitcherDecisionsModel` (`from_jsonable` rebuilds a stored card) | `simulation.linescore`, `simulation.pitcher_decisions` |
 | [`props.py`](../../api/schemas/props.py) (180) | `BoxscoreCardRowModel`, `BoxscoreCardModel` (`from_prop_set`; a side's placeholder relievers fold into one row, `GENERIC_PEN_IDS`), `PropEdgeResponse` | `simulation.prop_distributions` |
-| [`markets.py`](../../api/schemas/markets.py) (313) | `CLVModel`, `EdgeReportModel` (with `price_book` and `result`), `BetSignalModel`, `LineQuoteModel`, `LineMovementModel` | `betting.clv_engine`, `betting.bet_signal`, `betting.line_movement` |
+| [`markets.py`](../../api/schemas/markets.py) (135) | `EdgeReportModel` (with `price_book` and `result`), `BetSignalModel` | `betting.bet_signal` |
 | [`live.py`](../../api/schemas/live.py) (57) | `LiveGameStateResponse` | The live service's `game_state` JSON |
 
 **Watch out:** A model's docstring and fields are the OpenAPI schema. A change to either, or
@@ -543,10 +541,10 @@ runs (`SimRunRequest`, `SimRunModel`, `WhatIfRequest`, `WhatIfStarted`, `WhatIfR
 
 ### `api/routes/betting.py`
 
-[Source](../../api/routes/betting.py) · 610 lines · Tests: [test_api_betting.py](../../tests/unit/test_api_betting.py), [test_segment_edges.py](../../tests/unit/test_segment_edges.py), [test_game_page_grading.py](../../tests/unit/test_game_page_grading.py), [test_live_run_lines.py](../../tests/unit/test_live_run_lines.py)
+[Source](../../api/routes/betting.py) · 606 lines · Tests: [test_api_betting.py](../../tests/unit/test_api_betting.py), [test_segment_edges.py](../../tests/unit/test_segment_edges.py), [test_game_page_grading.py](../../tests/unit/test_game_page_grading.py), [test_live_run_lines.py](../../tests/unit/test_live_run_lines.py)
 
 The aggregate `/api/betting` router, `/edges`, `/signals`, the simulation they price from and
-the grading on the real final. It includes `betting_lines` and `betting_card`.
+the grading on the real final. It includes `betting_card`.
 
 | Function / class | What it does | Called from |
 |---|---|---|
@@ -580,7 +578,7 @@ fire on them (an owner ruling on the segment markets, SIM-546).
 
 ### `api/routes/betting_stored_odds.py`
 
-[Source](../../api/routes/betting_stored_odds.py) · 467 lines · Tests: [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py), [test_segment_edges.py](../../tests/unit/test_segment_edges.py)
+[Source](../../api/routes/betting_stored_odds.py) · 466 lines · Tests: [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py), [test_segment_edges.py](../../tests/unit/test_segment_edges.py)
 
 The stored price source: each sportsbook's latest usable one-book row (`bp:<id>`) in
 `raw.game_odds` (one book per odds row, SIM-555).
@@ -591,15 +589,6 @@ The stored price source: each sportsbook's latest usable one-book row (`bp:<id>`
 | `_latest_pregame_rows` / `_drop_withdrawn` | The same rules in Python: a closing row beats a current row of the same book; a current row not seen within 20 minutes (`CURRENT_ROW_MAX_AGE_S`) of the game's newest sighting is withdrawn. | `_read_stored_rows` |
 | `_stored_market(stored, market)` | The graded book's row (the first book on `GRADED_BOOK_PREFERENCE`) gives the fair probability; each side's offered price is the best stored price at that line. | `betting_pricing` |
 | `_stored_reference_margin` | One book's two-way margin for a run line listed as two separate bets; a segment run line reads its own segment's total first. | `betting_pricing` |
-
-### `api/routes/betting_lines.py`
-
-[Source](../../api/routes/betting_lines.py) · 172 lines · Tests: [test_api_betting.py](../../tests/unit/test_api_betting.py), [test_line_movement.py](../../tests/unit/test_line_movement.py)
-
-| Function / class | What it does | Called from |
-|---|---|---|
-| `get_game_line_movement` | `GET /line-movement`: `betting.line_movement.fetch_line_movement` over the stored history, one series per side and book. `market_type` is `moneyline`, `runline` or `total` (else 422). 503 with no pool; there is no mock. | Clients |
-| `get_game_clv` | `GET /clv`: the series that carry a closing-line value (CLV: the opening price against the closing price). A run-line side whose spread moved has none. | Clients |
 
 ### `api/routes/betting_card.py`
 

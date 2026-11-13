@@ -102,7 +102,7 @@ from accuracy.pricing import (  # noqa: E402
 from accuracy.records import RUN_LINE_MARKET_TYPES, AccuracyRecord  # noqa: E402
 from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
-from betting.clv_engine import run_line_is_pair  # noqa: E402
+from betting.bet_signal import run_line_is_pair  # noqa: E402
 
 
 class RescoreRefused(ValueError):

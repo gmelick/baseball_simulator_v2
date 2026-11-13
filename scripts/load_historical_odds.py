@@ -4,13 +4,12 @@ scripts/load_historical_odds.py
 ===============================
 The historical odds loader. It backfills the OPENING and CLOSING betting lines
 of completed games into ``raw.game_odds`` / ``raw.prop_odds``, so the
-closing-line-value (CLV) measurements have an entry line and a closing line to
-score against.
+accuracy comparison has an entry line and a closing line to score against.
 
 WHY
 ---
-The CLV engine needs, per completed game, an entry (opening) line and a closing
-line. The live pipeline captures these lines going forward (the live closing
+The accuracy comparison needs, per completed game, an entry (opening) line and a
+closing line. The live pipeline captures these lines going forward (the live closing
 marker), but it holds no history. This script walks the Final games already in
 ``raw.games`` and pulls their opening + closing lines from the configured odds
 provider (BettingPros by default — set ``ODDS_PROVIDER=bettingpros`` +

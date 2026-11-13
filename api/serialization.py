@@ -5,7 +5,7 @@ The array-safe JSON helper of the API's response models.
 
 The simulation and betting dataclasses (:mod:`simulation.results`,
 :mod:`simulation.win_probability`, :mod:`simulation.snapshots`,
-:mod:`simulation.prop_distributions`, :mod:`betting.clv_engine`) hold numpy
+:mod:`simulation.prop_distributions`, :mod:`betting.bet_signal`) hold numpy
 arrays and numpy scalars (``NDArray[np.int64]`` score arrays, a prop PMF's
 ``support`` and ``probabilities``). ``json.dumps`` cannot write those, and
 ``default=str`` turns an array into an unparseable ``"[1 2 3]"``.

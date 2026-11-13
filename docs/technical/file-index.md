@@ -1,4 +1,4 @@
-<!-- file-index-key: ec87f876de5c8a3d -->
+<!-- file-index-key: 7f13643bf1ede2fd -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -19,14 +19,14 @@ Every source and config file in the repository, in the order of the [code review
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
 | [7. Getting data in: the raw tables](#stage-7) | 57 | 13,053 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
-| [9. Odds and betting](#stage-9) | 16 | 6,281 |
-| [10. The API](#stage-10) | 42 | 14,155 |
+| [9. Odds and betting](#stage-9) | 14 | 5,284 |
+| [10. The API](#stage-10) | 41 | 13,790 |
 | [11. Game day: the live service](#stage-11) | 18 | 6,023 |
-| [12. The frontend](#stage-12) | 82 | 27,244 |
+| [12. The frontend](#stage-12) | 82 | 26,364 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
-| [14. Measurement and maintenance tools](#stage-14) | 78 | 39,502 |
-| [15. Tests and CI](#stage-15) | 315 | 126,745 |
-| **All** | **793** | **290,527** |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 39,497 |
+| [15. Tests and CI](#stage-15) | 314 | 125,630 |
+| **All** | **789** | **287,165** |
 
 <a id="stage-1"></a>
 
@@ -286,12 +286,12 @@ The worker pool and the code that turns 100 games into win odds, prop distributi
 | [`simulation/lineup_resolver.py`](../../simulation/lineup_resolver.py) | 1,021 | simulation.lineup_resolver — the lineup and substitution resolver. | 9: `test_lineup_resolver.py`, `test_api_games.py`, `test_api_betting.py` +6 |
 | [`simulation/production_factory.py`](../../simulation/production_factory.py) | 633 | The production machine factory for the batch runner. | 18: `test_ibb_rates.py`, `test_fence_stage.py`, `test_pool_cutoff.py` +15 |
 | [`simulation/batch_runner.py`](../../simulation/batch_runner.py) | 1,261 | The parallel Monte-Carlo batch runner. | 31: `test_batch_runner.py`, `test_batch_runner_stress.py`, `test_batch_runner_hit_rate.py` +28 |
-| [`simulation/results.py`](../../simulation/results.py) | 374 | The aggregate of N simulated games of one matchup. | 19: `test_clv_engine.py`, `test_api_schemas.py`, `test_cache_codec.py` +16 |
+| [`simulation/results.py`](../../simulation/results.py) | 374 | The aggregate of N simulated games of one matchup. | 19: `test_api_schemas.py`, `test_cache_codec.py`, `test_inning_grid.py` +16 |
 | [`simulation/linescore.py`](../../simulation/linescore.py) | 258 | The per-inning linescore and each team's runs / hits / errors (R/H/E). | 5: `test_linescore.py`, `test_inning_grid.py`, `test_api_game_card.py` +2 |
 | [`simulation/pitcher_decisions.py`](../../simulation/pitcher_decisions.py) | 333 | simulation.pitcher_decisions — the winning, losing and save pitchers of one game. | 4: `test_pitcher_decisions.py`, `test_play_pitcher_decisions.py`, `test_api_game_card.py` +1 |
 | [`simulation/prop_distributions.py`](../../simulation/prop_distributions.py) | 530 | The **prop-distribution aggregator**: one probability distribution per player and prop over the N games of a Monte-Carlo run. | 19: `test_prop_distributions.py`, `test_sim_jobs.py`, `test_api_games.py` +16 |
 | [`simulation/game_market_distributions.py`](../../simulation/game_market_distributions.py) | 395 | The simulator prices EVERY game market the book posts, not only the full-game moneyline, run line and total (the owner's ruling of 2026-09-12, SIM-421). | 5: `test_inning_grid.py`, `test_odds_readers.py`, `test_segment_edges.py` +2 |
-| [`simulation/win_probability.py`](../../simulation/win_probability.py) | 394 | The **calibrated game win probability**. | 10: `test_win_probability.py`, `test_clv_engine.py`, `test_api_betting.py` +7 |
+| [`simulation/win_probability.py`](../../simulation/win_probability.py) | 394 | The **calibrated game win probability**. | 10: `test_win_probability.py`, `test_api_betting.py`, `test_api_schemas.py` +7 |
 | [`simulation/whatif.py`](../../simulation/whatif.py) | 179 | Managerial changes on a start state (the game page's "what if"). | 1: `test_game_page_whatif.py` |
 | [`simulation/play_recorder.py`](../../simulation/play_recorder.py) | 260 | Capture the ordered PlayResult stream of ONE game. | 10: `test_play_recorder.py`, `test_cache_codec.py`, `test_inning_grid.py` +7 |
 | [`simulation/snapshots.py`](../../simulation/snapshots.py) | 524 | The data shapes of the field graphic, the play-by-play and the override. | 8: `test_play_snapshots.py`, `test_sim_store.py`, `test_api_schemas.py` +5 |
@@ -321,10 +321,8 @@ Where the bookmakers' prices come from, and how the model's numbers become edges
 | [`pipeline/bettingpros/transport.py`](../../pipeline/bettingpros/transport.py) | 168 | The HTTP reads of the BettingPros and MLB APIs, with the retry policy. | — |
 | [`pipeline/odds_row_guard.py`](../../pipeline/odds_row_guard.py) | 460 | The load guard: refuse an odds row that cannot be one bet (one row per book, SIM-555). | 6: `test_odds_matcher.py`, `test_odds_writers.py`, `test_odds_census_sql.py` +3 |
 | [`pipeline/etl/opening_line_job.py`](../../pipeline/etl/opening_line_job.py) | 652 | Nightly Opening Line Ingestion Job MLB Baseball Simulation Platform | 3: `test_etl_flow.py`, `test_odds_writers.py`, `test_odds_vocabulary.py` |
-| [`betting/clv_engine.py`](../../betting/clv_engine.py) | 881 | The edge engine: the simulator's probabilities against the market's prices. | 14: `test_clv_engine.py`, `test_clv_engine_run_line.py`, `test_bet_signal.py` +11 |
-| [`betting/bet_signal.py`](../../betting/bet_signal.py) | 268 | Bet signals: the gate, the stake and the rank over a list of edge reports. | 1: `test_bet_signal.py` |
-| [`betting/line_movement.py`](../../betting/line_movement.py) | 803 | The line-movement series: one side's price at one book, from the opening to the close. | 3: `test_line_movement.py`, `test_live_run_lines.py`, `test_odds_live_pages.py` |
-| [`betting/__init__.py`](../../betting/__init__.py) | 68 | The betting layer: it compares the simulator's probabilities with the market's prices. | 1: `test_odds_live_pages.py` |
+| [`betting/bet_signal.py`](../../betting/bet_signal.py) | 1,016 | The betting layer: the market's prices against the simulator, and the bets. | 13: `test_bet_signal.py`, `test_bet_signal_pricing.py`, `test_bet_signal_run_line.py` +10 |
+| [`betting/__init__.py`](../../betting/__init__.py) | 7 | The betting layer: it compares the simulator's probabilities with the market's prices. | — |
 
 <a id="stage-10"></a>
 
@@ -334,7 +332,7 @@ The FastAPI app: its boot, the login, the routes the frontend calls and the run 
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`api/main.py`](../../api/main.py) | 487 | The FastAPI app of the MLB Baseball Simulation Platform: the app factory and its lifespan. | 6: `test_api_main_wiring.py`, `test_sim_kwargs.py`, `test_api_auth_session.py` +3 |
+| [`api/main.py`](../../api/main.py) | 486 | The FastAPI app of the MLB Baseball Simulation Platform: the app factory and its lifespan. | 6: `test_api_main_wiring.py`, `test_sim_kwargs.py`, `test_api_auth_session.py` +3 |
 | [`api/startup.py`](../../api/startup.py) | 457 | The startup and shutdown steps of the app's lifespan (`api/main.py`) that no test patches. | — |
 | [`api/env_check.py`](../../api/env_check.py) | 68 | The environment check the app runs first at startup. | 1: `test_route_auth_coverage.py` |
 | [`api/middleware.py`](../../api/middleware.py) | 49 | The app's own response middleware. | — |
@@ -351,18 +349,17 @@ The FastAPI app: its boot, the login, the routes the frontend calls and the run 
 | [`api/routes/games_feed.py`](../../api/routes/games_feed.py) | 397 | The real game: the league's per-game feed and the live service's stored state. | 2: `test_api_games.py`, `test_game_feed.py` |
 | [`api/routes/games_runs.py`](../../api/routes/games_runs.py) | 172 | The reads of a game's simulation runs (the durable `sim.sim_runs` rows). | — |
 | [`api/routes/games_models.py`](../../api/routes/games_models.py) | 592 | The request and response models of the game routes (`/api/games`). | 4: `test_api_games.py`, `test_game_feed.py`, `test_inning_grid.py` +1 |
-| [`api/routes/betting.py`](../../api/routes/betting.py) | 610 | The betting routes (prefix `/api/betting`). | 8: `test_api_betting.py`, `test_segment_edges.py`, `test_api_end_to_end.py` +5 |
+| [`api/routes/betting.py`](../../api/routes/betting.py) | 606 | The betting routes (prefix `/api/betting`). | 8: `test_api_betting.py`, `test_segment_edges.py`, `test_api_end_to_end.py` +5 |
 | [`api/routes/betting_pricing.py`](../../api/routes/betting_pricing.py) | 891 | The edge math of /edges and /signals: the prices of each market and the edge report of each side. | 2: `test_segment_edges.py`, `test_odds_live_pages.py` |
-| [`api/routes/betting_stored_odds.py`](../../api/routes/betting_stored_odds.py) | 467 | The stored price source of the betting routes: every book's stored line for a game. | 3: `test_segment_edges.py`, `test_odds_last_seen.py`, `test_odds_live_pages.py` |
-| [`api/routes/betting_lines.py`](../../api/routes/betting_lines.py) | 172 | The line-movement and CLV reads of a game's stored odds. | — |
+| [`api/routes/betting_stored_odds.py`](../../api/routes/betting_stored_odds.py) | 466 | The stored price source of the betting routes: every book's stored line for a game. | 3: `test_segment_edges.py`, `test_odds_last_seen.py`, `test_odds_live_pages.py` |
 | [`api/routes/betting_card.py`](../../api/routes/betting_card.py) | 177 | The book's pregame lines for a slate card. | 1: `test_slate_card_odds.py` |
 | [`api/routes/auth.py`](../../api/routes/auth.py) | 181 | The browser session's login, status and logout. | 1: `test_route_auth_coverage.py` |
 | [`api/routes/metrics.py`](../../api/routes/metrics.py) | 633 | The Prometheus metrics endpoint. | 3: `test_metrics_endpoint.py`, `test_backup_age_gauge.py`, `test_route_auth_coverage.py` |
-| [`api/schemas/__init__.py`](../../api/schemas/__init__.py) | 96 | The API's response models: the wire contract of the simulation and betting outputs. | 6: `test_sim_jobs.py`, `test_api_schemas.py`, `test_inning_grid.py` +3 |
+| [`api/schemas/__init__.py`](../../api/schemas/__init__.py) | 87 | The API's response models: the wire contract of the simulation and betting outputs. | 5: `test_sim_jobs.py`, `test_api_schemas.py`, `test_inning_grid.py` +2 |
 | [`api/schemas/_base.py`](../../api/schemas/_base.py) | 20 | The base of every response model. | — |
 | [`api/schemas/game_card.py`](../../api/schemas/game_card.py) | 181 | The game card of a stored game: the linescore (`simulation.linescore`) and the pitcher decisions (`simulation.pitcher_decisions`). | — |
 | [`api/schemas/live.py`](../../api/schemas/live.py) | 57 | The live service's stored game state (`GET /api/games/{game_pk}/live`). | — |
-| [`api/schemas/markets.py`](../../api/schemas/markets.py) | 313 | The models of `betting`: CLV (closing-line value), the edge report, the bet signal and the line movement. | — |
+| [`api/schemas/markets.py`](../../api/schemas/markets.py) | 135 | The models of `betting`: the edge report and the bet signal. | — |
 | [`api/schemas/props.py`](../../api/schemas/props.py) | 180 | The per-player prop models: the boxscore card (each player's prop means over a run) and the prop-edge response (one player's prop distribution and edge). | — |
 | [`api/schemas/snapshots.py`](../../api/schemas/snapshots.py) | 267 | The models of `simulation.snapshots`: a player reference, the field at a pitch, the play-by-play and the baseline-versus-override delta. | — |
 | [`api/schemas/summary.py`](../../api/schemas/summary.py) | 171 | The models of `simulation.results`: the confidence interval and the game summary. | — |
@@ -421,10 +418,10 @@ The React app: the day slate, the game page, the Data Lab and the similarity exp
 | [`frontend/src/api/assistant.ts`](../../frontend/src/api/assistant.ts) | 96 | assistant.ts — the streaming client (server-sent events) for the AI assistant (api/routes/ai_assistant.py). | — |
 | [`frontend/src/api/auth.ts`](../../frontend/src/api/auth.ts) | 50 | auth.ts — the browser's auth API client. | — |
 | [`frontend/src/api/betting.ts`](../../frontend/src/api/betting.ts) | 139 | betting.ts — the client of the betting routes (/api/betting): the edges, the signals and the slate card's lines. | — |
-| [`frontend/src/api/games.ts`](../../frontend/src/api/games.ts) | 693 | games.ts — the browser's client of the game routes (/api/games). | — |
+| [`frontend/src/api/games.ts`](../../frontend/src/api/games.ts) | 692 | games.ts — the browser's client of the game routes (/api/games). | — |
 | [`frontend/src/api/lab.ts`](../../frontend/src/api/lab.ts) | 171 | lab.ts — the browser's client for the Data Lab: the summary analytics, the data freshness, the schema tree, the read-only SQL runner and the AI-assistant capability probe. | — |
 | [`frontend/src/api/players.ts`](../../frontend/src/api/players.ts) | 25 | players.ts — the name typeahead and the player identity client (api/routes/players.py). | — |
-| [`frontend/src/api/schema.d.ts`](../../frontend/src/api/schema.d.ts) | 5,379 | The TypeScript types of every API route and response (generated from openapi.json by `npm run gen:api`). | — |
+| [`frontend/src/api/schema.d.ts`](../../frontend/src/api/schema.d.ts) | 5,086 | The TypeScript types of every API route and response (generated from openapi.json by `npm run gen:api`). | — |
 | [`frontend/src/api/similarity.ts`](../../frontend/src/api/similarity.ts) | 153 | similarity.ts — the client for the Similarity Explorer (api/routes/similarity_explorer.py). | — |
 | [`frontend/src/api/unauthorized.ts`](../../frontend/src/api/unauthorized.ts) | 22 | unauthorized.ts — the one signal that a data request came back 401 (no valid credential). | — |
 | [`frontend/src/pages/DaySummaryPage.tsx`](../../frontend/src/pages/DaySummaryPage.tsx) *+ css* | 196 | DaySummaryPage.tsx — the Daily Diamond day slate. | — |
@@ -480,14 +477,14 @@ The React app: the day slate, the game page, the Data Lab and the similarity exp
 | [`frontend/src/styles/tokens.css`](../../frontend/src/styles/tokens.css) | 208 | tokens.css — the design system's tokens. | — |
 | [`frontend/src/teams.ts`](../../frontend/src/teams.ts) | 59 | teams.ts — the 30 MLB clubs by MLB team id. | — |
 | [`frontend/src/vite-env.d.ts`](../../frontend/src/vite-env.d.ts) | 6 | / &lt;reference types="vite/client" /&gt; | — |
-| [`frontend/e2e/gamepage.spec.ts`](../../frontend/e2e/gamepage.spec.ts) | 313 | gamepage.spec.ts — the game page's real game, what-if panel and collapsible panels. | — |
+| [`frontend/e2e/gamepage.spec.ts`](../../frontend/e2e/gamepage.spec.ts) | 312 | gamepage.spec.ts — the game page's real game, what-if panel and collapsible panels. | — |
 | [`frontend/e2e/simulation.spec.ts`](../../frontend/e2e/simulation.spec.ts) | 152 | simulation.spec.ts — one simulation run per game. | — |
 | [`frontend/e2e/slate.spec.ts`](../../frontend/e2e/slate.spec.ts) | 339 | slate.spec.ts — the Daily Diamond slate. | — |
-| [`frontend/e2e/smoke.spec.ts`](../../frontend/e2e/smoke.spec.ts) | 327 | smoke.spec.ts — the frontend's cross-browser smoke tests. | — |
+| [`frontend/e2e/smoke.spec.ts`](../../frontend/e2e/smoke.spec.ts) | 326 | smoke.spec.ts — the frontend's cross-browser smoke tests. | — |
 | [`frontend/.eslintrc.cjs`](../../frontend/.eslintrc.cjs) | 26 | The ESLint rules for the frontend source. | — |
 | [`frontend/Dockerfile`](../../frontend/Dockerfile) | 40 | Frontend image — SIM-401 | — |
 | [`frontend/Dockerfile.dockerignore`](../../frontend/Dockerfile.dockerignore) | 23 | The files the frontend image build leaves out. | — |
-| [`frontend/openapi.json`](../../frontend/openapi.json) | 10,394 | The API contract snapshot (generated by scripts/export_openapi.py; the frontend's types come from it). | — |
+| [`frontend/openapi.json`](../../frontend/openapi.json) | 9,810 | The API contract snapshot (generated by scripts/export_openapi.py; the frontend's types come from it). | — |
 | [`frontend/package.json`](../../frontend/package.json) | 40 | The frontend's npm manifest: its dependencies and its scripts (dev, build, lint, e2e, gen:api). | — |
 | [`frontend/playwright.config.ts`](../../frontend/playwright.config.ts) | 38 | Playwright config — SIM-400 | — |
 | [`frontend/scripts/fetch-logos.mjs`](../../frontend/scripts/fetch-logos.mjs) | 23 | fetch-logos.mjs — SIM-519 Part T. | — |
@@ -559,7 +556,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/accuracy/__init__.py`](../../scripts/accuracy/__init__.py) | 21 | The stages of the sim-vs-closing-line accuracy comparison. | 4: `test_sim_kwargs.py`, `test_odds_readers.py`, `test_accuracy_comparison.py` +1 |
 | [`scripts/accuracy/confidence.py`](../../scripts/accuracy/confidence.py) | 249 | How far a row of a report can be trusted: the cluster bootstrap interval and the stated minimum sample size. | 3: `test_accuracy_comparison.py`, `test_accuracy_minimum_sample.py`, `test_accuracy_hypothetical_return.py` |
 | [`scripts/accuracy/grading.py`](../../scripts/accuracy/grading.py) | 779 | What really happened, and one accuracy record per priced market. | 5: `test_odds_readers.py`, `test_segment_markets.py`, `test_rescore_runlines.py` +2 |
-| [`scripts/accuracy/hypothetical_return.py`](../../scripts/accuracy/hypothetical_return.py) | 370 | The hypothetical dollar return: an opt-in companion table (`--report-hypothetical-return`) that shows a probability disagreement in money. | 1: `test_accuracy_hypothetical_return.py` |
+| [`scripts/accuracy/hypothetical_return.py`](../../scripts/accuracy/hypothetical_return.py) | 369 | The hypothetical dollar return: an opt-in companion table (`--report-hypothetical-return`) that shows a probability disagreement in money. | 1: `test_accuracy_hypothetical_return.py` |
 | [`scripts/accuracy/pricing.py`](../../scripts/accuracy/pricing.py) | 573 | The closing prices: the graded book's row of each market, the best price a bettor could take, and the margin that prices a one-sided bet. | 4: `test_odds_readers.py`, `test_segment_markets.py`, `test_accuracy_comparison.py` +1 |
 | [`scripts/accuracy/records.py`](../../scripts/accuracy/records.py) | 262 | The accuracy record, and the market vocabulary every stage shares. | 8: `test_odds_readers.py`, `test_segment_markets.py`, `test_rescore_runlines.py` +5 |
 | [`scripts/accuracy/replay.py`](../../scripts/accuracy/replay.py) | 787 | Each game's replay and scoring, in one process or across a pool of worker processes. | 4: `test_sim_kwargs.py`, `test_odds_readers.py`, `test_accuracy_comparison.py` +1 |
@@ -590,7 +587,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) | 35 | DuckDB migration 0031, applied inside the rebuild's own transaction (step 2). | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/steal_pool_rebuild/pickoffs.py`](../../scripts/steal_pool_rebuild/pickoffs.py) | 142 | Step 1: the snapshot, and the pickoff rows counted from the play records (never from the builder's SQL). | — |
 | [`scripts/steal_pool_rebuild/preflight.py`](../../scripts/steal_pool_rebuild/preflight.py) | 225 | Step 0, the pre-flight: every reason the write path must not start. | 1: `test_steal_pool_rebuild.py` |
-| [`scripts/load_historical_odds.py`](../../scripts/load_historical_odds.py) | 1,268 | The historical odds loader. | 2: `test_odds_closing_rows.py`, `test_odds_game_markets.py` |
+| [`scripts/load_historical_odds.py`](../../scripts/load_historical_odds.py) | 1,267 | The historical odds loader. | 2: `test_odds_closing_rows.py`, `test_odds_game_markets.py` |
 | [`scripts/load_official_boxscores.py`](../../scripts/load_official_boxscores.py) | 344 | The official box-score backfill: fetch the MLB Stats API box score for every completed game and store one row per player who appeared in `raw.game_player_stats`. | 2: `test_boxscore_ingest.py`, `test_game_bullpen_listing.py` |
 | [`scripts/reload_games.py`](../../scripts/reload_games.py) | 374 | reload_games.py — corrective reload for SPECIFIC games, or for every gap it can find. | — |
 | [`scripts/resumable_sweep.py`](../../scripts/resumable_sweep.py) | 287 | resumable_sweep.py — drive the corrective reload sweep to completion despite a stochastic interpreter crash. | 1: `test_sweep_streaming.py` |
@@ -599,7 +596,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/accuracy_split_arm.sh`](../../scripts/accuracy_split_arm.sh) | 24 | The pitch / pitch-result split as one paired accuracy arm (the accuracy fit, SIM-548). | — |
 | [`scripts/boxscore_audit.py`](../../scripts/boxscore_audit.py) | 475 | The validation study for the official box-score ground truth: how far each per-player total the platform derives from `raw.pitches` sits from the official box score. | 1: `test_boxscore_reader.py` |
 | [`scripts/check_file_integrity.py`](../../scripts/check_file_integrity.py) | 176 | The file-integrity guard: it catches a `.py` file that a file bridge truncated or filled with NUL bytes. | 1: `test_check_file_integrity.py` |
-| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 840 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
+| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 837 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
 | [`scripts/export_openapi.py`](../../scripts/export_openapi.py) | 45 | Export the FastAPI OpenAPI schema to `frontend/openapi.json`. | — |
 | [`scripts/genexpr_crash_probe.py`](../../scripts/genexpr_crash_probe.py) | 434 | The SIM-445 crash class — a probe that re-runs the workload that segfaulted, with and without the database. | — |
 | [`scripts/measure_filter_cells.py`](../../scripts/measure_filter_cells.py) | 1,378 | Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy measurement, SIM-451). | 2: `test_filter_cells.py`, `test_pitch_cell_index.py` |
@@ -663,7 +660,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_actor_powers.py`](../../tests/unit/test_actor_powers.py) | 445 | SIM-523 part F — the FIT's knobs (plan: docs/audit/2026-09-08-sim523-play-picker- redesign-plan.md, part F). | — |
 | [`tests/unit/test_api_auth.py`](../../tests/unit/test_api_auth.py) | 113 | The CORS allowlist and the latency middleware of `api/auth.py`. | — |
 | [`tests/unit/test_api_auth_session.py`](../../tests/unit/test_api_auth_session.py) | 378 | The browser session login (`api/auth.py` and `api/routes/auth.py`). | — |
-| [`tests/unit/test_api_betting.py`](../../tests/unit/test_api_betting.py) | 442 | The betting routes under `/api/betting`. | — |
+| [`tests/unit/test_api_betting.py`](../../tests/unit/test_api_betting.py) | 331 | The betting routes under `/api/betting`. | — |
 | [`tests/unit/test_api_data_health.py`](../../tests/unit/test_api_data_health.py) | 122 | The data-freshness route (`api/routes/data_health.py`). | — |
 | [`tests/unit/test_api_error_envelope.py`](../../tests/unit/test_api_error_envelope.py) | 72 | The app's exception handler and its structured error envelope (`api/errors.py`). | — |
 | [`tests/unit/test_api_game_card.py`](../../tests/unit/test_api_game_card.py) | 473 | The loop-output routes of api/routes/games.py: the game card, the fielders, the box. | — |
@@ -672,7 +669,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_api_main_wiring.py`](../../tests/unit/test_api_main_wiring.py) | 580 | The app wiring of api/main.py: the routers, the lifespan, CORS and the rate limit. | — |
 | [`tests/unit/test_api_plays_pagination.py`](../../tests/unit/test_api_plays_pagination.py) | 132 | The pagination of GET /api/games/{game_pk}/plays (`api/routes/games.py`). | — |
 | [`tests/unit/test_api_realism_wiring.py`](../../tests/unit/test_api_realism_wiring.py) | 109 | The wiring that carries the realism inputs into the `simulate_game` GameSpec. | — |
-| [`tests/unit/test_api_schemas.py`](../../tests/unit/test_api_schemas.py) | 365 | The API's response models (:mod:`api.schemas`) and :mod:`api.serialization`. | — |
+| [`tests/unit/test_api_schemas.py`](../../tests/unit/test_api_schemas.py) | 348 | The API's response models (:mod:`api.schemas`) and :mod:`api.serialization`. | — |
 | [`tests/unit/test_api_state.py`](../../tests/unit/test_api_state.py) | 313 | The boot-time builders in api/state.py that the lifespan attaches to `app.state`. | — |
 | [`tests/unit/test_arm_angle_decision.py`](../../tests/unit/test_arm_angle_decision.py) | 333 | The guard for the pitcher arm-angle and spin-shape decision. | — |
 | [`tests/unit/test_arsenal_cache_vectorized.py`](../../tests/unit/test_arsenal_cache_vectorized.py) | 370 | The matrix row lookup of the arsenal distance cache. | — |
@@ -697,7 +694,9 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_batted_ball_engine.py`](../../tests/unit/test_batted_ball_engine.py) | 286 | The batted-ball similarity engine (a FAISS nearest-neighbour index). | — |
 | [`tests/unit/test_batter_physical_features.py`](../../tests/unit/test_batter_physical_features.py) | 450 | The batter model's physical group (the swing and stance features), and the fielder and catcher arm measurements that the same profile build fills. | — |
 | [`tests/unit/test_batter_similarity.py`](../../tests/unit/test_batter_similarity.py) | 485 | The batter-to-batter similarity engine. | 1: `test_batter_physical_features.py` |
-| [`tests/unit/test_bet_signal.py`](../../tests/unit/test_bet_signal.py) | 370 | The bet-signal module: which edges become +EV bets, and how much to stake. | — |
+| [`tests/unit/test_bet_signal.py`](../../tests/unit/test_bet_signal.py) | 365 | The bet-signal module: which edges become +EV bets, and how much to stake. | — |
+| [`tests/unit/test_bet_signal_pricing.py`](../../tests/unit/test_bet_signal_pricing.py) | 401 | The pricing half of :mod:`betting.bet_signal`: the implied probabilities and the edges. | — |
+| [`tests/unit/test_bet_signal_run_line.py`](../../tests/unit/test_bet_signal_run_line.py) | 243 | The run line (spread) EdgeReport of :mod:`betting.bet_signal`. | — |
 | [`tests/unit/test_bettingpros_provider.py`](../../tests/unit/test_bettingpros_provider.py) | 557 | Unit tests for the SIM-405 BettingPros odds provider. | — |
 | [`tests/unit/test_book_sharpness.py`](../../tests/unit/test_book_sharpness.py) | 338 | `scripts/probes/book_sharpness.py`: the odds-against-outcome read that ranks the books (plan test 17), on a synthetic season. | — |
 | [`tests/unit/test_boxscore_extended.py`](../../tests/unit/test_boxscore_extended.py) | 533 | The extended per-player box score: the batting fields `b2` (doubles), `b3` (triples), `r` (runs scored) and `sb` (stolen bases), the pitching fields `h_allowed` and `r_allowed`, and the exact total-bases formula of `p... | — |
@@ -715,8 +714,6 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_catcher_engine_throwing.py`](../../tests/unit/test_catcher_engine_throwing.py) | 302 | Tests of the catcher engine's throwing and deterrence sub-scores. | — |
 | [`tests/unit/test_catcher_similarity_scores.py`](../../tests/unit/test_catcher_similarity_scores.py) | 145 | The catcher similarity engine's scores: range, symmetry, self-exclusion, the four defensive sub-scores and the empirical-Bayes prior. | — |
 | [`tests/unit/test_check_file_integrity.py`](../../tests/unit/test_check_file_integrity.py) | 150 | Unit tests for `scripts/check_file_integrity.py`, the file-integrity guard. | — |
-| [`tests/unit/test_clv_engine.py`](../../tests/unit/test_clv_engine.py) | 482 | The closing-line-value and edge engine, :mod:`betting.clv_engine`. | — |
-| [`tests/unit/test_clv_engine_run_line.py`](../../tests/unit/test_clv_engine_run_line.py) | 259 | The run line (spread) EdgeReport of :mod:`betting.clv_engine`. | — |
 | [`tests/unit/test_db_dsn.py`](../../tests/unit/test_db_dsn.py) | 61 | SIM-443b — the connection-string reader has no default password. | — |
 | [`tests/unit/test_db_introspect.py`](../../tests/unit/test_db_introspect.py) | 93 | The existence probe (`db/introspect.py`), on a real in-memory DuckDB. | — |
 | [`tests/unit/test_delete_seasons_coverage.py`](../../tests/unit/test_delete_seasons_coverage.py) | 94 | The profile computor's `_delete_seasons` lists every season-keyed `derived.*` table, so a full rebuild leaves no stale rows behind. | — |
@@ -774,7 +771,6 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_invalid_state_detection.py`](../../tests/unit/test_invalid_state_detection.py) | 450 | The **invalid-state detection harness** for the simulation loop. | — |
 | [`tests/unit/test_lead_distance.py`](../../tests/unit/test_lead_distance.py) | 1,525 | Tests of lead distance in the stolen-base and baserunning models. | — |
 | [`tests/unit/test_league_average_profiles.py`](../../tests/unit/test_league_average_profiles.py) | 384 | Regression test for Data Engineer ticket SIM-162 — LeagueAverageProfiles. | — |
-| [`tests/unit/test_line_movement.py`](../../tests/unit/test_line_movement.py) | 364 | The line-movement time series and its CLV (closing line value). | — |
 | [`tests/unit/test_linescore.py`](../../tests/unit/test_linescore.py) | 261 | Tests of the per-inning linescore and the team R/H/E in simulation.linescore. | — |
 | [`tests/unit/test_lineup_resolver.py`](../../tests/unit/test_lineup_resolver.py) | 621 | The runtime lineup / substitution resolver (`simulation/lineup_resolver.py`): it reads the lineup store to BUILD a `GameState`. | — |
 | [`tests/unit/test_live_bridge.py`](../../tests/unit/test_live_bridge.py) | 258 | SIM-519 Part C — the live service: the Redis bridge, the heartbeat, the poll window, the Preview-to-Live hook and the vendor reads off the loop. | — |
@@ -784,7 +780,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_live_pipeline_bugs.py`](../../tests/unit/test_live_pipeline_bugs.py) | 575 | Permanent regression suite for the three P0 bugs fixed in this sprint. | — |
 | [`tests/unit/test_live_pipeline_setup.py`](../../tests/unit/test_live_pipeline_setup.py) | 66 | What the live ingestion pipeline sets up at construction: the set of completed games a poll skips (hydrated from `raw.games` at boot), and a simulation callback that must be an async function. | — |
 | [`tests/unit/test_live_resimulate_cooldown.py`](../../tests/unit/test_live_resimulate_cooldown.py) | 37 | The live service's manual resimulate endpoint is rate limited: a Redis cooldown key per game, and an HTTP 429 envelope with `retry_after_seconds` while the key lives. | — |
-| [`tests/unit/test_live_run_lines.py`](../../tests/unit/test_live_run_lines.py) | 471 | The live betting pages price a run line by its shape. | — |
+| [`tests/unit/test_live_run_lines.py`](../../tests/unit/test_live_run_lines.py) | 175 | The live betting pages price a run line by its shape. | — |
 | [`tests/unit/test_manager_decisions.py`](../../tests/unit/test_manager_decisions.py) | 251 | The manager decisions of the simulation loop's pre-pitch hook (`simulation/loop/manager.py`): the leverage index and the intentional walk. | — |
 | [`tests/unit/test_manager_defensive_subs.py`](../../tests/unit/test_manager_defensive_subs.py) | 168 | `defensive_sub` is a per-pitch column on `raw.pitches`, but how MANY pitch rows carry the flag is a property of the ETL parser, not of the manager: | — |
 | [`tests/unit/test_manager_draw.py`](../../tests/unit/test_manager_draw.py) | 656 | The manager decisions at the START of a plate appearance: the pitching change as a DRAW from an opportunity pool (the play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md). | — |
@@ -806,7 +802,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_odds_game_markets.py`](../../tests/unit/test_odds_game_markets.py) | 566 | Every game market the book posts (the prop-market work, SIM-421, owner ruling 2026-09-12). | — |
 | [`tests/unit/test_odds_hash_dedup.py`](../../tests/unit/test_odds_hash_dedup.py) | 224 | The live pipeline stores a game-odds quote once: `raw.game_odds` carries an `odds_hash` (SHA-256 of the quote) and a partial unique index on (game_pk, source, odds_hash), and `_persist_odds` inserts with ON CONFLICT …... | — |
 | [`tests/unit/test_odds_last_seen.py`](../../tests/unit/test_odds_last_seen.py) | 122 | SIM-519 Part G — odds currency: the last-seen stamp. | — |
-| [`tests/unit/test_odds_live_pages.py`](../../tests/unit/test_odds_live_pages.py) | 927 | The live betting pages read one book per odds row and name the book. | — |
+| [`tests/unit/test_odds_live_pages.py`](../../tests/unit/test_odds_live_pages.py) | 743 | The live betting pages read one book per odds row and name the book. | — |
 | [`tests/unit/test_odds_loader_retry.py`](../../tests/unit/test_odds_loader_retry.py) | 642 | SIM-555 (2026-10-01) — the loader's retry option and its incomplete games. | — |
 | [`tests/unit/test_odds_matcher.py`](../../tests/unit/test_odds_matcher.py) | 1,246 | SIM-555 (2026-10-01) — the matcher reads the PLAYED schedule entry of a game. | — |
 | [`tests/unit/test_odds_one_book_per_row.py`](../../tests/unit/test_odds_one_book_per_row.py) | 1,944 | SIM-555 (2026-09-28) — every book's prices stored, one book per row, and a load guard. | — |
@@ -939,7 +935,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_worker_prewarm.py`](../../tests/unit/test_worker_prewarm.py) | 293 | The worker contracts the cold-worker `/simulate` speed rests on. | — |
 | [`tests/integration/__init__.py`](../../tests/integration/__init__.py) | 7 | Package marker. | — |
 | [`tests/integration/conftest.py`](../../tests/integration/conftest.py) | 274 | Provides session-scoped testcontainers fixtures for PostgreSQL 15 and Redis 7. | 2: `test_etl_flow.py`, `test_schema_migrations.py` |
-| [`tests/integration/test_api_end_to_end.py`](../../tests/integration/test_api_end_to_end.py) | 670 | The API + WebSocket + historical-replay END-TO-END test suite. | — |
+| [`tests/integration/test_api_end_to_end.py`](../../tests/integration/test_api_end_to_end.py) | 629 | The API + WebSocket + historical-replay END-TO-END test suite. | — |
 | [`tests/integration/test_batch_runner_stress.py`](../../tests/integration/test_batch_runner_stress.py) | 460 | The stress / concurrency / leak suite for the persistent BatchRunner and the /simulate request path. | — |
 | [`tests/integration/test_etl_flow.py`](../../tests/integration/test_etl_flow.py) | 443 | Verifies the end-to-end write path for the ETL freshness tracking system against the *canonical* schema created by Alembic migration 0003: | — |
 | [`tests/integration/test_live_game_upsert.py`](../../tests/integration/test_live_game_upsert.py) | 232 | Drives the real `LiveIngestionPipeline._upsert_game_record()` (pipeline/live/live_ingestion_pipeline.py) against the migrated schema. | — |

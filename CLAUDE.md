@@ -15,8 +15,8 @@
   similarity engines** across player and situation dimensions. A stochastic pitch-by-pitch
   simulator plays 100 independent games per request. Every decision in a game is a draw from a
   pool of real plays, weighted by similarity. The outputs feed win probabilities, a probability
-  distribution (PMF) for each player statistic, box scores, and the betting surface (edges,
-  expected value, closing line value).
+  distribution (PMF) for each player statistic, box scores, and the betting surface (the
+  edges and the expected value).
 - **Primary use case:** predict player props (pitcher strikeouts, batter hits / home runs /
   total bases, and the rest of the fifteen markets) and find +EV betting edges. The model is
   judged by the accuracy comparison (`scripts/accuracy_comparison.py`): its probabilities and
@@ -324,7 +324,8 @@ and the three paths (a simulation request, game day, the nightly builds).
   `batch/` (the profile computor in `profiles/`, the bundle builder in `artifacts/`, the
   versioned link), `backup/`, the odds providers (`odds_provider.py`, `bettingpros/`) and the
   schedule and feed parsers.
-- `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
+- `betting/` — `bet_signal.py`: the market's implied and no-vig probabilities, the edge and
+  the EV, and the bet signal's gate, stake and rank.
 - `api/` — `main.py` and `startup.py` (the boot), `auth.py`, `state.py`, `sim_jobs.py`,
   `bundle_watch.py`, `routes/` (`games*.py`, `betting*.py`, the Data Lab routes), `schemas/`.
 - `db/` — `schemas/`, `migrations/` (Alembic `versions/` and DuckDB `duckdb/`), `sim_store.py`
@@ -352,7 +353,7 @@ area page in `docs/technical/` maps its modules' functions and callers.
 5. **Backend Developer** — the simulation loop, the sampler, the runner, FastAPI, Redis.
 6. **Performance Engineer** — throughput SLA (2 s/game, 30 s/100-game batch), the worker pool, memory.
 7. **UX Designer** — the frontend and its design system.
-8. **Betting / Markets Analyst** — CLV framework, odds, edges, props, the accuracy comparison.
+8. **Betting / Markets Analyst** — odds, pricing, edges, props, the accuracy comparison.
 9. **QA / DevOps** — tests, CI/CD, Docker, deployment, monitoring; the independent cross-validation pass.
 
 **Invoke a role by name** (e.g. "Baseball Analyst: review the steal draw's filters"). The PM

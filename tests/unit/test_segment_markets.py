@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from tests.script_loader import scripts_on_path
 
-from betting.clv_engine import DEFAULT_ONE_SIDED_MARGIN, run_line_is_pair
+from betting.bet_signal import DEFAULT_ONE_SIDED_MARGIN, run_line_is_pair
 from pipeline.odds_provider import GAME_MARKET_TYPES, LEGACY_GAME_MARKET_TYPES
 from simulation.game_market_distributions import (
     AWAY_FIRST,
@@ -232,7 +232,7 @@ class TestSegmentMarketScorer:
         r = recs[0]
         assert r.sim_prob == 0.25  # F1 home led in one of four
         # The market's fair home probability from the three-way de-vig.
-        from betting.clv_engine import devig_multiway, implied_prob_from_american
+        from betting.bet_signal import devig_multiway, implied_prob_from_american
 
         fair = devig_multiway(
             [
@@ -314,7 +314,7 @@ _G744796_GRID = {"home": [1, 0, 3, 0, 0, 0, 0, 0, 0], "away": [0, 1, 3, 0, 0, 0,
 
 
 def _implied(american: float) -> float:
-    from betting.clv_engine import implied_prob_from_american
+    from betting.bet_signal import implied_prob_from_american
 
     return implied_prob_from_american(american)
 
@@ -377,7 +377,7 @@ class TestRunLineTwoBets:
         assert away.sim_prob == pytest.approx(0.4)
 
     def test_run_line_pair_is_unchanged(self, runs):
-        from betting.clv_engine import devig_two_way
+        from betting.bet_signal import devig_two_way
 
         odds = _closing(
             "f5_runline",

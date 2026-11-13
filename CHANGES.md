@@ -1,3 +1,64 @@
+# CLOSED — the betting layer is one module, and the closing-line-value and line-movement code is gone — SIM-642, 2026-11-13
+
+**Why it matters.** The model is not judged by closing line value (CLV: how a bet's price
+compares with the market's last price before first pitch; owner ruling 2026-09-28). The owner
+ruled on 2026-11-13 that the CLV and line-movement code is no longer used. What the betting
+layer does is price the market and compare it with the simulator: the implied probability, the
+no-vig probability, the edge, the expected value (EV), then the bet signal. That work now lives
+in one module.
+
+**What changed.**
+
+- `betting/clv_engine.py` is merged into `betting/bet_signal.py`. The pricing half (the
+  conversions, the de-vig, the edge and EV, the report builders, the run-line rules) comes first;
+  the signal half (the gate, the Kelly stake, the rank) follows. Every pricing and signal function
+  keeps its body.
+- The CLV code is gone: the `CLV` class, `clv_from_prob`, `clv_from_odds`, the closing quote
+  `TwoWayMarket.close` and the report field `EdgeReport.clv`. No production caller passed a
+  closing quote, so every served `clv` was null. No served edge, EV or signal changes.
+- `betting/line_movement.py` is deleted. So is `api/routes/betting_lines.py`, which served
+  `GET /api/betting/games/{pk}/line-movement` and `.../clv`. The frontend never called either
+  route. Both now answer 404. The stored odds history in `raw.game_odds` stays.
+- The API models `CLVModel`, `LineQuoteModel` and `LineMovementModel` are gone, and
+  `EdgeReportModel` has no `clv` field. `frontend/openapi.json` and `src/api/schema.d.ts` are
+  regenerated; the hand-written `EdgeReport` type in `frontend/src/api/games.ts` drops `clv`.
+- `betting/__init__.py` holds only its docstring. It re-exported 20 names; the two importers
+  (`api/routes/games.py`, one test) now import from `betting.bet_signal`.
+
+**The tests.** `test_line_movement.py` is deleted. `test_clv_engine.py` and
+`test_clv_engine_run_line.py` are renamed `test_bet_signal_pricing.py` and
+`test_bet_signal_run_line.py`, without their CLV tests. Two tests that priced a total and a run
+line WITH a closing quote now price without one. The line-movement parts of
+`test_live_run_lines.py`, `test_odds_live_pages.py`, `test_api_betting.py`, `test_api_schemas.py`
+and the end-to-end file are cut. A new test checks that both retired routes answer 404.
+
+**The docs.** `docs/technical/betting.md` is rewritten from the code. `api.md`, `tests.md`,
+`database.md`, `code-review-path.md`, the file index, `agent_team.md` and CLAUDE.md §5 follow.
+
+**The independent QA pass.** One reviewer compared the merged module with both old files,
+function by function. Every function common to both is unchanged; three lose only their
+`clv=None` argument. It found no production caller that passed a closing quote and no live
+import left. It found no blocker. I applied its wording findings: CLAUDE.md §1 and §6,
+`agent_team.md`, `docs/technical/README.md`, three comments in the accuracy scripts, two
+docstrings that named "the CLV engine", and the Data Lab assistant's prompt. The prompt cited a
+CLV backtest; it now says no betting edge is demonstrated yet. The odds-ingest docstrings that
+describe the opening and closing columns stay: those columns feed the accuracy comparison.
+
+**The deploy trap.** `betting/` is baked into the app image, and `api/` hot-reloads. The
+mounted `api/` now imports `betting.bet_signal` names that the old image lacks. So rebuild the
+image (`docker compose build app`), then `docker compose up -d app`, inside the deploy window.
+
+**The gates.** The unit lane passes in pieces: one half, then the other half as two quarters.
+Two whole-lane runs died in the SIM-445 crash class (a segfault at collection, and a corrupted
+`isinstance` inside the stdlib `ast` module); each rerun passed. ruff, mypy over the five
+packages and the frontend's `tsc --noEmit` pass. The edited end-to-end file
+(`tests/integration/test_api_end_to_end.py`) passes its 10 tests on host Python.
+
+**The record.** I filed this ticket and closed it in this change, so `BACKLOG.xlsx` gains no
+row. Two rows change. The per-book line-movement direction (SIM-607) is moot with the module
+gone, so its row is deleted. The test-assertion row (SIM-602) keeps only its plays test: the CLV
+snapshot test it named is deleted. Row 2 now reads `NEXT FREE TICKET ID: SIM-643`.
+
 # CLOSED — the two CI jobs that failed on every push pass again: a placeholder the secrets check accepts, and the browser tests on Ubuntu 24.04 — SIM-641, 2026-11-13
 
 **Why it matters.** The CI lane (`.github/workflows/ci.yml`, twelve jobs on every push) had not

@@ -17,8 +17,8 @@ ingestion, closing-line or persistence code:
 Provider contract (what a real provider MUST honour)
 ----------------------------------------------------
 Both methods must return the same dict shapes ``MockOddsAPI`` returns, because
-``raw.game_odds`` / ``raw.prop_odds`` inserts and the CLV engine
-depend on them:
+``raw.game_odds`` / ``raw.prop_odds`` inserts and the edge pricing
+(``betting.bet_signal``) depend on them:
 
 ``get_odds(game_pk, *, line_type, market_type, book, is_sharp_book) -> dict``
     Keys: ``game_pk, source, is_mock, book, line_type, market_type,

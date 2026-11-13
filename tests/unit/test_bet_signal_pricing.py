@@ -1,8 +1,7 @@
 """
-The closing-line-value and edge engine, :mod:`betting.clv_engine`.
+The pricing half of :mod:`betting.bet_signal`: the implied probabilities and the edges.
 
-The closing line value (CLV) is how far a bet's price beat the market's final
-price. The edge is the simulator's probability minus the market's no-vig
+The edge is the simulator's probability minus the market's no-vig
 probability. The EV (expected value) is the profit per unit staked at the
 offered price. To de-vig is to remove the book's margin from a market's prices.
 
@@ -18,8 +17,6 @@ database, no random draw. They check:
     de-vig scales N outcomes to a sum of 1.0;
   * the signs: a simulator probability ABOVE the no-vig probability gives a
     positive edge; the EV sign reads the offered price, vig included;
-  * the CLV is positive when the entry price beats the close, negative when it
-    does not, and zero when entry and close are equal;
   * the report builders read the prop PMFs, the win probability and the raw
     total-score arrays.
 """
@@ -29,14 +26,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from betting.clv_engine import (
+from betting.bet_signal import (
     MarketSide,
     OddsQuote,
     TwoWayMarket,
     american_to_decimal,
     american_to_implied_prob,
-    clv_from_odds,
-    clv_from_prob,
     decimal_to_american,
     devig_multiway,
     devig_two_way,
@@ -205,66 +200,6 @@ def test_edge_and_ev_agree_in_sign_vs_fair():
 
 
 # ===========================================================================
-# CLV
-# ===========================================================================
-
-
-def test_clv_positive_when_entry_beats_close():
-    # Bet a side whose fair prob RISES from entry (0.50) to close (0.55):
-    # you locked a longer price than the close -> positive CLV.
-    clv = clv_from_prob(0.50, 0.55)
-    assert clv.clv_prob == pytest.approx(0.05, abs=1e-12)
-    assert clv.beat_close is True
-    # Odds-space view: entry fair decimal (1/0.50=2.0) > close (1/0.55=1.818) -> +.
-    assert clv.clv_decimal > 0.0
-
-
-def test_clv_negative_when_line_moves_against():
-    clv = clv_from_prob(0.55, 0.50)  # fair prob FELL from entry to close
-    assert clv.clv_prob == pytest.approx(-0.05, abs=1e-12)
-    assert clv.beat_close is False
-    assert clv.clv_decimal < 0.0
-
-
-def test_clv_zero_when_no_movement():
-    clv = clv_from_prob(0.52, 0.52)
-    assert clv.clv_prob == pytest.approx(0.0, abs=1e-12)
-    assert clv.beat_close is False
-
-
-def test_clv_from_two_way_odds_beats_close():
-    # Entry: our side +120 (dog), other -140.  Close: our side -120 (now fav),
-    # other +100.  Our side's fair prob rose -> we beat the close.
-    clv = clv_from_odds(
-        entry_side_american=+120,
-        entry_other_american=-140,
-        close_side_american=-120,
-        close_other_american=+100,
-    )
-    assert clv.clv_prob > 0.0
-    assert clv.beat_close is True
-
-
-def test_clv_from_two_way_odds_worse_than_close():
-    # Reverse: entry our side -120, close our side +120 -> line moved against us.
-    clv = clv_from_odds(
-        entry_side_american=-120,
-        entry_other_american=+100,
-        close_side_american=+120,
-        close_other_american=-140,
-    )
-    assert clv.clv_prob < 0.0
-    assert clv.beat_close is False
-
-
-def test_clv_from_prob_rejects_degenerate():
-    with pytest.raises(ValueError):
-        clv_from_prob(0.0, 0.5)
-    with pytest.raises(ValueError):
-        clv_from_prob(0.5, 1.0)
-
-
-# ===========================================================================
 # Report builders (they read the prop PMFs, the win probability, the totals)
 # ===========================================================================
 
@@ -367,20 +302,6 @@ def test_moneyline_away_side_uses_away_prob():
     assert rep.edge == pytest.approx(0.40 - fair, abs=1e-12)
 
 
-def test_moneyline_with_clv():
-    wp = _win_prob(0.55)
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=+110, other=-130),  # entry: home dog +110
-        close=OddsQuote(side=-120, other=+100),  # close: home now favourite
-    )
-    rep = moneyline_edge_report(wp, market, side=MarketSide.HOME)
-    assert rep.clv is not None
-    # Home's fair prob rose entry->close -> beat the close.
-    assert rep.clv.beat_close is True
-    assert rep.clv.clv_prob > 0.0
-
-
 def test_prop_edge_report_consumes_pmf_over():
     # Strikeouts PMF centred so P(K >= 6) is high.  Support 4..8.
     dist = _prop_dist("K", [4, 5, 6, 7, 8], [0.05, 0.15, 0.30, 0.30, 0.20])
@@ -467,16 +388,14 @@ def test_total_edge_report_integer_line_excludes_push():
     assert over.sim_prob + under.sim_prob + 3.0 / 7.0 == pytest.approx(1.0, abs=1e-12)
 
 
-def test_total_with_clv_end_to_end():
+def test_total_end_to_end():
     summary = _summary_from_totals([9] * 6 + [7] * 4)  # P(over 8.5) = 0.60
     market = TwoWayMarket(
         side=MarketSide.OVER,
         entry=OddsQuote(side=+105, other=-125, line=8.5),  # entry over +105
-        close=OddsQuote(side=-115, other=-105, line=8.5),  # close over -115
     )
     rep = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
     assert rep.sim_prob == pytest.approx(0.60, abs=1e-12)
-    # Over's fair prob rose entry->close -> beat the close.
-    assert rep.clv is not None
-    assert rep.clv.beat_close is True
-    assert rep.clv.clv_prob > 0.0
+    fair, _ = devig_two_way(+105, -125)
+    assert rep.edge == pytest.approx(0.60 - fair, abs=1e-12)
+    assert rep.ev == pytest.approx(expected_value(0.60, +105), abs=1e-12)

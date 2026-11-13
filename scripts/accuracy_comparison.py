@@ -64,7 +64,7 @@ HOW IT REUSES THE PLATFORM'S SEAMS
   factory ref (the path of ``api/routes/betting.py`` and
   ``scripts/validate_props.py``). The results build a ``GameSimSummary``, a
   ``WinProbability`` and a ``PropDistributionSet``.
-* The de-vig and the edge math: ``betting.clv_engine`` (``moneyline_edge_report``,
+* The de-vig and the edge math: ``betting.bet_signal`` (``moneyline_edge_report``,
   ``total_over_under_edge_report``, ``prop_edge_report``,
   ``run_line_bet_cover_prob``, ``devig_two_way``, ``devig_one_sided``), fed the
   CLOSING quote.
@@ -450,7 +450,7 @@ async def run(args: argparse.Namespace) -> int:
     os.makedirs(out_dir, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)
-    log.info("Wrote CLV backtest report -> %s", args.output)
+    log.info("Wrote the accuracy comparison report -> %s", args.output)
 
     # A run that priced nothing is a failure, not a result. The report is written
     # (the operator has the file to diagnose from), but the exit code says the run
@@ -517,7 +517,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--workers 1 is the SERIAL in-process fallback."
         ),
     )
-    p.add_argument("--output", default=DEFAULT_OUTPUT, help="CLV backtest JSON report path.")
+    p.add_argument(
+        "--output", default=DEFAULT_OUTPUT, help="The accuracy comparison JSON report path."
+    )
     p.add_argument("--dsn", default=DEFAULT_DSN, help="Postgres DSN (completed games + odds).")
     p.add_argument("--duckdb", default=DEFAULT_DUCKDB_PATH, help="Sim DuckDB path.")
     p.add_argument(

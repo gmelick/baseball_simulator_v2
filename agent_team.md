@@ -39,7 +39,7 @@ parts fit together.
 | 5 | Backend Developer | The simulation loop, the runner, the API | [Simulation](docs/technical/simulation.md), [API](docs/technical/api.md) |
 | 6 | Performance Engineer | Throughput: the worker pool, the sampler's hot paths, memory | [Architecture](docs/technical/architecture.md) |
 | 7 | UX Designer | The frontend and its design system | [Frontend](docs/technical/frontend.md) |
-| 8 | Betting / Markets Analyst | Odds, pricing, edges, closing line value, the accuracy comparison | [Betting](docs/technical/betting.md) |
+| 8 | Betting / Markets Analyst | Odds, pricing, edges, the accuracy comparison | [Betting](docs/technical/betting.md) |
 | 9 | QA / DevOps | Tests, CI, Docker, deployment, scheduled jobs, monitoring | [Tests and CI](docs/technical/tests.md), [WORKFLOW.md](WORKFLOW.md) |
 
 ---
@@ -232,8 +232,7 @@ adds the simulations, projections and odds on top.
 **Owns.**
 
 - `betting/`: implied probability, removing the bookmaker's margin, edge, expected
-  value, closing line value (how a bet's price compares with the market's last price
-  before the game), the bet signal and its stake, the line-movement series.
+  value, and the bet signal and its stake.
 - `api/routes/betting*.py`: the edges and signals routes.
 - The market vocabulary: the fifteen player-prop markets and the fifteen game markets
   in `pipeline/odds_provider.py`.

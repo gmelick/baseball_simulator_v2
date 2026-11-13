@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from tests.script_loader import load_script
 
-from betting.clv_engine import devig_multiway, devig_two_way, implied_prob_from_american
+from betting.bet_signal import devig_multiway, devig_two_way, implied_prob_from_american
 from pipeline.odds_provider import (
     GRADED_BOOK_PREFERENCE,
 )

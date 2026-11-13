@@ -211,26 +211,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/betting/games/{game_pk}/clv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Entry-vs-close CLV snapshot per side/book
-         * @description A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes and both ends priceable). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. A run-line series has a CLV only when its spread was the same at both ends (SIM-549). clv_basis says whether it was priced as a pair or as two separate bets. SIM-555: the one-book rows only (book = bp:<id>). numpy-free. 503 if no DB pool, 422 on a bad market_type.
-         */
-        get: operations["get_game_clv_api_betting_games__game_pk__clv_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/betting/games/{game_pk}/edges": {
         parameters: {
             query?: never;
@@ -243,26 +223,6 @@ export interface paths {
          * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (SIM-546: the fifteen game markets by default, every side of each) off the GameSimSummary + market odds. The three full-game markets keep their labels (moneyline, total, run_line); every segment or team market's label is its market type. Odds come from the injected query params or the prices document when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book); else the deterministic mock provider. odds_source flags each market: injected, stored or mock. market_names gives each label its plain name. A cached summary with no inning grid prices the full-game markets only. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
          */
         get: operations["get_game_edges_api_betting_games__game_pk__edges_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/betting/games/{game_pk}/line-movement": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Opening->closing line-movement time-series per side/book
-         * @description Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. A run line (SIM-549) carries run_line_shape: pair, two_bets or mixed. When either end is two separate bets, both ends are priced on their own price over the game's two-way margin. A side whose spread moved gets no CLV; clv_note says why. SIM-555: only the one-book rows are read (book = bp:<id>); each series and each quote carries the book's display name in book_name. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.
-         */
-        get: operations["get_game_line_movement_api_betting_games__game_pk__line_movement_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -520,7 +480,7 @@ export interface paths {
         };
         /**
          * Player prop PMF + optional edge report (SIM-390)
-         * @description Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.
+         * @description Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via ``betting.bet_signal`` (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.
          */
         get: operations["get_player_prop_edge_api_games__game_pk__props__player_id___prop__get"];
         put?: never;
@@ -1069,7 +1029,7 @@ export interface components {
          *     A fireable +EV bet recommendation derived from one :class:`EdgeReport`.
          *     ``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.
          *     "home" / "over"); ``report`` is the full source :class:`EdgeReportModel` (so a
-         *     consumer gets the sim/market probabilities + CLV behind the signal). The list
+         *     consumer gets the sim/market probabilities behind the signal). The list
          *     a signals endpoint returns is already ranked by EV descending (``rank`` 0 ==
          *     strongest). numpy-free (plain floats / ints).
          */
@@ -1156,29 +1116,6 @@ export interface components {
              */
             synthetic: boolean;
         };
-        /**
-         * CLVModel
-         * @description Response model for :class:`betting.clv_engine.CLV` (SIM-339).
-         *
-         *     Closing Line Value for one side of one market/prop.  ``beat_close`` mirrors
-         *     the source dataclass's derived property (clv_prob > 0).
-         */
-        CLVModel: {
-            /** Beat Close */
-            beat_close: boolean;
-            /** Close Fair Decimal */
-            close_fair_decimal: number;
-            /** Close Fair Prob */
-            close_fair_prob: number;
-            /** Clv Decimal */
-            clv_decimal: number;
-            /** Clv Prob */
-            clv_prob: number;
-            /** Entry Fair Decimal */
-            entry_fair_decimal: number;
-            /** Entry Fair Prob */
-            entry_fair_prob: number;
-        };
         /** CardMoneyline */
         CardMoneyline: {
             /** Away */
@@ -1258,32 +1195,6 @@ export interface components {
             /** Role */
             role: string;
         };
-        /**
-         * ClvSnapshotResponse
-         * @description The ``GET /api/betting/games/{game_pk}/clv`` envelope.
-         *
-         *     A thin snapshot projection of /line-movement: the entry-vs-close CLV of every
-         *     line-movement series that HAS one. Omitted: a series with < 2 quotes, a pair
-         *     with a missing opposite-side price, and a run-line side whose spread moved
-         *     between the open and the close. Each row carries the side / book identity plus
-         *     the CLV's ``clv_prob`` / ``beat_close`` for a compact "did I beat the close"
-         *     view without the full quote series.
-         */
-        ClvSnapshotResponse: {
-            /** Book */
-            book?: string | null;
-            /**
-             * Count
-             * @default 0
-             */
-            count: number;
-            /** Game Pk */
-            game_pk: number;
-            /** Market Type */
-            market_type: string;
-            /** Series */
-            series?: components["schemas"]["LineMovementModel"][];
-        };
         /** ColumnInfo */
         ColumnInfo: {
             /** Data Type */
@@ -1354,11 +1265,10 @@ export interface components {
         };
         /**
          * EdgeReportModel
-         * @description Response model for :class:`betting.clv_engine.EdgeReport` (SIM-339).
+         * @description Response model for :class:`betting.bet_signal.EdgeReport` (SIM-339).
          *
-         *     The full edge / EV / CLV report for one side of one market or prop.  ``side``
-         *     is the MarketSide enum's ``.value`` (a JSON-native string, e.g. "home" /
-         *     "over"); ``clv`` is present only when a closing quote was supplied.
+         *     The edge / EV report for one side of one market or prop.  ``side`` is the
+         *     MarketSide enum's ``.value`` (a JSON-native string, e.g. "home" / "over").
          *     ``positive_edge`` mirrors the source's derived property (edge > 0).
          *
          *     SIM-555: when the betting routes price a market from the stored lines (the
@@ -1370,7 +1280,6 @@ export interface components {
          *     sets them.
          */
         EdgeReportModel: {
-            clv?: components["schemas"]["CLVModel"] | null;
             /** Edge */
             edge: number;
             /** Ev */
@@ -2107,136 +2016,6 @@ export interface components {
             total_pitches_estimated: boolean;
         };
         /**
-         * LineMovementModel
-         * @description Response model for :class:`betting.line_movement.LineMovement` (SIM-368).
-         *
-         *     The line-movement time-series for one (game_pk, market, side, book): the
-         *     ordered :class:`LineQuoteModel` series plus the derived opening->closing
-         *     summary (the American / implied-prob / line deltas, the per-step delta series,
-         *     the running ``implied_prob_series`` plottable surface, the steam ``direction``)
-         *     and the entry-vs-close :class:`CLVModel`. ``side`` is the MarketSide enum's
-         *     ``.value``; ``has_movement`` / ``beat_close`` mirror the source's derived
-         *     properties. numpy-free (plain floats).
-         */
-        LineMovementModel: {
-            /** American Delta */
-            american_delta?: number | null;
-            /**
-             * Beat Close
-             * @default false
-             */
-            beat_close: boolean;
-            /** Book */
-            book?: string | null;
-            /**
-             * Book Name
-             * @default
-             */
-            book_name: string;
-            /** Closing American */
-            closing_american?: number | null;
-            /** Closing Implied Prob */
-            closing_implied_prob?: number | null;
-            clv?: components["schemas"]["CLVModel"] | null;
-            /** Clv Basis */
-            clv_basis?: string | null;
-            /** Clv Note */
-            clv_note?: string | null;
-            /**
-             * Direction
-             * @default flat
-             */
-            direction: string;
-            /** Game Pk */
-            game_pk: number;
-            /**
-             * Has Movement
-             * @default false
-             */
-            has_movement: boolean;
-            /** Implied Prob Delta */
-            implied_prob_delta?: number | null;
-            /** Implied Prob Series */
-            implied_prob_series?: number[];
-            /** Line Delta */
-            line_delta?: number | null;
-            /** Market Type */
-            market_type: string;
-            /** Opening American */
-            opening_american?: number | null;
-            /** Opening Implied Prob */
-            opening_implied_prob?: number | null;
-            /** Quotes */
-            quotes?: components["schemas"]["LineQuoteModel"][];
-            /** Run Line Shape */
-            run_line_shape?: string | null;
-            /** Sharp Consensus */
-            sharp_consensus?: boolean | null;
-            /** Side */
-            side: string;
-            /** Step American Deltas */
-            step_american_deltas?: number[];
-            /** Step Implied Prob Deltas */
-            step_implied_prob_deltas?: number[];
-        };
-        /**
-         * LineMovementResponse
-         * @description The ``GET /api/betting/games/{game_pk}/line-movement`` envelope.
-         *
-         *     Carries one :class:`LineMovementModel` per (side, book) present in the stored
-         *     ``raw.game_odds`` history for the (game_pk, market_type[, book]).
-         */
-        LineMovementResponse: {
-            /** Book */
-            book?: string | null;
-            /**
-             * Count
-             * @default 0
-             */
-            count: number;
-            /** Game Pk */
-            game_pk: number;
-            /** Market Type */
-            market_type: string;
-            /** Series */
-            series?: components["schemas"]["LineMovementModel"][];
-        };
-        /**
-         * LineQuoteModel
-         * @description Response model for :class:`betting.line_movement.LineQuote` (SIM-368).
-         *
-         *     One timestamped quote for a single side of one market at one book -- a point
-         *     on the line-movement time-series. ``fetched_at`` is rendered as a string (a
-         *     datetime is ISO-8601'd via :func:`api.serialization.to_jsonable`, an already-
-         *     string timestamp passes through). ``implied_prob`` is the RAW single-side
-         *     implied probability. numpy-free.
-         */
-        LineQuoteModel: {
-            /** American */
-            american: number;
-            /** Book */
-            book: string;
-            /**
-             * Book Name
-             * @default
-             */
-            book_name: string;
-            /** Fetched At */
-            fetched_at?: string | null;
-            /** Implied Prob */
-            implied_prob: number;
-            /** Is Sharp Book */
-            is_sharp_book: boolean;
-            /** Line */
-            line?: number | null;
-            /** Line Type */
-            line_type: string;
-            /** Other American */
-            other_american?: number | null;
-            /** Other Line */
-            other_line?: number | null;
-        };
-        /**
          * LinescoreModel
          * @description Response model for :class:`simulation.linescore.Linescore` (SIM-362).
          *
@@ -2665,7 +2444,7 @@ export interface components {
          *     (half-integer line: over + under == 1; integer line: a push mass is
          *     excluded from both).  When ``over_ml`` and ``under_ml`` are also supplied
          *     the ``edge_report`` is populated via
-         *     :func:`betting.clv_engine.prop_edge_report`; the side evaluated is
+         *     :func:`betting.bet_signal.prop_edge_report`; the side evaluated is
          *     determined by the ``bet_side`` query param (``"over"`` or ``"under"``).
          *
          *     ``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use
@@ -3902,42 +3681,6 @@ export interface operations {
             };
         };
     };
-    get_game_clv_api_betting_games__game_pk__clv_get: {
-        parameters: {
-            query?: {
-                /** @description moneyline | runline | total */
-                market_type?: string;
-                /** @description Restrict to one stored book label, e.g. bp:12 (else all books) */
-                book?: string | null;
-            };
-            header?: never;
-            path: {
-                game_pk: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClvSnapshotResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_game_edges_api_betting_games__game_pk__edges_get: {
         parameters: {
             query?: {
@@ -3985,42 +3728,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EdgesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_game_line_movement_api_betting_games__game_pk__line_movement_get: {
-        parameters: {
-            query?: {
-                /** @description moneyline | runline | total */
-                market_type?: string;
-                /** @description Restrict to one stored book label, e.g. bp:12 (else all books) */
-                book?: string | null;
-            };
-            header?: never;
-            path: {
-                game_pk: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LineMovementResponse"];
                 };
             };
             /** @description Validation Error */

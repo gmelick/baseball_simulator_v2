@@ -45,7 +45,7 @@ from typing import Any
 
 import numpy as np
 
-from betting.clv_engine import (
+from betting.bet_signal import (
     REFERENCE_MARGIN_BAND,
     MarketSide,
     OddsQuote,
@@ -486,8 +486,8 @@ def score_game_accuracy(
     closing price is skipped. A total or run line that landed EXACTLY on the
     closing line (a push) gives no record: the scored probability is a STRICT over
     or cover probability (the push rule of
-    :func:`betting.clv_engine.total_over_under_edge_report` and
-    :func:`betting.clv_engine.spread_cover_prob`), so a push has no 0/1 label.
+    :func:`betting.bet_signal.total_over_under_edge_report` and
+    :func:`betting.bet_signal.spread_cover_prob`), so a push has no 0/1 label.
     """
     records: list[AccuracyRecord] = []
 

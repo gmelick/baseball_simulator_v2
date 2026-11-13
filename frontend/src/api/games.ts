@@ -389,7 +389,6 @@ export interface EdgeReport {
   ev: number
   offered_american: number
   sim_fair_american: number
-  clv: Record<string, unknown> | null
   positive_edge: boolean
   /**
    * The stored book label of the offered price (e.g. `bp:10`), when the market

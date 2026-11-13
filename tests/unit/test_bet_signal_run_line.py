@@ -1,4 +1,4 @@
-"""The run line (spread) EdgeReport of :mod:`betting.clv_engine`.
+"""The run line (spread) EdgeReport of :mod:`betting.bet_signal`.
 
 These tests build a SYNTHETIC per-iteration score margin (a raw
 ``home - away`` array, and a :class:`GameSimSummary` with matching
@@ -15,8 +15,6 @@ These tests build a SYNTHETIC per-iteration score margin (a raw
   * the input is either a raw margin array or a :class:`GameSimSummary`;
   * the :class:`EdgeReport` carries the right ``label`` / ``side`` / ``line`` /
     ``sim_prob`` / ``market_fair_prob`` / ``edge`` / ``ev``;
-  * the report computes the CLV (closing line value: the entry price against
-    the closing price) when a closing quote is supplied;
   * ``market.entry.line`` overrides the ``line`` keyword default.
 """
 
@@ -25,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from betting.clv_engine import (
+from betting.bet_signal import (
     MarketSide,
     OddsQuote,
     TwoWayMarket,
@@ -233,20 +231,6 @@ def test_run_line_report_market_line_overrides_keyword():
     # assertion tells the two lines apart.
     assert rep.line == pytest.approx(-1.0, abs=1e-12)
     assert rep.sim_prob == pytest.approx(0.50, abs=1e-12)
-
-
-def test_run_line_report_with_clv_end_to_end():
-    summary = _summary_from_margins(_MARGINS)  # home -1.5 cover = 0.50
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=+120, other=-140, line=-1.5),  # entry: home dog +120
-        close=OddsQuote(side=-120, other=+100, line=-1.5),  # close: home now favoured
-    )
-    rep = run_line_edge_report(summary, market, side=MarketSide.HOME)
-    assert rep.clv is not None
-    # Home's fair prob rose entry->close -> beat the close.
-    assert rep.clv.beat_close is True
-    assert rep.clv.clv_prob > 0.0
 
 
 def test_run_line_report_rejects_over_under_side():

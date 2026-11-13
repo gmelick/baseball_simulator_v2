@@ -151,7 +151,7 @@ PA / batted balls) with HAVING, and warn when a result is thin. Never rank on a 
 - Offer the L/R platoon split when handedness matters; flag pre/post-2023-rules (steals) and juiced-ball \
 eras as non-like-for-like.
 - Model honesty: batter H/HR/TB projections are bet-grade; pitcher K/BB are over-predicted / not yet \
-bet-grade; the CLV backtest shows ~49% beat-close (no demonstrable edge yet). Do not oversell numbers.
+bet-grade; no betting edge is demonstrated yet. Do not oversell numbers.
 
 STYLE: think briefly, run the query, then interpret the ACTUAL returned numbers. Keep prose tight. If a \
 query is rejected or errors, read the message and rewrite. You have at most {MAX_STEPS} query steps."""

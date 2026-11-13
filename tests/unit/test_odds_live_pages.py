@@ -2,11 +2,8 @@
 
 A ``raw.game_odds`` row labelled ``bp:<id>`` holds one book's prices. A
 ``consensus`` row can mix two books inside one row, so the pages never read
-one (one book per odds row, SIM-555). These tests pin three rules:
+one (one book per odds row, SIM-555). These tests pin two rules:
 
-  * the line-movement reads keep only the one-book rows (the three SQL
-    statements carry the label filter), and every quote and series names its
-    book (``book_name``), through the API models too;
   * ``/edges`` and ``/signals`` price a market from the stored lines when no
     price is injected: the fair probability from ONE book's row (the graded
     book, first on the preference list), the offered price of each side from
@@ -31,9 +28,7 @@ import api.routes.betting_pricing as pricing
 import api.routes.betting_stored_odds as stored_odds
 import api.routes.games as games_mod
 from api.routes.betting import router as betting_router
-from api.schemas import LineMovementModel, LineQuoteModel
-from betting import line_movement as lm
-from betting.clv_engine import (
+from betting.bet_signal import (
     MarketSide,
     OddsQuote,
     TwoWayMarket,
@@ -42,7 +37,7 @@ from betting.clv_engine import (
     implied_prob_from_american,
     moneyline_edge_report,
 )
-from pipeline.odds_provider import BOOK_KIND, STORED_BOOK_FILTER_SQL, bettable_labels
+from pipeline.odds_provider import BOOK_KIND, bettable_labels
 from simulation.game_state import GameState
 
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
@@ -50,185 +45,6 @@ NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 def _imp(a: float) -> float:
     return implied_prob_from_american(a)
-
-
-# ===========================================================================
-# The line-movement reads: the label filter and the book's name
-# ===========================================================================
-
-
-class TestLineMovementLabelFilter:
-    def test_the_three_statements_carry_the_filter(self):
-        for sql in (
-            lm._SQL_FETCH_GAME_ODDS,
-            lm._SQL_FETCH_GAME_ODDS_BOOK,
-            lm._SQL_FETCH_REFERENCE_ODDS,
-        ):
-            assert STORED_BOOK_FILTER_SQL in sql
-            assert "book LIKE 'bp:%'" in sql
-
-    @pytest.mark.asyncio
-    async def test_every_read_of_a_two_bets_run_line_sends_the_filter(self):
-        calls: list[str] = []
-
-        class _Conn:
-            async def fetch(self, sql, *args):
-                calls.append(sql)
-                if "IN ('total', 'moneyline')" in sql:
-                    return []
-                return [_rl_row(1, -1.5, 350, -1.5, 150), _rl_row(2, -1.5, 300, -1.5, 170)]
-
-        await lm.fetch_line_movement(_Conn(), game_pk=1, market_type="runline")
-        assert len(calls) == 2
-        assert all("book LIKE 'bp:%'" in sql for sql in calls)
-
-    @pytest.mark.asyncio
-    async def test_the_book_filter_keeps_the_label_filter(self):
-        calls: list[tuple[str, tuple]] = []
-
-        class _Conn:
-            async def fetch(self, sql, *args):
-                calls.append((sql, args))
-                return []
-
-        await lm.fetch_line_movement(_Conn(), game_pk=5, market_type="total", book="bp:12")
-        sql, args = calls[0]
-        assert "AND book = $3" in sql and "book LIKE 'bp:%'" in sql
-        assert args == (5, "total", "bp:12")
-
-
-def _rl_row(t, home_line, home_ml, away_line, away_ml, *, book="bp:12"):
-    return {
-        "fetched_at": t,
-        "line_type": "current",
-        "book": book,
-        "is_sharp_book": False,
-        "market_type": "runline",
-        "home_ml": None,
-        "away_ml": None,
-        "home_spread": home_line,
-        "home_spread_ml": home_ml,
-        "away_spread": away_line,
-        "away_spread_ml": away_ml,
-        "total_line": None,
-        "over_ml": None,
-        "under_ml": None,
-    }
-
-
-def _ml_row(t, home_ml, away_ml, *, book="bp:10", line_type="current"):
-    return {
-        "fetched_at": t,
-        "line_type": line_type,
-        "book": book,
-        "is_sharp_book": False,
-        "market_type": "moneyline",
-        "home_ml": home_ml,
-        "away_ml": away_ml,
-        "home_spread": None,
-        "home_spread_ml": None,
-        "away_spread": None,
-        "away_spread_ml": None,
-        "total_line": None,
-        "over_ml": None,
-        "under_ml": None,
-    }
-
-
-class TestBookName:
-    def test_a_quote_names_its_book(self):
-        def quote(book):
-            return lm.LineQuote.from_american(
-                fetched_at=1, line_type="closing", book=book, is_sharp_book=False, american=-110
-            )
-
-        assert quote("bp:10").book_name == "FanDuel"
-        assert quote("bp:12").book_name == "DraftKings"
-        assert quote("bp:999").book_name == "bp:999"  # an id the vocabulary does not name
-        assert quote("consensus").book_name == "consensus"
-
-    def test_a_series_names_its_book(self):
-        rows = [_ml_row(1, -120, 100, book="bp:19"), _ml_row(2, -130, 110, book="bp:19")]
-        mv = lm.line_movement_from_quotes(
-            rows, market_type="moneyline", side=MarketSide.HOME, book="bp:19"
-        )
-        assert mv.book_name == "BetMGM"
-        assert all(q.book_name == "BetMGM" for q in mv.quotes)
-        # A series with no book (a direct build) and an empty one.
-        assert (
-            lm.line_movement_from_quotes(
-                rows, market_type="moneyline", side=MarketSide.HOME
-            ).book_name
-            == ""
-        )
-        empty = lm.line_movement_from_quotes(
-            [], market_type="moneyline", side=MarketSide.HOME, book="bp:24"
-        )
-        assert empty.book_name == "bet365"
-
-    @pytest.mark.asyncio
-    async def test_the_read_groups_by_book_and_names_each(self):
-        class _Conn:
-            async def fetch(self, sql, *args):
-                return [
-                    _ml_row(1, -120, 100, book="bp:12"),
-                    _ml_row(2, -130, 110, book="bp:12"),
-                    _ml_row(1, -118, -102, book="bp:10"),
-                ]
-
-        movements = await lm.fetch_line_movement(_Conn(), game_pk=1, market_type="moneyline")
-        names = {(m.book, m.side, m.book_name) for m in movements}
-        assert ("bp:12", MarketSide.HOME, "DraftKings") in names
-        assert ("bp:10", MarketSide.AWAY, "FanDuel") in names
-
-    def test_the_api_models_carry_the_name(self):
-        rows = [_ml_row(1, -120, 100, book="bp:13"), _ml_row(2, -130, 110, book="bp:13")]
-        mv = lm.line_movement_from_quotes(
-            rows, market_type="moneyline", side=MarketSide.HOME, book="bp:13"
-        )
-        model = LineMovementModel.from_dataclass(mv)
-        assert model.book_name == "Caesars"
-        assert [q.book_name for q in model.quotes] == ["Caesars", "Caesars"]
-
-    def test_the_api_models_name_the_book_for_an_old_image(self):
-        """The app imports ``betting/`` from its image, which can be older than
-        the mounted ``api/``. A LineQuote or LineMovement without
-        ``book_name`` still gets the book's name from the API models."""
-        quote = SimpleNamespace(
-            fetched_at=None,
-            line_type="closing",
-            book="bp:49",
-            is_sharp_book=False,
-            american=-110.0,
-            other_american=None,
-            line=None,
-            implied_prob=_imp(-110.0),
-            other_line=None,
-        )
-        assert LineQuoteModel.from_dataclass(quote).book_name == "Hard Rock"
-        movement = SimpleNamespace(
-            game_pk=1,
-            market_type="moneyline",
-            side=MarketSide.HOME,
-            book="bp:14",
-            quotes=(quote,),
-            opening_american=-110.0,
-            closing_american=-110.0,
-            opening_implied_prob=0.5,
-            closing_implied_prob=0.5,
-            american_delta=0.0,
-            implied_prob_delta=0.0,
-            line_delta=None,
-            step_implied_prob_deltas=(),
-            step_american_deltas=(),
-            implied_prob_series=(0.5,),
-            direction="flat",
-            clv=None,
-            sharp_consensus=None,
-            has_movement=False,
-            beat_close=False,
-        )
-        assert LineMovementModel.from_dataclass(movement).book_name == "Fanatics"
 
 
 # ===========================================================================

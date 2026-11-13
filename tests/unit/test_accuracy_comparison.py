@@ -20,8 +20,8 @@ These tests run with NO DB and NO real sim: pure functions
 ``aggregate_accuracy_comparison``, ``format_accuracy_comparison``) get
 synthetic inputs directly; ``score_game_accuracy`` / ``score_prop_accuracy``
 get synthetic ``WinProbability`` / ``GameSimSummary`` / ``PropDistributionSet``
-objects built the same way ``tests/unit/test_clv_engine.py`` and
-``tests/unit/test_clv_engine_run_line.py`` do, so no live sim run or DB is needed.
+objects built the same way ``tests/unit/test_bet_signal_pricing.py`` and
+``tests/unit/test_bet_signal_run_line.py`` do, so no live sim run or DB is needed.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ from simulation.win_probability import TieHandling, WinProbability  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Synthetic-data helpers (mirror test_clv_engine.py / test_clv_engine_run_line.py)
+# Synthetic-data helpers (mirror test_bet_signal_pricing.py / test_bet_signal_run_line.py)
 # ---------------------------------------------------------------------------
 
 
@@ -422,7 +422,7 @@ def _runline_row(home_spread, home_ml, away_spread, away_ml) -> dict:
 def test_full_game_run_line_uses_the_same_rule():
     """(+1.5, +1.5): two separate bets, each priced from its own line through
     spread_cover_prob, its margin from the same game's full-game total."""
-    from betting.clv_engine import MarketSide, implied_prob_from_american, spread_cover_prob
+    from betting.bet_signal import MarketSide, implied_prob_from_american, spread_cover_prob
 
     wp = _win_prob(0.5)
     # home +1.5 covers on a margin of -1 or better (0.8); away +1.5 on +1 or worse (0.6)
@@ -536,7 +536,7 @@ async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp
 def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
     """A pair goes through the edge report's arithmetic: its sim probability
     and its de-vigged fair probability, to the bit."""
-    from betting.clv_engine import MarketSide, OddsQuote, TwoWayMarket, run_line_edge_report
+    from betting.bet_signal import MarketSide, OddsQuote, TwoWayMarket, run_line_edge_report
 
     wp = _win_prob(0.5)
     summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)

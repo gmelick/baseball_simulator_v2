@@ -40,7 +40,7 @@ import api.routes.betting_stored_odds as stored_odds
 import api.routes.games as games_mod
 from api.routes import betting as betting_routes
 from api.routes.betting import router as betting_router
-from betting.clv_engine import (
+from betting.bet_signal import (
     MarketSide,
     OddsQuote,
     TwoWayMarket,
@@ -174,7 +174,7 @@ def _prices(doc) -> str:
 
 
 # ===========================================================================
-# The builders (betting/clv_engine.py)
+# The builders (betting/bet_signal.py)
 # ===========================================================================
 
 
@@ -224,7 +224,7 @@ class TestBuilders:
             assert report.edge == pytest.approx(p - f)
             assert report.ev == pytest.approx(expected_value(p, own))
             assert report.offered_american == own
-            assert report.clv is None and report.line is None
+            assert report.line is None
 
     def test_the_three_way_builder_refuses_a_certain_side_and_an_over_side(self):
         kwargs = {"label": "f1_moneyline", "home_ml": 150, "away_ml": 180, "draw_ml": 120}

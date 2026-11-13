@@ -54,7 +54,7 @@ from typing import Any
 
 from fastapi import Request
 
-from betting.clv_engine import MarketSide, american_to_decimal, reference_margin_from_prices
+from betting.bet_signal import MarketSide, american_to_decimal, reference_margin_from_prices
 from pipeline.odds_provider import (
     FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
@@ -72,10 +72,9 @@ from pipeline.odds_row_guard import check_row
 log = logging.getLogger("api.routes.betting")
 
 
-#: The three full-game markets: the market types the line-movement and CLV
-#: reads understand (``betting.line_movement``'s ``_MARKET_SIDES``), and the
-#: default market list of the stored read. /edges and /signals price every
-#: game market (``betting_pricing._EDGE_MARKET_TYPES``).
+#: The three full-game markets: the default market list of the stored read.
+#: /edges and /signals price every game market
+#: (``betting_pricing._EDGE_MARKET_TYPES``).
 _VALID_MARKET_TYPES = ("moneyline", "runline", "total")
 
 

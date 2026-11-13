@@ -76,7 +76,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from betting.clv_engine import (  # noqa: E402
+from betting.bet_signal import (  # noqa: E402
     devig_multiway,
     devig_two_way,
     implied_prob_from_american,

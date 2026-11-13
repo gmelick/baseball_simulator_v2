@@ -19,7 +19,7 @@ where that is possible:
     first team to score, a run in the first inning) keeps its simulator
     probability and its outcome: neither depends on the price. Its market
     probability is re-computed from the graded book's closing row with the
-    backtest's own de-vig (``betting.clv_engine``: two-way, or three-way on the
+    backtest's own de-vig (``betting.bet_signal``: two-way, or three-way on the
     first-inning and first-five moneylines), and its two stored prices become
     the graded book's. A market with no graded row, or a three-way row with no
     tie price, gives the record up: a fresh run gives no record either.
@@ -78,7 +78,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from betting.clv_engine import (  # noqa: E402
+from betting.bet_signal import (  # noqa: E402
     devig_multiway,
     devig_two_way,
     implied_prob_from_american,
