@@ -23,7 +23,7 @@ WHAT IT ADDS
                                  per book.
     raw.game_odds_archive        empty copies of the two odds tables' columns
     raw.prop_odds_archive        and defaults. The retirement script
-                                 (``scripts/sim555_retire_consensus_rows.py``)
+                                 (``scripts/probes/retire_consensus_odds.py``)
                                  moves the old ``consensus`` rows here, season by
                                  season, once the census on the new rows passes.
 

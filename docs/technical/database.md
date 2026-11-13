@@ -13,7 +13,7 @@ array files built from the analytics file; the workers load it (see
 [the nightly builds](pipeline-batch.md)). Redis caches simulation results (see
 [the API](api.md)).
 
-The current schema versions are Alembic head **0030** for Postgres and
+The current schema versions are Alembic head **0031** for Postgres and
 DuckDB schema **v32** for the analytics file.
 
 ## The stores at a glance
@@ -112,7 +112,7 @@ writer computes an odds hash and skips a duplicate.
 |---|---|---|---|
 | `raw.game_odds` | Game-market prices per snapshot: the moneyline (with `draw_ml` for a three-way segment moneyline), the run line, the total, and the twelve segment and team markets (`market_type`, fifteen values). `line_type` is `opening`, `current`, `closing` or `bet_placement`. `book_line_at` is the vendor's stamp; `last_seen_at` the last time the book still posted the price. | the live service's odds writers (`pipeline/live/ingestion/odds_rows.py`, `closing_rows.py`), also used by `scripts/load_historical_odds.py` | the betting routes, `betting/line_movement.py`, the accuracy comparison, the slate card |
 | `raw.prop_odds` | Player-prop prices: over / under at a line, per player and `prop_stat` (fifteen markets). | the same writers | the accuracy comparison, the opening-line job, the probes |
-| `raw.game_odds_archive`, `raw.prop_odds_archive` | The retired `consensus` rows, copied out of the live tables season by season. | `scripts/probes/retire_consensus_odds.py` | two odds probes |
+| `raw.game_odds_archive`, `raw.prop_odds_archive` | The retired `consensus` rows, copied out of the live tables season by season. A row archived before Alembic 0031 holds NULL `last_seen_at`. | `scripts/probes/retire_consensus_odds.py` | two odds probes |
 
 ### ETL bookkeeping
 
@@ -222,7 +222,7 @@ The file numbers its own runs (`next_replay_run_id`) and keeps the five newest p
 
 ### Postgres (Alembic)
 
-The current version is Alembic head **0030**. Each file is
+The current version is Alembic head **0031**. Each file is
 `NNNN_<ticket>_<subject>.py` with `revision = "NNNN"`. `db/migrations/env.py` reads `BASEBALL_DB_DSN`. Run another Alembic
 command through the owner's service: `docker compose run --rm migrate alembic current`.
 
@@ -258,6 +258,7 @@ command through the owner's service: `docker compose run --rm migrate alembic cu
 | 0028 | `book_line_at` on both odds tables, two per-book indexes, the two archive tables. |
 | 0029 | The live slate: the schedule columns on `raw.games`, `source` and `published_at` on `raw.game_lineups`, the run-job columns on `sim.sim_runs`, `last_seen_at` on both odds tables. |
 | 0030 | The what-if runs: `kind`, `start_at_bat` and `changes` on `sim.sim_runs`. Its downgrade DELETES the what-if runs. |
+| 0031 | `last_seen_at` on the two odds archives, so each archive holds every live column again. The column accepts NULL and has no default. |
 
 ### DuckDB (numbered SQL)
 
@@ -392,7 +393,7 @@ offline (SQL output). `alembic.ini` at the repository root points at this folder
 
 ### `db/migrations/versions/`
 
-[Source](../../db/migrations/versions/) · 30 files · Tests: [test_schema_migrations.py](../../tests/integration/test_schema_migrations.py), [test_docs_alembic_head.py](../../tests/unit/test_docs_alembic_head.py)
+[Source](../../db/migrations/versions/) · 31 files · Tests: [test_schema_migrations.py](../../tests/integration/test_schema_migrations.py), [test_docs_alembic_head.py](../../tests/unit/test_docs_alembic_head.py)
 
 The Postgres migrations, one per schema change. The [Postgres table](#postgres-alembic)
 above lists each. Several unit tests read a migration's source to check its SQL (the odds,
@@ -425,7 +426,8 @@ tables.
 A reference copy of the Postgres DDL with comments on each table. No code applies it, and
 it is incomplete: it has no `raw.savant_pitch_tracking` (0020) and no `raw.game_bullpen`
 (0025), and its `raw.games`, `raw.game_lineups` and `sim.sim_runs` lack the columns of
-0029 and 0030. Its header calls itself authoritative only through migration 0013. Several
+0029 and 0030. Its odds tables also lack 0029's `last_seen_at`; its archives copy its own odds
+tables, so it stays consistent with itself. Its header calls itself authoritative only through migration 0013. Several
 unit tests read it to check a column or a CHECK constraint.
 
 ### `db/schemas/duckdb_schema_version.txt`

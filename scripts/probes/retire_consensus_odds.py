@@ -45,8 +45,10 @@ in no named season. The script prints a WARNING for each stale name and runs on.
 Any other missing game still refuses its season.
 
 ``--dry-run`` runs steps 1 and 2 and the counts in a read-only transaction and writes
-nothing. The script writes only when it runs without ``--dry-run``; no test runs
-it against a real database (the tests drive it with a stub connection).
+nothing. The script writes only when it runs without ``--dry-run``. The unit tests
+drive it with a stub connection; one integration test
+(``tests/integration/test_schema_migrations.py``) runs a season on a migrated
+throwaway database.
 
 EXIT CODES
 ----------

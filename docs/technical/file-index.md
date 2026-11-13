@@ -1,4 +1,4 @@
-<!-- file-index-key: 2dd0d16fd613b872 -->
+<!-- file-index-key: c250c6c34771ad42 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -17,16 +17,16 @@ Every source and config file in the repository, in the order of the [code review
 | [4. The sampler's data: the bundle](#stage-4) | 15 | 4,772 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
-| [7. Getting data in: the raw tables](#stage-7) | 56 | 12,996 |
+| [7. Getting data in: the raw tables](#stage-7) | 57 | 13,053 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 16 | 6,281 |
 | [10. The API](#stage-10) | 42 | 14,155 |
 | [11. Game day: the live service](#stage-11) | 18 | 6,023 |
 | [12. The frontend](#stage-12) | 82 | 27,244 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
-| [14. Measurement and maintenance tools](#stage-14) | 78 | 39,500 |
-| [15. Tests and CI](#stage-15) | 315 | 126,560 |
-| **All** | **792** | **290,283** |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 39,502 |
+| [15. Tests and CI](#stage-15) | 315 | 126,742 |
+| **All** | **793** | **290,524** |
 
 <a id="stage-1"></a>
 
@@ -272,6 +272,7 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | [`db/migrations/versions/0028_sim555_odds_book_line_stamp.py`](../../db/migrations/versions/0028_sim555_odds_book_line_stamp.py) | 84 | sim555_odds_book_line_stamp | — |
 | [`db/migrations/versions/0029_sim519_live_slate.py`](../../db/migrations/versions/0029_sim519_live_slate.py) | 160 | sim519_live_slate | — |
 | [`db/migrations/versions/0030_whatif_runs.py`](../../db/migrations/versions/0030_whatif_runs.py) | 66 | whatif_runs | — |
+| [`db/migrations/versions/0031_sim582_odds_archive_last_seen.py`](../../db/migrations/versions/0031_sim582_odds_archive_last_seen.py) | 57 | sim582_odds_archive_last_seen | — |
 
 <a id="stage-8"></a>
 
@@ -624,7 +625,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/probes/outfield_arm_recompute.py`](../../scripts/probes/outfield_arm_recompute.py) | 837 | scripts/probes/outfield_arm_recompute.py — the outfield arm block (SIM-550), run-book step 2: the block rebuilt from our own advancement pool, the league rows, and the verify block. | 1: `test_outfield_arm_recompute.py` |
 | [`scripts/probes/rescore_graded_book.py`](../../scripts/probes/rescore_graded_book.py) | 682 | scripts/probes/rescore_graded_book.py — SIM-555: re-price the fixed-line records of stored accuracy reports against the graded book, beside the originals. | 1: `test_rescore_graded_book.py` |
 | [`scripts/probes/rescore_runlines.py`](../../scripts/probes/rescore_runlines.py) | 460 | scripts/probes/rescore_runlines.py — SIM-549: re-price the run-line records of stored accuracy reports, beside the originals. | 2: `test_rescore_runlines.py`, `test_odds_readers.py` |
-| [`scripts/probes/retire_consensus_odds.py`](../../scripts/probes/retire_consensus_odds.py) | 419 | scripts/probes/retire_consensus_odds.py — SIM-555: archive, then delete, the old `consensus` odds rows, one season at a time. | 1: `test_retire_consensus_odds.py` |
+| [`scripts/probes/retire_consensus_odds.py`](../../scripts/probes/retire_consensus_odds.py) | 421 | scripts/probes/retire_consensus_odds.py — SIM-555: archive, then delete, the old `consensus` odds rows, one season at a time. | 2: `test_retire_consensus_odds.py`, `test_schema_migrations.py` |
 | [`scripts/probes/run_index_acceptance.py`](../../scripts/probes/run_index_acceptance.py) | 380 | Runs the EXPLAIN (ANALYZE, BUFFERS) acceptance gates for the SIM-085 and SIM-089 indexes against a populated staging database, captures the plan text and per-query latency, and emits a Markdown report fragment that th... | 1: `test_index_acceptance_harness.py` |
 | [`scripts/probes/runner_profile_recompute.py`](../../scripts/probes/runner_profile_recompute.py) | 368 | scripts/probes/runner_profile_recompute.py — SIM-531 run-book step 4: the three runner-side profile tables and the league averages, recomputed on their own (not the five-hour full rebuild). | — |
 | [`scripts/probes/running_game_census.py`](../../scripts/probes/running_game_census.py) | 1,067 | scripts/probes/running_game_census.py — SIM-554: where the simulator's steals and pickoffs land. | 1: `test_running_game_census.py` |
@@ -640,7 +641,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`tests/conftest.py`](../../tests/conftest.py) | 382 | Root test configuration: shared fixtures and pytest hooks. | — |
-| [`tests/script_loader.py`](../../tests/script_loader.py) | 60 | Load a script from `scripts/` as a module, for a test. | 45: `test_sim_kwargs.py`, `test_gen_secrets.py`, `test_backup_drill.py` +42 |
+| [`tests/script_loader.py`](../../tests/script_loader.py) | 60 | Load a script from `scripts/` as a module, for a test. | 46: `test_sim_kwargs.py`, `test_gen_secrets.py`, `test_backup_drill.py` +43 |
 | [`tests/__init__.py`](../../tests/__init__.py) | 1 | Package marker. | — |
 | [`tests/regression/__init__.py`](../../tests/regression/__init__.py) | 10 | Package marker. | — |
 | [`tests/regression/conftest.py`](../../tests/regression/conftest.py) | 323 | Fixtures that build deterministic synthetic similarity engines for the regression gate (the engine invariant tests). | — |
@@ -808,7 +809,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_odds_live_pages.py`](../../tests/unit/test_odds_live_pages.py) | 927 | The live betting pages read one book per odds row and name the book. | — |
 | [`tests/unit/test_odds_loader_retry.py`](../../tests/unit/test_odds_loader_retry.py) | 642 | SIM-555 (2026-10-01) — the loader's retry option and its incomplete games. | — |
 | [`tests/unit/test_odds_matcher.py`](../../tests/unit/test_odds_matcher.py) | 1,246 | SIM-555 (2026-10-01) — the matcher reads the PLAYED schedule entry of a game. | — |
-| [`tests/unit/test_odds_one_book_per_row.py`](../../tests/unit/test_odds_one_book_per_row.py) | 1,901 | SIM-555 (2026-09-28) — every book's prices stored, one book per row, and a load guard. | — |
+| [`tests/unit/test_odds_one_book_per_row.py`](../../tests/unit/test_odds_one_book_per_row.py) | 1,944 | SIM-555 (2026-09-28) — every book's prices stored, one book per row, and a load guard. | — |
 | [`tests/unit/test_odds_provider_ingestion.py`](../../tests/unit/test_odds_provider_ingestion.py) | 446 | SIM-340 — Real odds provider + prop ingestion (multi-book, sharp flag, cadence) | — |
 | [`tests/unit/test_odds_provider_pin.py`](../../tests/unit/test_odds_provider_pin.py) | 139 | The test lane's odds provider pin (SIM-567). | — |
 | [`tests/unit/test_odds_provider_retry.py`](../../tests/unit/test_odds_provider_retry.py) | 696 | SIM-555 (2026-10-01) — the BettingPros provider retries a transient read failure and counts every failed read it catches. | — |
@@ -943,7 +944,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/integration/test_etl_flow.py`](../../tests/integration/test_etl_flow.py) | 443 | Verifies the end-to-end write path for the ETL freshness tracking system against the *canonical* schema created by Alembic migration 0003: | — |
 | [`tests/integration/test_live_game_upsert.py`](../../tests/integration/test_live_game_upsert.py) | 232 | Drives the real `LiveIngestionPipeline._upsert_game_record()` (pipeline/live/live_ingestion_pipeline.py) against the migrated schema. | — |
 | [`tests/integration/test_live_pipeline_upsert.py`](../../tests/integration/test_live_pipeline_upsert.py) | 265 | Drives the real `LiveIngestionPipeline._upsert_lineup_state()` (pipeline/live/live_ingestion_pipeline.py) against the migrated schema: | — |
-| [`tests/integration/test_schema_migrations.py`](../../tests/integration/test_schema_migrations.py) | 493 | Verifies that `alembic upgrade head` produces the complete production schema in a fresh PostgreSQL 15 database. | — |
+| [`tests/integration/test_schema_migrations.py`](../../tests/integration/test_schema_migrations.py) | 632 | Verifies that `alembic upgrade head` produces the complete production schema in a fresh PostgreSQL 15 database. | — |
 | [`tests/performance/__init__.py`](../../tests/performance/__init__.py) | 1 | Performance benchmark suite. | — |
 | [`tests/performance/bench_api_simulate.py`](../../tests/performance/bench_api_simulate.py) | 343 | The end-to-end `GET /api/games/{game_pk}/simulate` latency perf gate. | — |
 | [`tests/performance/bench_simulation.py`](../../tests/performance/bench_simulation.py) | 635 | The performance benchmark harness. | — |

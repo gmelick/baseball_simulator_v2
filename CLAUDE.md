@@ -31,7 +31,7 @@
 
 - **Phases 1–6 are complete; Phase 7 is largely complete** (§12). The platform runs on Python
   3.13 and numpy 2.x. The frontend is React 18 + Vite + TypeScript. DuckDB schema **v32**,
-  Alembic head **0030** (§7, `db/migrations/README.md`).
+  Alembic head **0031** (§7, `db/migrations/README.md`).
 - **The simulator has one path: the full-pool similarity sampler** (SIM-486). The no-DB tests
   and the batch runner's no-DB factory build the same `StateMachine` over the in-memory bundle
   `simulation/synthetic_bundle.py`. A missing artifact bundle fails the worker loudly; there is
@@ -278,7 +278,7 @@ The loop cheat sheet holds the detail; these are the facts a change most often t
   the app boots with uncalibrated win probabilities.
 - **The change pool must carry `game_ymd`**, or the backtest cutoff (SIM-535) refuses every
   backtest game.
-- **Migration 0031 applies only through `scripts/rebuild_steal_pool.py --apply-migration`**,
+- **DuckDB migration 0031 applies only through `scripts/rebuild_steal_pool.py --apply-migration`**,
   which writes the pickoff rows in the same transaction. Never apply it as a separate step; the
   new code refuses an un-migrated table before it deletes anything.
 - **A full re-sweep of `raw.pitches` takes about 6 hours** (`scripts/resumable_sweep.py`).

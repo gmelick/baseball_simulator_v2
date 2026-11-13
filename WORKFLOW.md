@@ -7,7 +7,7 @@ something breaks.
 
 The stack runs Python 3.13 in Docker. The analytics file is at
 DuckDB schema **v32**, and the statistics database is at
-Alembic head **0030**.
+Alembic head **0031**.
 
 **Shell.** Every command here is for Windows Command Prompt (cmd.exe), the
 primary shell. Two cmd rules matter:
@@ -128,7 +128,7 @@ docker compose ps
 :: Expected: every service up; each one with a health check reads "(healthy)".
 :: The scheduler has no health check. migrate is not listed: it runs only when called.
 docker compose run --rm migrate alembic current
-:: Expected: 0030 (head)
+:: Expected: 0031 (head)
 curl http://localhost:8000/health
 :: Expected: {"status":"ok", ... "auth_enforced":true, "sql_console":{"ro_pool":true,"role":"baseball_ro"}}
 ```
@@ -247,7 +247,7 @@ docker compose logs app | findstr /C:"build_all_engines" /C:"replay store OPEN" 
 docker compose exec db pg_isready -U baseball_user -d baseball_sim
 :: Expected: accepting connections
 docker compose run --rm migrate alembic current
-:: Expected: 0030 (head)
+:: Expected: 0031 (head)
 docker compose exec db psql -U baseball_user -d baseball_sim -c "SELECT season, COUNT(*) FROM raw.games WHERE status = 'Final' GROUP BY season ORDER BY season;"
 ```
 
@@ -555,7 +555,7 @@ make restore-postgres SET=PASTE_TS
 :: Expected last line: RESTORE OK /backups/postgres/PASTE_TS
 make db-roles
 docker compose run --rm migrate alembic current
-:: Expected: 0030 (head)
+:: Expected: 0031 (head)
 
 :: The analytics file: checks the size and sha256, moves a live .wal aside, replaces the file.
 docker compose stop scheduler

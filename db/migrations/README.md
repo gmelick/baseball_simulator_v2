@@ -31,7 +31,7 @@ because the pool builders insert by position.
 
 The app applies the replay files (0008 to 0010 and 0032) to `/data/replay.duckdb` itself
 (`db/sim_store.ensure_replay_schema`). A file that changes the analytics file runs by hand
-or through the rebuild script its ticket names. Apply migration 0031 only through
+or through the rebuild script its ticket names. Apply DuckDB migration 0031 only through
 `scripts/rebuild_steal_pool.py --apply-migration`.
 
 ## The rules

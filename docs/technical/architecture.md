@@ -115,7 +115,7 @@ mounted: a script change reaches a container only after an image build.
 
 | Store | Where | Holds | Written by |
 |---|---|---|---|
-| Postgres `raw.*` | the `db` service | The facts: games, pitches, play events, lineups, the official box, the bullpens, players, venues, the Savant boards, every book's odds. Alembic head **0030**. | The historical loader (nightly finals), the live service, the odds loaders. |
+| Postgres `raw.*` | the `db` service | The facts: games, pitches, play events, lineups, the official box, the bullpens, players, venues, the Savant boards, every book's odds. Alembic head **0031**. | The historical loader (nightly finals), the live service, the odds loaders. |
 | Postgres `sim.*` | the `db` service | The run jobs (`sim.sim_runs`) and the live game state (`sim.lineup_state`). | The app (runs), the live service (state). |
 | DuckDB file | `/data/baseball_sim.duckdb` | `derived.*` profiles (pitchers, batters, fielders, runners, catchers, managers, park factors, run expectancy, league averages) and `sim.*` play pools (pitch, outcome, steal, advancement, intentional-walk rates). DuckDB schema **v32**. | The nightly profile build only. |
 | Engine-artifact bundle | `/data/play_pool/engine_artifacts` | Everything a worker draws from: the per-hand pitch and batted-ball pools, the steal, advancement and pitching-change pools, the park geometry, the pitcher-by-pitcher matrix, the actor score matrices, the reference tables (intentional-walk rates, venue run factors), the catcher receiving document. | The nightly bundle build. |
