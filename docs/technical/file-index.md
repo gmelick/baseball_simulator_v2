@@ -1,4 +1,4 @@
-<!-- file-index-key: c250c6c34771ad42 -->
+<!-- file-index-key: ec87f876de5c8a3d -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -587,7 +587,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/steal_pool_rebuild/checks.py`](../../scripts/steal_pool_rebuild/checks.py) | 400 | Step 3, the checks a to h inside the rebuild's transaction, and the rollback. | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/steal_pool_rebuild/common.py`](../../scripts/steal_pool_rebuild/common.py) | 158 | The constants and the small helpers every step of the steal-pool rebuild shares: the paths, the files of a whole steal pool, the labels, the exit codes. | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/steal_pool_rebuild/export.py`](../../scripts/steal_pool_rebuild/export.py) | 351 | Steps 5 to 7: the export, the round-trip, the steal band centres and the rollback text. | 1: `test_steal_pool_rebuild.py` |
-| [`scripts/steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) | 35 | Migration 0031, applied inside the rebuild's own transaction (step 2). | 1: `test_steal_pool_rebuild.py` |
+| [`scripts/steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) | 35 | DuckDB migration 0031, applied inside the rebuild's own transaction (step 2). | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/steal_pool_rebuild/pickoffs.py`](../../scripts/steal_pool_rebuild/pickoffs.py) | 142 | Step 1: the snapshot, and the pickoff rows counted from the play records (never from the builder's SQL). | — |
 | [`scripts/steal_pool_rebuild/preflight.py`](../../scripts/steal_pool_rebuild/preflight.py) | 225 | Step 0, the pre-flight: every reason the write path must not start. | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/load_historical_odds.py`](../../scripts/load_historical_odds.py) | 1,268 | The historical odds loader. | 2: `test_odds_closing_rows.py`, `test_odds_game_markets.py` |

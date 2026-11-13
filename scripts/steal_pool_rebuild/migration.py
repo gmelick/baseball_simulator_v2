@@ -1,4 +1,4 @@
-"""Migration 0031, applied inside the rebuild's own transaction (step 2)."""
+"""DuckDB migration 0031, applied inside the rebuild's own transaction (step 2)."""
 
 from __future__ import annotations
 

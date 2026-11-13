@@ -183,7 +183,7 @@ Rebuilds `sim.steal_opportunity_pool` for the running game on the pitch (SIM-554
 |---|---|
 | [`steal_pool_rebuild/preflight.py`](../../scripts/steal_pool_rebuild/preflight.py) (225 lines) | Step 0: the builder version, the migration, the window's pitch pool, the build watermark, a whole bundle pool. |
 | [`steal_pool_rebuild/pickoffs.py`](../../scripts/steal_pool_rebuild/pickoffs.py) (142 lines) | Step 1: the snapshot, and the pickoff rows counted from the play records, never from the builder's SQL. |
-| [`steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) (35 lines) | Migration 0031, applied inside step 2. |
+| [`steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) (35 lines) | DuckDB migration 0031, applied inside step 2. |
 | [`steal_pool_rebuild/checks.py`](../../scripts/steal_pool_rebuild/checks.py) (400 lines) | Step 3: checks a–h inside the transaction, and the rollback. |
 | [`steal_pool_rebuild/bundle.py`](../../scripts/steal_pool_rebuild/bundle.py) (230 lines) | Step 4: whether the bundle's steal pool is whole, the rollback copy and the hashes that prove the export touched nothing else. |
 | [`steal_pool_rebuild/export.py`](../../scripts/steal_pool_rebuild/export.py) (351 lines) | Steps 5–7: the export, the round-trip, the steal band centres and the rollback text. |

@@ -1910,8 +1910,8 @@ class TestMigration0028:
 class TestMigration0031:
     """0029 gave the live odds tables ``last_seen_at``; 0031 gives it to their archives.
 
-    The archive column accepts NULL and has no default: the rows archived before
-    0031 never had a last-seen time, and the retirement script copies every live
+    The archive column accepts NULL and has no default. The rows archived before
+    0031 never had a last-seen time. The retirement script copies every live
     column by name, so a newly archived row keeps its own value.
     """
 

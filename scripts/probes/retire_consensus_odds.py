@@ -231,7 +231,7 @@ async def archive_columns(conn: Any, table: str, archive: str) -> list[str]:
     if lost:
         raise RetireError(
             f"raw.{archive} lacks the live columns {lost}; the copy would lose them "
-            "(re-create the archive from the live table)"
+            "(add the column to the archive with an Alembic migration, as 0031 did)"
         )
     return live
 

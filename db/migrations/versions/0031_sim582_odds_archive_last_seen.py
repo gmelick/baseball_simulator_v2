@@ -8,8 +8,8 @@ SIM-582: the two odds archives hold every live odds column again. Migration 0028
 created the archives as copies of the live tables' columns. Migration 0029 then
 added ``last_seen_at`` to the live tables only. The retirement script
 (``scripts/probes/retire_consensus_odds.py``) checks that an archive holds every
-live column before it copies a season's rows. Since 0029 that check fails, so the
-script stops with an error (exit 3) and copies nothing.
+live column before it copies a season's rows. From 0029 until 0031 that check
+failed, so the script stopped with an error (exit 3) and copied nothing.
 
 WHAT IT ADDS
 ============
@@ -19,8 +19,8 @@ WHAT IT ADDS
                                          live column order. A row archived
                                          before 0031 holds NULL: its last-seen
                                          time was never kept. The script copies
-                                         every live column by name, so a row it
-                                         archives keeps its own value and the
+                                         every live column by name. So a row it
+                                         archives keeps its own value, and the
                                          archive needs no default.
 
 The column changes only the catalog: a nullable column with no default rewrites

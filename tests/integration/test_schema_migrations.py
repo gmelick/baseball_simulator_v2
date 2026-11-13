@@ -513,10 +513,10 @@ class TestSchemaMigrations:
         """A real retirement copies a consensus row, its ``last_seen_at`` included.
 
         The definition of done of SIM-582. The test seeds one Final game of an
-        unused season with a ``consensus`` and a ``bp:1`` closing price in each
-        odds table, runs the retirement script's ``retire_season`` against the
-        migrated database, and reads the archives. Before 0031 the script refuses
-        the season: the archive lacks the live column ``last_seen_at``.
+        unused season. Each odds table gets a ``consensus`` and a ``bp:1`` closing
+        price. The test runs the retirement script's ``retire_season`` on the
+        migrated database, then reads the archives. Before 0031 the script stops
+        with an error: the archive lacks the live column ``last_seen_at``.
         """
         retire = load_script("retire_consensus_odds")
         seen = datetime(2099, 4, 1, 23, 30, tzinfo=UTC)

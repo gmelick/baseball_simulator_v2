@@ -177,9 +177,9 @@ of `run`, after every profile table, because some pools copy profile columns.
 
 **Watch out:** The steal and advancement pools take POSITIONAL inserts: the `SELECT`
 order must match the DDL in `db/schemas/02_duckdb_schema.sql`. The steal build refuses
-a table without migration 0031's columns before it deletes anything
+a table without DuckDB migration 0031's columns before it deletes anything
 (`_require_steal_pool_0031`); `scripts/rebuild_steal_pool.py --apply-migration` applies
-0031 and rebuilds in one transaction.
+that DuckDB migration and rebuilds in one transaction.
 
 ### `pipeline/batch/profiles/pool_meta.py`
 
