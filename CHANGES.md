@@ -1,3 +1,122 @@
+# CLOSED — the two odds archives carry `last_seen_at`, so each holds every live column again and the integration tests pass — SIM-582, 2026-11-13
+
+**Why it matters.** Each odds table has an archive: the retirement script
+(`scripts/probes/retire_consensus_odds.py`) moves a season's old `consensus` rows there.
+Migration 0029 gave the live tables `last_seen_at`, the last time a book still posted the price.
+It did not give the column to the archives. The script checks that an archive holds every live
+column before it copies. From 0029 until 0031 that check failed, so the script stopped with an
+error (exit 3) and copied nothing. The weekly integration lane
+(`.github/workflows/integration-weekly.yml`) failed on every Monday from 2026-10-12 for the same
+reason. While it stayed red, it could not report a new failure.
+Production holds no `consensus` row to retire today, so no job was blocked.
+
+**What changed.**
+
+- Alembic migration 0031 (`db/migrations/versions/0031_sim582_odds_archive_last_seen.py`) adds
+  `last_seen_at TIMESTAMPTZ` to `raw.game_odds_archive` and `raw.prop_odds_archive`.
+- The column accepts NULL and has no default. A row archived before 0031 holds NULL: its
+  last-seen time was never kept. The script copies every live column by name, so a row it
+  archives keeps its own value.
+- `ADD COLUMN` puts the column last, where 0029 put it in the live tables. So each archive keeps
+  the live column order. A nullable column with no default rewrites no row.
+- The downgrade drops the column from both archives.
+
+**The docs.**
+
+- The Alembic head reads 0031 in `CLAUDE.md`, `WORKFLOW.md` (its version line and its three
+  `alembic current` checks), `docs/technical/architecture.md` and `docs/technical/database.md`.
+- `database.md` gains the 0031 row and a note on the archives' old rows. It now counts 31
+  migration files. Its note on `db/schemas/01_postgres_schema.sql` adds that the file's odds tables
+  lack 0029's `last_seen_at`. The file's archives copy its own odds tables, so the file stays
+  consistent with itself. Its full refresh is the open ticket on the Postgres schema file (SIM-630).
+- A DuckDB migration 0031 already exists: the steal pool's pitch class (SIM-554). So `CLAUDE.md`
+  §2b, `db/migrations/README.md`, `docs/technical/pipeline-batch.md`, `scripts.md` and the
+  docstring of `scripts/steal_pool_rebuild/migration.py` now say "DuckDB migration 0031" for it.
+  Code comments in the DuckDB code keep the bare number; their context is clear.
+- The retirement script's refusal message advised re-creating the archive from the live table. On
+  production that step throws away the archived rows. The message now advises an Alembic
+  migration that adds the column, as 0031 does.
+- The retirement script's docstring no longer says that no test runs it on a real database. The
+  0028 docstring named a script that does not exist; it now names the real one. The
+  `docs/technical/tests.md` and `scripts.md` rows follow.
+
+**The tests, red then green.**
+
+- `tests/unit/test_odds_one_book_per_row.py`, `TestMigration0031`: the chain (0031 after 0030), the
+  two nullable `ADD COLUMN` statements with no default, and the downgrade. On the red commit all
+  three failed, because the file did not exist.
+- `tests/integration/test_schema_migrations.py`, `test_sim582_archives_carry_last_seen_at`: in
+  each archive, the last column is a nullable `last_seen_at` with no default.
+- `test_sim582_retirement_copies_a_row`, the retirement test: the ticket's definition of done.
+  The test seeds one Final game of season 2099. Each odds table gets a `consensus` and a `bp:1`
+  closing price. It runs the script's `retire_season` on the migrated throwaway database, then
+  checks the archives.
+  - Each archive holds the copied row with its `last_seen_at`.
+  - Only the `bp:1` rows stay live.
+  - The test deletes every row it seeded.
+- The red run, on host Python: 31 passed and 3 failed. The two new tests failed, and so did the
+  column-order test of 0028. The retirement test failed on the script's own error,
+  "raw.game_odds_archive lacks the live columns ['last_seen_at']", not on a seed error.
+- The column-order test of 0028 no longer says in its docstring that the script copies with
+  `INSERT ... SELECT *`.
+
+**The lanes (the branch, 2026-11-13).**
+
+| Lane | Result |
+|---|---|
+| Integration, host Python (`-m integration`) | 34 passed |
+| Unit, container, `test_[a-f]*` | 2,356 passed, 4 skipped |
+| Unit, container, `test_[g-m]*` | 652 passed |
+| Unit, container, `test_[n-z]*` | 3,509 passed, 1 skipped |
+| `ruff check .`, `ruff format --check .` | clean |
+| `mypy` over the five packages | no issues in 211 files |
+
+The lane's command passed `-q` on top of the `-q` in `pyproject.toml`, which hides pytest's
+summary line. So my runner loop saw no summary and ran each piece three times. All nine runs
+exited 0 with the same counts, read from the progress lines. No piece crashed.
+
+**The independent QA pass.** Two reviewers read the branch.
+- The first ran the new tests at the red commit and confirmed each failure and its cause. It also
+  ran three broken versions of the migration, and the tests caught each one. One set NOT NULL
+  with a default, one had no time zone, and one changed a single archive.
+- The second checked every doc line against the code and the backlog edit cell by cell.
+- Neither found a blocker or a major problem. I applied their minor findings. The DuckDB 0031 is
+  named apart in three more places, the refusal hint is safe, and the long sentences are split.
+
+**The deploy (2026-11-13).**
+- Master moved to `2b21c8e` by a fast-forward, at 05:29 UTC, and was pushed. The app reloaded on
+  the new file under `db/` and answered `/health` 200.
+- Before the migrate, no lock and no open transaction touched the archives, and no job held a
+  running mark.
+- `docker compose run --rm -e PGOPTIONS="-c lock_timeout=10s" migrate` ran "upgrade 0030 ->
+  0031" at 05:31 UTC and exited 0. `alembic current` reads `0031 (head)`.
+- In production each archive's columns now equal its live table's, in order. The game odds have
+  22 columns, and the props 16. `last_seen_at` accepts NULL and has no default in both archives.
+- The archives still hold 370,986 and 4,045,103 rows, and every one of them holds NULL
+  `last_seen_at`.
+- The weekly integration lane, run by hand on master (run 43372575333), passed: 34 passed, 17
+  deselected. It is the first green run since 2026-10-05.
+- The CI run of the push (run 43372351362) passed the unit tests with coverage, the slow tests,
+  the regression gate, the API end-to-end suite, lint, mypy and the frontend build. Only the two
+  jobs that fail on every recent push failed (below).
+
+**Found, not filed.**
+- Migration 0012 runs `DROP INDEX IF EXISTS idx_game_odds_dedup` with no `raw.` prefix, so the
+  drop did nothing. The old partial unique index still sits in production beside
+  `idx_game_odds_dedup_full`.
+- The CI lane on master has not passed since 2026-10-21.
+  - The secrets check fails on every push from the documentation rebuild (SIM-624, `1d2dc79`) on.
+    It flags the placeholder `PASTE_APP_PASSWORD` in two example addresses of `WORKFLOW.md`. Its
+    allow-list does not know that word.
+  - The Playwright job fails on the two pushes of 2026-11-13. Playwright does not support
+    Chromium on the runner's new Ubuntu 26.04 image.
+- The backlog's table `OpenTickets` and its filter cover A4:F13 only, the header and the first
+  nine tickets. So an Excel sort or filter reaches only those rows.
+
+**The record.** `BACKLOG.xlsx` loses the row "Add last_seen_at to the two odds archive
+tables, so the retirement copy fits again" (SIM-582). The next free ID stays
+SIM-641. The branch `sim582-archive-last-seen` and its worktree are deleted.
+
 # FILED AND CHECKED — the scheduled jobs start late after a pause of the laptop (SIM-640); the weekly integration lane, the arsenal merge's smoke and six days without Docker read — 2026-11-12
 
 **Why it matters.** Three checks show where the platform stands before the next ticket. The
@@ -44,6 +163,8 @@ test, `test_sim555_stamp_indexes_and_archives`, and passes the other 31.
   `INSERT ... SELECT *`. The script names the live columns after its check (`archive_columns`).
 - The lane leaves out 17 tests that carry no integration marker. The end-to-end file (12) runs
   in the CI e2e job. The stress test (5) has its own open ticket (SIM-619).
+- Alembic migration 0031 fixes the cause on 2026-11-13: see the entry on the odds archives'
+  `last_seen_at` above (SIM-582).
 
 **The arsenal merge's after-deploy smoke (SIM-606).** `scripts/sim_stats.py` played the same ten
 games 50 times each, with seeds 0 to 49, on bundle `20261112T081316Z`. The bundle link read the
