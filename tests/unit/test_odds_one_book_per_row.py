@@ -9,7 +9,7 @@ pieces they rest on:
   * the BettingPros provider's one-row-per-book reads, the opener's row, the
     stamps, the first-five exclusions and the one-row methods on top;
   * the load guard (``pipeline/odds_row_guard.py``) and its tally;
-  * migration 0028.
+  * migration 0028, and migration 0031 (SIM-582: the archives' ``last_seen_at``).
 
 No network and no database. The provider's ``_bp_get`` / ``_mlb_get`` seams are
 served from the captured payloads under ``tests/fixtures/bettingpros/`` (event
@@ -73,6 +73,7 @@ from pipeline.odds_row_guard import (
 _ROOT = Path(__file__).resolve().parents[2]
 _FIX = _ROOT / "tests" / "fixtures" / "bettingpros"
 _MIG = _ROOT / "db" / "migrations" / "versions" / "0028_sim555_odds_book_line_stamp.py"
+_MIG_0031 = _ROOT / "db" / "migrations" / "versions" / "0031_sim582_odds_archive_last_seen.py"
 
 _OFFERS_92857 = {
     122: "offers_ml_92857.json",
@@ -1830,8 +1831,8 @@ class _RecordingOp:
         self.sql.append(" ".join(sql.split()))
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("mig_0028", _MIG)
+def _load_migration(path: Path = _MIG, name: str = "mig_0028"):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -1899,3 +1900,45 @@ class TestMigration0028:
             assert "book_line_at    TIMESTAMPTZ" in block, table
             assert f"CREATE TABLE IF NOT EXISTS raw.{table}_archive" in ddl
         assert "idx_game_odds_market_book" in ddl and "idx_prop_odds_market_book" in ddl
+
+
+# ===========================================================================
+# Migration 0031 (SIM-582)
+# ===========================================================================
+
+
+class TestMigration0031:
+    """0029 gave the live odds tables ``last_seen_at``; 0031 gives it to their archives.
+
+    The archive column accepts NULL and has no default: the rows archived before
+    0031 never had a last-seen time, and the retirement script copies every live
+    column by name, so a newly archived row keeps its own value.
+    """
+
+    def test_the_chain(self) -> None:
+        module = _load_migration(_MIG_0031, "mig_0031")
+        assert module.revision == "0031"
+        assert module.down_revision == "0030"
+
+    def test_upgrade_adds_a_nullable_last_seen_at_to_both_archives(self, monkeypatch) -> None:
+        module = _load_migration(_MIG_0031, "mig_0031")
+        op = _RecordingOp()
+        monkeypatch.setattr(module, "op", op)
+        module.upgrade()
+        for table in ("game_odds_archive", "prop_odds_archive"):
+            assert (
+                f"ALTER TABLE raw.{table} ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NULL;"
+            ) in op.sql, table
+        # The upgrade touches only the two archives and sets no default and no NOT NULL.
+        assert len(op.sql) == 2, op.sql
+        for statement in op.sql:
+            assert "DEFAULT" not in statement and "NOT NULL" not in statement, statement
+
+    def test_downgrade_drops_the_column_from_both_archives(self, monkeypatch) -> None:
+        module = _load_migration(_MIG_0031, "mig_0031")
+        op = _RecordingOp()
+        monkeypatch.setattr(module, "op", op)
+        module.downgrade()
+        for table in ("game_odds_archive", "prop_odds_archive"):
+            assert f"ALTER TABLE raw.{table} DROP COLUMN IF EXISTS last_seen_at;" in op.sql, table
+        assert len(op.sql) == 2, op.sql

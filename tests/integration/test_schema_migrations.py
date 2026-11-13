@@ -32,6 +32,7 @@ Run:
 """
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,7 @@ from sqlalchemy import text
 
 from pipeline.odds_provider import GAME_MARKET_TYPES, PROP_STATS
 from tests.integration.conftest import assert_table_exists
+from tests.script_loader import load_script
 
 pytestmark = pytest.mark.integration
 
@@ -411,9 +413,11 @@ class TestSchemaMigrations:
         reads what the migration's SQL built: ``book_line_at`` is a nullable
         TIMESTAMPTZ on both odds tables (a row stored with no book stamp holds NULL); each
         index covers the columns the graded-row read sorts on; each archive has
-        the live table's columns in the same order (the retirement script copies
-        with ``INSERT ... SELECT *``); and an archive's ``id`` has no default, so
-        it never draws from the live table's sequence.
+        the live table's columns in the same order (the retirement script checks
+        that the archive holds every live column, then copies them by name); and
+        an archive's ``id`` has no default, so it never draws from the live
+        table's sequence. Migration 0031 gives the archives the ``last_seen_at``
+        that 0029 gave the live tables.
         """
         for table in ("game_odds", "prop_odds"):
             row = pg_connection.execute(
@@ -478,6 +482,141 @@ class TestSchemaMigrations:
             )
             # The other defaults are copied (LIKE ... INCLUDING DEFAULTS).
             assert defaults["fetched_at"] is not None, f"raw.{table}_archive lost its defaults"
+
+    def test_sim582_archives_carry_last_seen_at(self, pg_connection: sa.Connection) -> None:
+        """0031: each archive's ``last_seen_at`` is a nullable TIMESTAMPTZ with no default.
+
+        It is the last column, as in the live table (0029 appended it there). A
+        row archived before 0031 holds NULL; the retirement script copies a new
+        row's own value, so the archive needs no default.
+        """
+        for table in ("game_odds_archive", "prop_odds_archive"):
+            rows = pg_connection.execute(
+                text("""
+                    SELECT column_name, data_type, is_nullable, column_default
+                    FROM   information_schema.columns
+                    WHERE  table_schema = 'raw' AND table_name = :t
+                    ORDER  BY ordinal_position
+                """),
+                {"t": table},
+            ).fetchall()
+            assert rows, f"raw.{table} is missing (migration 0028)"
+            name, data_type, is_nullable, default = rows[-1]
+            assert name == "last_seen_at", f"raw.{table}'s last column is {name} (migration 0031)"
+            assert data_type == "timestamp with time zone", (
+                f"raw.{table}.last_seen_at is {data_type}"
+            )
+            assert is_nullable == "YES", f"raw.{table}.last_seen_at must accept NULL (the old rows)"
+            assert default is None, f"raw.{table}.last_seen_at has a default ({default})"
+
+    async def test_sim582_retirement_copies_a_row(self, asyncpg_pool) -> None:
+        """A real retirement copies a consensus row, its ``last_seen_at`` included.
+
+        The definition of done of SIM-582. The test seeds one Final game of an
+        unused season with a ``consensus`` and a ``bp:1`` closing price in each
+        odds table, runs the retirement script's ``retire_season`` against the
+        migrated database, and reads the archives. Before 0031 the script refuses
+        the season: the archive lacks the live column ``last_seen_at``.
+        """
+        retire = load_script("retire_consensus_odds")
+        seen = datetime(2099, 4, 1, 23, 30, tzinfo=UTC)
+        season, game_pk, venue_id, player_id = 2099, 9582001, 9582001, 9582101
+        teams = (9582010, 9582011)
+        pool = asyncpg_pool
+        try:
+            await pool.execute(
+                "INSERT INTO raw.venues (venue_id, season, venue_name, city, surface, roof_type) "
+                "VALUES ($1, $2, 'SIM-582 Test Park', 'Testville', 'Grass', 'Open')",
+                venue_id,
+                season,
+            )
+            for team_id, abbrev in zip(teams, ("TH", "TA"), strict=True):
+                await pool.execute(
+                    "INSERT INTO raw.teams "
+                    "(team_id, season, team_name, team_abbrev, league, division, venue_id) "
+                    "VALUES ($1, $2, $3, $4, 'AL', 'AL East', $5)",
+                    team_id,
+                    season,
+                    f"SIM-582 {abbrev}",
+                    abbrev,
+                    venue_id,
+                )
+            await pool.execute(
+                "INSERT INTO raw.players "
+                "(player_id, full_name, first_name, last_name, bats, throws, primary_position) "
+                "VALUES ($1, 'Sim Test', 'Sim', 'Test', 'R', 'R', 'P')",
+                player_id,
+            )
+            await pool.execute(
+                "INSERT INTO raw.games "
+                "(game_pk, season, game_date, game_type, status, venue_id, home_team_id, "
+                "away_team_id) VALUES ($1, $2, DATE '2099-04-01', 'R', 'Final', $3, $4, $5)",
+                game_pk,
+                season,
+                venue_id,
+                *teams,
+            )
+            for book, home_ml, away_ml in (("consensus", -120, 100), ("bp:1", -118, 102)):
+                await pool.execute(
+                    "INSERT INTO raw.game_odds (game_pk, book, line_type, market_type, home_ml, "
+                    "away_ml, odds_hash, last_seen_at) "
+                    "VALUES ($1, $2, 'closing', 'moneyline', $3, $4, $5, $6)",
+                    game_pk,
+                    book,
+                    home_ml,
+                    away_ml,
+                    f"sim582-{book}-ml",
+                    seen,
+                )
+                await pool.execute(
+                    "INSERT INTO raw.prop_odds (game_pk, player_id, book, line_type, prop_stat, "
+                    "line, over_ml, under_ml, odds_hash, last_seen_at) "
+                    "VALUES ($1, $2, $3, 'closing', 'strikeouts', 5.5, -110, -110, $4, $5)",
+                    game_pk,
+                    player_id,
+                    book,
+                    f"sim582-{book}-k",
+                    seen,
+                )
+
+            async with pool.acquire() as conn:
+                result = await retire.retire_season(conn, season, dry_run=False)
+
+            assert not result.refused, result
+            one_each = {"game_odds": 1, "prop_odds": 1}
+            assert result.counted == one_each, result
+            assert result.archived == one_each, result
+            assert result.deleted == one_each, result
+            for archive in ("game_odds_archive", "prop_odds_archive"):
+                rows = await pool.fetch(
+                    f"SELECT book, last_seen_at FROM raw.{archive} WHERE game_pk = $1", game_pk
+                )
+                assert [(r["book"], r["last_seen_at"]) for r in rows] == [("consensus", seen)], (
+                    f"raw.{archive} did not keep the copied row's last_seen_at: {rows}"
+                )
+            for table in ("game_odds", "prop_odds"):
+                books = await pool.fetch(
+                    f"SELECT book FROM raw.{table} WHERE game_pk = $1", game_pk
+                )
+                assert [r["book"] for r in books] == ["bp:1"], f"raw.{table} kept {books}"
+        finally:
+            for table in (
+                "game_odds_archive",
+                "prop_odds_archive",
+                "prop_odds",
+                "game_odds",
+                "games",
+            ):
+                await pool.execute(f"DELETE FROM raw.{table} WHERE game_pk = $1", game_pk)
+            await pool.execute(
+                "DELETE FROM raw.teams WHERE team_id = ANY($1::int[]) AND season = $2",
+                list(teams),
+                season,
+            )
+            await pool.execute(
+                "DELETE FROM raw.venues WHERE venue_id = $1 AND season = $2", venue_id, season
+            )
+            await pool.execute("DELETE FROM raw.players WHERE player_id = $1", player_id)
 
     def test_raw_etl_freshness_table_exists(self, pg_connection: sa.Connection) -> None:
         """raw.etl_data_freshness must exist. Migration 0003 creates it."""
