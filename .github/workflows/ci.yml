@@ -682,7 +682,10 @@ jobs:
 
   frontend-e2e:
     name: Frontend E2E (Playwright, cross-browser)
-    runs-on: ubuntu-latest
+    # SIM-641: ubuntu-latest became Ubuntu 26.04 in November 2026, and Playwright
+    # 1.60 (frontend/package-lock.json) has no browser build for it, so the browser
+    # install failed. This job stays on 24.04 until a Playwright upgrade supports 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: frontend
 

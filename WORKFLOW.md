@@ -162,13 +162,15 @@ A script you run on the host (not in a container) reads `BASEBALL_DB_DSN`. No
 script has a default. Use the app role:
 
 ```bat
-set BASEBALL_DB_DSN=postgresql://baseball_app:PASTE_APP_PASSWORD@localhost:5432/baseball_sim
+set BASEBALL_DB_DSN=postgresql://baseball_app:CHANGE_ME_APP_PASSWORD@localhost:5432/baseball_sim
 :: To keep it for new windows (open a NEW cmd window afterwards):
-setx BASEBALL_DB_DSN "postgresql://baseball_app:PASTE_APP_PASSWORD@localhost:5432/baseball_sim"
+setx BASEBALL_DB_DSN "postgresql://baseball_app:CHANGE_ME_APP_PASSWORD@localhost:5432/baseball_sim"
 ```
 
-`PASTE_APP_PASSWORD` is the value of `BASEBALL_APP_DB_PASSWORD` in `.env`. The
-containers ignore this variable: compose builds their connection strings.
+Replace `CHANGE_ME_APP_PASSWORD` with the value of `BASEBALL_APP_DB_PASSWORD` in `.env`.
+Keep the `CHANGE_ME` placeholder here: the CI secrets check rejects an example address with
+an unknown password word. The containers ignore this variable: compose builds their
+connection strings.
 
 ---
 

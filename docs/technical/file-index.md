@@ -25,8 +25,8 @@ Every source and config file in the repository, in the order of the [code review
 | [12. The frontend](#stage-12) | 82 | 27,244 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,129 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 39,502 |
-| [15. Tests and CI](#stage-15) | 315 | 126,742 |
-| **All** | **793** | **290,524** |
+| [15. Tests and CI](#stage-15) | 315 | 126,745 |
+| **All** | **793** | **290,527** |
 
 <a id="stage-1"></a>
 
@@ -949,7 +949,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/performance/bench_api_simulate.py`](../../tests/performance/bench_api_simulate.py) | 343 | The end-to-end `GET /api/games/{game_pk}/simulate` latency perf gate. | — |
 | [`tests/performance/bench_simulation.py`](../../tests/performance/bench_simulation.py) | 635 | The performance benchmark harness. | — |
 | [`tests/fixtures/mlb_game_feed/record_fixtures.py`](../../tests/fixtures/mlb_game_feed/record_fixtures.py) | 203 | Record trimmed league game feeds for the tests that parse the feed. | — |
-| [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) | 750 | MLB Baseball Simulation Platform — CI Pipeline (SIM-146) | — |
+| [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) | 753 | MLB Baseball Simulation Platform — CI Pipeline (SIM-146) | — |
 | [`.github/workflows/acceptance-nightly.yml`](../../.github/workflows/acceptance-nightly.yml) | 343 | MLB Baseball Simulation Platform — Production-config acceptance bands (SIM-450) | — |
 | [`.github/workflows/docker-release.yml`](../../.github/workflows/docker-release.yml) | 89 | MLB Baseball Simulation Platform — Docker Release (SIM-146) | — |
 | [`.github/workflows/frontend-release.yml`](../../.github/workflows/frontend-release.yml) | 84 | MLB Baseball Simulation Platform — Frontend Docker Release (SIM-401) | — |

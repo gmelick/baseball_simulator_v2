@@ -611,7 +611,7 @@ Node 20 and `npm ci`. A newer run on the same ref cancels an older one.
 | `secrets-check` | no committed `.env`; no literal credential, retired password or DSN password | — |
 | `file-integrity` | `python scripts/check_file_integrity.py` (NUL bytes, unparseable source) | — |
 | `frontend` | `npm run gen:api` + `git diff --exit-code`, `type-check`, `lint`, `build` | — |
-| `frontend-e2e` | `npm run e2e:install`, `npm run e2e` | `frontend` |
+| `frontend-e2e` | `npm run e2e:install`, `npm run e2e`, on `ubuntu-24.04` (Playwright 1.60 has no build for Ubuntu 26.04) | `frontend` |
 | `docker-build-check` | builds the `runtime` image target, no push | `lint`, `unit-tests`, `secrets-check` |
 
 The roster check reads the JUnit report and fails unless each of 27 named tests ran.
