@@ -593,7 +593,7 @@ container and in CI.
 
 ### `.github/workflows/ci.yml`
 
-[Source](../../.github/workflows/ci.yml) · 750 lines
+[Source](../../.github/workflows/ci.yml) · 753 lines
 
 Runs on every push to any branch, and on a pull request to `main` or `release/**`.
 Python jobs use 3.13 and `pip install -r requirements-dev.txt`; the frontend jobs use

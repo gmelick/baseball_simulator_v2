@@ -1,3 +1,56 @@
+# CLOSED — the two CI jobs that failed on every push pass again: a placeholder the secrets check accepts, and the browser tests on Ubuntu 24.04 — SIM-641, 2026-11-13
+
+**Why it matters.** The CI lane (`.github/workflows/ci.yml`, twelve jobs on every push) had not
+passed on master since 2026-10-21. Two jobs failed on every push. A lane that always fails
+cannot report a new failure, so a real defect could land unseen. The owner asked on 2026-11-13
+to fix both. I filed this ticket and closed it in the same change.
+
+**The secrets check.** The job's step "Reject a Postgres DSN with a literal password" scans every
+database address outside `docs/`, `CHANGES.md` and `tests/`. An address may carry only a known
+placeholder as its password: `CHANGE_ME...`, `${VAR}`, `<text>`, `***`, `pass`, `password` or `pw`.
+
+- The documentation rebuild (SIM-624, `1d2dc79`, 2026-10-21) wrote `PASTE_APP_PASSWORD` into two
+  example addresses of `WORKFLOW.md` §2.4. The step rejected that word on every push since.
+- The examples now say `CHANGE_ME_APP_PASSWORD`. The word stays in capitals, because the manual's
+  rule for cmd.exe forbids `<...>`: cmd reads `<` as a redirect.
+- The note after the examples tells the reader to replace the word. It also says why the word is
+  a `CHANGE_ME` word.
+- A local run of the step's grep finds no address left to reject.
+
+**The browser tests.** The job `frontend-e2e` installs the Playwright browsers, then runs the
+browser tests in Chromium, Firefox and WebKit.
+
+- GitHub's `ubuntu-latest` runner became Ubuntu 26.04 between 2026-10-27 and 2026-11-13.
+  Playwright 1.60.0, the version in `frontend/package-lock.json`, has no browser build for it.
+  The install step failed with "Playwright does not support chromium on ubuntu26.04-x64".
+- The job last passed on 2026-10-27, on the `ubuntu-24.04` image. It now runs there:
+  `runs-on: ubuntu-24.04`, with a comment that says why.
+- The other eleven jobs keep `ubuntu-latest`; they pass on Ubuntu 26.04.
+- `docs/technical/tests.md` names the runner in the job's row, and its count of the lines of
+  `ci.yml` reads 753.
+
+**The proof.** The branch's CI run (run 43377500634, commit `44d097e`) passed all twelve jobs.
+It is the first fully green run since 2026-10-21.
+- The secrets check passed every step.
+- The browser tests ran on the `ubuntu-24.04` image: 63 passed in the three browsers.
+- The Docker build check ran again; it waits on the secrets check, so it had been skipped.
+
+**The independent QA pass.** One reviewer ran the four steps of the secrets check locally, on
+master and on the branch. On master the DSN step flags `WORKFLOW.md` lines 165 and 167; on the
+branch it flags nothing. It confirmed the image of each run and found no other workflow that
+installs a browser. It found no blocker and no major problem. I applied its four minor findings.
+- The manual's note now says when to replace the word, then why it is a `CHANGE_ME` word.
+- The comment above `runs-on` is three short sentences.
+- The line count of `ci.yml` in `tests.md` is current.
+- The backlog's next free ID moved to SIM-642 in this change.
+
+**Found, not filed.** npm lists Playwright 1.65.0 today. An upgrade that supports Ubuntu 26.04
+lets the browser job move back to `ubuntu-latest`. I did not test that upgrade.
+
+**The record.** I filed this ticket and closed it in this change, so `BACKLOG.xlsx` gains no
+row. Its row 2 now reads `NEXT FREE TICKET ID: SIM-642`. The branch `sim641-ci-green` and its
+worktree are deleted.
+
 # CLOSED — the two odds archives carry `last_seen_at`, so each holds every live column again and the integration tests pass — SIM-582, 2026-11-13
 
 **Why it matters.** Each odds table has an archive: the retirement script
@@ -110,6 +163,7 @@ exited 0 with the same counts, read from the progress lines. No piece crashed.
     allow-list does not know that word.
   - The Playwright job fails on the two pushes of 2026-11-13. Playwright does not support
     Chromium on the runner's new Ubuntu 26.04 image.
+  - Both jobs pass again after the CI fix of 2026-11-13 (SIM-641, the entry above).
 - The backlog's table `OpenTickets` and its filter cover A4:F13 only, the header and the first
   nine tickets. So an Excel sort or filter reaches only those rows.
 

@@ -167,10 +167,10 @@ set BASEBALL_DB_DSN=postgresql://baseball_app:CHANGE_ME_APP_PASSWORD@localhost:5
 setx BASEBALL_DB_DSN "postgresql://baseball_app:CHANGE_ME_APP_PASSWORD@localhost:5432/baseball_sim"
 ```
 
-Replace `CHANGE_ME_APP_PASSWORD` with the value of `BASEBALL_APP_DB_PASSWORD` in `.env`.
-Keep the `CHANGE_ME` placeholder here: the CI secrets check rejects an example address with
-an unknown password word. The containers ignore this variable: compose builds their
-connection strings.
+When you type the command, replace `CHANGE_ME_APP_PASSWORD` with the value of
+`BASEBALL_APP_DB_PASSWORD` in `.env`. The manual uses a `CHANGE_ME` word because the CI
+secrets check accepts only a known placeholder as the password of an example address. The
+containers ignore this variable: compose builds their connection strings.
 
 ---
 
