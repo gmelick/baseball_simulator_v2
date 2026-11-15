@@ -65,8 +65,8 @@ HOW IT REUSES THE PLATFORM'S SEAMS
   ``scripts/validate_props.py``). The results build a ``GameSimSummary``, a
   ``WinProbability`` and a ``PropDistributionSet``.
 * The de-vig and the edge math: ``betting.bet_signal`` (``moneyline_edge_report``,
-  ``total_over_under_edge_report``, ``prop_edge_report``,
-  ``run_line_bet_cover_prob``, ``devig_two_way``, ``devig_one_sided``), fed the
+  ``samples_over_under_edge_report``, ``prop_edge_report``,
+  ``run_line_bet_cover_prob``, ``devig``, ``devig_one_sided``), fed the
   CLOSING quote.
 * The scoring rules: ``simulation.prop_validation.binary_brier`` and
   ``binary_log_loss``, once with the simulator's probabilities and once with the

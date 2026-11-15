@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from tests.script_loader import load_script
 
-from betting.bet_signal import devig_multiway, devig_two_way, implied_prob_from_american
+from betting.bet_signal import devig
 from pipeline.odds_provider import (
     GRADED_BOOK_PREFERENCE,
 )
@@ -102,20 +102,14 @@ class TestSharpness:
 
     def test_the_three_way_probability_uses_the_tie(self):
         row = {"home_ml": 150, "away_ml": 170, "draw_ml": 400}
-        expected = devig_multiway(
-            [
-                implied_prob_from_american(150),
-                implied_prob_from_american(170),
-                implied_prob_from_american(400),
-            ]
-        )[0]
+        expected = devig([150, 170, 400])[0]
         assert sharp.reference_prob("f5_moneyline", row) == pytest.approx(expected)
         assert sharp.reference_prob("f5_moneyline", {"home_ml": 150, "away_ml": 170}) is None
         assert sharp.reference_prob(
             "moneyline", {"home_ml": -150, "away_ml": 130}
-        ) == pytest.approx(devig_two_way(-150, 130)[0])
+        ) == pytest.approx(devig([-150, 130])[0])
         assert sharp.reference_prob("first_inning_run", {"over_ml": 110, "under_ml": -130}) == (
-            pytest.approx(devig_two_way(110, -130)[0])
+            pytest.approx(devig([110, -130])[0])
         )
 
     def test_segment_outcomes_read_the_grid(self):

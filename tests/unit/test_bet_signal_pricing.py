@@ -29,20 +29,15 @@ import pytest
 from betting.bet_signal import (
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
     american_to_decimal,
-    american_to_implied_prob,
-    decimal_to_american,
-    devig_multiway,
-    devig_two_way,
-    edge,
+    devig,
+    edge_report,
     expected_value,
-    fair_american_from_prob,
     implied_prob_from_american,
     moneyline_edge_report,
     prob_to_american,
     prop_edge_report,
-    total_over_under_edge_report,
+    samples_over_under_edge_report,
 )
 from simulation.prop_distributions import PropDistribution
 from simulation.results import ConfidenceInterval, GameSimSummary
@@ -62,8 +57,6 @@ def test_implied_prob_known_american_odds():
     assert implied_prob_from_american(+100) == pytest.approx(0.50, abs=1e-12)
     # -200 -> 0.6667     (heavy favourite)
     assert implied_prob_from_american(-200) == pytest.approx(2.0 / 3.0, abs=1e-9)
-    # alias agrees
-    assert american_to_implied_prob(-110) == implied_prob_from_american(-110)
 
 
 def test_american_zero_is_undefined():
@@ -81,7 +74,7 @@ def test_prob_to_american_is_inverse():
     # known anchors
     assert prob_to_american(0.40) == pytest.approx(150.0, abs=1e-9)
     assert prob_to_american(0.50) == pytest.approx(100.0, abs=1e-9)
-    assert fair_american_from_prob(2.0 / 3.0) == pytest.approx(-200.0, abs=1e-6)
+    assert prob_to_american(2.0 / 3.0) == pytest.approx(-200.0, abs=1e-6)
 
 
 def test_prob_to_american_rejects_out_of_range():
@@ -90,15 +83,10 @@ def test_prob_to_american_rejects_out_of_range():
             prob_to_american(p)
 
 
-def test_american_decimal_roundtrip():
+def test_american_to_decimal():
     assert american_to_decimal(+150) == pytest.approx(2.50, abs=1e-12)
     assert american_to_decimal(-110) == pytest.approx(1.0 + 100.0 / 110.0, abs=1e-12)
     assert american_to_decimal(+100) == pytest.approx(2.0, abs=1e-12)
-    for a in (-110, +150, +100, -200, +250):
-        d = american_to_decimal(a)
-        assert decimal_to_american(d) == pytest.approx(a, abs=1e-6), a
-    with pytest.raises(ValueError):
-        decimal_to_american(1.0)
 
 
 # ===========================================================================
@@ -112,7 +100,7 @@ def test_two_way_devig_sums_to_one_and_reduces_both_sides():
     q_under = implied_prob_from_american(-110)
     assert q_over + q_under > 1.0  # there IS a vig
 
-    p_over, p_under = devig_two_way(-110, -110)
+    p_over, p_under = devig([-110, -110])
     # Sums to exactly 1.0
     assert p_over + p_under == pytest.approx(1.0, abs=1e-12)
     # Symmetric market -> 0.5 each
@@ -127,36 +115,31 @@ def test_two_way_devig_asymmetric_reduces_both():
     # A lopsided market: -200 favourite / +170 dog.
     q_fav = implied_prob_from_american(-200)
     q_dog = implied_prob_from_american(+170)
-    p_fav, p_dog = devig_two_way(-200, +170)
+    p_fav, p_dog = devig([-200, +170])
     assert p_fav + p_dog == pytest.approx(1.0, abs=1e-12)
     assert p_fav < q_fav  # both sides reduced
     assert p_dog < q_dog
     assert p_fav > p_dog  # ordering preserved (favourite still favoured)
 
 
-def test_multiway_devig_normalises_n_outcomes():
-    # Three raw implied probs summing to 1.08 (8% overround).
-    raw = [0.40, 0.38, 0.30]  # sums to 1.08
-    fair = devig_multiway(raw)
+def test_three_way_devig_normalises_every_outcome():
+    # A home / away / tie market with an overround.
+    prices = [+150, +160, +250]
+    raw = [implied_prob_from_american(a) for a in prices]
+    assert sum(raw) > 1.0
+    fair = devig(prices)
     assert sum(fair) == pytest.approx(1.0, abs=1e-12)
-    # Each reduced proportionally; ordering preserved.
-    for f, r in zip(fair, raw, strict=False):
-        assert f < r
+    # Each side is scaled by the same factor, so the order is kept.
+    for f, q in zip(fair, raw, strict=True):
+        assert f == pytest.approx(q / sum(raw), abs=1e-12)
     assert fair[0] > fair[1] > fair[2]
-    # Two-way multiway reduces to devig_two_way.
-    q_a = implied_prob_from_american(-130)
-    q_b = implied_prob_from_american(+110)
-    mw = devig_multiway([q_a, q_b])
-    tw = devig_two_way(-130, +110)
-    assert mw[0] == pytest.approx(tw[0], abs=1e-12)
-    assert mw[1] == pytest.approx(tw[1], abs=1e-12)
 
 
 def test_devig_rejects_bad_input():
     with pytest.raises(ValueError):
-        devig_multiway([0.5])  # < 2 outcomes
+        devig([-110])  # fewer than 2 prices
     with pytest.raises(ValueError):
-        devig_multiway([0.5, 0.0])  # non-positive
+        devig([-110, 0])  # a price of 0
 
 
 # ===========================================================================
@@ -164,13 +147,24 @@ def test_devig_rejects_bad_input():
 # ===========================================================================
 
 
+def _edge(p_sim: float, p_fair: float) -> float:
+    return edge_report(
+        label="t",
+        side=MarketSide.HOME,
+        line=None,
+        sim_prob=p_sim,
+        fair_prob=p_fair,
+        offered_american=-110,
+    ).edge
+
+
 def test_edge_sign_against_fair_prob():
     # Fair market prob 0.50; sim more bullish -> positive edge.
-    assert edge(0.55, 0.50) == pytest.approx(0.05, abs=1e-12)
+    assert _edge(0.55, 0.50) == pytest.approx(0.05, abs=1e-12)
     # sim less bullish -> negative edge.
-    assert edge(0.45, 0.50) == pytest.approx(-0.05, abs=1e-12)
+    assert _edge(0.45, 0.50) == pytest.approx(-0.05, abs=1e-12)
     # equal -> zero edge.
-    assert edge(0.50, 0.50) == pytest.approx(0.0, abs=1e-12)
+    assert _edge(0.50, 0.50) == pytest.approx(0.0, abs=1e-12)
 
 
 def test_ev_sign_at_offered_price():
@@ -192,9 +186,9 @@ def test_edge_and_ev_agree_in_sign_vs_fair():
     # price can still be negative, because the offered price carries the vig. The
     # edge (against the fair price) and the EV (against the offered price) differ
     # on purpose.
-    p_over, _ = devig_two_way(-110, -110)  # fair 0.50
+    p_over, _ = devig([-110, -110])  # fair 0.50
     sim = 0.52
-    assert edge(sim, p_over) > 0.0  # beats the no-vig market
+    assert sim - p_over > 0.0  # beats the no-vig market
     # at -110 the break-even is 0.5238; sim 0.52 < that -> EV negative despite +edge
     assert expected_value(sim, -110) < 0.0
 
@@ -272,13 +266,10 @@ def _summary_from_totals(totals) -> GameSimSummary:
 def test_moneyline_edge_report_consumes_win_prob():
     wp = _win_prob(0.60)  # sim says home 60%
     # Market: home -130 (fair ~0.54 after de-vig), away +110.
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=-130, other=+110),
-    )
+    market = OddsQuote(side=-130, other=+110)
     rep = moneyline_edge_report(wp, market, side=MarketSide.HOME)
     assert rep.sim_prob == pytest.approx(0.60, abs=1e-12)
-    fair, _ = devig_two_way(-130, +110)
+    fair, _ = devig([-130, +110])
     assert rep.market_fair_prob == pytest.approx(fair, abs=1e-12)
     # Sim 0.60 > fair ~0.54 -> positive edge.
     assert rep.positive_edge is True
@@ -291,14 +282,11 @@ def test_moneyline_edge_report_consumes_win_prob():
 
 def test_moneyline_away_side_uses_away_prob():
     wp = _win_prob(0.60)  # away is 0.40
-    market = TwoWayMarket(
-        side=MarketSide.AWAY,
-        entry=OddsQuote(side=+150, other=-170),  # away dog +150 (raw implied 0.40)
-    )
+    market = OddsQuote(side=+150, other=-170)
     rep = moneyline_edge_report(wp, market, side=MarketSide.AWAY)
     assert rep.sim_prob == pytest.approx(0.40, abs=1e-12)
     # away fair = devig(+150, -170)[0] ~0.39; sim 0.40 is close to it -> small edge
-    fair, _ = devig_two_way(+150, -170)
+    fair, _ = devig([+150, -170])
     assert rep.edge == pytest.approx(0.40 - fair, abs=1e-12)
 
 
@@ -306,10 +294,7 @@ def test_prop_edge_report_consumes_pmf_over():
     # Strikeouts PMF centred so P(K >= 6) is high.  Support 4..8.
     dist = _prop_dist("K", [4, 5, 6, 7, 8], [0.05, 0.15, 0.30, 0.30, 0.20])
     # Line 5.5 -> over == P(K >= 6) == 0.30+0.30+0.20 = 0.80.
-    market = TwoWayMarket(
-        side=MarketSide.OVER,
-        entry=OddsQuote(side=-110, other=-110, line=5.5),
-    )
+    market = OddsQuote(side=-110, other=-110, line=5.5)
     rep = prop_edge_report(dist, market, side=MarketSide.OVER)
     assert rep.sim_prob == pytest.approx(0.80, abs=1e-12)
     assert rep.line == pytest.approx(5.5, abs=1e-12)
@@ -323,16 +308,13 @@ def test_prop_edge_report_consumes_pmf_over():
 def test_prop_edge_report_under_and_push_convention():
     dist = _prop_dist("K", [4, 5, 6, 7, 8], [0.05, 0.15, 0.30, 0.30, 0.20])
     # Integer line 6: under == P(K < 6) == 0.05+0.15 = 0.20 (push mass at 6 excluded).
-    market = TwoWayMarket(
-        side=MarketSide.UNDER,
-        entry=OddsQuote(side=-110, other=-110, line=6),
-    )
+    market = OddsQuote(side=-110, other=-110, line=6)
     rep = prop_edge_report(dist, market, side=MarketSide.UNDER)
     assert rep.sim_prob == pytest.approx(0.20, abs=1e-12)
     # Over at the same integer line excludes the push too: P(K>6)=0.50.
     over_rep = prop_edge_report(
         dist,
-        TwoWayMarket(side=MarketSide.OVER, entry=OddsQuote(-110, -110, line=6)),
+        OddsQuote(-110, -110, line=6),
         side=MarketSide.OVER,
     )
     assert over_rep.sim_prob == pytest.approx(0.50, abs=1e-12)
@@ -345,7 +327,7 @@ def test_prop_edge_report_requires_line():
     with pytest.raises(ValueError):
         prop_edge_report(
             dist,
-            TwoWayMarket(side=MarketSide.OVER, entry=OddsQuote(-110, -110, line=None)),
+            OddsQuote(-110, -110, line=None),
             side=MarketSide.OVER,
         )
 
@@ -354,16 +336,13 @@ def test_total_edge_report_consumes_raw_arrays():
     # Totals: ten games, five at 7 and five at 10.
     summary = _summary_from_totals([7, 7, 7, 7, 7, 10, 10, 10, 10, 10])
     # Half-integer line 8.5 -> over == P(total > 8.5) == 5/10 = 0.50.
-    market = TwoWayMarket(
-        side=MarketSide.OVER,
-        entry=OddsQuote(side=-105, other=-115, line=8.5),
+    market = OddsQuote(side=-105, other=-115, line=8.5)
+    rep = samples_over_under_edge_report(
+        summary.total_scores, market, side=MarketSide.OVER, label="total"
     )
-    rep = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
     assert rep.sim_prob == pytest.approx(0.50, abs=1e-12)
-    under_rep = total_over_under_edge_report(
-        summary,
-        TwoWayMarket(side=MarketSide.UNDER, entry=OddsQuote(-115, -105, line=8.5)),
-        side=MarketSide.UNDER,
+    under_rep = samples_over_under_edge_report(
+        summary.total_scores, OddsQuote(-115, -105, line=8.5), side=MarketSide.UNDER, label="total"
     )
     assert under_rep.sim_prob == pytest.approx(0.50, abs=1e-12)
     # half-integer: over + under == 1 (no push).
@@ -372,15 +351,12 @@ def test_total_edge_report_consumes_raw_arrays():
 
 def test_total_edge_report_integer_line_excludes_push():
     summary = _summary_from_totals([7, 7, 8, 8, 8, 9, 9])  # three 8s push at line 8
-    market = TwoWayMarket(
-        side=MarketSide.OVER,
-        entry=OddsQuote(side=-110, other=-110, line=8),
+    market = OddsQuote(side=-110, other=-110, line=8)
+    over = samples_over_under_edge_report(
+        summary.total_scores, market, side=MarketSide.OVER, label="total"
     )
-    over = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
-    under = total_over_under_edge_report(
-        summary,
-        TwoWayMarket(side=MarketSide.UNDER, entry=OddsQuote(-110, -110, line=8)),
-        side=MarketSide.UNDER,
+    under = samples_over_under_edge_report(
+        summary.total_scores, OddsQuote(-110, -110, line=8), side=MarketSide.UNDER, label="total"
     )
     # over = P(>8)=2/7, under = P(<8)=2/7, push = 3/7; over+under+push == 1.
     assert over.sim_prob == pytest.approx(2.0 / 7.0, abs=1e-12)
@@ -390,12 +366,11 @@ def test_total_edge_report_integer_line_excludes_push():
 
 def test_total_end_to_end():
     summary = _summary_from_totals([9] * 6 + [7] * 4)  # P(over 8.5) = 0.60
-    market = TwoWayMarket(
-        side=MarketSide.OVER,
-        entry=OddsQuote(side=+105, other=-125, line=8.5),  # entry over +105
+    market = OddsQuote(side=+105, other=-125, line=8.5)
+    rep = samples_over_under_edge_report(
+        summary.total_scores, market, side=MarketSide.OVER, label="total"
     )
-    rep = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
     assert rep.sim_prob == pytest.approx(0.60, abs=1e-12)
-    fair, _ = devig_two_way(+105, -125)
+    fair, _ = devig([+105, -125])
     assert rep.edge == pytest.approx(0.60 - fair, abs=1e-12)
     assert rep.ev == pytest.approx(expected_value(0.60, +105), abs=1e-12)

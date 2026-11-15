@@ -44,7 +44,6 @@ from api.serialization import to_jsonable
 from betting.bet_signal import (
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
     moneyline_edge_report,
     prop_edge_report,
 )
@@ -317,10 +316,7 @@ def test_metric_delta_model_roundtrips_standalone():
 
 def test_edge_report_model_roundtrips_moneyline():
     wp = win_probability(_summary())
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=-110, other=-110),
-    )
+    market = OddsQuote(side=-110, other=-110)
     report = moneyline_edge_report(wp, market, side=MarketSide.HOME)
     model = EdgeReportModel.from_dataclass(report)
     loaded = _roundtrip(model)
@@ -335,10 +331,7 @@ def test_edge_report_model_roundtrips_moneyline():
 
 def test_edge_report_model_roundtrips_prop():
     dist = PropDistribution.from_samples(900, "K", [6, 8, 5, 7, 6, 8])
-    market = TwoWayMarket(
-        side=MarketSide.OVER,
-        entry=OddsQuote(side=-115, other=-105, line=6.5),
-    )
+    market = OddsQuote(side=-115, other=-105, line=6.5)
     report = prop_edge_report(dist, market, side=MarketSide.OVER)
     model = EdgeReportModel.from_dataclass(report)
     loaded = _roundtrip(model)

@@ -23,8 +23,8 @@ from betting.bet_signal import (
     DEFAULT_ONE_SIDED_MARGIN,
     MarketSide,
     devig_one_sided,
+    edge_report,
     implied_prob_from_american,
-    one_sided_edge_report,
     reference_margin_from_prices,
     run_line_bet_cover_prob,
     run_line_is_pair,
@@ -81,7 +81,7 @@ class TestPrimitives:
         )
 
     def test_one_sided_edge_report(self):
-        rep = one_sided_edge_report(
+        rep = edge_report(
             label="run_line",
             side=MarketSide.AWAY,
             line=-1.5,
@@ -92,7 +92,7 @@ class TestPrimitives:
         assert rep.line == -1.5 and rep.market_fair_prob == 0.374
         assert rep.edge == pytest.approx(0.4 - 0.374)
         with pytest.raises(ValueError):  # a certain probability has no fair price
-            one_sided_edge_report(
+            edge_report(
                 label="run_line",
                 side=MarketSide.HOME,
                 line=-1.5,

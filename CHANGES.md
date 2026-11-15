@@ -1,3 +1,66 @@
+# CLOSED — the betting module loses ten names, and its docs are rewritten short — SIM-643, 2026-11-15
+
+**Why it matters.** After the closing-line-value code left (SIM-642), `betting/bet_signal.py`
+still carried thin wrappers, aliases and a class whose only job was CLV. The owner asked for a
+function-by-function review, then for every suggested change. The module drops from 1,016 to
+611 lines. No served number changes, apart from the removed `confidence` field.
+
+**What changed (Backend Developer, Betting / Markets Analyst).**
+
+- **One de-vig.** `devig(american_prices)` replaces `devig_two_way` and `devig_multiway`. It
+  takes two prices for a two-way market and three for a market with a tie. Every old
+  `devig_multiway` caller converted prices to probabilities first, so the callers pass the
+  prices now. `devig_one_sided` stays separate: it divides one price by another market's
+  margin, a different method.
+- **One report core.** `one_sided_edge_report` is renamed `edge_report` and is the one place an
+  `EdgeReport` is built. The two-way builders call it through a private `_two_way` helper (the
+  de-vig, then `edge_report`). `_build_edge_report` is gone; the pricing route no longer
+  imports a private name.
+- **`TwoWayMarket` is gone.** It held the entry and the closing quote for CLV. Its `side` field
+  was never read. The builders take an `OddsQuote` directly, as `quote`.
+- **`total_over_under_edge_report` is gone.** It only called
+  `samples_over_under_edge_report` with the label `total`. Its four callers pass
+  `summary.total_scores` themselves.
+- **Removed:** `decimal_to_american` (only its test called it), the aliases
+  `american_to_implied_prob` and `fair_american_from_prob`, `edge()` (one subtraction),
+  `kelly_fraction_full` (folded into `stake_fraction` as `EV / b`), and the constants
+  `DEFAULT_MIN_EV`, `DEFAULT_KELLY_FRACTION` and `DEFAULT_MAX_STAKE_FRACTION` (now the field
+  defaults of `BetSignalConfig`). `DEFAULT_MIN_EDGE` stays: two accuracy scripts read it.
+- **`stake_fraction(report, config)`** takes a `BetSignalConfig`; the config validates the
+  settings once.
+- **`BetSignal.confidence` is gone.** It was an exact copy of `edge`. The response model, the
+  API snapshot, the generated types and `frontend/src/api/betting.ts` drop it. No component
+  read it.
+- **The module is in seven sections:** the conversions, the de-vig, the expected value, the
+  records, the report builders, the run line, the signals. Every docstring and comment is
+  rewritten shorter, in plain words.
+
+**Callers.** `api/routes/betting_pricing.py`, `api/routes/games.py`,
+`scripts/accuracy/grading.py`, the docstrings of `hypothetical_return.py`, `report.py` and
+`accuracy_comparison.py`, and the probes `book_sharpness.py` and `rescore_graded_book.py`.
+
+**Tests (QA / DevOps).** The tests move to the new names. The test that compared the old totals
+builder with the samples builder is deleted: they are one function now. The `devig` tests cover
+a three-way market and the two error cases. The stake tests pass a `BetSignalConfig`.
+
+**Docs.** `docs/technical/betting.md` is rewritten from the code, in the module's seven
+sections. The file index is regenerated.
+
+**Why `prob_to_american` stays.** It gives the report's `sim_fair_american`: the simulator's own
+price with no vig. The game page's Betting card shows it as "sim fair" next to the book's
+price. The accuracy comparison also calls it to skip a probability of 0 or 1.
+
+**Gates.** ruff check and format, mypy (no issues in 208 files), the frontend's
+`tsc --noEmit`, the unit lane in two halves (6,462 passed, 5 skipped, no crash) and the
+end-to-end file on host Python (10 passed). An independent QA pass compared the old and the new
+module function by function and found no behaviour change. It caught two wrong "called from"
+cells in `betting.md`, two docstring gaps and one edge case: the gate now keeps
+`not ev <= min_ev`, so a NaN EV passes as it did before. All five are fixed.
+
+**Deploy.** The `betting/` folder is baked into the app image, and the app hot-reloads `api/`.
+Rebuild the image (`docker compose build app`, then `docker compose up -d app`) before the app
+reloads the new `api/` code.
+
 # CLOSED — the betting layer is one module, and the closing-line-value and line-movement code is gone — SIM-642, 2026-11-13
 
 **Why it matters.** The model is not judged by closing line value (CLV: how a bet's price

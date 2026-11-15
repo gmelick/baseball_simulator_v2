@@ -77,9 +77,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from betting.bet_signal import (  # noqa: E402
-    devig_multiway,
-    devig_two_way,
-    implied_prob_from_american,
+    devig,
 )
 from pipeline.odds_provider import (  # noqa: E402
     GAME_MARKET_KIND,
@@ -171,20 +169,14 @@ def reference_prob(market_type: str, row: Mapping[str, Any]) -> float | None:
                 draw = row.get("draw_ml")
                 if draw is None:
                     return None
-                fair = devig_multiway(
-                    [
-                        implied_prob_from_american(float(home)),
-                        implied_prob_from_american(float(away)),
-                        implied_prob_from_american(float(draw)),
-                    ]
-                )
+                fair = devig([float(home), float(away), float(draw)])
                 return float(fair[0])
-            return float(devig_two_way(float(home), float(away))[0])
+            return float(devig([float(home), float(away)])[0])
         if kind in ("total", "yes_no"):
             over, under = row.get("over_ml"), row.get("under_ml")
             if over is None or under is None:
                 return None
-            return float(devig_two_way(float(over), float(under))[0])
+            return float(devig([float(over), float(under)])[0])
     except ValueError:
         return None
     return None
@@ -346,7 +338,7 @@ def strikeout_observations(
             try:
                 if over is None or under is None:
                     raise ValueError("a side is missing")
-                prob = float(devig_two_way(float(over), float(under))[0])
+                prob = float(devig([float(over), float(under)])[0])
             except ValueError:
                 skipped[f"unpriced:{STRIKEOUTS}:{book}"] += 1
                 continue

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from tests.script_loader import load_script
 
-from betting.bet_signal import devig_multiway, devig_two_way, implied_prob_from_american
+from betting.bet_signal import devig
 from pipeline.odds_provider import (
     GRADED_BOOK_PREFERENCE,
     ODDS_ROW_VERSION,
@@ -139,21 +139,15 @@ class TestRescore:
         )
         recs = _by_market(out["accuracy_records"])
         ml = recs[(1, "moneyline")]
-        assert ml["market_prob"] == pytest.approx(devig_two_way(-150.0, 130.0)[0])
+        assert ml["market_prob"] == pytest.approx(devig([-150.0, 130.0])[0])
         assert (ml["market_side_price"], ml["market_other_price"]) == (-150.0, 130.0)
         assert (ml["sim_prob"], ml["outcome"]) == (0.60, 1)  # the simulator's side is kept
         f5 = recs[(1, "f5_moneyline")]
-        three = devig_multiway(
-            [
-                implied_prob_from_american(130),
-                implied_prob_from_american(150),
-                implied_prob_from_american(450),
-            ]
-        )
+        three = devig([130, 150, 450])
         assert f5["market_prob"] == pytest.approx(three[0])
         assert f5["market_other_price"] is None
         fir = recs[(1, "first_inning_run")]
-        assert fir["market_prob"] == pytest.approx(devig_two_way(100.0, -120.0)[0])
+        assert fir["market_prob"] == pytest.approx(devig([100.0, -120.0])[0])
         assert summary["graded_books"]["moneyline"] == {"bp:12": 1}
 
     def test_a_record_without_a_graded_price_is_given_up(self):

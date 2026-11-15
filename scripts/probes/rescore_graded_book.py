@@ -79,9 +79,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from betting.bet_signal import (  # noqa: E402
-    devig_multiway,
-    devig_two_way,
-    implied_prob_from_american,
+    devig,
 )
 from pipeline.odds_provider import (  # noqa: E402
     GAME_MARKET_KIND,
@@ -277,16 +275,10 @@ def reprice_fixed_line(market_type: str, row: Mapping[str, Any]) -> Repriced:
             draw = _float(row.get("draw_ml"))
             if draw is None:
                 raise Unpriceable("no_tie_price")
-            fair = devig_multiway(
-                [
-                    implied_prob_from_american(side),
-                    implied_prob_from_american(other),
-                    implied_prob_from_american(draw),
-                ]
-            )
+            fair = devig([side, other, draw])
             return Repriced(market_prob=float(fair[0]), side_price=side, other_price=None)
         return Repriced(
-            market_prob=float(devig_two_way(side, other)[0]), side_price=side, other_price=other
+            market_prob=float(devig([side, other])[0]), side_price=side, other_price=other
         )
     except Unpriceable:
         raise

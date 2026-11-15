@@ -69,10 +69,6 @@
         "additionalProperties": false,
         "description": "Response model for :class:`betting.bet_signal.BetSignal` (SIM-369).\n\nA fireable +EV bet recommendation derived from one :class:`EdgeReport`.\n``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.\n\"home\" / \"over\"); ``report`` is the full source :class:`EdgeReportModel` (so a\nconsumer gets the sim/market probabilities behind the signal). The list\na signals endpoint returns is already ranked by EV descending (``rank`` 0 ==\nstrongest). numpy-free (plain floats / ints).",
         "properties": {
-          "confidence": {
-            "title": "Confidence",
-            "type": "number"
-          },
           "edge": {
             "title": "Edge",
             "type": "number"
@@ -145,7 +141,6 @@
           "edge",
           "ev",
           "stake_fraction",
-          "confidence",
           "rank",
           "report"
         ],

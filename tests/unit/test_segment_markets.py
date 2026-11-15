@@ -232,15 +232,9 @@ class TestSegmentMarketScorer:
         r = recs[0]
         assert r.sim_prob == 0.25  # F1 home led in one of four
         # The market's fair home probability from the three-way de-vig.
-        from betting.bet_signal import devig_multiway, implied_prob_from_american
+        from betting.bet_signal import devig
 
-        fair = devig_multiway(
-            [
-                implied_prob_from_american(255.0),
-                implied_prob_from_american(290.0),
-                implied_prob_from_american(-130.0),
-            ]
-        )
+        fair = devig([255.0, 290.0, -130.0])
         assert r.market_prob == pytest.approx(fair[0])
         assert sum(fair) == pytest.approx(1.0)
         assert r.outcome == 1  # home scored in the first, away did not
@@ -377,7 +371,7 @@ class TestRunLineTwoBets:
         assert away.sim_prob == pytest.approx(0.4)
 
     def test_run_line_pair_is_unchanged(self, runs):
-        from betting.bet_signal import devig_two_way
+        from betting.bet_signal import devig
 
         odds = _closing(
             "f5_runline",
@@ -393,7 +387,7 @@ class TestRunLineTwoBets:
         assert len(recs) == 1
         r = recs[0]
         assert (r.market, r.market_type) == ("f5_runline", "f5_runline")
-        assert r.market_prob == pytest.approx(devig_two_way(105.0, -140.0)[0])
+        assert r.market_prob == pytest.approx(devig([105.0, -140.0])[0])
         assert r.market_side_price == 105.0 and r.market_other_price == -140.0
         assert r.sim_prob == market_probability(runs, "f5_runline", line=-0.5)
         assert r.outcome == 1

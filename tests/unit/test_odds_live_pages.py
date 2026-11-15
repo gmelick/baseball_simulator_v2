@@ -31,8 +31,7 @@ from api.routes.betting import router as betting_router
 from betting.bet_signal import (
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
-    devig_two_way,
+    devig,
     expected_value,
     implied_prob_from_american,
     moneyline_edge_report,
@@ -315,7 +314,7 @@ class TestStoredMarket:
     def test_the_offered_price_moves_the_ev_and_not_the_edge(self):
         base = moneyline_edge_report(
             SimpleNamespace(home_win_prob=0.55, away_win_prob=0.45),
-            TwoWayMarket(side=MarketSide.HOME, entry=OddsQuote(side=-150.0, other=130.0)),
+            OddsQuote(side=-150.0, other=130.0),
             side=MarketSide.HOME,
         )
         moved = pricing._at_offered_price(base, (-140.0, "bp:10"))
@@ -472,7 +471,7 @@ class TestStoredEdges:
         assert body["fair_book"] == {"moneyline": "bp:12"}
         assert body["fair_book_name"] == {"moneyline": "DraftKings"}
         by_side = {e["side"]: e for e in body["edges"]}
-        fair_home, fair_away = devig_two_way(-150, 130)  # DraftKings' row alone
+        fair_home, fair_away = devig([-150, 130])  # DraftKings' row alone
         home, away = by_side["home"], by_side["away"]
         assert home["market_fair_prob"] == pytest.approx(fair_home)
         assert away["market_fair_prob"] == pytest.approx(fair_away)
@@ -522,7 +521,7 @@ class TestStoredEdges:
         assert body["odds_source"] == {"runline": "stored"}
         assert body["run_line_pricing"]["shape"] == "pair"
         by_side = {e["side"]: e for e in body["edges"]}
-        fair_home, fair_away = devig_two_way(120, -140)
+        fair_home, fair_away = devig([120, -140])
         assert by_side["home"]["market_fair_prob"] == pytest.approx(fair_home)
         assert by_side["away"]["market_fair_prob"] == pytest.approx(fair_away)
         assert {
@@ -657,7 +656,7 @@ class TestStoredEdges:
         assert body["fair_book"] == {"moneyline": "bp:12"}
         assert body["fair_book_name"] == {"moneyline": "DraftKings"}
         by_side = {e["side"]: e for e in body["edges"]}
-        fair_home, fair_away = devig_two_way(-150, 130)
+        fair_home, fair_away = devig([-150, 130])
         assert by_side["home"]["market_fair_prob"] == pytest.approx(fair_home)
         assert by_side["away"]["market_fair_prob"] == pytest.approx(fair_away)
         assert (
@@ -687,7 +686,7 @@ class TestStoredEdges:
         )
         assert body["fair_book"] == {"moneyline": "bp:12"}
         by_side = {e["side"]: e for e in body["edges"]}
-        assert by_side["home"]["market_fair_prob"] == pytest.approx(devig_two_way(-150, 130)[0])
+        assert by_side["home"]["market_fair_prob"] == pytest.approx(devig([-150, 130])[0])
         assert (by_side["away"]["offered_american"], by_side["away"]["price_book"]) == (
             135.0,
             "bp:10",
@@ -740,4 +739,4 @@ class TestStoredEdges:
         assert home["offered_american"] == 400.0
         assert (home["price_book"], home["price_book_name"]) == ("bp:10", "FanDuel")
         assert home["report"]["price_book"] == "bp:10"
-        assert home["report"]["market_fair_prob"] == pytest.approx(devig_two_way(300, -400)[0])
+        assert home["report"]["market_fair_prob"] == pytest.approx(devig([300, -400])[0])

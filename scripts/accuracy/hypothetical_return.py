@@ -42,7 +42,7 @@ WHAT THIS DOES NOT CLAIM
   return-scale quantity, with no scale check.
 * That the fade side's probability is exact on a line that can push (an integer
   total, run line or prop line). ``sim_prob`` excludes the push mass from both
-  sides (the convention of ``betting.bet_signal.total_over_under_edge_report``,
+  sides (the convention of ``betting.bet_signal.samples_over_under_edge_report``,
   ``spread_cover_prob`` and ``PropDistribution.p_over``), so ``1 - sim_prob``
   includes it and overstates a fade bet's ``model_ev`` by about the push
   probability. A fix needs the push probability on :class:`AccuracyRecord`.

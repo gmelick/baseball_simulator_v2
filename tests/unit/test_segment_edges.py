@@ -43,14 +43,11 @@ from api.routes.betting import router as betting_router
 from betting.bet_signal import (
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
-    devig_multiway,
-    devig_two_way,
+    devig,
     expected_value,
     implied_prob_from_american,
     samples_over_under_edge_report,
     three_way_edge_report,
-    total_over_under_edge_report,
 )
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_NAMES, GAME_MARKET_TYPES
@@ -182,18 +179,9 @@ class TestBuilders:
     def test_the_tie_is_a_side(self):
         assert MarketSide.DRAW.value == "draw"
 
-    def test_the_total_builder_delegates_to_the_samples_builder(self):
-        market = TwoWayMarket(side=MarketSide.OVER, entry=OddsQuote(-110, -105, line=9.5))
-        for side in (MarketSide.OVER, MarketSide.UNDER):
-            old = total_over_under_edge_report(SUMMARY, market, side=side)
-            new = samples_over_under_edge_report(
-                SUMMARY.total_scores, market, side=side, label="total"
-            )
-            assert old == new
-
     def test_the_samples_builder_takes_its_label_and_splits_the_push(self):
         samples = np.array([0, 1, 1, 2, 3])
-        market = TwoWayMarket(side=MarketSide.OVER, entry=OddsQuote(-110, -110, line=1.0))
+        market = OddsQuote(-110, -110, line=1.0)
         over = samples_over_under_edge_report(samples, market, side=MarketSide.OVER, label="x")
         under = samples_over_under_edge_report(samples, market, side=MarketSide.UNDER, label="x")
         assert over.label == "x" and over.line == 1.0
@@ -204,7 +192,7 @@ class TestBuilders:
 
     def test_the_three_way_builder_de_vigs_the_three_prices(self):
         prices = (150.0, 180.0, 120.0)
-        fair = devig_multiway([_imp(p) for p in prices])
+        fair = devig(list(prices))
         probs = (0.35, 0.3, 0.35)
         reports = [
             three_way_edge_report(
@@ -309,7 +297,7 @@ def test_the_segment_reports_read_the_segment_runs(client_for):
     assert first["away"]["sim_prob"] == pytest.approx(p_away)
     fs = MockOddsAPI.get_odds(GAME_PK, market_type="first_to_score")
     assert first["home"]["market_fair_prob"] == pytest.approx(
-        devig_two_way(fs["home_ml"], fs["away_ml"])[0]
+        devig([fs["home_ml"], fs["away_ml"]])[0]
     )
 
 
@@ -378,7 +366,7 @@ def test_stored_rows_price_the_segment_markets(client_for):
     assert total["over"]["ev"] == pytest.approx(expected_value(total["over"]["sim_prob"], -105.0))
 
     ml = _by(body, "f1_moneyline")
-    fair = devig_multiway([_imp(180), _imp(200), _imp(110)])  # DraftKings' row alone
+    fair = devig([180, 200, 110])  # DraftKings' row alone
     for side, f in zip(("home", "away", "draw"), fair, strict=True):
         assert ml[side]["market_fair_prob"] == pytest.approx(f)
     assert (ml["home"]["offered_american"], ml["home"]["price_book"]) == (190.0, "bp:10")
@@ -481,7 +469,7 @@ def test_a_segment_run_line_pair_de_vigs_its_two_prices(client_for):
     body = client_for(_StubPool(rows)).get(_edges_url("&markets=f1_runline")).json()
     assert body["run_line_pricing_by_label"]["f1_runline"]["shape"] == "pair"
     sides = _by(body, "f1_runline")
-    fair_home, fair_away = devig_two_way(130, -150)
+    fair_home, fair_away = devig([130, -150])
     assert sides["home"]["market_fair_prob"] == pytest.approx(fair_home)
     assert sides["away"]["market_fair_prob"] == pytest.approx(fair_away)
     assert {s: e["line"] for s, e in sides.items()} == {"home": -0.5, "away": 0.5}
@@ -623,7 +611,7 @@ class TestPricesParam:
         assert total["over"]["line"] == 5.5
         assert total["over"]["offered_american"] == 105.0
         assert total["under"]["offered_american"] == -125.0
-        assert total["over"]["market_fair_prob"] == pytest.approx(devig_two_way(105, -125)[0])
+        assert total["over"]["market_fair_prob"] == pytest.approx(devig([105, -125])[0])
         assert total["over"]["price_book"] is None
         ml = _by(body, "f1_moneyline")
         assert {s: e["offered_american"] for s, e in ml.items()} == {

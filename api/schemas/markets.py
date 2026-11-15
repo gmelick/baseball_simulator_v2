@@ -99,7 +99,6 @@ class BetSignalModel(_ApiModel):
     edge: float
     ev: float
     stake_fraction: float
-    confidence: float
     rank: int
 
     #: The full source EdgeReport (sim_prob, market fair prob, sim_fair_american).
@@ -127,7 +126,6 @@ class BetSignalModel(_ApiModel):
             edge=float(signal.edge),
             ev=float(signal.ev),
             stake_fraction=float(signal.stake_fraction),
-            confidence=float(signal.confidence),
             rank=int(signal.rank),
             report=EdgeReportModel.from_dataclass(signal.report, price_book=price_book),
             price_book=price_book,

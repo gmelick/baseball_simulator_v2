@@ -80,19 +80,17 @@ from betting.bet_signal import (
     EdgeReport,
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
-    _build_edge_report,
+    devig,
     devig_one_sided,
+    edge_report,
     expected_value,
     moneyline_edge_report,
-    one_sided_edge_report,
     reference_margin_from_prices,
     run_line_bet_cover_prob,
     run_line_edge_report,
     run_line_is_pair,
     samples_over_under_edge_report,
     three_way_edge_report,
-    total_over_under_edge_report,
 )
 from pipeline.odds_provider import (
     FULL_GAME_MARKET_TYPES,
@@ -280,9 +278,7 @@ def _price_run_line(
                 replace(
                     run_line_edge_report(
                         margin_source,
-                        TwoWayMarket(
-                            side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=home_line)
-                        ),
+                        OddsQuote(side=h, other=a, line=home_line),
                         side=MarketSide.HOME,
                         line=home_line,
                     ),
@@ -299,9 +295,7 @@ def _price_run_line(
                 replace(
                     run_line_edge_report(
                         margin_source,
-                        TwoWayMarket(
-                            side=MarketSide.AWAY, entry=OddsQuote(side=a, other=h, line=home_line)
-                        ),
+                        OddsQuote(side=a, other=h, line=home_line),
                         side=MarketSide.AWAY,
                         line=home_line,
                     ),
@@ -320,15 +314,13 @@ def _price_run_line(
     ):
         _safe_report(
             reports,
-            lambda side=side, price=price, own_line=own_line, offered=offered: (
-                one_sided_edge_report(
-                    label=label,
-                    side=side,
-                    line=own_line,
-                    sim_prob=run_line_bet_cover_prob(margin_source, side, own_line),
-                    offered_american=price if offered is None else offered[0],
-                    fair_prob=devig_one_sided(price, margin),
-                )
+            lambda side=side, price=price, own_line=own_line, offered=offered: edge_report(
+                label=label,
+                side=side,
+                line=own_line,
+                sim_prob=run_line_bet_cover_prob(margin_source, side, own_line),
+                offered_american=price if offered is None else offered[0],
+                fair_prob=devig_one_sided(price, margin),
             ),
         )
     return {
@@ -415,7 +407,7 @@ def _price_segment_market(
                 lambda side=side, own=own, other=other: _at_offered_price(
                     samples_over_under_edge_report(
                         samples,
-                        TwoWayMarket(side=side, entry=OddsQuote(side=own, other=other, line=line)),
+                        OddsQuote(side=own, other=other, line=line),
                         side=side,
                         label=market,
                     ),
@@ -455,12 +447,13 @@ def _price_segment_market(
             _safe_report(
                 reports,
                 lambda side=side, sim_p=sim_p, own=own, other=other: _at_offered_price(
-                    _build_edge_report(
+                    edge_report(
                         label=market,
                         side=side,
                         line=None,
                         sim_prob=sim_p,
-                        market=TwoWayMarket(side=side, entry=OddsQuote(side=own, other=other)),
+                        fair_prob=devig([own, other])[0],
+                        offered_american=own,
                     ),
                     offered(side),
                 ),
@@ -506,7 +499,7 @@ def _build_edge_reports(
       * **moneyline** -- HOME and AWAY off the :class:`WinProbability`
         (``moneyline_edge_report``), de-vigged against (home_ml, away_ml).
       * **total** -- OVER and UNDER off the summary's ``total_scores`` array
-        (``total_over_under_edge_report``) at ``total_line``, against
+        (``samples_over_under_edge_report``) at ``total_line``, against
         (over_ml, under_ml).
       * **runline** -- HOME and AWAY cover off the score margin, each side at its
         OWN spread (``run_line`` for home, ``away_run_line`` for away). A pair
@@ -514,7 +507,7 @@ def _build_edge_reports(
         (home_rl_ml, away_rl_ml) against each other (``run_line_edge_report``).
         Two separate bets price each bet from its own price over the book's
         margin: the total's, then the moneyline's, then a flat 1.05
-        (``one_sided_edge_report``).
+        (``edge_report``).
       * **the twelve segment and team markets** -- off the summary's
         inning grid (:func:`_price_segment_market`), each report labelled with
         its market type. A summary with no grid skips them and logs one line.
@@ -568,7 +561,7 @@ def _build_edge_reports(
                 lambda side=side, own=own, other=other, offered=offered: _at_offered_price(
                     moneyline_edge_report(
                         win_prob,
-                        TwoWayMarket(side=side, entry=OddsQuote(side=own, other=other)),
+                        OddsQuote(side=own, other=other),
                         side=side,
                     ),
                     offered,
@@ -597,10 +590,11 @@ def _build_edge_reports(
             _safe_report(
                 reports,
                 lambda side=side, own=own, other=other, offered=offered: _at_offered_price(
-                    total_over_under_edge_report(
-                        summary,
-                        TwoWayMarket(side=side, entry=OddsQuote(side=own, other=other, line=line)),
+                    samples_over_under_edge_report(
+                        summary.total_scores,
+                        OddsQuote(side=own, other=other, line=line),
                         side=side,
+                        label="total",
                     ),
                     offered,
                 ),

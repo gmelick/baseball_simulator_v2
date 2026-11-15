@@ -101,7 +101,7 @@ from api.schemas import (
     StateAtPitchModel,
 )
 from api.serialization import to_jsonable
-from betting.bet_signal import MarketSide, OddsQuote, TwoWayMarket
+from betting.bet_signal import MarketSide, OddsQuote
 from betting.bet_signal import prop_edge_report as _prop_edge_report
 from db import sim_store
 from simulation.batch_runner import BatchRunner, GameSpec
@@ -1630,16 +1630,13 @@ async def get_player_prop_edge(
     edge_rpt: EdgeReportModel | None = None
     if line is not None and over_ml is not None and under_ml is not None:
         mkt_side = MarketSide.OVER if bet_side == "over" else MarketSide.UNDER
-        market = TwoWayMarket(
-            side=mkt_side,
-            entry=OddsQuote(
-                side=float(over_ml) if bet_side == "over" else float(under_ml),
-                other=float(under_ml) if bet_side == "over" else float(over_ml),
-                line=float(line),
-            ),
+        quote = OddsQuote(
+            side=float(over_ml) if bet_side == "over" else float(under_ml),
+            other=float(under_ml) if bet_side == "over" else float(over_ml),
+            line=float(line),
         )
         try:
-            raw_report = _prop_edge_report(dist, market, side=mkt_side)
+            raw_report = _prop_edge_report(dist, quote, side=mkt_side)
             edge_rpt = EdgeReportModel.from_dataclass(raw_report)
         except Exception as exc:  # noqa: BLE001 -- degenerate odds give no report
             log.warning("prop_edge_report failed for %d/%s: %s", player_id, prop_upper, exc)

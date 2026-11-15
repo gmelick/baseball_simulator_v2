@@ -47,10 +47,10 @@ def _toy_report() -> dict:
     """Game 1: a pair (-0.5 / +0.5). Game 2: two separate bets (-1.5 / -1.5)
     with its first-five total in the report. Game 3: a moneyline only. Game 4:
     a full-game run line listed as two bets. Game 5: a first-inning one."""
-    from betting.bet_signal import devig_two_way
+    from betting.bet_signal import devig
 
-    pair_mkt = devig_two_way(105.0, -125.0)[0]
-    paired_two_bets = devig_two_way(350.0, 150.0)[0]  # a pair's de-vig: wrong for two bets
+    pair_mkt = devig([105.0, -125.0])[0]
+    paired_two_bets = devig([350.0, 150.0])[0]  # a pair's de-vig: wrong for two bets
     return {
         "params": {"base_seed": 0, "bootstrap_samples": 20, "bootstrap_seed": 1},
         "counters": {"games_scored": 3, "n_accuracy_records": 4},
@@ -60,8 +60,8 @@ def _toy_report() -> dict:
             _rec(2, "f5_runline", 0.20, paired_two_bets, 0, 350.0, 150.0),
             _rec(2, "f5_total", 0.50, 0.49, 1, -109.0, -121.0),
             _rec(3, "moneyline", 0.60, 0.58, 1, -140.0, 120.0),
-            _rec(4, "runline", 0.30, devig_two_way(160.0, 110.0)[0], 1, 160.0, 110.0),
-            _rec(5, "f1_runline", 0.85, devig_two_way(-400.0, 250.0)[0], 1, -400.0, 250.0),
+            _rec(4, "runline", 0.30, devig([160.0, 110.0])[0], 1, 160.0, 110.0),
+            _rec(5, "f1_runline", 0.85, devig([-400.0, 250.0])[0], 1, -400.0, 250.0),
         ],
     }
 

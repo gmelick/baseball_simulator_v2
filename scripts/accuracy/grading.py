@@ -49,16 +49,14 @@ from betting.bet_signal import (
     REFERENCE_MARGIN_BAND,
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
-    devig_multiway,
+    devig,
     devig_one_sided,
-    devig_two_way,
     moneyline_edge_report,
     prob_to_american,
     prop_edge_report,
     run_line_bet_cover_prob,
     run_line_is_pair,
-    total_over_under_edge_report,
+    samples_over_under_edge_report,
 )
 from pipeline.odds_provider import (
     GAME_MARKET_KIND,
@@ -283,7 +281,7 @@ def score_run_line_market(
             sim_prob = float(sim_cover("home", home_line))
             if open_sim_prob_only:
                 prob_to_american(sim_prob)  # raises on 0 or 1, as the edge report does
-            market_prob = float(devig_two_way(cp.side, cp.other)[0])
+            market_prob = float(devig([cp.side, cp.other])[0])
         except ValueError as exc:
             log.info("game %s %s accuracy skipped (degenerate): %s", game_pk, market_type, exc)
             return []
@@ -486,7 +484,7 @@ def score_game_accuracy(
     closing price is skipped. A total or run line that landed EXACTLY on the
     closing line (a push) gives no record: the scored probability is a STRICT over
     or cover probability (the push rule of
-    :func:`betting.bet_signal.total_over_under_edge_report` and
+    :func:`betting.bet_signal.samples_over_under_edge_report` and
     :func:`betting.bet_signal.spread_cover_prob`), so a push has no 0/1 label.
     """
     records: list[AccuracyRecord] = []
@@ -495,11 +493,8 @@ def score_game_accuracy(
     cp = _closing_prices(odds, "moneyline", "home_ml", "away_ml", None)
     if cp is not None:
         try:
-            market = TwoWayMarket(
-                side=MarketSide.HOME,
-                entry=OddsQuote(side=cp.side, other=cp.other, line=None),
-            )
-            er = moneyline_edge_report(win_prob, market, side=MarketSide.HOME)
+            quote = OddsQuote(side=cp.side, other=cp.other, line=None)
+            er = moneyline_edge_report(win_prob, quote, side=MarketSide.HOME)
             outcome = 1 if home_score > away_score else 0
             # The raw decisive home-win share, before the reliability curve: the
             # calibration layer is fitted on it.
@@ -528,11 +523,10 @@ def score_game_accuracy(
         actual_total = float(home_score + away_score)
         if actual_total != cp.line:
             try:
-                market = TwoWayMarket(
-                    side=MarketSide.OVER,
-                    entry=OddsQuote(side=cp.side, other=cp.other, line=cp.line),
+                quote = OddsQuote(side=cp.side, other=cp.other, line=cp.line)
+                er = samples_over_under_edge_report(
+                    summary.total_scores, quote, side=MarketSide.OVER, label="total"
                 )
-                er = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
                 outcome = 1 if actual_total > cp.line else 0
                 records.append(
                     AccuracyRecord(
@@ -657,17 +651,11 @@ def score_segment_market_accuracy(
                 draw = cl.get("draw_ml")
                 if draw is None:
                     continue
-                fair = devig_multiway(
-                    [
-                        _implied(cp.side),
-                        _implied(cp.other),
-                        _implied(float(draw)),
-                    ]
-                )
+                fair = devig([cp.side, cp.other, float(draw)])
                 market_prob = float(fair[0])
                 other_price: float | None = None
             else:
-                market_prob = float(devig_two_way(cp.side, cp.other)[0])
+                market_prob = float(devig([cp.side, cp.other])[0])
                 other_price = float(cp.other)
             outcome = market_outcome(actual, market_type, line=cp.line)
         except ValueError as exc:
@@ -747,11 +735,8 @@ def score_prop_accuracy(
             continue  # push
 
         try:
-            market = TwoWayMarket(
-                side=MarketSide.OVER,
-                entry=OddsQuote(side=float(close_over), other=float(close_under), line=line_f),
-            )
-            er = prop_edge_report(dist, market, side=MarketSide.OVER)
+            quote = OddsQuote(side=float(close_over), other=float(close_under), line=line_f)
+            er = prop_edge_report(dist, quote, side=MarketSide.OVER)
         except ValueError as exc:
             log.info(
                 "game %s prop-accuracy %s/%s skipped (degenerate): %s",

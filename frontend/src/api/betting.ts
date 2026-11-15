@@ -22,7 +22,6 @@ export interface BetSignal {
   edge: number
   ev: number
   stake_fraction: number
-  confidence: number
   rank: number
   report: EdgeReport
   /** The stored book label of the offered price (null: injected or mock). */

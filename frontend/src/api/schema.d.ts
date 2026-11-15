@@ -1034,8 +1034,6 @@ export interface components {
          *     strongest). numpy-free (plain floats / ints).
          */
         BetSignalModel: {
-            /** Confidence */
-            confidence: number;
             /** Edge */
             edge: number;
             /** Ev */

@@ -15,7 +15,7 @@ These tests build a SYNTHETIC per-iteration score margin (a raw
   * the input is either a raw margin array or a :class:`GameSimSummary`;
   * the :class:`EdgeReport` carries the right ``label`` / ``side`` / ``line`` /
     ``sim_prob`` / ``market_fair_prob`` / ``edge`` / ``ev``;
-  * ``market.entry.line`` overrides the ``line`` keyword default.
+  * ``quote.line`` overrides the ``line`` keyword default.
 """
 
 from __future__ import annotations
@@ -26,9 +26,7 @@ import pytest
 from betting.bet_signal import (
     MarketSide,
     OddsQuote,
-    TwoWayMarket,
-    devig_two_way,
-    edge,
+    devig,
     expected_value,
     prob_to_american,
     run_line_edge_report,
@@ -169,10 +167,7 @@ def test_cover_prob_rejects_bad_side_and_empty():
 def test_run_line_report_home_fields_and_edge():
     summary = _summary_from_margins(_MARGINS)  # home -1.5 cover = 0.50
     # Market: home -1.5 at +110 (dog price on the spread), away +1.5 at -130.
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=+110, other=-130, line=-1.5),
-    )
+    market = OddsQuote(side=+110, other=-130, line=-1.5)
     rep = run_line_edge_report(summary, market, side=MarketSide.HOME)
     # Core fields.
     assert rep.label == "run_line"
@@ -180,9 +175,9 @@ def test_run_line_report_home_fields_and_edge():
     assert rep.line == pytest.approx(-1.5, abs=1e-12)
     assert rep.sim_prob == pytest.approx(0.50, abs=1e-12)
     # De-vigged fair prob of the home side from the entry market.
-    fair, _ = devig_two_way(+110, -130)
+    fair, _ = devig([+110, -130])
     assert rep.market_fair_prob == pytest.approx(fair, abs=1e-12)
-    assert rep.edge == pytest.approx(edge(0.50, fair), abs=1e-12)
+    assert rep.edge == pytest.approx(0.50 - fair, abs=1e-12)
     # EV at the offered +110 under p = 0.50.
     assert rep.ev == pytest.approx(expected_value(0.50, +110), abs=1e-12)
     assert rep.offered_american == pytest.approx(+110, abs=1e-12)
@@ -193,38 +188,29 @@ def test_run_line_report_home_fields_and_edge():
 
 def test_run_line_report_away_side_uses_complement():
     summary = _summary_from_margins(_MARGINS)  # away +1.5 cover = 0.50
-    market = TwoWayMarket(
-        side=MarketSide.AWAY,
-        entry=OddsQuote(side=-130, other=+110, line=-1.5),  # away side priced -130
-    )
+    market = OddsQuote(side=-130, other=+110, line=-1.5)
     rep = run_line_edge_report(summary, market, side=MarketSide.AWAY)
     assert rep.side is MarketSide.AWAY
     # AWAY is priced at the SAME home line (-1.5); cover = complement = 0.50.
     assert rep.line == pytest.approx(-1.5, abs=1e-12)
     assert rep.sim_prob == pytest.approx(0.50, abs=1e-12)
-    fair, _ = devig_two_way(-130, +110)
+    fair, _ = devig([-130, +110])
     assert rep.market_fair_prob == pytest.approx(fair, abs=1e-12)
 
 
 def test_run_line_report_default_line_when_market_line_missing():
-    # No market.entry.line -> the line keyword default (-1.5) is used.
+    # No quote.line -> the line keyword default (-1.5) is used.
     summary = _summary_from_margins(_MARGINS)
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=+100, other=-120, line=None),
-    )
+    market = OddsQuote(side=+100, other=-120, line=None)
     rep = run_line_edge_report(summary, market, side=MarketSide.HOME)
     assert rep.line == pytest.approx(-1.5, abs=1e-12)
     assert rep.sim_prob == pytest.approx(0.50, abs=1e-12)  # home -1.5 cover
 
 
 def test_run_line_report_market_line_overrides_keyword():
-    # market.entry.line (an integer -1.0) overrides the line keyword default.
+    # quote.line (an integer -1.0) overrides the line keyword default.
     summary = _summary_from_margins(_MARGINS)
-    market = TwoWayMarket(
-        side=MarketSide.HOME,
-        entry=OddsQuote(side=-110, other=-110, line=-1.0),
-    )
+    market = OddsQuote(side=-110, other=-110, line=-1.0)
     rep = run_line_edge_report(summary, market, side=MarketSide.HOME, line=-1.5)
     # The market's -1.0 line wins: HOME covers on margin > 1 (0.50), and
     # margin == 1 is a push. HOME also reads 0.50 at -1.5, so only the line
@@ -235,9 +221,6 @@ def test_run_line_report_market_line_overrides_keyword():
 
 def test_run_line_report_rejects_over_under_side():
     summary = _summary_from_margins(_MARGINS)
-    market = TwoWayMarket(
-        side=MarketSide.OVER,
-        entry=OddsQuote(side=-110, other=-110, line=-1.5),
-    )
+    market = OddsQuote(side=-110, other=-110, line=-1.5)
     with pytest.raises(ValueError):
         run_line_edge_report(summary, market, side=MarketSide.OVER)

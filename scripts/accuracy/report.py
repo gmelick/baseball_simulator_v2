@@ -120,7 +120,7 @@ def _accuracy_row_for(
         # The [0, 1] clip is the one binary_brier applies before it scores
         # sim_brier and market_brier above. Every producer of these probabilities
         # stays inside [0, 1] today (the win-probability map clamps; the total and
-        # run-line probabilities are count ratios; devig_two_way normalises), so
+        # run-line probabilities are count ratios; devig normalises), so
         # the clip changes nothing now. It keeps the per-observation differences
         # summing to the reported aggregate if a future producer is unbounded.
         sim_p_b = np.clip(sim_p, 0.0, 1.0)

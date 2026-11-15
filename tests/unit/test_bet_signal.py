@@ -22,20 +22,15 @@ from __future__ import annotations
 import pytest
 
 from betting.bet_signal import (
-    DEFAULT_KELLY_FRACTION,
-    DEFAULT_MAX_STAKE_FRACTION,
     BetSignal,
     BetSignalConfig,
     EdgeReport,
     MarketSide,
     american_to_decimal,
     bet_signals_from_edges,
-    expected_value,
-    kelly_fraction_full,
-    prob_to_american,
+    edge_report,
     stake_fraction,
 )
-from betting.bet_signal import edge as edge_fn
 
 # ===========================================================================
 # Synthetic EdgeReport factory (real constructor, hand-set probabilities)
@@ -51,22 +46,14 @@ def _edge_report(
     offered_american: float,
     line: float | None = None,
 ) -> EdgeReport:
-    """Build a real EdgeReport with consistent edge/EV derived from the inputs.
-
-    The factory computes edge and ev the SAME way the report builders do
-    (edge = sim - fair; ev at the offered price), so the synthetic report is
-    internally consistent without a live simulation.
-    """
-    return EdgeReport(
+    """Build a real EdgeReport from hand-set probabilities, through the module's own builder."""
+    return edge_report(
         label=label,
         side=side,
         line=line,
         sim_prob=sim_prob,
-        market_fair_prob=market_fair_prob,
-        edge=edge_fn(sim_prob, market_fair_prob),
-        ev=expected_value(sim_prob, offered_american),
+        fair_prob=market_fair_prob,
         offered_american=offered_american,
-        sim_fair_american=prob_to_american(sim_prob),
     )
 
 
@@ -76,14 +63,17 @@ def _edge_report(
 
 
 def test_full_kelly_hand_calc_even_money():
-    # +100 -> decimal 2.0 -> b = 1.0.  p = 0.60, q = 0.40.
-    # full Kelly = (b*p - q)/b = (0.6 - 0.4)/1 = 0.20.
-    assert kelly_fraction_full(0.60, +100) == pytest.approx(0.20, abs=1e-12)
-    # f* == EV / b cross-check.
-    b = american_to_decimal(+100) - 1.0
-    assert kelly_fraction_full(0.60, +100) == pytest.approx(
-        expected_value(0.60, +100) / b, abs=1e-12
+    # +100 -> b = 1.0; p = 0.60 -> full Kelly (b*p - q)/b = 0.20. With no cap
+    # and a Kelly fraction of 1, the stake is the full Kelly fraction.
+    rep = _edge_report(
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.60,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
+    full = BetSignalConfig(kelly_fraction=1.0, max_stake_fraction=1.0)
+    assert stake_fraction(rep, full) == pytest.approx(0.20, abs=1e-12)
 
 
 def test_stake_fraction_quarter_kelly_hand_calc_below_cap():
@@ -96,7 +86,7 @@ def test_stake_fraction_quarter_kelly_hand_calc_below_cap():
         market_fair_prob=0.50,
         offered_american=+100,
     )
-    s = stake_fraction(rep, kelly_fraction=0.25, cap=0.10)
+    s = stake_fraction(rep, BetSignalConfig(kelly_fraction=0.25, max_stake_fraction=0.10))
     assert s == pytest.approx(0.05, abs=1e-12)
 
 
@@ -109,7 +99,7 @@ def test_stake_fraction_respects_cap():
         market_fair_prob=0.50,
         offered_american=+100,
     )
-    s = stake_fraction(rep, kelly_fraction=0.50, cap=0.05)
+    s = stake_fraction(rep, BetSignalConfig(kelly_fraction=0.50, max_stake_fraction=0.05))
     assert s == pytest.approx(0.05, abs=1e-12)
 
 
@@ -123,7 +113,6 @@ def test_stake_fraction_zero_for_non_positive_kelly():
         market_fair_prob=0.50,
         offered_american=+100,
     )
-    assert kelly_fraction_full(0.45, +100) < 0.0
     assert stake_fraction(rep) == 0.0
 
 
@@ -142,21 +131,7 @@ def test_stake_fraction_matches_closed_form():
     b = american_to_decimal(american) - 1.0
     q = 1.0 - p
     expected = max(0.0, min(0.05, 0.25 * max(0.0, (b * p - q) / b)))
-    assert stake_fraction(rep, kelly_fraction=0.25, cap=0.05) == pytest.approx(expected, abs=1e-12)
-
-
-def test_stake_fraction_rejects_negative_knobs():
-    rep = _edge_report(
-        label="moneyline",
-        side=MarketSide.HOME,
-        sim_prob=0.60,
-        market_fair_prob=0.50,
-        offered_american=+100,
-    )
-    with pytest.raises(ValueError):
-        stake_fraction(rep, kelly_fraction=-0.1)
-    with pytest.raises(ValueError):
-        stake_fraction(rep, cap=-0.1)
+    assert stake_fraction(rep) == pytest.approx(expected, abs=1e-12)
 
 
 # ===========================================================================
@@ -190,7 +165,7 @@ def test_positive_ev_report_yields_signal_with_capped_kelly_stake():
     # The default quarter Kelly gives the hand calc 0.25 * 0.20 = 0.05, which
     # sits exactly at the default cap of 0.05.
     assert sig.stake_fraction == pytest.approx(0.05, abs=1e-12)
-    assert 0.0 < sig.stake_fraction <= DEFAULT_MAX_STAKE_FRACTION
+    assert 0.0 < sig.stake_fraction <= BetSignalConfig().max_stake_fraction
 
 
 def test_negative_ev_report_yields_no_signal():
@@ -359,7 +334,7 @@ def test_config_rejects_negative_knobs():
 
 def test_config_defaults():
     cfg = BetSignalConfig()
-    assert cfg.kelly_fraction == DEFAULT_KELLY_FRACTION
-    assert cfg.max_stake_fraction == DEFAULT_MAX_STAKE_FRACTION
+    assert cfg.kelly_fraction == 0.25
+    assert cfg.max_stake_fraction == 0.05
     assert cfg.min_edge == 0.02
     assert cfg.min_ev == 0.0

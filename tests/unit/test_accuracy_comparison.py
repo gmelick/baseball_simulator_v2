@@ -536,7 +536,7 @@ async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp
 def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
     """A pair goes through the edge report's arithmetic: its sim probability
     and its de-vigged fair probability, to the bit."""
-    from betting.bet_signal import MarketSide, OddsQuote, TwoWayMarket, run_line_edge_report
+    from betting.bet_signal import MarketSide, OddsQuote, run_line_edge_report
 
     wp = _win_prob(0.5)
     summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)
@@ -545,7 +545,7 @@ def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
     assert len(recs) == 1
     er = run_line_edge_report(
         summary,
-        TwoWayMarket(side=MarketSide.HOME, entry=OddsQuote(side=140.0, other=-160.0, line=-1.5)),
+        OddsQuote(side=140.0, other=-160.0, line=-1.5),
         side=MarketSide.HOME,
         line=-1.5,
     )
