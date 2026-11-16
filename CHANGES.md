@@ -64,8 +64,8 @@ findings, all fixed:
 **Deploy note.** `app`, `live` and `jobs` mount `pipeline/`, so they see the new code at once
 and need a restart to load it. `scripts/` is not mounted: the image's copy of the accuracy
 scripts imports `LEGACY_GAME_MARKET_TYPES`, which the mounted `pipeline/` no longer has. So
-rebuild the image (`docker compose build app`), then recreate `app`, `live` and `jobs` after
-the deploy window.
+rebuild all three images (`docker compose build app live jobs`: each service builds its own),
+then recreate the three services. Deployed 2026-11-16 at 02:30 UTC, before the 07:00 jobs.
 
 # CLOSED — the betting module loses ten names, and its docs are rewritten short — SIM-643, 2026-11-15
 
