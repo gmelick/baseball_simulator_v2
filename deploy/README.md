@@ -204,7 +204,7 @@ The keys the code reads that differ by tier:
 | `RATE_LIMIT_PER_MINUTE` | Requests a minute per API key, else per client address; `0` or unset is off. | unset | `120` | `300` |
 | `TRUSTED_PROXY_HOSTS` | The proxies whose `X-Real-IP` the rate limiter believes. Compose sets `nginx` when unset; an empty value turns the trust off. | unset | commented | commented |
 | `CORS_ORIGINS` / `FRONTEND_URL` | The browser origins the API accepts. With neither set, development allows three localhost origins and other tiers one. | unset | the staging origin | the production origin |
-| `ODDS_PROVIDER` / `ODDS_API_KEY` | The odds source: `mock` (the default), or `bettingpros` / `real` (both the BettingPros provider, which needs the key). | commented | `mock` | see the gaps below |
+| `ODDS_PROVIDER` / `ODDS_API_KEY` | The odds source: `mock` (the default), or `bettingpros` (the BettingPros provider, which needs the key). | commented | `mock` | see the gaps below |
 
 Keep `ENVIRONMENT=development` on a stack that serves plain HTTP. Any other
 value marks the cookie `secure`, the browser drops it over HTTP, and the login

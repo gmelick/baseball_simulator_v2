@@ -38,7 +38,7 @@ The availability decision per pitcher:
   * otherwise                                           → available=True, active
 
 Network surface is a SINGLE stubbable seam, ``_mlb_get`` (mirrors
-:mod:`pipeline.bettingpros_odds_provider`); ``game_pk`` → date + (home,away)
+:mod:`pipeline.bettingpros.provider`); ``game_pk`` → date + (home,away)
 team ids is resolved via the MLB schedule endpoint, also through ``_mlb_get``.
 Persistence is a single stubbable seam, :meth:`_persist`, so the parse + decision
 logic is unit-tested against a captured roster JSON fixture with NO live call and

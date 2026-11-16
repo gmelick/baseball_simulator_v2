@@ -22,17 +22,16 @@ import pytest
 from tests.script_loader import load_script
 
 from pipeline.bettingpros.markets import _GAME_MARKET_IDS
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.bettingpros.provider import BettingProsOddsProvider
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 from pipeline.odds_provider import (
+    FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
     GAME_MARKET_SIDE,
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
-    LEGACY_GAME_MARKET_TYPES,
-    THREE_WAY_GAME_MARKET_TYPES,
 )
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
@@ -59,7 +58,7 @@ _FIXTURE_BY_MARKET = {
     369: "offers_first_inning_run_99026.json",
 }
 
-SEGMENT_MARKETS = tuple(m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES)
+SEGMENT_MARKETS = tuple(m for m in GAME_MARKET_TYPES if m not in FULL_GAME_MARKET_TYPES)
 
 
 def _load(name: str) -> dict:
@@ -94,7 +93,7 @@ class _SegmentFixtureProvider(BettingProsOddsProvider):
 class TestVocabulary:
     def test_fifteen_markets_in_canonical_order(self):
         assert len(GAME_MARKET_TYPES) == 15
-        assert GAME_MARKET_TYPES[:3] == LEGACY_GAME_MARKET_TYPES
+        assert GAME_MARKET_TYPES[:3] == FULL_GAME_MARKET_TYPES
         assert len(set(GAME_MARKET_TYPES)) == 15
 
     def test_every_market_has_a_kind_a_segment_and_a_side(self):
@@ -115,16 +114,12 @@ class TestVocabulary:
         assert GAME_MARKET_SIDE["team_total_home"] == "home"
         assert GAME_MARKET_SIDE["f5_team_total_away"] == "away"
 
-    def test_three_way_markets_are_the_two_segment_moneylines(self):
-        assert THREE_WAY_GAME_MARKET_TYPES == ("f1_moneyline", "f5_moneyline")
-
     def test_market_ids_cover_the_vocabulary(self):
         for m in GAME_MARKET_TYPES:
             assert m in _GAME_MARKET_IDS
         # Both team-total sides read the same BettingPros market.
         assert _GAME_MARKET_IDS["team_total_home"] == _GAME_MARKET_IDS["team_total_away"] == 277
         assert _GAME_MARKET_IDS["f5_team_total_home"] == _GAME_MARKET_IDS["f5_team_total_away"]
-        assert _GAME_MARKET_IDS["run_line"] == _GAME_MARKET_IDS["runline"]
 
     def test_migration_0024_lists_the_same_fifteen_values(self):
         text = _MIGRATION.read_text(encoding="utf-8")
@@ -305,7 +300,7 @@ class TestMockSegmentMarkets:
             assert set(GAME_ODDS_FIELDS) <= set(a)
 
     def test_legacy_markets_keep_the_full_game_shape(self):
-        for m in LEGACY_GAME_MARKET_TYPES:
+        for m in FULL_GAME_MARKET_TYPES:
             odds = MockOddsAPI.get_odds(745000, market_type=m)
             assert odds["home_ml"] is not None and odds["total_line"] is not None
             assert odds["home_spread"] is not None

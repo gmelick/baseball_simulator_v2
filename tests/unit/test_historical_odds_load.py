@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
-from pipeline.odds_provider import graded_book_labels, is_bettable
+from pipeline.bettingpros.provider import BettingProsOddsProvider
+from pipeline.odds_provider import is_bettable
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 
@@ -126,8 +126,6 @@ _K_CLOSES = {
 
 def test_closing_prop_is_one_row_per_book():
     # K prop: each row's two sides come from its own book (all at line 5.5).
-    # The default row is the first book on GRADED_BOOK_PREFERENCE with a row
-    # (no DraftKings offer here).
     prov = _FixtureProvider(player_full_name="Bryce Miller")
     rows = {
         r["book"]: r
@@ -139,32 +137,16 @@ def test_closing_prop_is_one_row_per_book():
         if is_bettable(book)
     }
     assert closes == _K_CLOSES
-    quote = prov.get_prop_odds(746437, 682243, "strikeouts", line_type="closing")
-    assert quote["line_type"] == "closing"
-    graded = next(label for label in graded_book_labels() if label in closes)
-    assert quote["book"] == graded
-    assert (quote["line"], quote["over_ml"], quote["under_ml"]) == _K_CLOSES[graded]
-    assert quote["is_mock"] is False
+    assert all(row["line_type"] == "closing" for row in rows.values())
+    assert all(row["is_mock"] is False for row in rows.values())
 
 
-def test_closing_prefer_book_id_pins_the_book():
-    # prefer_book_id pins every call to that book: SugarHouse (15) prices DET at
-    # 125 / SEA at -148.
-    prov = _FixtureProvider(prefer_book_id=15)
-    rows = prov.get_odds_by_book(746437, line_type="closing", market_type="moneyline")
-    assert [r["book"] for r in rows] == ["bp:15"]
-    odds = prov.get_odds(746437, line_type="closing", market_type="moneyline")
+def test_closing_sugarhouse_row_is_its_own_book():
+    # SugarHouse (15) prices DET at 125 / SEA at -148.
+    rows = _FixtureProvider().get_odds_by_book(746437, line_type="closing", market_type="moneyline")
+    (odds,) = [r for r in rows if r["book"] == "bp:15"]
     assert odds["home_ml"] == 125
     assert odds["away_ml"] == -148
-
-
-def test_closing_prefer_book_id_absent_yields_none():
-    odds = _FixtureProvider(prefer_book_id=999_999).get_odds(
-        746437, line_type="closing", market_type="moneyline"
-    )
-    assert odds["home_ml"] is None
-    assert odds["away_ml"] is None
-    assert odds["source"] == "bettingpros"  # shape preserved
 
 
 def test_book_line_handles_empty_books_and_unstamped_lines():

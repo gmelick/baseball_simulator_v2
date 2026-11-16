@@ -1,5 +1,6 @@
-"""The parsing of a BettingPros offer: the sides a market needs, one book's line,
-the opener, the vendor's stamp and the player-name key.
+"""Parse a BettingPros offer: the sides a market needs, one book's line and the opener.
+
+The module also reads the vendor's stamp and builds the player-name key.
 """
 
 from __future__ import annotations
@@ -16,18 +17,18 @@ from typing import (
     TypeVar,
 )
 
-from pipeline.bettingpros.rules import TWIN_PRICE_TOLERANCE
+from pipeline.bettingpros.markets import TWIN_PRICE_TOLERANCE
 from pipeline.odds_row_guard import implied_probability
 
-log = logging.getLogger("pipeline.bettingpros_odds_provider")
+log = logging.getLogger("pipeline.bettingpros")
 
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
 
 
-#: The sides a row of each market kind must price. A market missing a
-#: required side in the payload gets no row for any book.
+#: The sides a row of each market kind must price.
+#: A market that lacks a required side gets no row for any book.
 _REQUIRED_SIDES: dict[str, tuple[str, ...]] = {
     "moneyline": ("home", "away"),
     "three_way": ("home", "away"),
@@ -36,25 +37,25 @@ _REQUIRED_SIDES: dict[str, tuple[str, ...]] = {
     "yes_no": ("yes", "no"),
     "prop": ("over", "under"),
 }
-#: The sides a row prices when the book quotes them: the tie of a three-way market.
+#: The sides a row prices only when the book quotes them: a three-way market's tie.
 _OPTIONAL_SIDES: dict[str, tuple[str, ...]] = {"three_way": ("draw",)}
 
-#: A side's price, line and vendor stamp, as read from one book's line.
+#: A side's price, line and vendor stamp, read from one book's line.
 _Quote = tuple[float | None, float | None, Any]
 
 
 class _FirstInningReadError(RuntimeError):
-    """The first-inning read the twin rule needs failed.
+    """Signal that the first-inning read failed, so the twin check cannot run.
 
-    The first-five market then gets no rows: without the check, a book's
-    first-five entry may be a first-inning bet under the wrong label.
+    The first-five market then gets no rows.
+    Without the check, a first-five row may be a first-inning bet under the wrong label.
     """
 
 
 def _usable(ln: Mapping[str, Any]) -> bool:
-    """True when a line is a price the book is taking.
+    """Return True when a line is a price the book takes.
 
-    A line flagged ``is_off`` or inactive, or without a price, is not a quote.
+    A line flagged ``is_off`` or inactive, or a line without a price, is not a quote.
     """
     return not ln.get("is_off") and ln.get("active") is not False and ln.get("cost") is not None
 
@@ -69,10 +70,10 @@ def _opt_int(value: Any) -> int | None:
 
 
 def _book_line(sel: Mapping[str, Any], book_id: int) -> dict[str, Any] | None:
-    """The book's usable line on one selection, or ``None``.
+    """Return the book's usable line on one selection, or ``None``.
 
-    The feed lists one line per book per selection. When a book lists more than
-    one usable line, the one flagged ``main`` wins, else the first.
+    The feed normally lists one line per book per selection.
+    When a book lists more than one usable line, the ``main`` line wins, else the first.
     """
     usable = [
         ln
@@ -96,11 +97,11 @@ def _book_line(sel: Mapping[str, Any], book_id: int) -> dict[str, Any] | None:
 
 
 def _shared_opener(sides: Mapping[str, Mapping[str, Any]]) -> int | None:
-    """The one book that opened every side, or ``None``.
+    """Return the one book that opened every side, or ``None``.
 
-    The same rule as the opening row: every side's ``opening_line`` names a
-    ``book_id`` and a ``cost``, and all sides name the same book. No sides,
-    a side without an opener, or two openers give ``None``.
+    The rule matches the opening row's rule.
+    Every side's ``opening_line`` must name a ``book_id`` and a ``cost``.
+    All sides must name the same book.
     """
     openers: set[int] = set()
     for sel in sides.values():
@@ -113,7 +114,10 @@ def _shared_opener(sides: Mapping[str, Mapping[str, Any]]) -> int | None:
 
 
 def _stamp(value: Any) -> datetime | None:
-    """A vendor stamp (naive UTC text, ``"2026-09-10 16:15:50"``) as an aware UTC datetime."""
+    """Return a vendor stamp as a timezone-aware UTC datetime, or ``None``.
+
+    The vendor writes UTC text with no zone, e.g. ``"2026-09-10 16:15:50"``.
+    """
     if not value:
         return None
     parsed = _parse_utc(str(value))
@@ -121,7 +125,7 @@ def _stamp(value: Any) -> datetime | None:
 
 
 def _books_on(sides: Mapping[str, Mapping[str, Any]]) -> list[int]:
-    """Every book id listed on the given sides, in first-appearance order."""
+    """Return every book id on the given sides, in the order the books first appear."""
     seen: list[int] = []
     for sel in sides.values():
         for book in sel.get("books") or []:
@@ -134,10 +138,9 @@ def _books_on(sides: Mapping[str, Mapping[str, Any]]) -> list[int]:
 def _same_line(
     a: Mapping[str, Any], b: Mapping[str, Any], tolerance: float = TWIN_PRICE_TOLERANCE
 ) -> bool:
-    """True when two lines carry the same line and prices within ``tolerance``.
+    """Return True when two lines have the same line and prices within ``tolerance``.
 
-    ``tolerance`` is an implied-probability gap; ``0.0`` asks for identical
-    prices (see :func:`twin_price_tolerance`).
+    ``tolerance`` is a gap in implied probability; ``0.0`` asks for identical prices.
     """
     cost_a, cost_b = _opt_float(a.get("cost")), _opt_float(b.get("cost"))
     if cost_a is None or cost_b is None:
@@ -152,14 +155,12 @@ def _tie_rules_out_twin(
     f1_tie: Mapping[str, Any] | None,
     tolerance: float = TWIN_PRICE_TOLERANCE,
 ) -> bool:
-    """True when the ties show a first-five entry is not a first-inning copy.
+    """Return True when the ties show that a first-five entry is not a first-inning copy.
 
-    A book that lists a first-five tie the first-inning entry lacks, or a tie
-    beyond ``tolerance`` of the first-inning tie, did not copy the entry. A
-    first-five entry with no tie decides nothing here: a copy may drop the
-    tie, so the team sides decide. On a near-even game a book's two-way
-    first-five and first-inning prices sit within the tolerance, so without
-    this rule a book that adds a first-five tie reads as a copy.
+    A first-five tie that the first-inning entry lacks rules out a copy.
+    A first-five tie beyond ``tolerance`` of the first-inning tie also rules out a copy.
+    A first-five entry with no tie decides nothing; the team sides decide.
+    On a near-even game the team sides match within the tolerance, so the tie must decide.
     """
     if f5_tie is None:
         return False
@@ -169,13 +170,11 @@ def _tie_rules_out_twin(
 
 
 def _parse_utc(value: str) -> datetime | None:
-    """Parse a UTC timestamp from either source, or ``None`` if unparseable.
+    """Parse a UTC timestamp from either source as a naive datetime, or return ``None``.
 
-    The MLB schedule's ``gameDate`` is ISO-8601 (``"2026-09-08T22:35:00Z"``);
-    BettingPros' ``scheduled`` is space-separated with no zone marker
-    (``"2026-09-08 22:35:00"``) but represents the same UTC instant (verified
-    against a live game: both read the identical wall-clock value). Naive
-    ``datetime`` objects from both are therefore directly comparable.
+    The MLB schedule writes ``"2026-09-08T22:35:00Z"``.
+    BettingPros writes ``"2026-09-08 22:35:00"``, with no zone, but also in UTC.
+    So the naive datetimes from the two sources compare directly.
     """
     v = value.strip()
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
@@ -187,7 +186,7 @@ def _parse_utc(value: str) -> datetime | None:
 
 
 def _normalize_name(name: str) -> str:
-    """Lower-case, strip accents + non-alphanumerics, collapse spaces."""
+    """Return the name key: lower case, no accents or punctuation, single spaces."""
     decomposed = unicodedata.normalize("NFKD", name)
     ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
     kept = "".join(c if c.isalnum() or c.isspace() else " " for c in ascii_only)

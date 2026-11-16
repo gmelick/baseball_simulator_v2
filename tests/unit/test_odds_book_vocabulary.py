@@ -16,7 +16,6 @@ from pipeline.odds_provider import (
     BOOK_NAMES,
     FULL_GAME_MARKET_TYPES,
     GRADED_BOOK_PREFERENCE,
-    LEGACY_GAME_MARKET_TYPES,
     ODDS_ROW_VERSION,
     STORED_BOOK_FILTER_SQL,
     bettable_labels,
@@ -27,7 +26,6 @@ from pipeline.odds_provider import (
     graded_book_labels,
     graded_row_order_sql,
     is_bettable,
-    non_bettable_labels,
     resolve_book,
 )
 
@@ -69,7 +67,7 @@ class TestBookVocabulary:
         the vendor adds could become a best price or a graded row."""
         assert book_kind("bp:999") == "unknown"
         assert not is_bettable("bp:999")
-        assert "bp:999" not in bettable_labels() and "bp:999" not in non_bettable_labels()
+        assert "bp:999" not in bettable_labels()
 
     def test_the_catalogue_s_pickem_apps_and_prediction_markets_are_not_bettable(self) -> None:
         """The vendor's /v3/books catalogue (read 2026-09-28): 74 DraftKings
@@ -84,7 +82,7 @@ class TestBookVocabulary:
         for book_id in (44, 45, 53, 69, 70, 74, 76, 78):
             label = book_label(book_id)
             assert not is_bettable(label), label
-            assert label in non_bettable_labels() and label not in bettable_labels()
+            assert label not in bettable_labels()
             assert book_display_name(label) == BOOK_NAMES[book_id]
 
     def test_the_bettable_labels_are_the_listed_sportsbooks(self) -> None:
@@ -102,9 +100,9 @@ class TestBookVocabulary:
             "bp:49",
         ]
         assert set(graded_book_labels()) <= set(bettable_labels())
-        assert not set(bettable_labels()) & set(non_bettable_labels())
         labels = {book_label(b) for b in BOOK_KIND}
-        assert set(bettable_labels()) | set(non_bettable_labels()) == labels
+        assert set(bettable_labels()) <= labels
+        assert all(not is_bettable(label) for label in labels - set(bettable_labels()))
 
     def test_display_names(self) -> None:
         assert book_display_name("bp:10") == "FanDuel"
@@ -130,7 +128,7 @@ class TestBookVocabulary:
 
     def test_every_sportsbook_display_name_resolves_back_to_its_id(self) -> None:
         """Review fix: ``resolve_book(book_display_name(label))`` round-trips for every
-        sportsbook, so ``--book "theScore Bet"`` and ``get_odds(book=...)`` accept the
+        sportsbook, so ``--book "theScore Bet"`` and ``resolve_book`` accept the
         name the pages show."""
         sportsbooks = [b for b in BOOK_NAMES if BOOK_KIND[b] == "sportsbook"]
         assert 33 in sportsbooks and len(sportsbooks) == 11
@@ -148,29 +146,6 @@ class TestBookVocabulary:
         assert graded_book_labels() == [f"bp:{b}" for b in GRADED_BOOK_PREFERENCE]
         assert graded_book_labels((10, 12)) == ["bp:10", "bp:12"]
 
-    def test_the_non_bettable_labels(self) -> None:
-        assert non_bettable_labels() == [
-            "bp:0",
-            "bp:36",
-            "bp:37",
-            "bp:38",
-            "bp:39",
-            "bp:44",
-            "bp:45",
-            "bp:53",
-            "bp:60",
-            "bp:63",
-            "bp:68",
-            "bp:69",
-            "bp:70",
-            "bp:73",
-            "bp:74",
-            "bp:75",
-            "bp:76",
-            "bp:78",
-        ]
-        assert not set(non_bettable_labels()) & set(graded_book_labels())
-
     def test_the_sql_helpers(self) -> None:
         assert STORED_BOOK_FILTER_SQL == "book LIKE 'bp:%'"
         assert graded_row_order_sql("$3") == (
@@ -178,9 +153,8 @@ class TestBookVocabulary:
         )
         assert ODDS_ROW_VERSION == "sim555.2"
 
-    def test_the_full_game_alias(self) -> None:
+    def test_the_full_game_markets(self) -> None:
         assert FULL_GAME_MARKET_TYPES == ("moneyline", "runline", "total")
-        assert LEGACY_GAME_MARKET_TYPES is FULL_GAME_MARKET_TYPES
 
     def test_the_exports(self) -> None:
         from pipeline import odds_provider
@@ -203,7 +177,6 @@ class TestBookVocabulary:
             "resolve_book",
             "graded_book_labels",
             "bettable_labels",
-            "non_bettable_labels",
             "graded_row_order_sql",
             "odds_rows_by_book",
             "prop_rows_by_book",

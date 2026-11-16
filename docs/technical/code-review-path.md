@@ -439,9 +439,10 @@ price with the model's probability, and reports the edge and the expected value.
 
 1. [pipeline/odds_provider.py](../../pipeline/odds_provider.py): the market vocabulary
    and the provider interface.
-2. [pipeline/bettingpros_odds_provider.py](../../pipeline/bettingpros_odds_provider.py)
-   and [pipeline/bettingpros/](../../pipeline/bettingpros/): the vendor's provider.
-3. [betting/bet_signal.py](../../betting/bet_signal.py): implied probability, margin
+2. [pipeline/bettingpros/](../../pipeline/bettingpros/): the vendor's provider, starting
+   at `provider.py`.
+3. [pipeline/odds_row_guard.py](../../pipeline/odds_row_guard.py): the load guard.
+4. [betting/bet_signal.py](../../betting/bet_signal.py): implied probability, margin
    removal, edge and expected value, then the bet signal's gate, stake and rank.
 
 **Check.**

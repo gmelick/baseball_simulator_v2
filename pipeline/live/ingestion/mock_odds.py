@@ -8,10 +8,10 @@ import random
 from typing import Any
 
 from pipeline.odds_provider import (
+    FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
-    LEGACY_GAME_MARKET_TYPES,
 )
 
 # ---------------------------------------------------------------------------
@@ -102,9 +102,8 @@ class MockOddsAPI:
         ----------
         game_pk       : MLB game identifier (seeds the RNG for determinism)
         line_type     : 'opening' | 'current' | 'closing' | 'bet_placement'
-        market_type   : any value of ``GAME_MARKET_TYPES`` (``run_line`` is the
-                        legacy alias of ``runline``); an unknown value raises
-                        ``ValueError`` like the real provider does
+        market_type   : any value of ``GAME_MARKET_TYPES``; an unknown
+                        value raises ``ValueError`` like the real provider does
         book          : book identifier (e.g. 'consensus', 'pinnacle', 'draftkings')
         is_sharp_book : TRUE for sharp books used as CLV reference (e.g. Pinnacle, Circa)
 
@@ -115,8 +114,7 @@ class MockOddsAPI:
         can end tied), a team total a lower line, a yes / no market an over /
         under pair at 0.5.
         """
-        canonical = "runline" if market_type == "run_line" else market_type
-        if canonical not in GAME_MARKET_KIND:
+        if market_type not in GAME_MARKET_KIND:
             known = ", ".join(GAME_MARKET_TYPES)
             raise ValueError(f"Unknown market_type '{market_type}'. Known values: {known}")
         rng = random.Random(game_pk)
@@ -171,7 +169,7 @@ class MockOddsAPI:
         }
         for field in GAME_ODDS_FIELDS:
             result[field] = None
-        if canonical in LEGACY_GAME_MARKET_TYPES:
+        if market_type in FULL_GAME_MARKET_TYPES:
             result.update(
                 {
                     "home_ml": home_ml,
@@ -189,8 +187,8 @@ class MockOddsAPI:
 
         # A segment / team market: its own deterministic draw, seeded on the
         # game AND the market so two markets of one game never share numbers.
-        mrng = random.Random(game_pk * 1_000 + (GAME_MARKET_TYPES.index(canonical) + 1))
-        kind = GAME_MARKET_KIND[canonical]
+        mrng = random.Random(game_pk * 1_000 + (GAME_MARKET_TYPES.index(market_type) + 1))
+        kind = GAME_MARKET_KIND[market_type]
         if kind == "three_way":
             # A first-inning / first-five moneyline: the tie is a real outcome,
             # so the three prices carry the vig between them.
@@ -216,11 +214,11 @@ class MockOddsAPI:
             result["away_spread_ml"] = MockOddsAPI._prob_to_american((1.0 - p_home) * (1 + vig / 2))
         elif kind == "total":
             # The line scales with the slice of the game and the side.
-            if canonical.startswith("f1_"):
+            if market_type.startswith("f1_"):
                 line = mrng.choice([0.5, 1.5])
-            elif canonical.startswith("f5_team"):
+            elif market_type.startswith("f5_team"):
                 line = mrng.choice([1.5, 2.0, 2.5])
-            elif canonical.startswith("f5_"):
+            elif market_type.startswith("f5_"):
                 line = mrng.choice([4.0, 4.5, 5.0])
             else:  # a full-game team total
                 line = mrng.choice([3.5, 4.0, 4.5, 5.0])

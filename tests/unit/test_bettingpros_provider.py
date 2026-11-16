@@ -8,11 +8,10 @@ Unit tests for the SIM-405 BettingPros odds provider. The two network seams
 Fixtures: game_pk 746437 (SEA @ DET, 2024-08-15) ↔ BettingPros event 92857.
 Expected values are read straight from the captured responses.
 
-SIM-555 (2026-09-28) changed the pins on purpose: ``get_odds`` / ``get_prop_odds``
-now return ONE book's row, the first book on ``GRADED_BOOK_PREFERENCE`` with a
-row, not the "best current line" the vendor flagged per side (which mixed books
-inside one row). A test whose book falls past the list's head reads the order
-from the constant, so a reorder of the list (as on 2026-09-29) never breaks it.
+SIM-555 (2026-09-28) changed the pins on purpose: ``get_odds`` returns ONE
+book's row, the first book on ``GRADED_BOOK_PREFERENCE`` with a row, not the
+"best current line" the vendor flagged per side (which mixed books inside one
+row). A prop test reads every book's row through ``get_prop_odds_by_book``.
 """
 
 from __future__ import annotations
@@ -23,8 +22,8 @@ from pathlib import Path
 import pytest
 
 from pipeline.bettingpros.parsing import _normalize_name
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
-from pipeline.odds_provider import graded_book_labels, is_bettable
+from pipeline.bettingpros.provider import BettingProsOddsProvider
+from pipeline.odds_provider import is_bettable
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 
@@ -120,26 +119,11 @@ def test_get_odds_opening_line_type_uses_opening_line():
     assert odds["away_ml"] == -148
 
 
-def test_get_odds_names_a_book_and_echoes_line_type():
-    odds = _FixtureProvider().get_odds(
-        746437, line_type="closing", book="fanduel", is_sharp_book=True
-    )
-    assert odds["book"] == "bp:10"
+def test_get_odds_by_book_carries_each_book_and_echoes_line_type():
+    rows = _FixtureProvider().get_odds_by_book(746437, line_type="closing")
+    odds = next(row for row in rows if row["book"] == "bp:10")  # FanDuel
     assert (odds["home_ml"], odds["away_ml"]) == (116, -136)
-    assert odds["line_type"] == "closing"
-    assert odds["is_sharp_book"] is True
-
-
-def test_get_odds_unknown_book_is_an_empty_row_that_echoes_the_request():
-    # SIM-555: BettingPros carries no Pinnacle line; the name no longer silently
-    # returns another book's prices.
-    odds = _FixtureProvider().get_odds(
-        746437, line_type="closing", book="pinnacle", is_sharp_book=True
-    )
-    assert odds["book"] == "pinnacle"
-    assert odds["line_type"] == "closing"
-    assert odds["is_sharp_book"] is True
-    assert odds["home_ml"] is None and odds["away_ml"] is None
+    assert all(row["line_type"] == "closing" for row in rows)
 
 
 def test_get_odds_unresolvable_game_returns_empty():
@@ -147,6 +131,8 @@ def test_get_odds_unresolvable_game_returns_empty():
     assert odds["home_ml"] is None
     assert odds["away_ml"] is None
     assert odds["source"] == "bettingpros"  # shape preserved
+    assert odds["book"] == "consensus"
+    assert _FixtureProvider(schedule_empty=True).get_odds_by_book(999999) == []
 
 
 # --------------------------------------------------------------------------- get_prop_odds
@@ -159,38 +145,29 @@ def test_get_prop_odds_matches_player_by_name():
         if is_bettable(row["book"])
     }
     assert closes == _K_CLOSES
-    quote = provider.get_prop_odds(746437, 682243, "strikeouts")
-    assert quote["prop_stat"] == "strikeouts"
-    # The first book on the preference list with an offer.
-    graded = next(label for label in graded_book_labels() if label in closes)
-    assert quote["book"] == graded
-    assert (quote["line"], quote["over_ml"], quote["under_ml"]) == _K_CLOSES[graded]
-    assert quote["is_mock"] is False
+    assert all(row["prop_stat"] == "strikeouts" for row in rows)
+    assert all(row["is_mock"] is False for row in rows)
 
 
-def test_get_prop_odds_no_player_match_returns_nulls():
-    quote = _FixtureProvider(player_full_name="Nobody Here").get_prop_odds(
+def test_get_prop_odds_no_player_match_returns_no_rows():
+    rows = _FixtureProvider(player_full_name="Nobody Here").get_prop_odds_by_book(
         746437, 111111, "strikeouts"
     )
-    assert quote["line"] is None
-    assert quote["over_ml"] is None
-    assert quote["prop_stat"] == "strikeouts"  # shape preserved
+    assert rows == []
 
 
 def test_get_prop_odds_unknown_stat_raises():
     # SIM-421 made "doubles" (the old probe value) a real market, so the probe is
     # now innings_pitched — a market the vocabulary still does not carry.
     with pytest.raises(ValueError, match="Unknown prop_stat"):
-        _FixtureProvider().get_prop_odds(746437, 682243, "innings_pitched")
+        _FixtureProvider().get_prop_odds_by_book(746437, 682243, "innings_pitched")
 
 
 # --------------------------------------------------------------------------- registry
-def test_registry_resolves_bettingpros_and_real():
+def test_registry_resolves_bettingpros():
     from pipeline.odds_provider import get_odds_provider
 
-    for name in ("bettingpros", "real"):
-        prov = get_odds_provider(name)
-        assert isinstance(prov, BettingProsOddsProvider)
+    assert isinstance(get_odds_provider("bettingpros"), BettingProsOddsProvider)
 
 
 # --------------------------------------------------------------------------- SIM-536

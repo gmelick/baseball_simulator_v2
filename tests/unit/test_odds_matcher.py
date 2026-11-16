@@ -42,17 +42,17 @@ from typing import Any
 
 import pytest
 
+from pipeline.bettingpros.provider import BettingProsOddsProvider
 from pipeline.bettingpros.schedule import (
     _MAX_EVENT_TIME_DELTA,
     _MAX_SINGLE_EVENT_DELTA,
     _is_postponed,
     _read_schedule,
 )
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
 from pipeline.odds_provider import GAME_MARKET_TYPES
-from pipeline.odds_row_guard import RULES, RefusalTally, check_row, refuse_reason
+from pipeline.odds_row_guard import RULES, RefusalTally, check_row
 
-_LOGGER = "pipeline.bettingpros_odds_provider"
+_LOGGER = "pipeline.bettingpros"
 
 _TEAMS = {
     "STL": ("St. Louis Cardinals", "Cardinals"),
@@ -732,8 +732,6 @@ class TestStraightDoubleHeaderGameTwo:
         assert check_row(rows["bp:10"]) is None
         late = check_row(rows["bp:12"])
         assert late is not None and late.rule == "late_closing_stamp"
-        props = provider.get_prop_odds(746773, 1, "strikeouts")
-        assert props["scheduled_start"] == _utc("2024-07-10 21:25:00")
 
     def test_game_one_keeps_its_listed_start(self) -> None:
         offers = {122: _ml_offers("CWS", "MIN", {10: (-110, -110, "2024-07-10 18:00:00")})}
@@ -1012,21 +1010,20 @@ class TestPostponedStartOnTheRows:
         provider = _Stub(_745175, _745175_EVENTS, offers=_745175_OFFERS)
         postponed = _utc("2024-05-25 00:15:00")
         for line_type in ("opening", "closing"):
+            moneyline = provider.get_odds_by_book(
+                745175, line_type=line_type, market_type="moneyline"
+            )
+            assert moneyline, line_type
             for market in GAME_MARKET_TYPES:
-                # The one-row call returns the empty row when the market has no offer.
-                row = provider.get_odds(745175, line_type=line_type, market_type=market)
-                assert row["postponed_start"] == postponed, (line_type, market)
-                assert row["scheduled_start"] == _utc("2024-07-14 00:15:00")
                 for book_row in provider.get_odds_by_book(
                     745175, line_type=line_type, market_type=market
                 ):
-                    assert book_row["postponed_start"] == postponed
+                    assert book_row["postponed_start"] == postponed, (line_type, market)
+                    assert book_row["scheduled_start"] == _utc("2024-07-14 00:15:00")
             props = provider.get_prop_odds_by_book(
                 745175, 543243, "strikeouts", line_type=line_type
             )
             assert props and all(r["postponed_start"] == postponed for r in props)
-            empty = provider.get_prop_odds(745175, 543243, "walks", line_type=line_type)
-            assert empty["postponed_start"] == postponed
         assert postponed.tzinfo is UTC
 
     def test_a_game_without_a_postponement_carries_none(self) -> None:
@@ -1034,12 +1031,6 @@ class TestPostponedStartOnTheRows:
         provider = _Stub(_745169, _745169_EVENTS, offers=offers)
         rows = provider.get_odds_by_book(745169, line_type="closing")
         assert rows and all(r["postponed_start"] is None for r in rows)
-        assert provider.get_prop_odds(745169, 1, "strikeouts")["postponed_start"] is None
-
-    def test_an_unmatched_game_carries_none(self) -> None:
-        provider = _Stub(_745175, {})
-        assert provider.get_odds(745175)["postponed_start"] is None
-        assert provider.get_prop_odds(745175, 1, "strikeouts")["postponed_start"] is None
 
     def test_a_subclass_that_resolves_the_meta_itself_carries_none(self) -> None:
         class _OwnMeta(_Stub):
@@ -1079,7 +1070,6 @@ class TestTheGuardRule:
         assert at is not None and at.rule == "stamped_before_postponement"
         # FanDuel's close of the real game is kept.
         assert check_row(rows["bp:10"]) is None
-        assert refuse_reason(rows["bp:10"]) is None
 
     def test_opening_game_rows(self) -> None:
         provider = _Stub(_745175, _745175_EVENTS, offers=_745175_OFFERS)

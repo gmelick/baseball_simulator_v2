@@ -46,7 +46,7 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.bettingpros.provider import BettingProsOddsProvider
 from pipeline.odds_provider import get_odds_provider
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
@@ -362,9 +362,9 @@ class TestRetryLog:
     ) -> None:
         urlopen(_http_error(502), _PAYLOAD)
         provider, _ = _provider(max_retries=3, retry_wait_s=2.0)
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
             _read(provider)
-        lines = [r for r in caplog.records if r.name == "pipeline.bettingpros_odds_provider"]
+        lines = [r for r in caplog.records if r.name == "pipeline.bettingpros"]
         assert len(lines) == 1 and lines[0].levelno == logging.INFO
         message = lines[0].getMessage()
         assert "api.bettingpros.com/v3/offers" in message
@@ -378,9 +378,9 @@ class TestRetryLog:
         noisy = urllib.error.URLError(f"timed out reading {_OFFERS_URL} with key {_KEY}")
         urlopen(noisy, _PAYLOAD)
         provider, _ = _provider(max_retries=1)
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
             _read(provider)
-        (record,) = [r for r in caplog.records if r.name == "pipeline.bettingpros_odds_provider"]
+        (record,) = [r for r in caplog.records if r.name == "pipeline.bettingpros"]
         message = record.getMessage()
         assert "timed out reading api.bettingpros.com/v3/offers" in message
         assert _KEY not in message and "?" not in message and "market_id" not in message

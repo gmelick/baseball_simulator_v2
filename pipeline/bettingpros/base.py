@@ -10,7 +10,10 @@ from pipeline.bettingpros.schedule import _ScheduleInfo
 
 
 class ProviderBase:
-    """The provider's settings and caches, declared once so each mixin sees them."""
+    """The provider's settings and caches, declared once for every part of the provider.
+
+    Each part is a mixin: a class that adds methods to the provider class.
+    """
 
     API_KEY_ENV: ClassVar[str]
     MAX_RETRIES_ENV: ClassVar[str]
@@ -21,7 +24,6 @@ class ProviderBase:
     OFFERS_CACHE_TTL_ENV: ClassVar[str]
     DEFAULT_OFFERS_CACHE_TTL_S: ClassVar[float]
     _api_key: str | None
-    _prefer_book_id: int | None
     _timeout: float
     _offers_cache_ttl_s: float
     _clock: Callable[[], float]

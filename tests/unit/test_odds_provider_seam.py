@@ -10,8 +10,7 @@ Verifies the provider *seam* added in ``pipeline/odds_provider.py``:
      correctly; an unknown name raises a clear error).
   2. ``MockOddsAPI`` satisfies the ``OddsProvider`` interface (runtime Protocol
      isinstance check + return-shape parity smoke).
-  3. ``ODDS_PROVIDER=real`` selects the BettingPros provider.
-  4. A fake provider can be injected into ``LiveIngestionPipeline`` so its
+  3. A fake provider can be injected into ``LiveIngestionPipeline`` so its
      provider lookup (``_fetch_odds`` / ``_fetch_prop_odds``) is exercised
      without the mock — and a ``__new__``-built pipeline falls back to the mock.
 
@@ -39,7 +38,7 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
+from pipeline.bettingpros.provider import BettingProsOddsProvider  # noqa: E402
 from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 from pipeline.odds_provider import (  # noqa: E402
@@ -47,7 +46,6 @@ from pipeline.odds_provider import (  # noqa: E402
     ODDS_PROVIDER_ENV,
     PROP_STATS,
     OddsProvider,
-    available_providers,
     get_odds_provider,
     register_odds_provider,
 )
@@ -131,13 +129,12 @@ class TestFactory:
         assert isinstance(get_odds_provider(), _FakeProvider)
 
     def test_explicit_arg_overrides_env(self, clean_env) -> None:
-        clean_env.setenv(ODDS_PROVIDER_ENV, "real")
-        # explicit "mock" wins over env "real"
+        clean_env.setenv(ODDS_PROVIDER_ENV, "bettingpros")
+        # explicit "mock" wins over env "bettingpros"
         assert isinstance(get_odds_provider("mock"), MockOddsAPI)
 
     def test_registered_fake_selected_by_name(self) -> None:
         register_odds_provider("fake_named", lambda: _FakeProvider())
-        assert "fake_named" in available_providers()
         assert isinstance(get_odds_provider("fake_named"), _FakeProvider)
 
     def test_unknown_name_raises_clear_error(self, clean_env) -> None:
@@ -159,6 +156,16 @@ class TestMockConforms:
     def test_isinstance_protocol(self) -> None:
         # runtime_checkable Protocol — duck-typed presence check
         assert isinstance(MockOddsAPI(), OddsProvider)
+        assert isinstance(BettingProsOddsProvider(api_key="test"), OddsProvider)
+
+    def test_the_protocol_lists_the_one_row_and_the_by_book_methods(self) -> None:
+        for name in ("get_odds", "get_odds_by_book", "get_prop_odds_by_book"):
+            assert callable(getattr(OddsProvider, name, None)), name
+        # get_prop_odds left the protocol: no production reader calls it.
+        assert not hasattr(OddsProvider, "get_prop_odds")
+
+    def test_a_provider_without_a_by_book_method_is_not_an_odds_provider(self) -> None:
+        assert not isinstance(_FakeProvider(), OddsProvider)
 
     def test_has_required_methods(self) -> None:
         inst = MockOddsAPI()
@@ -221,19 +228,7 @@ class TestMockConforms:
 
 
 # ===========================================================================
-# 3. The "real" provider name
-# ===========================================================================
-
-
-class TestRealProviderName:
-    def test_selectable_via_factory(self, clean_env) -> None:
-        # The "real" provider name resolves to the BettingPros integration.
-        clean_env.setenv(ODDS_PROVIDER_ENV, "real")
-        assert isinstance(get_odds_provider(), BettingProsOddsProvider)
-
-
-# ===========================================================================
-# 4. Pipeline provider lookup (injection + lazy fallback)
+# 3. Pipeline provider lookup (injection + lazy fallback)
 # ===========================================================================
 
 

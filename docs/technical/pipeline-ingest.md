@@ -341,24 +341,29 @@ pure; the tests run them on recorded feeds in `tests/fixtures/mlb_game_feed/`.
 
 ## Odds
 
+The odds layer fetches every book's prices for every market of a game, checks each row and
+hands it to the writers. Three places hold it: the shared names and the provider switch
+(`odds_provider.py`), the load guard (`odds_row_guard.py`) and the BettingPros provider
+(`pipeline/bettingpros/`). The mock provider is `pipeline/live/ingestion/mock_odds.py`.
+
 ### `pipeline/odds_provider.py`
 
-[Source](../../pipeline/odds_provider.py) · 797 lines · Tests: [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py), [test_odds_provider_seam.py](../../tests/unit/test_odds_provider_seam.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_readers.py](../../tests/unit/test_odds_readers.py)
+[Source](../../pipeline/odds_provider.py) · 606 lines · Tests: [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py), [test_odds_provider_seam.py](../../tests/unit/test_odds_provider_seam.py), [test_odds_book_vocabulary.py](../../tests/unit/test_odds_book_vocabulary.py), [test_odds_readers.py](../../tests/unit/test_odds_readers.py)
 
-The odds seam and the one source of the odds vocabulary. A provider is any object with the
-`OddsProvider` methods; the mock and BettingPros providers register themselves by name.
+The names every odds reader and writer shares, and the switch between the two providers.
 
-| Function / class | What it does | Called from |
+| Name | What it does | Called from |
 |---|---|---|
-| `PROP_STATS` / `PITCHER_PROP_STATS` / `BATTER_PROP_STATS` | The fifteen prop markets: five pitcher markets (strikeouts, earned runs, walks, outs recorded, hits allowed) and ten batter markets (hits, home runs, total bases, RBIs, singles, doubles, triples, runs, stolen bases, hits + runs + RBIs). | every odds writer and reader |
-| `PROP_STAT_TO_MODEL_PROP` | Each market's name in the simulator's prop output (`strikeouts` → `K`). `scripts/accuracy/records.py` keeps its own copy of the same pairs. | `scripts/probes/rescore_graded_book.py` |
-| `GAME_MARKET_TYPES` / `GAME_MARKET_KIND` / `GAME_MARKET_SEGMENT` / `GAME_MARKET_SIDE` / `GAME_MARKET_NAMES` | The fifteen game markets: the full-game moneyline, run line and total; the first-inning and first-five moneyline, total and run line; each side's full-game and first-five team total; the first team to score; a run in the first inning. The kind says which columns a market fills (`moneyline`, `three_way`, `runline`, `total`, `yes_no`). | every odds writer and reader, `simulation/game_market_distributions.py` |
-| `BOOK_NAMES` / `BOOK_KIND` / `GRADED_BOOK_PREFERENCE` / `BETTABLE_KINDS` | The books. A row names its book as `'bp:<id>'`. Only sportsbooks are bettable. The readers grade against the first book on the preference list that has a row: DraftKings, then BetMGM, FanDuel, theScore and seven more. | the readers, the BettingPros provider |
-| `odds_rows_by_book` / `prop_rows_by_book` | Every book's rows of one market, through the provider's by-book method (or its one-row method, for a test fake). | the live cycles, the opening-line job, `scripts/load_historical_odds.py` |
-| `get_odds_provider` / `register_odds_provider` | Pick the provider by name, else `ODDS_PROVIDER`, else `mock`. | the live pipeline, the opening-line job, the odds loader |
+| `PROP_STATS` / `PITCHER_PROP_STATS` / `BATTER_PROP_STATS` | The fifteen prop markets: five pitcher markets and ten batter markets. | every odds writer and reader |
+| `PROP_STAT_TO_MODEL_PROP` | Each market's name in the simulator's prop output (`strikeouts` → `K`). | `scripts/probes/rescore_graded_book.py` |
+| `GAME_MARKET_TYPES` / `FULL_GAME_MARKET_TYPES` / `GAME_MARKET_KIND` / `GAME_MARKET_SEGMENT` / `GAME_MARKET_SIDE` / `GAME_MARKET_NAMES` | The fifteen game markets, the three full-game ones among them. The kind says which columns a market fills (`moneyline`, `three_way`, `runline`, `total`, `yes_no`). | every odds writer and reader, `simulation/game_market_distributions.py` |
+| `BOOK_NAMES` / `BOOK_KIND` / `GRADED_BOOK_PREFERENCE` / `BETTABLE_KINDS` and the `book_*` helpers | The books. A row names its book as `'bp:<id>'`. Only a listed sportsbook is bettable. The readers grade against the first book on the preference list that has a row. | the readers, the BettingPros provider |
+| `OddsProvider` | The interface: `get_odds` (the one row the live service broadcasts), `get_odds_by_book` and `get_prop_odds_by_book`. | the live pipeline, the writers |
+| `odds_rows_by_book` / `prop_rows_by_book` | Every book's rows of one market, through the by-book read (or a test fake's one-row read). | the live cycles, the opening-line job, `scripts/load_historical_odds.py` |
+| `get_odds_provider` / `register_odds_provider` | Pick the provider by name, else `ODDS_PROVIDER`, else `mock`. Tests register fakes. | the live pipeline, the opening-line job, the odds loader |
 
-**Flags:** `ODDS_PROVIDER` (code default `mock`; `bettingpros` or `real` selects the
-vendor). The compose stack reads it from `.env`; `tests/conftest.py` pins `mock`.
+**Flags:** `ODDS_PROVIDER` (`mock` by default, `bettingpros` for the vendor). The compose
+stack reads it from `.env`; `tests/conftest.py` pins `mock`.
 
 **Watch out:** a new prop market goes in four places together: the tuples here, a migration
 that widens the `raw.prop_odds` CHECK, `MockOddsAPI`'s config and the BettingPros market
@@ -366,61 +371,49 @@ ids. Import-time guards and the vocabulary test fail when one is missing.
 
 ### `pipeline/odds_row_guard.py`
 
-[Source](../../pipeline/odds_row_guard.py) · 460 lines · Tests: [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_book_census.py](../../tests/unit/test_odds_book_census.py)
+[Source](../../pipeline/odds_row_guard.py) · 401 lines · Tests: [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_book_census.py](../../tests/unit/test_odds_book_census.py)
 
-The load guard: it refuses an odds row that no single book could post (one row per book,
-SIM-555). Every writer calls it before it stores a row; the API's stored-odds read calls it
-again. The module is pure.
+The load guard: it refuses an odds row that no single book could post. Every writer calls it
+before it stores a row; the API's stored-odds read calls it again. The module is pure.
 
-| Function / class | What it does | Called from |
+| Name | What it does | Called from |
 |---|---|---|
-| `check_row` / `refuse_reason` | The rules, per market kind: a missing side; run-line spreads of different size; equal spreads priced like a pair; an over and an under at two lines; a first-five row that carries first-inning prices; a placeholder team-total line; a three-way row whose prices cannot be one market; a closing line stamped more than 15 minutes after the start; a price stamped no later than 15 minutes after a postponed game's original start. | the live cycles, the opening-line job, `scripts/load_historical_odds.py`, `api/routes/betting_stored_odds.py` |
+| `check_row` | Returns a `Refusal` (a rule and a plain reason) or `None`. The 13 rules: a missing side; run-line spreads of different size; equal spreads priced like a pair; an over and an under at two lines; a first-five row that carries first-inning prices or a first-inning tie; a placeholder team-total line; a three-way row whose prices cannot be one market; a closing line stamped more than 15 minutes after the start; a price for a postponed game's original date. | the live cycles, the opening-line job, `scripts/load_historical_odds.py`, `api/routes/betting_stored_odds.py` |
 | `RefusalTally` | Counts the refusals by rule, market and book, and warns when the refused share passes a limit. | the writers |
-| `implied_probability` | The chance an American price stands for (+150 → 0.40). | `check_row`, the BettingPros twin rule |
+| `implied_probability` | The chance an American price stands for (+150 → 0.40). | `check_row`, the BettingPros twin rule, the census probe |
 
-### `pipeline/bettingpros_odds_provider.py`
+### `pipeline/bettingpros/`
 
-[Source](../../pipeline/bettingpros_odds_provider.py) · 445 lines · Tests: [test_bettingpros_provider.py](../../tests/unit/test_bettingpros_provider.py), [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py), [test_odds_provider_retry.py](../../tests/unit/test_odds_provider_retry.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py)
+[Source](../../pipeline/bettingpros/) · 8 modules, 2029 lines · Tests: [test_bettingpros_provider.py](../../tests/unit/test_bettingpros_provider.py), [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_provider_retry.py](../../tests/unit/test_odds_provider_retry.py), [test_odds_census_sql.py](../../tests/unit/test_odds_census_sql.py)
 
-`BettingProsOddsProvider`, the real odds source over the BettingPros v3 API. It resolves an
-MLB game to a vendor event by the date and the team nicknames, and an MLB player to a prop
-offer by the normalized name. Its parts live in `pipeline/bettingpros/`.
+The BettingPros provider, `BettingProsOddsProvider(OfferRowsMixin, ProviderBase)`.
+`OfferRowsMixin` extends `EventMatchMixin`, which extends `TransportMixin`. Every part logs
+as `pipeline.bettingpros`.
 
-| Function / class | What it does | Called from |
+| Module | Lines | What it holds |
 |---|---|---|
-| `get_odds_by_book` / `get_prop_odds_by_book` | One row per book for one market and line type. An `opening` row is the opener's single row; any other line type gives one row per book with a usable line on every side, the vendor's blend (`bp:0`) included. Each row carries the vendor's stamp in `book_line_at`. | `odds_provider.odds_rows_by_book` / `prop_rows_by_book` |
-| `get_odds` / `get_prop_odds` | The one-row methods. The default `book='consensus'` returns the first graded book's row; the blend and the other non-sportsbooks are never the default. | `GameOddsMixin._fetch_odds` (the live broadcast row) |
+| [`provider.py`](../../pipeline/bettingpros/provider.py) | 191 | The class: its settings and the three reads. `get_odds_by_book` / `get_prop_odds_by_book` give one row per book; `get_odds` gives the graded book's row for the live broadcast. |
+| [`transport.py`](../../pipeline/bettingpros/transport.py) | 184 | The HTTP reads, with the retry policy, and the two network seams `_bp_get` and `_mlb_get` that the tests stub. |
+| [`events.py`](../../pipeline/bettingpros/events.py) | 548 | The game-to-event match (double-headers, postponed and suspended games), the player-name lookup, the paged `/offers` read and the caches. `forget_game` and `forget_failed_lookups` drop cached facts. |
+| [`schedule.py`](../../pipeline/bettingpros/schedule.py) | 147 | The schedule facts the match reads: the dates a game touched, its double-header number, its postponed start. |
+| [`rows.py`](../../pipeline/bettingpros/rows.py) | 594 | One row per book for a market, the opening row, and the first-five rules. |
+| [`parsing.py`](../../pipeline/bettingpros/parsing.py) | 202 | Pure helpers: one book's usable line, the shared opener, the vendor's stamp, the name key. |
+| [`markets.py`](../../pipeline/bettingpros/markets.py) | 122 | The vendor's market id for every game and prop market, and the first-five rules: the dated exclusion (DraftKings from 2025-03-01) and the twin price tolerance. |
+| [`base.py`](../../pipeline/bettingpros/base.py) | 41 | Type declarations of the settings and caches every part sees. |
 
 **Flags:** `ODDS_API_KEY` (the vendor key). `ODDS_OFFERS_CACHE_TTL_S` (default 30 seconds,
 half the live cadence; 0 turns the caches off). `BETTINGPROS_MAX_RETRIES` (default 0) and
 `BETTINGPROS_RETRY_WAIT_S` (default 2.0).
 
-**Watch out:** leave `BETTINGPROS_MAX_RETRIES` unset in the app and the live service. A
-retry waits with `time.sleep`, which stops the whole event loop. Only the offline loaders
-turn retries on (`set_retry_policy`). A read that still fails becomes an empty result and
-counts in `read_failures`.
+**Watch out:**
 
-### `pipeline/bettingpros/`
-
-[Source](../../pipeline/bettingpros/) · 8 modules, 1907 lines · Tests: [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_census_sql.py](../../tests/unit/test_odds_census_sql.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py)
-
-The provider's parts. The class is `BettingProsOddsProvider(OfferRowsMixin, ProviderBase)`;
-`OfferRowsMixin` extends `EventMatchMixin`, which extends `TransportMixin`.
-
-| Module | Lines | What it holds |
-|---|---|---|
-| [`base.py`](../../pipeline/bettingpros/base.py) | 39 | `ProviderBase`: the settings and caches every mixin sees. |
-| [`transport.py`](../../pipeline/bettingpros/transport.py) | 168 | `TransportMixin`: `_http_get_json` (the one read, with the retry policy: 429, 5xx, time-outs and dropped connections retry with a doubling wait up to 60 seconds), and the two network seams `_bp_get` and `_mlb_get` that the tests stub. |
-| [`events.py`](../../pipeline/bettingpros/events.py) | 612 | `EventMatchMixin`: the game-to-event match (`_resolve_event`, `_match_by_start`, `_match_game_two`), the player-name lookup, the paged `/offers` read (at most 20 pages) and the caches. A found game or name is kept for the process; a failed lookup is kept for one cache lifetime. `forget_game` and `forget_failed_lookups` drop them. |
-| [`schedule.py`](../../pipeline/bettingpros/schedule.py) | 155 | The schedule facts the match reads: the slates a game touched, its double-header number, its postponed start. The match reads the PLAYED entry, never a postponed one. |
-| [`rows.py`](../../pipeline/bettingpros/rows.py) | 591 | `OfferRowsMixin`: one row per book (`_rows`, `_game_market_rows`, `_prop_market_rows`) and the first-five rules. A first-five entry that copies the book's first-inning prices (the "twin" rule), or a book on the dated exclusion list, gives no row. When the first-inning read fails, the first-five market gets no rows at all. |
-| [`rules.py`](../../pipeline/bettingpros/rules.py) | 79 | The vendor-data rules: the dated first-five exclusions and the twin rule's price tolerance. |
-| [`parsing.py`](../../pipeline/bettingpros/parsing.py) | 203 | One offer's sides, one book's usable line (an `is_off` or inactive line is not a quote), the shared opener, the vendor's stamp and the name key. |
-| [`markets.py`](../../pipeline/bettingpros/markets.py) | 60 | The vendor market id of every game and prop market (`hits` is 287, `hits_allowed` 404), with import-time guards against the vocabulary. |
-
-**Watch out:** game 2 of a straight double-header has a placeholder start, so the match takes
-the later of the two teams' events on that date. A made-up game's rows carry
-`postponed_start`, and the guard refuses a price stamped before it.
+* Leave `BETTINGPROS_MAX_RETRIES` unset in the app and the live service. A retry waits with
+  `time.sleep`, which stalls the opening-line job's event loop and the live pipeline's odds
+  thread. Only the offline loaders turn retries on.
+* Game 2 of a straight double-header has a placeholder start, so the match takes the later of
+  the two teams' events on that date.
+* A made-up game's rows carry `postponed_start`, and the guard refuses a price stamped no
+  later than 15 minutes after it.
 
 ### `pipeline/etl/opening_line_job.py`
 

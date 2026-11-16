@@ -59,10 +59,10 @@ from betting.bet_signal import (
     samples_over_under_edge_report,
 )
 from pipeline.odds_provider import (
+    FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
     GAME_MARKET_TYPES,
-    LEGACY_GAME_MARKET_TYPES,
 )
 from simulation.game_market_distributions import (
     SegmentRuns,
@@ -580,7 +580,7 @@ def score_game_accuracy(
 #: The segment and team markets (the prop-market work, SIM-421): every game
 #: market except the three full-game ones :func:`score_game_accuracy` scores.
 SEGMENT_MARKET_TYPES: tuple[str, ...] = tuple(
-    m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES
+    m for m in GAME_MARKET_TYPES if m not in FULL_GAME_MARKET_TYPES
 )
 
 #: (side column, other column, line column, other line column) per market kind,

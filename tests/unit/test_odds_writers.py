@@ -41,7 +41,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import scripts.load_historical_odds as loader
 
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.bettingpros.provider import BettingProsOddsProvider
 from pipeline.etl.opening_line_job import OpeningLineJob
 from pipeline.live import live_ingestion_pipeline as live
 from pipeline.live.ingestion.constants import (

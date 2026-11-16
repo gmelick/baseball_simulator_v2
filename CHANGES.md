@@ -1,3 +1,72 @@
+# CLOSED — the odds layer loses its unused reads and names, and its docs are rewritten short — SIM-644, 2026-11-15
+
+**Why it matters.** After the betting module's clean-up (SIM-643), the owner asked for the same
+review of the odds layer: `pipeline/odds_provider.py`, `pipeline/odds_row_guard.py` and the
+BettingPros provider. The split into files mostly held. The review found one misplaced file,
+two small files that belong together, unused reads and names, and docstrings several times
+longer than the code needed. The eleven files fall from 3,609 to 3,036 lines. No stored row
+and no served number changes.
+
+**What changed (Data Engineer, Betting / Markets Analyst).**
+
+- **The provider class moves into its folder.** `pipeline/bettingpros_odds_provider.py` is now
+  `pipeline/bettingpros/provider.py`. Every part logs as `pipeline.bettingpros`.
+- **`rules.py` merges into `markets.py`.** Both held BettingPros facts keyed by market id: the
+  market ids, and the first-five rules (the dated DraftKings exclusion and the twin price
+  tolerance). The names are unchanged.
+- **The provider's unused reads are gone.** No production code called `get_prop_odds`, the
+  named-book choice of `get_odds`, or the `prefer_book_id` pin. Every writer reads one row per
+  book. `get_odds` stays, slimmed: the live refresh loop broadcasts its row, the graded book's
+  moneyline. It takes only `line_type` and `market_type`. Its empty row now carries only the
+  identity keys and the price fields; nothing reads the broadcast's `odds` field.
+- **The row builders return only the rows.** `_game_market_rows` and `_prop_market_rows` no
+  longer return an empty template row beside them.
+- **The `OddsProvider` interface** lists `get_odds`, `get_odds_by_book` and
+  `get_prop_odds_by_book`.
+- **Removed names:** `LEGACY_GAME_MARKET_TYPES` (another name for `FULL_GAME_MARKET_TYPES`;
+  the mock and two accuracy scripts switch over), `THREE_WAY_GAME_MARKET_TYPES`,
+  `non_bettable_labels`, `available_providers` (inlined in the one error message),
+  `refuse_reason`, the `real` provider name, and the `run_line` market alias. No caller passed
+  `run_line`: the API validates markets against `GAME_MARKET_TYPES`, and the database never
+  allowed it.
+- **The docstrings are rewritten short and plain**, as in the betting module. The provider's
+  module docstring falls from about 210 lines to 40, `odds_provider.py`'s from 113 to 34 and
+  the guard's from 77 to 42. Each rule moves, in one or two sentences, to the function that
+  implements it. An AST comparison (the code with docstrings removed) proves the rewrites
+  changed no code.
+
+**Kept on purpose.** The guard's `implied_probability` and the betting module's
+`implied_prob_from_american` are the same formula. They differ on a price of 0: the guard gives
+1.0 and the betting module raises. A raise inside a loader stops a load, so the guard keeps its
+own copy.
+
+**Tests (QA / DevOps).** Twelve test files are reworked. Tests of the deleted behaviour are
+deleted; tests that read a row through a deleted read now read it through the by-book read. New
+tests check the interface's three methods. Gates: ruff and the format check pass; mypy finds
+no issue in the CI scope; the odds test files pass on host Python (834); the container unit
+lane: 6,456 passed, 5 skipped, 0 failed, in two halves, with no crash.
+
+**Independent QA pass.** It found no behaviour change beyond the intended deletions. Its
+findings, all fixed:
+- `deploy/README.md` and one test docstring still named the `real` provider.
+- Two SQL comments in `scripts/probes/odds_census.sql` named the old provider path.
+- Three docstrings and the ingest page said the guard refuses a price stamped "at or before" a
+  postponed start. It refuses one stamped no later than 15 minutes after.
+- The retry warning said a retry blocks the app's event loop. That is true of the
+  opening-line job. The live pipeline's retry stalls its one odds thread.
+- One dead line in `rows.py`.
+- Three facts it flagged as lost: why the offers read needs every page, why the
+  placeholder-line rule is the only catch, and why the moneyline twin needs identical prices.
+
+**Docs.** The Odds section of `docs/technical/pipeline-ingest.md` is rewritten from the code;
+`code-review-path.md` points at the new paths; the file index is regenerated.
+
+**Deploy note.** `app`, `live` and `jobs` mount `pipeline/`, so they see the new code at once
+and need a restart to load it. `scripts/` is not mounted: the image's copy of the accuracy
+scripts imports `LEGACY_GAME_MARKET_TYPES`, which the mounted `pipeline/` no longer has. So
+rebuild the image (`docker compose build app`), then recreate `app`, `live` and `jobs` after
+the deploy window.
+
 # CLOSED — the betting module loses ten names, and its docs are rewritten short — SIM-643, 2026-11-15
 
 **Why it matters.** After the closing-line-value code left (SIM-642), `betting/bet_signal.py`

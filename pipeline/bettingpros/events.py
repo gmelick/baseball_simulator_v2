@@ -1,5 +1,42 @@
-"""The event match: an MLB game resolved to its BettingPros event, with the
-caches of found and failed lookups, and the offer reads of a matched event.
+"""The event match: an MLB game resolved to its BettingPros event.
+
+The module also holds the caches and the paged read of an event's offers.
+
+The match:
+
+* The matcher reads the PLAYED schedule entry: the first one not postponed.
+  It also searches the vendor slate of each later entry, because the vendor
+  may move a suspended game to its resumption date.
+* An event's gap is its distance to the nearest start of the game.
+  A gap of 2 hours or less matches.
+* The single-event rule takes a gap of up to 12 hours. The event must be the
+  two teams' only event on the played date, and the game is not a
+  double-header. The vendor kept another start time for the game.
+* Game 2 of a straight double-header has a placeholder start, 5 minutes after
+  game 1's. The matcher takes the later of the two teams' two events. The
+  rows measure their stamps from that event's start.
+* Every row of a made-up game carries ``postponed_start``. The load guard
+  refuses a price stamped no later than 15 minutes after it.
+
+The caches:
+
+* One ``/offers`` response for an (event, market) serves every player, every
+  book and both line types. The offers cache keeps it for one time-to-live
+  (TTL), so a game costs one read per market, not one per player and book.
+* A per-date cache keeps each date's ``/events`` list for one TTL.
+* The TTL is 30 seconds by default, half the live pipeline's 60-second fetch
+  cycle, so each cycle sees a fresh line. ``ODDS_OFFERS_CACHE_TTL_S`` sets it,
+  and 0 turns the caches off.
+* Each store first drops every entry past the TTL. So a long-lived provider
+  holds at most one TTL's worth of payloads.
+* A found game, event or player name stays for the process lifetime.
+  A failed lookup stays for one TTL only, so a game BettingPros lists later
+  is found on a later call.
+* An ``/offers`` market is paged. A failure on page 1 raises. A failure on a
+  later page logs a warning and returns the pages in hand. Neither result is
+  cached.
+* Each caught read failure adds 1 to ``read_failures``. The loader uses the
+  count to keep a game that a vendor error cut short off its done-list.
 """
 
 from __future__ import annotations
@@ -29,7 +66,7 @@ from pipeline.bettingpros.schedule import (
 )
 from pipeline.bettingpros.transport import _MAX_OFFER_PAGES, TransportMixin
 
-log = logging.getLogger("pipeline.bettingpros_odds_provider")
+log = logging.getLogger("pipeline.bettingpros")
 
 
 class EventMatchMixin(TransportMixin):
@@ -37,35 +74,16 @@ class EventMatchMixin(TransportMixin):
 
     # ------------------------------------------------------ identifier bridges
     def _resolve_game_meta(self, game_pk: int) -> tuple[str, str, str, datetime | None] | None:
-        """``game_pk`` → (official local date, home name, away name, UTC start time).
+        """``game_pk`` → (official local date, home name, away name, UTC start).
 
-        The date MUST come from ``officialDate`` (the schedule's own
-        local-calendar-date field), never from truncating ``gameDate`` (a UTC
-        timestamp). For any West-/Mountain-time night game, the UTC clock has
-        already rolled past midnight into the next calendar day while the game
-        is still being played on ``officialDate`` — truncating ``gameDate``
-        then queries BettingPros for the WRONG day's slate, which most often
-        pairs the game with a different one between the same two teams the
-        following day. A live check (2026-09-08) found this on 5 of 15 games
-        that day — every West-Coast game, exactly the affected set.
+        The date comes from ``officialDate``, never from the UTC ``gameDate``.
+        A West-Coast night game passes midnight UTC, so ``gameDate`` names the
+        next day's slate.
 
-        The UTC start time (from ``gameDate``, unlike ``officialDate`` this one
-        legitimately needs to stay in UTC) is returned too, so
-        :meth:`_resolve_event` can pick the right BettingPros event by actual
-        start time instead of guessing.
-
-        A resolved game is cached for the process lifetime. A failed
-        read returns ``None`` and is kept for one time-to-live
-        (:meth:`_failed_recently`); the first call after that reads the
-        schedule again. A read that raised counts in ``read_failures``; a
-        schedule answer without the game does not (the game is absent).
-
-        The meta comes from the PLAYED schedule entry, not the first one (see
-        :func:`_read_schedule`): a made-up game's postponed entry carries the
-        original start, against which the matcher would decline the vendor's
-        event at the real start. The same read fills ``_game_schedule_cache``
-        with the
-        facts the matcher and the rows need (:class:`_ScheduleInfo`).
+        The meta comes from the played schedule entry (:func:`_read_schedule`).
+        The same read fills ``_game_schedule_cache``. A found game stays
+        cached for the process lifetime. A failure returns ``None`` and stays
+        for one time-to-live. A read that raised counts in ``read_failures``.
         """
         if game_pk in self._game_meta_cache:
             return self._game_meta_cache[game_pk]
@@ -87,7 +105,7 @@ class EventMatchMixin(TransportMixin):
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve game_pk %s: %s", game_pk, exc)
             if not read_done:
-                self.read_failures += 1  # The schedule read failed
+                self.read_failures += 1  # the schedule read failed
         if meta is not None:
             self._game_meta_cache[game_pk] = meta
         else:
@@ -95,32 +113,14 @@ class EventMatchMixin(TransportMixin):
         return meta
 
     def _resolve_event(self, game_pk: int) -> dict[str, Any] | None:
-        """``game_pk`` → the matching BettingPros event dict (or None).
+        """``game_pk`` → its BettingPros event, or ``None``.
 
-        When more than one event matches by team name (a
-        double-header), the earlier code always picked the earliest-scheduled
-        one — silently returning game 1's odds even when ``game_pk`` was game
-        2. It now picks whichever candidate's ``scheduled`` time is CLOSEST to
-        the actual game's own start time (from :meth:`_resolve_game_meta`),
-        which is what genuinely tells the two games apart. That same
-        start-time check also acts as a sanity gate on every match, not only
-        double-headers: a match more than :data:`_MAX_EVENT_TIME_DELTA` away
-        from the real first pitch is treated as no match, rather than priced
-        against whatever the closest name match happened to be.
+        With a known start, :meth:`_match_by_start` picks the event. Without
+        one, the method takes a lone same-team event and refuses two.
 
-        A matched event is cached for the process lifetime. No match
-        (or a failed read) is kept for one time-to-live
-        (:meth:`_failed_recently`), so a repeat call inside that window reads
-        nothing, and the first call after it looks again. A failed slate read
-        counts in ``read_failures``; no match does not, nor does a slate the
-        matcher cannot read (a retry would read the same answer).
-
-        With a known start, :meth:`_match_by_start`
-        picks the event. It searches the slate of a suspended game's
-        resumption too, measures each event against every start of the game,
-        and adds the single-event rule for a start the vendor did not move.
-        Game 2 of a straight double-header, whose MLB start is a placeholder,
-        takes the later of the two teams' two events (:meth:`_match_game_two`).
+        A matched event stays cached for the process lifetime. No match stays
+        for one time-to-live. A failed slate read counts in ``read_failures``;
+        no match does not.
         """
         if game_pk in self._event_cache:
             return self._event_cache[game_pk]
@@ -144,12 +144,10 @@ class EventMatchMixin(TransportMixin):
                         game_pk, candidates, info, date_str, game_dt, home_n, away_n
                     )
                 elif len(candidates) == 1:
-                    # No usable start time to sanity-check against (gameDate was
-                    # missing or unparseable) but only one name match anyway: accept it.
+                    # No start to check against, but only one team match: take it.
                     event = candidates[0]
                 elif len(candidates) > 1:
-                    # Multiple candidates and no start time to tell them apart by —
-                    # guessing "game 1" is exactly the bug this fix removes, so refuse.
+                    # Two or more matches and no start to tell them apart: refuse.
                     log.warning(
                         "BettingPros: %d events matched game_pk %s (double-header) but "
                         "the game's own start time is unknown — refusing to guess which",
@@ -159,7 +157,7 @@ class EventMatchMixin(TransportMixin):
             except Exception as exc:  # noqa: BLE001
                 log.warning("BettingPros: event lookup failed for game_pk %s: %s", game_pk, exc)
                 if not read_done:
-                    self.read_failures += 1  # The events read failed
+                    self.read_failures += 1  # the events read failed
         if event is not None:
             self._event_cache[game_pk] = event
         else:
@@ -172,9 +170,9 @@ class EventMatchMixin(TransportMixin):
     ) -> list[dict[str, Any]]:
         """The slate's events whose home and visitor nicknames match the two MLB teams.
 
-        A nickname suffix-matches the MLB full name ("Tigers" ⊂ "Detroit
-        Tigers"). An event without a participant id raises ``KeyError``: the
-        slate is malformed, and the caller treats it as no match.
+        A nickname matches the end of the MLB name ("Tigers" in "Detroit
+        Tigers"). A participant without an id raises ``KeyError``, and the
+        caller treats it as no match.
         """
         candidates = []
         for e in slate:
@@ -198,36 +196,19 @@ class EventMatchMixin(TransportMixin):
         """The vendor event of a game with a known start, or ``None``.
 
         ``played`` holds the same-team events of the played date's slate. The
-        method adds the same-team events of every other slate of
-        ``info.slate_dates`` (a suspended game's resumption date), each event
-        once. An event's gap is its smallest distance to any start of the
-        game: the played start, then each resumption. The event with the
-        smallest gap wins (the played slate first on a tie).
+        method adds the same-team events of each later slate in
+        ``info.slate_dates``. The event with the smallest gap to any start of
+        the game wins; the played slate wins a tie.
 
-        * A gap of :data:`_MAX_EVENT_TIME_DELTA` (2 h) or less is a match. On a
-          double-header this picks the right game.
-        * The single-event rule: a larger gap still matches when the event is
-          the ONLY same-team event on the played date's slate, the played
-          entry is not a double-header (``doubleHeader`` 'N' or absent), and
-          the event sits at most :data:`_MAX_SINGLE_EVENT_DELTA` (12 h) from
-          the played start. The vendor kept another start time for the game.
-          The load guard's closing-stamp rule drops a closing price stamped
-          more than 15 minutes after the real first pitch
-          (``CLOSING_STAMP_GRACE``); a price inside those 15 minutes stays. A
-          WARNING names the event.
+        * A gap of 2 hours or less is a match.
+        * The single-event rule takes a gap of up to 12 hours (a WARNING).
+          The event must be the only same-team event on the played slate, and
+          the game is not a double-header.
         * Any other gap is no match (a WARNING).
 
-        Game 2 of a straight double-header with no listed start
-        (:attr:`_ScheduleInfo.start_unknown`) skips the gaps: its start is a
-        placeholder 5 minutes after game 1's, so the nearest event is game
-        1's. :meth:`_match_game_two` picks the event.
-
-        A failed read of an extra slate counts in ``read_failures`` and the
-        match goes on with the slates read, by the 2-hour rule only. A match
-        that close to a start is the game whatever the missing slate holds.
-        The single-event rule needs every slate: the missing one may hold a
-        closer event. The count keeps the game off the loader's done-list,
-        so the next run reads the slate again.
+        Game 2 of a straight double-header with no listed start goes to
+        :meth:`_match_game_two`. When a later slate fails to read, the method
+        counts the failure and uses the 2-hour rule only.
         """
         if info.start_unknown:
             return self._match_game_two(game_pk, played, info)
@@ -248,7 +229,7 @@ class EventMatchMixin(TransportMixin):
                     game_pk,
                     exc,
                 )
-                self.read_failures += 1  # The extra slate read failed
+                self.read_failures += 1  # a later date's slate read failed
                 extra_failed = True
                 continue
             for e in self._same_team_events(extra, home_n, away_n):
@@ -348,16 +329,9 @@ class EventMatchMixin(TransportMixin):
     ) -> dict[str, Any] | None:
         """The vendor event of game 2 of a straight double-header with no listed start.
 
-        MLB lists no real start for such a game (``startTimeTBD``); its
-        ``gameDate`` is game 1's start plus 5 minutes. The event nearest that
-        placeholder is game 1's: game 746773's placeholder is 18:15Z, game 1's
-        event 18:10Z, game 2's event about three hours later. The loader's
-        logs show such a game 2 matched 5 minutes off, to game 1's event, and
-        no event at a placeholder. So the method takes the LATER of
-        exactly two same-team events on the played date's slate. Any other
-        count, or two events at one time, is no match (a WARNING): game 1's
-        event is never game 2's. The rows then measure their stamps from the
-        vendor event's start (:meth:`_game_meta_fields`).
+        The placeholder start sits nearest game 1's event. So the method takes
+        the LATER of exactly two same-team events on the played slate. Any
+        other count, or two events at one time, is no match (a WARNING).
         """
         starts = [(_parse_utc(str(e.get("scheduled", ""))), e) for e in played]
         timed = [(start, e) for start, e in starts if start is not None]
@@ -396,9 +370,7 @@ class EventMatchMixin(TransportMixin):
     def _failed_recently(self, kind: str, key: int) -> bool:
         """True while a failed ``kind`` lookup of ``key`` is inside the time-to-live.
 
-        ``kind`` is ``'game'`` (the MLB schedule), ``'event'`` (the vendor
-        event) or ``'player'`` (the MLB name). A time-to-live of 0 keeps no
-        failure, so every call reads again.
+        ``kind`` is ``'game'``, ``'event'`` or ``'player'``.
         """
         hit = self._failed_lookups.get((kind, int(key)))
         return hit is not None and self._is_fresh(hit[0])
@@ -410,26 +382,17 @@ class EventMatchMixin(TransportMixin):
     def forget_failed_lookups(self) -> None:
         """Drop every stored failed lookup, so the next call reads again.
 
-        The historical loader calls this before each game. A failed player
-        lookup is stored for one time-to-live (600 s in the loader, about 33
-        games) and counted once, in the game where it failed. Without this
-        call, a later game that names the same player inside that window gets
-        the stored failure: no read, no count, no props for the player, and
-        the game goes on the done-list. The cost is one more read per failed
-        player per game. A found game, event or name stays cached.
+        The historical loader calls this before each game. Without it, a
+        failure stored in one game cuts the next game short without a count
+        in ``read_failures``.
         """
         self._failed_lookups.clear()
 
     def forget_game(self, game_pk: int) -> None:
         """Drop every cached fact of one game, so the next call reads it again.
 
-        The provider keeps a found game's meta, its schedule facts and its
-        vendor event for the process lifetime. A game postponed or suspended
-        after its lookup keeps its first entry's facts: the original start,
-        the original event, no ``postponed_start``. The live pipeline is the
-        one long-lived caller: its schedule poll calls this method for a
-        postponed or suspended entry and for a made-up game before its first
-        pitch. A stored failed lookup of the game goes too.
+        A game postponed or suspended after its lookup otherwise keeps its old
+        start and event. The live pipeline calls this for such a game.
         """
         key = int(game_pk)
         self._game_meta_cache.pop(key, None)
@@ -441,9 +404,7 @@ class EventMatchMixin(TransportMixin):
     def _store(self, cache: dict[_K, tuple[float, _V]], key: _K, payload: _V) -> None:
         """Put ``payload`` in ``cache`` under ``key`` after dropping every stale entry.
 
-        The sweep bounds the cache to one time-to-live's worth of entries. A
-        long-lived provider (the live pipeline, the historical loader) would
-        otherwise keep every finished game's payload for the process lifetime.
+        The drop holds a cache to one time-to-live's worth of entries.
         A time-to-live of 0 stores nothing.
         """
         if self._offers_cache_ttl_s <= 0:
@@ -454,12 +415,9 @@ class EventMatchMixin(TransportMixin):
         cache[key] = (self._clock(), payload)
 
     def _events_for_date(self, date_str: str) -> list[dict[str, Any]]:
-        """The BettingPros events of one date, served from the per-date cache while fresh.
+        """The BettingPros events of one date, from the per-date cache while fresh.
 
-        Every game on a date shares one ``/events`` response. A fetch failure
-        raises to
-        the caller (``_resolve_event`` logs it) and is not cached, so the next
-        game retries.
+        A read failure raises to the caller and is not cached.
         """
         hit = self._events_by_date_cache.get(date_str)
         if hit is not None and self._is_fresh(hit[0]):
@@ -470,14 +428,9 @@ class EventMatchMixin(TransportMixin):
         return events
 
     def _offers(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
-        """Every offer of one (event, market), served from the offers cache while fresh.
+        """Every offer of one (event, market), from the offers cache while fresh.
 
-        One response carries every player's offer for the market and serves
-        every book and both line types, so one fetch per (event, market) per
-        time-to-live replaces one fetch per (player, market, book, line type).
-        A page-1 fetch failure raises to the caller. A later-page failure
-        returns the pages in hand. Neither result is cached, so the next call
-        fetches again; only a complete market is stored.
+        Only a complete market is cached.
         """
         key = (int(event_id), int(market_id))
         hit = self._offers_cache.get(key)
@@ -491,17 +444,13 @@ class EventMatchMixin(TransportMixin):
     def _fetch_offers_all_pages(
         self, event_id: int, market_id: int
     ) -> tuple[list[dict[str, Any]], bool]:
-        """GET ``/offers`` for one (event, market) and follow its pagination.
+        """GET every ``/offers`` page of one (event, market).
 
-        The API pages at 10 offers (``_pagination.total_pages``). A batter
-        market lists every hitter in the game, so page 1 alone silently
-        dropped the players on later pages — their quotes came back empty.
-
-        Returns ``(offers, complete)``. Page 1 raises on failure. A later page
-        that fails logs a warning naming the event, the market and the page,
-        and the offers already in hand come back with ``complete=False`` so
-        the players on the earlier pages keep their quotes. A ``_pagination``
-        block that is not a dict counts as one page.
+        The vendor pages at 10 offers, so a batter market needs every page
+        to list every hitter. Returns ``(offers, complete)``. A failure on
+        page 1 raises. A failure on a later page logs a warning and returns
+        the offers in hand with ``complete=False``. A ``_pagination`` block
+        that is not a dict counts as one page.
         """
         params: dict[str, Any] = {"sport": "MLB", "market_id": market_id, "event_id": event_id}
         data = self._bp_get("offers", params)
@@ -527,7 +476,7 @@ class EventMatchMixin(TransportMixin):
                     len(offers),
                     exc,
                 )
-                self.read_failures += 1  # The market comes back partial
+                self.read_failures += 1  # the market comes back partial
                 return offers, False
             offers.extend(more.get("offers", []))
         return offers, True
@@ -535,12 +484,8 @@ class EventMatchMixin(TransportMixin):
     def _resolve_player_name(self, player_id: int) -> str | None:
         """MLB ``player_id`` → normalized full name.
 
-        A found name is cached for the process lifetime. A failed lookup is
-        kept for one time-to-live only (:meth:`_failed_recently`), so one
-        timeout does not cost the player every prop for the rest of a season's
-        load or of the live pipeline's day. A read that
-        raised counts in ``read_failures``; an answer without the player does
-        not.
+        A found name stays cached for the process lifetime. A failure stays
+        for one time-to-live. A read that raised counts in ``read_failures``.
         """
         if player_id in self._player_name_cache:
             return self._player_name_cache[player_id]
@@ -556,7 +501,7 @@ class EventMatchMixin(TransportMixin):
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve player_id %s: %s", player_id, exc)
             if not read_done:
-                self.read_failures += 1  # The people read failed
+                self.read_failures += 1  # the player read failed
         if name is None:
             self._note_failed_lookup("player", player_id)
         else:
@@ -567,19 +512,12 @@ class EventMatchMixin(TransportMixin):
     def _game_meta_fields(
         self, game_pk: int, event: Mapping[str, Any] | None = None
     ) -> tuple[datetime | None, date | None, str | None]:
-        """(scheduled start as aware UTC, official date, official date text) for a game.
+        """(start as aware UTC, official date, official date text) for a game.
 
-        Read from :meth:`_resolve_game_meta` (cached; :meth:`_resolve_event`
-        fills it first). The start is for the load guard only; the date drives
-        the dated first-five exclusion.
-
-        Game 2 of a straight double-header with no listed start
-        (:attr:`_ScheduleInfo.start_unknown`) takes ``event``'s start instead.
-        MLB's placeholder sits 5 minutes after game 1's start, so the guard
-        would refuse every closing price of game 2 as late. The vendor's start
-        is an estimate: when game 1 ends early, game 2 starts before it, and an
-        in-play price stamped before the vendor's start plus 15 minutes then
-        passes the guard.
+        The load guard reads the start. Game 2 of a straight double-header
+        with no listed start takes ``event``'s start instead of MLB's
+        placeholder. The vendor's start is an estimate, so an early game 2
+        can let an in-play price pass the guard.
         """
         meta = self._resolve_game_meta(game_pk)
         if meta is None:
@@ -600,11 +538,9 @@ class EventMatchMixin(TransportMixin):
     def _postponed_start(self, game_pk: int) -> datetime | None:
         """The original start of a game postponed and made up later, as aware UTC.
 
-        ``None`` for any other game, and for a game whose schedule facts the
-        provider did not read (a subclass that resolves the meta another
-        way). Every row of a made-up game carries it as ``postponed_start``:
-        the load guard refuses a price stamped at or before it (the price of
-        the game that was not played).
+        The method gives ``None`` for any other game, or when the schedule
+        facts are missing. The load guard refuses a price stamped no later
+        than 15 minutes after this start.
         """
         info = self._game_schedule_cache.get(game_pk)
         if info is None or info.postponed_start is None:

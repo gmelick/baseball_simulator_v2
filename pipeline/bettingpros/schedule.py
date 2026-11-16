@@ -1,5 +1,8 @@
-"""The MLB schedule facts the event match reads: the slates a game was played
-on, its double-header number and its postponed start.
+"""The MLB schedule facts the event match reads.
+
+The facts are the dates a game was played on, its double-header number and
+its postponed start. MLB lists a game once per date it touched, so one game
+can have several schedule entries.
 """
 
 from __future__ import annotations
@@ -16,27 +19,25 @@ from typing import (
 
 from pipeline.bettingpros.parsing import _parse_utc
 
-#: The largest gap allowed between the actual game's start time and the
-#: BettingPros event we matched it to. A match beyond this is treated as no
-#: match at all, rather than silently priced against the wrong game.
+#: The largest gap between a game's start and its BettingPros event.
+#: A larger gap is no match, so the game never takes another game's prices.
 _MAX_EVENT_TIME_DELTA = timedelta(hours=2)
 
-#: The largest gap the single-event rule accepts. The vendor sometimes
-#: keeps a game's first start time after MLB moves it (game 745169: MLB moved
-#: it to 18:15Z, the vendor's only event of the two teams that day kept
-#: 00:15Z, six hours later). The rule takes such an event only when it is the
-#: two teams' one event on the played date and the game is not a double-header.
+#: The largest gap the single-event rule accepts. The vendor sometimes keeps
+#: a game's first start time after MLB moves it. For example, MLB moved game
+#: 745169 to 18:15Z, and the vendor's event stayed at 00:15Z.
 _MAX_SINGLE_EVENT_DELTA = timedelta(hours=12)
 
 
 class _ScheduleInfo(NamedTuple):
-    """The MLB schedule facts the matcher reads beyond the meta 4-tuple.
+    """The MLB schedule facts of one game, beyond the meta 4-tuple.
 
+    The meta 4-tuple is (official date, home name, away name, start).
     Every time is naive UTC, as :func:`_parse_utc` gives it.
     """
 
-    #: The vendor slates to search: the played date first, then each date of
-    #: a later entry that is not postponed (the resumption of a suspended game).
+    #: The vendor slates to search: the played date first, then the date of
+    #: each later entry that is not postponed (a suspended game's resumption).
     slate_dates: tuple[str, ...]
     #: The played entry's start, then each later start that is not postponed.
     anchor_starts: tuple[datetime, ...]
@@ -59,10 +60,8 @@ class _ScheduleInfo(NamedTuple):
     def start_unknown(self) -> bool:
         """True for game 2 of a straight double-header with no listed start.
 
-        MLB sets ``startTimeTBD`` on such a game and gives it a placeholder
-        ``gameDate``: game 1's start plus 5 minutes (game 746773: 18:15Z
-        beside game 1 at 18:10Z). Every straight double-header's game 2 of
-        2019-2026 has this layout.
+        MLB sets ``startTimeTBD`` on such a game. Its ``gameDate`` is a
+        placeholder: game 1's start plus 5 minutes.
         """
         return self.double_header == "Y" and self.game_number == 2 and self.start_tbd
 
@@ -70,8 +69,7 @@ class _ScheduleInfo(NamedTuple):
 def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
     """The schedule facts of a game with one entry.
 
-    The matcher uses it when the schedule cache holds nothing for a game (a
-    subclass that resolves the meta another way).
+    The matcher uses them when the schedule cache holds nothing for the game.
     """
     anchors = () if game_dt is None else (game_dt,)
     return _ScheduleInfo((date_str,), anchors, None, None)
@@ -80,11 +78,9 @@ def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
 def _is_postponed(game: Mapping[str, Any]) -> bool:
     """True when an MLB schedule entry is a postponed game.
 
-    The test reads two status fields. ``detailedState`` starts with
-    "Postponed"; ``codedGameState`` "D" is MLB's postponed code (the ETL's
-    ``_map_game_status`` reads the same code; the live payloads of 2024 carry
-    both, with ``statusCode`` "DI" or "DR"). A suspended game is not
-    postponed: MLB marks both of its entries "Final".
+    The entry is postponed when ``detailedState`` starts with "Postponed" or
+    ``codedGameState`` is "D". A suspended game is not postponed: MLB marks
+    both of its entries "Final".
     """
     status = game.get("status") or {}
     detailed = str(status.get("detailedState") or "")
@@ -96,18 +92,14 @@ def _read_schedule(
 ) -> tuple[tuple[str, str, str, datetime | None], _ScheduleInfo]:
     """The meta 4-tuple and the schedule facts of one ``schedule?gamePk=`` answer.
 
-    MLB lists a game once per date it touched. A game postponed and made up
-    later has two entries: the postponed one (its ``gameDate`` the original
-    start) and the played one. A suspended game has two entries, both
-    "Final": the first at the original first pitch, the second at the
-    resumption. The PLAYED entry is the first entry that is not postponed;
-    when every entry is postponed (a game never played), it is the first
-    entry. The meta comes from the played entry, so a suspended game's start
-    is its ORIGINAL first pitch (the load guard's stamp rules need it). The
-    played entry's ``gameNumber`` and ``status.startTimeTBD`` tell a straight
-    double-header's game 2, whose ``gameDate`` is a placeholder
-    (:attr:`_ScheduleInfo.start_unknown`).
-    Raises ``LookupError`` when the answer lists no entry, and ``KeyError``
+    A made-up game has a postponed entry at the original start, then a
+    played entry. A suspended game has two "Final" entries: the first pitch
+    and the resumption. The PLAYED entry is the first entry that is not
+    postponed, or the first entry when every entry is postponed. The meta
+    comes from the played entry, so a suspended game keeps its original
+    first pitch.
+
+    Raises ``LookupError`` when the answer lists no entry. Raises ``KeyError``
     when the played entry lacks a field the meta needs.
     """
     entries: list[tuple[Any, Mapping[str, Any]]] = [

@@ -33,7 +33,7 @@
 -- book the vocabulary does not list is never graded), the graded-book preference
 -- (graded_book_labels()) and the three-way markets (the first-inning and
 -- first-five moneylines). tests/unit/test_odds_census_sql.py checks them, the
--- dated first-five exclusion against pipeline/bettingpros_odds_provider.py, and
+-- dated first-five exclusion against pipeline/bettingpros/markets.py, and
 -- the limits of sections 4b and 5b against pipeline/odds_row_guard.py.
 -- =============================================================================
 
@@ -270,7 +270,7 @@ GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3;
 
 -- -----------------------------------------------------------------------------
--- The dated first-five exclusion: pipeline/bettingpros_odds_provider.F5_EXCLUDED_BOOKS
+-- The dated first-five exclusion: pipeline/bettingpros/markets.F5_EXCLUDED_BOOKS
 -- on F5_EXCLUDED_MARKETS (DraftKings, bp:12, from 2025-03-01, on the first-five
 -- run line and total only: its first-five moneyline is kept, and the guard
 -- refuses its bad rows). Keep this literal in step with both.

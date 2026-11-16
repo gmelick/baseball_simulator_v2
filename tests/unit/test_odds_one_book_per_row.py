@@ -29,8 +29,7 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros.parsing import _book_line, _usable
-from pipeline.bettingpros.rules import (
+from pipeline.bettingpros.markets import (
     F5_EXCLUDED_BOOKS,
     F5_EXCLUDED_MARKETS,
     F5_TWIN_MARKETS,
@@ -40,7 +39,8 @@ from pipeline.bettingpros.rules import (
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.bettingpros.parsing import _book_line, _usable
+from pipeline.bettingpros.provider import BettingProsOddsProvider
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.odds_provider import (
     GAME_ODDS_FIELDS,
@@ -67,7 +67,6 @@ from pipeline.odds_row_guard import (
     RefusalTally,
     check_row,
     implied_probability,
-    refuse_reason,
 )
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -464,8 +463,8 @@ class TestOneRowPerBook:
         default = synthetic.get_odds(1)
         assert default["book"] == "consensus"
         assert all(default[f] is None for f in GAME_ODDS_FIELDS)
-        # A named non-sportsbook is still readable on request.
-        assert synthetic.get_odds(1, book="bp:0")["home_ml"] == -145
+        # The by-book read still carries the blend's prices.
+        assert _by_book(synthetic.get_odds_by_book(1))["bp:0"]["home_ml"] == -145
 
     def test_get_odds_returns_the_first_preferred_book(self) -> None:
         """Plan test 4."""
@@ -473,20 +472,14 @@ class TestOneRowPerBook:
         dk = provider.get_odds(746437, line_type="closing")
         assert dk["book"] == "bp:12" and dk["book_id"] == 12
         assert (dk["home_ml"], dk["away_ml"]) == (120, -142)
-        fd = provider.get_odds(746437, line_type="closing", book="fanduel")
-        assert fd["book"] == "bp:10" and (fd["home_ml"], fd["away_ml"]) == (116, -136)
-        assert provider.get_odds(746437, line_type="closing", book="bp:13")["home_ml"] == 122
-        unknown = provider.get_odds(
-            746437, line_type="closing", book="pinnacle", is_sharp_book=True
-        )
-        assert unknown["book"] == "pinnacle"
-        assert unknown["is_sharp_book"] is True
-        assert all(unknown[f] is None for f in GAME_ODDS_FIELDS)
-        # A known book with no row gives an empty row too.
-        assert provider.get_odds(746437, line_type="closing", book="hardrock")["home_ml"] is None
-        # Every book's display name reads its row (review fix: "theScore Bet").
-        score = provider.get_odds(746437, line_type="closing", book="theScore Bet")
-        assert score["book"] == "bp:33" and score["home_ml"] is not None
+        # The other books' rows ride the by-book read.
+        rows = _by_book(provider.get_odds_by_book(746437, line_type="closing"))
+        assert rows["bp:12"] == dk
+        fd = rows["bp:10"]
+        assert (fd["home_ml"], fd["away_ml"]) == (116, -136)
+        assert rows["bp:13"]["home_ml"] == 122
+        assert "bp:49" not in rows  # Hard Rock has no row
+        assert rows["bp:33"]["home_ml"] is not None
 
     def test_the_default_falls_to_the_next_preferred_book(self, monkeypatch) -> None:
         # The first-inning run line: the first book on the list with a row answers
@@ -500,7 +493,7 @@ class TestOneRowPerBook:
         # listed sportsbook is on the list since 2026-09-29, so the test takes
         # PartyCasino (27) off it.
         monkeypatch.setattr(
-            "pipeline.bettingpros_odds_provider.GRADED_BOOK_PREFERENCE",
+            "pipeline.bettingpros.provider.GRADED_BOOK_PREFERENCE",
             tuple(b for b in GRADED_BOOK_PREFERENCE if b != 27),
         )
         offers = _offers(
@@ -605,14 +598,6 @@ class TestOneRowPerBook:
         assert "over_line" not in provider.get_odds(746437, market_type="moneyline")
         assert "over_line" in provider.get_odds(746437, market_type="total")
 
-    def test_run_line_stays_an_alias(self) -> None:
-        provider = _Fixture92857()
-        rows = provider.get_odds_by_book(746437, line_type="closing", market_type="run_line")
-        assert rows and all(r["market_type"] == "run_line" for r in rows)
-        dk = _by_book(rows)["bp:12"]
-        assert (dk["home_spread"], dk["home_spread_ml"]) == (1.5, -142)
-        assert (dk["away_spread"], dk["away_spread_ml"]) == (-1.5, 120)
-
     def test_an_unknown_market_raises_and_an_unknown_game_is_empty(self) -> None:
         with pytest.raises(ValueError, match="Unknown market_type"):
             _Fixture92857().get_odds_by_book(746437, market_type="sixth_inning_total")
@@ -624,36 +609,6 @@ class TestOneRowPerBook:
         assert _NoGame().get_odds_by_book(999) == []
         empty = _NoGame().get_odds(999)
         assert empty["source"] == "bettingpros" and empty["home_ml"] is None
-
-    def test_prefer_book_id_pins_every_call(self, monkeypatch) -> None:
-        pinned = _Fixture92857(prefer_book_id=15)
-        rows = pinned.get_odds_by_book(746437, line_type="closing")
-        assert [(r["book"], r["home_ml"], r["away_ml"]) for r in rows] == [("bp:15", 125, -148)]
-        assert pinned.get_odds(746437, line_type="closing")["book"] == "bp:15"
-        # The opener is FanDuel, not the pinned book: no opening row.
-        assert pinned.get_odds_by_book(746437, line_type="opening") == []
-        # Review fix: the default never returns a non-sportsbook, pinned or not. The
-        # by-book read keeps the pinned blend; naming it reads it.
-        blend_pin = _Fixture92857(prefer_book_id=0)
-        assert [r["book"] for r in blend_pin.get_odds_by_book(746437, line_type="closing")] == [
-            "bp:0"
-        ]
-        default = blend_pin.get_odds(746437, line_type="closing")
-        assert default["book"] == "consensus"
-        assert all(default[f] is None for f in GAME_ODDS_FIELDS)
-        assert blend_pin.get_odds(746437, line_type="closing", book="bp:0")["book"] == "bp:0"
-        # A pinned sportsbook off the preference list is still the default. Every
-        # listed sportsbook is on the list since 2026-09-29, so the test takes
-        # PartyCasino (27) off it.
-        monkeypatch.setattr(
-            "pipeline.bettingpros_odds_provider.GRADED_BOOK_PREFERENCE",
-            tuple(b for b in GRADED_BOOK_PREFERENCE if b != 27),
-        )
-        party = _Fixture92857(prefer_book_id=27)
-        assert party.get_odds(746437, line_type="closing")["book"] == "bp:27"
-        absent = _Fixture92857(prefer_book_id=999_999)
-        assert absent.get_odds_by_book(746437, line_type="closing") == []
-        assert absent.get_odds(746437, line_type="closing")["home_ml"] is None
 
     def test_current_reads_the_same_per_book_rows_as_closing(self) -> None:
         provider = _Fixture92857()
@@ -694,7 +649,7 @@ class TestPropRowsByBook:
         "bp:27": (5.5, 100, -135),  # PartyCasino
     }
 
-    def test_get_prop_odds_picks_the_preferred_book(self) -> None:
+    def test_the_strikeout_closes_per_sportsbook(self) -> None:
         provider = _Fixture92857()
         by_book = _by_book(
             provider.get_prop_odds_by_book(746437, 682243, "strikeouts", line_type="closing")
@@ -705,15 +660,6 @@ class TestPropRowsByBook:
             if is_bettable(book)
         }
         assert closes == self.K_CLOSES
-        # The first book on the preference list with a row answers.
-        graded = next(label for label in graded_book_labels() if label in closes)
-        quote = provider.get_prop_odds(746437, 682243, "strikeouts", line_type="closing")
-        assert quote["book"] == graded
-        assert (quote["line"], quote["over_ml"], quote["under_ml"]) == self.K_CLOSES[graded]
-        named = provider.get_prop_odds(746437, 682243, "strikeouts", book="sugarhouse")
-        assert (named["book"], named["over_ml"], named["under_ml"]) == ("bp:15", -108, -127)
-        unknown = provider.get_prop_odds(746437, 682243, "strikeouts", book="pinnacle")
-        assert unknown["book"] == "pinnacle" and unknown["line"] is None
 
     def test_the_line_falls_back_to_the_under(self) -> None:
         offer = {
@@ -951,7 +897,7 @@ class TestGuard:
         for line in (0.5, 1.0, 1.5):
             refusal = check_row(total(line))
             assert refusal is not None and refusal.rule == "f5_total_first_inning_line", line
-        assert "first-five total at 1.5" in refuse_reason(total(1.5))
+        assert "first-five total at 1.5" in check_row(total(1.5)).message
         for line in (2.0, 2.5, 4.5):
             assert check_row(total(line)) is None, line
         # A row without side lines (a mock or hand-built row) is still checked.
@@ -994,7 +940,7 @@ class TestGuard:
                 assert check_row(team_total(line, market=market, over=-110, under=-110)) is None
         # The 700 / -800 row adds to a normal margin, so only the line tells it apart.
         assert check_row(team_total(1.0, over=700, under=-800)) is not None
-        assert "team total at 1" in refuse_reason(team_total(1.0))
+        assert "team total at 1" in check_row(team_total(1.0)).message
         # A first-five team total at 0.5 is real (books post it) and is not refused.
         for market in ("f5_team_total_home", "f5_team_total_away"):
             assert check_row(team_total(0.5, market=market, over=-150, under=120)) is None
@@ -1090,7 +1036,6 @@ class TestGuard:
         refusal = check_row(rows["bp:10"])
         assert refusal is not None and refusal.rule == "late_closing_stamp"
         assert "40 minutes" in refusal.message
-        assert refuse_reason(rows["bp:10"]) == refusal.message
         # A current or opening row is never refused for its stamp.
         current = _by_book(provider.get_odds_by_book(1, line_type="current"))
         assert check_row(current["bp:10"]) is None
@@ -1299,7 +1244,7 @@ class TestFirstFiveExclusions:
 
     def test_the_moneyline_exclusion_is_neither_applied_nor_logged(self, caplog) -> None:
         provider = _Synthetic(_dk_f5_payloads(), game_date="2025-06-01")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
             for market in ("f5_moneyline", "f5_runline", "f5_total"):
                 provider.get_odds_by_book(1, line_type="closing", market_type=market)
         dated = [r.getMessage() for r in caplog.records if "excluded from" in r.getMessage()]
@@ -1405,7 +1350,7 @@ class TestFirstFiveExclusions:
                 return super()._bp_get(path, params)
 
         provider = _FlakyFirstInning(payloads, game_date="2024-08-14")
-        with caplog.at_level(logging.WARNING, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.WARNING, logger="pipeline.bettingpros"):
             for line_type in ("closing", "opening", "current"):
                 assert (
                     provider.get_odds_by_book(1, line_type=line_type, market_type="f5_runline")
@@ -1746,7 +1691,7 @@ class TestFirstFiveExclusions:
 
     def test_each_exclusion_is_logged_once(self, caplog) -> None:
         provider = _Synthetic(_f5_payloads(dk=(-1.5, 280, -1.5, 150)), game_date="2025-06-01")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
             for _ in range(3):
                 provider.get_odds_by_book(1, line_type="closing", market_type="f5_runline")
         messages = [
@@ -1797,7 +1742,7 @@ class TestFirstFiveExclusions:
             ),
         )
         provider = _Synthetic({283: offers}, game_date="2025-06-01")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
             closing = provider.get_odds_by_book(1, line_type="closing", market_type="f5_runline")
             opening = provider.get_odds_by_book(1, line_type="opening", market_type="f5_runline")
         assert [r["book"] for r in closing] == ["bp:19"], case
@@ -1813,7 +1758,7 @@ class TestFirstFiveExclusions:
         # Before the date nothing is excluded and nothing is logged.
         caplog.clear()
         before = _Synthetic({283: offers}, game_date="2025-02-28")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros_odds_provider"):
+        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
             before.get_odds_by_book(1, line_type="closing", market_type="f5_runline")
         assert not any("excluded from" in r.getMessage() for r in caplog.records), case
 

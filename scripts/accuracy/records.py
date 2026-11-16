@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_TYPES, LEGACY_GAME_MARKET_TYPES
+from pipeline.odds_provider import FULL_GAME_MARKET_TYPES, GAME_MARKET_KIND, GAME_MARKET_TYPES
 from simulation.prop_validation import (
     BOXSCORE_BATTER_PROPS,
     BOXSCORE_PITCHER_PROPS,
@@ -86,7 +86,7 @@ MARKET_TRUST: dict[str, str] = {
     "runline_away": "caution",
     # unvalidated: the twelve segment and team markets, priced from the
     # simulator's per-iteration linescore
-    **{m: "unvalidated" for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES},
+    **{m: "unvalidated" for m in GAME_MARKET_TYPES if m not in FULL_GAME_MARKET_TYPES},
     "f5_runline_away": "unvalidated",
     "f1_runline_away": "unvalidated",
     # untrustworthy

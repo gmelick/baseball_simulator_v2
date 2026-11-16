@@ -119,8 +119,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.bettingpros.parsing import _book_line, _opt_float, _opt_int
-from pipeline.bettingpros.rules import (
+from pipeline.bettingpros.markets import (
     F5_EXCLUDED_BOOKS,
     F5_TWIN_MARKETS,
     TWIN_MONEYLINE_PRICE_TOLERANCE,
@@ -129,7 +128,8 @@ from pipeline.bettingpros.rules import (
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.bettingpros.parsing import _book_line, _opt_float, _opt_int
+from pipeline.bettingpros.provider import BettingProsOddsProvider
 from pipeline.odds_provider import (  # noqa: E402
     GAME_MARKET_KIND,
     GAME_ODDS_FIELDS,

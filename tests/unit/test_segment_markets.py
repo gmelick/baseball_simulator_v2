@@ -17,7 +17,7 @@ import pytest
 from tests.script_loader import scripts_on_path
 
 from betting.bet_signal import DEFAULT_ONE_SIDED_MARGIN, run_line_is_pair
-from pipeline.odds_provider import GAME_MARKET_TYPES, LEGACY_GAME_MARKET_TYPES
+from pipeline.odds_provider import FULL_GAME_MARKET_TYPES, GAME_MARKET_TYPES
 from simulation.game_market_distributions import (
     AWAY_FIRST,
     HOME_FIRST,
@@ -204,7 +204,7 @@ def _closing(market_type: str, **cols):
 class TestSegmentMarketScorer:
     def test_segment_list_is_every_non_legacy_market(self):
         assert (
-            tuple(m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES)
+            tuple(m for m in GAME_MARKET_TYPES if m not in FULL_GAME_MARKET_TYPES)
             == SEGMENT_MARKET_TYPES
         )
 

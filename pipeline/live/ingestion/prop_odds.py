@@ -367,7 +367,7 @@ class PropOddsMixin(PipelineBase):
 
         Parameters
         ----------
-        prop : dict returned by the configured provider's get_prop_odds()
+        prop : one prop row from the configured provider's get_prop_odds_by_book()
                (MockOddsAPI by default, or BettingProsOddsProvider under
                ODDS_PROVIDER=bettingpros).  Required keys:
                  game_pk, player_id, prop_stat, line,

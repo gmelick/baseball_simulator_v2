@@ -131,7 +131,7 @@ LOOKAHEAD_DAYS = 7  # how many days ahead to capture opening lines
 PITCHER_PROP_TYPES: tuple[str, ...] = PITCHER_PROP_STATS
 BATTER_PROP_TYPES: tuple[str, ...] = BATTER_PROP_STATS
 
-# Every prop line comes from the configured provider's get_prop_odds() (the
+# Every prop line comes from the configured provider's prop rows (the
 # default mock keeps the vig model, the RNG seeding and the line centres in one
 # place).
 

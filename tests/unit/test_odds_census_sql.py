@@ -12,13 +12,15 @@ import re
 import pytest
 from tests.script_loader import PROBES, load_script
 
-from pipeline.bettingpros.rules import F5_EXCLUDED_BOOKS, F5_TWIN_MARKETS, f5_excluded_markets
+from pipeline.bettingpros.markets import F5_EXCLUDED_BOOKS, F5_TWIN_MARKETS, f5_excluded_markets
 from pipeline.odds_provider import (
+    BOOK_KIND,
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
     bettable_labels,
+    book_label,
     graded_book_labels,
-    non_bettable_labels,
+    is_bettable,
 )
 from pipeline.odds_row_guard import (
     F5_TOTAL_LINE_MAX,
@@ -56,7 +58,8 @@ class TestCensusSql:
         literal = "o.book IN (" + ", ".join(f"'{b}'" for b in bettable_labels()) + ")"
         assert self.SQL.count(literal) == 2
         assert "NOT IN ('bp:" not in self.SQL
-        assert not any(f"'{b}'" in self._statements() for b in non_bettable_labels())
+        non_bettable = [book_label(b) for b in BOOK_KIND if not is_bettable(book_label(b))]
+        assert not any(f"'{b}'" in self._statements() for b in non_bettable)
 
     def test_the_three_way_markets_match_the_vocabulary(self):
         three_way = [m for m in GAME_MARKET_TYPES if GAME_MARKET_KIND[m] == "three_way"]

@@ -1,5 +1,6 @@
-"""The odds rows built from an event's offers: one row per book and market, the
-first-inning twin rule and the first-five exclusions.
+"""Build the odds rows from an event's offers: one row per book per market.
+
+The module also holds the two first-five exclusions: the dated list and the twin rule.
 """
 
 from __future__ import annotations
@@ -13,6 +14,10 @@ from pipeline.bettingpros.events import EventMatchMixin
 from pipeline.bettingpros.markets import (
     _GAME_MARKET_IDS,
     _PROP_MARKET_IDS,
+    F5_EXCLUDED_BOOKS,
+    F5_TWIN_MARKETS,
+    is_f5_dated_excluded,
+    twin_price_tolerance,
 )
 from pipeline.bettingpros.parsing import (
     _OPTIONAL_SIDES,
@@ -29,12 +34,6 @@ from pipeline.bettingpros.parsing import (
     _stamp,
     _tie_rules_out_twin,
 )
-from pipeline.bettingpros.rules import (
-    F5_EXCLUDED_BOOKS,
-    F5_TWIN_MARKETS,
-    is_f5_dated_excluded,
-    twin_price_tolerance,
-)
 from pipeline.odds_provider import (
     GAME_MARKET_KIND,
     GAME_MARKET_SIDE,
@@ -43,11 +42,11 @@ from pipeline.odds_provider import (
     book_label,
 )
 
-log = logging.getLogger("pipeline.bettingpros_odds_provider")
+log = logging.getLogger("pipeline.bettingpros")
 
 
 class OfferRowsMixin(EventMatchMixin):
-    """Turns an event's offers into odds rows, one per book."""
+    """Turn an event's offers into odds rows, one row per book."""
 
     @staticmethod
     def _game_sides(
@@ -56,14 +55,13 @@ class OfferRowsMixin(EventMatchMixin):
         home_abbrev: Any,
         away_abbrev: Any,
     ) -> dict[str, dict[str, Any]]:
-        """The market's selections keyed by side (the first selection of each side wins).
+        """Return the market's selections keyed by side; the first selection of a side wins.
 
-        Moneylines and run lines name the team in ``participant``; the tie of a
-        three-way moneyline carries ``selection == 'draw'``. BettingPros folds an
-        unrelated yes / no pair into the first-five moneyline (seen live
-        2026-09-12); those carry neither a participant nor ``draw`` and are
-        ignored. A total's sides are its over and under; a yes / no market's
-        its yes and no.
+        A moneyline or run line names the team in ``participant``.
+        The tie of a three-way moneyline carries ``selection == 'draw'``.
+        The vendor sometimes adds an unrelated yes / no pair to the first-five moneyline.
+        Those selections have no participant and no ``draw``, so the method skips them.
+        A total has an over and an under side; a yes / no market has a yes and a no side.
         """
         sides: dict[str, dict[str, Any]] = {}
         for sel in selections:
@@ -89,7 +87,7 @@ class OfferRowsMixin(EventMatchMixin):
 
     @staticmethod
     def _prop_sides(offer: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-        """A prop offer's over and under selections, keyed ``over`` / ``under``."""
+        """Return a prop offer's over and under selections, keyed ``over`` / ``under``."""
         sides: dict[str, dict[str, Any]] = {}
         for sel in offer.get("selections", []):
             label = str(sel.get("label") or sel.get("selection") or "").lower()
@@ -100,7 +98,12 @@ class OfferRowsMixin(EventMatchMixin):
 
     @staticmethod
     def _fill(kind: str, row: dict[str, Any], quote: Mapping[str, _Quote]) -> None:
-        """Write one book's quote into the row's columns for the market kind."""
+        """Write one book's quote into the columns of the market kind.
+
+        Each market fills only its own columns; two markets never share one row.
+        A total, yes / no or prop row also gets ``over_line`` / ``under_line``.
+        The load guard (``pipeline/odds_row_guard.py``) reads those two lines.
+        """
 
         def cost(key: str) -> float | None:
             return quote[key][0] if key in quote else None
@@ -120,7 +123,7 @@ class OfferRowsMixin(EventMatchMixin):
             row["over_line"], row["under_line"] = line("over"), line("under")
             row["total_line"] = line("over")
         elif kind == "yes_no":
-            # "A run in the first inning: yes" IS "over 0.5 first-inning runs".
+            # "A run in the first inning: yes" is "over 0.5 first-inning runs".
             row["over_ml"], row["under_ml"] = cost("yes"), cost("no")
             row["over_line"], row["under_line"] = line("yes"), line("no")
             priced = row["over_ml"] is not None or row["under_ml"] is not None
@@ -140,7 +143,21 @@ class OfferRowsMixin(EventMatchMixin):
         excluded: frozenset[int] = frozenset(),
         opener_is_twin: bool = False,
     ) -> list[dict[str, Any]]:
-        """One row per book for a market's sides (the opener's single row on 'opening')."""
+        """Return one row per book for a market's sides.
+
+        Each row is a copy of ``base`` with one book's prices and ``book = 'bp:<id>'``.
+        A market that lacks a required side gets no rows.
+
+        On ``'opening'`` the method returns at most one row, the opener's.
+        Every required side must name the same opening book, or the market gets no row.
+        A three-way tie joins the row only when the same book opened the tie.
+        An excluded opener, or an opener that copies its first-inning opener, gets no row.
+        The stamp ``book_line_at`` is the newest ``created`` of the row's sides.
+
+        On another line type, each book with a usable line on every required side gets a row.
+        The rows keep the payload's book order; the vendor's blend appears as ``bp:0``.
+        The stamp is the newest ``updated`` of the row's sides.
+        """
         required = _REQUIRED_SIDES[kind]
         optional = tuple(k for k in _OPTIONAL_SIDES.get(kind, ()) if k in sides)
         if any(k not in sides for k in required):
@@ -166,10 +183,8 @@ class OfferRowsMixin(EventMatchMixin):
                 openers.add(opener_id)
                 quote[key] = (cost, _opt_float(ol.get("line")), ol.get("created"))
             if len(openers) != 1:
-                return []  # two openers: the feed gives no one-book opening row
+                return []  # two openers: no one book opened the market
             opener = openers.pop()
-            if self._prefer_book_id is not None and opener != self._prefer_book_id:
-                return []
             if opener in excluded or opener_is_twin:
                 return []
             for key in optional:
@@ -180,8 +195,6 @@ class OfferRowsMixin(EventMatchMixin):
             return [make_row(opener, quote)]
 
         book_ids = _books_on({k: sides[k] for k in required})
-        if self._prefer_book_id is not None:
-            book_ids = [b for b in book_ids if b == self._prefer_book_id]
         rows: list[dict[str, Any]] = []
         for book_id in book_ids:
             if book_id in excluded:
@@ -198,14 +211,11 @@ class OfferRowsMixin(EventMatchMixin):
         return rows
 
     def _f1_selections(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
-        """The selections of the first-inning market a first-five market is checked against.
+        """Return the selections of the first-inning market that matches a first-five market.
 
-        Reads :meth:`_offers` directly (cached per (event, market)), so a
-        failed read is told apart from an empty market: an empty market gives
-        ``[]`` (no twin is possible, the first-five rows stand); a failed read
-        raises :class:`_FirstInningReadError` (the caller drops the first-five
-        rows). ``_offers`` does not cache a failure, so the next call reads
-        again.
+        An empty market returns ``[]``: no twin is possible, so the first-five rows stand.
+        A failed read raises :class:`_FirstInningReadError`, and the caller drops the rows.
+        ``_offers`` does not cache a failure, so the next call reads again.
         """
         f1_market = F5_TWIN_MARKETS[market_id]
         try:
@@ -219,13 +229,12 @@ class OfferRowsMixin(EventMatchMixin):
     def _f1_twin_sides(
         self, event_id: int, market_id: int, required_sides: Mapping[str, Mapping[str, Any]]
     ) -> dict[str, dict[str, Any]] | None:
-        """The first-inning selections that match a first-five market's sides.
+        """Return the first-inning selections that match a first-five market's sides.
 
-        A team side matches by ``participant`` (the first-five side names the
-        same team); an over / under matches by label. The first-inning tie, when
-        the market lists one, comes back under ``'draw'``. ``None`` when the
-        first-inning market lacks a required side (then nothing can be a twin).
-        Raises :class:`_FirstInningReadError` when the first-inning read fails.
+        A team side matches by ``participant``; an over or under side matches by label.
+        The first-inning tie, when the market lists one, comes back under ``'draw'``.
+        The method returns ``None`` when the first-inning market lacks a required side.
+        A failed first-inning read raises :class:`_FirstInningReadError`.
         """
         f1_selections = self._f1_selections(event_id, market_id)
         matched: dict[str, dict[str, Any]] = {}
@@ -249,7 +258,7 @@ class OfferRowsMixin(EventMatchMixin):
         return matched
 
     def _log_f5_exclusion(self, event_id: int, market_id: int, who: str, why: str) -> None:
-        """Log a first-five exclusion at INFO, once per (event, market, book)."""
+        """Log a first-five exclusion at INFO, once per event, market and book."""
         key = (int(event_id), int(market_id), who)
         if key in self._f5_logged:
             return
@@ -269,17 +278,13 @@ class OfferRowsMixin(EventMatchMixin):
         required_sides: Mapping[str, Mapping[str, Any]],
         game_date: date | None,
     ) -> frozenset[int]:
-        """The books on F5_EXCLUDED_BOOKS whose date is on or before the game's.
+        """Return the books that the dated list excludes from this first-five market.
 
-        Only for the first-five markets of F5_TWIN_MARKETS, and for each book
-        only on the markets :data:`F5_EXCLUDED_MARKETS` lists for it (see
-        :func:`is_f5_dated_excluded`); an unknown game date excludes nothing.
-        The exclusion itself does not depend on the payload. The INFO line
-        does: it is written only when the excluded book had something to lose
-        on this market, a usable line on every required side (a closing or
-        current row) or the shared opener (the opening row). Otherwise every
-        first-five market of every game from the date would log an exclusion
-        of a book that quoted nothing.
+        A book on :data:`F5_EXCLUDED_BOOKS` drops from its start date on.
+        The exclusion covers only the markets :data:`F5_EXCLUDED_MARKETS` lists for the book.
+        Example: DraftKings drops from 2025-03-01 on the run line and the total.
+        An unknown game date excludes nothing.
+        The method logs an exclusion only when the book quoted the market or opened it.
         """
         if market_id not in F5_TWIN_MARKETS or game_date is None:
             return frozenset()
@@ -306,19 +311,16 @@ class OfferRowsMixin(EventMatchMixin):
         *,
         tie: Mapping[str, Any] | None = None,
     ) -> frozenset[int]:
-        """The books whose first-five entry is a first-inning bet.
+        """Return the books whose first-five entry is really a first-inning bet.
 
-        Only for the three first-five markets of F5_TWIN_MARKETS. Two rules:
-        (1) a book on F5_EXCLUDED_BOOKS whose date is on or before the game's
-        date, on the markets F5_EXCLUDED_MARKETS lists for it; (2) a book
-        whose usable first-five lines equal its own usable
-        first-inning lines on every required side (the same line, the implied
-        probabilities within :func:`twin_price_tolerance` — identical prices
-        on the moneyline): the "twin". ``tie`` is the first-five tie selection
-        of a three-way market: a book whose tie rules out a copy (see
-        :func:`_tie_rules_out_twin`) is not a twin. The first-inning market is
-        one more cached vendor read per game; a failed read raises
-        :class:`_FirstInningReadError`.
+        The method applies two rules, to the three first-five markets only.
+        Rule 1 is the dated list (:meth:`_f5_dated_exclusions`).
+        Rule 2 is the twin: a first-five line that copies the same book's first-inning line.
+        A twin has the same line on every required side, and prices within the tolerance.
+        The tolerance is :func:`twin_price_tolerance`, a gap in implied probability.
+        The moneyline asks for identical prices, so a near-even game is not taken for a copy.
+        ``tie`` is a three-way market's first-five tie; :func:`_tie_rules_out_twin` checks it.
+        A failed first-inning read raises :class:`_FirstInningReadError`.
         """
         if market_id not in F5_TWIN_MARKETS:
             return frozenset()
@@ -366,15 +368,14 @@ class OfferRowsMixin(EventMatchMixin):
         *,
         tie: Mapping[str, Any] | None = None,
     ) -> bool:
-        """True when the first-five opener copies the first-inning opener.
+        """Return True when the first-five opener copies the first-inning opener.
 
-        On every required side: the same opening book, the same line, the
-        implied probabilities within :func:`twin_price_tolerance` (identical
-        prices on the moneyline). On a three-way market the opening row's tie
-        is the tie that the same book opened; a first-five opening tie that
-        rules out a copy (see :func:`_tie_rules_out_twin`) clears the opener.
-        Such a market gets no opening row. A failed first-inning read raises
-        :class:`_FirstInningReadError`.
+        A copy has the same opening book on every required side.
+        Each side also has the same line, and prices within :func:`twin_price_tolerance`.
+        On a three-way market, only a tie that the same book opened counts.
+        A first-five opening tie that rules out a copy clears the opener.
+        A market with a copied opener gets no opening row.
+        A failed first-inning read raises :class:`_FirstInningReadError`.
         """
         if market_id not in F5_TWIN_MARKETS:
             return False
@@ -411,13 +412,18 @@ class OfferRowsMixin(EventMatchMixin):
 
     def _game_market_rows(
         self, game_pk: int, line_type: str, market_type: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """(the empty row, one row per book) for one game market and line type."""
-        canonical = "runline" if market_type == "run_line" else market_type
-        if canonical not in GAME_MARKET_KIND:
+    ) -> list[dict[str, Any]]:
+        """Return one row per book for one game market and line type.
+
+        Each row carries ``scheduled_start``, ``game_date`` and ``postponed_start``.
+        The load guard and the logs read those fields; the database never stores them.
+        When the first-inning read fails, a first-five market gets no rows at all.
+        An unchecked row may be a first-inning bet; a WARNING names the game.
+        """
+        if market_type not in GAME_MARKET_KIND:
             known = ", ".join(GAME_MARKET_TYPES)
             raise ValueError(f"Unknown market_type '{market_type}'. Known values: {known}")
-        kind = GAME_MARKET_KIND[canonical]
+        kind = GAME_MARKET_KIND[market_type]
         base: dict[str, Any] = {
             "game_pk": game_pk,
             "source": "bettingpros",
@@ -435,9 +441,8 @@ class OfferRowsMixin(EventMatchMixin):
         base.update({"book_id": None, "book_line_at": None})
         event = self._resolve_event(game_pk)
         if event is None:
-            base.update({"scheduled_start": None, "game_date": None, "postponed_start": None})
             log.warning("BettingPros: no event for game_pk %s — returning empty odds", game_pk)
-            return base, []
+            return []
         start, official, date_str = self._game_meta_fields(game_pk, event)
         base.update(
             {
@@ -448,8 +453,8 @@ class OfferRowsMixin(EventMatchMixin):
         )
         event_id = event["id"]
         home_abbrev, away_abbrev = event.get("home"), event.get("visitor")
-        market_id = _GAME_MARKET_IDS[canonical]
-        side = GAME_MARKET_SIDE[canonical]
+        market_id = _GAME_MARKET_IDS[market_type]
+        side = GAME_MARKET_SIDE[market_type]
         if kind == "total" and side is not None:
             team_abbrev = home_abbrev if side == "home" else away_abbrev
             selections = self._team_offer_selections(event_id, market_id, team_abbrev)
@@ -458,14 +463,12 @@ class OfferRowsMixin(EventMatchMixin):
         sides = self._game_sides(kind, selections, home_abbrev, away_abbrev)
         required = _REQUIRED_SIDES[kind]
         if any(k not in sides for k in required):
-            return base, []
+            return []
         required_sides = {k: sides[k] for k in required}
         tie = sides.get("draw")
         try:
-            # The opening row falls when its opener is excluded by either rule
-            # (the dated list, or a book whose closing first-five lines copy its
-            # first-inning lines), or when the opener copies its own
-            # first-inning opener.
+            # The opening row drops when either rule excludes its opener.
+            # It also drops when the opener copies its own first-inning opener.
             excluded = self._f5_exclusions(event_id, market_id, required_sides, official, tie=tie)
             opener_is_twin = line_type == "opening" and self._f5_opener_is_twin(
                 event_id, market_id, required_sides, tie=tie
@@ -480,17 +483,17 @@ class OfferRowsMixin(EventMatchMixin):
                 exc,
             )
             self.read_failures += 1  # The first-inning read failed
-            return base, []
+            return []
         rows = self._rows(
             base, kind, sides, line_type, excluded=excluded, opener_is_twin=opener_is_twin
         )
-        return base, rows
+        return rows
 
-    # ------------------------------------------------------------ get_prop_odds
+    # -------------------------------------------------------------- prop rows
     def _prop_market_rows(
         self, game_pk: int, player_id: int, prop_stat: str, line_type: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """(the empty row, one row per book) for one player's prop market."""
+    ) -> list[dict[str, Any]]:
+        """Return one row per book for one player's prop market."""
         if prop_stat not in _PROP_MARKET_IDS:
             known = ", ".join(sorted(_PROP_MARKET_IDS))
             raise ValueError(f"Unknown prop_stat '{prop_stat}'. Known values: {known}")
@@ -512,12 +515,12 @@ class OfferRowsMixin(EventMatchMixin):
             "over_line": None,
             "under_line": None,
             "game_date": None,
-            "postponed_start": None,  # A made-up game's original start, for the guard
+            "postponed_start": None,  # A made-up game's original start; the guard reads it
         }
         event = self._resolve_event(game_pk)
         player_name = self._resolve_player_name(player_id)
         if event is None or player_name is None:
-            return base, []
+            return []
         start, _official, date_str = self._game_meta_fields(game_pk, event)
         base.update(
             {
@@ -528,12 +531,12 @@ class OfferRowsMixin(EventMatchMixin):
         )
         offer = self._find_player_offer(event["id"], _PROP_MARKET_IDS[prop_stat], player_name)
         if offer is None:
-            return base, []
-        return base, self._rows(base, "prop", self._prop_sides(offer), line_type)
+            return []
+        return self._rows(base, "prop", self._prop_sides(offer), line_type)
 
     # --------------------------------------------------------------- internals
     def _selections(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
-        """All selections of the (single) offer for a game-level market."""
+        """Return the selections of the one offer of a game market."""
         try:
             offers = self._offers(event_id, market_id)  # Cached per (event, market)
         except Exception as exc:  # noqa: BLE001
@@ -545,12 +548,12 @@ class OfferRowsMixin(EventMatchMixin):
     def _team_offer_selections(
         self, event_id: int, market_id: int, team_abbrev: Any
     ) -> list[dict[str, Any]]:
-        """The selections of the offer for ONE team in a per-team market.
+        """Return the selections of one team's offer in a team-total market.
 
-        A team-total market holds one offer per team; each offer names its
-        team in ``team_id`` (the abbreviation the event uses for ``home`` /
-        ``visitor``) and again as its only participant. Returns ``[]`` when the
-        team has no offer.
+        A team-total market holds one offer per team.
+        Each offer names its team in ``team_id`` and again as its only participant.
+        The name is the abbreviation the event uses for ``home`` or ``visitor``.
+        The method returns ``[]`` when the team has no offer.
         """
         try:
             offers = self._offers(event_id, market_id)
@@ -571,7 +574,7 @@ class OfferRowsMixin(EventMatchMixin):
     def _find_player_offer(
         self, event_id: int, market_id: int, player_name: str
     ) -> dict[str, Any] | None:
-        """The prop offer whose participant matches ``player_name`` (normalized)."""
+        """Return the prop offer whose participant matches ``player_name``, or ``None``."""
         try:
             offers = self._offers(event_id, market_id)  # Cached per (event, market)
         except Exception as exc:  # noqa: BLE001
@@ -585,7 +588,7 @@ class OfferRowsMixin(EventMatchMixin):
                 last = player.get("last_name", "")
                 if _normalize_name(f"{first} {last}") == player_name:
                     return offer
-                # Fall back to the participant display name if first/last absent.
+                # Without a first and last name, use the participant's display name.
                 if part.get("name") and _normalize_name(part["name"]) == player_name:
                     return offer
         return None

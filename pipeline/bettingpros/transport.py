@@ -1,4 +1,26 @@
-"""The HTTP reads of the BettingPros and MLB APIs, with the retry policy."""
+"""The HTTP reads of the BettingPros and MLB APIs, with the retry policy.
+
+Every read goes through one method, ``_http_get_json``. ``_bp_get`` and
+``_mlb_get`` are the only network calls; the unit tests stub them.
+
+The retry rules:
+
+* A transient failure is retried: an HTTP 429 or 5xx, a time-out, a refused
+  or dropped connection, an unreachable network, a TLS error.
+* The wait before retry k is ``retry_wait_s`` times 2 to the power k − 1,
+  at most 60 seconds.
+* A 429 or 503 with a numeric ``Retry-After`` header waits at least that long.
+* Any other failure (an HTTP 4xx, a body that is not JSON) raises at once.
+* After the last retry, the original error reaches the caller.
+* The default is no retry (``BETTINGPROS_MAX_RETRIES`` unset means 0).
+  The historical loader turns retries on with ``set_retry_policy``.
+
+Use retries in offline jobs only, and leave ``BETTINGPROS_MAX_RETRIES`` unset
+in the API container. A retry waits with ``time.sleep``. The opening-line
+job calls the provider on the app's event loop, so one wait stops the whole
+app. The live pipeline calls it on its one worker thread, so one wait stalls
+every odds read.
+"""
 
 from __future__ import annotations
 
@@ -13,27 +35,24 @@ from typing import Any
 
 from pipeline.bettingpros.base import ProviderBase
 
-log = logging.getLogger("pipeline.bettingpros_odds_provider")
+log = logging.getLogger("pipeline.bettingpros")
 
 _BP_BASE = "https://api.bettingpros.com/v3"
 _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 
 
-#: The most ``/offers`` pages read for one (event, market). The API
-#: pages at 10 offers; a batter market lists every hitter in the game (two to
-#: three pages), so the cap only guards against a runaway pager.
+#: The most ``/offers`` pages read for one (event, market). The API pages
+#: at 10 offers, and a batter market fills two to three pages. The cap only
+#: stops a pager that never ends.
 _MAX_OFFER_PAGES = 20
 
 
-#: The error types a read may retry. ``OSError`` is the base of
-#: ``URLError`` (a time-out or a refused connection inside ``urlopen``; also
-#: the base of ``HTTPError``, whose status :func:`_is_transient` checks), of
-#: ``TimeoutError`` (``socket.timeout`` since Python 3.10) and of
-#: ``ConnectionError``. ``OSError`` also covers what urllib does not wrap.
-#: urllib wraps an ``OSError`` in ``URLError`` only around the request. An
-#: error raised while the status line or the body is read comes through bare:
-#: an ``ssl.SSLError``, or an ``EHOSTUNREACH``, ``ENETUNREACH`` or ``ENETDOWN``.
-#: ``HTTPException`` covers ``RemoteDisconnected`` and ``IncompleteRead``.
+#: The error types a read may retry. ``OSError`` covers ``URLError``,
+#: ``HTTPError``, ``TimeoutError`` and ``ConnectionError``. It also covers the
+#: bare errors urllib does not wrap while it reads the body, such as an
+#: ``ssl.SSLError`` or an unreachable network. ``HTTPException`` covers
+#: ``RemoteDisconnected`` and ``IncompleteRead``. :func:`_is_transient`
+#: checks the status of an ``HTTPError``.
 _RETRYABLE_ERRORS: tuple[type[Exception], ...] = (OSError, http.client.HTTPException)
 
 #: The statuses whose numeric ``Retry-After`` sets a floor on the wait.
@@ -43,9 +62,8 @@ _RETRY_AFTER_STATUSES = frozenset({429, 503})
 def _is_transient(exc: BaseException) -> bool:
     """True when a failed read may succeed on a later attempt.
 
-    An HTTP 429 or 5xx, a time-out, a refused or dropped connection, an
-    unreachable network, a TLS error. Any other HTTP status (a 4xx) is the
-    server's final answer.
+    An HTTP 429 or 5xx and every network error are transient. Any other HTTP
+    status (a 4xx) is the server's final answer.
     """
     if isinstance(exc, urllib.error.HTTPError):
         code = exc.code if isinstance(exc.code, int) else 0
@@ -56,8 +74,8 @@ def _is_transient(exc: BaseException) -> bool:
 def _retry_after_s(exc: BaseException) -> float | None:
     """The numeric ``Retry-After`` of a 429 or 503, in seconds, or ``None``.
 
-    ``None`` when the status is another one, or the header is absent, an
-    HTTP date, negative or not finite.
+    The function gives ``None`` for any other status, and for a header that
+    is absent, an HTTP date, negative or not finite.
     """
     if not isinstance(exc, urllib.error.HTTPError) or exc.code not in _RETRY_AFTER_STATUSES:
         return None
@@ -83,10 +101,11 @@ class TransportMixin(ProviderBase):
 
     # ----------------------------------------------------------------- HTTP
     def set_retry_policy(self, max_retries: int, retry_wait_s: float) -> None:
-        """Set the retries of a transient read failure and the first wait.
+        """Set the number of retries of a transient read failure and the first wait.
 
-        ``max_retries`` is a whole number 0 or more (0 = one attempt);
-        ``retry_wait_s`` is 0 or more seconds. Raises ``ValueError`` otherwise.
+        ``max_retries`` is a whole number, 0 or more (0 means one attempt).
+        ``retry_wait_s`` is 0 or more seconds. Any other value raises
+        ``ValueError``.
         """
         if max_retries < 0 or int(max_retries) != max_retries:
             raise ValueError(f"max_retries must be a whole number >= 0, not {max_retries!r}")
@@ -98,9 +117,8 @@ class TransportMixin(ProviderBase):
     def _retry_wait(self, retry: int, exc: BaseException) -> float:
         """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc``.
 
-        ``retry_wait_s`` doubles per retry. A 429 or 503 with a numeric
-        ``Retry-After`` waits at least that long. Both stop at
-        :attr:`RETRY_WAIT_CAP_S`.
+        The wait doubles per retry. A numeric ``Retry-After`` sets a floor.
+        :attr:`RETRY_WAIT_CAP_S` caps the wait.
         """
         # The exponent stops at 64: a larger one adds nothing under the cap.
         wait = self._retry_wait_s * 2.0 ** min(retry - 1, 64)
@@ -117,14 +135,12 @@ class TransportMixin(ProviderBase):
         return text
 
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        """GET ``url`` and decode its JSON body; the one read of every vendor and MLB call.
+        """GET ``url`` and decode its JSON body. Every vendor and MLB read uses it.
 
-        A transient failure (an HTTP 429 or 5xx, a time-out, a refused
-        or dropped connection) is retried up to ``max_retries`` times, after
-        the wait of :meth:`_retry_wait`. Each retry logs one INFO line with the
-        attempt, the error, the host and path (no query, no key) and the wait.
-        Any other failure raises at once. After the last retry the original
-        error propagates unchanged, so the callers' handlers still catch it.
+        The method retries a transient failure up to ``max_retries`` times.
+        Each retry logs one INFO line without the query or the API key.
+        Any other failure raises at once. After the last retry, the original
+        error reaches the caller unchanged.
         """
         retry = 0
         while True:

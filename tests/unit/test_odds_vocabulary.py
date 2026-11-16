@@ -52,7 +52,7 @@ import scripts.load_historical_odds as loader  # noqa: E402
 
 from pipeline import odds_provider  # noqa: E402
 from pipeline.bettingpros.markets import _PROP_MARKET_IDS  # noqa: E402
-from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
+from pipeline.bettingpros.provider import BettingProsOddsProvider  # noqa: E402
 from pipeline.etl import opening_line_job  # noqa: E402
 from pipeline.live.ingestion import prop_odds  # noqa: E402
 from pipeline.live.ingestion.constants import (  # noqa: E402
@@ -504,15 +504,20 @@ class _CountingProvider(BettingProsOddsProvider):
         ]
 
 
+def _row(rows: list[dict], book: str) -> dict:
+    """The one row of ``book`` among a by-book read's rows."""
+    (row,) = [r for r in rows if r["book"] == book]
+    return row
+
+
 class TestBettingProsNewMarkets:
     def test_singles_is_priced_as_a_batter_market(self) -> None:
         prov = _CountingProvider(offers_cache_ttl_s=0)
-        quote = prov.get_prop_odds(746437, 61001, "singles")
+        quote = _row(prov.get_prop_odds_by_book(746437, 61001, "singles"), "bp:10")
         assert quote["prop_stat"] == "singles"
         assert quote["line"] == 0.5
-        # SIM-555: one book's row, the first on the graded-book preference with an
-        # offer (FanDuel, book 10) — no longer the per-side "best" line (book 15).
-        assert quote["book"] == "bp:10"
+        # SIM-555: FanDuel's (book 10) own over and under, no longer the per-side
+        # "best" line (book 15).
         assert quote["over_ml"] == -150
         assert quote["under_ml"] == 115
         assert quote["is_mock"] is False
@@ -520,7 +525,7 @@ class TestBettingProsNewMarkets:
 
     def test_singles_opening_and_closing_lines(self) -> None:
         prov = _CountingProvider(offers_cache_ttl_s=0)
-        opening = prov.get_prop_odds(746437, 61001, "singles", line_type="opening")
+        (opening,) = prov.get_prop_odds_by_book(746437, 61001, "singles", line_type="opening")
         assert (opening["over_ml"], opening["under_ml"]) == (-145, 110)
         # SIM-555: one closing row per book; BetRivers (18) is one of them.
         rows = {
@@ -529,75 +534,70 @@ class TestBettingProsNewMarkets:
         }
         assert set(rows) == {"bp:10", "bp:15", "bp:18"}
         assert (rows["bp:18"]["over_ml"], rows["bp:18"]["under_ml"]) == (-155, 118)
-        closing = prov.get_prop_odds(746437, 61001, "singles", line_type="closing")
-        assert (closing["book"], closing["over_ml"], closing["under_ml"]) == ("bp:10", -150, 115)
+        assert (rows["bp:10"]["over_ml"], rows["bp:10"]["under_ml"]) == (-150, 115)
 
     def test_hits_allowed_is_priced_as_a_pitcher_market(self) -> None:
         prov = _CountingProvider(offers_cache_ttl_s=0)
-        quote = prov.get_prop_odds(746437, 45184, "hits_allowed")
+        quote = _row(prov.get_prop_odds_by_book(746437, 45184, "hits_allowed"), "bp:10")
         assert quote["line"] == 4.5
         # SIM-555: FanDuel's own over and under (was the per-side best: -102 / -112).
-        assert quote["book"] == "bp:10"
         assert quote["over_ml"] == -110
         assert quote["under_ml"] == -112
         assert prov.offers_calls()[0]["market_id"] == 404
 
     def test_hits_and_hits_allowed_hit_different_markets(self) -> None:
         prov = _CountingProvider(offers_cache_ttl_s=0)
-        prov.get_prop_odds(746437, 61001, "hits")
-        prov.get_prop_odds(746437, 45184, "hits_allowed")
+        prov.get_prop_odds_by_book(746437, 61001, "hits")
+        prov.get_prop_odds_by_book(746437, 45184, "hits_allowed")
         # The hits market (287) spans two pages in the fixture; hits_allowed is 404.
         assert [c["market_id"] for c in prov.offers_calls()] == [287, 287, 404]
 
     @pytest.mark.parametrize("prop_stat", _NEW_EIGHT)
     def test_every_new_market_is_accepted_by_the_provider(self, prop_stat: str) -> None:
         prov = _CountingProvider()
-        # An unknown player yields the null-quote shape, never a ValueError.
-        quote = prov.get_prop_odds(746437, 111111, prop_stat)
-        assert quote["prop_stat"] == prop_stat
-        assert quote["source"] == "bettingpros"
+        # An unknown player yields no rows, never a ValueError.
+        assert prov.get_prop_odds_by_book(746437, 111111, prop_stat) == []
 
 
 class TestBettingProsOffersCache:
     def test_second_player_on_the_same_event_and_market_makes_no_http_call(self) -> None:
         prov = _CountingProvider(clock=_FakeClock())
-        first = prov.get_prop_odds(746437, 45184, "strikeouts")
+        first = prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         n_after_first = len(prov.offers_calls(285))
-        second = prov.get_prop_odds(746437, 111111, "strikeouts")  # another player
+        second = prov.get_prop_odds_by_book(746437, 111111, "strikeouts")  # another player
         assert n_after_first == 1
         assert len(prov.offers_calls(285)) == 1
-        assert first["line"] == 5.5
-        assert second["line"] is None  # no offer for that name — still no re-fetch
+        assert _row(first, "bp:10")["line"] == 5.5
+        assert second == []  # no offer for that name — still no re-fetch
 
-    def test_books_and_line_types_share_one_fetch(self) -> None:
+    def test_line_types_share_one_fetch(self) -> None:
         prov = _CountingProvider(clock=_FakeClock())
-        for book in ("pinnacle", "circa", "draftkings"):
-            for line_type in ("opening", "current", "closing"):
-                prov.get_prop_odds(746437, 45184, "strikeouts", line_type=line_type, book=book)
+        for line_type in ("opening", "current", "closing"):
+            prov.get_prop_odds_by_book(746437, 45184, "strikeouts", line_type=line_type)
         assert len(prov.offers_calls(285)) == 1
 
     def test_a_different_market_is_its_own_entry(self) -> None:
         prov = _CountingProvider(clock=_FakeClock())
-        prov.get_prop_odds(746437, 45184, "strikeouts")
-        prov.get_prop_odds(746437, 45184, "hits_allowed")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "hits_allowed")
         assert len(prov.offers_calls(285)) == 1
         assert len(prov.offers_calls(404)) == 1
 
     def test_expired_entry_is_fetched_again(self) -> None:
         clock = _FakeClock()
         prov = _CountingProvider(clock=clock, offers_cache_ttl_s=30)
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         clock.now += 29.0
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         assert len(prov.offers_calls(285)) == 1  # still fresh
         clock.now += 1.5
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         assert len(prov.offers_calls(285)) == 2  # past the time-to-live
 
     def test_ttl_zero_disables_the_cache(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), offers_cache_ttl_s=0)
-        prov.get_prop_odds(746437, 45184, "strikeouts")
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         assert len(prov.offers_calls(285)) == 2
 
     def test_game_odds_share_the_cache_too(self) -> None:
@@ -608,10 +608,10 @@ class TestBettingProsOffersCache:
 
     def test_a_failed_fetch_is_not_cached(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), fail_offers_once=True)
-        failed = prov.get_prop_odds(746437, 45184, "strikeouts")
-        assert failed["line"] is None
-        ok = prov.get_prop_odds(746437, 45184, "strikeouts")
-        assert ok["line"] == 5.5
+        failed = prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
+        assert failed == []
+        ok = prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
+        assert _row(ok, "bp:10")["line"] == 5.5
         assert len(prov.offers_calls(285)) == 2
 
     def test_default_ttl_is_below_the_live_prop_cadence(self, monkeypatch) -> None:
@@ -654,31 +654,31 @@ class TestBettingProsCacheEviction:
     def test_a_store_drops_every_offers_entry_past_the_ttl(self) -> None:
         clock = _FakeClock()
         prov = _CountingProvider(clock=clock, offers_cache_ttl_s=30)
-        prov.get_prop_odds(746437, 45184, "strikeouts")  # (92857, 285)
-        prov.get_prop_odds(746437, 45184, "hits_allowed")  # (92857, 404)
-        prov.get_prop_odds(746437, 61001, "singles")  # (92857, 295)
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")  # (92857, 285)
+        prov.get_prop_odds_by_book(746437, 45184, "hits_allowed")  # (92857, 404)
+        prov.get_prop_odds_by_book(746437, 61001, "singles")  # (92857, 295)
         prov.get_odds(746437, market_type="moneyline")  # (92857, 122)
         assert len(prov._offers_cache) == 4
         clock.now += 31  # every entry is now stale
-        prov.get_prop_odds(746437, 61001, "hits")  # a new key: (92857, 287)
+        prov.get_prop_odds_by_book(746437, 61001, "hits")  # a new key: (92857, 287)
         assert set(prov._offers_cache) == {(92857, 287)}
 
     def test_fresh_entries_survive_the_sweep(self) -> None:
         clock = _FakeClock()
         prov = _CountingProvider(clock=clock, offers_cache_ttl_s=30)
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         clock.now += 20
-        prov.get_prop_odds(746437, 45184, "hits_allowed")
+        prov.get_prop_odds_by_book(746437, 45184, "hits_allowed")
         clock.now += 15  # strikeouts is 35 s old (stale); hits_allowed 15 s (fresh)
-        prov.get_prop_odds(746437, 61001, "singles")
+        prov.get_prop_odds_by_book(746437, 61001, "singles")
         assert set(prov._offers_cache) == {(92857, 404), (92857, 295)}
 
     def test_a_stale_hit_is_replaced_not_duplicated(self) -> None:
         clock = _FakeClock()
         prov = _CountingProvider(clock=clock, offers_cache_ttl_s=30)
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         clock.now += 31
-        prov.get_prop_odds(746437, 45184, "strikeouts")  # stale → re-fetched and re-stored
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")  # stale → re-fetched and re-stored
         assert set(prov._offers_cache) == {(92857, 285)}
         assert len(prov.offers_calls(285)) == 2
 
@@ -694,8 +694,8 @@ class TestBettingProsCacheEviction:
 
     def test_ttl_zero_stores_nothing(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), offers_cache_ttl_s=0)
-        prov.get_prop_odds(746437, 45184, "strikeouts")
-        prov.get_prop_odds(746437, 61001, "singles")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 61001, "singles")
         prov.get_odds(746437, market_type="moneyline")
         assert prov._offers_cache == {}
         assert prov._events_by_date_cache == {}
@@ -717,7 +717,7 @@ class TestBettingProsCacheEviction:
 class TestBettingProsPagination:
     def test_player_on_page_two_is_found(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names={62011: "Kerry Carpenter"})
-        quote = prov.get_prop_odds(746437, 62011, "hits")
+        quote = _row(prov.get_prop_odds_by_book(746437, 62011, "hits"), "bp:10")
         assert quote["line"] == 0.5
         assert quote["over_ml"] == -175
         assert quote["under_ml"] == 135
@@ -726,14 +726,14 @@ class TestBettingProsPagination:
 
     def test_all_pages_land_in_one_cache_entry(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names={62011: "Kerry Carpenter"})
-        prov.get_prop_odds(746437, 62011, "hits")
-        prov.get_prop_odds(746437, 62001, "hits")  # page-1 player, served from the cache
+        prov.get_prop_odds_by_book(746437, 62011, "hits")
+        prov.get_prop_odds_by_book(746437, 62001, "hits")  # page-1 player, served from the cache
         assert len(prov.offers_calls(287)) == 2  # page 1 + page 2, once
         assert len(prov._offers_cache[(92857, 287)][1]) == 5
 
     def test_single_page_market_makes_one_call(self) -> None:
         prov = _CountingProvider(clock=_FakeClock())
-        prov.get_prop_odds(746437, 45184, "strikeouts")
+        prov.get_prop_odds_by_book(746437, 45184, "strikeouts")
         assert [c.get("page", 1) for c in prov.offers_calls(285)] == [1]
 
 
@@ -749,33 +749,31 @@ class TestBettingProsLaterPageFailure:
 
     def test_page_one_players_keep_their_quotes(self, caplog) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names=self._NAMES, fail_offers_page=2)
-        with caplog.at_level("WARNING", logger="pipeline.bettingpros_odds_provider"):
-            page_one = prov.get_prop_odds(746437, 62001, "hits")
+        with caplog.at_level("WARNING", logger="pipeline.bettingpros"):
+            page_one = _row(prov.get_prop_odds_by_book(746437, 62001, "hits"), "bp:10")
         assert page_one["line"] == 0.5
         assert page_one["over_ml"] == -200
         # The warning names the page, the event and the market.
         messages = [r.getMessage() for r in caplog.records]
         assert any("page 2 of 2" in m and "92857" in m and "287" in m for m in messages)
 
-    def test_page_two_players_get_the_null_quote(self) -> None:
+    def test_page_two_players_get_no_rows(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names=self._NAMES, fail_offers_page=2)
-        quote = prov.get_prop_odds(746437, 62011, "hits")
-        assert quote["line"] is None
-        assert quote["prop_stat"] == "hits"
+        assert prov.get_prop_odds_by_book(746437, 62011, "hits") == []
 
     def test_the_partial_market_is_not_cached(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names=self._NAMES, fail_offers_page=2)
-        prov.get_prop_odds(746437, 62001, "hits")
+        prov.get_prop_odds_by_book(746437, 62001, "hits")
         assert (92857, 287) not in prov._offers_cache
         # The next call fetches again: page 1 succeeds, page 2 fails again.
-        prov.get_prop_odds(746437, 62001, "hits")
+        prov.get_prop_odds_by_book(746437, 62001, "hits")
         assert [c.get("page", 1) for c in prov.offers_calls(287)] == [1, 2, 1, 2]
 
     def test_page_two_recovering_prices_everyone_and_caches(self) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names=self._NAMES, fail_offers_page=2)
-        prov.get_prop_odds(746437, 62001, "hits")
+        prov.get_prop_odds_by_book(746437, 62001, "hits")
         prov._fail_offers_page = None  # the transport recovers
-        quote = prov.get_prop_odds(746437, 62011, "hits")
+        quote = _row(prov.get_prop_odds_by_book(746437, 62011, "hits"), "bp:10")
         assert quote["line"] == 0.5
         assert len(prov._offers_cache[(92857, 287)][1]) == 5
 
@@ -789,7 +787,7 @@ class TestBettingProsLaterPageFailure:
         prov = _CountingProvider(
             clock=_FakeClock(), names=self._NAMES, pagination_override=["not", "a", "dict"]
         )
-        quote = prov.get_prop_odds(746437, 62001, "hits")
+        quote = _row(prov.get_prop_odds_by_book(746437, 62001, "hits"), "bp:10")
         assert quote["line"] == 0.5
         assert [c.get("page", 1) for c in prov.offers_calls(287)] == [1]
         assert (92857, 287) in prov._offers_cache  # one page is a complete market
@@ -798,7 +796,7 @@ class TestBettingProsLaterPageFailure:
         prov = _CountingProvider(
             clock=_FakeClock(), names=self._NAMES, pagination_override={"total_pages": "many"}
         )
-        prov.get_prop_odds(746437, 62001, "hits")
+        prov.get_prop_odds_by_book(746437, 62001, "hits")
         assert [c.get("page", 1) for c in prov.offers_calls(287)] == [1]
 
 

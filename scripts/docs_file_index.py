@@ -250,7 +250,7 @@ STAGES: list[tuple[int, str, str, list[str]]] = [
         "Where the bookmakers' prices come from, and how the model's numbers become edges.",
         [
             "pipeline/odds_provider.py",
-            "pipeline/bettingpros_odds_provider.py",
+            "pipeline/bettingpros/provider.py",
             "pipeline/bettingpros/*",
             "pipeline/odds_row_guard.py",
             "pipeline/etl/opening_line_job.py",
