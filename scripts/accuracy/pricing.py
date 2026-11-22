@@ -9,7 +9,7 @@ book's prices for every side, labelled ``book = 'bp:<id>'``. The rows labelled
 comparison grades each market against ONE book: the GRADED ROW is the row of the
 first book on ``GRADED_BOOK_PREFERENCE`` that has a row for the market (the same
 list on every game), and a book off the list only when no listed book has one.
-Only the listed sportsbooks are graded (``pipeline.odds_provider.bettable_labels``):
+Only the listed sportsbooks are graded (``betting.markets.bettable_labels``):
 never the vendor's blend, the daily-fantasy apps, the exchanges, the prediction
 markets or a book the vocabulary does not list. ``--benchmark-book`` grades
 against one named book instead; the blend ``bp:0`` serves as a second benchmark,
@@ -28,8 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from betting.bet_signal import american_to_decimal, reference_margin_from_prices
-from pipeline.odds_provider import (
+from betting.markets import (
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
     GRADED_BOOK_PREFERENCE,
@@ -43,6 +42,7 @@ from pipeline.odds_provider import (
     is_bettable,
     resolve_book,
 )
+from betting.pricing import american_to_decimal, reference_margin_from_prices
 
 from .records import PROP_VOCAB_MAP, AccuracyRecord, run_line_market_key
 
@@ -65,7 +65,7 @@ def graded_book_filter_sql(param: str, *, benchmark: bool = False) -> str:
     """The WHERE tail that keeps the rows a reader may grade against.
 
     ``param`` names the query parameter that carries the books to keep (the
-    listed sportsbooks, :func:`pipeline.odds_provider.bettable_labels`) or, with
+    listed sportsbooks, :func:`betting.markets.bettable_labels`) or, with
     ``benchmark``, the one book to keep. The default form lists what may be
     graded, so a book the vocabulary does not list is never graded. Both forms
     keep the stored label filter, so a ``consensus`` row never reaches a reader.
@@ -493,7 +493,7 @@ def _closing_prices(
 
 def _implied(american: float) -> float:
     """The raw (vig-included) implied probability of one American price."""
-    from betting.bet_signal import implied_prob_from_american
+    from betting.pricing import implied_prob_from_american
 
     return float(implied_prob_from_american(float(american)))
 
@@ -507,7 +507,7 @@ def _implied(american: float) -> float:
 # markets. Here "margin" means a two-way market's two implied probabilities added
 # up: about 1.05, never below 1. DEFAULT_ONE_SIDED_MARGIN (1.05, the last-resort
 # margin), REFERENCE_MARGIN_BAND (1.00-1.15) and run_line_is_pair live in
-# betting.bet_signal, which the live /edges route shares.
+# betting.pricing, which the live /edges route shares.
 
 #: The two-way total of each segment, the first reference market.
 _SEGMENT_TOTAL_OF: dict[str, str] = {"game": "total", "f5": "f5_total", "f1": "f1_total"}

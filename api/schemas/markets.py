@@ -9,11 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 from api.schemas._base import _ApiModel
-from pipeline.odds_provider import book_display_name
+from betting.markets import book_display_name
 
 
 class EdgeReportModel(_ApiModel):
-    """Response model for :class:`betting.bet_signal.EdgeReport` (SIM-339).
+    """Response model for :class:`betting.pricing.EdgeReport` (SIM-339).
 
     The edge / EV report for one side of one market or prop.  ``side`` is the
     MarketSide enum's ``.value`` (a JSON-native string, e.g. "home" / "over").
@@ -55,7 +55,7 @@ class EdgeReportModel(_ApiModel):
 
     @classmethod
     def from_dataclass(cls, report: Any, *, price_book: str | None = None) -> EdgeReportModel:
-        """Build from a :class:`betting.bet_signal.EdgeReport`.
+        """Build from a :class:`betting.pricing.EdgeReport`.
 
         ``price_book`` is the stored label of the offered price's book; the
         display name follows from it.
@@ -79,7 +79,7 @@ class EdgeReportModel(_ApiModel):
 
 
 class BetSignalModel(_ApiModel):
-    """Response model for :class:`betting.bet_signal.BetSignal` (SIM-369).
+    """Response model for :class:`betting.pricing.BetSignal` (SIM-369).
 
     A fireable +EV bet recommendation derived from one :class:`EdgeReport`.
     ``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.
@@ -111,7 +111,7 @@ class BetSignalModel(_ApiModel):
 
     @classmethod
     def from_dataclass(cls, signal: Any, *, price_book: str | None = None) -> BetSignalModel:
-        """Build from a :class:`betting.bet_signal.BetSignal`.
+        """Build from a :class:`betting.pricing.BetSignal`.
 
         ``price_book`` is the stored label of the offered price's book. The
         nested report carries it too.

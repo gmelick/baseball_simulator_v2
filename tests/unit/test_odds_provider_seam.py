@@ -3,7 +3,7 @@ test_odds_provider_seam.py
 ============================
 SIM-370 — Real odds/prop provider swap behind MockOddsAPI.
 
-Verifies the provider *seam* added in ``pipeline/odds_provider.py``:
+Verifies the provider *seam* added in ``betting/markets.py``:
 
   1. ``get_odds_provider()`` returns a ``MockOddsAPI`` by default and respects
      the ``ODDS_PROVIDER`` env var (explicit name + a registered fake select
@@ -38,17 +38,17 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.bettingpros.provider import BettingProsOddsProvider  # noqa: E402
-from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
-from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
-from pipeline.odds_provider import (  # noqa: E402
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider  # noqa: E402
+from betting.load import (  # noqa: E402
     DEFAULT_PROVIDER,
     ODDS_PROVIDER_ENV,
-    PROP_STATS,
     OddsProvider,
     get_odds_provider,
     register_odds_provider,
 )
+from betting.markets import PROP_STATS  # noqa: E402
+from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 # ===========================================================================
 # Test fakes

@@ -45,7 +45,13 @@ from typing import Any
 
 import numpy as np
 
-from betting.bet_signal import (
+from betting.markets import (
+    FULL_GAME_MARKET_TYPES,
+    GAME_MARKET_KIND,
+    GAME_MARKET_SEGMENT,
+    GAME_MARKET_TYPES,
+)
+from betting.pricing import (
     REFERENCE_MARGIN_BAND,
     MarketSide,
     OddsQuote,
@@ -57,12 +63,6 @@ from betting.bet_signal import (
     run_line_bet_cover_prob,
     run_line_is_pair,
     samples_over_under_edge_report,
-)
-from pipeline.odds_provider import (
-    FULL_GAME_MARKET_TYPES,
-    GAME_MARKET_KIND,
-    GAME_MARKET_SEGMENT,
-    GAME_MARKET_TYPES,
 )
 from simulation.game_market_distributions import (
     SegmentRuns,
@@ -484,8 +484,8 @@ def score_game_accuracy(
     closing price is skipped. A total or run line that landed EXACTLY on the
     closing line (a push) gives no record: the scored probability is a STRICT over
     or cover probability (the push rule of
-    :func:`betting.bet_signal.samples_over_under_edge_report` and
-    :func:`betting.bet_signal.spread_cover_prob`), so a push has no 0/1 label.
+    :func:`betting.pricing.samples_over_under_edge_report` and
+    :func:`betting.pricing.spread_cover_prob`), so a push has no 0/1 label.
     """
     records: list[AccuracyRecord] = []
 

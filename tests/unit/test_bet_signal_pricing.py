@@ -1,5 +1,5 @@
 """
-The pricing half of :mod:`betting.bet_signal`: the implied probabilities and the edges.
+The pricing half of :mod:`betting.pricing`: the implied probabilities and the edges.
 
 The edge is the simulator's probability minus the market's no-vig
 probability. The EV (expected value) is the profit per unit staked at the
@@ -26,7 +26,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from betting.bet_signal import (
+from betting.pricing import (
     MarketSide,
     OddsQuote,
     american_to_decimal,

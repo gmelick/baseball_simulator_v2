@@ -7,7 +7,7 @@ and the CHECK-constraint migration.
 
 What this file pins:
 
-  1. The vocabulary has ONE source (``pipeline/odds_provider.py``). The mock
+  1. The vocabulary has ONE source (``betting/markets.py``). The mock
      provider, the BettingPros market map, the live pipeline, the opening-line
      job and the historical loader all agree with it.
   2. ``MockOddsAPI`` quotes every new market in the raw.prop_odds shape.
@@ -48,11 +48,18 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import scripts.load_historical_odds as loader  # noqa: E402
-
-from pipeline import odds_provider  # noqa: E402
-from pipeline.bettingpros.markets import _PROP_MARKET_IDS  # noqa: E402
-from pipeline.bettingpros.provider import BettingProsOddsProvider  # noqa: E402
+import betting.history as loader  # noqa: E402
+from betting import markets as odds_provider  # noqa: E402
+from betting.bettingpros.fetch_odds import (
+    _PROP_MARKET_IDS,  # noqa: E402
+    BettingProsOddsProvider,  # noqa: E402
+)
+from betting.markets import (  # noqa: E402
+    BATTER_PROP_STATS,
+    PITCHER_PROP_STATS,
+    PROP_STAT_TO_MODEL_PROP,
+    PROP_STATS,
+)
 from pipeline.etl import opening_line_job  # noqa: E402
 from pipeline.live.ingestion import prop_odds  # noqa: E402
 from pipeline.live.ingestion.constants import (  # noqa: E402
@@ -63,12 +70,6 @@ from pipeline.live.ingestion.constants import (  # noqa: E402
 )
 from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
-from pipeline.odds_provider import (  # noqa: E402
-    BATTER_PROP_STATS,
-    PITCHER_PROP_STATS,
-    PROP_STAT_TO_MODEL_PROP,
-    PROP_STATS,
-)
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 _MIG = _ROOT / "db" / "migrations" / "versions" / "0022_sim421_prop_odds_market_vocabulary.py"
@@ -749,7 +750,7 @@ class TestBettingProsLaterPageFailure:
 
     def test_page_one_players_keep_their_quotes(self, caplog) -> None:
         prov = _CountingProvider(clock=_FakeClock(), names=self._NAMES, fail_offers_page=2)
-        with caplog.at_level("WARNING", logger="pipeline.bettingpros"):
+        with caplog.at_level("WARNING", logger="betting.bettingpros"):
             page_one = _row(prov.get_prop_odds_by_book(746437, 62001, "hits"), "bp:10")
         assert page_one["line"] == 0.5
         assert page_one["over_ml"] == -200

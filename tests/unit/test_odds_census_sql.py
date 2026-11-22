@@ -12,8 +12,8 @@ import re
 import pytest
 from tests.script_loader import PROBES, load_script
 
-from pipeline.bettingpros.markets import F5_EXCLUDED_BOOKS, F5_TWIN_MARKETS, f5_excluded_markets
-from pipeline.odds_provider import (
+from betting.bettingpros.fetch_odds import F5_EXCLUDED_BOOKS, F5_TWIN_MARKETS, f5_excluded_markets
+from betting.markets import (
     BOOK_KIND,
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
@@ -22,7 +22,7 @@ from pipeline.odds_provider import (
     graded_book_labels,
     is_bettable,
 )
-from pipeline.odds_row_guard import (
+from betting.validate import (
     F5_TOTAL_LINE_MAX,
     THREE_WAY_SUM_MAX,
     THREE_WAY_SUM_MIN,
@@ -80,7 +80,7 @@ class TestCensusSql:
         assert f"NOT {tie_last}" in sections["13"]
 
     def test_the_team_total_line_of_one_is_checked(self):
-        from pipeline.odds_row_guard import TEAM_TOTAL_LINE_MAX
+        from betting.validate import TEAM_TOTAL_LINE_MAX
 
         body = self._sections(self.SQL)["6b"]
         assert "o.market_type IN ('team_total_home', 'team_total_away')" in body

@@ -41,10 +41,10 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.bettingpros.provider import BettingProsOddsProvider  # noqa: E402
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider  # noqa: E402
+from betting.load import ODDS_PROVIDER_ENV, get_odds_provider  # noqa: E402
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-from pipeline.odds_provider import ODDS_PROVIDER_ENV, get_odds_provider  # noqa: E402
 
 # The two environment names come from their readers. A rename in a reader
 # then fails the conftest check below. A stale pin never passes unseen.

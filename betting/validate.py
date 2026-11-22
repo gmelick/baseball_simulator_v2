@@ -46,14 +46,14 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
-from pipeline.odds_provider import (
+from betting.markets import (
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
     GAME_MARKET_SIDE,
     GAME_ODDS_FIELDS,
 )
 
-_log = logging.getLogger("pipeline.odds_row_guard")
+_log = logging.getLogger("betting.validate")
 
 #: Equal non-zero spreads whose prices add inside this band are one book's mislabelled pair.
 PAIR_PRICE_BAND = (1.00, 1.10)

@@ -19,13 +19,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from tests.script_loader import load_script
 
-from pipeline.bettingpros.markets import _GAME_MARKET_IDS
-from pipeline.bettingpros.provider import BettingProsOddsProvider
-from pipeline.live.ingestion.mock_odds import MockOddsAPI
-from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-from pipeline.odds_provider import (
+import betting.history
+from betting.bettingpros.fetch_odds import _GAME_MARKET_IDS, BettingProsOddsProvider
+from betting.markets import (
     FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
@@ -33,6 +30,8 @@ from pipeline.odds_provider import (
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
 )
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 _MIGRATION = (
@@ -151,7 +150,7 @@ class TestProviderSegmentMarkets:
 
     @staticmethod
     def _book_cost(market_id: int, book_id: int, *, participant=None, selection=None):
-        from pipeline.bettingpros.parsing import _book_line
+        from betting.bettingpros.fetch_odds import _book_line
 
         sel_list = _load(_FIXTURE_BY_MARKET[market_id])["offers"][0]["selections"]
         for sel in sel_list:
@@ -444,7 +443,7 @@ class TestLiveGameMarketCycle:
 
 class TestLoaderGameMarkets:
     def _loader(self):
-        return load_script("load_historical_odds", module_name="load_historical_odds_game_markets")
+        return betting.history
 
     def test_default_is_every_market(self):
         loader = self._loader()

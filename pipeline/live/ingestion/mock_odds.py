@@ -7,7 +7,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from pipeline.odds_provider import (
+from betting.markets import (
     FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
@@ -254,7 +254,7 @@ class MockOddsAPI:
         ----------
         game_pk       : MLB game identifier
         player_id     : MLB player identifier
-        prop_stat     : one of the 15 markets in PROP_STATS (pipeline/odds_provider.py):
+        prop_stat     : one of the 15 markets in PROP_STATS (betting/markets.py):
                         the pitcher markets 'strikeouts' | 'earned_runs' | 'walks'
                         | 'outs_recorded' | 'hits_allowed' and the batter markets
                         'hits' | 'home_runs' | 'total_bases' | 'rbis' | 'singles'

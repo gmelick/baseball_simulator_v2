@@ -54,8 +54,7 @@ from typing import Any
 
 from fastapi import Request
 
-from betting.bet_signal import MarketSide, american_to_decimal, reference_margin_from_prices
-from pipeline.odds_provider import (
+from betting.markets import (
     FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
     GAME_MARKET_SEGMENT,
@@ -67,7 +66,8 @@ from pipeline.odds_provider import (
     book_id_from_label,
     is_bettable,
 )
-from pipeline.odds_row_guard import check_row
+from betting.pricing import MarketSide, american_to_decimal, reference_margin_from_prices
+from betting.validate import check_row
 
 log = logging.getLogger("api.routes.betting")
 
@@ -113,7 +113,7 @@ _SQL_GAME_STATUS = "SELECT status FROM raw.games WHERE game_pk = $1"
 #: the blend, a daily-fantasy app, an exchange, a prediction market or a book
 #: the vocabulary does not list), the allowed line types only. ``$2`` is the
 #: market list (:func:`_stored_read_markets`), ``$3`` the sportsbook labels
-#: (:func:`pipeline.odds_provider.bettable_labels`), ``$4`` the allowed line
+#: (:func:`betting.markets.bettable_labels`), ``$4`` the allowed line
 #: types (:func:`_usable_line_types`). A closing row sorts before any current
 #: row of the same book. ``draw_ml`` is the tie price of a three-way market.
 #: This read serves a database before Alembic 0029, which has no ``last_seen_at``.
@@ -160,7 +160,7 @@ CURRENT_ROW_MAX_AGE_S = 1200
 #: column has ``None`` there.
 SideColumns = tuple[tuple[MarketSide, str, str | None], ...]
 
-#: Each market KIND's sides (``pipeline.odds_provider.GAME_MARKET_KIND``).
+#: Each market KIND's sides (``betting.markets.GAME_MARKET_KIND``).
 #: A three-way market prices the tie as a third side. The yes / no market ("a
 #: run in the first inning") is stored as over / under at line 0.5.
 _KIND_SIDE_COLUMNS: dict[str, SideColumns] = {
@@ -301,7 +301,7 @@ def _stored_rows_by_market(
     counts (:func:`_latest_pregame_rows`).
     That row is kept when its book is one a bettor can use, every price and
     line of its market is present, no price is 0 (no such American price) and
-    the load guard (:func:`pipeline.odds_row_guard.check_row`) passes it. Each
+    the load guard (:func:`betting.validate.check_row`) passes it. Each
     market's list is sorted by :func:`_graded_order`: the first row is the
     graded book's.
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from pipeline.odds_provider import FULL_GAME_MARKET_TYPES, GAME_MARKET_KIND, GAME_MARKET_TYPES
+from betting.markets import FULL_GAME_MARKET_TYPES, GAME_MARKET_KIND, GAME_MARKET_TYPES
 from simulation.prop_validation import (
     BOXSCORE_BATTER_PROPS,
     BOXSCORE_PITCHER_PROPS,

@@ -36,22 +36,23 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from tests.script_loader import load_script
+
+import betting.history
 
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import betting.validate as odds_row_guard
 import pipeline.live.ingestion.constants as live_constants
-import pipeline.odds_row_guard as odds_row_guard
-from pipeline.live.ingestion.closing_rows import (
+from betting.load import (
     closing_candidates,
     closing_hash,
     promote_closing_game_rows,
     promote_closing_prop_rows,
 )
+from betting.markets import GAME_MARKET_KIND, GAME_MARKET_TYPES  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline, pregame_odds_cadence_s
-from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_TYPES  # noqa: E402
 
 GAME_PK = 776465
 SCHEDULED_START = datetime(2026, 10, 9, 23, 5, tzinfo=UTC)
@@ -791,7 +792,7 @@ class TestPregameCadence:
 
 
 def _load_loader() -> Any:
-    return load_script("load_historical_odds", module_name="load_historical_odds_closing_rows")
+    return betting.history
 
 
 class TestLoaderGameDates:
@@ -928,7 +929,7 @@ class TestNightlyScript:
         proc, record = _run_script(tmp_path, ODDS_PROVIDER="BettingPros", ODDS_API_KEY="k")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         args = record.read_text(encoding="utf-8").split()
-        assert args[0].endswith("scripts/load_historical_odds.py")
+        assert args[:2] == ["-m", "betting.history"]
         today = datetime.now(UTC).date()
         d1, d2 = today - timedelta(days=1), today - timedelta(days=2)
         i = args.index("--game-dates")

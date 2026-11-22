@@ -1,7 +1,10 @@
-"""The betting layer: it compares the simulator's probabilities with the market's prices.
+"""The betting layer: the odds from BettingPros, their checks and load, and the pricing.
 
-The package has one module, :mod:`betting.bet_signal`. It turns a book's
-American odds into implied and no-vig probabilities, compares them with the
-simulator's probabilities (the edge and the expected value), and gates, stakes
-and ranks the sides worth a bet. Import each name from that module.
+- :mod:`betting.markets`: our market names and book labels.
+- :mod:`betting.bettingpros.match_games`: find BettingPros' event for an MLB game.
+- :mod:`betting.bettingpros.fetch_odds`: get the odds and build one row per book.
+- :mod:`betting.validate`: the checks a row must pass before it is stored.
+- :mod:`betting.load`: write the rows, and stamp the closing line.
+- :mod:`betting.history`: load the odds of finished games (the nightly pass, backfills).
+- :mod:`betting.pricing`: no-vig probabilities, the edge, the expected value, the signal.
 """

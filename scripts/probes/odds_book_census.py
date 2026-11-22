@@ -8,7 +8,7 @@ WHY THIS EXISTS
 The re-load stores one odds row per book (``book = 'bp:<id>'``). Before it runs,
 this probe reads a few hundred games from the vendor through the provider's
 own by-book methods (``BettingProsOddsProvider.get_odds_by_book`` /
-``get_prop_odds_by_book``) and the load guard (``pipeline/odds_row_guard.py``),
+``get_prop_odds_by_book``) and the load guard (``betting/validate.py``),
 exactly as the loader will, and writes nothing to the database. It answers
 three questions the plan (§8 step 3) makes a gate:
 
@@ -119,18 +119,20 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.bettingpros.markets import (
+from betting.bettingpros.fetch_odds import (
     F5_EXCLUDED_BOOKS,
     F5_TWIN_MARKETS,
     TWIN_MONEYLINE_PRICE_TOLERANCE,
     TWIN_PRICE_TOLERANCE,
+    BettingProsOddsProvider,
+    _book_line,
+    _opt_float,
+    _opt_int,
     f5_excluded_markets,
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from pipeline.bettingpros.parsing import _book_line, _opt_float, _opt_int
-from pipeline.bettingpros.provider import BettingProsOddsProvider
-from pipeline.odds_provider import (  # noqa: E402
+from betting.markets import (  # noqa: E402
     GAME_MARKET_KIND,
     GAME_ODDS_FIELDS,
     GRADED_BOOK_PREFERENCE,
@@ -141,7 +143,7 @@ from pipeline.odds_provider import (  # noqa: E402
     book_label,
     is_bettable,
 )
-from pipeline.odds_row_guard import (  # noqa: E402
+from betting.validate import (  # noqa: E402
     F5_TIE_IMPLIED_MAX,
     F5_TOTAL_LINE_MAX,
     F5_WIN_OR_TIE_SUM_MAX,

@@ -1,72 +1,359 @@
-"""The event match: an MLB game resolved to its BettingPros event.
+"""Find BettingPros' event for an MLB game.
 
-The module also holds the caches and the paged read of an event's offers.
-
-The match:
-
-* The matcher reads the PLAYED schedule entry: the first one not postponed.
-  It also searches the vendor slate of each later entry, because the vendor
-  may move a suspended game to its resumption date.
-* An event's gap is its distance to the nearest start of the game.
-  A gap of 2 hours or less matches.
-* The single-event rule takes a gap of up to 12 hours. The event must be the
-  two teams' only event on the played date, and the game is not a
-  double-header. The vendor kept another start time for the game.
-* Game 2 of a straight double-header has a placeholder start, 5 minutes after
-  game 1's. The matcher takes the later of the two teams' two events. The
-  rows measure their stamps from that event's start.
-* Every row of a made-up game carries ``postponed_start``. The load guard
-  refuses a price stamped no later than 15 minutes after it.
-
-The caches:
-
-* One ``/offers`` response for an (event, market) serves every player, every
-  book and both line types. The offers cache keeps it for one time-to-live
-  (TTL), so a game costs one read per market, not one per player and book.
-* A per-date cache keeps each date's ``/events`` list for one TTL.
-* The TTL is 30 seconds by default, half the live pipeline's 60-second fetch
-  cycle, so each cycle sees a fresh line. ``ODDS_OFFERS_CACHE_TTL_S`` sets it,
-  and 0 turns the caches off.
-* Each store first drops every entry past the TTL. So a long-lived provider
-  holds at most one TTL's worth of payloads.
-* A found game, event or player name stays for the process lifetime.
-  A failed lookup stays for one TTL only, so a game BettingPros lists later
-  is found on a later call.
-* An ``/offers`` market is paged. A failure on page 1 raises. A failure on a
-  later page logs a warning and returns the pages in hand. Neither result is
-  cached.
-* Each caught read failure adds 1 to ``read_failures``. The loader uses the
-  count to keep a game that a vendor error cut short off its done-list.
+The module holds the HTTP client every BettingPros read uses (the retries and the
+caches), the MLB schedule read, and the match of a BettingPros event to an MLB game.
 """
 
 from __future__ import annotations
 
+import http.client
+import json
 import logging
-from collections.abc import Mapping
-from datetime import (
-    UTC,
-    date,
-    datetime,
-    timedelta,
-)
-from typing import Any
+import math
+import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Mapping
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, ClassVar, NamedTuple, TypeVar
 
-from pipeline.bettingpros.parsing import (
-    _K,
-    _V,
-    _normalize_name,
-    _parse_utc,
-)
-from pipeline.bettingpros.schedule import (
-    _MAX_EVENT_TIME_DELTA,
-    _MAX_SINGLE_EVENT_DELTA,
-    _lone_schedule,
-    _read_schedule,
-    _ScheduleInfo,
-)
-from pipeline.bettingpros.transport import _MAX_OFFER_PAGES, TransportMixin
+_K = TypeVar("_K")
 
-log = logging.getLogger("pipeline.bettingpros")
+
+_V = TypeVar("_V")
+
+
+def _parse_utc(value: str) -> datetime | None:
+    """Parse a UTC timestamp from either source as a naive datetime, or return ``None``.
+
+    The MLB schedule writes ``"2026-09-08T22:35:00Z"``.
+    BettingPros writes ``"2026-09-08 22:35:00"``, with no zone, but also in UTC.
+    So the naive datetimes from the two sources compare directly.
+    """
+    v = value.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(v, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _normalize_name(name: str) -> str:
+    """Return the name key: lower case, no accents or punctuation, single spaces."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
+    kept = "".join(c if c.isalnum() or c.isspace() else " " for c in ascii_only)
+    return " ".join(kept.lower().split())
+
+
+#: The largest gap between a game's start and its BettingPros event.
+#: A larger gap is no match, so the game never takes another game's prices.
+_MAX_EVENT_TIME_DELTA = timedelta(hours=2)
+
+
+#: The largest gap the single-event rule accepts. The vendor sometimes keeps
+#: a game's first start time after MLB moves it. For example, MLB moved game
+#: 745169 to 18:15Z, and the vendor's event stayed at 00:15Z.
+_MAX_SINGLE_EVENT_DELTA = timedelta(hours=12)
+
+
+class _ScheduleInfo(NamedTuple):
+    """The MLB schedule facts of one game, beyond the meta 4-tuple.
+
+    The meta 4-tuple is (official date, home name, away name, start).
+    Every time is naive UTC, as :func:`_parse_utc` gives it.
+    """
+
+    #: The vendor slates to search: the played date first, then the date of
+    #: each later entry that is not postponed (a suspended game's resumption).
+    slate_dates: tuple[str, ...]
+    #: The played entry's start, then each later start that is not postponed.
+    anchor_starts: tuple[datetime, ...]
+    #: The played entry's ``doubleHeader`` code ('N', 'Y', 'S'), or ``None``.
+    double_header: str | None
+    #: The start of the last postponed entry before the played one, or ``None``.
+    postponed_start: datetime | None
+    #: The played entry's position among the game's schedule entries (0 = first).
+    played_entry: int = 0
+    #: The number of schedule entries the game has.
+    n_entries: int = 1
+    #: True when every entry is postponed: the game was never played.
+    never_played: bool = False
+    #: The played entry's ``gameNumber`` (1, or 2 on a double-header), or ``None``.
+    game_number: int | None = None
+    #: The played entry's ``status.startTimeTBD``: MLB lists no real start.
+    start_tbd: bool = False
+
+    @property
+    def start_unknown(self) -> bool:
+        """True for game 2 of a straight double-header with no listed start.
+
+        MLB sets ``startTimeTBD`` on such a game. Its ``gameDate`` is a
+        placeholder: game 1's start plus 5 minutes.
+        """
+        return self.double_header == "Y" and self.game_number == 2 and self.start_tbd
+
+
+def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
+    """The schedule facts of a game with one entry.
+
+    The matcher uses them when the schedule cache holds nothing for the game.
+    """
+    anchors = () if game_dt is None else (game_dt,)
+    return _ScheduleInfo((date_str,), anchors, None, None)
+
+
+def _is_postponed(game: Mapping[str, Any]) -> bool:
+    """True when an MLB schedule entry is a postponed game.
+
+    The entry is postponed when ``detailedState`` starts with "Postponed" or
+    ``codedGameState`` is "D". A suspended game is not postponed: MLB marks
+    both of its entries "Final".
+    """
+    status = game.get("status") or {}
+    detailed = str(status.get("detailedState") or "")
+    return detailed.startswith("Postponed") or status.get("codedGameState") == "D"
+
+
+def _read_schedule(
+    data: Mapping[str, Any],
+) -> tuple[tuple[str, str, str, datetime | None], _ScheduleInfo]:
+    """The meta 4-tuple and the schedule facts of one ``schedule?gamePk=`` answer.
+
+    A made-up game has a postponed entry at the original start, then a
+    played entry. A suspended game has two "Final" entries: the first pitch
+    and the resumption. The PLAYED entry is the first entry that is not
+    postponed, or the first entry when every entry is postponed. The meta
+    comes from the played entry, so a suspended game keeps its original
+    first pitch.
+
+    Raises ``LookupError`` when the answer lists no entry. Raises ``KeyError``
+    when the played entry lacks a field the meta needs.
+    """
+    entries: list[tuple[Any, Mapping[str, Any]]] = [
+        (day.get("date"), game)
+        for day in data.get("dates") or []
+        for game in day.get("games") or []
+    ]
+    if not entries:
+        raise LookupError("the schedule lists no entry for the game")
+    played_i = next((i for i, (_d, g) in enumerate(entries) if not _is_postponed(g)), 0)
+    played = entries[played_i][1]
+    date_str = str(played["officialDate"])
+    home = str(played["teams"]["home"]["team"]["name"])
+    away = str(played["teams"]["away"]["team"]["name"])
+    game_dt = _parse_utc(str(played.get("gameDate", "")))
+    slate_dates = [date_str]
+    anchors = [] if game_dt is None else [game_dt]
+    for day_date, game in entries[played_i + 1 :]:
+        if _is_postponed(game):
+            continue
+        for value in (day_date, game.get("officialDate")):
+            if value and str(value) not in slate_dates:
+                slate_dates.append(str(value))
+        resumed = _parse_utc(str(game.get("gameDate", "")))
+        if resumed is not None and resumed not in anchors:
+            anchors.append(resumed)
+    postponed_start: datetime | None = None
+    for _day_date, game in entries[:played_i]:
+        parsed = _parse_utc(str(game.get("gameDate", "")))
+        if parsed is not None:
+            postponed_start = parsed
+    double_header = played.get("doubleHeader")
+    game_number = played.get("gameNumber")
+    info = _ScheduleInfo(
+        slate_dates=tuple(slate_dates),
+        anchor_starts=tuple(anchors),
+        double_header=None if double_header is None else str(double_header),
+        postponed_start=postponed_start,
+        played_entry=played_i,
+        n_entries=len(entries),
+        never_played=_is_postponed(played),
+        game_number=game_number if isinstance(game_number, int) else None,
+        start_tbd=(played.get("status") or {}).get("startTimeTBD") is True,
+    )
+    return (date_str, home, away, game_dt), info
+
+
+class ProviderBase:
+    """The provider's settings and caches, declared once for every part of the provider.
+
+    Each part is a mixin: a class that adds methods to the provider class.
+    """
+
+    API_KEY_ENV: ClassVar[str]
+    MAX_RETRIES_ENV: ClassVar[str]
+    RETRY_WAIT_ENV: ClassVar[str]
+    DEFAULT_MAX_RETRIES: ClassVar[int]
+    DEFAULT_RETRY_WAIT_S: ClassVar[float]
+    RETRY_WAIT_CAP_S: ClassVar[float]
+    OFFERS_CACHE_TTL_ENV: ClassVar[str]
+    DEFAULT_OFFERS_CACHE_TTL_S: ClassVar[float]
+    _api_key: str | None
+    _timeout: float
+    _offers_cache_ttl_s: float
+    _clock: Callable[[], float]
+    _max_retries: int
+    _retry_wait_s: float
+    _retry_sleep: Callable[[float], None]
+    read_failures: int
+    _event_cache: dict[int, dict[str, Any]]
+    _game_meta_cache: dict[int, tuple[str, str, str, datetime | None]]
+    _game_schedule_cache: dict[int, _ScheduleInfo]
+    _player_name_cache: dict[int, str]
+    _failed_lookups: dict[tuple[str, int], tuple[float, None]]
+    _offers_cache: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]]
+    _events_by_date_cache: dict[str, tuple[float, list[dict[str, Any]]]]
+    _f5_logged: set[tuple[int, int, str]]
+
+
+log = logging.getLogger("betting.bettingpros")
+
+
+_BP_BASE = "https://api.bettingpros.com/v3"
+
+
+_MLB_BASE = "https://statsapi.mlb.com/api/v1"
+
+
+#: The error types a read may retry. ``OSError`` covers ``URLError``,
+#: ``HTTPError``, ``TimeoutError`` and ``ConnectionError``. It also covers the
+#: bare errors urllib does not wrap while it reads the body, such as an
+#: ``ssl.SSLError`` or an unreachable network. ``HTTPException`` covers
+#: ``RemoteDisconnected`` and ``IncompleteRead``. :func:`_is_transient`
+#: checks the status of an ``HTTPError``.
+_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (OSError, http.client.HTTPException)
+
+
+#: The statuses whose numeric ``Retry-After`` sets a floor on the wait.
+_RETRY_AFTER_STATUSES = frozenset({429, 503})
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """True when a failed read may succeed on a later attempt.
+
+    An HTTP 429 or 5xx and every network error are transient. Any other HTTP
+    status (a 4xx) is the server's final answer.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code if isinstance(exc.code, int) else 0
+        return code == 429 or code >= 500
+    return isinstance(exc, _RETRYABLE_ERRORS)
+
+
+def _retry_after_s(exc: BaseException) -> float | None:
+    """The numeric ``Retry-After`` of a 429 or 503, in seconds, or ``None``.
+
+    The function gives ``None`` for any other status, and for a header that
+    is absent, an HTTP date, negative or not finite.
+    """
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in _RETRY_AFTER_STATUSES:
+        return None
+    headers = exc.headers
+    raw = headers.get("Retry-After") if headers is not None else None
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def _log_target(url: str) -> str:
+    """The host and path of a URL, for a log line: no query string, no user part."""
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.hostname or ''}{parts.path}"
+
+
+class TransportMixin(ProviderBase):
+    """The provider's reads: one GET with the retry policy, for each API."""
+
+    # ----------------------------------------------------------------- HTTP
+    def set_retry_policy(self, max_retries: int, retry_wait_s: float) -> None:
+        """Set the number of retries of a transient read failure and the first wait.
+
+        ``max_retries`` is a whole number, 0 or more (0 means one attempt).
+        ``retry_wait_s`` is 0 or more seconds. Any other value raises
+        ``ValueError``.
+        """
+        if max_retries < 0 or int(max_retries) != max_retries:
+            raise ValueError(f"max_retries must be a whole number >= 0, not {max_retries!r}")
+        if not retry_wait_s >= 0:  # a NaN fails this test too
+            raise ValueError(f"retry_wait_s must be >= 0 seconds, not {retry_wait_s!r}")
+        self._max_retries = int(max_retries)
+        self._retry_wait_s = float(retry_wait_s)
+
+    def _retry_wait(self, retry: int, exc: BaseException) -> float:
+        """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc``.
+
+        The wait doubles per retry. A numeric ``Retry-After`` sets a floor.
+        :attr:`RETRY_WAIT_CAP_S` caps the wait.
+        """
+        # The exponent stops at 64: a larger one adds nothing under the cap.
+        wait = self._retry_wait_s * 2.0 ** min(retry - 1, 64)
+        retry_after = _retry_after_s(exc)
+        if retry_after is not None:
+            wait = max(wait, retry_after)
+        return min(wait, self.RETRY_WAIT_CAP_S)
+
+    def _describe_error(self, exc: BaseException, url: str) -> str:
+        """The error for a log line, with the URL's query and the API key taken out."""
+        text = f"{type(exc).__name__}: {exc}".replace(url, _log_target(url))
+        if self._api_key:
+            text = text.replace(self._api_key, "<api key>")
+        return text
+
+    def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
+        """GET ``url`` and decode its JSON body. Every vendor and MLB read uses it.
+
+        The method retries a transient failure up to ``max_retries`` times.
+        Each retry logs one INFO line without the query or the API key.
+        Any other failure raises at once. After the last retry, the original
+        error reaches the caller unchanged.
+        """
+        retry = 0
+        while True:
+            try:
+                req = urllib.request.Request(url, headers=headers or {})
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed hosts
+                    return json.loads(resp.read().decode("utf-8"))
+            except _RETRYABLE_ERRORS as exc:
+                if retry >= self._max_retries or not _is_transient(exc):
+                    raise
+                retry += 1
+                wait = self._retry_wait(retry, exc)
+                log.info(
+                    "BettingPros: %s failed on attempt %d of %d (%s); retrying in %.1f s",
+                    _log_target(url),
+                    retry,
+                    self._max_retries + 1,
+                    self._describe_error(exc, url),
+                    wait,
+                )
+                if isinstance(exc, urllib.error.HTTPError):
+                    exc.close()  # free the error response's connection before the next attempt
+                self._retry_sleep(wait)
+
+    def _bp_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        """GET a BettingPros v3 endpoint (the network seam stubbed in tests)."""
+        if not self._api_key:
+            raise RuntimeError(
+                f"BettingProsOddsProvider needs an API key — set {self.API_KEY_ENV}."
+            )
+        qs = urllib.parse.urlencode(params)
+        url = f"{_BP_BASE}/{path}?{qs}"
+        return self._http_get_json(
+            url, headers={"x-api-key": self._api_key, "Content-Type": "application/json"}
+        )
+
+    def _mlb_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        """GET an MLB Stats API endpoint (the network seam stubbed in tests)."""
+        qs = urllib.parse.urlencode(params)
+        url = f"{_MLB_BASE}/{path}?{qs}"
+        return self._http_get_json(url)
 
 
 class EventMatchMixin(TransportMixin):
@@ -426,87 +713,6 @@ class EventMatchMixin(TransportMixin):
         events = list(data.get("events", []))
         self._store(self._events_by_date_cache, date_str, events)
         return events
-
-    def _offers(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
-        """Every offer of one (event, market), from the offers cache while fresh.
-
-        Only a complete market is cached.
-        """
-        key = (int(event_id), int(market_id))
-        hit = self._offers_cache.get(key)
-        if hit is not None and self._is_fresh(hit[0]):
-            return hit[1]
-        offers, complete = self._fetch_offers_all_pages(event_id, market_id)
-        if complete:
-            self._store(self._offers_cache, key, offers)
-        return offers
-
-    def _fetch_offers_all_pages(
-        self, event_id: int, market_id: int
-    ) -> tuple[list[dict[str, Any]], bool]:
-        """GET every ``/offers`` page of one (event, market).
-
-        The vendor pages at 10 offers, so a batter market needs every page
-        to list every hitter. Returns ``(offers, complete)``. A failure on
-        page 1 raises. A failure on a later page logs a warning and returns
-        the offers in hand with ``complete=False``. A ``_pagination`` block
-        that is not a dict counts as one page.
-        """
-        params: dict[str, Any] = {"sport": "MLB", "market_id": market_id, "event_id": event_id}
-        data = self._bp_get("offers", params)
-        offers = list(data.get("offers", []))
-        pagination = data.get("_pagination")
-        total_pages = 1
-        if isinstance(pagination, dict):
-            try:
-                total_pages = int(pagination.get("total_pages") or 1)
-            except (TypeError, ValueError):
-                total_pages = 1
-        for page in range(2, min(total_pages, _MAX_OFFER_PAGES) + 1):
-            try:
-                more = self._bp_get("offers", {**params, "page": page})
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "BettingPros: offers page %d of %d failed (event %s, market %s); "
-                    "using the %d offers in hand: %s",
-                    page,
-                    total_pages,
-                    event_id,
-                    market_id,
-                    len(offers),
-                    exc,
-                )
-                self.read_failures += 1  # the market comes back partial
-                return offers, False
-            offers.extend(more.get("offers", []))
-        return offers, True
-
-    def _resolve_player_name(self, player_id: int) -> str | None:
-        """MLB ``player_id`` → normalized full name.
-
-        A found name stays cached for the process lifetime. A failure stays
-        for one time-to-live. A read that raised counts in ``read_failures``.
-        """
-        if player_id in self._player_name_cache:
-            return self._player_name_cache[player_id]
-        if self._failed_recently("player", player_id):
-            return None
-        name: str | None = None
-        read_done = False
-        try:
-            data = self._mlb_get(f"people/{player_id}", {})
-            read_done = True
-            full = data["people"][0]["fullName"]
-            name = _normalize_name(str(full))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("BettingPros: could not resolve player_id %s: %s", player_id, exc)
-            if not read_done:
-                self.read_failures += 1  # the player read failed
-        if name is None:
-            self._note_failed_lookup("player", player_id)
-        else:
-            self._player_name_cache[player_id] = name
-        return name
 
     # ------------------------------------------------ one row per book
     def _game_meta_fields(

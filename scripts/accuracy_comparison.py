@@ -64,7 +64,7 @@ HOW IT REUSES THE PLATFORM'S SEAMS
   factory ref (the path of ``api/routes/betting.py`` and
   ``scripts/validate_props.py``). The results build a ``GameSimSummary``, a
   ``WinProbability`` and a ``PropDistributionSet``.
-* The de-vig and the edge math: ``betting.bet_signal`` (``moneyline_edge_report``,
+* The de-vig and the edge math: ``betting.pricing`` (``moneyline_edge_report``,
   ``samples_over_under_edge_report``, ``prop_edge_report``,
   ``run_line_bet_cover_prob``, ``devig``, ``devig_one_sided``), fed the
   CLOSING quote.

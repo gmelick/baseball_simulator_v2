@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-scripts/load_historical_odds.py
+betting/history.py
 ===============================
 The historical odds loader. It backfills the OPENING and CLOSING betting lines
 of completed games into ``raw.game_odds`` / ``raw.prop_odds``, so the
@@ -38,9 +38,9 @@ Per Final game (ordered by game_pk for reproducibility), for each line type
     pitchers; the batter markets (``BATTER_PROP_STATS``: hits / home_runs /
     total_bases / rbis / singles / doubles / triples / runs / stolen_bases /
     hits_runs_rbis) only for non-pitchers. Both tuples come from
-    ``pipeline/odds_provider.py`` (the one source of the vocabulary).
+    ``betting/markets.py`` (the one source of the vocabulary).
 
-Before a row is written, the load guard (``pipeline/odds_row_guard.py``)
+Before a row is written, the load guard (``betting/validate.py``)
 checks it. A row with no price at all is skipped silently. A row that cannot
 be one bet (a missing side, spreads of different size, equal spreads priced
 like a pair, a first-five row with a first-inning shape, an over and an under
@@ -105,25 +105,25 @@ USAGE
     # image's copy (scripts/ is not bind-mounted) and the provider named:
     MSYS_NO_PATHCONV=1 docker compose run -d --name odds_load_2024 \
         -v "$PWD:/app" app \
-        python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
+        python -m betting.history --seasons 2024 --provider bettingpros
 
     # The crash-safe form the shell loop runs. --done-file skips the
     # games the file lists and appends each game once it is complete;
     # --retries / --retry-wait set the vendor-read retry policy (the values
     # shown are the defaults). Exit 1 = some game is incomplete (see above).
-    python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
+    python -m betting.history --seasons 2024 --provider bettingpros
         --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
 
     # In the app container, with a real provider configured:
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=… \
-        python scripts/load_historical_odds.py --seasons 2024 --max-games 200
-    python scripts/load_historical_odds.py --seasons 2023 2024            # game + prop
-    python scripts/load_historical_odds.py --seasons 2024 --no-props      # game odds only
+        python -m betting.history --seasons 2024 --max-games 200
+    python -m betting.history --seasons 2023 2024            # game + prop
+    python -m betting.history --seasons 2024 --no-props      # game odds only
 
     # A follow-up pass: fetch ONLY these eight prop markets for a season whose
     # other seven markets are already loaded. The game lines are skipped
     # (--no-game-odds); a re-run is idempotent through the odds_hash dedup.
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
+    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
         --seasons 2024 --no-game-odds
         --prop-stats singles doubles triples runs stolen_bases hits_runs_rbis
                      outs_recorded hits_allowed
@@ -132,12 +132,12 @@ USAGE
     # stops the run before any fetch); --line-types defaults to "opening closing".
 
     # One book only (a smoke run, or a top-up of one book's rows):
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
+    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
         --seasons 2024 --max-games 20 --book draftkings
 
     # The nightly closing pass (scripts/nightly_closing_lines.sh) loads
     # the closing rows of two official dates only, after the live marker ran:
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
+    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
         --seasons 2026 --line-types closing --game-dates 2026-10-08 2026-10-07
 
     # Every game market the book posts loads by default (owner ruling
@@ -146,7 +146,7 @@ USAGE
     # each side's full-game and first-five team total; first team to score;
     # a run in the first inning). --game-markets narrows the set the same way
     # --prop-stats does, e.g. a pass for the twelve segment and team markets:
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python scripts/load_historical_odds.py
+    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
         --seasons 2024 --no-props
         --game-markets f1_moneyline f5_moneyline f1_total f5_total f1_runline
                        f5_runline team_total_home team_total_away
@@ -182,43 +182,35 @@ import asyncio
 import logging
 import math
 import os
-import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import date, datetime
 from typing import Any
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from betting.load import DEFAULT_PROVIDER, ODDS_PROVIDER_ENV, odds_rows_by_book, prop_rows_by_book
 
 # The prop-market vocabulary is imported, never copied: the pitcher / batter
 # split routes which markets a player is asked for. The book vocabulary and the
 # by-book seam come from the same source.
-from pipeline.odds_provider import (  # noqa: E402
+from betting.markets import (
     BATTER_PROP_STATS,
     BOOK_IDS_BY_NAME,
-    DEFAULT_PROVIDER,
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
-    ODDS_PROVIDER_ENV,
     PITCHER_PROP_STATS,
     PROP_STATS,
     STORED_BOOK_FILTER_SQL,
     book_display_name,
     book_id_from_label,
     book_label,
-    odds_rows_by_book,
-    prop_rows_by_book,
     resolve_book,
 )
 
 # The load guard (pure; no I/O).
-from pipeline.odds_row_guard import RefusalTally, check_row  # noqa: E402
+from betting.validate import RefusalTally, check_row
+from pipeline.db_dsn import require_dsn  # noqa: E402
 
-log = logging.getLogger("load_historical_odds")
+log = logging.getLogger("betting.history")
 
 #: No default password. main() resolves a blank value through
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
@@ -232,7 +224,7 @@ KNOWN_LINE_TYPES: tuple[str, ...] = ("opening", "current", "closing")
 #: Every game market the book posts is persisted per line_type (one row each;
 #: owner ruling 2026-09-12, SIM-421): the three full-game markets plus the
 #: twelve segment and team markets. The vocabulary is imported from
-#: ``pipeline/odds_provider.py`` (``GAME_MARKET_TYPES``); ``--game-markets``
+#: ``betting/markets.py`` (``GAME_MARKET_TYPES``); ``--game-markets``
 #: narrows it for a follow-up pass.
 
 #: The offers-cache time-to-live this OFFLINE job applies when
@@ -935,7 +927,7 @@ def _written_by_book_summary(written_by_book: Mapping[str, int]) -> str:
 async def run(args: argparse.Namespace) -> int:
     import asyncpg
 
-    from pipeline.odds_provider import get_odds_provider
+    from betting.load import get_odds_provider
 
     seasons = sorted({int(s) for s in args.seasons})
     # The market subset and line types are validated here so a bad

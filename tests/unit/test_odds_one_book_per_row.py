@@ -4,11 +4,11 @@ These tests drive the build plan's tests 1-13
 (``docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`` §7) plus the
 pieces they rest on:
 
-  * the book vocabulary in ``pipeline/odds_provider.py`` (labels, kinds, names,
+  * the book vocabulary in ``betting/markets.py`` (labels, kinds, names,
     the graded-book preference, the SQL helpers) and the by-book protocol seam;
   * the BettingPros provider's one-row-per-book reads, the opener's row, the
     stamps, the first-five exclusions and the one-row methods on top;
-  * the load guard (``pipeline/odds_row_guard.py``) and its tally;
+  * the load guard (``betting/validate.py``) and its tally;
   * migration 0028, and migration 0031 (SIM-582: the archives' ``last_seen_at``).
 
 No network and no database. The provider's ``_bp_get`` / ``_mlb_get`` seams are
@@ -29,30 +29,28 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros.markets import (
+from betting.bettingpros.fetch_odds import (
     F5_EXCLUDED_BOOKS,
     F5_EXCLUDED_MARKETS,
     F5_TWIN_MARKETS,
     TWIN_MONEYLINE_PRICE_TOLERANCE,
     TWIN_PRICE_TOLERANCE,
+    BettingProsOddsProvider,
+    _book_line,
+    _usable,
     f5_excluded_markets,
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from pipeline.bettingpros.parsing import _book_line, _usable
-from pipeline.bettingpros.provider import BettingProsOddsProvider
-from pipeline.live.ingestion.mock_odds import MockOddsAPI
-from pipeline.odds_provider import (
+from betting.load import OddsProvider, odds_rows_by_book, prop_rows_by_book
+from betting.markets import (
     GAME_ODDS_FIELDS,
     GRADED_BOOK_PREFERENCE,
-    OddsProvider,
     book_kind,
     graded_book_labels,
     is_bettable,
-    odds_rows_by_book,
-    prop_rows_by_book,
 )
-from pipeline.odds_row_guard import (
+from betting.validate import (
     CLOSING_STAMP_GRACE,
     F5_TIE_IMPLIED_MAX,
     F5_TOTAL_LINE_MAX,
@@ -68,6 +66,7 @@ from pipeline.odds_row_guard import (
     check_row,
     implied_probability,
 )
+from pipeline.live.ingestion.mock_odds import MockOddsAPI
 
 _ROOT = Path(__file__).resolve().parents[2]
 _FIX = _ROOT / "tests" / "fixtures" / "bettingpros"
@@ -493,7 +492,7 @@ class TestOneRowPerBook:
         # listed sportsbook is on the list since 2026-09-29, so the test takes
         # PartyCasino (27) off it.
         monkeypatch.setattr(
-            "pipeline.bettingpros.provider.GRADED_BOOK_PREFERENCE",
+            "betting.bettingpros.fetch_odds.GRADED_BOOK_PREFERENCE",
             tuple(b for b in GRADED_BOOK_PREFERENCE if b != 27),
         )
         offers = _offers(
@@ -1244,7 +1243,7 @@ class TestFirstFiveExclusions:
 
     def test_the_moneyline_exclusion_is_neither_applied_nor_logged(self, caplog) -> None:
         provider = _Synthetic(_dk_f5_payloads(), game_date="2025-06-01")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
+        with caplog.at_level(logging.INFO, logger="betting.bettingpros"):
             for market in ("f5_moneyline", "f5_runline", "f5_total"):
                 provider.get_odds_by_book(1, line_type="closing", market_type=market)
         dated = [r.getMessage() for r in caplog.records if "excluded from" in r.getMessage()]
@@ -1350,7 +1349,7 @@ class TestFirstFiveExclusions:
                 return super()._bp_get(path, params)
 
         provider = _FlakyFirstInning(payloads, game_date="2024-08-14")
-        with caplog.at_level(logging.WARNING, logger="pipeline.bettingpros"):
+        with caplog.at_level(logging.WARNING, logger="betting.bettingpros"):
             for line_type in ("closing", "opening", "current"):
                 assert (
                     provider.get_odds_by_book(1, line_type=line_type, market_type="f5_runline")
@@ -1691,7 +1690,7 @@ class TestFirstFiveExclusions:
 
     def test_each_exclusion_is_logged_once(self, caplog) -> None:
         provider = _Synthetic(_f5_payloads(dk=(-1.5, 280, -1.5, 150)), game_date="2025-06-01")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
+        with caplog.at_level(logging.INFO, logger="betting.bettingpros"):
             for _ in range(3):
                 provider.get_odds_by_book(1, line_type="closing", market_type="f5_runline")
         messages = [
@@ -1742,7 +1741,7 @@ class TestFirstFiveExclusions:
             ),
         )
         provider = _Synthetic({283: offers}, game_date="2025-06-01")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
+        with caplog.at_level(logging.INFO, logger="betting.bettingpros"):
             closing = provider.get_odds_by_book(1, line_type="closing", market_type="f5_runline")
             opening = provider.get_odds_by_book(1, line_type="opening", market_type="f5_runline")
         assert [r["book"] for r in closing] == ["bp:19"], case
@@ -1758,7 +1757,7 @@ class TestFirstFiveExclusions:
         # Before the date nothing is excluded and nothing is logged.
         caplog.clear()
         before = _Synthetic({283: offers}, game_date="2025-02-28")
-        with caplog.at_level(logging.INFO, logger="pipeline.bettingpros"):
+        with caplog.at_level(logging.INFO, logger="betting.bettingpros"):
             before.get_odds_by_book(1, line_type="closing", market_type="f5_runline")
         assert not any("excluded from" in r.getMessage() for r in caplog.records), case
 

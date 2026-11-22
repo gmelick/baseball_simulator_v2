@@ -3,7 +3,7 @@
 These tests drive the writer half of the build plan
 (``docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`` §5.4, test 14):
 
-  * the historical loader (``scripts/load_historical_odds.py``) reads every
+  * the historical loader (``betting/history.py``) reads every
     book's row of an offer, drops the empty rows, runs the load guard, sends
     the kept rows in ONE batch, and counts the refusals and the written rows by
     book; ``--book`` restricts a run to one book; the resume query counts only
@@ -39,9 +39,21 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import scripts.load_historical_odds as loader
 
-from pipeline.bettingpros.provider import BettingProsOddsProvider
+import betting.history as loader
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.load import (
+    _GAME_ODDS_INSERT_SQL,
+    _PROP_ODDS_INSERT_SQL,
+    _stamp_param,
+    game_odds_insert_args,
+    insert_game_odds_rows,
+    insert_prop_odds_rows,
+    prop_odds_insert_args,
+    register_odds_provider,
+)
+from betting.markets import GAME_MARKET_TYPES, GAME_ODDS_FIELDS, PITCHER_PROP_STATS
+from betting.validate import RefusalTally
 from pipeline.etl.opening_line_job import OpeningLineJob
 from pipeline.live import live_ingestion_pipeline as live
 from pipeline.live.ingestion.constants import (
@@ -54,26 +66,12 @@ from pipeline.live.ingestion.constants import (
 )
 from pipeline.live.ingestion.mlb_websocket import ConnectionManager
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
-from pipeline.live.ingestion.odds_rows import (
-    _GAME_ODDS_INSERT_SQL,
-    _PROP_ODDS_INSERT_SQL,
+from pipeline.live.ingestion.odds_cycle import (
     _json_default,
     _jsonable_odds,
     _odds_facts_may_be_stale,
-    _stamp_param,
-    game_odds_insert_args,
-    insert_game_odds_rows,
-    insert_prop_odds_rows,
-    prop_odds_insert_args,
 )
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-from pipeline.odds_provider import (
-    GAME_MARKET_TYPES,
-    GAME_ODDS_FIELDS,
-    PITCHER_PROP_STATS,
-    register_odds_provider,
-)
-from pipeline.odds_row_guard import RefusalTally
 
 # ===========================================================================
 # Synthetic BettingPros payloads
@@ -371,7 +369,7 @@ class TestLoaderBatchesAndGuards:
         # The lines carry 20:11:43; a 19:30 start puts them 42 minutes after it.
         rec = _BatchRecorder()
         tally = RefusalTally()
-        caplog.set_level(logging.INFO, logger="load_historical_odds")
+        caplog.set_level(logging.INFO, logger="betting.history")
         written = await loader._load_game_odds(
             _every_payload(start=datetime(2025, 9, 3, 19, 30)),
             rec.game,
@@ -438,7 +436,7 @@ class TestLoaderBatchesAndGuards:
                 raise RuntimeError("db hiccup")
             return len(rows)
 
-        caplog.set_level(logging.WARNING, logger="load_historical_odds")
+        caplog.set_level(logging.WARNING, logger="betting.history")
         by_book: Counter[str] = Counter()
         written = await loader._load_game_odds(
             _every_payload(),
@@ -724,7 +722,7 @@ class TestLoaderRefusesTheImplicitMock:
         monkeypatch.delenv("ODDS_PROVIDER", raising=False)
         monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "0")
         monkeypatch.setattr(loader, "_fetch_final_games", _games)
-        caplog.set_level(logging.ERROR, logger="load_historical_odds")
+        caplog.set_level(logging.ERROR, logger="betting.history")
         assert await loader.run(loader.parse_args(["--seasons", "2024"])) == 2
         assert touched == []
         assert "--provider bettingpros" in caplog.text
@@ -774,7 +772,7 @@ class TestLoaderRunSummary:
         monkeypatch.setattr(loader, "_fetch_final_games", _games)
         monkeypatch.setattr(loader, "_fetch_lineup_players", _players)
         monkeypatch.setattr(loader, "_build_persisters", lambda dsn, pool: (rec.game, rec.prop))
-        caplog.set_level(logging.INFO, logger="load_historical_odds")
+        caplog.set_level(logging.INFO, logger="betting.history")
         args = loader.parse_args(
             [
                 "--seasons",
@@ -856,7 +854,7 @@ class TestLoaderDoneFile:
         monkeypatch.setattr(loader, "_fetch_final_games", _games)
         monkeypatch.setattr(loader, "_fetch_lineup_players", _players)
         monkeypatch.setattr(loader, "_build_persisters", lambda dsn, pool: (rec.game, rec.prop))
-        caplog.set_level(logging.INFO, logger="load_historical_odds")
+        caplog.set_level(logging.INFO, logger="betting.history")
         args = loader.parse_args(
             [
                 "--seasons",

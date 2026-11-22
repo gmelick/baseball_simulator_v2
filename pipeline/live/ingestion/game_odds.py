@@ -12,20 +12,18 @@ from datetime import (
 )
 from typing import Any
 
-from pipeline.live.ingestion.base import PipelineBase
-from pipeline.live.ingestion.closing_rows import promote_closing_game_rows
-from pipeline.live.ingestion.constants import PROP_FETCH_CADENCE_S
-from pipeline.live.ingestion.odds_rows import (
+from betting.load import (
     _GAME_ODDS_INSERT_SQL,
     _game_row_has_odds,
     _odds_hash,
     game_odds_insert_args,
     insert_game_odds_rows,
-)
-from pipeline.odds_provider import (
-    GAME_MARKET_TYPES,
     odds_rows_by_book,
+    promote_closing_game_rows,
 )
+from betting.markets import GAME_MARKET_TYPES
+from pipeline.live.ingestion.base import PipelineBase
+from pipeline.live.ingestion.constants import PROP_FETCH_CADENCE_S
 
 log = logging.getLogger("live_ingestion")
 

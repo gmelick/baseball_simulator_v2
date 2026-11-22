@@ -60,7 +60,7 @@ for p in (str(_ROOT), str(_ROOT / "scripts")):
 import numpy as np  # noqa: E402
 from sim_stats import _FACTORY, _resolve, open_sim_duckdb, sim_kwargs_from_state  # noqa: E402
 
-from pipeline.odds_provider import (  # noqa: E402
+from betting.markets import (  # noqa: E402
     STORED_BOOK_FILTER_SQL,
     bettable_labels,
     graded_book_labels,

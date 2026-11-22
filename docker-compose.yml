@@ -432,6 +432,7 @@ services:
       # Comment out for a production-like build test
       - ./api:/app/api
       - ./pipeline:/app/pipeline
+      - ./betting:/app/betting
       - ./similarity:/app/similarity
       # SIM-375: mount the real Phase-5 simulation package (not the dead
       # ``simulator`` stub) so the Monte-Carlo loop/runner code hot-reloads in dev.
@@ -519,6 +520,7 @@ services:
       start_period: 90s
     volumes:
       - ./pipeline:/app/pipeline
+      - ./betting:/app/betting
       - ./db:/app/db
       - ./api:/app/api
       - ./simulation:/app/simulation
@@ -566,6 +568,7 @@ services:
       - duckdb_data:/data
       - ./api:/app/api
       - ./pipeline:/app/pipeline
+      - ./betting:/app/betting
       - ./similarity:/app/similarity
       - ./simulation:/app/simulation
       - ./db:/app/db

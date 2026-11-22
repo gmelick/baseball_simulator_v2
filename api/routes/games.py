@@ -101,8 +101,8 @@ from api.schemas import (
     StateAtPitchModel,
 )
 from api.serialization import to_jsonable
-from betting.bet_signal import MarketSide, OddsQuote
-from betting.bet_signal import prop_edge_report as _prop_edge_report
+from betting.pricing import MarketSide, OddsQuote
+from betting.pricing import prop_edge_report as _prop_edge_report
 from db import sim_store
 from simulation.batch_runner import BatchRunner, GameSpec
 from simulation.flags import read_str
@@ -1546,7 +1546,7 @@ _VALID_PROP_NAMES: frozenset[str] = frozenset(ALL_PROPS)
         "prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  "
         "Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply "
         "``line``, ``over_ml``, and ``under_ml`` to also get a full "
-        "``edge_report`` via ``betting.bet_signal`` (SIM-339).  ``bet_side`` controls "
+        "``edge_report`` via ``betting.pricing`` (SIM-339).  ``bet_side`` controls "
         "which side's edge is computed (``'over'`` or ``'under'``, default "
         "``'over'``).  Valid props (SIM-421 added the market's other lines): "
         "K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, "

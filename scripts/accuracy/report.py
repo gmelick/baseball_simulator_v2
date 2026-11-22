@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from pipeline.odds_provider import book_display_name, book_label
+from betting.markets import book_display_name, book_label
 from simulation.prop_validation import OUTCOME_PROB_EPS, binary_brier, binary_log_loss
 
 from .confidence import (

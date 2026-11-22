@@ -28,7 +28,8 @@ import api.routes.betting_pricing as pricing
 import api.routes.betting_stored_odds as stored_odds
 import api.routes.games as games_mod
 from api.routes.betting import router as betting_router
-from betting.bet_signal import (
+from betting.markets import BOOK_KIND, bettable_labels
+from betting.pricing import (
     MarketSide,
     OddsQuote,
     devig,
@@ -36,7 +37,6 @@ from betting.bet_signal import (
     implied_prob_from_american,
     moneyline_edge_report,
 )
-from pipeline.odds_provider import BOOK_KIND, bettable_labels
 from simulation.game_state import GameState
 
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"

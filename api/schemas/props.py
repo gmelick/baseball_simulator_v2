@@ -150,7 +150,7 @@ class PropEdgeResponse(_ApiModel):
     (half-integer line: over + under == 1; integer line: a push mass is
     excluded from both).  When ``over_ml`` and ``under_ml`` are also supplied
     the ``edge_report`` is populated via
-    :func:`betting.bet_signal.prop_edge_report`; the side evaluated is
+    :func:`betting.pricing.prop_edge_report`; the side evaluated is
     determined by the ``bet_side`` query param (``"over"`` or ``"under"``).
 
     ``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use

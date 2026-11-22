@@ -15,10 +15,8 @@ import numpy as np
 import pytest
 from tests.script_loader import load_script
 
-from betting.bet_signal import devig
-from pipeline.odds_provider import (
-    GRADED_BOOK_PREFERENCE,
-)
+from betting.markets import GRADED_BOOK_PREFERENCE
+from betting.pricing import devig
 
 sharp = load_script("book_sharpness")
 

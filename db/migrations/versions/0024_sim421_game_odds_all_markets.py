@@ -11,7 +11,7 @@ WHAT CHANGES
 ============
 ``raw.game_odds.market_type`` carried a CHECK constraint over three values
 (moneyline, runline, total). This migration replaces it with the same
-constraint over the 15 values in ``pipeline/odds_provider.py``
+constraint over the 15 values in ``betting/markets.py``
 ``GAME_MARKET_TYPES``: the three full-game markets plus the twelve segment and
 team markets BettingPros posts on every game — the first-inning and
 first-five-innings moneyline, total and run line; each side's full-game and
@@ -30,7 +30,7 @@ Postgres cannot restore the three-value constraint while a row holds one of
 the twelve new values. The downgrade therefore DELETES every ``raw.game_odds``
 row whose ``market_type`` is one of the twelve new markets, drops ``draw_ml``,
 then restores the three-value constraint. Those quotes are gone after a
-downgrade; re-load them with ``scripts/load_historical_odds.py --game-markets
+downgrade; re-load them with ``python -m betting.history --game-markets
 ...`` after the next upgrade.
 """
 

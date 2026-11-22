@@ -76,10 +76,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from betting.bet_signal import (  # noqa: E402
-    devig,
-)
-from pipeline.odds_provider import (  # noqa: E402
+from betting.markets import (  # noqa: E402
     GAME_MARKET_KIND,
     GRADED_BOOK_PREFERENCE,
     ODDS_ROW_VERSION,
@@ -89,6 +86,7 @@ from pipeline.odds_provider import (  # noqa: E402
     book_kind,
     book_label,
 )
+from betting.pricing import devig  # noqa: E402
 from simulation.game_market_distributions import SegmentRuns, market_outcome  # noqa: E402
 from simulation.prop_validation import OUTCOME_PROB_EPS  # noqa: E402
 

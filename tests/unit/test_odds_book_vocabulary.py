@@ -1,14 +1,14 @@
 """The odds book vocabulary: the stored book labels, the kinds, the bettable books and the graded-book order.
 
 The one-row-per-book storage (the one-book-per-row work, SIM-555) names each stored row's book as
-``bp:<id>``. These tests pin the vocabulary in ``pipeline/odds_provider.py`` that every writer and
+``bp:<id>``. These tests pin the vocabulary in ``betting/markets.py`` that every writer and
 reader shares: the label round trip, each id's kind, which kinds a bettor can take, and the order
 in which the accuracy comparison picks its graded book.
 """
 
 from __future__ import annotations
 
-from pipeline.odds_provider import (
+from betting.markets import (
     BETTABLE_KINDS,
     BOOK_IDS_BY_NAME,
     BOOK_KIND,
@@ -157,7 +157,7 @@ class TestBookVocabulary:
         assert FULL_GAME_MARKET_TYPES == ("moneyline", "runline", "total")
 
     def test_the_exports(self) -> None:
-        from pipeline import odds_provider
+        from betting import load, markets
 
         for name in (
             "BOOK_NAMES",
@@ -178,7 +178,7 @@ class TestBookVocabulary:
             "graded_book_labels",
             "bettable_labels",
             "graded_row_order_sql",
-            "odds_rows_by_book",
-            "prop_rows_by_book",
         ):
-            assert name in odds_provider.__all__, name
+            assert name in markets.__all__, name
+        assert callable(load.odds_rows_by_book)
+        assert callable(load.prop_rows_by_book)

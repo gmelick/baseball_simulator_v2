@@ -21,7 +21,7 @@ absent from ``_SIM_TABLES`` — the queries below filter on
 
 Two tests also read the CHECK constraints that migrations 0022 and 0024 widen
 (the fifteen prop markets and the fifteen game markets).  They compare the
-applied constraint to the vocabulary in ``pipeline/odds_provider.py``.
+applied constraint to the vocabulary in ``betting/markets.py``.
 
 These tests run against the session-scoped testcontainers PostgreSQL instance
 spun up in conftest.py — migrations are applied once per session before any
@@ -41,7 +41,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
-from pipeline.odds_provider import GAME_MARKET_TYPES, PROP_STATS
+from betting.markets import GAME_MARKET_TYPES, PROP_STATS
 from tests.integration.conftest import assert_table_exists
 from tests.script_loader import load_script
 
@@ -360,7 +360,7 @@ class TestSchemaMigrations:
     # file's TEXT.  A constraint that fails to apply, or drifts from the code's
     # vocabulary, passes them.  The two tests below read the constraint the
     # database enforces.  They compare it to the one source of the vocabulary,
-    # ``pipeline/odds_provider.py``.
+    # ``betting/markets.py``.
 
     def test_sim421_prop_odds_check_matches_the_code_vocabulary(
         self, pg_connection: sa.Connection
@@ -374,7 +374,7 @@ class TestSchemaMigrations:
         assert found == set(PROP_STATS), (
             f"raw.prop_odds.prop_stat CHECK drift — missing: {sorted(set(PROP_STATS) - found)}, "
             f"unexpected: {sorted(found - set(PROP_STATS))}. Migration 0022 and "
-            "PROP_STATS in pipeline/odds_provider.py must list the same markets."
+            "PROP_STATS in betting/markets.py must list the same markets."
         )
 
     def test_sim421_game_odds_check_matches_the_code_vocabulary(
@@ -390,7 +390,7 @@ class TestSchemaMigrations:
             "raw.game_odds.market_type CHECK drift — missing: "
             f"{sorted(set(GAME_MARKET_TYPES) - found)}, "
             f"unexpected: {sorted(found - set(GAME_MARKET_TYPES))}. Migration 0024 and "
-            "GAME_MARKET_TYPES in pipeline/odds_provider.py must list the same markets."
+            "GAME_MARKET_TYPES in betting/markets.py must list the same markets."
         )
 
         row = pg_connection.execute(

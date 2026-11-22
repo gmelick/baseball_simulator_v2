@@ -67,7 +67,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.odds_provider import (  # noqa: E402
+from betting.markets import (  # noqa: E402
     GAME_MARKET_SEGMENT,
     bettable_labels,
     graded_row_order_sql,
@@ -102,7 +102,7 @@ from accuracy.pricing import (  # noqa: E402
 from accuracy.records import RUN_LINE_MARKET_TYPES, AccuracyRecord  # noqa: E402
 from accuracy.report import aggregate_accuracy_comparison  # noqa: E402
 
-from betting.bet_signal import run_line_is_pair  # noqa: E402
+from betting.pricing import run_line_is_pair  # noqa: E402
 
 
 class RescoreRefused(ValueError):

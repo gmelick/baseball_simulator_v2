@@ -29,7 +29,7 @@ only when the away spread is the negative of the home spread (home -1.5 / away
 +1.5); the two prices then de-vig against each other. Otherwise the book
 listed two separate bets, such as home -1.5 / away -1.5, and each bet prices
 from its own price over the book's two-way margin: the game's total, then its
-moneyline, then a flat 1.05 (``betting.bet_signal.devig_one_sided``; the run
+moneyline, then a flat 1.05 (``betting.pricing.devig_one_sided``; the run
 lines scored by shape, SIM-549). Those reference prices are the injected
 over_ml / under_ml and home_ml / away_ml, else the mock's, so an injected run
 line can rest on the mock's total. Every run-line report carries its own
@@ -38,7 +38,7 @@ out, it mirrors an injected ``run_line`` (a pair) or takes the provider's.
 
 THE FIFTEEN GAME MARKETS
 ------------------------
-The routes price every market in ``pipeline.odds_provider.GAME_MARKET_TYPES``
+The routes price every market in ``betting.markets.GAME_MARKET_TYPES``
 by default; ``?markets=`` narrows them. The three full-game markets keep their
 labels (``moneyline``, ``total``, ``run_line``). The twelve segment and team
 markets (the first-inning and first-five moneyline, total and run line; each
@@ -76,7 +76,15 @@ from api.routes.betting_stored_odds import (
     _stored_reference_margin,
     _StoredMarket,
 )
-from betting.bet_signal import (
+from betting.markets import (
+    FULL_GAME_MARKET_TYPES,
+    GAME_MARKET_KIND,
+    GAME_MARKET_NAMES,
+    GAME_MARKET_SEGMENT,
+    GAME_MARKET_TYPES,
+    book_display_name,
+)
+from betting.pricing import (
     EdgeReport,
     MarketSide,
     OddsQuote,
@@ -91,14 +99,6 @@ from betting.bet_signal import (
     run_line_is_pair,
     samples_over_under_edge_report,
     three_way_edge_report,
-)
-from pipeline.odds_provider import (
-    FULL_GAME_MARKET_TYPES,
-    GAME_MARKET_KIND,
-    GAME_MARKET_NAMES,
-    GAME_MARKET_SEGMENT,
-    GAME_MARKET_TYPES,
-    book_display_name,
 )
 from simulation.game_market_distributions import (
     SegmentRuns,

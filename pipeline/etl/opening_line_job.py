@@ -35,7 +35,7 @@ loader does, and the readers keep only the bettable books. When the two sides
 name two openers the provider gives an empty row, and the job writes nothing:
 an empty row would break the NOT NULL ``raw.prop_odds.line`` and abort the
 run, or store an all-empty game row that blocks tomorrow's retry. Every
-non-empty row passes the load guard (``pipeline/odds_row_guard.py``) first; a
+non-empty row passes the load guard (``betting/validate.py``) first; a
 refused row is logged and counted. The mock provider keeps its behaviour: its
 one ``consensus`` row per market.
 
@@ -72,7 +72,7 @@ import pathlib
 
 # The odds and prop lines come through the provider seam
 # (get_odds_provider), so ODDS_PROVIDER selects the source, as in
-# scripts/load_historical_odds.py. The seam's default is the deterministic
+# betting/history.py. The seam's default is the deterministic
 # MockOddsAPI.
 import sys
 from datetime import date, timedelta
@@ -86,22 +86,18 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # The live pipeline's writers: the one INSERT, the odds_hash, the dedup.
-from pipeline.live.ingestion.odds_rows import (  # noqa: E402
-    insert_game_odds_rows,
-    insert_prop_odds_rows,
-)
-from pipeline.odds_provider import (  # noqa: E402
-    BATTER_PROP_STATS,
-    GAME_ODDS_FIELDS,
-    PITCHER_PROP_STATS,
+from betting.load import (  # noqa: E402  # noqa: E402
     OddsProvider,
     get_odds_provider,
+    insert_game_odds_rows,
+    insert_prop_odds_rows,
     odds_rows_by_book,
     prop_rows_by_book,
 )
+from betting.markets import BATTER_PROP_STATS, GAME_ODDS_FIELDS, PITCHER_PROP_STATS  # noqa: E402
 
 # The load guard (pure; no I/O).
-from pipeline.odds_row_guard import RefusalTally, check_row  # noqa: E402
+from betting.validate import RefusalTally, check_row  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -123,7 +119,7 @@ GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 LOOKAHEAD_DAYS = 7  # how many days ahead to capture opening lines
 
 # The prop markets, aligned with the 15-value CHECK constraint
-# on raw.prop_odds (migration 0022). The lists live in pipeline/odds_provider.py
+# on raw.prop_odds (migration 0022). The lists live in betting/markets.py
 # (the single source); this job keeps its historical names as aliases.
 #
 # Pitcher props captured when a starter is announced (starting pitcher known at schedule time).

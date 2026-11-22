@@ -22,7 +22,7 @@ from pipeline.live.ingestion.constants import (
     WS_RECONNECT_BASE,
     WS_RECONNECT_MAX,
 )
-from pipeline.live.ingestion.odds_rows import _json_default
+from pipeline.live.ingestion.odds_cycle import _json_default
 
 log = logging.getLogger("live_ingestion")
 

@@ -1,52 +1,409 @@
-"""Build the odds rows from an event's offers: one row per book per market.
+"""Get BettingPros' odds for an MLB game and build one row per book.
 
-The module also holds the two first-five exclusions: the dated list and the twin rule.
+The module holds BettingPros' market ids, the first-five rules, the offer reads, the
+row building and the provider class.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
-from datetime import date
+import os
+import time
+from collections.abc import Callable, Mapping
+from datetime import UTC, date, datetime
 from typing import Any
 
-from pipeline.bettingpros.events import EventMatchMixin
-from pipeline.bettingpros.markets import (
-    _GAME_MARKET_IDS,
-    _PROP_MARKET_IDS,
-    F5_EXCLUDED_BOOKS,
-    F5_TWIN_MARKETS,
-    is_f5_dated_excluded,
-    twin_price_tolerance,
-)
-from pipeline.bettingpros.parsing import (
-    _OPTIONAL_SIDES,
-    _REQUIRED_SIDES,
-    _book_line,
-    _books_on,
-    _FirstInningReadError,
+from betting.bettingpros.match_games import (
+    EventMatchMixin,
+    ProviderBase,
     _normalize_name,
-    _opt_float,
-    _opt_int,
-    _Quote,
-    _same_line,
-    _shared_opener,
-    _stamp,
-    _tie_rules_out_twin,
+    _parse_utc,
+    _ScheduleInfo,
 )
-from pipeline.odds_provider import (
+from betting.markets import (
     GAME_MARKET_KIND,
     GAME_MARKET_SIDE,
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
+    GRADED_BOOK_PREFERENCE,
+    PROP_STATS,
+    book_kind,
     book_label,
 )
+from betting.validate import implied_probability
 
-log = logging.getLogger("pipeline.bettingpros")
+log = logging.getLogger("betting.bettingpros")
+
+
+# ---------------------------------------------------------------------------
+# The market ids
+# ---------------------------------------------------------------------------
+
+#: Our game market name -> the BettingPros market id. The two team totals of
+#: one segment share an id: the response holds one offer per team.
+_GAME_MARKET_IDS: dict[str, int] = {
+    "moneyline": 122,
+    "total": 175,
+    "runline": 176,
+    "f1_moneyline": 278,
+    "f5_moneyline": 279,
+    "f1_total": 280,
+    "f5_total": 281,
+    "f1_runline": 282,
+    "f5_runline": 283,
+    "team_total_home": 277,
+    "team_total_away": 277,
+    "f5_team_total_home": 407,
+    "f5_team_total_away": 407,
+    "first_to_score": 286,
+    "first_inning_run": 369,
+}
+
+
+if set(_GAME_MARKET_IDS) != set(GAME_MARKET_TYPES):  # pragma: no cover — an import-time guard
+    raise RuntimeError(
+        "BettingPros game market ids and GAME_MARKET_TYPES disagree: "
+        f"{sorted(set(_GAME_MARKET_IDS) ^ set(GAME_MARKET_TYPES))}"
+    )
+
+
+#: Our prop market name -> the BettingPros market id.
+_PROP_MARKET_IDS: dict[str, int] = {
+    "strikeouts": 285,
+    "hits": 287,
+    "home_runs": 299,
+    "earned_runs": 290,
+    "walks": 408,
+    "total_bases": 293,
+    "rbis": 289,
+    "singles": 295,
+    "doubles": 291,
+    "triples": 292,
+    "runs": 288,
+    "stolen_bases": 294,
+    "hits_runs_rbis": 403,
+    "outs_recorded": 405,
+    "hits_allowed": 404,
+}
+
+
+if set(_PROP_MARKET_IDS) != set(PROP_STATS):  # pragma: no cover — an import-time guard
+    raise RuntimeError(
+        "BettingPros prop market ids and PROP_STATS disagree: "
+        f"{sorted(set(_PROP_MARKET_IDS) ^ set(PROP_STATS))}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The first-five rules
+#
+# Some books post first-inning prices under a first-five label. Two rules drop
+# those entries: a dated rule for a known book, and the "twin" rule for a book
+# whose first-five line copies its own first-inning line.
+# ---------------------------------------------------------------------------
+
+#: A first-five market id -> the first-inning market it may copy.
+F5_TWIN_MARKETS: dict[int, int] = {283: 282, 281: 280, 279: 278}
+
+
+#: A book whose first-five entries are first-inning bets from this date on.
+#: DraftKings (12) from 2025-03-01, found by the 300-game census.
+F5_EXCLUDED_BOOKS: dict[int, date] = {12: date(2025, 3, 1)}
+
+
+#: The first-five markets each dated exclusion covers. A listed book with no
+#: entry here is excluded on all three. DraftKings' first-five moneyline is
+#: kept: only 5 of its 71 rows are first-inning bets, and the load guard
+#: refuses all 5.
+F5_EXCLUDED_MARKETS: dict[int, frozenset[int]] = {12: frozenset({283, 281})}
+
+
+def f5_excluded_markets(book_id: int) -> frozenset[int]:
+    """The first-five markets a book's dated exclusion covers.
+
+    It does not say whether the book is excluded at all;
+    :func:`is_f5_dated_excluded` does.
+    """
+    return F5_EXCLUDED_MARKETS.get(int(book_id), frozenset(F5_TWIN_MARKETS))
+
+
+def is_f5_dated_excluded(book_id: int, market_id: int, game_date: date | None) -> bool:
+    """True when the dated rule drops this book's row of this market on this date.
+
+    An unknown game date excludes nothing.
+    """
+    start = F5_EXCLUDED_BOOKS.get(int(book_id))
+    if start is None or game_date is None:
+        return False
+    return start <= game_date and int(market_id) in f5_excluded_markets(book_id)
+
+
+#: The largest implied-probability gap at which a first-five line counts as a
+#: copy of the same book's first-inning line.
+TWIN_PRICE_TOLERANCE = 0.03
+
+
+#: The gap for the moneyline. Both moneylines sit at the line 1, and a
+#: near-even game's real first-five price can sit within 0.03 of the
+#: first-inning price. The evidence for copies is run lines only, so a
+#: moneyline is a copy only at identical prices.
+TWIN_MONEYLINE_PRICE_TOLERANCE = 0.0
+
+
+#: The first-five markets whose twin test needs identical prices.
+_EXACT_TWIN_MARKETS: frozenset[int] = frozenset({279})
+
+
+def twin_price_tolerance(market_id: int) -> float:
+    """The twin rule's price gap for a first-five market id."""
+    if int(market_id) in _EXACT_TWIN_MARKETS:
+        return TWIN_MONEYLINE_PRICE_TOLERANCE
+    return TWIN_PRICE_TOLERANCE
+
+
+#: The sides a row of each market kind must price.
+#: A market that lacks a required side gets no row for any book.
+_REQUIRED_SIDES: dict[str, tuple[str, ...]] = {
+    "moneyline": ("home", "away"),
+    "three_way": ("home", "away"),
+    "runline": ("home", "away"),
+    "total": ("over", "under"),
+    "yes_no": ("yes", "no"),
+    "prop": ("over", "under"),
+}
+
+
+#: The sides a row prices only when the book quotes them: a three-way market's tie.
+_OPTIONAL_SIDES: dict[str, tuple[str, ...]] = {"three_way": ("draw",)}
+
+
+#: A side's price, line and vendor stamp, read from one book's line.
+_Quote = tuple[float | None, float | None, Any]
+
+
+class _FirstInningReadError(RuntimeError):
+    """Signal that the first-inning read failed, so the twin check cannot run.
+
+    The first-five market then gets no rows.
+    Without the check, a first-five row may be a first-inning bet under the wrong label.
+    """
+
+
+def _usable(ln: Mapping[str, Any]) -> bool:
+    """Return True when a line is a price the book takes.
+
+    A line flagged ``is_off`` or inactive, or a line without a price, is not a quote.
+    """
+    return not ln.get("is_off") and ln.get("active") is not False and ln.get("cost") is not None
+
+
+def _opt_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _book_line(sel: Mapping[str, Any], book_id: int) -> dict[str, Any] | None:
+    """Return the book's usable line on one selection, or ``None``.
+
+    The feed normally lists one line per book per selection.
+    When a book lists more than one usable line, the ``main`` line wins, else the first.
+    """
+    usable = [
+        ln
+        for book in sel.get("books") or []
+        if _opt_int(book.get("id")) == book_id
+        for ln in book.get("lines") or []
+        if _usable(ln)
+    ]
+    if not usable:
+        return None
+    if len(usable) > 1:
+        log.debug(
+            "BettingPros: book %s lists %d usable lines on one selection; taking the main one",
+            book_id,
+            len(usable),
+        )
+        for ln in usable:
+            if ln.get("main"):
+                return ln
+    return usable[0]
+
+
+def _shared_opener(sides: Mapping[str, Mapping[str, Any]]) -> int | None:
+    """Return the one book that opened every side, or ``None``.
+
+    The rule matches the opening row's rule.
+    Every side's ``opening_line`` must name a ``book_id`` and a ``cost``.
+    All sides must name the same book.
+    """
+    openers: set[int] = set()
+    for sel in sides.values():
+        ol = sel.get("opening_line") or {}
+        opener_id = _opt_int(ol.get("book_id"))
+        if opener_id is None or _opt_float(ol.get("cost")) is None:
+            return None
+        openers.add(opener_id)
+    return openers.pop() if len(openers) == 1 else None
+
+
+def _stamp(value: Any) -> datetime | None:
+    """Return a vendor stamp as a timezone-aware UTC datetime, or ``None``.
+
+    The vendor writes UTC text with no zone, e.g. ``"2026-09-10 16:15:50"``.
+    """
+    if not value:
+        return None
+    parsed = _parse_utc(str(value))
+    return None if parsed is None else parsed.replace(tzinfo=UTC)
+
+
+def _books_on(sides: Mapping[str, Mapping[str, Any]]) -> list[int]:
+    """Return every book id on the given sides, in the order the books first appear."""
+    seen: list[int] = []
+    for sel in sides.values():
+        for book in sel.get("books") or []:
+            book_id = _opt_int(book.get("id"))
+            if book_id is not None and book_id not in seen:
+                seen.append(book_id)
+    return seen
+
+
+def _same_line(
+    a: Mapping[str, Any], b: Mapping[str, Any], tolerance: float = TWIN_PRICE_TOLERANCE
+) -> bool:
+    """Return True when two lines have the same line and prices within ``tolerance``.
+
+    ``tolerance`` is a gap in implied probability; ``0.0`` asks for identical prices.
+    """
+    cost_a, cost_b = _opt_float(a.get("cost")), _opt_float(b.get("cost"))
+    if cost_a is None or cost_b is None:
+        return False
+    if _opt_float(a.get("line")) != _opt_float(b.get("line")):
+        return False
+    return abs(implied_probability(cost_a) - implied_probability(cost_b)) <= tolerance
+
+
+def _tie_rules_out_twin(
+    f5_tie: Mapping[str, Any] | None,
+    f1_tie: Mapping[str, Any] | None,
+    tolerance: float = TWIN_PRICE_TOLERANCE,
+) -> bool:
+    """Return True when the ties show that a first-five entry is not a first-inning copy.
+
+    A first-five tie that the first-inning entry lacks rules out a copy.
+    A first-five tie beyond ``tolerance`` of the first-inning tie also rules out a copy.
+    A first-five entry with no tie decides nothing; the team sides decide.
+    On a near-even game the team sides match within the tolerance, so the tie must decide.
+    """
+    if f5_tie is None:
+        return False
+    if f1_tie is None:
+        return True
+    return not _same_line(f5_tie, f1_tie, tolerance)
+
+
+def _opt_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+#: The most ``/offers`` pages read for one (event, market). The API pages
+#: at 10 offers, and a batter market fills two to three pages. The cap only
+#: stops a pager that never ends.
+_MAX_OFFER_PAGES = 20
 
 
 class OfferRowsMixin(EventMatchMixin):
     """Turn an event's offers into odds rows, one row per book."""
+
+    def _offers(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
+        """Every offer of one (event, market), from the offers cache while fresh.
+
+        Only a complete market is cached.
+        """
+        key = (int(event_id), int(market_id))
+        hit = self._offers_cache.get(key)
+        if hit is not None and self._is_fresh(hit[0]):
+            return hit[1]
+        offers, complete = self._fetch_offers_all_pages(event_id, market_id)
+        if complete:
+            self._store(self._offers_cache, key, offers)
+        return offers
+
+    def _fetch_offers_all_pages(
+        self, event_id: int, market_id: int
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """GET every ``/offers`` page of one (event, market).
+
+        The vendor pages at 10 offers, so a batter market needs every page
+        to list every hitter. Returns ``(offers, complete)``. A failure on
+        page 1 raises. A failure on a later page logs a warning and returns
+        the offers in hand with ``complete=False``. A ``_pagination`` block
+        that is not a dict counts as one page.
+        """
+        params: dict[str, Any] = {"sport": "MLB", "market_id": market_id, "event_id": event_id}
+        data = self._bp_get("offers", params)
+        offers = list(data.get("offers", []))
+        pagination = data.get("_pagination")
+        total_pages = 1
+        if isinstance(pagination, dict):
+            try:
+                total_pages = int(pagination.get("total_pages") or 1)
+            except (TypeError, ValueError):
+                total_pages = 1
+        for page in range(2, min(total_pages, _MAX_OFFER_PAGES) + 1):
+            try:
+                more = self._bp_get("offers", {**params, "page": page})
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "BettingPros: offers page %d of %d failed (event %s, market %s); "
+                    "using the %d offers in hand: %s",
+                    page,
+                    total_pages,
+                    event_id,
+                    market_id,
+                    len(offers),
+                    exc,
+                )
+                self.read_failures += 1  # the market comes back partial
+                return offers, False
+            offers.extend(more.get("offers", []))
+        return offers, True
+
+    def _resolve_player_name(self, player_id: int) -> str | None:
+        """MLB ``player_id`` → normalized full name.
+
+        A found name stays cached for the process lifetime. A failure stays
+        for one time-to-live. A read that raised counts in ``read_failures``.
+        """
+        if player_id in self._player_name_cache:
+            return self._player_name_cache[player_id]
+        if self._failed_recently("player", player_id):
+            return None
+        name: str | None = None
+        read_done = False
+        try:
+            data = self._mlb_get(f"people/{player_id}", {})
+            read_done = True
+            full = data["people"][0]["fullName"]
+            name = _normalize_name(str(full))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("BettingPros: could not resolve player_id %s: %s", player_id, exc)
+            if not read_done:
+                self.read_failures += 1  # the player read failed
+        if name is None:
+            self._note_failed_lookup("player", player_id)
+        else:
+            self._player_name_cache[player_id] = name
+        return name
 
     @staticmethod
     def _game_sides(
@@ -102,7 +459,7 @@ class OfferRowsMixin(EventMatchMixin):
 
         Each market fills only its own columns; two markets never share one row.
         A total, yes / no or prop row also gets ``over_line`` / ``under_line``.
-        The load guard (``pipeline/odds_row_guard.py``) reads those two lines.
+        The load guard (``betting/validate.py``) reads those two lines.
         """
 
         def cost(key: str) -> float | None:
@@ -592,3 +949,139 @@ class OfferRowsMixin(EventMatchMixin):
                 if part.get("name") and _normalize_name(part["name"]) == player_name:
                     return offer
         return None
+
+
+class BettingProsOddsProvider(OfferRowsMixin, ProviderBase):
+    """The BettingPros odds provider.
+
+    ``offers_cache_ttl_s`` is the cache lifetime in seconds; ``None`` reads
+    ``ODDS_OFFERS_CACHE_TTL_S`` (default 30). ``max_retries`` and
+    ``retry_wait_s`` set the retries and the first wait; ``None`` reads
+    ``BETTINGPROS_MAX_RETRIES`` (default 0) and ``BETTINGPROS_RETRY_WAIT_S``
+    (default 2.0). ``clock`` and ``sleep`` are injectable for tests.
+
+    ``read_failures`` counts each failed read the provider caught. A normal
+    absence (no event, no offer, a matcher decline) does not count. The
+    historical loader keeps a game whose count grew off its done-list.
+    """
+
+    API_KEY_ENV = "ODDS_API_KEY"
+    MAX_RETRIES_ENV = "BETTINGPROS_MAX_RETRIES"
+    RETRY_WAIT_ENV = "BETTINGPROS_RETRY_WAIT_S"
+    DEFAULT_MAX_RETRIES = 0
+    #: The first wait in seconds; it doubles per retry.
+    DEFAULT_RETRY_WAIT_S = 2.0
+    #: The longest wait before one retry, a ``Retry-After`` included.
+    RETRY_WAIT_CAP_S = 60.0
+    OFFERS_CACHE_TTL_ENV = "ODDS_OFFERS_CACHE_TTL_S"
+    DEFAULT_OFFERS_CACHE_TTL_S = 30.0
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        timeout: float = 15.0,
+        offers_cache_ttl_s: float | None = None,
+        clock: Callable[[], float] | None = None,
+        max_retries: int | None = None,
+        retry_wait_s: float | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self._api_key = api_key or os.environ.get(self.API_KEY_ENV)
+        self._timeout = timeout
+        if offers_cache_ttl_s is None:
+            offers_cache_ttl_s = float(
+                os.environ.get(self.OFFERS_CACHE_TTL_ENV, self.DEFAULT_OFFERS_CACHE_TTL_S)
+            )
+        self._offers_cache_ttl_s = float(offers_cache_ttl_s)
+        self._clock: Callable[[], float] = clock or time.monotonic
+        if max_retries is None:
+            max_retries = int(os.environ.get(self.MAX_RETRIES_ENV, self.DEFAULT_MAX_RETRIES))
+        if retry_wait_s is None:
+            retry_wait_s = float(os.environ.get(self.RETRY_WAIT_ENV, self.DEFAULT_RETRY_WAIT_S))
+        self._max_retries: int = self.DEFAULT_MAX_RETRIES
+        self._retry_wait_s: float = self.DEFAULT_RETRY_WAIT_S
+        self.set_retry_policy(max_retries, retry_wait_s)
+        # Not _sleep: the census probe's subclass uses that name for its rate limit.
+        self._retry_sleep: Callable[[float], None] = sleep or time.sleep
+        self.read_failures = 0
+
+        # Found lookups, kept for the process lifetime.
+        self._event_cache: dict[int, dict[str, Any]] = {}
+        self._game_meta_cache: dict[int, tuple[str, str, str, datetime | None]] = {}
+        self._game_schedule_cache: dict[int, _ScheduleInfo] = {}
+        self._player_name_cache: dict[int, str] = {}
+        # Failed lookups and payloads, kept for one time-to-live: (stored_at, payload).
+        self._failed_lookups: dict[tuple[str, int], tuple[float, None]] = {}
+        self._offers_cache: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
+        self._events_by_date_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        # The first-five exclusions already logged, per (event, market, book).
+        self._f5_logged: set[tuple[int, int, str]] = set()
+
+    def get_odds_by_book(
+        self,
+        game_pk: int,
+        *,
+        line_type: str = "current",
+        market_type: str = "moneyline",
+    ) -> list[dict[str, Any]]:
+        """One row per book for one game market and line type.
+
+        ``market_type`` is a value of ``GAME_MARKET_TYPES``; another value
+        raises ``ValueError``. A game with no match gives an empty list.
+        """
+        return self._game_market_rows(game_pk, line_type, market_type)
+
+    def get_odds(
+        self,
+        game_pk: int,
+        *,
+        line_type: str = "current",
+        market_type: str = "moneyline",
+    ) -> dict[str, Any]:
+        """The graded book's row of one game market: the row the live service broadcasts.
+
+        The graded book is the first book on ``GRADED_BOOK_PREFERENCE`` with a
+        row, else the first other sportsbook. The blend, the fantasy apps and
+        the exchanges never count. With no such row, every price is ``None``.
+        """
+        rows = self._game_market_rows(game_pk, line_type, market_type)
+        by_id = {row["book_id"]: row for row in reversed(rows)}
+        for book_id in GRADED_BOOK_PREFERENCE:
+            if book_id in by_id:
+                return dict(by_id[book_id])
+        for row in rows:
+            if book_kind(row["book"]) == "sportsbook":
+                return dict(row)
+        empty: dict[str, Any] = {
+            "game_pk": game_pk,
+            "source": "bettingpros",
+            "is_mock": False,
+            "book": "consensus",
+            "line_type": line_type,
+            "market_type": market_type,
+            "is_sharp_book": False,
+        }
+        empty.update(dict.fromkeys(GAME_ODDS_FIELDS))
+        return empty
+
+    def get_prop_odds_by_book(
+        self,
+        game_pk: int,
+        player_id: int,
+        prop_stat: str,
+        *,
+        line_type: str = "current",
+    ) -> list[dict[str, Any]]:
+        """One row per book for one player's prop market.
+
+        ``line`` is the over's line, or the under's when the over has none.
+        An unknown ``prop_stat`` raises ``ValueError``. A game or player with
+        no match, or a player with no offer, gives an empty list.
+        """
+        return self._prop_market_rows(game_pk, player_id, prop_stat, line_type)
+
+
+__all__ = [
+    "BettingProsOddsProvider",
+]

@@ -2,7 +2,7 @@
 test_historical_odds_load.py
 ==============================
 SIM-435 — unit tests for (1) the BettingPros provider's CLOSING-line parsing and
-(2) the historical-odds loader (scripts/load_historical_odds.py).
+(2) the historical-odds loader (betting/history.py).
 
 No network and no live DB:
   * the provider's _bp_get / _mlb_get seams are stubbed with the captured
@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.bettingpros.provider import BettingProsOddsProvider
-from pipeline.odds_provider import is_bettable
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.markets import is_bettable
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 
@@ -150,7 +150,7 @@ def test_closing_sugarhouse_row_is_its_own_book():
 
 
 def test_book_line_handles_empty_books_and_unstamped_lines():
-    from pipeline.bettingpros.parsing import _book_line
+    from betting.bettingpros.fetch_odds import _book_line
 
     # No books at all → None, not an exception.
     assert _book_line({"books": []}, 1) is None
@@ -167,7 +167,7 @@ def test_book_line_handles_empty_books_and_unstamped_lines():
 # ===========================================================================
 # (2) The loader — driven against a fake provider + a MOCK pool (no Postgres)
 # ===========================================================================
-import scripts.load_historical_odds as loader  # noqa: E402
+import betting.history as loader  # noqa: E402
 
 
 class _RecordingConn:

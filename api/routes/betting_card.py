@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from api.auth import require_auth
 from api.routes.betting_stored_odds import StoredRows, _read_stored_rows
-from pipeline.odds_provider import book_display_name
+from betting.markets import book_display_name
 
 log = logging.getLogger("api.routes.betting")
 

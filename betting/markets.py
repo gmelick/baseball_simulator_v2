@@ -1,43 +1,6 @@
-"""The odds vocabulary and the odds provider seam.
-
-Every reader and writer of odds imports its names from here; none keeps a copy.
-
-* The prop markets. :data:`PROP_STATS` lists the 15 values of
-  ``raw.prop_odds.prop_stat``, split by role into :data:`PITCHER_PROP_STATS`
-  and :data:`BATTER_PROP_STATS`.
-* The game markets. :data:`GAME_MARKET_TYPES` lists the 15 values of
-  ``raw.game_odds.market_type``. :data:`GAME_MARKET_KIND` says which columns a
-  market fills; :data:`GAME_MARKET_SEGMENT` and :data:`GAME_MARKET_SIDE` say
-  what it settles on, so no caller parses a market name.
-* The books. A row holds one book's prices for every side of one market. The
-  row names the book as ``'bp:<id>'``, with the BettingPros book id.
-  :data:`BOOK_KIND` says what a book is; only a listed sportsbook is bettable.
-  The readers grade against one book: the first on :data:`GRADED_BOOK_PREFERENCE`
-  that has a row for the market.
-* The provider. :class:`OddsProvider` returns one row per book.
-  :func:`get_odds_provider` picks a provider by the ``ODDS_PROVIDER``
-  environment variable: ``bettingpros``, or the deterministic mock by default.
-
-The market kinds (the columns a game row fills):
-
-* ``moneyline``: ``home_ml`` / ``away_ml``.
-* ``three_way``: ``home_ml`` / ``away_ml`` / ``draw_ml``. A first-inning or
-  first-five moneyline can end tied.
-* ``runline``: ``home_spread`` / ``home_spread_ml`` / ``away_spread`` /
-  ``away_spread_ml``.
-* ``total``: ``total_line`` / ``over_ml`` / ``under_ml``.
-* ``yes_no``: "a run in the first inning". Yes is ``over_ml`` and No is
-  ``under_ml`` at ``total_line`` 0.5, because a run IS over 0.5 runs.
-
-A row's ``line_type`` is ``opening``, ``current``, ``closing`` or
-``bet_placement``. The CHECK constraints on both tables list the same values.
-"""
+"""Our market names and our book labels: the vocabulary every odds reader and writer shares."""
 
 from __future__ import annotations
-
-import os
-from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # The prop markets
@@ -51,6 +14,7 @@ PITCHER_PROP_STATS: tuple[str, ...] = (
     "outs_recorded",
     "hits_allowed",
 )
+
 
 #: The batter markets. A batter gets these and never a pitcher market.
 #: Trap: ``hits`` is the batter market; ``hits_allowed`` is the pitcher market.
@@ -66,6 +30,7 @@ BATTER_PROP_STATS: tuple[str, ...] = (
     "stolen_bases",
     "hits_runs_rbis",
 )
+
 
 #: Every prop market, in the canonical order.
 PROP_STATS: tuple[str, ...] = (
@@ -85,6 +50,7 @@ PROP_STATS: tuple[str, ...] = (
     "outs_recorded",
     "hits_allowed",
 )
+
 
 #: prop_stat → the prop name the simulator emits
 #: (``simulation/prop_distributions.py``).
@@ -106,12 +72,14 @@ PROP_STAT_TO_MODEL_PROP: dict[str, str] = {
     "hits_runs_rbis": "HRR",
 }
 
+
 # ---------------------------------------------------------------------------
 # The game markets
 # ---------------------------------------------------------------------------
 
 #: The three full-game markets.
 FULL_GAME_MARKET_TYPES: tuple[str, ...] = ("moneyline", "runline", "total")
+
 
 #: Every game market, in the canonical order: the full-game markets first.
 GAME_MARKET_TYPES: tuple[str, ...] = (
@@ -132,6 +100,7 @@ GAME_MARKET_TYPES: tuple[str, ...] = (
     "first_inning_run",
 )
 
+
 #: market_type → the columns it fills (the module docstring lists the kinds).
 GAME_MARKET_KIND: dict[str, str] = {
     "moneyline": "moneyline",
@@ -150,6 +119,7 @@ GAME_MARKET_KIND: dict[str, str] = {
     "first_to_score": "moneyline",
     "first_inning_run": "yes_no",
 }
+
 
 #: market_type → the part of the game it settles on: ``game``, ``f1`` (the
 #: first inning) or ``f5`` (the first five innings).
@@ -171,11 +141,13 @@ GAME_MARKET_SEGMENT: dict[str, str] = {
     "first_inning_run": "f1",
 }
 
+
 #: market_type → the team a team total counts; ``None`` for a both-team market.
 GAME_MARKET_SIDE: dict[str, str | None] = {
     m: ("home" if m.endswith("_home") else "away" if m.endswith("_away") else None)
     for m in GAME_MARKET_TYPES
 }
+
 
 #: market_type → the plain name the API and the logs show.
 GAME_MARKET_NAMES: dict[str, str] = {
@@ -196,6 +168,7 @@ GAME_MARKET_NAMES: dict[str, str] = {
     "first_inning_run": "A run in the first inning",
 }
 
+
 #: The price fields of a game row, in the ``raw.game_odds`` column order.
 #: A provider returns every field, with ``None`` where the market fills none.
 GAME_ODDS_FIELDS: tuple[str, ...] = (
@@ -210,6 +183,7 @@ GAME_ODDS_FIELDS: tuple[str, ...] = (
     "over_ml",
     "under_ml",
 )
+
 
 # ---------------------------------------------------------------------------
 # The books
@@ -249,6 +223,7 @@ BOOK_NAMES: dict[int, str] = {
     78: "Plus500",
 }
 
+
 #: Book id → what the book is. ``blend`` (id 0) is the vendor's mix of other
 #: books' prices; nobody can bet it. ``dfs`` is a daily-fantasy pick'em app.
 #: An id not listed here is ``unknown``, so a new book is never bettable
@@ -285,6 +260,7 @@ BOOK_KIND: dict[int, str] = {
     78: "prediction",
 }
 
+
 #: A book's short name (lower case, no spaces) → its id, for ``--book NAME``.
 #: Each sportsbook's display name, in that form, is a key too, so
 #: ``resolve_book(book_display_name(label))`` gives the id back.
@@ -303,11 +279,14 @@ BOOK_IDS_BY_NAME: dict[str, int] = {
     "hardrock": 49,
 }
 
+
 #: The prefix of every stored book label (``'bp:12'``).
 BOOK_LABEL_PREFIX = "bp:"
 
+
 #: The SQL filter every reader appends, so it grades only a book's row.
 STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
+
 
 #: The graded book, in order. A reader grades against the first book on the
 #: list with a row for the market, the same list on every game. The order
@@ -317,8 +296,10 @@ STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
 #: The record is ``docs/audit/records/sim555_book_sharpness.txt``.
 GRADED_BOOK_PREFERENCE: tuple[int, ...] = (12, 19, 10, 33, 18, 24, 13, 49, 14, 15, 27)
 
+
 #: The book kinds whose prices a bettor can take.
 BETTABLE_KINDS: frozenset[str] = frozenset({"sportsbook"})
+
 
 #: The stamp of this row scheme. The readers write it into each report;
 #: the skill table refuses to merge reports with different stamps.
@@ -415,167 +396,11 @@ def graded_row_order_sql(param: str) -> str:
     return f"array_position({param}::varchar[], book) NULLS LAST, fetched_at DESC"
 
 
-# ---------------------------------------------------------------------------
-# The provider
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class OddsProvider(Protocol):
-    """An odds source: one row per book for a game market or a prop market.
-
-    ``get_odds`` gives the one row the live service broadcasts.
-    ``isinstance(obj, OddsProvider)`` checks only that the methods exist.
-    An unknown ``market_type`` or ``prop_stat`` raises ``ValueError``.
-    """
-
-    def get_odds(
-        self,
-        game_pk: int,
-        *,
-        line_type: str = "current",
-        market_type: str = "moneyline",
-    ) -> dict[str, Any]:
-        """The graded book's row of one game market."""
-        ...
-
-    def get_odds_by_book(
-        self,
-        game_pk: int,
-        *,
-        line_type: str = "current",
-        market_type: str = "moneyline",
-    ) -> list[dict[str, Any]]:
-        """One row per book for one game market, with every price field."""
-        ...
-
-    def get_prop_odds_by_book(
-        self,
-        game_pk: int,
-        player_id: int,
-        prop_stat: str,
-        *,
-        line_type: str = "current",
-    ) -> list[dict[str, Any]]:
-        """One row per book for one player's prop market."""
-        ...
-
-
-def odds_rows_by_book(
-    provider: Any,
-    game_pk: int,
-    *,
-    line_type: str = "current",
-    market_type: str = "moneyline",
-) -> list[dict[str, Any]]:
-    """Every book's row of one game market, from any provider.
-
-    A provider without ``get_odds_by_book`` (a test fake) answers with its one
-    ``get_odds`` row. A by-book result that is not a list or a tuple (an
-    unconfigured mock object) also falls back to ``get_odds``.
-    """
-    by_book = getattr(provider, "get_odds_by_book", None)
-    if callable(by_book):
-        rows = by_book(game_pk, line_type=line_type, market_type=market_type)
-        if isinstance(rows, (list, tuple)):
-            return list(rows)
-    return [provider.get_odds(game_pk, line_type=line_type, market_type=market_type)]
-
-
-def prop_rows_by_book(
-    provider: Any,
-    game_pk: int,
-    player_id: int,
-    prop_stat: str,
-    *,
-    line_type: str = "current",
-) -> list[dict[str, Any]]:
-    """Every book's row of one player's prop market, from any provider.
-
-    The fallback is the same as :func:`odds_rows_by_book`, to ``get_prop_odds``.
-    """
-    by_book = getattr(provider, "get_prop_odds_by_book", None)
-    if callable(by_book):
-        rows = by_book(game_pk, player_id, prop_stat, line_type=line_type)
-        if isinstance(rows, (list, tuple)):
-            return list(rows)
-    return [provider.get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)]
-
-
-# ---------------------------------------------------------------------------
-# The provider registry and factory
-# ---------------------------------------------------------------------------
-
-#: The environment variable that names the provider.
-ODDS_PROVIDER_ENV = "ODDS_PROVIDER"
-#: The provider name when the environment variable is unset or empty.
-DEFAULT_PROVIDER = "mock"
-
-# Provider name → zero-argument factory. Each factory imports its provider late.
-_PROVIDER_FACTORIES: dict[str, Callable[[], OddsProvider]] = {}
-
-
-def _make_mock_provider() -> OddsProvider:
-    """The factory of the mock provider.
-
-    The import is inside the function. It avoids a circular import and keeps
-    this module importable without the live pipeline's dependencies.
-    """
-    from pipeline.live.ingestion.mock_odds import MockOddsAPI
-
-    return MockOddsAPI()
-
-
-def register_odds_provider(name: str, factory: Callable[[], OddsProvider]) -> None:
-    """Register a provider factory, so ``ODDS_PROVIDER=<name>`` selects it.
-
-    ``factory`` takes no argument. A test uses this to inject a fake provider.
-    Names match case-insensitively.
-    """
-    _PROVIDER_FACTORIES[name.strip().lower()] = factory
-
-
-def _make_bettingpros_provider() -> OddsProvider:
-    """The factory of the BettingPros provider."""
-    from pipeline.bettingpros.provider import BettingProsOddsProvider
-
-    return BettingProsOddsProvider()
-
-
-# The built-in providers.
-register_odds_provider("mock", _make_mock_provider)
-register_odds_provider("bettingpros", _make_bettingpros_provider)
-
-
-def get_odds_provider(name: str | None = None) -> OddsProvider:
-    """The selected odds provider.
-
-    The name comes from ``name``, else ``ODDS_PROVIDER``, else ``"mock"``.
-    An unregistered name raises ``RuntimeError``.
-    """
-    selected = (name or os.environ.get(ODDS_PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()
-    factory = _PROVIDER_FACTORIES.get(selected)
-    if factory is None:
-        raise RuntimeError(
-            f"Unknown ODDS_PROVIDER '{selected}'. Registered providers: "
-            f"{', '.join(sorted(_PROVIDER_FACTORIES))}. Set {ODDS_PROVIDER_ENV} to one "
-            "of these or register one via register_odds_provider()."
-        )
-    return factory()
-
-
 __all__ = [
-    "OddsProvider",
-    "get_odds_provider",
-    "register_odds_provider",
-    "ODDS_PROVIDER_ENV",
-    "DEFAULT_PROVIDER",
-    # The prop markets
     "PROP_STATS",
     "PITCHER_PROP_STATS",
     "BATTER_PROP_STATS",
     "PROP_STAT_TO_MODEL_PROP",
-    # The game markets
     "GAME_MARKET_TYPES",
     "FULL_GAME_MARKET_TYPES",
     "GAME_MARKET_KIND",
@@ -583,7 +408,6 @@ __all__ = [
     "GAME_MARKET_SIDE",
     "GAME_MARKET_NAMES",
     "GAME_ODDS_FIELDS",
-    # The books and the by-book seam
     "BOOK_NAMES",
     "BOOK_KIND",
     "BOOK_IDS_BY_NAME",
@@ -601,6 +425,4 @@ __all__ = [
     "graded_book_labels",
     "bettable_labels",
     "graded_row_order_sql",
-    "odds_rows_by_book",
-    "prop_rows_by_book",
 ]

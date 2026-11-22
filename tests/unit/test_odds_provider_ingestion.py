@@ -42,14 +42,10 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from betting.markets import BATTER_PROP_STATS, PITCHER_PROP_STATS, PROP_STATS  # noqa: E402
 from pipeline.live import live_ingestion_pipeline as live  # noqa: E402
 from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
-from pipeline.odds_provider import (  # noqa: E402
-    BATTER_PROP_STATS,
-    PITCHER_PROP_STATS,
-    PROP_STATS,
-)
 
 # ===========================================================================
 # Helpers

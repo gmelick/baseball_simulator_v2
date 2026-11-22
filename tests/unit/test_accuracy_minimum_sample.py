@@ -10,7 +10,7 @@ market row states the smallest number of observations the market needs
 before its result can be trusted at all. The estimate uses a standard
 power-analysis formula (the sample size that detects an effect of a given
 size), the platform's "is this edge big enough to act on" floor
-(``betting.bet_signal.DEFAULT_MIN_EDGE``), the SAME detection-margin constant
+(``betting.pricing.DEFAULT_MIN_EDGE``), the SAME detection-margin constant
 as ``tests/acceptance/bands.py``, and a Bonferroni correction (alpha divided
 by the number of rows) for scanning several market rows at once. Every
 report ALSO gets an honest, GAME-CLUSTERED spread. Several observations from

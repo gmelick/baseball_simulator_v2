@@ -8,7 +8,7 @@ A small sample can look like real skill by chance, so every row states the
 smallest number of observations it needs before its result means anything:
 
 1. The smallest edge worth caring about is the platform's own floor for acting
-   on an edge, ``betting.bet_signal.DEFAULT_MIN_EDGE`` (0.02,
+   on an edge, ``betting.pricing.DEFAULT_MIN_EDGE`` (0.02,
    :data:`MIN_DETECTABLE_EDGE`). A Brier or log-loss difference is not on a
    probability scale, so the floor is an approximation there: near a coin-flip
    market, a probability shift of ``e`` changes one observation's Brier score by
@@ -55,7 +55,7 @@ from typing import Any
 import numpy as np
 from scipy.stats import norm
 
-from betting.bet_signal import DEFAULT_MIN_EDGE
+from betting.pricing import DEFAULT_MIN_EDGE
 
 #: The resamples of the bootstrap interval. 2000 is the usual floor for a
 #: percentile bootstrap; the command line can raise it for a tighter interval.

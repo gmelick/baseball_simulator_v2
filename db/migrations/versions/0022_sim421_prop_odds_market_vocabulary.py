@@ -17,7 +17,7 @@ the eight markets BettingPros already quotes:
   pitcher:  outs_recorded, hits_allowed
   batter:   singles, doubles, triples, runs, stolen_bases, hits_runs_rbis
 
-The vocabulary itself lives in ``pipeline/odds_provider.py`` (``PROP_STATS``);
+The vocabulary itself lives in ``betting/markets.py`` (``PROP_STATS``);
 this constraint lists the same 15 strings and a unit test keeps the two in step.
 The constraint is dropped and re-added inside one ``DO`` block so a re-run is
 idempotent (the migration 0004 style).
@@ -28,7 +28,7 @@ Postgres cannot restore the seven-value constraint while a row holds one of
 the eight new values. The downgrade therefore DELETES every ``raw.prop_odds``
 row whose ``prop_stat`` is one of the eight new markets, then restores the
 seven-value constraint. Those quotes are gone after a downgrade; re-load them
-with ``scripts/load_historical_odds.py --prop-stats ...`` after the next
+with ``python -m betting.history --prop-stats ...`` after the next
 upgrade.
 """
 

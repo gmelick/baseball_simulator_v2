@@ -59,6 +59,16 @@ from fastapi.routing import APIRouter
 # The odds routes and the live WebSocket require a login. api.auth
 # imports only FastAPI and Starlette, so this import makes no cycle.
 from api.auth import authenticate_websocket
+
+# Odds/prop provider seam.  The pipeline obtains its odds source via
+# get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
+# hard-instantiating MockOddsAPI, so a real provider can drop in behind the
+# OddsProvider interface without touching ingestion/CLV/persistence code.
+from betting.load import OddsProvider, get_odds_provider
+
+# The load guard. Every writer shows it each non-empty row before the
+# row is persisted; a refused row is logged, counted and never written.
+from betting.validate import RefusalTally
 from db.introspect import pg_column_exists_async
 from pipeline.live.ingestion.base import PipelineBase
 from pipeline.live.ingestion.constants import (
@@ -79,28 +89,15 @@ from pipeline.live.ingestion.mlb_websocket import (
     ConnectionManager,
     MLBGameWebSocket,
 )
-from pipeline.live.ingestion.odds_routes import odds_router
-from pipeline.live.ingestion.odds_rows import (
+from pipeline.live.ingestion.odds_cycle import (
     _json_default,
     _jsonable_odds,
     _odds_facts_may_be_stale,
     _scheduled_start,
     pregame_odds_cadence_s,
 )
+from pipeline.live.ingestion.odds_routes import odds_router
 from pipeline.live.ingestion.prop_odds import PropOddsMixin
-
-# Odds/prop provider seam.  The pipeline obtains its odds source via
-# get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
-# hard-instantiating MockOddsAPI, so a real provider can drop in behind the
-# OddsProvider interface without touching ingestion/CLV/persistence code.
-from pipeline.odds_provider import (
-    OddsProvider,
-    get_odds_provider,
-)
-
-# The load guard. Every writer shows it each non-empty row before the
-# row is persisted; a refused row is logged, counted and never written.
-from pipeline.odds_row_guard import RefusalTally
 
 # The type of the simulation callback. It MUST be an async function: a sync
 # function would raise TypeError when the pipeline awaits it, or never run if
@@ -137,7 +134,7 @@ log = logging.getLogger("live_ingestion")
 # deterministic MockOddsAPI is the default, and ODDS_PROVIDER=bettingpros
 # switches to the real BettingProsOddsProvider.
 #
-# The 15 prop markets live in pipeline/odds_provider.py (PROP_STATS, split into
+# The 15 prop markets live in betting/markets.py (PROP_STATS, split into
 # PITCHER_PROP_STATS / BATTER_PROP_STATS, the prop-market work of SIM-421);
 # MockOddsAPI._PROP_CONFIG and the raw.prop_odds CHECK constraint (migration
 # 0022) list the same 15 values.

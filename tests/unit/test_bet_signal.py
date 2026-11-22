@@ -1,9 +1,9 @@
 """The bet-signal module: which edges become +EV bets, and how much to stake.
 
-The subject is :mod:`betting.bet_signal`. EV is the expected value of a bet.
+The subject is :mod:`betting.pricing`. EV is the expected value of a bet.
 The Kelly stake is the bankroll share that maximizes long-run growth; the
 module stakes a fraction of it. These tests build SYNTHETIC
-:class:`~betting.bet_signal.EdgeReport` objects with the REAL constructor (no
+:class:`~betting.pricing.EdgeReport` objects with the REAL constructor (no
 live provider, no DB, no RNG, no simulation run) and check the contract:
 
   * a clearly +EV report (sim_prob 0.60 at +100: a positive edge, a positive
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from betting.bet_signal import (
+from betting.pricing import (
     BetSignal,
     BetSignalConfig,
     EdgeReport,

@@ -6,7 +6,7 @@ moneyline, run line and total (the owner's ruling of 2026-09-12, SIM-421).
 
 WHY THIS EXISTS
 ---------------
-The odds tables carry fifteen game markets (``pipeline/odds_provider.py``
+The odds tables carry fifteen game markets (``betting/markets.py``
 ``GAME_MARKET_TYPES``): the three full-game markets plus twelve segment and
 team markets — the first-inning and first-five-innings moneyline, total and
 run line; each side's full-game and first-five team total; the first team to
@@ -30,7 +30,7 @@ THE OUTPUT
 ----------
 :func:`market_probability` answers "what is the simulator's probability of the
 reference side of this market at this line?" for any market type, using the
-same conventions the full-game markets use in :mod:`betting.bet_signal`:
+same conventions the full-game markets use in :mod:`betting.pricing`:
 
   * a total-kind market (``total``, ``f1_total``, ``f5_total``, the four team
     totals) — the OVER is the STRICT ``P(runs > line)``; a whole-number line
@@ -46,7 +46,7 @@ same conventions the full-game markets use in :mod:`betting.bet_signal`:
     ``P(the segment ended tied)``; the three sum to one;
   * a run-line-kind market (``runline``, ``f1_runline``, ``f5_runline``) — HOME
     covers when ``home_runs + spread > away_runs`` over the segment; an equal
-    result is a push (mirrors :func:`betting.bet_signal.spread_cover_prob`).
+    result is a push (mirrors :func:`betting.pricing.spread_cover_prob`).
     The AWAY bet at its own spread is priced too (``side="away"``): the book
     sometimes lists the two teams' run lines as two separate bets rather than
     the two sides of one (the run-line scoring, SIM-549).
@@ -66,7 +66,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_SEGMENT, GAME_MARKET_SIDE
+from betting.markets import GAME_MARKET_KIND, GAME_MARKET_SEGMENT, GAME_MARKET_SIDE
 
 #: The innings a "first five" market settles on.
 FIRST_FIVE_INNINGS = 5
@@ -255,7 +255,7 @@ def cover_probabilities(
 
     Home covers when ``home_runs + home_spread > away_runs``; an exact equality
     (possible on a whole-number spread such as the first-inning pick'em at 0)
-    is a push. Mirrors :func:`betting.bet_signal.spread_cover_prob`.
+    is a push. Mirrors :func:`betting.pricing.spread_cover_prob`.
     """
     kind = _validate_market(market_type)
     if kind != "runline":

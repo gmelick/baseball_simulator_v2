@@ -67,7 +67,7 @@
       },
       "BetSignalModel": {
         "additionalProperties": false,
-        "description": "Response model for :class:`betting.bet_signal.BetSignal` (SIM-369).\n\nA fireable +EV bet recommendation derived from one :class:`EdgeReport`.\n``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.\n\"home\" / \"over\"); ``report`` is the full source :class:`EdgeReportModel` (so a\nconsumer gets the sim/market probabilities behind the signal). The list\na signals endpoint returns is already ranked by EV descending (``rank`` 0 ==\nstrongest). numpy-free (plain floats / ints).",
+        "description": "Response model for :class:`betting.pricing.BetSignal` (SIM-369).\n\nA fireable +EV bet recommendation derived from one :class:`EdgeReport`.\n``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.\n\"home\" / \"over\"); ``report`` is the full source :class:`EdgeReportModel` (so a\nconsumer gets the sim/market probabilities behind the signal). The list\na signals endpoint returns is already ranked by EV descending (``rank`` 0 ==\nstrongest). numpy-free (plain floats / ints).",
         "properties": {
           "edge": {
             "title": "Edge",
@@ -590,7 +590,7 @@
       },
       "EdgeReportModel": {
         "additionalProperties": false,
-        "description": "Response model for :class:`betting.bet_signal.EdgeReport` (SIM-339).\n\nThe edge / EV report for one side of one market or prop.  ``side`` is the\nMarketSide enum's ``.value`` (a JSON-native string, e.g. \"home\" / \"over\").\n``positive_edge`` mirrors the source's derived property (edge > 0).\n\nSIM-555: when the betting routes price a market from the stored lines (the\nclosing line; before the game starts, also the current line),\n``price_book`` names the book whose price is ``offered_american`` (the best\nprice a bettor can take at this line, e.g. ``bp:10``) and\n``price_book_name`` its display name (\"FanDuel\"). Both are None for an\ninjected or mock price. The source dataclass carries no book, so the route\nsets them.",
+        "description": "Response model for :class:`betting.pricing.EdgeReport` (SIM-339).\n\nThe edge / EV report for one side of one market or prop.  ``side`` is the\nMarketSide enum's ``.value`` (a JSON-native string, e.g. \"home\" / \"over\").\n``positive_edge`` mirrors the source's derived property (edge > 0).\n\nSIM-555: when the betting routes price a market from the stored lines (the\nclosing line; before the game starts, also the current line),\n``price_book`` names the book whose price is ``offered_american`` (the best\nprice a bettor can take at this line, e.g. ``bp:10``) and\n``price_book_name`` its display name (\"FanDuel\"). Both are None for an\ninjected or mock price. The source dataclass carries no book, so the route\nsets them.",
         "properties": {
           "edge": {
             "title": "Edge",
@@ -4047,7 +4047,7 @@
       },
       "PropEdgeResponse": {
         "additionalProperties": false,
-        "description": "SIM-390 response for GET /{game_pk}/props/{player_id}/{prop}.\n\nThe full integer-support PMF for one player's one prop over a Monte-Carlo\nrun, enriched with optional over/under probabilities and an edge report.\n\nWhen a ``line`` query param is supplied the ``p_over``, ``p_under``, and\n``p_push`` fields are populated using the sportsbook convention\n(half-integer line: over + under == 1; integer line: a push mass is\nexcluded from both).  When ``over_ml`` and ``under_ml`` are also supplied\nthe ``edge_report`` is populated via\n:func:`betting.bet_signal.prop_edge_report`; the side evaluated is\ndetermined by the ``bet_side`` query param (``\"over\"`` or ``\"under\"``).\n\n``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use\n(JSON object keys must be strings, so integer outcomes are stringified).",
+        "description": "SIM-390 response for GET /{game_pk}/props/{player_id}/{prop}.\n\nThe full integer-support PMF for one player's one prop over a Monte-Carlo\nrun, enriched with optional over/under probabilities and an edge report.\n\nWhen a ``line`` query param is supplied the ``p_over``, ``p_under``, and\n``p_push`` fields are populated using the sportsbook convention\n(half-integer line: over + under == 1; integer line: a push mass is\nexcluded from both).  When ``over_ml`` and ``under_ml`` are also supplied\nthe ``edge_report`` is populated via\n:func:`betting.pricing.prop_edge_report`; the side evaluated is\ndetermined by the ``bet_side`` query param (``\"over\"`` or ``\"under\"``).\n\n``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use\n(JSON object keys must be strings, so integer outcomes are stringified).",
         "properties": {
           "edge_report": {
             "anyOf": [
@@ -8122,7 +8122,7 @@
     },
     "/api/games/{game_pk}/props/{player_id}/{prop}": {
       "get": {
-        "description": "Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via ``betting.bet_signal`` (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.",
+        "description": "Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via ``betting.pricing`` (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.",
         "operationId": "get_player_prop_edge_api_games__game_pk__props__player_id___prop__get",
         "parameters": [
           {

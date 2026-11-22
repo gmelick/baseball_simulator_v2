@@ -6,7 +6,7 @@ of the home spread (home −1.5 / away +1.5). The book also lists two SEPARATE b
 mis-prices each side (the run lines scored by shape, SIM-549). The accuracy
 comparison applies the same rule; these tests pin it on the live surface:
 
-  * the shared primitives in ``betting.bet_signal``;
+  * the shared primitives in ``betting.pricing``;
   * the ``/edges`` and ``/signals`` routes: an injected away spread, each report
     at its own side's spread, and ``run_line_pricing`` in the response.
 """
@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 import api.routes.games as games_mod
 from api.routes.betting import router as betting_router
-from betting.bet_signal import (
+from betting.pricing import (
     DEFAULT_ONE_SIDED_MARGIN,
     MarketSide,
     devig_one_sided,

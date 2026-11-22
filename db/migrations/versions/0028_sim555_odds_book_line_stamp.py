@@ -34,7 +34,7 @@ archived row keeps its original ``id``.
 
 No constraint on ``book``: the label ``bp:<id>`` fits ``VARCHAR(50)``. No kind
 column: a book's kind (sportsbook, blend, daily fantasy, exchange, prediction
-market) is a lookup on its id in ``pipeline/odds_provider.py``.
+market) is a lookup on its id in ``betting/markets.py``.
 
 DOWNGRADE
 =========

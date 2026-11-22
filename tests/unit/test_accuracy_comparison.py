@@ -422,7 +422,7 @@ def _runline_row(home_spread, home_ml, away_spread, away_ml) -> dict:
 def test_full_game_run_line_uses_the_same_rule():
     """(+1.5, +1.5): two separate bets, each priced from its own line through
     spread_cover_prob, its margin from the same game's full-game total."""
-    from betting.bet_signal import MarketSide, implied_prob_from_american, spread_cover_prob
+    from betting.pricing import MarketSide, implied_prob_from_american, spread_cover_prob
 
     wp = _win_prob(0.5)
     # home +1.5 covers on a margin of -1 or better (0.8); away +1.5 on +1 or worse (0.6)
@@ -536,7 +536,7 @@ async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp
 def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
     """A pair goes through the edge report's arithmetic: its sim probability
     and its de-vigged fair probability, to the bit."""
-    from betting.bet_signal import MarketSide, OddsQuote, run_line_edge_report
+    from betting.pricing import MarketSide, OddsQuote, run_line_edge_report
 
     wp = _win_prob(0.5)
     summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)

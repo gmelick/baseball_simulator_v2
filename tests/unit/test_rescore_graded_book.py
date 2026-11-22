@@ -13,13 +13,13 @@ from typing import Any
 import pytest
 from tests.script_loader import load_script
 
-from betting.bet_signal import devig
-from pipeline.odds_provider import (
+from betting.markets import (
     GRADED_BOOK_PREFERENCE,
     ODDS_ROW_VERSION,
     bettable_labels,
     graded_book_labels,
 )
+from betting.pricing import devig
 
 rescore = load_script("rescore_graded_book")
 

@@ -193,7 +193,7 @@ validate-props: _require_env_file
 ## --book NAME loads one book's rows.  Example:
 ## FLAGS="--seasons 2024 --max-games 5 --provider bettingpros".
 load-historical-odds: _require_env_file
-	docker compose run --rm app python scripts/load_historical_odds.py $(FLAGS)
+	docker compose run --rm app python -m betting.history $(FLAGS)
 
 ## Tail logs for all services (Ctrl-C to exit)
 logs:

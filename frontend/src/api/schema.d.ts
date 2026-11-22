@@ -480,7 +480,7 @@ export interface paths {
         };
         /**
          * Player prop PMF + optional edge report (SIM-390)
-         * @description Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via ``betting.bet_signal`` (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.
+         * @description Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via ``betting.pricing`` (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.
          */
         get: operations["get_player_prop_edge_api_games__game_pk__props__player_id___prop__get"];
         put?: never;
@@ -1024,7 +1024,7 @@ export interface components {
         };
         /**
          * BetSignalModel
-         * @description Response model for :class:`betting.bet_signal.BetSignal` (SIM-369).
+         * @description Response model for :class:`betting.pricing.BetSignal` (SIM-369).
          *
          *     A fireable +EV bet recommendation derived from one :class:`EdgeReport`.
          *     ``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.
@@ -1263,7 +1263,7 @@ export interface components {
         };
         /**
          * EdgeReportModel
-         * @description Response model for :class:`betting.bet_signal.EdgeReport` (SIM-339).
+         * @description Response model for :class:`betting.pricing.EdgeReport` (SIM-339).
          *
          *     The edge / EV report for one side of one market or prop.  ``side`` is the
          *     MarketSide enum's ``.value`` (a JSON-native string, e.g. "home" / "over").
@@ -2442,7 +2442,7 @@ export interface components {
          *     (half-integer line: over + under == 1; integer line: a push mass is
          *     excluded from both).  When ``over_ml`` and ``under_ml`` are also supplied
          *     the ``edge_report`` is populated via
-         *     :func:`betting.bet_signal.prop_edge_report`; the side evaluated is
+         *     :func:`betting.pricing.prop_edge_report`; the side evaluated is
          *     determined by the ``bet_side`` query param (``"over"`` or ``"under"``).
          *
          *     ``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use

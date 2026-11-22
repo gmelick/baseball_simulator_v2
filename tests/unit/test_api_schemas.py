@@ -10,7 +10,7 @@ which plain ``json.dumps`` cannot write. Each response model has a
   (a) build the source dataclass with numpy-bearing data, through the
       dataclass's own factory where it has one (``GameSimSummary.from_results``,
       ``win_probability(...)``, ``PlayByPlay.from_play_results``,
-      ``OverrideDelta.from_summaries``, the ``betting.bet_signal`` report
+      ``OverrideDelta.from_summaries``, the ``betting.pricing`` report
       builders), else a minimal instance;
   (b) convert it with ``from_dataclass`` and check ``model.model_dump_json()``;
   (c) ``json.loads`` the JSON and check that it holds plain Python types only,
@@ -41,12 +41,7 @@ from api.schemas import (
     StateAtPitchModel,
 )
 from api.serialization import to_jsonable
-from betting.bet_signal import (
-    MarketSide,
-    OddsQuote,
-    moneyline_edge_report,
-    prop_edge_report,
-)
+from betting.pricing import MarketSide, OddsQuote, moneyline_edge_report, prop_edge_report
 from simulation.game_state import Bases, GameState, Half, PlayResult
 from simulation.prop_distributions import PropDistribution
 from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
@@ -310,7 +305,7 @@ def test_metric_delta_model_roundtrips_standalone():
 
 
 # ===========================================================================
-# bet_signal.py -- EdgeReport
+# pricing.py -- EdgeReport
 # ===========================================================================
 
 

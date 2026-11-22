@@ -1,4 +1,4 @@
-"""The run line (spread) EdgeReport of :mod:`betting.bet_signal`.
+"""The run line (spread) EdgeReport of :mod:`betting.pricing`.
 
 These tests build a SYNTHETIC per-iteration score margin (a raw
 ``home - away`` array, and a :class:`GameSimSummary` with matching
@@ -23,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from betting.bet_signal import (
+from betting.pricing import (
     MarketSide,
     OddsQuote,
     devig,

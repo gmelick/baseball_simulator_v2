@@ -19,7 +19,7 @@ where that is possible:
     first team to score, a run in the first inning) keeps its simulator
     probability and its outcome: neither depends on the price. Its market
     probability is re-computed from the graded book's closing row with the
-    backtest's own de-vig (``betting.bet_signal``: two-way, or three-way on the
+    backtest's own de-vig (``betting.pricing``: two-way, or three-way on the
     first-inning and first-five moneylines), and its two stored prices become
     the graded book's. A market with no graded row, or a three-way row with no
     tie price, gives the record up: a fresh run gives no record either.
@@ -78,10 +78,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from betting.bet_signal import (  # noqa: E402
-    devig,
-)
-from pipeline.odds_provider import (  # noqa: E402
+from betting.markets import (  # noqa: E402
     GAME_MARKET_KIND,
     GAME_MARKET_TYPES,
     GRADED_BOOK_PREFERENCE,
@@ -92,6 +89,7 @@ from pipeline.odds_provider import (  # noqa: E402
     graded_book_labels,
     graded_row_order_sql,
 )
+from betting.pricing import devig  # noqa: E402
 
 #: The suffix of a re-scored report, beside its original.
 OUTPUT_SUFFIX = ".sim555.json"

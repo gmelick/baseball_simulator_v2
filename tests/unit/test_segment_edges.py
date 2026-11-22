@@ -40,7 +40,8 @@ import api.routes.betting_stored_odds as stored_odds
 import api.routes.games as games_mod
 from api.routes import betting as betting_routes
 from api.routes.betting import router as betting_router
-from betting.bet_signal import (
+from betting.markets import GAME_MARKET_KIND, GAME_MARKET_NAMES, GAME_MARKET_TYPES
+from betting.pricing import (
     MarketSide,
     OddsQuote,
     devig,
@@ -50,7 +51,6 @@ from betting.bet_signal import (
     three_way_edge_report,
 )
 from pipeline.live.ingestion.mock_odds import MockOddsAPI
-from pipeline.odds_provider import GAME_MARKET_KIND, GAME_MARKET_NAMES, GAME_MARKET_TYPES
 from simulation.game_market_distributions import SegmentRuns, side_probabilities
 from simulation.game_state import GameState
 from simulation.results import GameSimSummary
@@ -171,7 +171,7 @@ def _prices(doc) -> str:
 
 
 # ===========================================================================
-# The builders (betting/bet_signal.py)
+# The builders (betting/pricing.py)
 # ===========================================================================
 
 

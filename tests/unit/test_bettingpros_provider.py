@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.bettingpros.parsing import _normalize_name
-from pipeline.bettingpros.provider import BettingProsOddsProvider
-from pipeline.odds_provider import is_bettable
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.bettingpros.match_games import _normalize_name
+from betting.markets import is_bettable
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 
@@ -165,7 +165,7 @@ def test_get_prop_odds_unknown_stat_raises():
 
 # --------------------------------------------------------------------------- registry
 def test_registry_resolves_bettingpros():
-    from pipeline.odds_provider import get_odds_provider
+    from betting.load import get_odds_provider
 
     assert isinstance(get_odds_provider("bettingpros"), BettingProsOddsProvider)
 
@@ -497,7 +497,7 @@ class _CountingFailures(BettingProsOddsProvider):
 
 
 def _one_loader_game(provider: BettingProsOddsProvider, players: int = 20) -> None:
-    from pipeline.odds_provider import BATTER_PROP_STATS, GAME_MARKET_TYPES
+    from betting.markets import BATTER_PROP_STATS, GAME_MARKET_TYPES
 
     for line_type in ("opening", "closing"):
         for market in GAME_MARKET_TYPES:

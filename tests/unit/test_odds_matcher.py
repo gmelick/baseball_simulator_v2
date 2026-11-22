@@ -42,17 +42,17 @@ from typing import Any
 
 import pytest
 
-from pipeline.bettingpros.provider import BettingProsOddsProvider
-from pipeline.bettingpros.schedule import (
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.bettingpros.match_games import (
     _MAX_EVENT_TIME_DELTA,
     _MAX_SINGLE_EVENT_DELTA,
     _is_postponed,
     _read_schedule,
 )
-from pipeline.odds_provider import GAME_MARKET_TYPES
-from pipeline.odds_row_guard import RULES, RefusalTally, check_row
+from betting.markets import GAME_MARKET_TYPES
+from betting.validate import RULES, RefusalTally, check_row
 
-_LOGGER = "pipeline.bettingpros"
+_LOGGER = "betting.bettingpros"
 
 _TEAMS = {
     "STL": ("St. Louis Cardinals", "Cardinals"),

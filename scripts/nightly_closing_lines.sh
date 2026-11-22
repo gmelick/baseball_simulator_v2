@@ -5,7 +5,8 @@
 # A closing row is the last price a book posted before first pitch. The live
 # pipeline promotes each game's closing rows at first pitch. This job is the
 # fallback and the reconciliation: it runs the historical loader's closing pass
-# over the games of yesterday and the day before (UTC dates; two dates cover a
+# (python -m betting.history) over the games of yesterday and the day before
+# (UTC dates; two dates cover a
 # late West-coast game that turns Final after midnight UTC).
 #
 #   * A game the live pipeline missed (a restart, a crash, a failed promotion)
@@ -61,7 +62,8 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 log "start: closing pass for the games of ${D1} and ${D2} (seasons ${SEASONS})"
 # SEASONS is one or two words; the split is intended.
 # shellcheck disable=SC2086
-python "${REPO_DIR}/scripts/load_historical_odds.py" \
+cd "${REPO_DIR}"
+python -m betting.history \
     --provider bettingpros \
     --seasons ${SEASONS} \
     --line-types closing \

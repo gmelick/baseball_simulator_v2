@@ -18,7 +18,7 @@ Semantics (the one source for both loaders):
   - otherwise           -> the coerced value, or ``None`` if coercion fails
 
 NOTE: the ``_opt_int`` (`pipeline/live/bullpen_availability_ingest.py`) and
-``_opt_float`` (`pipeline/bettingpros/parsing.py`) helpers are a *different*
+``_opt_float`` (`betting/bettingpros/fetch_odds.py`) helpers are a *different*
 family — they do NOT treat ``""`` as missing — and are intentionally left
 separate.  Folding them in here would be a behavior change, not a refactor.
 """
