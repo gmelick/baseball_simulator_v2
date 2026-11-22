@@ -1,7 +1,7 @@
 # The betting folder: one place for the odds and the pricing (SIM-645) — plan
 
 Status: PLANNED, 2026-11-21. Owner decisions taken in the session of 2026-11-21 are marked
-"decided". Open questions are in §7.
+"decided"; §7 lists the last two. No question is open.
 
 ## 1. Why
 
@@ -24,6 +24,9 @@ The review behind this plan found three more problems:
   the "does this row have a price" check five times, and the choice of prop markets for a
   pitcher or a batter twice. The historical loader builds a whole live-service object only to
   borrow its two writers.
+
+The plan keeps the folder at two BettingPros files; the HTTP client sits in `fetch_odds.py`
+(§7).
 - **The opening-line job never runs.** Nothing schedules it (`deploy/ofelia/config.ini` has no
   entry; `schedule_opening_line_job` has no caller). The live service's
   `capture_opening_prop_lines` has no caller either. The 165,395 opening rows in
@@ -114,7 +117,8 @@ last two days' games. This takes the opening half of the capture-the-opening-lin
 
 **B3. No mock source.**
 - Delete `MockOddsAPI` and the provider registry. The odds source is BettingPros; a missing
-  `ODDS_API_KEY` raises at the first fetch with one plain message.
+  `ODDS_API_KEY` raises at the first fetch with one plain message. The `ODDS_PROVIDER`
+  setting goes (§7).
 - The API's pricing route: a market with no injected price and no usable stored row returns
   its simulated probability and fair price with no offered price, no edge, no expected value
   and no bet signal. `odds_source` reads `"none"` for it, in place of `"mock"`.
@@ -167,14 +171,16 @@ price of 0 before it relies on that.
 - Rewrite the `ODDS_PROVIDER` lines of the three env templates. The rest of the templates stays
   with the env-template ticket (SIM-632).
 
-## 7. Open questions for the owner
+## 7. Owner decisions (2026-11-21)
 
-1. **The `ODDS_PROVIDER` setting.** With one source, the setting chooses nothing. I recommend
-   removing it: the key's presence decides whether odds load. The nightly script and the
-   scheduler entry then drop their `ODDS_PROVIDER=bettingpros` guards.
-2. **The HTTP client.** Both BettingPros files call the vendor over HTTP with the same retries
-   and cache. The plan puts the client in `fetch_odds.py`, and `match_games.py` imports it. A
-   third small file (`client.py`) is the alternative.
+1. **The `ODDS_PROVIDER` setting is removed (decided).** With one source, the setting chooses
+   nothing. The key's presence decides whether odds load. Step B3 removes the setting from the
+   code, the compose comments and the env templates. The nightly script and the scheduler entry
+   drop their `ODDS_PROVIDER=bettingpros` guards; the script still exits 1 when the key is
+   missing.
+2. **The HTTP client lives in `fetch_odds.py` (decided).** Both BettingPros files call the
+   vendor over HTTP with the same retries and cache. `match_games.py` imports the client from
+   `fetch_odds.py`, so the folder keeps its two files.
 
 ## 8. Out of scope, and stale rows found
 
