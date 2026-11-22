@@ -143,7 +143,7 @@ from betting.markets import (  # noqa: E402
     book_label,
     is_bettable,
 )
-from betting.pricing import implied_prob_from_american as implied_probability  # noqa: E402
+from betting.pricing import implied_prob_from_american  # noqa: E402
 from betting.validate import (  # noqa: E402
     F5_TIE_IMPLIED_MAX,
     F5_TOTAL_LINE_MAX,
@@ -153,6 +153,12 @@ from betting.validate import (  # noqa: E402
     RefusalTally,
     check_row,
 )
+
+
+def implied_probability(american: float) -> float:
+    """The chance a raw vendor price stands for; the vendor's 0 placeholder reads 1.0."""
+    return 1.0 if float(american) == 0 else implied_prob_from_american(american)
+
 
 DEFAULT_SEASONS: tuple[int, ...] = tuple(range(2019, 2027))
 DEFAULT_GAMES = 300

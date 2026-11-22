@@ -1,4 +1,4 @@
-<!-- file-index-key: 94106d714a2783bb -->
+<!-- file-index-key: 734563f91d817af0 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -19,14 +19,14 @@ Every source and config file in the repository, in the order of the [code review
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
 | [7. Getting data in: the raw tables](#stage-7) | 57 | 13,053 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
-| [9. Odds and betting](#stage-9) | 8 | 5,003 |
+| [9. Odds and betting](#stage-9) | 8 | 5,006 |
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
-| [12. The frontend](#stage-12) | 82 | 26,343 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,105 |
-| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,358 |
-| [15. Tests and CI](#stage-15) | 313 | 123,900 |
-| **All** | **779** | **282,576** |
+| [12. The frontend](#stage-12) | 82 | 26,173 |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,104 |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,364 |
+| [15. Tests and CI](#stage-15) | 315 | 124,515 |
+| **All** | **781** | **283,029** |
 
 <a id="stage-1"></a>
 
@@ -309,12 +309,12 @@ Where the bookmakers' prices come from, and how the model's numbers become edges
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`betting/markets.py`](../../betting/markets.py) | 453 | Our market names and our book labels: the vocabulary every odds reader and writer shares. | 21: `test_segment_markets.py`, `test_odds_game_markets.py`, `test_odds_matcher.py` +18 |
+| [`betting/markets.py`](../../betting/markets.py) | 453 | Our market names and our book labels: the vocabulary every odds reader and writer shares. | 22: `test_segment_markets.py`, `test_odds_game_markets.py`, `test_betting_load.py` +19 |
 | [`betting/bettingpros/match_games.py`](../../betting/bettingpros/match_games.py) | 754 | Find BettingPros' event for an MLB game. | 2: `test_odds_matcher.py`, `test_bettingpros_provider.py` |
-| [`betting/bettingpros/fetch_odds.py`](../../betting/bettingpros/fetch_odds.py) | 1,091 | Get BettingPros' odds for an MLB game and build one row per book. | 12: `test_odds_matcher.py`, `test_odds_writers.py`, `test_odds_census_sql.py` +9 |
-| [`betting/validate.py`](../../betting/validate.py) | 426 | The load guard: it refuses an odds row that cannot be one bet. | 11: `test_odds_matcher.py`, `test_odds_writers.py`, `test_live_pipeline.py` +8 |
-| [`betting/load.py`](../../betting/load.py) | 796 | Load the odds into the database. | 14: `test_historical_odds_load.py`, `test_odds_writers.py`, `test_live_pipeline.py` +11 |
-| [`betting/history.py`](../../betting/history.py) | 862 | Load the odds of finished games: the nightly pass and the backfills. | 6: `test_odds_writers.py`, `test_odds_vocabulary.py`, `test_odds_closing_rows.py` +3 |
+| [`betting/bettingpros/fetch_odds.py`](../../betting/bettingpros/fetch_odds.py) | 1,091 | Get BettingPros' odds for an MLB game and build one row per book. | 13: `test_betting_load.py`, `test_odds_matcher.py`, `test_odds_writers.py` +10 |
+| [`betting/validate.py`](../../betting/validate.py) | 426 | The load guard: it refuses an odds row that cannot be one bet. | 12: `test_betting_load.py`, `test_odds_matcher.py`, `test_odds_writers.py` +9 |
+| [`betting/load.py`](../../betting/load.py) | 796 | Load the odds into the database. | 15: `test_betting_load.py`, `test_historical_odds_load.py`, `test_odds_writers.py` +12 |
+| [`betting/history.py`](../../betting/history.py) | 865 | Load the odds of finished games: the nightly pass and the backfills. | 7: `test_betting_load.py`, `test_odds_writers.py`, `test_odds_vocabulary.py` +4 |
 | [`betting/pricing.py`](../../betting/pricing.py) | 611 | The betting layer: compare the simulator's probabilities with the market's prices. | 14: `test_bet_signal_pricing.py`, `test_bet_signal.py`, `test_api_schemas.py` +11 |
 | [`betting/__init__.py`](../../betting/__init__.py) | 10 | The betting layer: the odds from BettingPros, their checks and load, and the pricing. | 2: `test_odds_vocabulary.py`, `test_odds_book_vocabulary.py` |
 
@@ -412,7 +412,7 @@ The React app: the day slate, the game page, the Data Lab and the similarity exp
 | [`frontend/src/api/games.ts`](../../frontend/src/api/games.ts) | 692 | games.ts — the browser's client of the game routes (/api/games). | — |
 | [`frontend/src/api/lab.ts`](../../frontend/src/api/lab.ts) | 171 | lab.ts — the browser's client for the Data Lab: the summary analytics, the data freshness, the schema tree, the read-only SQL runner and the AI-assistant capability probe. | — |
 | [`frontend/src/api/players.ts`](../../frontend/src/api/players.ts) | 25 | players.ts — the name typeahead and the player identity client (api/routes/players.py). | — |
-| [`frontend/src/api/schema.d.ts`](../../frontend/src/api/schema.d.ts) | 5,084 | The TypeScript types of every API route and response (generated from openapi.json by `npm run gen:api`). | — |
+| [`frontend/src/api/schema.d.ts`](../../frontend/src/api/schema.d.ts) | 4,986 | The TypeScript types of every API route and response (generated from openapi.json by `npm run gen:api`). | — |
 | [`frontend/src/api/similarity.ts`](../../frontend/src/api/similarity.ts) | 153 | similarity.ts — the client for the Similarity Explorer (api/routes/similarity_explorer.py). | — |
 | [`frontend/src/api/unauthorized.ts`](../../frontend/src/api/unauthorized.ts) | 22 | unauthorized.ts — the one signal that a data request came back 401 (no valid credential). | — |
 | [`frontend/src/pages/DaySummaryPage.tsx`](../../frontend/src/pages/DaySummaryPage.tsx) *+ css* | 196 | DaySummaryPage.tsx — the Daily Diamond day slate. | — |
@@ -475,7 +475,7 @@ The React app: the day slate, the game page, the Data Lab and the similarity exp
 | [`frontend/.eslintrc.cjs`](../../frontend/.eslintrc.cjs) | 26 | The ESLint rules for the frontend source. | — |
 | [`frontend/Dockerfile`](../../frontend/Dockerfile) | 40 | Frontend image — SIM-401 | — |
 | [`frontend/Dockerfile.dockerignore`](../../frontend/Dockerfile.dockerignore) | 23 | The files the frontend image build leaves out. | — |
-| [`frontend/openapi.json`](../../frontend/openapi.json) | 9,805 | The API contract snapshot (generated by scripts/export_openapi.py; the frontend's types come from it). | — |
+| [`frontend/openapi.json`](../../frontend/openapi.json) | 9,733 | The API contract snapshot (generated by scripts/export_openapi.py; the frontend's types come from it). | — |
 | [`frontend/package.json`](../../frontend/package.json) | 40 | The frontend's npm manifest: its dependencies and its scripts (dev, build, lint, e2e, gen:api). | — |
 | [`frontend/playwright.config.ts`](../../frontend/playwright.config.ts) | 38 | Playwright config — SIM-400 | — |
 | [`frontend/scripts/fetch-logos.mjs`](../../frontend/scripts/fetch-logos.mjs) | 23 | fetch-logos.mjs — SIM-519 Part T. | — |
@@ -523,7 +523,7 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`deploy/monitoring/grafana/datasource.yml`](../../deploy/monitoring/grafana/datasource.yml) | 22 | Grafana datasource provisioning — MLB Baseball Simulation Platform (SIM-374) | — |
 | [`deploy/monitoring/prometheus.yml`](../../deploy/monitoring/prometheus.yml) | 64 | Prometheus scrape configuration — MLB Baseball Simulation Platform (SIM-374) | — |
 | [`deploy/monitoring/secrets/app_api_key.example`](../../deploy/monitoring/secrets/app_api_key.example) | 1 | An example of the API key file Prometheus reads to scrape the app. | — |
-| [`pyproject.toml`](../../pyproject.toml) | 127 | MLB Baseball Simulation Platform — pyproject.toml | — |
+| [`pyproject.toml`](../../pyproject.toml) | 126 | MLB Baseball Simulation Platform — pyproject.toml | — |
 | [`requirements.txt`](../../requirements.txt) | 111 | The Python packages the app image installs. | — |
 | [`requirements-dev.txt`](../../requirements-dev.txt) | 48 | The extra Python packages for tests, lint and type checks. | — |
 | [`requirements-docs.txt`](../../requirements-docs.txt) | 5 | The packages that build the technical reference website (MkDocs). | — |
@@ -607,7 +607,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/probes/fielder_profile_recompute.py`](../../scripts/probes/fielder_profile_recompute.py) | 728 | scripts/probes/fielder_profile_recompute.py — Savant's per-position outs above average and the outfield jump in the fielder profile (SIM-532), run-book step 4: the DuckDB migration, the fielder chain, the league rows,... | 1: `test_fielder_profile_recompute.py` |
 | [`scripts/probes/manager_probe.py`](../../scripts/probes/manager_probe.py) | 915 | scripts/probes/manager_probe.py — SIM-427: the manager probe (plan part 4f). | 1: `test_odds_readers.py` |
 | [`scripts/probes/manager_profile_recompute.py`](../../scripts/probes/manager_profile_recompute.py) | 142 | scripts/probes/manager_profile_recompute.py — SIM-427 part 4a: the manager profiles and the manager league-average row, recomputed on their own (not the five-hour full rebuild). | — |
-| [`scripts/probes/odds_book_census.py`](../../scripts/probes/odds_book_census.py) | 1,874 | scripts/probes/odds_book_census.py — SIM-555: the read-only census of the vendor's books, the gate before the re-load. | 2: `test_odds_book_census.py`, `test_odds_census_sql.py` |
+| [`scripts/probes/odds_book_census.py`](../../scripts/probes/odds_book_census.py) | 1,880 | scripts/probes/odds_book_census.py — SIM-555: the read-only census of the vendor's books, the gate before the re-load. | 2: `test_odds_book_census.py`, `test_odds_census_sql.py` |
 | [`scripts/probes/odds_census.sql`](../../scripts/probes/odds_census.sql) | 459 | scripts/probes/odds_census.sql | — |
 | [`scripts/probes/odds_row_compare.py`](../../scripts/probes/odds_row_compare.py) | 158 | Run the historical odds loader with its vendor reads recorded or replayed, and capture its writes. | — |
 | [`scripts/probes/outfield_arm_recompute.py`](../../scripts/probes/outfield_arm_recompute.py) | 837 | scripts/probes/outfield_arm_recompute.py — the outfield arm block (SIM-550), run-book step 2: the block rebuilt from our own advancement pool, the league rows, and the verify block. | 1: `test_outfield_arm_recompute.py` |
@@ -666,7 +666,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_arsenal_cache_vectorized.py`](../../tests/unit/test_arsenal_cache_vectorized.py) | 370 | The matrix row lookup of the arsenal distance cache. | — |
 | [`tests/unit/test_arsenal_fit_reproducible.py`](../../tests/unit/test_arsenal_fit_reproducible.py) | 204 | The pitcher arsenal fit gives the same arsenal whatever order the pitch rows arrive in. | — |
 | [`tests/unit/test_arsenal_w2_standardization.py`](../../tests/unit/test_arsenal_w2_standardization.py) | 351 | The arsenal W₂ distance reads a GMM's mean and covariance on one scale. | — |
-| [`tests/unit/test_backfill_odds_hash.py`](../../tests/unit/test_backfill_odds_hash.py) | 145 | Unit tests for the odds_hash backfill script (`scripts/probes/backfill_odds_hash.py`). | — |
+| [`tests/unit/test_backfill_odds_hash.py`](../../tests/unit/test_backfill_odds_hash.py) | 146 | Unit tests for the odds_hash backfill script (`scripts/probes/backfill_odds_hash.py`). | — |
 | [`tests/unit/test_backup_age_gauge.py`](../../tests/unit/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
 | [`tests/unit/test_backup_data_stores.py`](../../tests/unit/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (pipeline/backup/data_stores.py). | — |
 | [`tests/unit/test_backup_drill.py`](../../tests/unit/test_backup_drill.py) | 772 | The restore drill for the scheduled backups. | — |
@@ -688,6 +688,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_bet_signal.py`](../../tests/unit/test_bet_signal.py) | 340 | The bet-signal module: which edges become +EV bets, and how much to stake. | — |
 | [`tests/unit/test_bet_signal_pricing.py`](../../tests/unit/test_bet_signal_pricing.py) | 376 | The pricing half of :mod:`betting.pricing`: the implied probabilities and the edges. | — |
 | [`tests/unit/test_bet_signal_run_line.py`](../../tests/unit/test_bet_signal_run_line.py) | 226 | The run line (spread) EdgeReport of :mod:`betting.pricing`. | — |
+| [`tests/unit/test_betting_load.py`](../../tests/unit/test_betting_load.py) | 431 | The one load path (SIM-645): `betting/load.py` fetches, keeps, checks and writes. | — |
 | [`tests/unit/test_bettingpros_provider.py`](../../tests/unit/test_bettingpros_provider.py) | 534 | Unit tests for the SIM-405 BettingPros odds provider. | — |
 | [`tests/unit/test_book_sharpness.py`](../../tests/unit/test_book_sharpness.py) | 330 | `scripts/probes/book_sharpness.py`: the odds-against-outcome read that ranks the books (plan test 17), on a synthetic season. | — |
 | [`tests/unit/test_boxscore_extended.py`](../../tests/unit/test_boxscore_extended.py) | 533 | The extended per-player box score: the batting fields `b2` (doubles), `b3` (triples), `r` (runs scored) and `sb` (stolen bases), the pitching fields `h_allowed` and `r_allowed`, and the exact total-bases formula of `p... | — |
@@ -935,6 +936,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/performance/bench_api_simulate.py`](../../tests/performance/bench_api_simulate.py) | 343 | The end-to-end `GET /api/games/{game_pk}/simulate` latency perf gate. | — |
 | [`tests/performance/bench_simulation.py`](../../tests/performance/bench_simulation.py) | 635 | The performance benchmark harness. | — |
 | [`tests/fixtures/mlb_game_feed/record_fixtures.py`](../../tests/fixtures/mlb_game_feed/record_fixtures.py) | 203 | Record trimmed league game feeds for the tests that parse the feed. | — |
+| [`tests/bp_recorded.py`](../../tests/bp_recorded.py) | 183 | The real BettingPros provider, fed by recorded real responses. | 11: `test_betting_load.py`, `test_odds_writers.py`, `test_live_pipeline.py` +8 |
 | [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) | 753 | MLB Baseball Simulation Platform — CI Pipeline (SIM-146) | — |
 | [`.github/workflows/acceptance-nightly.yml`](../../.github/workflows/acceptance-nightly.yml) | 343 | MLB Baseball Simulation Platform — Production-config acceptance bands (SIM-450) | — |
 | [`.github/workflows/docker-release.yml`](../../.github/workflows/docker-release.yml) | 89 | MLB Baseball Simulation Platform — Docker Release (SIM-146) | — |

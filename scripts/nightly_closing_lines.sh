@@ -55,8 +55,8 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 log "start: opening and closing pass for the games of ${D1} and ${D2} (seasons ${SEASONS})"
 # SEASONS is one or two words; the split is intended.
-# shellcheck disable=SC2086
 cd "${REPO_DIR}"
+# shellcheck disable=SC2086
 python -m betting.history \
     --seasons ${SEASONS} \
     --line-types opening closing \

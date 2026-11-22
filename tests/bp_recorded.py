@@ -2,8 +2,10 @@
 
 The owner's ruling (SIM-645): no test invents a price. A test that needs odds rows
 runs the real :class:`BettingProsOddsProvider` over the responses recorded in
-``tests/fixtures/bettingpros/``. Only the two network seams (``_bp_get`` and
-``_mlb_get``) are replaced; every other line of the provider runs.
+``tests/fixtures/bettingpros/``. The two network seams (``_bp_get`` and
+``_mlb_get``) are replaced; :class:`Recorded99026` also answers the event and the
+game lookups (``_resolve_event``, ``_resolve_game_meta``), because its recording
+holds no schedule. Every price comes from a recorded response.
 
 Two recorded games:
 

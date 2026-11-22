@@ -635,8 +635,11 @@ async def run(args: argparse.Namespace) -> int:
     try:
         pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
         # Re-stamp a stored price the book still posts (Alembic 0029), as the live
-        # writers do.
-        restamp = await pg_column_exists_async(pool, "raw", "game_odds", "last_seen_at")
+        # writers do. A failed probe means the plain insert, as in the live service.
+        try:
+            restamp = await pg_column_exists_async(pool, "raw", "game_odds", "last_seen_at")
+        except Exception:  # noqa: BLE001 -- unknown means the plain insert
+            restamp = False
 
         for g in games:
             game_pk = g["game_pk"]

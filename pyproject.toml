@@ -89,7 +89,6 @@ omit = [
     "similarity/similarity_diagnostics.py",
     "pipeline/etl/venue_backfill_job.py",
     "pipeline/etl/etl_sprint_speed_loader.py",
-    "pipeline/etl/opening_line_job.py",
     "*/migrations/*",
     # Live-infra wiring + integration/real-DB paths: exercised by the SIM-371
     # E2E suite + integration tests, not unit tests (same rationale as above).
