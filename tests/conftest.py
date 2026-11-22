@@ -127,21 +127,12 @@ os.environ["SIM_RELIEF_HAND_OFF_WEIGHT"] = "1.0"
 # and tests/unit/test_route_auth_coverage.py.
 os.environ.setdefault("AUTH_DISABLED", "1")
 
-# The test lane's odds provider. The app container reads the stack's .env
-# through env_file, and that file names the vendor: ODDS_PROVIDER=bettingpros.
-# Twelve tests build the live pipeline with __new__ (no constructor) and set
-# no provider, so the pipeline's lazy fallback reads the environment. Without
-# the pin, those tests build the vendor's provider and its reads go to the
-# network. The pin is a hard one, because setdefault cannot beat the explicit
-# .env value. A test that wants the vendor name sets it with monkeypatch
-# (tests/unit/test_odds_writers.py). The clean_env fixture of
-# tests/unit/test_odds_provider_seam.py deletes it. Monkeypatch restores the
-# pinned value on teardown. The pin removes the API key too. A test that
-# still builds the vendor's provider then sends no BettingPros request. The
-# provider's _bp_get raises "needs an API key" first. The public methods
-# catch that error and return empty rows. The MLB Stats API reads (_mlb_get)
-# need no key, so they still try the network.
-os.environ["ODDS_PROVIDER"] = "mock"
+# No test reaches BettingPros. The app container reads the stack's .env, which
+# holds the vendor key, so the lane removes it. A provider built without the key
+# sends no BettingPros request: its _bp_get raises "needs an API key", and the
+# public methods catch that error and return empty rows. The MLB Stats API
+# reads (_mlb_get) need no key, so a test that reaches one still tries the
+# network; the odds tests feed recorded responses instead.
 os.environ.pop("ODDS_API_KEY", None)
 
 # ---------------------------------------------------------------------------

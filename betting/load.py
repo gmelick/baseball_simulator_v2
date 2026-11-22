@@ -1,177 +1,262 @@
 """Load the odds into the database.
 
-The module holds the odds source seam, the insert statements and the odds hash, and the
-closing-line stamp.
+:func:`load_odds` is the one load path: it fetches every book's rows of a game, drops the
+rows with no price, runs the load guard, and writes the kept rows. The live service and the
+historical loader both call it. The module also holds the insert statements, the odds hash
+and the closing-line stamp.
 """
 
 from __future__ import annotations
 
-import os
-from collections.abc import Callable, Mapping, Sequence
+import logging
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from betting.markets import GAME_ODDS_FIELDS
-from betting.validate import CLOSING_STAMP_GRACE, check_row
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.markets import (
+    GAME_MARKET_TYPES,
+    GAME_ODDS_FIELDS,
+    PROP_STATS,
+    book_id_from_label,
+    prop_markets_for,
+)
+from betting.validate import CLOSING_STAMP_GRACE, RefusalTally, check_row
 
-# ---------------------------------------------------------------------------
-# The provider
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class OddsProvider(Protocol):
-    """An odds source: one row per book for a game market or a prop market.
-
-    ``get_odds`` gives the one row the live service broadcasts.
-    ``isinstance(obj, OddsProvider)`` checks only that the methods exist.
-    An unknown ``market_type`` or ``prop_stat`` raises ``ValueError``.
-    """
-
-    def get_odds(
-        self,
-        game_pk: int,
-        *,
-        line_type: str = "current",
-        market_type: str = "moneyline",
-    ) -> dict[str, Any]:
-        """The graded book's row of one game market."""
-        ...
-
-    def get_odds_by_book(
-        self,
-        game_pk: int,
-        *,
-        line_type: str = "current",
-        market_type: str = "moneyline",
-    ) -> list[dict[str, Any]]:
-        """One row per book for one game market, with every price field."""
-        ...
-
-    def get_prop_odds_by_book(
-        self,
-        game_pk: int,
-        player_id: int,
-        prop_stat: str,
-        *,
-        line_type: str = "current",
-    ) -> list[dict[str, Any]]:
-        """One row per book for one player's prop market."""
-        ...
-
-
-def odds_rows_by_book(
-    provider: Any,
-    game_pk: int,
-    *,
-    line_type: str = "current",
-    market_type: str = "moneyline",
-) -> list[dict[str, Any]]:
-    """Every book's row of one game market, from any provider.
-
-    A provider without ``get_odds_by_book`` (a test fake) answers with its one
-    ``get_odds`` row. A by-book result that is not a list or a tuple (an
-    unconfigured mock object) also falls back to ``get_odds``.
-    """
-    by_book = getattr(provider, "get_odds_by_book", None)
-    if callable(by_book):
-        rows = by_book(game_pk, line_type=line_type, market_type=market_type)
-        if isinstance(rows, (list, tuple)):
-            return list(rows)
-    return [provider.get_odds(game_pk, line_type=line_type, market_type=market_type)]
-
-
-def prop_rows_by_book(
-    provider: Any,
-    game_pk: int,
-    player_id: int,
-    prop_stat: str,
-    *,
-    line_type: str = "current",
-) -> list[dict[str, Any]]:
-    """Every book's row of one player's prop market, from any provider.
-
-    The fallback is the same as :func:`odds_rows_by_book`, to ``get_prop_odds``.
-    """
-    by_book = getattr(provider, "get_prop_odds_by_book", None)
-    if callable(by_book):
-        rows = by_book(game_pk, player_id, prop_stat, line_type=line_type)
-        if isinstance(rows, (list, tuple)):
-            return list(rows)
-    return [provider.get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)]
-
+log = logging.getLogger("betting.load")
 
 # ---------------------------------------------------------------------------
-# The provider registry and factory
+# The odds source
 # ---------------------------------------------------------------------------
 
-#: The environment variable that names the provider.
-ODDS_PROVIDER_ENV = "ODDS_PROVIDER"
 
+def odds_source() -> BettingProsOddsProvider:
+    """The BettingPros provider every odds job reads through.
 
-#: The provider name when the environment variable is unset or empty.
-DEFAULT_PROVIDER = "mock"
-
-
-# Provider name → zero-argument factory. Each factory imports its provider late.
-_PROVIDER_FACTORIES: dict[str, Callable[[], OddsProvider]] = {}
-
-
-def _make_mock_provider() -> OddsProvider:
-    """The factory of the mock provider.
-
-    The import is inside the function. It avoids a circular import and keeps
-    this module importable without the live pipeline's dependencies.
+    The provider reads ``ODDS_API_KEY``. Without the key, each BettingPros read fails
+    with one plain message, and the caller logs it as a failed fetch.
     """
-    from pipeline.live.ingestion.mock_odds import MockOddsAPI
-
-    return MockOddsAPI()
-
-
-def register_odds_provider(name: str, factory: Callable[[], OddsProvider]) -> None:
-    """Register a provider factory, so ``ODDS_PROVIDER=<name>`` selects it.
-
-    ``factory`` takes no argument. A test uses this to inject a fake provider.
-    Names match case-insensitively.
-    """
-    _PROVIDER_FACTORIES[name.strip().lower()] = factory
-
-
-def _make_bettingpros_provider() -> OddsProvider:
-    """The factory of the BettingPros provider."""
-    from betting.bettingpros.fetch_odds import BettingProsOddsProvider
-
     return BettingProsOddsProvider()
 
 
-def get_odds_provider(name: str | None = None) -> OddsProvider:
-    """The selected odds provider.
+# ---------------------------------------------------------------------------
+# The load core: fetch, keep, check, write
+# ---------------------------------------------------------------------------
 
-    The name comes from ``name``, else ``ODDS_PROVIDER``, else ``"mock"``.
-    An unregistered name raises ``RuntimeError``.
+#: The odds fields of a prop row; a row with all three empty is not a quote.
+_PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
+
+#: One offer: its label for the logs, and every book's row of it.
+Offer = tuple[str, list[dict[str, Any]]]
+
+
+def has_price(row: Mapping[str, Any]) -> bool:
+    """True when a game or prop row carries at least one price or line.
+
+    A row with none is not a quote: the loaders skip it without a log line.
     """
-    selected = (name or os.environ.get(ODDS_PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()
-    factory = _PROVIDER_FACTORIES.get(selected)
-    if factory is None:
-        raise RuntimeError(
-            f"Unknown ODDS_PROVIDER '{selected}'. Registered providers: "
-            f"{', '.join(sorted(_PROVIDER_FACTORIES))}. Set {ODDS_PROVIDER_ENV} to one "
-            "of these or register one via register_odds_provider()."
+    fields = _PROP_ODDS_FIELDS if row.get("prop_stat") is not None else GAME_ODDS_FIELDS
+    return any(row.get(f) is not None for f in fields)
+
+
+def _count(failures: Counter[str] | None, step: str) -> None:
+    if failures is not None:
+        failures[step] += 1
+
+
+def game_offers(
+    provider: Any,
+    game_pk: int,
+    *,
+    line_types: tuple[str, ...] = ("current",),
+    game_markets: tuple[str, ...] = GAME_MARKET_TYPES,
+    failures: Counter[str] | None = None,
+) -> list[Offer]:
+    """Every book's priced rows of each game market, one offer per line type and market.
+
+    A fetch that raises is logged and counted in ``failures`` under ``fetch``; the next
+    market still runs. An offer with no priced row is left out.
+    """
+    offers: list[Offer] = []
+    for line_type in line_types:
+        for market_type in game_markets:
+            label = f"{line_type}/{market_type}"
+            try:
+                rows = provider.get_odds_by_book(
+                    game_pk, line_type=line_type, market_type=market_type
+                )
+            except Exception as exc:  # noqa: BLE001 — one market must not stop the rest
+                log.warning("game odds fetch failed game %s %s: %s", game_pk, label, exc)
+                _count(failures, "fetch")
+                continue
+            kept = [row for row in rows if has_price(row)]
+            if kept:
+                offers.append((label, kept))
+    return offers
+
+
+def prop_offers(
+    provider: Any,
+    game_pk: int,
+    roles: Mapping[int, str],
+    *,
+    line_types: tuple[str, ...] = ("current",),
+    prop_stats: tuple[str, ...] = PROP_STATS,
+    failures: Counter[str] | None = None,
+) -> list[Offer]:
+    """Every book's priced rows of each player's prop markets, one offer per market.
+
+    ``roles`` maps each player to a ``PROP_ROLE_*``; :func:`prop_markets_for` picks the
+    markets. A fetch that raises is logged and counted as in :func:`game_offers`.
+    """
+    offers: list[Offer] = []
+    for player_id, role in roles.items():
+        for prop_stat in prop_markets_for(role, prop_stats):
+            for line_type in line_types:
+                label = f"{line_type}/{prop_stat} (player {player_id})"
+                try:
+                    rows = provider.get_prop_odds_by_book(
+                        game_pk, player_id, prop_stat, line_type=line_type
+                    )
+                except Exception as exc:  # noqa: BLE001 — one market must not stop the rest
+                    log.warning("prop fetch failed game %s %s: %s", game_pk, label, exc)
+                    _count(failures, "fetch")
+                    continue
+                kept = [row for row in rows if has_price(row)]
+                if kept:
+                    offers.append((label, kept))
+    return offers
+
+
+def keep_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    game_pk: int,
+    tally: RefusalTally,
+    book_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """The rows of one offer that the load guard keeps.
+
+    ``book_id`` keeps one book's rows only. Each refused row is logged at INFO and
+    counted in ``tally`` by rule, market and book.
+    """
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        if book_id is not None and book_id_from_label(row.get("book")) != book_id:
+            continue
+        tally.offered()
+        refusal = check_row(row)
+        if refusal is None:
+            kept.append(dict(row))
+            continue
+        prop_stat = row.get("prop_stat")
+        market = str(prop_stat if prop_stat is not None else row.get("market_type"))
+        book = str(row.get("book"))
+        tally.add(refusal, market, book)
+        shown = market if prop_stat is None else f"{market} (player {row.get('player_id')})"
+        log.info(
+            "refused game %s %s/%s %s: %s",
+            game_pk,
+            row.get("line_type"),
+            shown,
+            book,
+            refusal.message,
         )
-    return factory()
+    return kept
 
 
-# The built-in providers.
-register_odds_provider("mock", _make_mock_provider)
-register_odds_provider("bettingpros", _make_bettingpros_provider)
+async def write_offers(
+    conn: Any,
+    game_pk: int,
+    offers: Sequence[Offer],
+    *,
+    tally: RefusalTally,
+    restamp: bool,
+    book_id: int | None = None,
+    failures: Counter[str] | None = None,
+    written_by_book: Counter[str] | None = None,
+) -> int:
+    """Check each offer's rows and write the kept rows, one ``executemany`` per offer.
+
+    A write that raises is logged and counted in ``failures`` under ``write``; the next
+    offer still runs. ``written_by_book`` counts the rows sent per book. Returns the
+    rows sent (the dedup may insert fewer).
+    """
+    written = 0
+    for label, rows in offers:
+        kept = keep_rows(rows, game_pk=game_pk, tally=tally, book_id=book_id)
+        if not kept:
+            continue
+        try:
+            if kept[0].get("prop_stat") is not None:
+                await insert_prop_odds_rows(conn, kept, restamp=restamp)
+            else:
+                await insert_game_odds_rows(conn, game_pk, kept, restamp=restamp)
+        except Exception as exc:  # noqa: BLE001 — one offer must not stop the rest
+            log.warning(
+                "odds write failed game %s %s (%d rows): %s", game_pk, label, len(kept), exc
+            )
+            _count(failures, "write")
+            continue
+        written += len(kept)
+        if written_by_book is not None:
+            written_by_book.update(str(row.get("book")) for row in kept)
+    return written
+
+
+async def load_odds(
+    conn: Any,
+    provider: Any,
+    game_pk: int,
+    *,
+    tally: RefusalTally,
+    restamp: bool,
+    line_types: tuple[str, ...] = ("current",),
+    game_markets: tuple[str, ...] | None = GAME_MARKET_TYPES,
+    roles: Mapping[int, str] | None = None,
+    prop_stats: tuple[str, ...] = PROP_STATS,
+    book_id: int | None = None,
+    failures: Counter[str] | None = None,
+    written_by_book: Counter[str] | None = None,
+) -> int:
+    """Load one game's odds: fetch every book's rows, check them, write the kept ones.
+
+    ``game_markets=None`` skips the game markets; ``roles=None`` (or an empty map) skips
+    the props. The fetch blocks on the network: the live service calls
+    :func:`game_offers` and :func:`prop_offers` on its vendor thread and then
+    :func:`write_offers`, so its event loop never waits on BettingPros. Returns the
+    rows sent.
+    """
+    offers: list[Offer] = []
+    if game_markets:
+        offers += game_offers(
+            provider, game_pk, line_types=line_types, game_markets=game_markets, failures=failures
+        )
+    if roles:
+        offers += prop_offers(
+            provider,
+            game_pk,
+            roles,
+            line_types=line_types,
+            prop_stats=prop_stats,
+            failures=failures,
+        )
+    return await write_offers(
+        conn,
+        game_pk,
+        offers,
+        tally=tally,
+        restamp=restamp,
+        book_id=book_id,
+        failures=failures,
+        written_by_book=written_by_book,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Odds rows and the database
 # ---------------------------------------------------------------------------
-
-#: The odds fields of a prop row; a row with all three empty is not a quote.
-_PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
 
 
 def _stamp_param(value: Any) -> datetime | None:
@@ -189,16 +274,6 @@ def _stamp_param(value: Any) -> datetime | None:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
-
-
-def _game_row_has_odds(row: Mapping[str, Any]) -> bool:
-    """True when a game-odds row carries at least one price or line."""
-    return any(row.get(f) is not None for f in GAME_ODDS_FIELDS)
-
-
-def _prop_row_has_odds(row: Mapping[str, Any]) -> bool:
-    """True when a prop-odds row carries a line or a price."""
-    return any(row.get(f) is not None for f in _PROP_ODDS_FIELDS)
 
 
 #: The raw.game_odds INSERT. ``odds_hash`` stays the LAST parameter (two pinned

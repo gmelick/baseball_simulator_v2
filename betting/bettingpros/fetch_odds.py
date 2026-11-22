@@ -30,7 +30,7 @@ from betting.markets import (
     book_kind,
     book_label,
 )
-from betting.validate import implied_probability
+from betting.pricing import implied_prob_from_american
 
 log = logging.getLogger("betting.bettingpros")
 
@@ -284,7 +284,11 @@ def _same_line(
         return False
     if _opt_float(a.get("line")) != _opt_float(b.get("line")):
         return False
-    return abs(implied_probability(cost_a) - implied_probability(cost_b)) <= tolerance
+    if cost_a == 0 or cost_b == 0:
+        # 0 is the vendor's placeholder for no price: two placeholders match.
+        return cost_a == cost_b
+    gap = implied_prob_from_american(cost_a) - implied_prob_from_american(cost_b)
+    return abs(gap) <= tolerance
 
 
 def _tie_rules_out_twin(

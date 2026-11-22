@@ -4,7 +4,7 @@
 #
 # A closing row is the last price a book posted before first pitch. The live
 # pipeline promotes each game's closing rows at first pitch. This job is the
-# fallback and the reconciliation: it runs the historical loader's closing pass
+# fallback and the reconciliation: it runs the historical loader
 # (python -m betting.history) over the games of yesterday and the day before
 # (UTC dates; two dates cover a
 # late West-coast game that turns Final after midnight UTC).
@@ -16,18 +16,17 @@
 #   * Where it differs, the loader adds a second closing row with a later
 #     fetch time, and every reader takes the latest one.
 #
-# The job runs only when ODDS_PROVIDER is "bettingpros". Any other value (or
-# none) writes nothing and exits 0 with one log line: the mock provider must
-# never write mock closing rows into a real store. With the real provider and
-# no ODDS_API_KEY, the job exits 1, because every vendor read would fail.
+# It loads the opening and the closing rows. The live pipeline stores no
+# opening row; BettingPros returns each market's opener with every offer, so
+# this pass recovers it. Without ODDS_API_KEY the job exits 1, because every
+# vendor read would fail.
 #
 # Invoked by the Ofelia scheduler (docker-compose `scheduler` profile) at 10:30
 # UTC, inside the running app container (job-exec): that container reads the
 # host's .env, where ODDS_API_KEY lives; see deploy/ofelia/config.ini. It is a
 # separate job from nightly_ingest.sh on purpose: a vendor outage must not stop
 # the profile and artifact rebuild. Safe to run by hand:
-#   docker compose exec app env ODDS_PROVIDER=bettingpros \
-#       sh /app/scripts/nightly_closing_lines.sh
+#   docker compose exec app sh /app/scripts/nightly_closing_lines.sh
 # =============================================================================
 set -eu
 
@@ -37,13 +36,8 @@ export BASEBALL_DB_DSN
 
 log() { echo "[nightly-closing-lines $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-PROVIDER="$(printf '%s' "${ODDS_PROVIDER:-}" | tr '[:upper:]' '[:lower:]')"
-if [ "${PROVIDER}" != "bettingpros" ]; then
-    log "skipped: ODDS_PROVIDER is '${ODDS_PROVIDER:-unset}', not 'bettingpros' (no rows written)"
-    exit 0
-fi
 if [ -z "${ODDS_API_KEY:-}" ]; then
-    log "ERROR: ODDS_PROVIDER is bettingpros but ODDS_API_KEY is not set; nothing loaded"
+    log "ERROR: ODDS_API_KEY is not set; nothing loaded"
     exit 1
 fi
 
@@ -59,13 +53,12 @@ fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-log "start: closing pass for the games of ${D1} and ${D2} (seasons ${SEASONS})"
+log "start: opening and closing pass for the games of ${D1} and ${D2} (seasons ${SEASONS})"
 # SEASONS is one or two words; the split is intended.
 # shellcheck disable=SC2086
 cd "${REPO_DIR}"
 python -m betting.history \
-    --provider bettingpros \
     --seasons ${SEASONS} \
-    --line-types closing \
+    --line-types opening closing \
     --game-dates "${D1}" "${D2}"
 log "done"

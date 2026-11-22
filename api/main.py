@@ -325,17 +325,14 @@ def create_app() -> FastAPI:
 
     app.include_router(data_health_router)
 
-    # The live routers: ws_router (the WebSocket /ws/games/{game_pk}, the
-    # frontend's live subscriptions) and odds_router (/api/odds/{game_pk},
-    # /api/odds/today/all). The messages come from the live service through
-    # the Redis bridge, or from an in-process pipeline when
-    # LIVE_PIPELINE_ENABLED is on. odds_router carries require_auth; the
-    # WebSocket handler checks the handshake's cookie or key itself and closes
-    # with 1008 on a failure.
-    from pipeline.live.live_ingestion_pipeline import odds_router, ws_router
+    # The live router: the WebSocket /ws/games/{game_pk}, the frontend's live
+    # subscriptions. The messages come from the live service through the Redis
+    # bridge, or from an in-process pipeline when LIVE_PIPELINE_ENABLED is on.
+    # The handler checks the handshake's cookie or key itself and closes with
+    # 1008 on a failure.
+    from pipeline.live.live_ingestion_pipeline import ws_router
 
     app.include_router(ws_router)
-    app.include_router(odds_router)
 
     # GET /metrics: the app's metrics in the Prometheus text format, for the
     # Prometheus scrape and the Grafana dashboards (deploy/monitoring/).

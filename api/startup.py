@@ -245,7 +245,7 @@ async def start_live_feed(app: FastAPI, *, dsn: str, redis_url: str) -> None:
         app.state.pipeline = pipeline
     else:
         log.info(
-            "LIVE_PIPELINE_ENABLED is false — ws_router/odds_router are mounted "
+            "LIVE_PIPELINE_ENABLED is false — ws_router is mounted "
             "but the background live ingestion pipeline is NOT started."
         )
         # The live service runs in its own container and publishes on Redis;

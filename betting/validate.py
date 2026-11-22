@@ -52,6 +52,7 @@ from betting.markets import (
     GAME_MARKET_SIDE,
     GAME_ODDS_FIELDS,
 )
+from betting.pricing import implied_prob_from_american
 
 _log = logging.getLogger("betting.validate")
 
@@ -87,6 +88,7 @@ CLOSING_STAMP_GRACE = timedelta(minutes=15)
 
 #: Every rule, grouped by the market kind it checks, in the order of the checks.
 RULES = (
+    "zero_price",
     "missing_side",
     "spread_size",
     "equal_spreads_priced_like_a_pair",
@@ -110,12 +112,30 @@ class Refusal(NamedTuple):
     message: str  # the reason in plain English, with the numbers
 
 
-def implied_probability(american: float) -> float:
-    """The chance an American price stands for: +150 → 0.40; -150 → 0.60."""
-    price = float(american)
-    if price < 0:
-        return -price / (-price + 100.0)
-    return 100.0 / (price + 100.0)
+#: The price fields of a game row and of a prop row.
+_GAME_PRICE_FIELDS = (
+    "home_ml",
+    "away_ml",
+    "draw_ml",
+    "over_ml",
+    "under_ml",
+    "home_spread_ml",
+    "away_spread_ml",
+)
+_PROP_PRICE_FIELDS = ("over_ml", "under_ml")
+
+
+def _check_zero_price(row: Mapping[str, Any], is_prop: bool) -> Refusal | None:
+    """Refuse a row with a price of 0.
+
+    BettingPros sends 0 as a placeholder for a price a book does not offer. No
+    American price is 0, so the row has no real price on that side.
+    """
+    for field in _PROP_PRICE_FIELDS if is_prop else _GAME_PRICE_FIELDS:
+        value = row.get(field)
+        if value is not None and float(value) == 0.0:
+            return Refusal("zero_price", f"{field} is 0, the vendor's placeholder for no price")
+    return None
 
 
 def _aware(value: Any) -> datetime | None:
@@ -139,7 +159,7 @@ def _check_runline(row: Mapping[str, Any], segment: str | None) -> Refusal | Non
     hs, as_ = float(hs), float(as_)
     if abs(hs) != abs(as_):
         return Refusal("spread_size", f"spreads of different size ({hs:+g} / {as_:+g})")
-    total = implied_probability(hml) + implied_probability(aml)
+    total = implied_prob_from_american(hml) + implied_prob_from_american(aml)
     if hs == as_ != 0 and PAIR_PRICE_BAND[0] <= total <= PAIR_PRICE_BAND[1]:
         return Refusal(
             "equal_spreads_priced_like_a_pair",
@@ -213,15 +233,15 @@ def _check_three_way(row: Mapping[str, Any], segment: str | None) -> Refusal | N
     if draw is None:
         return None
     if segment == "f5":
-        p_draw = implied_probability(draw)
+        p_draw = implied_prob_from_american(draw)
         if p_draw > F5_TIE_IMPLIED_MAX:
             return Refusal(
                 "f5_tie_price",
                 f"a first-five tie at {float(draw):+g} implies {p_draw:.3f}: "
                 "a first-inning tie price",
             )
-    teams = implied_probability(home) + implied_probability(away)
-    total = teams + implied_probability(draw)
+    teams = implied_prob_from_american(home) + implied_prob_from_american(away)
+    total = teams + implied_prob_from_american(draw)
     if total < THREE_WAY_SUM_MIN:
         return Refusal(
             "three_way_sum_below_one",
@@ -287,6 +307,9 @@ def check_row(row: Mapping[str, Any]) -> Refusal | None:
     is_prop = row.get("prop_stat") is not None
     if _is_empty(row, is_prop):
         return None
+    zero = _check_zero_price(row, is_prop)
+    if zero is not None:
+        return zero
     canonical: str | None = None
     if is_prop:
         kind: str | None = "total"
@@ -397,5 +420,4 @@ __all__ = [
     "Refusal",
     "RefusalTally",
     "check_row",
-    "implied_probability",
 ]

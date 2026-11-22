@@ -42,7 +42,7 @@ From the usable rows:
   * a run line listed as two separate bets reads the graded book's own
     two-way margin (:func:`_stored_reference_margin`).
 
-A failed read logs a WARNING, and the markets fall back to the mock.
+A failed read logs a WARNING, and the markets have no stored price.
 """
 
 from __future__ import annotations
@@ -307,7 +307,7 @@ def _stored_rows_by_market(
 
     The columns come from the market's kind (:data:`_STORED_SIDE_COLUMNS`). A three-way row needs its tie price too: a
     row with no ``draw_ml`` is not usable, so the graded row is the first book
-    with a complete row, and with none the market falls to the mock."""
+    with a complete row; with none the market has no stored price."""
     by_market: dict[str, list[dict[str, Any]]] = {}
     for row in _latest_pregame_rows(rows, line_types):
         market = str(row.get("market_type"))
@@ -418,7 +418,7 @@ async def _read_stored_rows(
     which sets the usable line types (:func:`_usable_line_types`), then each
     book's latest usable row of each market in ``markets``. Empty when the app
     has no pool, the game has no stored row, or a read fails; a failure logs a
-    WARNING and the markets fall back to the mock."""
+    WARNING and the markets have no stored price."""
     pool = getattr(request.app.state, "pg_pool", None)
     if pool is None:
         return {}
@@ -429,9 +429,9 @@ async def _read_stored_rows(
         else:
             line_types, rows = await _fetch_stored_rows(pool, game_pk, markets)
         return _stored_rows_by_market(rows, line_types)
-    except Exception as exc:  # noqa: BLE001 -- the mock is the fallback
+    except Exception as exc:  # noqa: BLE001 -- the route prices without stored rows
         log.warning(
-            "SIM-555: the stored odds read failed for game %s; the markets use the mock: %s",
+            "SIM-555: the stored odds read failed for game %s; the markets have no stored price: %s",
             game_pk,
             exc,
         )

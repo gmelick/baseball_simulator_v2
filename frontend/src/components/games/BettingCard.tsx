@@ -3,7 +3,7 @@
  *
  * Each market's edge reports with the favored side highlighted, the +EV signal
  * badges (stake % and offered price), and an `odds_source` indicator per market
- * (injected, stored or mock).
+ * (injected or stored). A market with no price has no section; one note names them.
  * A market priced from the stored lines (the closing line; before the game
  * starts, also the latest current line) names the book of the fair price and, per
  * side, the book with the best price at that line.
@@ -189,17 +189,13 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
     const pricing = runLinePricing(market)
     const title = names[market] ?? FALLBACK_NAMES[market] ?? market
     const threeWay = sides.some((e) => e.side === 'draw')
-    // A market with no stored line for this game has only placeholder prices:
-    // the card shows the sim's view and no price, fair line or edge.
-    const noLine = source === 'mock'
     return (
       <section key={market} className={styles.market} aria-label={title}>
         <div className={styles.marketHeader}>
           <h5 className={styles.marketTitle}>{title}</h5>
-          {source && source !== 'mock' && (
+          {source && source !== 'none' && (
             <Badge variant="info">{source === 'stored' ? 'stored odds' : 'live odds'}</Badge>
           )}
-          {noLine && <Badge variant="default">no stored line</Badge>}
           {fairBook && <span className={styles.stake}>fair price from {fairBook}</span>}
         </div>
 
@@ -223,19 +219,18 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
         <div className={styles.sides}>
           {sides.map((e) => {
             const signal = signalByKey.get(`${e.label}:${e.side}`)
-            // A market with no stored line has an invented line: no grade on it.
-            const result = noLine ? null : e.result
+            const result = e.result
             return (
               <div
                 key={e.side}
-                className={`${styles.side} ${e.positive_edge && !noLine ? styles.favored : ''} ${
+                className={`${styles.side} ${e.positive_edge ? styles.favored : ''} ${
                   result ? styles[`result_${result}`] : ''
                 }`}
                 data-result={result ?? undefined}
               >
                 <div className={styles.sideTop}>
                   <span className={styles.sideName}>{sideLabel(e.label, e.side, e.line)}</span>
-                  {!noLine && <span className={styles.price}>{fmtAmerican(e.offered_american)}</span>}
+                  <span className={styles.price}>{fmtAmerican(e.offered_american)}</span>
                   {result && (
                     <Badge variant={result === 'won' ? 'success' : result === 'lost' ? 'danger' : 'default'}>
                       {result}
@@ -244,20 +239,14 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
                 </div>
                 <div className={styles.metrics}>
                   <span>sim {fmtPct(e.sim_prob)}</span>
-                  {noLine ? (
-                    <span>sim fair {fmtAmerican(e.sim_fair_american)}</span>
-                  ) : (
-                    <>
-                      <span>fair {fmtPct(e.market_fair_prob)}</span>
-                      <span className={e.edge > 0 ? styles.edgePos : styles.edgeNeg}>
-                        edge {fmtSignedPct(e.edge)}
-                      </span>
-                      {/* The book with the best price at this line. */}
-                      {e.price_book_name && <span>best at {e.price_book_name}</span>}
-                    </>
-                  )}
+                  <span>fair {fmtPct(e.market_fair_prob)}</span>
+                  <span className={e.edge > 0 ? styles.edgePos : styles.edgeNeg}>
+                    edge {fmtSignedPct(e.edge)}
+                  </span>
+                  {/* The book with the best price at this line. */}
+                  {e.price_book_name && <span>best at {e.price_book_name}</span>}
                 </div>
-                {signal && !noLine && (
+                {signal && (
                   <div className={styles.signal}>
                     <Badge variant="success">+EV</Badge>
                     <span className={styles.stake}>
@@ -273,7 +262,10 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
     )
   }
 
-  const anyNoLine = Object.values(edges.odds_source).some((v) => v === 'mock')
+  // The markets with no injected and no stored price: they have no section.
+  const noLine = (edges.markets ?? [])
+    .filter((m) => edges.odds_source[m] === 'none')
+    .map((m) => names[LABEL_OF[m] ?? m] ?? FALLBACK_NAMES[LABEL_OF[m] ?? m] ?? m)
   return (
     <div className={styles.card}>
       {edges.final && (
@@ -281,10 +273,9 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
           Final {edges.final.away}–{edges.final.home}: each side shows how it settled.
         </p>
       )}
-      {anyNoLine && (
-        <p className={styles.note}>
-          Markets marked “no stored line” have no sportsbook price stored for this game, so
-          they show only the simulation&apos;s probability and its fair price, and no result.
+      {noLine.length > 0 && (
+        <p className={styles.note} data-testid="betting-no-line">
+          No sportsbook price is stored for: {noLine.join(', ')}.
         </p>
       )}
       {grouped.map((g) => (

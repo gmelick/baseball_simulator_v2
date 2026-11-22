@@ -143,6 +143,7 @@ from betting.markets import (  # noqa: E402
     book_label,
     is_bettable,
 )
+from betting.pricing import implied_prob_from_american as implied_probability  # noqa: E402
 from betting.validate import (  # noqa: E402
     F5_TIE_IMPLIED_MAX,
     F5_TOTAL_LINE_MAX,
@@ -151,7 +152,6 @@ from betting.validate import (  # noqa: E402
     Refusal,
     RefusalTally,
     check_row,
-    implied_probability,
 )
 
 DEFAULT_SEASONS: tuple[int, ...] = tuple(range(2019, 2027))

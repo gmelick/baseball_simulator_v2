@@ -186,12 +186,9 @@ validate-props: _require_env_file
 ## Offline (SIM-435): backfill OPENING + CLOSING odds for Final games into
 ## raw.game_odds / raw.prop_odds so the accuracy comparison has closing lines
 ## to score against.  SIM-555: one row per book (`bp:<id>`), guarded, batched.
-## Network-bound.  Name the provider in FLAGS: --provider bettingpros for real
-## lines, or --provider mock for the deterministic wiring smoke.  The loader
-## refuses to run the mock unasked.  The app container reads ODDS_PROVIDER and
-## ODDS_API_KEY from .env.  A --provider flag wins over .env.
+## Network-bound.  The app container reads ODDS_API_KEY from .env.
 ## --book NAME loads one book's rows.  Example:
-## FLAGS="--seasons 2024 --max-games 5 --provider bettingpros".
+## FLAGS="--seasons 2024 --max-games 5".
 load-historical-odds: _require_env_file
 	docker compose run --rm app python -m betting.history $(FLAGS)
 

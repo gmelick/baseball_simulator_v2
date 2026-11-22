@@ -55,6 +55,8 @@ from typing import Any
 
 import numpy as np
 
+from betting.pricing import implied_prob_from_american
+
 BINS = [0.0, 0.2, 0.35, 0.5, 0.65, 0.8, 1.0001]
 #: A real two-way pair's implied probabilities add to about 1.03-1.10 (the
 #: book's margin). Outside this band the two prices are not two sides of one
@@ -236,8 +238,7 @@ def per_game_sums(
 
 
 def _implied(american: float) -> float:
-    a = float(american)
-    return 100.0 / (a + 100.0) if a > 0 else (-a) / (-a + 100.0)
+    return implied_prob_from_american(float(american))
 
 
 def _mean_overround(recs: list[dict[str, Any]]) -> float | None:

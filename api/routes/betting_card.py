@@ -6,7 +6,7 @@ The book's pregame lines for a slate card.
     GET /api/betting/games/{game_pk}/card-odds
 
 The route gives the graded book's moneyline, run line and total for one game,
-from the stored rows only, never the mock (``betting_stored_odds``): the
+from the stored rows only (``betting_stored_odds``): the
 closing row once stored, else the latest current row while the game is in
 Preview. On a final game, ``settled`` says how each line settled. The
 aggregate router in ``api/routes/betting.py`` includes this one.
@@ -82,7 +82,7 @@ class CardOddsResponse(BaseModel):
 
     Each market is the graded book's row (``GRADED_BOOK_PREFERENCE``): its
     closing row once stored, else its latest current row while the game is in
-    Preview. A market with no stored row is null. Never the mock.
+    Preview. A market with no stored row is null.
     """
 
     game_pk: int
@@ -152,7 +152,7 @@ def _card_odds_from_rows(game_pk: int, stored: StoredRows) -> CardOddsResponse:
     dependencies=[Depends(require_auth)],
     description=(
         "The graded book's moneyline, run line and total for one game, from the stored "
-        "rows only (never the mock): the closing row once stored, else the latest "
+        "rows only: the closing row once stored, else the latest "
         "current row while the game is in Preview. On a final game `settled` says how "
         "each line settled. 404 when the game has no stored row for any of the three."
     ),

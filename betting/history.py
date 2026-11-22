@@ -183,32 +183,32 @@ import logging
 import math
 import os
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
-from betting.load import DEFAULT_PROVIDER, ODDS_PROVIDER_ENV, odds_rows_by_book, prop_rows_by_book
+from betting.load import load_odds, odds_source
 
 # The prop-market vocabulary is imported, never copied: the pitcher / batter
 # split routes which markets a player is asked for. The book vocabulary and the
 # by-book seam come from the same source.
 from betting.markets import (
-    BATTER_PROP_STATS,
     BOOK_IDS_BY_NAME,
     GAME_MARKET_TYPES,
-    GAME_ODDS_FIELDS,
-    PITCHER_PROP_STATS,
+    PROP_ROLE_BATTER,
+    PROP_ROLE_BOTH,
+    PROP_ROLE_PITCHER,
     PROP_STATS,
     STORED_BOOK_FILTER_SQL,
     book_display_name,
-    book_id_from_label,
     book_label,
     resolve_book,
 )
 
 # The load guard (pure; no I/O).
-from betting.validate import RefusalTally, check_row
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from betting.validate import RefusalTally
+from db.introspect import pg_column_exists_async
+from pipeline.db_dsn import require_dsn
 
 log = logging.getLogger("betting.history")
 
@@ -259,12 +259,6 @@ EXIT_INCOMPLETE = 1
 
 #: The end-of-run summary names at most this many incomplete games.
 INCOMPLETE_LIST_MAX = 20
-
-#: The writers the load functions take. A game writer gets
-#: ``(game_pk, rows)``, a prop writer ``(rows)``; both persist one offer's rows
-#: in one batch and return the number of rows sent.
-GameWriter = Callable[[int, list[dict[str, Any]]], Awaitable[Any]]
-PropWriter = Callable[[list[dict[str, Any]]], Awaitable[Any]]
 
 
 def _select_prop_stats(requested: list[str] | None) -> tuple[str, ...]:
@@ -456,32 +450,6 @@ def _incomplete_summary(
     )
 
 
-#: The registry name of the deterministic mock provider.
-MOCK_PROVIDER = "mock"
-
-
-def _select_provider(requested: str | None) -> str:
-    """The odds provider this run reads; never the mock unless asked.
-
-    ``--provider`` wins, then the ``ODDS_PROVIDER`` environment variable, then
-    the registry's default (the mock). The mock writes made-up prices. A run
-    whose provider resolves to the mock without ``--provider mock`` raises
-    ``ValueError``. A real season must never get mock rows by default. The app
-    container reads ``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's
-    ``.env`` (bettingpros since 2026-10-09). The unit-test lane pins the mock
-    in ``tests/conftest.py``.
-    """
-    asked = (requested or "").strip().lower()
-    name = (asked or os.environ.get(ODDS_PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()
-    if name == MOCK_PROVIDER and asked != MOCK_PROVIDER:
-        raise ValueError(
-            "the odds provider resolves to the mock (ODDS_PROVIDER is unset or 'mock'), "
-            "which writes made-up prices: pass --provider bettingpros for a real load, "
-            "or --provider mock for a no-network test run."
-        )
-    return name
-
-
 def _configure_offline_cache() -> float:
     """Set the offers-cache time-to-live for this offline job; return the value in force.
 
@@ -667,12 +635,11 @@ async def _fetch_final_games(
     return [{"game_pk": int(r["game_pk"])} for r in rows]
 
 
-async def _fetch_lineup_players(pool, game_pk: int) -> list[tuple[int, bool]]:
-    """Return ``(player_id, is_pitcher)`` for every player in ``game_pk``'s lineup.
+async def _fetch_lineup_roles(pool, game_pk: int) -> dict[int, str]:
+    """Return ``player_id -> PROP_ROLE_*`` for every player in ``game_pk``'s lineup.
 
-    Reads ``raw.game_lineups`` (the lineup table). ``is_pitcher`` routes
-    which prop markets are requested for the player. DISTINCT so a player who
-    changed slots (sequence > 1) is fetched once.
+    Reads ``raw.game_lineups``. A player listed at a pitcher position is a pitcher, any
+    other a batter; a player listed at both (a two-way player) is both.
     """
     rows = await pool.fetch(
         """
@@ -682,234 +649,13 @@ async def _fetch_lineup_players(pool, game_pk: int) -> list[tuple[int, bool]]:
         """,
         int(game_pk),
     )
-    out: list[tuple[int, bool]] = []
+    roles: dict[int, str] = {}
     for r in rows:
         pos = str(r["position_code"] or "").upper()
-        out.append((int(r["player_id"]), pos in _PITCHER_POSITIONS))
-    return out
-
-
-def _has_line(odds: Mapping[str, Any]) -> bool:
-    """True if a game-odds dict carries at least one resolved price/line."""
-    return any(odds.get(k) is not None for k in GAME_ODDS_FIELDS)
-
-
-def _prop_has_line(quote: Mapping[str, Any]) -> bool:
-    """True if a prop dict carries a line or a price."""
-    return any(quote.get(k) is not None for k in _PROP_ODDS_FIELDS)
-
-
-def _keep_rows(
-    rows: list[dict[str, Any]],
-    *,
-    game_pk: int,
-    tally: RefusalTally | None,
-    book_id: int | None = None,
-) -> list[dict[str, Any]]:
-    """The rows of one offer that go to the database.
-
-    In order: a ``--book`` run drops every other book's row; a row with no
-    price or line at all is skipped silently (it is not a quote); the load
-    guard checks every other row. A refused row is logged at INFO and counted
-    in ``tally`` by rule, market and book.
-    """
-    kept: list[dict[str, Any]] = []
-    for row in rows:
-        if book_id is not None and book_id_from_label(row.get("book")) != book_id:
-            continue
-        prop_stat = row.get("prop_stat")
-        has_odds = _has_line(row) if prop_stat is None else _prop_has_line(row)
-        if not has_odds:
-            continue
-        if tally is not None:
-            tally.offered()
-        refusal = check_row(row)
-        if refusal is None:
-            kept.append(row)
-            continue
-        market = str(prop_stat if prop_stat is not None else row.get("market_type"))
-        book = str(row.get("book"))
-        if tally is not None:
-            tally.add(refusal, market, book)
-        shown = market if prop_stat is None else f"{market} (player {row.get('player_id')})"
-        log.info(
-            "refused game %s %s/%s %s: %s",
-            game_pk,
-            row.get("line_type"),
-            shown,
-            book,
-            refusal.message,
-        )
-    return kept
-
-
-def _count_by_book(rows: list[dict[str, Any]], written_by_book: Counter[str] | None) -> None:
-    """Add each written row to the per-book count (``None`` counts nothing)."""
-    if written_by_book is None:
-        return
-    for row in rows:
-        written_by_book[str(row.get("book"))] += 1
-
-
-async def _load_game_odds(
-    provider,
-    persist_many: GameWriter,
-    game_pk: int,
-    *,
-    line_types: tuple[str, ...] = LINE_TYPES,
-    game_markets: tuple[str, ...] = GAME_MARKET_TYPES,
-    tally: RefusalTally | None = None,
-    written_by_book: Counter[str] | None = None,
-    book_id: int | None = None,
-    failures: Counter[str] | None = None,
-) -> int:
-    """Fetch + persist the game lines (opening & closing by default) for one game.
-
-    Each (line type, market) is one offer. The provider gives every
-    book's row (``odds_rows_by_book``); ``_keep_rows`` applies ``--book``, skips
-    the empty rows and runs the load guard; the kept rows go to
-    ``persist_many(game_pk, rows)`` in ONE call. ``tally`` counts the guard's
-    refusals and ``written_by_book`` the rows written per book (both optional).
-    ``failures`` counts the fetches (``fetch``) and the writes (``write``) that
-    raised and were skipped; ``run()`` keeps such a game off the done-list.
-
-    ``game_markets`` is the market subset (``--game-markets``); the default is
-    every market the book posts. Returns the rows written (sent to the
-    database; the dedup may insert fewer).
-    """
-    written = 0
-    for line_type in line_types:
-        for market_type in game_markets:
-            try:
-                rows = odds_rows_by_book(
-                    provider, game_pk, line_type=line_type, market_type=market_type
-                )
-            except Exception as exc:  # noqa: BLE001 — skip a market we can't fetch
-                log.warning(
-                    "game odds fetch failed game %s %s/%s: %s",
-                    game_pk,
-                    line_type,
-                    market_type,
-                    exc,
-                )
-                _count_failure(failures, "fetch")
-                continue
-            kept = _keep_rows(rows, game_pk=game_pk, tally=tally, book_id=book_id)
-            if not kept:
-                continue
-            try:
-                await persist_many(game_pk, kept)
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "game odds persist failed game %s %s/%s (%d rows): %s",
-                    game_pk,
-                    line_type,
-                    market_type,
-                    len(kept),
-                    exc,
-                )
-                _count_failure(failures, "write")
-                continue
-            written += len(kept)
-            _count_by_book(kept, written_by_book)
-    return written
-
-
-def _prop_stats_for_player(is_pitcher: bool, prop_stats: tuple[str, ...]) -> tuple[str, ...]:
-    """The markets of ``prop_stats`` a pitcher (or a hitter) is asked for.
-
-    A pitcher gets the pitcher markets only, a hitter the batter markets only,
-    so ``hits`` (batter) and ``hits_allowed`` (pitcher) never cross.
-    """
-    role_stats = PITCHER_PROP_STATS if is_pitcher else BATTER_PROP_STATS
-    return tuple(s for s in prop_stats if s in role_stats)
-
-
-async def _load_prop_odds(
-    provider,
-    persist_many: PropWriter,
-    game_pk: int,
-    players: list[tuple[int, bool]],
-    *,
-    prop_stats: tuple[str, ...] = PROP_STATS,
-    line_types: tuple[str, ...] = LINE_TYPES,
-    tally: RefusalTally | None = None,
-    written_by_book: Counter[str] | None = None,
-    book_id: int | None = None,
-    failures: Counter[str] | None = None,
-) -> int:
-    """Fetch + persist the prop lines (opening & closing by default) for one game.
-
-    Each (player, prop_stat, line type) is one offer: every book's row
-    (``prop_rows_by_book``), filtered and guarded as in :func:`_load_game_odds`,
-    persisted in ONE ``persist_many(rows)`` call. ``failures`` counts the
-    skipped fetches and writes, as in :func:`_load_game_odds`.
-
-    ``prop_stats`` narrows the markets (``--prop-stats``); each player is asked
-    only for the markets of his role. An unknown prop_stat raises
-    ``ValueError`` (a programming error). Returns the rows written.
-    """
-    written = 0
-    for player_id, is_pitcher in players:
-        for prop_stat in _prop_stats_for_player(is_pitcher, prop_stats):
-            for line_type in line_types:
-                try:
-                    rows = prop_rows_by_book(
-                        provider, game_pk, player_id, prop_stat, line_type=line_type
-                    )
-                except ValueError:
-                    raise  # an unknown prop_stat is a programming error — surface it
-                except Exception as exc:  # noqa: BLE001 — skip a market we can't fetch
-                    log.warning(
-                        "prop fetch failed game %s player %s %s/%s: %s",
-                        game_pk,
-                        player_id,
-                        prop_stat,
-                        line_type,
-                        exc,
-                    )
-                    _count_failure(failures, "fetch")
-                    continue
-                kept = _keep_rows(rows, game_pk=game_pk, tally=tally, book_id=book_id)
-                if not kept:
-                    continue
-                try:
-                    await persist_many(kept)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning(
-                        "prop persist failed game %s player %s %s/%s (%d rows): %s",
-                        game_pk,
-                        player_id,
-                        prop_stat,
-                        line_type,
-                        len(kept),
-                        exc,
-                    )
-                    _count_failure(failures, "write")
-                    continue
-                written += len(kept)
-                _count_by_book(kept, written_by_book)
-    return written
-
-
-def _build_persisters(dsn: str, pool):
-    """Return ``(persist_game_many, persist_prop_many)`` bound to the live pipeline write path.
-
-    The writers are the batch writers ``LiveIngestionPipeline._persist_odds_many``
-    / ``_persist_prop_odds_many`` (one ``executemany`` per offer; the odds_hash
-    dedup and INSERT … ON CONFLICT DO NOTHING apply unchanged). The pipeline is
-    built without starting it: a dummy redis_url satisfies the __init__ guard,
-    and start() is never called, so Redis is untouched. This job's own asyncpg
-    pool is attached to ``_db``.
-    """
-    from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-
-    pipeline = LiveIngestionPipeline(
-        dsn=dsn,
-        redis_url=os.environ.get("REDIS_URL", "redis://unused:6379"),
-    )
-    pipeline._db = pool  # attach our pool; start() (which would build one) is never called
-    return pipeline._persist_odds_many, pipeline._persist_prop_odds_many
+        role = PROP_ROLE_PITCHER if pos in _PITCHER_POSITIONS else PROP_ROLE_BATTER
+        pid = int(r["player_id"])
+        roles[pid] = PROP_ROLE_BOTH if roles.get(pid, role) != role else role
+    return roles
 
 
 def _written_by_book_summary(written_by_book: Mapping[str, int]) -> str:
@@ -927,8 +673,6 @@ def _written_by_book_summary(written_by_book: Mapping[str, int]) -> str:
 async def run(args: argparse.Namespace) -> int:
     import asyncpg
 
-    from betting.load import get_odds_provider
-
     seasons = sorted({int(s) for s in args.seasons})
     # The market subset and line types are validated here so a bad
     # value stops the run before any provider request.
@@ -945,13 +689,8 @@ async def run(args: argparse.Namespace) -> int:
     )
     # The long offline time-to-live must be in the environment BEFORE
     # the provider is built — it reads the variable in its constructor.
-    try:
-        provider_name = _select_provider(args.provider)
-    except ValueError as exc:
-        log.error("%s", exc)
-        return 2
     cache_ttl = _configure_offline_cache()
-    provider = get_odds_provider(provider_name)
+    provider = odds_source()
     log.info(
         "SIM-435 historical odds backfill — seasons=%s provider=%s game_odds=%s props=%s "
         "game_markets=%s prop_stats=%s line_types=%s book=%s offers_cache_ttl_s=%s",
@@ -1030,7 +769,9 @@ async def run(args: argparse.Namespace) -> int:
     load_failures: Counter[str] = Counter()
     try:
         pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
-        persist_game_many, persist_prop_many = _build_persisters(args.dsn, pool)
+        # Re-stamp a stored price the book still posts (Alembic 0029), as the live
+        # writers do.
+        restamp = await pg_column_exists_async(pool, "raw", "game_odds", "last_seen_at")
 
         for g in games:
             game_pk = g["game_pk"]
@@ -1040,34 +781,37 @@ async def run(args: argparse.Namespace) -> int:
             failures_before = _read_failures(provider)
             load_failures_before = load_failures.copy()
             if not no_game_odds:
-                n_game_rows += await _load_game_odds(
+                n_game_rows += await load_odds(
+                    pool,
                     provider,
-                    persist_game_many,
                     game_pk,
+                    tally=tally,
+                    restamp=restamp,
                     line_types=line_types,
                     game_markets=game_markets,
-                    tally=tally,
-                    written_by_book=written_by_book,
                     book_id=book_id,
                     failures=load_failures,
+                    written_by_book=written_by_book,
                 )
 
             if not args.no_props:
-                players = await _fetch_lineup_players(pool, game_pk)
-                if not players:
+                roles = await _fetch_lineup_roles(pool, game_pk)
+                if not roles:
                     log.info("skip props for game %s (no lineup rows)", game_pk)
                 else:
-                    n_prop_rows += await _load_prop_odds(
+                    n_prop_rows += await load_odds(
+                        pool,
                         provider,
-                        persist_prop_many,
                         game_pk,
-                        players,
-                        prop_stats=prop_stats,
-                        line_types=line_types,
                         tally=tally,
-                        written_by_book=written_by_book,
+                        restamp=restamp,
+                        line_types=line_types,
+                        game_markets=None,
+                        roles=roles,
+                        prop_stats=prop_stats,
                         book_id=book_id,
                         failures=load_failures,
+                        written_by_book=written_by_book,
                     )
 
             n_done += 1
@@ -1216,12 +960,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="SECONDS",
         help="SIM-555: the wait before the first retry; each later wait is twice as long "
         "(the provider caps one wait at 60 s). Default: %(default)s.",
-    )
-    p.add_argument(
-        "--provider",
-        default=None,
-        help="Odds provider name (defaults to the ODDS_PROVIDER env). The mock "
-        "(the registry default) runs only when named here: --provider mock.",
     )
     p.add_argument(
         "--book",

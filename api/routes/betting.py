@@ -147,7 +147,7 @@ class EdgesResponse(BaseModel):
 
     Carries the per-market :class:`EdgeReportModel` list plus the run metadata
     (n_iterations / base_seed) and the per-market ``odds_source`` flags
-    ("injected" / "stored" / "mock") so a consumer knows where each market's
+    ("injected" / "stored" / "none") so a consumer knows where each market's
     prices came from. SIM-555: "stored" = each book's stored closing line, or,
     before the game starts, its latest stored current line. A stored market
     names its graded book in
@@ -184,7 +184,7 @@ class SignalsResponse(BaseModel):
     Carries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the
     run metadata, the gate config that produced them (min_edge / min_ev /
     kelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags
-    ("injected" / "stored" / "mock"). SIM-555: ``fair_book`` as on /edges; each
+    ("injected" / "stored" / "none"). SIM-555: ``fair_book`` as on /edges; each
     signal names the book of its offered price (``price_book``).
     """
 
@@ -372,9 +372,9 @@ def _grade(actual: Any, label: str, side: str, line: float | None) -> str | None
         "Preview; an in-play line is never read). The fair probability comes "
         "from one book's row (the graded book, named in fair_book) and each "
         "side's offered price, and so its EV, from the best stored price at that "
-        "line (its book named in price_book); else the deterministic mock "
-        "provider. odds_source flags each "
-        "market: injected, stored or mock. market_names gives each label its plain "
+        "line (its book named in price_book). A market with neither an injected "
+        "nor a stored price gets no report. odds_source flags each "
+        "market: injected, stored or none. market_names gives each label its plain "
         "name. A cached summary with no inning grid prices the full-game markets "
         "only. numpy-free EdgeReportModel list. 503 if "
         "no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or "
@@ -402,7 +402,7 @@ async def get_game_edges(
             "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists "
             "two separate bets); defaults to the mirror of run_line (a pair). Two "
             "separate bets are priced over the margin of over_ml / under_ml, then "
-            "home_ml / away_ml (each injected, else the mock's)"
+            "home_ml / away_ml when injected, else a flat 1.05 margin"
         ),
     ),
     prices: str | None = Query(None, description=_PRICES_PARAM_DESCRIPTION),
@@ -483,7 +483,7 @@ async def get_game_edges(
     dependencies=[Depends(require_auth)],
     description=(
         "Build the per-market EdgeReports (as /edges, with the same injected / "
-        "stored / mock odds sources and the same prices document; SIM-546: the "
+        "stored / none odds sources and the same prices document; SIM-546: the "
         "fifteen game markets by default, a tie side included), gate them to the "
         "+EV set "
         "(strictly positive edge >= min_edge AND ev > min_ev), size each via "
@@ -523,7 +523,7 @@ async def get_game_signals(
             "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists "
             "two separate bets); defaults to the mirror of run_line (a pair). Two "
             "separate bets are priced over the margin of over_ml / under_ml, then "
-            "home_ml / away_ml (each injected, else the mock's)"
+            "home_ml / away_ml when injected, else a flat 1.05 margin"
         ),
     ),
     prices: str | None = Query(None, description=_PRICES_PARAM_DESCRIPTION),

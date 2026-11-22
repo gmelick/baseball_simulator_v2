@@ -36,14 +36,6 @@ RESIM_COOLDOWN_S = 10
 GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 
 
-# The role a prop-eligible player plays, as _collect_prop_player_roles()
-# reports it. A pitcher is asked only for the pitcher markets and a hitter only
-# for the batter markets. "both" is the safe default: a player whose role is
-# unknown, or a two-way player who bats AND pitches, is asked for every market.
-PROP_ROLE_PITCHER = "pitcher"
-PROP_ROLE_BATTER = "batter"
-PROP_ROLE_BOTH = "both"
-
 #: Boxscore position codes that mark a pitcher (P; some feeds use
 #: SP / RP; TWP is a two-way player).
 _PITCHER_POSITION_CODES = frozenset({"P", "SP", "RP", "TWP"})

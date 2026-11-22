@@ -4,10 +4,10 @@
 socket, rebuilds the game state on every change, writes the game rows and the
 lineups, stores the odds and signals a re-simulation at the end of every plate
 appearance. ``create_app`` serves it on its own (the ``live`` service, which
-publishes to Redis); the API mounts ``ws_router`` and ``odds_router``. The
-parts live in ``pipeline/live/ingestion/``: the settings, the odds rows and
-closing rows, the mock odds, the odds routes, the game-state builder, the
-WebSocket parts and the game-odds and prop-odds mixins.
+publishes to Redis); the API mounts ``ws_router``. The parts live in
+``pipeline/live/ingestion/``: the settings, the odds cycle's timing, the
+game-state builder, the WebSocket parts and the game-odds and prop-odds mixins.
+The odds load itself is :func:`betting.load.load_odds`.
 
 The flow
 --------
@@ -59,12 +59,8 @@ from fastapi.routing import APIRouter
 # The odds routes and the live WebSocket require a login. api.auth
 # imports only FastAPI and Starlette, so this import makes no cycle.
 from api.auth import authenticate_websocket
-
-# Odds/prop provider seam.  The pipeline obtains its odds source via
-# get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
-# hard-instantiating MockOddsAPI, so a real provider can drop in behind the
-# OddsProvider interface without touching ingestion/CLV/persistence code.
-from betting.load import OddsProvider, get_odds_provider
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.load import odds_source
 
 # The load guard. Every writer shows it each non-empty row before the
 # row is persisted; a refused row is logged, counted and never written.
@@ -96,7 +92,6 @@ from pipeline.live.ingestion.odds_cycle import (
     _scheduled_start,
     pregame_odds_cadence_s,
 )
-from pipeline.live.ingestion.odds_routes import odds_router
 from pipeline.live.ingestion.prop_odds import PropOddsMixin
 
 # The type of the simulation callback. It MUST be an async function: a sync
@@ -122,22 +117,11 @@ log = logging.getLogger("live_ingestion")
 
 
 # ---------------------------------------------------------------------------
-# The odds sources
+# The odds source
 # ---------------------------------------------------------------------------
-# The provider names the books (one row per book, SIM-555). Each odds cycle
-# asks the provider for every book's row of a market (``odds_rows_by_book`` /
-# ``prop_rows_by_book``) and stores every row the load guard keeps, each under
-# its own label (``'bp:<id>'`` from BettingPros; the mock's one row keeps
-# ``'consensus'``).
-#
-# ODDS_PROVIDER selects the provider (``get_odds_provider()``): the
-# deterministic MockOddsAPI is the default, and ODDS_PROVIDER=bettingpros
-# switches to the real BettingProsOddsProvider.
-#
-# The 15 prop markets live in betting/markets.py (PROP_STATS, split into
-# PITCHER_PROP_STATS / BATTER_PROP_STATS, the prop-market work of SIM-421);
-# MockOddsAPI._PROP_CONFIG and the raw.prop_odds CHECK constraint (migration
-# 0022) list the same 15 values.
+# The odds come from BettingPros, one row per book (``'bp:<id>'``). Each cycle
+# loads every book's row through betting.load and stores each row the load
+# guard keeps.
 
 
 # Singleton shared across the FastAPI app
@@ -166,7 +150,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         dsn: str | None = None,
         redis_url: str | None = None,
         simulation_callback: SimulationCallback | None = None,
-        odds_provider: OddsProvider | None = None,
+        odds_provider: BettingProsOddsProvider | None = None,
     ) -> None:
         """
         Parameters
@@ -211,9 +195,8 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
             )
         self._sim_cb: SimulationCallback | None = simulation_callback
 
-        # Odds source.  Defaults to the env-selected provider
-        # (MockOddsAPI unless ODDS_PROVIDER is set); tests inject a fake here.
-        self._odds: OddsProvider = odds_provider or get_odds_provider()
+        # The odds source: BettingPros; tests inject a fake here.
+        self._odds: BettingProsOddsProvider = odds_provider or odds_source()
 
         self._db: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
@@ -1049,7 +1032,6 @@ def create_app(
 
     app = FastAPI(title="MLB Live Ingestion", lifespan=lifespan)
     app.include_router(ws_router)
-    app.include_router(odds_router)
 
     @app.get("/health")
     async def live_health(response: Response):

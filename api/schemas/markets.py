@@ -24,7 +24,7 @@ class EdgeReportModel(_ApiModel):
     ``price_book`` names the book whose price is ``offered_american`` (the best
     price a bettor can take at this line, e.g. ``bp:10``) and
     ``price_book_name`` its display name ("FanDuel"). Both are None for an
-    injected or mock price. The source dataclass carries no book, so the route
+    injected price. The source dataclass carries no book, so the route
     sets them.
     """
 
@@ -44,7 +44,7 @@ class EdgeReportModel(_ApiModel):
 
     positive_edge: bool
 
-    #: The stored book label of the offered price (None: injected or mock).
+    #: The stored book label of the offered price (None: an injected price).
     price_book: str | None = None
     #: That book's display name ("FanDuel").
     price_book_name: str | None = None
@@ -104,7 +104,7 @@ class BetSignalModel(_ApiModel):
     #: The full source EdgeReport (sim_prob, market fair prob, sim_fair_american).
     report: EdgeReportModel
 
-    #: The stored book label of the offered price (None: injected or mock).
+    #: The stored book label of the offered price (None: an injected price).
     price_book: str | None = None
     #: That book's display name ("FanDuel").
     price_book_name: str | None = None

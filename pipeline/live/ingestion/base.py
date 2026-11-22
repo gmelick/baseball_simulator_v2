@@ -12,8 +12,9 @@ import aiohttp
 import asyncpg
 import redis.asyncio as aioredis
 
-from betting.load import OddsProvider, get_odds_provider
-from betting.validate import RefusalTally, check_row
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.load import odds_source
+from betting.validate import RefusalTally
 from db.introspect import pg_column_exists_async
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 from pipeline.live.ingestion.mlb_websocket import MLBGameWebSocket
@@ -26,7 +27,7 @@ class PipelineBase:
 
     _dsn: str | None
     _redis_url: str | None
-    _odds: OddsProvider
+    _odds: BettingProsOddsProvider
     _db: asyncpg.Pool | None
     _redis: aioredis.Redis | None
     _broadcaster: Any
@@ -70,18 +71,15 @@ class PipelineBase:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, partial(fn, *args, **kwargs))
 
-    def _odds_provider(self) -> OddsProvider:
-        """
-        Resolve the active odds provider.
+    def _odds_provider(self) -> BettingProsOddsProvider:
+        """The odds provider: the one set in ``__init__``, else a new BettingPros provider.
 
-        Normally set in __init__ (env-selected, defaults to MockOddsAPI), but
-        pipelines built via __new__ (some tests) skip __init__, so fall back to
-        the default provider lazily.  A real provider drops in behind the
-        OddsProvider interface with no further changes here.
+        A pipeline built with ``__new__`` (some tests) skips ``__init__``, so the
+        provider is made on first use.
         """
         provider = getattr(self, "_odds", None)
         if provider is None:
-            provider = get_odds_provider()
+            provider = odds_source()
             self._odds = provider
         return provider
 
@@ -100,32 +98,3 @@ class PipelineBase:
             tally = RefusalTally()
             self._odds_refusals = tally
         return tally
-
-    def _guard_rows(self, game_pk: int, rows: list[dict]) -> list[dict]:
-        """The rows of one offer that the load guard keeps.
-
-        The caller passes non-empty rows only. Each refused row is logged at
-        INFO and counted in :meth:`_refusal_tally` by rule, market and book.
-        """
-        tally = self._refusal_tally()
-        kept: list[dict] = []
-        for row in rows:
-            tally.offered()
-            refusal = check_row(row)
-            if refusal is None:
-                kept.append(row)
-                continue
-            prop_stat = row.get("prop_stat")
-            market = str(prop_stat if prop_stat is not None else row.get("market_type"))
-            book = str(row.get("book"))
-            tally.add(refusal, market, book)
-            shown = market if prop_stat is None else f"{market} (player {row.get('player_id')})"
-            log.info(
-                "refused game %s %s/%s %s: %s",
-                game_pk,
-                row.get("line_type"),
-                shown,
-                book,
-                refusal.message,
-            )
-        return kept

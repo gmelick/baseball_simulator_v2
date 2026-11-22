@@ -1,5 +1,5 @@
-"""The player-prop odds of the live cycle: the players each market needs, the
-fetch, the writes and the closing-line marks.
+"""The live cycle's player props: the players each game needs, the cadence of the
+load, and the closing-line stamp at first pitch.
 """
 
 from __future__ import annotations
@@ -12,30 +12,16 @@ from datetime import (
 )
 from typing import Any
 
-from betting.load import (
-    _PROP_ODDS_INSERT_SQL,
-    _prop_odds_hash,
-    _prop_row_has_odds,
-    insert_prop_odds_rows,
-    promote_closing_prop_rows,
-    prop_odds_insert_args,
-    prop_rows_by_book,
-)
-from betting.markets import BATTER_PROP_STATS, PITCHER_PROP_STATS, PROP_STATS
+from betting.load import promote_closing_prop_rows, prop_offers, write_offers
+from betting.markets import PROP_ROLE_BATTER, PROP_ROLE_BOTH, PROP_ROLE_PITCHER
 from pipeline.live.ingestion.base import PipelineBase
-from pipeline.live.ingestion.constants import (
-    _PITCHER_POSITION_CODES,
-    PROP_FETCH_CADENCE_S,
-    PROP_ROLE_BATTER,
-    PROP_ROLE_BOTH,
-    PROP_ROLE_PITCHER,
-)
+from pipeline.live.ingestion.constants import _PITCHER_POSITION_CODES, PROP_FETCH_CADENCE_S
 
 log = logging.getLogger("live_ingestion")
 
 
 class PropOddsMixin(PipelineBase):
-    """Fetches and stores the player props of every watched game."""
+    """Loads the player props of every watched game, and stamps their closing rows."""
 
     @staticmethod
     def _collect_prop_player_roles(game_state: dict) -> dict[int, str]:
@@ -127,130 +113,6 @@ class PropOddsMixin(PipelineBase):
                 _add((player or {}).get("id"), role)
         return roles
 
-    @classmethod
-    def _collect_prop_player_ids(cls, game_state: dict) -> list[int]:
-        """
-        Extract the player_ids eligible for prop-line capture from a
-        built game_state (the keys of :meth:`_collect_prop_player_roles`).
-
-        Deduplicated, None-filtered, and order-stable so a fixed game_state
-        always yields the same id list.
-        """
-        return list(cls._collect_prop_player_roles(game_state))
-
-    @staticmethod
-    def _prop_stats_for_role(role: str, prop_stats: tuple[str, ...]) -> tuple[str, ...]:
-        """
-        The subset of ``prop_stats`` a player in ``role`` is asked for.
-
-        A pitcher gets the pitcher markets, a hitter the batter markets. Any
-        other role (PROP_ROLE_BOTH, or an unknown string) gets every market —
-        the safe default, so a mis-labelled player loses no quote.
-        """
-        if role == PROP_ROLE_PITCHER:
-            return tuple(s for s in prop_stats if s in PITCHER_PROP_STATS)
-        if role == PROP_ROLE_BATTER:
-            return tuple(s for s in prop_stats if s in BATTER_PROP_STATS)
-        return prop_stats
-
-    def _prop_offers(
-        self,
-        game_pk: int,
-        player_ids: list[int],
-        *,
-        line_type: str = "current",
-        prop_stats: tuple[str, ...] = PROP_STATS,
-        roles: Mapping[int, str] | None = None,
-    ) -> list[tuple[int, str, list[dict]]]:
-        """Every book's prop rows, one entry per offer.
-
-        An offer is one (player, prop_stat) at one line type. Each entry is
-        ``(player_id, prop_stat, rows)``: the provider's by-book rows through
-        ``prop_rows_by_book`` (one row for the mock or a provider with only the
-        one-row method), empty rows dropped. An offer with no row is left out.
-
-        ``roles`` (player_id → PROP_ROLE_*) splits the markets by role;
-        a player missing from ``roles``, or ``roles=None``, is asked for every
-        market in ``prop_stats``. An unknown prop_stat is logged and skipped.
-        """
-        provider = self._odds_provider()  # Env-selected, mock by default
-        offers: list[tuple[int, str, list[dict]]] = []
-        for player_id in player_ids:
-            role = roles.get(player_id, PROP_ROLE_BOTH) if roles else PROP_ROLE_BOTH
-            for prop_stat in self._prop_stats_for_role(role, prop_stats):
-                try:
-                    rows = prop_rows_by_book(
-                        provider, game_pk, player_id, prop_stat, line_type=line_type
-                    )
-                except ValueError:
-                    # Unknown prop_stat — skip rather than abort the cycle.
-                    log.warning(
-                        "skipping unknown prop_stat '%s' for player %s game %s",
-                        prop_stat,
-                        player_id,
-                        game_pk,
-                    )
-                    continue
-                kept = [row for row in rows if _prop_row_has_odds(row)]
-                if kept:
-                    offers.append((player_id, prop_stat, kept))
-        return offers
-
-    def _fetch_prop_odds(
-        self,
-        game_pk: int,
-        player_ids: list[int],
-        *,
-        line_type: str = "current",
-        prop_stats: tuple[str, ...] = PROP_STATS,
-        roles: Mapping[int, str] | None = None,
-    ) -> list[dict]:
-        """
-        A flat list of every book's prop rows for the players.
-
-        The provider names the books: the method reads every book's row of
-        each (player, prop_stat) through ``prop_rows_by_book``. BettingPros
-        gives one row per book, labelled ``'bp:<id>'``; the mock gives its one
-        ``'consensus'`` row. Empty rows are dropped; the load guard runs later,
-        in the persisting cycle.
-
-        ``roles`` splits the markets by role (see
-        :meth:`_prop_offers`).
-        """
-        return [
-            row
-            for _player_id, _prop_stat, rows in self._prop_offers(
-                game_pk, player_ids, line_type=line_type, prop_stats=prop_stats, roles=roles
-            )
-            for row in rows
-        ]
-
-    async def _persist_prop_offers(
-        self, game_pk: int, offers: list[tuple[int, str, list[dict]]]
-    ) -> int:
-        """Guard and persist each offer's rows in one batch; return the rows sent.
-
-        One ``executemany`` per offer. A failed batch is logged and the next
-        offer still runs.
-        """
-        written = 0
-        for player_id, prop_stat, rows in offers:
-            kept = self._guard_rows(game_pk, rows)
-            if not kept:
-                continue
-            try:
-                written += await self._persist_prop_odds_many(kept)
-            except Exception as exc:  # noqa: BLE001 — one offer must not stop the rest
-                log.warning(
-                    "prop persist failed game %s player %s %s (%d rows): %s",
-                    game_pk,
-                    player_id,
-                    prop_stat,
-                    len(kept),
-                    exc,
-                )
-        return written
-
     async def _persist_prop_odds_cycle(self, game_pk: int, game_state: dict) -> int:
         """
         Live prop-odds persistence cycle.
@@ -300,112 +162,23 @@ class PropOddsMixin(PipelineBase):
             return 0
 
         clock[game_pk] = now
-        offers = await self._off_loop(
-            self._prop_offers, game_pk, player_ids, line_type="current", roles=roles
+        offers = await self._off_loop(prop_offers, self._odds_provider(), game_pk, roles)
+        written = await write_offers(
+            self._db,
+            game_pk,
+            offers,
+            tally=self._refusal_tally(),
+            restamp=await self._last_seen_available(),
         )
-        written = await self._persist_prop_offers(game_pk, offers)
         if written:
             log.info(
-                "SIM-555: persisted %d prop rows from %d offers for game %s (%d players)",
+                "persisted %d prop rows from %d offers for game %s (%d players)",
                 written,
                 len(offers),
                 game_pk,
                 len(player_ids),
             )
         return written
-
-    async def capture_opening_prop_lines(
-        self,
-        game_pk: int,
-        player_ids: list[int],
-        *,
-        prop_stats: tuple[str, ...] = PROP_STATS,
-        roles: Mapping[int, str] | None = None,
-    ) -> int:
-        """
-        Opening-line capture hook for player props.
-
-        Writes the raw.prop_odds rows of each (player, prop_stat) with
-        line_type='opening'.  This is the prop analogue of the nightly opening
-        game-line capture (opening_line_job.py): it records the FIRST
-        line posted so opening→closing movement is recoverable for props, not
-        just game markets.
-
-        The rows are the provider's by-book opening rows (BettingPros:
-        the opener's one row, labelled ``'bp:<id>'``); each passes the load
-        guard and each offer's rows go to the database in one batch.
-
-        Pass ``roles`` (player_id → PROP_ROLE_*) to split the markets
-        by role; without it every player is asked for every market.
-
-        Idempotent by virtue of the dedup hash (migration 0013): re-running with
-        an unchanged opening line is a no-op via ON CONFLICT DO NOTHING.
-
-        Returns the number of opening prop rows sent.
-        """
-        offers = self._prop_offers(
-            game_pk,
-            player_ids,
-            line_type="opening",
-            prop_stats=prop_stats,
-            roles=roles,
-        )
-        written = await self._persist_prop_offers(game_pk, offers)
-        if written:
-            log.info("SIM-340: captured %d opening prop lines for game %s", written, game_pk)
-        return written
-
-    _prop_odds_hash = staticmethod(_prop_odds_hash)
-
-    async def _persist_prop_odds(self, prop: dict) -> None:
-        """
-        Inserts a fresh player prop odds snapshot into raw.prop_odds.
-
-        Parameters
-        ----------
-        prop : one prop row from the configured provider's get_prop_odds_by_book()
-               (MockOddsAPI by default, or BettingProsOddsProvider under
-               ODDS_PROVIDER=bettingpros).  Required keys:
-                 game_pk, player_id, prop_stat, line,
-                 over_ml, under_ml, book, line_type, is_sharp_book,
-                 source, is_mock
-
-        Notes
-        -----
-        The live pipeline writes line_type='current' during active game windows
-        via _persist_prop_odds_cycle(). Opening lines are
-        captured by capture_opening_prop_lines() and the nightly opening_line_job.
-        Closing lines are designated by mark_closing_prop_lines().
-
-        Also writes ``odds_hash`` (SHA-256 of the prop payload) and uses
-        ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING so the
-        live cadence never accumulates duplicate rows for an unchanged line.
-        Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
-        0013).
-
-        Also writes ``book_line_at`` (migration 0028). The cycles
-        persist one offer's rows at a time through
-        :meth:`_persist_prop_odds_many`.
-
-        The DB enforces prop_stat values via CHECK constraint (migration 0004).
-        Any unknown prop_stat will fail here with a clear IntegrityError before
-        the invalid value reaches the application layer.
-        """
-        await self._db.execute(_PROP_ODDS_INSERT_SQL, *self._prop_odds_params(prop))
-
-    def _prop_odds_params(self, prop: Mapping[str, Any]) -> tuple[Any, ...]:
-        """The bind values of one raw.prop_odds INSERT (see :func:`prop_odds_insert_args`)."""
-        return prop_odds_insert_args(prop)
-
-    async def _persist_prop_odds_many(self, rows: list[dict]) -> int:
-        """Insert one offer's prop rows in one ``executemany``.
-
-        The same SQL and dedup as :meth:`_persist_prop_odds`. Returns the number
-        of rows sent (the dedup may insert fewer). An empty list sends nothing.
-        """
-        return await insert_prop_odds_rows(
-            self._db, rows, restamp=await self._last_seen_available()
-        )
 
     async def mark_closing_prop_lines(
         self,

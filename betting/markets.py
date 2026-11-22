@@ -73,6 +73,27 @@ PROP_STAT_TO_MODEL_PROP: dict[str, str] = {
 }
 
 
+#: The role of a prop-eligible player. A pitcher is asked only for the pitcher
+#: markets and a hitter only for the batter markets. "both" is the safe default:
+#: a player whose role is unknown, or a two-way player, is asked for every market.
+PROP_ROLE_PITCHER = "pitcher"
+PROP_ROLE_BATTER = "batter"
+PROP_ROLE_BOTH = "both"
+
+
+def prop_markets_for(role: str, prop_stats: tuple[str, ...] = PROP_STATS) -> tuple[str, ...]:
+    """The markets of ``prop_stats`` a player in ``role`` is asked for.
+
+    A pitcher gets the pitcher markets and a hitter the batter markets, so ``hits``
+    (batter) and ``hits_allowed`` (pitcher) never cross. Any other role gets every market.
+    """
+    if role == PROP_ROLE_PITCHER:
+        return tuple(s for s in prop_stats if s in PITCHER_PROP_STATS)
+    if role == PROP_ROLE_BATTER:
+        return tuple(s for s in prop_stats if s in BATTER_PROP_STATS)
+    return prop_stats
+
+
 # ---------------------------------------------------------------------------
 # The game markets
 # ---------------------------------------------------------------------------
@@ -397,6 +418,10 @@ def graded_row_order_sql(param: str) -> str:
 
 
 __all__ = [
+    "PROP_ROLE_PITCHER",
+    "PROP_ROLE_BATTER",
+    "PROP_ROLE_BOTH",
+    "prop_markets_for",
     "PROP_STATS",
     "PITCHER_PROP_STATS",
     "BATTER_PROP_STATS",

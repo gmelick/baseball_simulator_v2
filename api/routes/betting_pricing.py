@@ -10,17 +10,16 @@ In this order:
 
   1. INJECTED prices: the named query params of the three full-game markets
      (home_ml / away_ml; over_ml / under_ml / total_line; home_rl_ml /
-     away_rl_ml / run_line / away_run_line) or the ``prices`` document, which
-     can name any of the fifteen markets (:func:`_parse_prices`). A full-game
-     market with any named param is priced from those, and the mock fills its
-     other prices. A market in the document is priced from the document
-     alone. A market given both ways is a 422.
+     away_rl_ml / run_line, and the optional away_run_line) or the ``prices``
+     document, which can name any of the fifteen markets
+     (:func:`_parse_prices`). A full-game market needs every one of its named
+     params, or none: a part of them is a 422. A market given both ways is a
+     422.
   2. the STORED lines (``api.routes.betting_stored_odds``), when the market
      has a usable stored row.
-  3. the MOCK odds provider (``MockOddsAPI.get_odds``, seeded on game_pk), so
-     every market is always priceable.
 
-``odds_source`` in the response says which one: "injected", "stored" or "mock".
+A market with neither has no price: it gets no report. ``odds_source`` says
+"injected", "stored" or "none" per market.
 
 A RUN LINE IS A PAIR, OR TWO SEPARATE BETS
 ------------------------------------------
@@ -31,10 +30,10 @@ listed two separate bets, such as home -1.5 / away -1.5, and each bet prices
 from its own price over the book's two-way margin: the game's total, then its
 moneyline, then a flat 1.05 (``betting.pricing.devig_one_sided``; the run
 lines scored by shape, SIM-549). Those reference prices are the injected
-over_ml / under_ml and home_ml / away_ml, else the mock's, so an injected run
-line can rest on the mock's total. Every run-line report carries its own
-side's spread in ``line``. ``away_run_line`` injects the away spread; left
-out, it mirrors an injected ``run_line`` (a pair) or takes the provider's.
+over_ml / under_ml and home_ml / away_ml; without them the flat 1.05 applies.
+Every run-line report carries its own side's spread in ``line``.
+``away_run_line`` injects the away spread; left out, it mirrors the injected
+``run_line`` (a pair).
 
 THE FIFTEEN GAME MARKETS
 ------------------------
@@ -130,31 +129,26 @@ def _report_label(market: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The injected prices and the mock
+# The injected prices
 # ---------------------------------------------------------------------------
 
 
-def _mock_odds(game_pk: int, market_type: str) -> dict[str, Any]:
-    """The deterministic mock odds of one market of a game.
+def _injected(market: str, **params: float | None) -> bool:
+    """True when the caller injected every named param of a full-game market.
 
-    The function imports :class:`MockOddsAPI` from the live pipeline (a heavy
-    module) only when it runs, so this module stays light to import. The mock
-    seeds its draw on ``game_pk``, so it is deterministic and needs no live
-    feed. A market with no injected and no stored price falls back to it.
+    None of them gives False. A part of them is a 422: the route has no other
+    source for the missing prices.
     """
-    from pipeline.live.ingestion.mock_odds import MockOddsAPI
-
-    return MockOddsAPI.get_odds(int(game_pk), market_type=market_type)
-
-
-def _resolve_price(injected: float | None, mock: dict[str, Any], key: str) -> tuple[float, bool]:
-    """Pick a price: the injected value if given, else the mock's ``key``.
-
-    Returns ``(price, was_injected)`` so the caller can flag the odds source.
-    """
-    if injected is not None:
-        return float(injected), True
-    return float(mock[key]), False
+    given = [name for name, value in params.items() if value is not None]
+    if not given:
+        return False
+    if len(given) < len(params):
+        missing = ", ".join(name for name in params if params[name] is None)
+        raise HTTPException(
+            status_code=422,
+            detail=f"{market}: give all of its prices or none; missing {missing}",
+        )
+    return True
 
 
 def _safe_report(reports: list[EdgeReport], builder: Any) -> None:
@@ -210,7 +204,7 @@ _NAMED_PARAM_OF: dict[str, dict[str, str]] = {
 }
 
 #: The injected query params of each market. A market with any of them is
-#: priced from the injected values (and the mock for the rest). A segment or
+#: priced from the injected values; it needs all of them. A segment or
 #: team market has no named param; the ``prices`` document injects it.
 _INJECTED_PARAMS: dict[str, tuple[str, ...]] = {
     m: tuple(_NAMED_PARAM_OF.get(m, {}).values()) for m in GAME_MARKET_TYPES
@@ -221,7 +215,7 @@ def _at_offered_price(report: EdgeReport, offered: tuple[float, str] | None) -> 
     """The report read at the offered price.
 
     The EV moves to the offered price; the fair probability and the edge stay
-    the graded book's. ``offered`` None (an injected or mock price) leaves the
+    the graded book's. ``offered`` None (an injected price) leaves the
     report as it is."""
     if offered is None:
         return report
@@ -238,7 +232,7 @@ class _EdgeBuild(NamedTuple):
     """What :func:`_build_edge_reports` returns."""
 
     reports: list[EdgeReport]
-    #: market -> "injected" | "stored" | "mock"
+    #: market -> "injected" | "stored" | "none"
     odds_source: dict[str, str]
     #: how the full-game run line was priced (None without the run line)
     run_line_pricing: dict[str, Any] | None
@@ -341,18 +335,15 @@ def _unstored_reference_margin(
     """The two-way margin of a run line NOT priced from the stored rows.
 
     The candidates follow :func:`_reference_order`. The full-game total and
-    moneyline read the injected query params, else the mock's prices. A
-    segment total reads the ``prices`` document, else the mock's."""
+    moneyline read the injected query params; a segment total reads the
+    ``prices`` document. A candidate with no price is skipped."""
     candidates: list[tuple[str, float | None, float | None]] = []
     for market, col_a, col_b in _reference_order(segment):
         if market in FULL_GAME_MARKET_TYPES:
-            mock = _mock_odds(game_pk, market)
             params = _NAMED_PARAM_OF[market]
-            price_a = _resolve_price(named.get(params[col_a]), mock, col_a)[0]
-            price_b = _resolve_price(named.get(params[col_b]), mock, col_b)[0]
-            candidates.append((market, price_a, price_b))
+            candidates.append((market, named.get(params[col_a]), named.get(params[col_b])))
         else:
-            row = injected.get(market) or _mock_odds(game_pk, market)
+            row = injected.get(market) or {}
             candidates.append((market, row.get(col_a), row.get(col_b)))
     return reference_margin_from_prices(candidates)
 
@@ -360,21 +351,20 @@ def _unstored_reference_margin(
 def _segment_quote(
     market: str,
     *,
-    game_pk: int,
     stored: StoredRows | None,
     injected: Mapping[str, Mapping[str, float]],
-) -> tuple[Mapping[str, Any], str, _StoredMarket | None]:
+) -> tuple[Mapping[str, Any] | None, str, _StoredMarket | None]:
     """The prices of one segment or team market and where they came from.
 
     The ``prices`` document's entry when it names the market (no stored row
-    is read for it), else the graded stored row, else the mock. Returns
-    ``(row-shaped prices, odds source, the stored market or None)``."""
+    is read for it), else the graded stored row, else no price. Returns
+    ``(row-shaped prices or None, odds source, the stored market or None)``."""
     if market in injected:
         return injected[market], "injected", None
     stored_market = _stored_market(stored, market)
     if stored_market is not None:
         return stored_market.graded, "stored", stored_market
-    return _mock_odds(game_pk, market), "mock", None
+    return None, "none", None
 
 
 def _price_segment_market(
@@ -513,8 +503,8 @@ def _build_edge_reports(
         its market type. A summary with no grid skips them and logs one line.
 
     Prices come from the injected query params when a full-game market has
-    any, else the ``stored`` rows (:func:`_stored_rows_by_market`) when the
-    market has one, else the mock provider. ``injected`` is the parsed
+    them all, else the ``stored`` rows (:func:`_stored_rows_by_market`) when the
+    market has one; a market with neither gets no report. ``injected`` is the parsed
     ``prices`` document's segment and team markets (:func:`_parse_prices`); a
     market in it is priced from it alone. A stored market takes its fair
     probability and its lines from the graded book's row, and each side's
@@ -541,18 +531,21 @@ def _build_edge_reports(
         if offered is not None:
             price_book[(label, side.value)] = offered[1]
 
-    if "moneyline" in markets:
-        stored_ml = None if _any_given(home_ml, away_ml) else _stored_market(stored, "moneyline")
+    ml_injected = "moneyline" in markets and _injected(
+        "moneyline", home_ml=home_ml, away_ml=away_ml
+    )
+    stored_ml = None if ml_injected else _stored_market(stored, "moneyline")
+    if "moneyline" in markets and not ml_injected and stored_ml is None:
+        odds_source["moneyline"] = "none"
+    elif "moneyline" in markets:
         if stored_ml is not None:
             h = float(stored_ml.graded["home_ml"])
             a = float(stored_ml.graded["away_ml"])
             odds_source["moneyline"] = "stored"
             fair_book["moneyline"] = stored_ml.fair_book
         else:
-            mock = _mock_odds(game_pk, "moneyline")
-            h, h_inj = _resolve_price(home_ml, mock, "home_ml")
-            a, a_inj = _resolve_price(away_ml, mock, "away_ml")
-            odds_source["moneyline"] = "injected" if (h_inj or a_inj) else "mock"
+            h, a = float(home_ml), float(away_ml)  # type: ignore[arg-type]
+            odds_source["moneyline"] = "injected"
         # HOME: side price home_ml, other away_ml. AWAY: side away_ml, other home_ml.
         for side, own, other in ((MarketSide.HOME, h, a), (MarketSide.AWAY, a, h)):
             offered = None if stored_ml is None else stored_ml.offered[side]
@@ -569,10 +562,13 @@ def _build_edge_reports(
             )
             note_book("moneyline", side, offered)
 
-    if "total" in markets:
-        stored_tot = (
-            None if _any_given(over_ml, under_ml, total_line) else _stored_market(stored, "total")
-        )
+    tot_injected = "total" in markets and _injected(
+        "total", over_ml=over_ml, under_ml=under_ml, total_line=total_line
+    )
+    stored_tot = None if tot_injected else _stored_market(stored, "total")
+    if "total" in markets and not tot_injected and stored_tot is None:
+        odds_source["total"] = "none"
+    elif "total" in markets:
         if stored_tot is not None:
             o = float(stored_tot.graded["over_ml"])
             u = float(stored_tot.graded["under_ml"])
@@ -580,11 +576,9 @@ def _build_edge_reports(
             odds_source["total"] = "stored"
             fair_book["total"] = stored_tot.fair_book
         else:
-            mock = _mock_odds(game_pk, "total")
-            o, o_inj = _resolve_price(over_ml, mock, "over_ml")
-            u, u_inj = _resolve_price(under_ml, mock, "under_ml")
-            line, line_inj = _resolve_price(total_line, mock, "total_line")
-            odds_source["total"] = "injected" if (o_inj or u_inj or line_inj) else "mock"
+            o, u = float(over_ml), float(under_ml)  # type: ignore[arg-type]
+            line = float(total_line)  # type: ignore[arg-type]
+            odds_source["total"] = "injected"
         for side, own, other in ((MarketSide.OVER, o, u), (MarketSide.UNDER, u, o)):
             offered = None if stored_tot is None else stored_tot.offered[side]
             _safe_report(
@@ -602,12 +596,18 @@ def _build_edge_reports(
             note_book("total", side, offered)
 
     run_line_pricing: dict[str, Any] | None = None
-    if "runline" in markets:
-        stored_rl = (
-            None
-            if _any_given(home_rl_ml, away_rl_ml, run_line, away_run_line)
-            else _stored_market(stored, "runline")
-        )
+    rl_injected = "runline" in markets and _injected(
+        "runline",
+        home_rl_ml=home_rl_ml,
+        away_rl_ml=away_rl_ml,
+        run_line=run_line,
+        # away_run_line is optional, but never alone.
+        **({"away_run_line": away_run_line} if away_run_line is not None else {}),
+    )
+    stored_rl = None if rl_injected else _stored_market(stored, "runline")
+    if "runline" in markets and not rl_injected and stored_rl is None:
+        odds_source["runline"] = "none"
+    elif "runline" in markets:
         if stored_rl is not None:
             h = float(stored_rl.graded["home_spread_ml"])
             a = float(stored_rl.graded["away_spread_ml"])
@@ -616,22 +616,12 @@ def _build_edge_reports(
             odds_source["runline"] = "stored"
             fair_book["runline"] = stored_rl.fair_book
         else:
-            mock = _mock_odds(game_pk, "runline")
-            h, h_inj = _resolve_price(home_rl_ml, mock, "home_spread_ml")
-            a, a_inj = _resolve_price(away_rl_ml, mock, "away_spread_ml")
-            # The HOME run line (negative: the home team lays runs).
-            eff_line, line_inj = _resolve_price(run_line, mock, "home_spread")
-            # The AWAY team's own spread: injected; else the mirror of an
-            # injected home line (a pair); else the provider's own away spread.
-            if away_run_line is not None:
-                away_line, away_inj = float(away_run_line), True
-            elif line_inj or mock.get("away_spread") is None:
-                away_line, away_inj = -eff_line, False
-            else:
-                away_line, away_inj = float(mock["away_spread"]), False
-            odds_source["runline"] = (
-                "injected" if (h_inj or a_inj or line_inj or away_inj) else "mock"
-            )
+            h, a = float(home_rl_ml), float(away_rl_ml)  # type: ignore[arg-type]
+            # The HOME run line (negative: the home team lays runs). The AWAY
+            # team's own spread is injected, else the mirror of the home line.
+            eff_line = float(run_line)  # type: ignore[arg-type]
+            away_line = -eff_line if away_run_line is None else float(away_run_line)
+            odds_source["runline"] = "injected"
         home_offered = None if stored_rl is None else stored_rl.offered[MarketSide.HOME]
         away_offered = None if stored_rl is None else stored_rl.offered[MarketSide.AWAY]
         note_book("run_line", MarketSide.HOME, home_offered)
@@ -666,10 +656,10 @@ def _build_edge_reports(
             segment_markets,
         )
     for market in segment_markets if runs is not None else []:
-        quote, source, stored_market = _segment_quote(
-            market, game_pk=game_pk, stored=stored, injected=injected
-        )
+        quote, source, stored_market = _segment_quote(market, stored=stored, injected=injected)
         odds_source[market] = source
+        if quote is None:
+            continue
         if stored_market is not None:
             fair_book[market] = stored_market.fair_book
             for side, _price, _line in _STORED_SIDE_COLUMNS[market]:

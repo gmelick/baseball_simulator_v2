@@ -56,7 +56,7 @@ export interface EdgesResponse {
    * 'run_line' on its edges.
    */
   markets: string[]
-  /** market → "injected" | "stored" | "mock" (where each market's prices came from). */
+  /** market → "injected" | "stored" | "none" (where each market's prices came from). */
   odds_source: Record<string, string>
   edges: EdgeReport[]
   run_line_pricing?: RunLinePricing | null
@@ -84,7 +84,7 @@ export interface SignalsResponse {
   n_iterations: number
   base_seed: number | null
   config: Record<string, number>
-  /** market → "injected" | "stored" | "mock". */
+  /** market → "injected" | "stored" | "none". */
   odds_source: Record<string, string>
   signals: BetSignal[]
   run_line_pricing?: RunLinePricing | null
