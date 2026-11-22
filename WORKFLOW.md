@@ -151,7 +151,7 @@ already loaded, so a rerun resumes.
 | 4. The profiles and pools | `docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild` | the `derived.*` profiles and the `sim.*` play pools in the analytics file |
 | 5. The bundle | `make engine-artifacts` | a new bundle version; the app restarts itself on it |
 | 6. The calibration | section 6 | `/data/calibration.json` |
-| 7. The odds (optional) | `make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"` | `raw.game_odds`, `raw.prop_odds` (needs `ODDS_API_KEY`) |
+| 7. The odds (optional) | `make load-historical-odds FLAGS="--seasons 2024"` | `raw.game_odds`, `raw.prop_odds` (needs `ODDS_API_KEY`) |
 
 The simulator's pools read the last three completed seasons plus the current
 one, so steps 2 and 3 name those four seasons.
@@ -188,7 +188,7 @@ times are UTC; Eastern time is four hours earlier in summer and five in winter.
 | 10:00 daily | `nightly-backup-postgres` | `db`, `postgres` | `db/backup/pg_backup.sh`: dumps the statistics database. | its own lock |
 | 10:00 daily | `nightly-backup-data` | `jobs`, `appuser` | `python -m pipeline.backup.data_stores`: copies the analytics file, the bundle and the small `/data` files. | the rebuild, finals and sweep marks |
 | 10:30 daily | `nightly-backup-offsite` | `jobs`, `appuser` | `python -m pipeline.backup.offsite`: copies the newest backup sets into the OneDrive folder. Takes about 10 to 25 minutes. | the data backup's mark and the Postgres backup's lock |
-| 10:30 daily | `nightly-closing-lines` | `app`, root | `scripts/nightly_closing_lines.sh`: loads the closing odds of yesterday's and the day before's games, as the fallback to the live service. Runs only with `ODDS_PROVIDER=bettingpros` (the job sets it) and `ODDS_API_KEY` in `.env`. | nothing |
+| 10:30 daily | `nightly-closing-lines` | `app`, root | `scripts/nightly_closing_lines.sh`: runs `python -m betting.history` for the opening and closing odds of yesterday's and the day before's games. The closing rows are the fallback to the live service; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
 
 Each data job runs inside two wrappers:
 
@@ -387,13 +387,14 @@ separate step: the old pool builder fails on a migrated table.
 ### 5.5 Odds and box scores
 
 ```bat
-make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
-make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --provider bettingpros --book draftkings"
+make load-historical-odds FLAGS="--seasons 2024"
+make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --book draftkings"
 ```
 
-The loader writes the opening and closing lines of Final games, one row per
-book, into `raw.game_odds` and `raw.prop_odds`. It needs `ODDS_API_KEY` in
-`.env`. It refuses the mock provider unless you name it. The historical loader
+The odds loader (`python -m betting.history`) writes the opening and closing
+lines of Final games, one row per book, into `raw.game_odds` and
+`raw.prop_odds`. It needs `ODDS_API_KEY` in `.env`; without the key every game
+ends incomplete and the loader exits 1. The historical game loader
 writes each game's official box score as it loads the game;
 [`scripts/load_official_boxscores.py`](scripts/load_official_boxscores.py)
 backfills older games.

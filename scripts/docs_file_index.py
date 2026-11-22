@@ -255,7 +255,6 @@ STAGES: list[tuple[int, str, str, list[str]]] = [
             "betting/validate.py",
             "betting/load.py",
             "betting/history.py",
-            "pipeline/etl/opening_line_job.py",
             "betting/pricing.py",
             "betting/*",
         ],

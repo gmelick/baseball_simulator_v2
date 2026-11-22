@@ -123,11 +123,11 @@ class PropOddsMixin(PipelineBase):
         it:
           1. Collects prop-eligible players + their roles from the game_state
              (pitcher, batter or both).
-          2. Fetches every book's rows of each offer via _prop_offers():
-             the pitcher markets for pitchers and the batter markets
-             for hitters.
-          3. Runs the load guard on each row and persists each offer's kept
-             rows in one batch via _persist_prop_odds_many().
+          2. Fetches every book's rows of each offer on the vendor thread
+             (:func:`betting.load.prop_offers`): the pitcher markets for
+             pitchers and the batter markets for hitters.
+          3. Runs the load guard on each row and writes each offer's kept
+             rows in one batch (:func:`betting.load.write_offers`).
 
         Returns the number of prop rows sent this cycle (0 when the cadence
         gate is closed or no eligible players were found).

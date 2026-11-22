@@ -43,8 +43,8 @@
 - **The unit lane runs the plain baseline.** `tests/conftest.py` pins most simulation flags
   OFF (the manager, the pitching-change draw, the platoon, the fielding filters, the fence
   stage, the kernels, the split), so the unit lane stays byte-identical whatever `.env` holds.
-  It leaves `SIM_STEAL_PITCH_CLASS` unpinned on purpose. It hard-pins `ODDS_PROVIDER=mock`,
-  removes `ODDS_API_KEY`, and defaults `AUTH_DISABLED=1`.
+  It leaves `SIM_STEAL_PITCH_CLASS` unpinned on purpose. It removes `ODDS_API_KEY`, so no
+  test reaches BettingPros, and defaults `AUTH_DISABLED=1`.
 - **Calibration is live.** The app applies `/data/calibration.json` at boot. `make calibrate`
   drops the win-probability reliability curve; §2b says how to restore it.
 - **The grade.** The latest 45 × 130 acceptance lane (`CHANGES.md`, the clean-up's close entry
@@ -111,23 +111,22 @@
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
 - **`scripts/` is NOT volume-mounted** into the running app container; only `api/`,
-  `pipeline/`, `similarity/`, `simulation/` and `db/` are. Edits to `scripts/` reach the
+  `pipeline/`, `betting/`, `similarity/`, `simulation/` and `db/` are. Edits to `scripts/` reach the
   running container only after `docker compose build app` and `docker compose up -d app`.
   Edits to the mounted folders need only `docker compose restart app`. Run a script that is
   not in the image yet with `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.
-- **`betting/` is NOT mounted either, and the app hot-reloads `api/`.** An edit to a mounted
-  `api/` file that imports a NEW `betting/` name breaks the reload: the app fails to import
-  until the image is rebuilt. Rebuild first (`docker compose build app`, then
-  `docker compose up -d app`), then edit `api/`.
+- **`betting/` is mounted into `app`, `live` and `jobs`**, like `pipeline/`. An edit to
+  `betting/` needs no image rebuild; the nightly odds pass (`python -m betting.history`)
+  runs the mounted copy too.
 - **The container test and lint targets run the checkout (SIM-567).** The seven Makefile
   targets (`test`, `test-unit`, `test-regression`, `test-integration`, `lint`, `format`,
   `type-check`) mount the checkout over `/app`. `make test-unit TESTS="tests/unit/test_x.py"`
   names the files. An ad-hoc `docker compose run app pytest` with no `-v` runs the image's old
   copy. From a worktree, `make` reads the worktree's own compose file and `.env`; run these
   targets from the main checkout. The app image has no git, so the file-index guard skips there;
-  CI runs it. With no `ODDS_API_KEY` the vendor's provider sends no BettingPros request, but its
-  MLB Stats API reads (`_mlb_get`) still try the network; it returns empty rows and raises no
-  error.
+  CI runs it. With no `ODDS_API_KEY` the BettingPros provider sends no BettingPros request,
+  but its MLB Stats API reads (`_mlb_get`) still try the network; it returns empty rows and
+  raises no error.
 - **The live service runs in its own compose service, `live`, and publishes on Redis
   (SIM-519).** Never set `LIVE_PIPELINE_ENABLED` in the app: the `live` service must be the one publisher.
   Every "latest run" read takes only `sim.sim_runs` rows with `kind = 'pregame'`, so the
@@ -322,10 +321,13 @@ and the three paths (a simulation request, game day, the nightly builds).
   (`make calibrate`'s fit), `backtesting/`. `api/state.py`'s `ENGINE_REGISTRY` builds the engines.
 - `pipeline/` — `etl/` (the historical and Savant loaders), `live/` (the game-day service),
   `batch/` (the profile computor in `profiles/`, the bundle builder in `artifacts/`, the
-  versioned link), `backup/`, the odds providers (`odds_provider.py`, `bettingpros/`) and the
-  schedule and feed parsers.
-- `betting/` — `bet_signal.py`: the market's implied and no-vig probabilities, the edge and
-  the EV, and the bet signal's gate, stake and rank.
+  versioned link), `backup/`, and the schedule and feed parsers. `live/ingestion/` keeps the
+  live odds hooks; they call `betting/load.py`.
+- `betting/` — the odds and the pricing, one file per step: `markets.py` (our market names
+  and book labels), `bettingpros/match_games.py` (the HTTP client and the game match),
+  `bettingpros/fetch_odds.py` (one row per book), `validate.py` (the load guard), `load.py`
+  (the one load path and the closing stamp), `history.py` (finished games; the nightly
+  pass) and `pricing.py` (the no-vig probabilities, the edge, the EV and the bet signal).
 - `api/` — `main.py` and `startup.py` (the boot), `auth.py`, `state.py`, `sim_jobs.py`,
   `bundle_watch.py`, `routes/` (`games*.py`, `betting*.py`, the Data Lab routes), `schemas/`.
 - `db/` — `schemas/`, `migrations/` (Alembic `versions/` and DuckDB `duckdb/`), `sim_store.py`
@@ -400,8 +402,8 @@ consolidates; QA cross-validates and never self-certifies its own work.
   `validation/replay_chi_squared.py`, the bundle builder and the profile computor. (b) `SIM-421`
   the ticket is the prop-market work. Its tags talk about prop markets, odds, the box score and
   the per-player prop lines; they live in `simulation/prop_distributions.py`, the odds
-  providers, the live odds cycles, `pipeline/etl/opening_line_job.py`,
-  `scripts/load_historical_odds.py`, the accuracy comparison, the props route and schema,
+  providers, the live odds cycles, `betting/history.py` (the historical odds loader),
+  the accuracy comparison, the props route and schema,
   migration 0022, and any `SIM-421 fix` on a box-line credit in the loop. Reconcile a realism
   tag if you touch it.
 - **Migrations (mandatory):** every Postgres schema change ships an Alembic migration in
@@ -450,7 +452,7 @@ make profile-computor    # rebuild the DuckDB profiles + pools
 make engine-artifacts    # build + publish a new bundle version
 make calibrate           # fit /data/calibration.json (drops the reliability curve — §2b)
 make validate-props      # prop-PMF / win-prob validation (FLAGS="... --write-calibration" writes the curve)
-make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
+make load-historical-odds FLAGS="--seasons 2024"
 make ingest-catch-up DAYS=14   # load the last N days' finals, crash-wrapped (Postgres only)
 make live-logs           # follow the live service's log
 make backup              # back up the three stores into BACKUP_DIR now (from cmd.exe)

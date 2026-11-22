@@ -25,7 +25,7 @@ The review behind this plan found three more problems:
   pitcher or a batter twice. The historical loader builds a whole live-service object only to
   borrow its two writers.
 
-The plan keeps the folder at two BettingPros files; the HTTP client sits in `fetch_odds.py`
+The plan keeps the folder at two BettingPros files; the HTTP client sits in `match_games.py`
 (§7).
 - **The opening-line job never runs.** Nothing schedules it (`deploy/ofelia/config.ini` has no
   entry; `schedule_opening_line_job` has no caller). The live service's
@@ -41,12 +41,10 @@ betting/
   markets.py            our market names: the 15 game markets, the 15 prop markets, the
                         pitcher and batter prop sets (today in pipeline/odds_provider.py)
   bettingpros/
-    match_games.py      get BettingPros' games and match each to an MLB schedule game
-                        (today events.py + schedule.py)
-    fetch_odds.py       the HTTP client, BettingPros' market ids, the first-five rules, the
-                        offer reading and the row building
-                        (today transport.py + markets.py + parsing.py + rows.py + provider.py
-                        + base.py)
+    match_games.py      the HTTP client; get BettingPros' games and match each to an MLB
+                        schedule game (today base.py + transport.py + events.py + schedule.py)
+    fetch_odds.py       BettingPros' market ids, the first-five rules, the offer reading and
+                        the row building (today markets.py + parsing.py + rows.py + provider.py)
   validate.py           the load guard (today pipeline/odds_row_guard.py)
   load.py               load_odds: the one core that fetches, keeps, checks and writes the
                         rows; the insert statements and the odds hash; the closing-line stamp
@@ -116,13 +114,18 @@ last two days' games. This takes the opening half of the capture-the-opening-lin
 (SIM-625); its venue-backfill half stays on that row.
 
 **B3. No mock source.**
-- Delete `MockOddsAPI` and the provider registry. The odds source is BettingPros; a missing
-  `ODDS_API_KEY` raises at the first fetch with one plain message. The `ODDS_PROVIDER`
+- Delete `MockOddsAPI` and the provider registry. The odds source is BettingPros. Without
+  `ODDS_API_KEY` each BettingPros read fails with one plain message ("needs an API key"); the
+  provider counts it as a failed read and returns no rows, as before. The `ODDS_PROVIDER`
   setting goes (§7).
-- The API's pricing route: a market with no injected price and no usable stored row returns
-  its simulated probability and fair price with no offered price, no edge, no expected value
-  and no bet signal. `odds_source` reads `"none"` for it, in place of `"mock"`.
-- The Betting card reads `"none"` where it read `"mock"`; its note is unchanged.
+- The API's pricing route: a market with no injected price and no usable stored row gets no
+  report, no edge and no bet signal; `odds_source` reads `"none"` for it, in place of
+  `"mock"`. (As built, 2026-11-22: the plan first said such a market would still show the
+  simulated probability. A total or a run line with no line has no probability to show, so
+  the build gives every unpriced market no report. A simulator-only report for the markets
+  with no line, such as the moneylines, is a possible follow-up.) A full-game market given
+  only some of its injected prices is a 422: no other source holds the missing ones.
+- The Betting card shows no section for an unpriced market; one note names those markets.
 - Regenerate `frontend/openapi.json` in the app image, then run `npm run gen:api`
   (CLAUDE.md §15).
 - `tests/conftest.py` stops pinning `ODDS_PROVIDER=mock`. It keeps removing `ODDS_API_KEY`, so
@@ -143,8 +146,10 @@ use the mock move to it, so every odds test runs the real reading and row-buildi
 **B5. One price formula.** `pricing.implied_prob_from_american` is the one copy. The guard,
 `scripts/accuracy/pricing.py` and `scripts/market_skill.py` import it. Today the guard's copy
 returns 1.0 on a price of 0 and the betting copy raises. The guard checks for a price of 0
-first and refuses the row, so no stored row changes; the step checks that no stored row has a
-price of 0 before it relies on that.
+first and refuses the row (the new rule `zero_price`). The check found 88 stored rows with a
+price of 0 (10 game rows, 78 prop rows), all from BettingPros between 2026-09-29 and
+2026-10-01: the vendor sends 0 for a price a book does not offer. From now on the guard
+refuses such a row; the stored rows stay.
 
 ## 5. The checks
 
@@ -178,9 +183,12 @@ price of 0 before it relies on that.
    code, the compose comments and the env templates. The nightly script and the scheduler entry
    drop their `ODDS_PROVIDER=bettingpros` guards; the script still exits 1 when the key is
    missing.
-2. **The HTTP client lives in `fetch_odds.py` (decided).** Both BettingPros files call the
-   vendor over HTTP with the same retries and cache. `match_games.py` imports the client from
-   `fetch_odds.py`, so the folder keeps its two files.
+2. **The HTTP client lives in `match_games.py` (decided, revised 2026-11-21).** Both
+   BettingPros files call the vendor over HTTP with the same retries and cache. The owner
+   first chose `fetch_odds.py`. The provider is one class chain (the client, the game match,
+   the row building, the provider), so that placement makes the two files import each other.
+   The owner then chose `match_games.py`: `fetch_odds.py` imports the client and the match
+   from it, and the folder keeps its two files.
 
 ## 8. Out of scope, and stale rows found
 

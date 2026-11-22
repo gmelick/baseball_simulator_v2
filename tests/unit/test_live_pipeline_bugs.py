@@ -10,8 +10,9 @@ SIM-100 — GameStateBuilder roster parsing:
           N+1 days_rest queries, wrong availability logic,
           dead used_pitcher_ids code, wrong date anchor for replay.
 
-SIM-132 — MockOddsAPI zero-vig: implied probs summed to exactly 1.0;
-          architecture comment still said 'inning>=7 OR score_diff<=2'.
+SIM-132 — the resimulation trigger: the architecture comment said
+          'inning>=7 OR score_diff<=2'; every completed PA now fires.
+          (The mock-odds half of SIM-132 left with the mock in SIM-645.)
 
 Run:
     pytest tests/unit/test_live_pipeline_bugs.py -v
@@ -34,20 +35,11 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder  # noqa: E402
-from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 # ===========================================================================
 # Helpers
 # ===========================================================================
-
-
-def _american_to_implied(american: int) -> float:
-    """Convert American odds integer to implied probability."""
-    if american < 0:
-        return (-american) / (-american + 100)
-    else:
-        return 100 / (american + 100)
 
 
 def _make_minimal_feed(
@@ -394,104 +386,8 @@ class TestRosterParsing:
 
 
 # ===========================================================================
-# SIM-132 — MockOddsAPI vig + resim trigger
+# SIM-132 — resim trigger
 # ===========================================================================
-
-
-class TestMockOddsVig:
-    """
-    Tests that MockOddsAPI moneylines carry realistic book overround.
-
-    Core assertion: for any game_pk, the sum of implied probabilities derived
-    from home_ml and away_ml must exceed 1.03 (real books carry 3–5 % hold on
-    MLB ML).
-    """
-
-    # SIM-159 calibration: MockOddsAPI samples vig from rng.uniform(0.06, 0.10)
-    # so the underlying overround `1 + vig/2` lives in [1.030, 1.050].  After
-    # the line is round-tripped through `_prob_to_american()` (which rounds to
-    # an integer) and then back via `_american_to_implied()`, the recovered
-    # implied-probability sum drifts by up to ±0.003 from that range — so the
-    # observed sum sits in roughly [1.027, 1.053].  Strict `> 1.03` therefore
-    # flakes at the lower edge (game_pk=12345 hits 1.0286).
-    #
-    # PM-approved fix (sprint 2026-05-13): keep the [0.06, 0.10] RNG range so
-    # the mock spans both sharp-book (3–5 %) and soft-book (6–8 %) overround
-    # ranges, and weaken the test bounds to absorb the ~0.003 American-odds
-    # rounding error.  The bounds below assert "vig is meaningfully present
-    # AND not absurdly high", which is the SIM-132 invariant we actually care
-    # about — they reject zero-vig (1.0) and unrealistic vig (> 1.06) without
-    # flaking on rounding.
-    _VIG_LOWER = 1.025  # 1.030 - rounding slack
-    _VIG_UPPER = 1.055  # 1.050 + rounding slack
-
-    def test_moneyline_implied_probs_sum_exceeds_1_03(self) -> None:
-        """
-        SIM-132: Zero-vig check.  Before fix, home_implied + away_implied == 1.0
-        exactly, meaning the mock produced fair-value lines that don't exist in
-        any real market.
-        """
-        odds = MockOddsAPI.get_odds(745000)
-        home_implied = _american_to_implied(odds["home_ml"])
-        away_implied = _american_to_implied(odds["away_ml"])
-        total = home_implied + away_implied
-
-        assert total >= self._VIG_LOWER, (
-            f"Implied prob sum = {total:.4f} (< {self._VIG_LOWER}). "
-            "MockOddsAPI is producing zero/near-zero-vig lines. "
-            "Edge calculations will be inflated by 3–8 pp vs. real markets."
-        )
-        assert total <= self._VIG_UPPER, (
-            f"Implied prob sum = {total:.4f} (> {self._VIG_UPPER}). "
-            "MockOddsAPI vig is unrealistically high for any real book."
-        )
-
-    @pytest.mark.parametrize("game_pk", [100001, 234567, 745000, 999999, 12345])
-    def test_moneyline_sum_in_realistic_vig_band(self, game_pk: int) -> None:
-        """Vig must be present and realistic for every game_pk — not just a
-        specific seed.  Bounds account for American-odds integer rounding
-        (see _VIG_LOWER / _VIG_UPPER comment above)."""
-        odds = MockOddsAPI.get_odds(game_pk)
-        home_implied = _american_to_implied(odds["home_ml"])
-        away_implied = _american_to_implied(odds["away_ml"])
-        total = home_implied + away_implied
-        assert self._VIG_LOWER <= total <= self._VIG_UPPER, (
-            f"game_pk={game_pk}: implied sum = {total:.4f} outside "
-            f"[{self._VIG_LOWER}, {self._VIG_UPPER}]"
-        )
-
-    def test_moneyline_vig_is_not_excessive(self) -> None:
-        """
-        Vig should not be absurdly high — capped so lines remain plausible.
-        Total implied should be < 1.12 (even the softest books don't exceed that).
-        """
-        odds = MockOddsAPI.get_odds(745000)
-        total = _american_to_implied(odds["home_ml"]) + _american_to_implied(odds["away_ml"])
-        assert total < 1.12, f"Implied sum = {total:.4f} — vig is unrealistically high"
-
-    def test_get_odds_returns_all_required_keys(self) -> None:
-        """get_odds() must still return all fields required by _persist_odds()."""
-        odds = MockOddsAPI.get_odds(745000)
-        required = {
-            "game_pk",
-            "source",
-            "is_mock",
-            "book",
-            "line_type",
-            "market_type",
-            "is_sharp_book",
-            "home_ml",
-            "away_ml",
-            "home_spread",
-            "home_spread_ml",
-            "away_spread",
-            "away_spread_ml",
-            "total_line",
-            "over_ml",
-            "under_ml",
-        }
-        missing = required - odds.keys()
-        assert not missing, f"get_odds() is missing keys: {missing}"
 
 
 class TestResimTrigger:

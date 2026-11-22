@@ -17,8 +17,9 @@ router's simulation seam (``sim_factory_ref``). The tests attach both directly:
     in-process batch over the in-memory synthetic bundle.
 
 So /edges and /signals run the real simulation loop, the real betting math and the
-real serializers. The odds default to the deterministic MockOddsAPI, or to the
-injected query parameters.
+real serializers. The prices come from the injected query parameters; the fake
+pool holds no stored line, so a market with no injected price has no price at all
+(``odds_source`` "none", no report). No test invents a stored price.
 """
 
 from __future__ import annotations
@@ -111,24 +112,24 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
     app = _build_app(pool=_FakePool())
     client = TestClient(app)
 
-    # The case injects a total_line and a run_line that sit inside the simulated
-    # distribution. A line outside it puts every iteration on one side: a 0/1 sim
-    # prob carries no priceable edge, and the route skips it. The moneyline prices
-    # are not injected, so that market still runs the mock-odds path.
-    # The default request prices all fifteen game markets (test_segment_edges.py
-    # covers them), so this case names the three full-game markets.
+    # The case injects every price of the three full-game markets, with a
+    # total_line and a run_line inside the simulated distribution. A line outside
+    # it puts every iteration on one side: a 0/1 sim prob carries no priceable
+    # edge, and the route skips it. The default request prices all fifteen game
+    # markets (test_segment_edges.py covers them), so this case names three.
     resp = client.get(
-        "/api/betting/games/745001/edges?n_iterations=120&base_seed=7&total_line=1.5"
-        "&run_line=-0.5&markets=moneyline,total,runline"
+        "/api/betting/games/745001/edges?n_iterations=120&base_seed=7"
+        "&home_ml=-120&away_ml=105"
+        "&over_ml=-110&under_ml=-110&total_line=1.5"
+        "&home_rl_ml=-115&away_rl_ml=-105&run_line=-0.5"
+        "&markets=moneyline,total,runline"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["game_pk"] == 745001
     # The three full-game markets -> 6 reports (both sides each).
     labels = {e["label"] for e in body["edges"]}
-    assert "moneyline" in labels
-    assert "total" in labels
-    assert "run_line" in labels  # the run line is present
+    assert labels == {"moneyline", "total", "run_line"}
     assert len(body["edges"]) == 6
 
     # Each report is the EdgeReportModel shape (numpy-free).
@@ -138,11 +139,11 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
         assert isinstance(e["positive_edge"], bool)
         assert e["side"] in ("home", "away", "over", "under")
 
-    # odds_source: moneyline prices were NOT injected -> mock; total/runline lines
-    # WERE injected -> injected.
-    assert body["odds_source"]["moneyline"] == "mock"
-    assert body["odds_source"]["total"] == "injected"
-    assert body["odds_source"]["runline"] == "injected"
+    assert body["odds_source"] == {
+        "moneyline": "injected",
+        "total": "injected",
+        "runline": "injected",
+    }
     # Full round-trip proves numpy-free.
     json.dumps(body)
 
@@ -175,6 +176,69 @@ def test_edges_respects_injected_odds_and_market_filter(patch_resolver):
         "reference_margin": None,
         "reference_source": None,
     }
+
+
+def test_a_market_with_no_price_gets_no_report_and_source_none(patch_resolver):
+    """No injected price and no stored row: the market is not priced at all."""
+    app = _build_app(pool=_FakePool())
+    client = TestClient(app)
+    resp = client.get(
+        "/api/betting/games/745001/edges?n_iterations=120&base_seed=7"
+        "&markets=moneyline,total,runline&over_ml=-110&under_ml=-110&total_line=1.5"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["odds_source"] == {"moneyline": "none", "total": "injected", "runline": "none"}
+    assert {e["label"] for e in body["edges"]} == {"total"}
+
+
+def test_edges_with_no_price_anywhere_is_an_empty_report_list(patch_resolver):
+    app = _build_app(pool=_FakePool())
+    client = TestClient(app)
+    resp = client.get(
+        "/api/betting/games/745001/edges?n_iterations=20&base_seed=3"
+        "&markets=moneyline,total,runline"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["edges"] == []
+    assert set(body["odds_source"].values()) == {"none"}
+
+
+@pytest.mark.parametrize(
+    ("query", "market", "missing"),
+    [
+        ("markets=moneyline&home_ml=-120", "moneyline", "away_ml"),
+        ("markets=total&over_ml=-110&under_ml=-110", "total", "total_line"),
+        ("markets=total&total_line=8.5", "total", "over_ml"),
+        ("markets=runline&run_line=-1.5", "runline", "home_rl_ml"),
+        ("markets=runline&away_run_line=1.5", "runline", "home_rl_ml"),
+    ],
+)
+def test_a_part_of_a_full_game_markets_prices_is_422(patch_resolver, query, market, missing):
+    """A full-game market prices from injected params only when all are given."""
+    app = _build_app(pool=_FakePool())
+    client = TestClient(app)
+    resp = client.get(f"/api/betting/games/745001/edges?n_iterations=5&{query}")
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail.startswith(f"{market}:")
+    assert missing in detail
+
+
+def test_an_injected_away_run_line_with_the_rest_is_priced(patch_resolver):
+    """Two separate run-line bets with no injected reference prices: the flat 1.05."""
+    app = _build_app(pool=_FakePool())
+    client = TestClient(app)
+    resp = client.get(
+        "/api/betting/games/745001/edges?n_iterations=30&base_seed=3&markets=runline"
+        "&home_rl_ml=-110&away_rl_ml=-110&run_line=-1.5&away_run_line=-1.5"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["odds_source"]["runline"] == "injected"
+    assert body["run_line_pricing"]["shape"] != "pair"
+    assert body["run_line_pricing"]["reference_margin"] == pytest.approx(1.05)
 
 
 def test_edges_bad_market_is_422(patch_resolver):
@@ -248,7 +312,20 @@ def test_signals_gate_excludes_non_positive_ev(patch_resolver):
     client = TestClient(app)
     resp = client.get(
         "/api/betting/games/745001/signals"
-        "?n_iterations=40&base_seed=5&markets=moneyline&min_edge=0.99"
+        "?n_iterations=40&base_seed=5&markets=moneyline&home_ml=-120&away_ml=105"
+        "&min_edge=0.99"
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["signals"] == []
+
+
+def test_signals_with_no_price_emit_nothing(patch_resolver):
+    """A market with no price gives no report, so no signal."""
+    app = _build_app(pool=_FakePool())
+    client = TestClient(app)
+    resp = client.get(
+        "/api/betting/games/745001/signals"
+        "?n_iterations=20&base_seed=5&markets=moneyline&min_edge=0.0"
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["signals"] == []
@@ -301,6 +378,7 @@ def test_edges_uses_calibration_map_from_app_state(patch_resolver):
 
     resp = client.get(
         "/api/betting/games/745001/edges?n_iterations=120&base_seed=42&markets=moneyline"
+        "&home_ml=-110&away_ml=-110"
     )
     assert resp.status_code == 200, resp.text
     edges = resp.json()["edges"]
@@ -323,6 +401,7 @@ def test_edges_falls_back_to_identity_when_no_calibration_map(patch_resolver):
 
     resp = client.get(
         "/api/betting/games/745001/edges?n_iterations=40&base_seed=7&markets=moneyline"
+        "&home_ml=-110&away_ml=-110"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

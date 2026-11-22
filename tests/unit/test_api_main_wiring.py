@@ -42,10 +42,10 @@ def test_create_app_builds_without_live_connections(monkeypatch):
     assert isinstance(app, FastAPI)
 
 
-def test_ws_and_odds_routers_are_mounted(monkeypatch):
-    """ws_router (/ws/games/{game_pk}) and odds_router (/api/odds/...) are in app.routes.
+def test_the_ws_router_is_mounted(monkeypatch):
+    """ws_router (/ws/games/{game_pk}) is in app.routes.
 
-    create_app() always registers them, whatever LIVE_PIPELINE_ENABLED says."""
+    create_app() always registers it, whatever LIVE_PIPELINE_ENABLED says."""
     monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
     from api.main import create_app
 
@@ -54,9 +54,6 @@ def test_ws_and_odds_routers_are_mounted(monkeypatch):
 
     # WebSocket route from ws_router (prefix="/ws").
     assert "/ws/games/{game_pk}" in paths
-    # REST routes from odds_router (prefix="/api/odds").
-    assert "/api/odds/{game_pk}" in paths
-    assert "/api/odds/today/all" in paths
 
 
 def test_exact_exported_names_importable():
@@ -65,15 +62,12 @@ def test_exact_exported_names_importable():
     So this test, not the app boot, catches a rename in the pipeline module."""
     from pipeline.live.live_ingestion_pipeline import (  # noqa: F401
         LiveIngestionPipeline,
-        odds_router,
         ws_router,
     )
 
-    # ws_router carries a websocket route; odds_router carries REST routes.
+    # ws_router carries the websocket route.
     ws_paths = {getattr(r, "path", None) for r in ws_router.routes}
-    odds_paths = {getattr(r, "path", None) for r in odds_router.routes}
     assert "/ws/games/{game_pk}" in ws_paths
-    assert "/api/odds/{game_pk}" in odds_paths
 
 
 def test_pipeline_not_started_at_factory_time(monkeypatch):

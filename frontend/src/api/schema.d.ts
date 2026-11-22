@@ -200,7 +200,7 @@ export interface paths {
         };
         /**
          * The book's pregame lines for a slate card (SIM-519 Part I)
-         * @description The graded book's moneyline, run line and total for one game, from the stored rows only (never the mock): the closing row once stored, else the latest current row while the game is in Preview. On a final game `settled` says how each line settled. 404 when the game has no stored row for any of the three.
+         * @description The graded book's moneyline, run line and total for one game, from the stored rows only: the closing row once stored, else the latest current row while the game is in Preview. On a final game `settled` says how each line settled. 404 when the game has no stored row for any of the three.
          */
         get: operations["get_card_odds_api_betting_games__game_pk__card_odds_get"];
         put?: never;
@@ -220,7 +220,7 @@ export interface paths {
         };
         /**
          * Per-market edge reports (the fifteen game markets)
-         * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (SIM-546: the fifteen game markets by default, every side of each) off the GameSimSummary + market odds. The three full-game markets keep their labels (moneyline, total, run_line); every segment or team market's label is its market type. Odds come from the injected query params or the prices document when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book); else the deterministic mock provider. odds_source flags each market: injected, stored or mock. market_names gives each label its plain name. A cached summary with no inning grid prices the full-game markets only. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
+         * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (SIM-546: the fifteen game markets by default, every side of each) off the GameSimSummary + market odds. The three full-game markets keep their labels (moneyline, total, run_line); every segment or team market's label is its market type. Odds come from the injected query params or the prices document when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book). A market with neither an injected nor a stored price gets no report. odds_source flags each market: injected, stored or none. market_names gives each label its plain name. A cached summary with no inning grid prices the full-game markets only. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
          */
         get: operations["get_game_edges_api_betting_games__game_pk__edges_get"];
         put?: never;
@@ -240,7 +240,7 @@ export interface paths {
         };
         /**
          * Ranked +EV bet-signal recommendations
-         * @description Build the per-market EdgeReports (as /edges, with the same injected / stored / mock odds sources and the same prices document; SIM-546: the fifteen game markets by default, a tie side included), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. The segment and team markets' probabilities are not calibrated. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
+         * @description Build the per-market EdgeReports (as /edges, with the same injected / stored / none odds sources and the same prices document; SIM-546: the fifteen game markets by default, a tie side included), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. The segment and team markets' probabilities are not calibrated. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.
          */
         get: operations["get_game_signals_api_betting_games__game_pk__signals_get"];
         put?: never;
@@ -670,49 +670,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/odds/today/all": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Todays Odds
-         * @description Returns mock odds for every game scheduled today.
-         */
-        get: operations["get_todays_odds_api_odds_today_all_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/odds/{game_pk}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Game Odds
-         * @description Returns mock betting lines for a game.  This handler calls MockOddsAPI
-         *     directly (it predates the SIM-370 seam); the live ingestion path instead
-         *     goes through get_odds_provider(), so ODDS_PROVIDER=bettingpros yields real
-         *     lines (is_mock=False) there.
-         */
-        get: operations["get_game_odds_api_odds__game_pk__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/players/search": {
         parameters: {
             query?: never;
@@ -1131,7 +1088,7 @@ export interface components {
          *
          *     Each market is the graded book's row (``GRADED_BOOK_PREFERENCE``): its
          *     closing row once stored, else its latest current row while the game is in
-         *     Preview. A market with no stored row is null. Never the mock.
+         *     Preview. A market with no stored row is null.
          */
         CardOddsResponse: {
             /** Game Pk */
@@ -1274,7 +1231,7 @@ export interface components {
          *     ``price_book`` names the book whose price is ``offered_american`` (the best
          *     price a bettor can take at this line, e.g. ``bp:10``) and
          *     ``price_book_name`` its display name ("FanDuel"). Both are None for an
-         *     injected or mock price. The source dataclass carries no book, so the route
+         *     injected price. The source dataclass carries no book, so the route
          *     sets them.
          */
         EdgeReportModel: {
@@ -1311,7 +1268,7 @@ export interface components {
          *
          *     Carries the per-market :class:`EdgeReportModel` list plus the run metadata
          *     (n_iterations / base_seed) and the per-market ``odds_source`` flags
-         *     ("injected" / "stored" / "mock") so a consumer knows where each market's
+         *     ("injected" / "stored" / "none") so a consumer knows where each market's
          *     prices came from. SIM-555: "stored" = each book's stored closing line, or,
          *     before the game starts, its latest stored current line. A stored market
          *     names its graded book in
@@ -2712,7 +2669,7 @@ export interface components {
          *     Carries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the
          *     run metadata, the gate config that produced them (min_edge / min_ev /
          *     kelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags
-         *     ("injected" / "stored" / "mock"). SIM-555: ``fair_book`` as on /edges; each
+         *     ("injected" / "stored" / "none"). SIM-555: ``fair_book`` as on /edges; each
          *     signal names the book of its offered price (``price_book``).
          */
         SignalsResponse: {
@@ -3706,7 +3663,7 @@ export interface operations {
                 away_rl_ml?: number | null;
                 /** @description Injected HOME run line (e.g. -1.5) */
                 run_line?: number | null;
-                /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's) */
+                /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml when injected, else a flat 1.05 margin */
                 away_run_line?: number | null;
                 /** @description A JSON document of injected prices keyed by market type, e.g. {"f5_total": {"over_ml": -110, "under_ml": -110, "line": 4.5}}. A moneyline-kind market takes home_ml and away_ml; a three-way market those and draw_ml; a total kind over_ml, under_ml and line (first_inning_run is always 0.5); a run line home_ml, away_ml, home_line and away_line. A market named here is priced from it alone (odds_source 'injected'). 422 on an unknown market or field, a missing or non-numeric field, or a market also given by the named params */
                 prices?: string | null;
@@ -3774,7 +3731,7 @@ export interface operations {
                 away_rl_ml?: number | null;
                 /** @description Injected HOME run line (e.g. -1.5) */
                 run_line?: number | null;
-                /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's) */
+                /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml when injected, else a flat 1.05 margin */
                 away_run_line?: number | null;
                 /** @description A JSON document of injected prices keyed by market type, e.g. {"f5_total": {"over_ml": -110, "under_ml": -110, "line": 4.5}}. A moneyline-kind market takes home_ml and away_ml; a three-way market those and draw_ml; a total kind over_ml, under_ml and line (first_inning_run is always 0.5); a run line home_ml, away_ml, home_line and away_line. A market named here is priced from it alone (odds_source 'injected'). 422 on an unknown market or field, a missing or non-numeric field, or a market also given by the named params */
                 prices?: string | null;
@@ -4573,61 +4530,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WhatIfResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_todays_odds_api_odds_today_all_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
-                };
-            };
-        };
-    };
-    get_game_odds_api_odds__game_pk__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                game_pk: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
                 };
             };
             /** @description Validation Error */

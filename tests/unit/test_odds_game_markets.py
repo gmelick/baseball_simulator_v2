@@ -3,9 +3,9 @@
 The odds tables carry all 15 game markets: the three full-game markets and the
 twelve segment / team markets BettingPros posts on every game. These tests
 drive the vocabulary, the real provider's parsers (against captured payloads
-from a live event on 2026-09-12: ATL vs TB, BettingPros event 99026), the mock
-provider, the dedup hash, the insert, the live cycle, the loader's routing and
-migration 0024.
+from a live event on 2026-09-12: ATL vs TB, BettingPros event 99026), the dedup
+hash, the insert, the live cycle, the load path and migration 0024. Every row
+comes from the real provider over the recorded responses; no test makes up a price.
 
 Fixtures: ``tests/fixtures/bettingpros/offers_<market>_99026.json`` — the
 ``/offers`` response per market, books trimmed to three, values untouched.
@@ -19,9 +19,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.bp_recorded import GAME_99026, Recorded99026
 
 import betting.history
 from betting.bettingpros.fetch_odds import _GAME_MARKET_IDS, BettingProsOddsProvider
+from betting.load import _odds_hash, insert_game_odds_rows, load_odds
 from betting.markets import (
     FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
@@ -30,7 +32,7 @@ from betting.markets import (
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
 )
-from pipeline.live.ingestion.mock_odds import MockOddsAPI
+from betting.validate import RefusalTally
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
@@ -285,155 +287,110 @@ class TestProviderSegmentMarkets:
 
 
 # ===========================================================================
-# The mock provider
-# ===========================================================================
-
-
-class TestMockSegmentMarkets:
-    def test_every_market_type_is_served_and_deterministic(self):
-        for m in GAME_MARKET_TYPES:
-            a = MockOddsAPI.get_odds(745000, market_type=m)
-            b = MockOddsAPI.get_odds(745000, market_type=m)
-            assert a == b
-            assert a["market_type"] == m
-            assert set(GAME_ODDS_FIELDS) <= set(a)
-
-    def test_legacy_markets_keep_the_full_game_shape(self):
-        for m in FULL_GAME_MARKET_TYPES:
-            odds = MockOddsAPI.get_odds(745000, market_type=m)
-            assert odds["home_ml"] is not None and odds["total_line"] is not None
-            assert odds["home_spread"] is not None
-            assert odds["draw_ml"] is None
-
-    def test_three_way_mock_prices_the_tie(self):
-        odds = MockOddsAPI.get_odds(745000, market_type="f1_moneyline")
-        assert odds["draw_ml"] is not None
-        assert odds["home_ml"] is not None and odds["away_ml"] is not None
-        assert odds["total_line"] is None
-
-    def test_yes_no_mock_sits_at_half(self):
-        odds = MockOddsAPI.get_odds(745000, market_type="first_inning_run")
-        assert odds["total_line"] == 0.5
-        assert odds["over_ml"] is not None and odds["under_ml"] is not None
-
-    def test_team_total_lines_are_team_sized(self):
-        for m in ("team_total_home", "team_total_away"):
-            assert 3.5 <= MockOddsAPI.get_odds(745000, market_type=m)["total_line"] <= 5.0
-        for m in ("f5_team_total_home", "f5_team_total_away"):
-            assert 1.5 <= MockOddsAPI.get_odds(745000, market_type=m)["total_line"] <= 2.5
-
-    def test_two_markets_of_one_game_do_not_share_numbers(self):
-        f1 = MockOddsAPI.get_odds(745000, market_type="f1_total")
-        f5 = MockOddsAPI.get_odds(745000, market_type="f5_total")
-        assert (f1["total_line"], f1["over_ml"]) != (f5["total_line"], f5["over_ml"])
-
-    def test_unknown_market_type_raises(self):
-        with pytest.raises(ValueError, match="Unknown market_type"):
-            MockOddsAPI.get_odds(745000, market_type="nope")
-
-
-# ===========================================================================
 # The hash and the insert
 # ===========================================================================
+
+
+def _three_way_row() -> dict:
+    """A recorded first-inning moneyline row that prices the tie."""
+    rows = Recorded99026().get_odds_by_book(GAME_99026, market_type="f1_moneyline")
+    return next(r for r in rows if r["draw_ml"] is not None)
 
 
 class TestHashAndPersist:
     def test_two_way_hash_is_unchanged_by_the_new_column(self):
         # A two-way payload hashes the same with or without the draw_ml key,
         # so every stored two-way hash still deduplicates.
-        odds = MockOddsAPI.get_odds(745000)
+        odds = Recorded99026().get_odds_by_book(GAME_99026, market_type="f1_total")[0]
         without = {k: v for k, v in odds.items() if k != "draw_ml"}
-        assert LiveIngestionPipeline._odds_hash(odds) == LiveIngestionPipeline._odds_hash(without)
+        assert _odds_hash(odds) == _odds_hash(without)
 
     def test_draw_price_changes_the_hash(self):
-        odds = MockOddsAPI.get_odds(745000, market_type="f1_moneyline")
+        odds = _three_way_row()
         moved = dict(odds, draw_ml=odds["draw_ml"] + 10)
-        assert LiveIngestionPipeline._odds_hash(odds) != LiveIngestionPipeline._odds_hash(moved)
+        assert _odds_hash(odds) != _odds_hash(moved)
 
     @pytest.mark.asyncio
     async def test_insert_writes_draw_ml_and_keeps_the_hash_last(self):
-        pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
-        pipeline._db = AsyncMock()
-        odds = MockOddsAPI.get_odds(745000, market_type="f5_moneyline")
-        await pipeline._persist_odds(745000, odds)
-        sql = pipeline._db.execute.await_args.args[0]
-        args = pipeline._db.execute.await_args.args[1:]
+        conn = AsyncMock()
+        odds = _three_way_row()
+        await insert_game_odds_rows(conn, GAME_99026, [odds])
+        sql, params = conn.executemany.await_args.args
+        (args,) = params
         assert "draw_ml" in sql
-        assert args[-1] == LiveIngestionPipeline._odds_hash(odds)
-        # book_line_at sits between the tie price and the hash (the mock
-        # carries no stamp).
-        assert args[-2] is None
+        assert args[-1] == _odds_hash(odds)
+        # book_line_at sits between the tie price and the hash.
+        assert args[-2] == odds["book_line_at"]
         assert args[-3] == odds["draw_ml"]
-        assert args[5] == "f5_moneyline"  # market_type keeps its slot
+        assert args[5] == "f1_moneyline"  # market_type keeps its slot
 
 
 # ===========================================================================
 # The live cycle: every game market, every book, on the cadence
 # ===========================================================================
 
+#: The recorded segment rows the load guard keeps across the twelve current
+#: offers: 32 rows (it refuses two first-five moneyline rows).
+_KEPT_CURRENT_ROWS = 32
+_CURRENT_OFFERS = 12
+
 
 class TestLiveGameMarketCycle:
     """The live cycle persists every book's row of all fifteen markets on the
     cadence, one batch per market. It stores no per-pitch row."""
 
-    def _pipeline(self) -> LiveIngestionPipeline:
+    def _pipeline(self, provider=None) -> LiveIngestionPipeline:
         p = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         p._db = AsyncMock()
-        p._odds = MockOddsAPI()
+        p._odds = provider or Recorded99026()
         p._last_game_odds_fetch = {}
+        p._last_seen_column = False
         return p
-
-    def test_the_segment_only_names_are_gone(self):
-        assert not hasattr(LiveIngestionPipeline, "SEGMENT_MARKET_TYPES")
-        assert not hasattr(LiveIngestionPipeline, "_persist_segment_odds_cycle")
-        assert not hasattr(LiveIngestionPipeline, "_fetch_segment_odds")
-
-    def test_fetch_returns_one_row_per_market_from_the_one_book_mock(self):
-        quotes = self._pipeline()._fetch_game_market_odds(745000)
-        assert [q["market_type"] for q in quotes] == list(GAME_MARKET_TYPES)
-        assert {q["line_type"] for q in quotes} == {"current"}
 
     @pytest.mark.asyncio
     async def test_cycle_persists_every_market_then_respects_the_cadence(self):
         p = self._pipeline()
-        assert await p._persist_game_odds_cycle(745000) == 15
+        assert await p._persist_game_odds_cycle(GAME_99026) == _KEPT_CURRENT_ROWS
         # One executemany per market; no single-row insert.
-        assert p._db.executemany.await_count == 15
+        assert p._db.executemany.await_count == _CURRENT_OFFERS
         p._db.execute.assert_not_awaited()
         markets = [call.args[1][0][5] for call in p._db.executemany.await_args_list]
-        assert markets == list(GAME_MARKET_TYPES)
+        assert markets == list(SEGMENT_MARKETS)
         # The gate is closed until the cadence elapses: nothing more is written.
-        assert await p._persist_game_odds_cycle(745000) == 0
-        assert p._db.executemany.await_count == 15
+        assert await p._persist_game_odds_cycle(GAME_99026) == 0
+        assert p._db.executemany.await_count == _CURRENT_OFFERS
 
     @pytest.mark.asyncio
     async def test_a_failing_market_does_not_stop_the_others(self):
-        p = self._pipeline()
-
-        class _Flaky(MockOddsAPI):
-            @staticmethod
-            def get_odds(game_pk, *, line_type="current", market_type="moneyline", **kw):
+        class _Flaky(Recorded99026):
+            def get_odds_by_book(self, game_pk, *, line_type="current", market_type="moneyline"):
                 if market_type == "f5_total":
                     raise RuntimeError("boom")
-                return MockOddsAPI.get_odds(game_pk, line_type=line_type, market_type=market_type)
+                return super().get_odds_by_book(
+                    game_pk, line_type=line_type, market_type=market_type
+                )
 
-        # The mock's by-book method reads self.get_odds, so the override applies.
-        p._odds = _Flaky()
-        assert await p._persist_game_odds_cycle(745000) == 14
+        p = self._pipeline(_Flaky())
+        # The f5 total's two recorded rows are missing; every other market lands.
+        assert await p._persist_game_odds_cycle(GAME_99026) == _KEPT_CURRENT_ROWS - 2
+        markets = [call.args[1][0][5] for call in p._db.executemany.await_args_list]
+        assert "f5_total" not in markets
+        assert len(markets) == _CURRENT_OFFERS - 1
 
     @pytest.mark.asyncio
     async def test_a_failing_batch_does_not_stop_the_others(self):
         p = self._pipeline()
-        calls = {"n": 0}
+        calls: list[int] = []
 
         async def _executemany(sql, params):
-            calls["n"] += 1
-            if calls["n"] == 2:
+            calls.append(len(params))
+            if len(calls) == 2:
                 raise RuntimeError("db hiccup")
 
         p._db.executemany = _executemany
-        assert await p._persist_game_odds_cycle(745000) == 14
-        assert calls["n"] == 15
+        written = await p._persist_game_odds_cycle(GAME_99026)
+        assert len(calls) == _CURRENT_OFFERS
+        assert written == _KEPT_CURRENT_ROWS - calls[1]
 
 
 # ===========================================================================
@@ -463,43 +420,41 @@ class TestLoaderGameMarkets:
         assert args.game_markets == ["first_inning_run", "team_total_home"]
 
     @pytest.mark.asyncio
-    async def test_load_game_odds_writes_one_row_per_market_and_line_type(self):
-        loader = self._loader()
-        persisted = []
-        batches = []
-
-        # The loader hands one offer's kept rows to a batch writer.
-        async def persist(game_pk, rows):
-            batches.append(rows)
-            persisted.extend(rows)
-            return len(rows)
-
-        written = await loader._load_game_odds(
-            MockOddsAPI(), persist, 745000, line_types=("opening", "closing")
+    async def test_load_odds_writes_every_market_and_line_type(self):
+        conn = AsyncMock()
+        written = await load_odds(
+            conn,
+            Recorded99026(),
+            GAME_99026,
+            tally=RefusalTally(),
+            restamp=False,
+            line_types=("opening", "closing"),
         )
-        assert written == 30
-        assert len(batches) == 30  # the one-book mock: one row per offer
-        assert {o["market_type"] for o in persisted} == set(GAME_MARKET_TYPES)
-        assert {o["line_type"] for o in persisted} == {"opening", "closing"}
+        rows = [args for call in conn.executemany.await_args_list for args in call.args[1]]
+        assert written == len(rows)
+        # One batch per (line type, market): twelve openers and twelve closers.
+        assert conn.executemany.await_count == 24
+        assert {r[5] for r in rows} == set(SEGMENT_MARKETS)
+        assert {r[4] for r in rows} == {"opening", "closing"}
 
     @pytest.mark.asyncio
     async def test_a_narrowed_market_set_writes_only_those(self):
-        loader = self._loader()
-        persisted = []
-
-        async def persist(game_pk, rows):
-            persisted.extend(rows)
-            return len(rows)
-
-        written = await loader._load_game_odds(
-            MockOddsAPI(),
-            persist,
-            745000,
+        conn = AsyncMock()
+        provider = Recorded99026()
+        written = await load_odds(
+            conn,
+            provider,
+            GAME_99026,
+            tally=RefusalTally(),
+            restamp=False,
             line_types=("closing",),
             game_markets=("first_inning_run", "f5_total"),
         )
-        assert written == 2
-        assert [o["market_type"] for o in persisted] == ["first_inning_run", "f5_total"]
+        rows = [args for call in conn.executemany.await_args_list for args in call.args[1]]
+        assert written == len(rows) == 3 + 2
+        assert [r[5] for r in rows] == ["first_inning_run"] * 3 + ["f5_total"] * 2
+        # The first-five total also reads the first-inning total (280) to rule out a copy.
+        assert set(provider.offers_calls) == {369, 281, 280}
 
 
 class TestLoaderResume:

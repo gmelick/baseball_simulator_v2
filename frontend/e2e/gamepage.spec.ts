@@ -8,7 +8,7 @@ import { expect, test, type Page } from '@playwright/test'
  * what-if panel at that plate appearance; a staged reliever runs the two 100-game
  * runs and the panel compares them. Projections and Betting start collapsed and
  * the browser remembers an opened panel. The Betting card grades each side on
- * the real final and marks a market with no stored line. The page shows no Line
+ * the real final and names a market with no stored price. The page shows no Line
  * movement or Managerial override box. page.route mocks the backend.
  */
 
@@ -198,7 +198,7 @@ async function mockFinalGame(page: Page): Promise<{ whatIfBody: () => unknown }>
       }),
     })
   })
-  // Betting: the moneyline from the stored lines (graded), the total with no stored line.
+  // Betting: the moneyline from the stored lines (graded); the total has no stored price.
   const edge = (label: string, sideName: string, line: number | null, result: string | null, offered: number) => ({
     label,
     side: sideName,
@@ -221,10 +221,8 @@ async function mockFinalGame(page: Page): Promise<{ whatIfBody: () => unknown }>
     edges: [
       edge('moneyline', 'home', null, 'lost', -130),
       edge('moneyline', 'away', null, 'won', 110),
-      edge('total', 'over', 8.5, 'lost', 999),
-      edge('total', 'under', 8.5, 'won', 999),
     ],
-    odds_source: { moneyline: 'stored', total: 'mock' },
+    odds_source: { moneyline: 'stored', total: 'none' },
     run_line_pricing: null,
     fair_book: {},
     fair_book_name: {},
@@ -304,9 +302,7 @@ test('the Betting card grades each side on the real final and marks a market wit
   const ml = card.getByRole('region', { name: 'Moneyline' })
   await expect(ml.locator('[data-result="won"]')).toContainText('Away')
   await expect(ml.locator('[data-result="lost"]')).toContainText('Home')
-  const total = card.getByRole('region', { name: 'Total' })
-  await expect(total.getByText('no stored line')).toBeVisible()
-  // No invented price, and no grade against an invented line.
-  await expect(total.getByText('+999')).toHaveCount(0)
-  await expect(total.locator('[data-result]')).toHaveCount(0)
+  // A market with no stored price has no section; one note names it.
+  await expect(card.getByRole('region', { name: 'Total' })).toHaveCount(0)
+  await expect(card.getByTestId('betting-no-line')).toContainText('Total')
 })

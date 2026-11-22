@@ -13,7 +13,7 @@ pin the provider half of the fix:
     a floor on the wait. Any other failure raises at once, and after the last retry
     the original error propagates;
   * the default is one attempt (``BETTINGPROS_MAX_RETRIES`` unset), so the live
-    pipeline and the opening-line job keep today's behaviour; ``set_retry_policy``
+    pipeline keeps today's behaviour; ``set_retry_policy``
     refuses a bad value;
   * ``read_failures`` grows by one at each place the provider catches a failed read,
     and not for a legitimate absence (no event, a matcher decline, a people answer
@@ -47,7 +47,7 @@ from typing import Any
 import pytest
 
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider
-from betting.load import get_odds_provider
+from betting.load import odds_source
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 
@@ -298,16 +298,16 @@ class TestRetryPolicy:
         assert waits == [] and len(fake.requests) == 1
 
     def test_the_default_is_one_attempt(self, urlopen, monkeypatch) -> None:
-        """The live pipeline and the opening-line job build the provider with no arguments."""
+        """The live pipeline builds the provider with no arguments (``odds_source``)."""
         monkeypatch.delenv(BettingProsOddsProvider.MAX_RETRIES_ENV, raising=False)
         monkeypatch.delenv(BettingProsOddsProvider.RETRY_WAIT_ENV, raising=False)
         assert BettingProsOddsProvider.MAX_RETRIES_ENV == "BETTINGPROS_MAX_RETRIES"
         assert BettingProsOddsProvider.RETRY_WAIT_ENV == "BETTINGPROS_RETRY_WAIT_S"
         provider = BettingProsOddsProvider(api_key=_KEY)
         assert (provider._max_retries, provider._retry_wait_s) == (0, 2.0)
-        registry_built = get_odds_provider("bettingpros")
-        assert isinstance(registry_built, BettingProsOddsProvider)
-        assert registry_built._max_retries == 0
+        source_built = odds_source()
+        assert isinstance(source_built, BettingProsOddsProvider)
+        assert source_built._max_retries == 0
         fake = urlopen(_http_error(503), _PAYLOAD)
         with pytest.raises(urllib.error.HTTPError):
             _read(provider)

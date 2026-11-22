@@ -40,7 +40,7 @@ The request path, from an API route to a priced game:
 8. The worker returns a `GameSimResult` per game. The parent aggregates them into a
    `results.GameSimSummary` and a `prop_distributions.PropDistributionSet`.
 9. The consumers price the run: `win_probability` (the moneyline), `game_market_distributions`
-   (the segment and team markets) and the betting layer (`betting/bet_signal.py`).
+   (the segment and team markets) and the betting layer (`betting/pricing.py`).
 
 Three other paths share the same loop:
 
@@ -623,11 +623,11 @@ prop over the N games. Fifteen props: pitchers K, BB, ER, OUTS, H_ALLOWED; batte
 | Function / class | What it does | Called from |
 |---|---|---|
 | `PropDistributionSet.from_boxscores` | Builds every player's PMFs; a game the player missed counts as zero, so the denominator is always N. A player gets the pitcher props if he ever pitched and the batter props if he ever batted or ran. HRR is summed per game, never convolved, because one home run is a hit, a run and an RBI at once. `from_results` reads the box scores off a list of results. | `BatchRunner.run_prop_set` / `run_job`; `from_results`: `scripts/validate_props.py`, `scripts/accuracy/replay.py` |
-| `PropDistribution.p_over` / `p_under` / `p_push` | The sportsbook convention: a half-point line cannot push; a whole-number line pushes on an exact match. | `betting/bet_signal.py`, `api/routes/games.py`, `prop_validation` |
+| `PropDistribution.p_over` / `p_under` / `p_push` | The sportsbook convention: a half-point line cannot push; a whole-number line pushes on an exact match. | `betting/pricing.py`, `api/routes/games.py`, `prop_validation` |
 | `PITCHER_PROPS` / `BATTER_PROPS` / `ALL_PROPS` | The prop names, core props first; the frontend shows the chips in this order. | `api/routes/games.py` (`_VALID_PROP_NAMES`) |
 
 **Watch out:** A new prop needs a tuple entry (appended, never reordered), an extractor and the
-matching odds vocabulary entry in `pipeline/odds_provider.py`.
+matching odds vocabulary entry in `betting/markets.py`.
 
 ### `simulation/game_market_distributions.py`
 

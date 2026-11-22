@@ -198,7 +198,7 @@ const EDGE_MARKETS: Array<{ type: string; label: string; name: string; sides: st
   { type: 'first_inning_run', label: 'first_inning_run', name: 'A run in the first inning', sides: ['over', 'under'] },
 ]
 
-/** Mock /edges + /signals for 745001: every market from the mock provider, no signal. */
+/** Stub /edges + /signals for 745001: every market from the stored lines, no signal. */
 async function mockBetting(page: Page): Promise<void> {
   const lineOf = (label: string, side: string): number | null => {
     if (side === 'over' || side === 'under') return label === 'first_inning_run' ? 0.5 : 4.5
@@ -221,7 +221,7 @@ async function mockBetting(page: Page): Promise<void> {
       price_book_name: null,
     })),
   )
-  const oddsSource = Object.fromEntries(EDGE_MARKETS.map((m) => [m.type, 'mock']))
+  const oddsSource = Object.fromEntries(EDGE_MARKETS.map((m) => [m.type, 'stored']))
   const marketNames = Object.fromEntries(EDGE_MARKETS.map((m) => [m.label, m.name]))
   const pairPricing = { shape: 'pair', home_line: -0.5, away_line: 0.5, reference_margin: null, reference_source: null }
   const common = {
@@ -275,7 +275,7 @@ test('the betting card renders all fifteen game markets with a tie side', async 
     'First inning',
     'Team totals',
   ])
-  // The sections, grouped under their sub-headings. The mock lists the markets in
+  // The sections, grouped under their sub-headings. The stub lists the markets in
   // the vocabulary order, so this order holds only when the card groups them.
   await expect(card.locator('section h5')).toHaveText([
     'Moneyline',

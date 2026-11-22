@@ -49,7 +49,6 @@ _REPRESENTATIVE_GETS = [
     "/api/players/search?q=ab",
     "/api/schema",
     "/api/data/freshness",
-    "/api/odds/1",
     "/api/assistant/status",
     "/metrics",
 ]
@@ -140,7 +139,7 @@ def test_each_data_router_carries_the_gate_and_the_open_ones_do_not():
         sql_runner,
     )
     from api.routes.auth import router as auth_router
-    from pipeline.live.live_ingestion_pipeline import odds_router, ws_router
+    from pipeline.live.live_ingestion_pipeline import ws_router
 
     def gated(router) -> bool:
         return any(d.dependency is require_auth for d in router.dependencies)
@@ -157,7 +156,6 @@ def test_each_data_router_carries_the_gate_and_the_open_ones_do_not():
         similarity.router,
         similarity_explorer.router,
         sql_runner.router,
-        odds_router,
     ]
     assert all(gated(r) for r in protected), [r.prefix for r in protected if not gated(r)]
     assert not gated(auth_router)

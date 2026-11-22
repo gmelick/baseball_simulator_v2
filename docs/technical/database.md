@@ -104,14 +104,15 @@ insert.
 ### Odds
 
 One odds row holds ONE book's prices and names the book (`book = 'bp:<id>'`). A reader
-keeps only those rows (`pipeline.odds_provider.STORED_BOOK_FILTER_SQL`), because an old
+keeps only those rows (`betting.markets.STORED_BOOK_FILTER_SQL`), because an old
 `consensus` row can mix two books. A row is new only when its price set is new: the
-writer computes an odds hash and skips a duplicate.
+writer computes an odds hash and skips a duplicate. The code that writes both tables is on
+[betting.md](betting.md).
 
 | Table | Holds | Written by | Read by |
 |---|---|---|---|
-| `raw.game_odds` | Game-market prices per snapshot: the moneyline (with `draw_ml` for a three-way segment moneyline), the run line, the total, and the twelve segment and team markets (`market_type`, fifteen values). `line_type` is `opening`, `current`, `closing` or `bet_placement`. `book_line_at` is the vendor's stamp; `last_seen_at` the last time the book still posted the price. | the live service's odds writers (`pipeline/live/ingestion/odds_rows.py`, `closing_rows.py`), also used by `scripts/load_historical_odds.py` | the betting routes, the accuracy comparison, the slate card |
-| `raw.prop_odds` | Player-prop prices: over / under at a line, per player and `prop_stat` (fifteen markets). | the same writers | the accuracy comparison, the opening-line job, the probes |
+| `raw.game_odds` | Game-market prices per snapshot: the moneyline (with `draw_ml` for a three-way segment moneyline), the run line, the total, and the twelve segment and team markets (`market_type`, fifteen values). `line_type` is `opening`, `current`, `closing` or `bet_placement`. `book_line_at` is the vendor's stamp; `last_seen_at` the last time the book still posted the price. | `betting/load.py`, called by the live service (current rows, and the closing stamp at first pitch) and the historical loader `betting/history.py` (opening and closing rows) | the betting routes, the accuracy comparison, the slate card, the historical loader's resume, the probes |
+| `raw.prop_odds` | Player-prop prices: over / under at a line, per player and `prop_stat` (fifteen markets). | the same writers | the accuracy comparison, the historical loader's resume, the probes |
 | `raw.game_odds_archive`, `raw.prop_odds_archive` | The retired `consensus` rows, copied out of the live tables season by season. A row archived before Alembic 0031 holds NULL `last_seen_at`. | `scripts/probes/retire_consensus_odds.py` | two odds probes |
 
 ### ETL bookkeeping
@@ -121,7 +122,7 @@ writer computes an odds hash and skips a duplicate.
 | `raw.etl_data_freshness` | The last game loaded per pitcher and batter. | the historical loader | the loader, the Data Health route |
 | `raw.etl_errors` | One row per pitch the loader skipped on a hard error; unique per natural key, so a rerun adds no duplicate. | the historical loader | the loader's reprocess path |
 | `raw.etl_game_ingest` | The terminal outcome per game (`loaded`, `empty`, `failed`), so a game with no pitches is not fetched forever. A reload ignores it on purpose. | the historical loader | the loader; `scripts/reload_games.py` |
-| `raw.pipeline_run_log` | A run log of two jobs. | `pipeline/etl/opening_line_job.py`, `pipeline/etl/venue_backfill_job.py` | the same two jobs |
+| `raw.pipeline_run_log` | A run log of the venue backfill. | `pipeline/etl/venue_backfill_job.py` | no reader today |
 
 ### The `sim` schema
 

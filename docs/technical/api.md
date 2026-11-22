@@ -119,8 +119,6 @@ means the route answers 503 when the lifespan has no read-only pool.
 | GET | `/api/betting/games/{game_pk}/edges` | The edge report of every side of each requested game market; `result` once the game is final | Login |
 | GET | `/api/betting/games/{game_pk}/signals` | The +EV bets (positive expected value), ranked by EV and sized by fractional Kelly | Login |
 | GET | `/api/betting/games/{game_pk}/card-odds` | The graded book's stored moneyline, run line and total for a slate card | Login |
-| GET | `/api/odds/{game_pk}` | Mock odds for one game (`MockOddsAPI`) | Login |
-| GET | `/api/odds/today/all` | Mock odds for every game on today's league schedule | Login |
 
 ### The Data Lab and the similarity explorer
 
@@ -233,7 +231,7 @@ The app factory and the lifespan. `app = create_app()` at the bottom is what uvi
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `create_app()` | Adds the CORS, rate-limit, latency and park-factor middleware; includes every router (auth, similarity, games, betting, data freshness, the WebSocket and odds routers, metrics, the Data Lab, the similarity explorer, the assistant); adds `/health`, `/ready` and `/`; mounts the built frontend when `frontend/dist` exists; installs the 500 handler. Opens no connection. | Module bottom; `scripts/export_openapi.py`; the tests |
+| `create_app()` | Adds the CORS, rate-limit, latency and park-factor middleware; includes every router (auth, similarity, games, betting, data freshness, the WebSocket router, metrics, the Data Lab, the similarity explorer, the assistant); adds `/health`, `/ready` and `/`; mounts the built frontend when `frontend/dist` exists; installs the 500 handler. Opens no connection. | Module bottom; `scripts/export_openapi.py`; the tests |
 | `lifespan(app)` | The boot steps and the shutdown above. | FastAPI, when the server starts |
 | `_background_prewarm(runner, pool_dir)` | Runs `BatchRunner.prewarm` in a thread and logs the outcome. With a pinned bundle version it passes no pool folder, so the workers find the bundle through the pin. | `lifespan` |
 | `health()` / `ready()` / `root()` | The probes. `/ready` answers 503 when Postgres or Redis fails; the live heartbeat and the pitcher engine are informational. | The compose health check (`/health`); nginx proxies both probes |
@@ -431,7 +429,7 @@ wire. `__init__.py` re-exports every public model: `from api.schemas import X`.
 | [`snapshots.py`](../../api/schemas/snapshots.py) (267) | `PlayerRefModel`, `FieldSnapshotModel`, `PlayByPlayEntryModel`, `PlayByPlayModel`, `StateAtPitchModel`, `MetricDeltaModel`, `OverrideDeltaModel` | `simulation.snapshots` |
 | [`game_card.py`](../../api/schemas/game_card.py) (181) | `InningLineModel`, `LinescoreModel`, `PitcherDecisionsModel` (`from_jsonable` rebuilds a stored card) | `simulation.linescore`, `simulation.pitcher_decisions` |
 | [`props.py`](../../api/schemas/props.py) (180) | `BoxscoreCardRowModel`, `BoxscoreCardModel` (`from_prop_set`; a side's placeholder relievers fold into one row, `GENERIC_PEN_IDS`), `PropEdgeResponse` | `simulation.prop_distributions` |
-| [`markets.py`](../../api/schemas/markets.py) (135) | `EdgeReportModel` (with `price_book` and `result`), `BetSignalModel` | `betting.bet_signal` |
+| [`markets.py`](../../api/schemas/markets.py) (135) | `EdgeReportModel` (with `price_book` and `result`), `BetSignalModel` | `betting.pricing` |
 | [`live.py`](../../api/schemas/live.py) (57) | `LiveGameStateResponse` | The live service's `game_state` JSON |
 
 **Watch out:** A model's docstring and fields are the OpenAPI schema. A change to either, or
@@ -549,21 +547,20 @@ the grading on the real final. It includes `betting_card`.
 | Function / class | What it does | Called from |
 |---|---|---|
 | `_summary_and_winprob(request, ...)` | The game routes' seam: state, kwargs, batch (cached by spec, seed and N), and the win probability through `app.state.calibration_map`. | `get_game_edges`, `get_game_signals` |
-| `get_game_edges` | `GET /edges`: the reports of the requested markets (all fifteen by default), with `odds_source`, the graded book, each side's offered-price book, the market names and each run line's pricing. Once final, each edge's `result` and the `final` score. | The Betting card |
-| `get_game_signals` | `GET /signals`: the same reports gated to +EV by `betting.bet_signal.bet_signals_from_edges`, ranked by EV. The gate's knobs are query parameters. | The Betting card |
+| `get_game_edges` | `GET /edges`: the reports of the requested markets (all fifteen by default), with `odds_source` (`injected`, `stored` or `none` per market; a market with `none` has no report), the graded book, each side's offered-price book, the market names and each run line's pricing. Once final, each edge's `result` and the `final` score. | The Betting card |
+| `get_game_signals` | `GET /signals`: the same reports gated to +EV by `betting.pricing.bet_signals_from_edges`, ranked by EV. The gate's knobs are query parameters. | The Betting card |
 | `_actual_result` / `_grade` | The real final from `raw.games.inning_scores`, else the feed's linescore; one side's "won", "lost" or "push". | `get_game_edges` |
 
-**Watch out:** `test_segment_edges.py` patches `_summary_and_winprob` here. `betting/` is baked
-into the app image while `api/` hot-reloads: rebuild the image before an `api/` edit imports a
-new `betting/` name.
+**Watch out:** `test_segment_edges.py` patches `_summary_and_winprob` here. `betting/` is
+mounted into the `app` container like `api/`, so an edit to either needs no image rebuild.
 
 ### `api/routes/betting_pricing.py`
 
-[Source](../../api/routes/betting_pricing.py) · 891 lines · Tests: [test_segment_edges.py](../../tests/unit/test_segment_edges.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py)
+[Source](../../api/routes/betting_pricing.py) · 875 lines · Tests: [test_segment_edges.py](../../tests/unit/test_segment_edges.py), [test_odds_live_pages.py](../../tests/unit/test_odds_live_pages.py)
 
 The edge math. A market's prices come from, in order: the injected query parameters or the
-`prices` document, the stored lines, then the deterministic mock (`MockOddsAPI`, seeded on
-the game).
+`prices` document, then the stored lines. A market with neither has no price: it gets no
+report. `odds_source` names the source of each market: `injected`, `stored` or `none`.
 
 | Function / class | What it does | Called from |
 |---|---|---|
@@ -571,7 +568,8 @@ the game).
 | `_priced_edge_reports(request, ...)` | Reads the stored rows when an uninjected market needs them, then builds the reports. | `betting.get_game_edges` / `get_game_signals` |
 | `_parse_prices` / `_split_prices` | The `prices` JSON document: any fault is a 422 naming the market. A full-game market in it becomes its named parameters. | `betting` |
 | `_parse_markets(markets)` | The comma-separated `markets` parameter; an unknown market is a 422. | `betting` |
-| `_mock_odds` / `_at_offered_price` | The mock's prices (imported lazily from `pipeline.live.ingestion.mock_odds`); a report re-read at the best offered price (the EV moves, the edge stays). | `_build_edge_reports` |
+| `_injected(market, **params)` | True when every named parameter of a full-game market is given. Some but not all of them is a 422 naming the missing ones, because the route has no other source for them. | `_build_edge_reports` |
+| `_at_offered_price` | A report re-read at the best offered price (the EV moves, the edge stays). | `_build_edge_reports` |
 
 **Watch out:** None of the twelve segment and team markets is calibrated. The signals still
 fire on them (an owner ruling on the segment markets, SIM-546).
@@ -585,7 +583,7 @@ The stored price source: each sportsbook's latest usable one-book row (`bp:<id>`
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `_read_stored_rows(request, game_pk, markets)` | Reads the game's status, then the latest row per market and book. A `Preview` game reads `closing` and `current` rows; any other game reads `closing` rows only. A failed read logs and returns nothing; the markets then use the mock. | `betting_pricing`, `betting_card` |
+| `_read_stored_rows(request, game_pk, markets)` | Reads the game's status, then the latest row per market and book. A `Preview` game reads `closing` and `current` rows; any other game reads `closing` rows only. A failed read logs a warning and returns nothing; the markets then have no stored price. | `betting_pricing`, `betting_card` |
 | `_latest_pregame_rows` / `_drop_withdrawn` | The same rules in Python: a closing row beats a current row of the same book; a current row not seen within 20 minutes (`CURRENT_ROW_MAX_AGE_S`) of the game's newest sighting is withdrawn. | `_read_stored_rows` |
 | `_stored_market(stored, market)` | The graded book's row (the first book on `GRADED_BOOK_PREFERENCE`) gives the fair probability; each side's offered price is the best stored price at that line. | `betting_pricing` |
 | `_stored_reference_margin` | One book's two-way margin for a run line listed as two separate bets; a segment run line reads its own segment's total first. | `betting_pricing` |
@@ -596,7 +594,7 @@ The stored price source: each sportsbook's latest usable one-book row (`bp:<id>`
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `get_card_odds` | `GET /card-odds`: the graded book's moneyline, run line and total from the stored rows only, never the mock. 404 when none exists. On a final game, `settled` says how each line settled. | The slate card |
+| `get_card_odds` | `GET /card-odds`: the graded book's moneyline, run line and total from the stored rows only. 404 when none exists. On a final game, `settled` says how each line settled. | The slate card |
 | `_card_odds_from_rows` / `_card_settlement` | The graded row of each market as the card's lines; the winning side of each line on the final score. | `get_card_odds` |
 
 ## The Data Lab and the similarity explorer
@@ -785,14 +783,10 @@ a hand-written writer with the same series names.
 
 ## Routes defined outside `api/`
 
-`create_app()` includes two routers from the live pipeline package:
+`create_app()` includes one router from the live pipeline package:
 
 - `ws_router` (`/ws/games/{game_pk}`, in
   [live_ingestion_pipeline.py](../../pipeline/live/live_ingestion_pipeline.py)): the handler
   checks the handshake, registers the socket with `connection_manager`, asks the bridge to
   subscribe to the game's Redis channel, and answers `ping` with `pong`. With no message for
   30 seconds it sends a `ping`.
-- `odds_router` (`/api/odds/*`, in
-  [odds_routes.py](../../pipeline/live/ingestion/odds_routes.py)): both routes return the
-  mock provider's odds, never stored or live lines. The Betting card reads `/api/betting`
-  instead.

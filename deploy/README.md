@@ -204,7 +204,7 @@ The keys the code reads that differ by tier:
 | `RATE_LIMIT_PER_MINUTE` | Requests a minute per API key, else per client address; `0` or unset is off. | unset | `120` | `300` |
 | `TRUSTED_PROXY_HOSTS` | The proxies whose `X-Real-IP` the rate limiter believes. Compose sets `nginx` when unset; an empty value turns the trust off. | unset | commented | commented |
 | `CORS_ORIGINS` / `FRONTEND_URL` | The browser origins the API accepts. With neither set, development allows three localhost origins and other tiers one. | unset | the staging origin | the production origin |
-| `ODDS_PROVIDER` / `ODDS_API_KEY` | The odds source: `mock` (the default), or `bettingpros` (the BettingPros provider, which needs the key). | commented | `mock` | see the gaps below |
+| `ODDS_API_KEY` | The BettingPros key, the one odds source. The live service and the nightly odds pass read it. Without it, no odds load: each BettingPros read fails and is logged. | blank | blank | a placeholder to replace |
 
 Keep `ENVIRONMENT=development` on a stack that serves plain HTTP. Any other
 value marks the cookie `secure`, the browser drops it over HTTP, and the login
@@ -215,15 +215,11 @@ loops.
 The staging and production templates predate the compose stack's current
 shape. Fix these before you use one:
 
-- `ODDS_PROVIDER=theoddsapi` (production) names no registered provider. The
-  live service fails at its start, and the app's odds routes fail, with
-  "Unknown ODDS_PROVIDER". Use `bettingpros`.
 - `LIVE_PIPELINE_ENABLED=true` starts a second live pipeline inside the app. On
   this compose file the `live` service is the one publisher; leave the key unset
   or `false`.
-- `WORKERS`, `SIM_MAX_WORKERS`, `ODDS_PROVIDER_API_KEY`, `ODDS_API_BASE`,
-  `ASYNC_DB_DSN`, `MLB_API_BASE` and `PROMETHEUS_PUSHGATEWAY` are read by no
-  code. The app's worker count is `SIM_RUNNER_WORKERS`.
+- `WORKERS`, `SIM_MAX_WORKERS`, `ASYNC_DB_DSN`, `MLB_API_BASE` and
+  `PROMETHEUS_PUSHGATEWAY` are read by no code. The app's worker count is `SIM_RUNNER_WORKERS`.
 - `CALIBRATION_REPORT_PATH=/data/calibration_report.json` differs from the path
   compose sets (`/data/calibration.json`); compose wins.
 

@@ -35,7 +35,8 @@ def odds_source() -> BettingProsOddsProvider:
     """The BettingPros provider every odds job reads through.
 
     The provider reads ``ODDS_API_KEY``. Without the key, each BettingPros read fails
-    with one plain message, and the caller logs it as a failed fetch.
+    with one plain message; the provider logs it, counts it in ``read_failures`` and
+    returns no rows.
     """
     return BettingProsOddsProvider()
 
@@ -263,7 +264,7 @@ def _stamp_param(value: Any) -> datetime | None:
     """A row's ``book_line_at`` as an aware datetime for the TIMESTAMPTZ column.
 
     A naive datetime is read as UTC (the vendor stamps in UTC); ISO-8601 text is
-    parsed; anything else (``None``, a mock row without the key) gives ``None``.
+    parsed; anything else (``None``, a row without the key) gives ``None``.
     """
     if isinstance(value, datetime):
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
@@ -426,15 +427,14 @@ def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, .
     ``book_line_at`` (the vendor's stamp on the row's line) sits just
     before ``odds_hash``, which stays LAST: two pinned tests read the hash as
     the final argument. The stamp is not in the hash, so an unchanged line
-    re-fetched later still deduplicates. The live pipeline, the historical
-    loader and the opening-line job all bind through this one function, so
-    every writer sends the hash the live schema requires (``odds_hash`` is
-    NOT NULL on raw.game_odds since migration 0012).
+    re-fetched later still deduplicates. Every write binds through this one
+    function, so every row carries the hash the live schema requires
+    (``odds_hash`` is NOT NULL on raw.game_odds since migration 0012).
     """
     return (
         game_pk,
-        odds.get("source", "mock"),
-        odds.get("is_mock", True),
+        odds.get("source", "bettingpros"),
+        odds.get("is_mock", False),
         odds.get("book", "consensus"),
         odds.get("line_type", "current"),
         odds.get("market_type", "moneyline"),
@@ -463,8 +463,8 @@ def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
     return (
         prop["game_pk"],
         prop["player_id"],
-        prop.get("source", "mock"),
-        prop.get("is_mock", True),
+        prop.get("source", "bettingpros"),
+        prop.get("is_mock", False),
         prop["prop_stat"],
         prop["line"],
         prop.get("over_ml"),
@@ -667,8 +667,8 @@ def _hash_typings(row: Mapping[str, Any], is_prop: bool) -> list[dict[str, Any]]
 def closing_hash(row: Mapping[str, Any]) -> str:
     """The odds_hash of ``row`` as a closing row.
 
-    The hash is ``LiveIngestionPipeline._odds_hash`` (for a prop row, one with
-    ``prop_stat``: ``_prop_odds_hash``) of the row with ``line_type`` set to
+    The hash is :func:`_odds_hash` (for a prop row, one with
+    ``prop_stat``: :func:`_prop_odds_hash`) of the row with ``line_type`` set to
     ``'closing'``. The row's numbers are typed the way its writer typed them:
     the typing whose hash at the row's own line type equals the stored
     ``odds_hash``. A row whose stored hash matches no typing (or has no hash)

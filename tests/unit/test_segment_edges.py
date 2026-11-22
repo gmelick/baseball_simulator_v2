@@ -3,8 +3,10 @@
 The edge route prices every game market the book posts, not only the three
 full-game markets. These tests pin the route's side:
 
-  * the default request prices all fifteen markets from the mock, every side
-    of each, each report labelled with its market type, and names them;
+  * the default request prices all fifteen markets from the stored rows (the
+    real provider's reading of recorded BettingPros responses), every side of
+    each, each report labelled with its market type, and names them; a market
+    with no price gets no report and the source "none";
   * a three-way market (the first-inning and first-five moneylines) de-vigs
     its three prices together, and each side's EV reads its own price;
   * the stored rows price the segment markets like the full-game ones: one
@@ -34,6 +36,7 @@ import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.bp_recorded import GAME_92857, GAME_99026, Recorded92857, Recorded99026
 
 import api.routes.betting_pricing as pricing
 import api.routes.betting_stored_odds as stored_odds
@@ -50,7 +53,7 @@ from betting.pricing import (
     samples_over_under_edge_report,
     three_way_edge_report,
 )
-from pipeline.live.ingestion.mock_odds import MockOddsAPI
+from betting.validate import check_row
 from simulation.game_market_distributions import SegmentRuns, side_probabilities
 from simulation.game_state import GameState
 from simulation.results import GameSimSummary
@@ -223,16 +226,57 @@ class TestBuilders:
 
 
 # ===========================================================================
-# The default request prices all fifteen from the mock
+# The default request prices all fifteen from the recorded stored rows
 # ===========================================================================
 
+_ROW_COLUMNS = (
+    "home_ml",
+    "away_ml",
+    "draw_ml",
+    "home_spread",
+    "home_spread_ml",
+    "away_spread",
+    "away_spread_ml",
+    "total_line",
+    "over_ml",
+    "under_ml",
+)
 
-def test_edges_default_prices_fifteen_markets_from_the_mock(client_for):
-    resp = client_for().get(_edges_url())
+
+def _recorded_stored_rows() -> list[dict]:
+    """Every book's closing row of the fifteen markets, as the real provider reads
+    the recorded BettingPros responses: the full-game markets of event 92857 and the
+    segment markets of event 99026. A row the load guard refuses is left out, as it
+    never reaches ``raw.game_odds``."""
+    full, segments = Recorded92857(), Recorded99026()
+    rows = []
+    for market in GAME_MARKET_TYPES:
+        if market in ("moneyline", "total", "runline"):
+            read = full.get_odds_by_book(GAME_92857, line_type="closing", market_type=market)
+        else:
+            read = segments.get_odds_by_book(GAME_99026, line_type="closing", market_type=market)
+        for r in read:
+            if check_row(r) is not None:
+                continue
+            row = _row(market, r["book"], **{c: r.get(c) for c in _ROW_COLUMNS})
+            rows.append(row)
+    return rows
+
+
+RECORDED_ROWS = _recorded_stored_rows()
+
+
+def _recorded_row(market: str, book: str) -> dict:
+    (row,) = [r for r in RECORDED_ROWS if r["market_type"] == market and r["book"] == book]
+    return row
+
+
+def test_edges_default_prices_fifteen_markets_from_the_stored_rows(client_for):
+    resp = client_for(_StubPool(RECORDED_ROWS)).get(_edges_url())
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["markets"] == list(GAME_MARKET_TYPES)
-    assert body["odds_source"] == dict.fromkeys(GAME_MARKET_TYPES, "mock")
+    assert body["odds_source"] == dict.fromkeys(GAME_MARKET_TYPES, "stored")
     labels = [pricing._report_label(m) for m in GAME_MARKET_TYPES]
     assert body["market_names"] == {
         pricing._report_label(m): GAME_MARKET_NAMES[m] for m in GAME_MARKET_TYPES
@@ -248,61 +292,39 @@ def test_edges_default_prices_fifteen_markets_from_the_mock(client_for):
     # The three full-game labels stay; the run line keeps its source key.
     assert {"moneyline", "total", "run_line"} <= set(counts)
     assert "runline" in body["odds_source"] and "runline" not in counts
-    # Every run line is a pair in the mock, and each one says so.
     assert set(body["run_line_pricing_by_label"]) == {"run_line", "f1_runline", "f5_runline"}
     assert body["run_line_pricing"] == body["run_line_pricing_by_label"]["run_line"]
     json.dumps(body)
 
 
-def test_the_mock_draws_valid_american_prices():
-    """Every mock price of the twelve markets is at least 100 in size.
-
-    A price inside (-100, 100) is not an American price, and a 0 makes the
-    de-vig refuse both sides of its market."""
-    columns = ("home_ml", "away_ml", "draw_ml", "home_spread_ml", "away_spread_ml")
-    columns += ("over_ml", "under_ml")
-    for game_pk in range(745_001, 746_001):
-        for market in GAME_MARKET_TYPES:
-            odds = MockOddsAPI.get_odds(game_pk, market_type=market)
-            for column in columns:
-                price = odds[column]
-                if price is not None:
-                    assert abs(price) >= 100, (game_pk, market, column, price)
-
-
-def test_the_default_request_prices_every_side_on_many_games(client_for):
-    """Over many games, the default request gives every market all its sides."""
-    client = client_for()
-    for game_pk in range(745_001, 745_041):
-        body = client.get(f"/api/betting/games/{game_pk}/edges?n_iterations=400").json()
-        counts: dict[str, int] = {}
-        for e in body["edges"]:
-            counts[e["label"]] = counts.get(e["label"], 0) + 1
-        for market in GAME_MARKET_TYPES:
-            expected = 3 if GAME_MARKET_KIND[market] == "three_way" else 2
-            label = pricing._report_label(market)
-            assert counts.get(label) == expected, (game_pk, market)
+def test_the_default_request_with_no_price_reports_nothing(client_for):
+    """No injected price and no stored row: every market is "none", with no report."""
+    body = client_for().get(_edges_url()).json()
+    assert body["odds_source"] == dict.fromkeys(GAME_MARKET_TYPES, "none")
+    assert body["edges"] == []
+    assert body["fair_book"] == {}
 
 
 def test_the_segment_reports_read_the_segment_runs(client_for):
-    body = client_for().get(_edges_url("&markets=f5_total,first_to_score")).json()
+    pool = _StubPool(RECORDED_ROWS)
+    body = client_for(pool).get(_edges_url("&markets=f5_total,first_to_score")).json()
     f5 = _by(body, "f5_total")
-    mock = MockOddsAPI.get_odds(GAME_PK, market_type="f5_total")
-    line = float(mock["total_line"])
+    graded = _recorded_row("f5_total", body["fair_book"]["f5_total"])
+    line = float(graded["total_line"])
     assert f5["over"]["line"] == line
     assert f5["over"]["sim_prob"] == pytest.approx(float(np.mean(RUNS.segment_total("f5") > line)))
     first = _by(body, "first_to_score")
     p_home, p_away, _ = side_probabilities(RUNS, "first_to_score")
     assert first["home"]["sim_prob"] == pytest.approx(p_home)
     assert first["away"]["sim_prob"] == pytest.approx(p_away)
-    fs = MockOddsAPI.get_odds(GAME_PK, market_type="first_to_score")
+    fs = _recorded_row("first_to_score", body["fair_book"]["first_to_score"])
     assert first["home"]["market_fair_prob"] == pytest.approx(
         devig([fs["home_ml"], fs["away_ml"]])[0]
     )
 
 
 def test_a_yes_no_market_is_priced_at_half_a_run(client_for):
-    body = client_for().get(_edges_url("&markets=first_inning_run")).json()
+    body = client_for(_StubPool(RECORDED_ROWS)).get(_edges_url("&markets=first_inning_run")).json()
     yes = _by(body, "first_inning_run")["over"]
     assert yes["line"] == 0.5
     assert yes["sim_prob"] == pytest.approx(float(np.mean(RUNS.segment_total("f1") > 0)))
@@ -314,19 +336,24 @@ def test_a_yes_no_market_is_priced_at_half_a_run(client_for):
 
 
 def test_three_way_fair_probabilities_sum_to_one(client_for):
-    body = client_for().get(_edges_url("&markets=f5_moneyline")).json()
+    body = client_for(_StubPool(RECORDED_ROWS)).get(_edges_url("&markets=f5_moneyline")).json()
     sides = _by(body, "f5_moneyline")
     assert set(sides) == {"home", "away", "draw"}
     assert sum(e["market_fair_prob"] for e in sides.values()) == pytest.approx(1.0, abs=1e-9)
-    mock = MockOddsAPI.get_odds(GAME_PK, market_type="f5_moneyline")
+    graded = _recorded_row("f5_moneyline", body["fair_book"]["f5_moneyline"])
+    fair = devig([graded["home_ml"], graded["away_ml"], graded["draw_ml"]])
     probs = dict(
         zip(("home", "away", "draw"), side_probabilities(RUNS, "f5_moneyline"), strict=True)
     )
-    for side, column in (("home", "home_ml"), ("away", "away_ml"), ("draw", "draw_ml")):
+    for (side, column), f in zip(
+        (("home", "home_ml"), ("away", "away_ml"), ("draw", "draw_ml")), fair, strict=True
+    ):
         e = sides[side]
         assert e["sim_prob"] == pytest.approx(probs[side])
-        assert e["offered_american"] == float(mock[column])
-        assert e["ev"] == pytest.approx(expected_value(e["sim_prob"], float(mock[column])))
+        assert e["market_fair_prob"] == pytest.approx(f)
+        # The offered price is the best stored price, never worse than the graded one.
+        assert e["offered_american"] >= float(graded[column])
+        assert e["ev"] == pytest.approx(expected_value(e["sim_prob"], e["offered_american"]))
 
 
 # ===========================================================================
@@ -373,8 +400,9 @@ def test_stored_rows_price_the_segment_markets(client_for):
     assert (ml["away"]["offered_american"], ml["away"]["price_book"]) == (200.0, "bp:12")
     # A tie on price keeps the book earlier on the list.
     assert (ml["draw"]["offered_american"], ml["draw"]["price_book"]) == (110.0, "bp:12")
-    # The markets with no stored row read the mock.
-    assert body["odds_source"]["f5_moneyline"] == "mock"
+    # A market with no stored row has no price.
+    assert body["odds_source"]["f5_moneyline"] == "none"
+    assert "f5_moneyline" not in {e["label"] for e in body["edges"]}
 
 
 def test_three_way_row_without_a_tie_is_not_usable(client_for):
@@ -386,10 +414,11 @@ def test_three_way_row_without_a_tie_is_not_usable(client_for):
     assert body["odds_source"] == {"f1_moneyline": "stored"}
     assert body["fair_book"] == {"f1_moneyline": "bp:19"}
     assert body["fair_book_name"] == {"f1_moneyline": "BetMGM"}
-    # With no complete row the market falls to the mock.
+    # With no complete row the market has no price and no report.
     body = client_for(_StubPool(rows[:1])).get(_edges_url("&markets=f1_moneyline")).json()
-    assert body["odds_source"] == {"f1_moneyline": "mock"}
+    assert body["odds_source"] == {"f1_moneyline": "none"}
     assert body["fair_book"] == {}
+    assert body["edges"] == []
 
 
 def test_the_usability_rule_reads_the_kind():
@@ -484,7 +513,7 @@ def test_summary_without_grids_skips_the_segment_markets(client_for, caplog):
     summary = _grid_summary(grids=False)
     assert summary.inning_grids is None
     with caplog.at_level(logging.INFO, logger="api.routes.betting"):
-        resp = client_for(summary=summary).get(_edges_url())
+        resp = client_for(_StubPool(RECORDED_ROWS), summary=summary).get(_edges_url())
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["markets"] == ["moneyline", "runline", "total"]
@@ -561,7 +590,7 @@ def test_legacy_markets_unchanged(monkeypatch):
 
 
 def test_the_twelve_do_not_move_the_three(client_for):
-    client = client_for()
+    client = client_for(_StubPool(RECORDED_ROWS))
     three = client.get(_edges_url("&markets=moneyline,total,runline")).json()
     fifteen = client.get(_edges_url()).json()
     legacy = {"moneyline", "total", "run_line"}

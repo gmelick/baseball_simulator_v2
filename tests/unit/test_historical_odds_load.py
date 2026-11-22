@@ -7,9 +7,9 @@ SIM-435 — unit tests for (1) the BettingPros provider's CLOSING-line parsing a
 No network and no live DB:
   * the provider's _bp_get / _mlb_get seams are stubbed with the captured
     fixtures (tests/fixtures/bettingpros/) — same pattern as the SIM-405 tests;
-  * the loader is driven against a fake provider + a MOCK asyncpg pool/connection
-    (records every INSERT) so the per-game opening+closing persist calls are
-    asserted without Postgres.
+  * the loader's load path (betting.load.load_odds) runs the real provider over
+    the recorded responses (tests/bp_recorded.py) into a recording pool, so the
+    opening and closing writes are asserted without Postgres.
 
 Closing line (SIM-555, 2026-09-28): one row per book, each side from that book;
 the one-row ``get_odds`` returns the first book on ``GRADED_BOOK_PREFERENCE``.
@@ -165,283 +165,78 @@ def test_book_line_handles_empty_books_and_unstamped_lines():
 
 
 # ===========================================================================
-# (2) The loader — driven against a fake provider + a MOCK pool (no Postgres)
+# (2) The loader's load path — the recorded provider + a recording pool (no Postgres)
 # ===========================================================================
+from tests.bp_recorded import (  # noqa: E402
+    BRYCE_MILLER,
+    GAME_92857,
+    JULIO_RODRIGUEZ,
+    Recorded92857,
+)
+
 import betting.history as loader  # noqa: E402
+from betting.load import load_odds  # noqa: E402
+from betting.markets import (  # noqa: E402
+    BATTER_PROP_STATS,
+    PITCHER_PROP_STATS,
+    PROP_ROLE_BATTER,
+    PROP_ROLE_PITCHER,
+)
+from betting.validate import RefusalTally  # noqa: E402
 
 
-class _RecordingConn:
-    """Mock asyncpg connection: records every execute()/executemany()/fetch() (no DB).
+class _RecordingPool:
+    """A stand-in asyncpg pool: records every executemany (no DB)."""
 
-    SIM-555: the loader writes one offer's rows in one ``executemany``; each
-    row's bind tuple is recorded in ``executes`` as if it were its own
-    ``execute``, and ``batches`` counts the executemany calls.
-    """
+    def __init__(self) -> None:
+        self.batches: list[tuple[str, list[tuple]]] = []
 
-    def __init__(self, lineup_rows: list[dict] | None = None):
-        self.executes: list[tuple] = []
-        self.batches: list[tuple[str, int]] = []
-        self._lineup_rows = lineup_rows or []
-
-    async def execute(self, sql: str, *args):
-        self.executes.append((sql, args))
-        return "INSERT 0 1"
-
-    async def executemany(self, sql: str, params):
-        params = list(params)
-        self.batches.append((sql, len(params)))
-        for args in params:
-            self.executes.append((sql, tuple(args)))
-
-    async def fetch(self, sql: str, *args):
-        return self._lineup_rows
-
-
-class _FakeProvider:
-    """Provider stub returning a fixed line per (line_type) so we can assert
-    that the loader requests + persists BOTH opening and closing per game."""
-
-    def __init__(self):
-        self.game_calls: list[tuple] = []
-        self.prop_calls: list[tuple] = []
-
-    def get_odds(self, game_pk, *, line_type="current", market_type="moneyline"):
-        self.game_calls.append((game_pk, line_type, market_type))
-        # moneyline carries ml; other markets carry a line so _has_line is True.
-        base = {
-            "game_pk": game_pk,
-            "source": "bettingpros",
-            "is_mock": False,
-            "book": "consensus",
-            "line_type": line_type,
-            "market_type": market_type,
-            "is_sharp_book": False,
-            "home_ml": -110 if market_type == "moneyline" else None,
-            "away_ml": 100 if market_type == "moneyline" else None,
-            "home_spread": 1.5 if market_type == "runline" else None,
-            "home_spread_ml": -120 if market_type == "runline" else None,
-            "away_spread": -1.5 if market_type == "runline" else None,
-            "away_spread_ml": 100 if market_type == "runline" else None,
-            "total_line": 8.5 if market_type == "total" else None,
-            "over_ml": -105 if market_type == "total" else None,
-            "under_ml": -115 if market_type == "total" else None,
-        }
-        return base
-
-    def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
-        self.prop_calls.append((game_pk, player_id, prop_stat, line_type))
-        return {
-            "game_pk": game_pk,
-            "player_id": player_id,
-            "prop_stat": prop_stat,
-            "line": 5.5,
-            "over_ml": -110,
-            "under_ml": -110,
-            "book": "consensus",
-            "line_type": line_type,
-            "is_sharp_book": False,
-            "source": "bettingpros",
-            "is_mock": False,
-        }
-
-
-async def _batch(sink: list, game_pk: int, rows: list[dict]) -> int:
-    """SIM-555: a game batch writer stand-in — one entry per row, returns the count."""
-    sink.extend((game_pk, odds) for odds in rows)
-    return len(rows)
+    async def executemany(self, sql: str, params) -> None:
+        self.batches.append((sql, [tuple(p) for p in params]))
 
 
 @pytest.mark.asyncio
-async def test_load_game_odds_persists_opening_and_closing_each_market():
-    provider = _FakeProvider()
-    persisted: list[tuple[int, dict]] = []
-
-    async def persist(game_pk, rows):
-        return await _batch(persisted, game_pk, rows)
-
-    written = await loader._load_game_odds(provider, persist, 746437)
-
-    # 2 line_types × 3 market_types = 6 rows (all resolve in the fake; the
-    # twelve segment markets come back empty from it and are skipped).
-    assert written == 6
-    assert len(persisted) == 6
-    line_types = {odds["line_type"] for _, odds in persisted}
-    assert line_types == {"opening", "closing"}
-    markets = {odds["market_type"] for _, odds in persisted}
-    assert markets == {"moneyline", "runline", "total"}
-    # The provider was asked for both opening and closing on each market.
-    assert provider.game_calls[0][1:] == ("opening", "moneyline")
-    assert any(c == (746437, "closing", "total") for c in provider.game_calls)
-
-
-@pytest.mark.asyncio
-async def test_load_game_odds_skips_empty_quotes():
-    class _EmptyProvider(_FakeProvider):
-        def get_odds(self, game_pk, *, line_type="current", market_type="moneyline"):
-            self.game_calls.append((game_pk, line_type, market_type))
-            base = super().get_odds(game_pk, line_type=line_type, market_type=market_type)
-            for k in (
-                "home_ml",
-                "away_ml",
-                "home_spread",
-                "home_spread_ml",
-                "away_spread",
-                "away_spread_ml",
-                "total_line",
-                "over_ml",
-                "under_ml",
-            ):
-                base[k] = None
-            return base
-
-    provider = _EmptyProvider()
-    persisted: list = []
-    tally = loader.RefusalTally()
-
-    async def persist(game_pk, rows):
-        return await _batch(persisted, game_pk, rows)
-
-    written = await loader._load_game_odds(provider, persist, 1, tally=tally)
-    assert written == 0
-    assert persisted == []  # an all-null quote is never persisted
-    # SIM-555: an empty row is skipped before the guard, never counted as refused.
-    assert tally.n_offered == 0 and tally.refused == 0
-
-
-@pytest.mark.asyncio
-async def test_load_prop_odds_routes_pitcher_vs_batter_markets():
-    provider = _FakeProvider()
-    persisted: list[dict] = []
-
-    async def persist(rows):
-        persisted.extend(rows)
-        return len(rows)
-
-    players = [(111, True), (222, False)]  # one pitcher, one batter
-    written = await loader._load_prop_odds(provider, persist, 999, players)
-
-    # SIM-421 changed this pin deliberately: it was pitcher 3 + batter 4 markets
-    # (14 rows). The vocabulary is now 5 pitcher + 10 batter markets, each at 2
-    # line_types: 10 + 20 = 30.
-    assert len(loader.PITCHER_PROP_STATS) == 5
-    assert len(loader.BATTER_PROP_STATS) == 10
-    assert written == 30
-    pitcher_stats = {q["prop_stat"] for q in persisted if q["player_id"] == 111}
-    batter_stats = {q["prop_stat"] for q in persisted if q["player_id"] == 222}
-    assert pitcher_stats == set(loader.PITCHER_PROP_STATS)
-    assert batter_stats == set(loader.BATTER_PROP_STATS)
-    # both line_types captured per player.
-    assert {q["line_type"] for q in persisted} == {"opening", "closing"}
-
-
-@pytest.mark.asyncio
-async def test_load_prop_odds_skips_null_line():
-    class _NullLineProvider(_FakeProvider):
-        def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
-            q = super().get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)
-            return {**q, "line": None}
-
-    provider = _NullLineProvider()
-    persisted: list[dict] = []
-    tally = loader.RefusalTally()
-
-    async def persist(rows):
-        persisted.extend(rows)
-        return len(rows)
-
-    written = await loader._load_prop_odds(provider, persist, 1, [(111, True)], tally=tally)
-    assert written == 0
-    assert persisted == []
-    # SIM-555: a quote with prices but no line is not empty, so the load guard
-    # sees it and refuses it (the line is missing): 5 pitcher markets × 2 line types.
-    assert tally.refused == 10
-    assert {rule for rule, _market, _book in tally.counts()} == {"missing_side"}
-
-
-@pytest.mark.asyncio
-async def test_load_prop_odds_skips_an_all_empty_quote_silently():
-    class _EmptyPropProvider(_FakeProvider):
-        def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
-            q = super().get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)
-            return {**q, "line": None, "over_ml": None, "under_ml": None}
-
-    tally = loader.RefusalTally()
-
-    async def persist(rows):  # pragma: no cover - never reached
-        raise AssertionError("an empty quote must never reach the writer")
-
-    written = await loader._load_prop_odds(
-        _EmptyPropProvider(), persist, 1, [(111, True)], tally=tally
+async def test_the_loader_line_types_store_the_opener_and_every_closing_row():
+    pool = _RecordingPool()
+    written = await load_odds(
+        pool,
+        Recorded92857(),
+        GAME_92857,
+        tally=RefusalTally(),
+        restamp=False,
+        line_types=loader.LINE_TYPES,
     )
-    assert written == 0
-    assert tally.n_offered == 0 and tally.refused == 0
+    game = [(sql, rows) for sql, rows in pool.batches if "INSERT INTO raw.game_odds" in sql]
+    # The opener (FanDuel) on each full-game market, then ten books' closing rows.
+    assert written == 3 * (1 + 10)
+    assert len(game) == len(pool.batches) == 6
+    assert all("ON CONFLICT" in sql for sql, _rows in game)  # idempotent dedup
+    assert {row[4] for _sql, rows in game for row in rows} == {"opening", "closing"}
+    assert {row[5] for _sql, rows in game for row in rows} == {"moneyline", "runline", "total"}
+    openers = [row for _sql, rows in game for row in rows if row[4] == "opening"]
+    assert {row[3] for row in openers} == {"bp:10"}
 
 
 @pytest.mark.asyncio
-async def test_load_prop_odds_propagates_unknown_stat_valueerror():
-    class _BadStatProvider(_FakeProvider):
-        def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
-            raise ValueError(f"Unknown prop_stat '{prop_stat}'")
-
-    provider = _BadStatProvider()
-
-    async def persist(quote):  # pragma: no cover - never reached
-        raise AssertionError("should not persist on a programming error")
-
-    with pytest.raises(ValueError, match="Unknown prop_stat"):
-        await loader._load_prop_odds(provider, persist, 1, [(111, True)])
-
-
-@pytest.mark.asyncio
-async def test_fetch_lineup_players_classifies_pitchers():
-    conn = _RecordingConn(
-        lineup_rows=[
-            {"player_id": 1, "position_code": "P"},
-            {"player_id": 2, "position_code": "SP"},
-            {"player_id": 3, "position_code": "CF"},
-            {"player_id": 4, "position_code": None},
-        ]
+async def test_the_loader_asks_a_pitcher_and_a_batter_only_their_own_markets():
+    pool = _RecordingPool()
+    provider = Recorded92857()
+    roles = {BRYCE_MILLER: PROP_ROLE_PITCHER, JULIO_RODRIGUEZ: PROP_ROLE_BATTER}
+    await load_odds(
+        pool,
+        provider,
+        GAME_92857,
+        tally=RefusalTally(),
+        restamp=False,
+        line_types=("closing",),
+        game_markets=None,
+        roles=roles,
     )
-    players = await loader._fetch_lineup_players(conn, 746437)
-    by_id = dict(players)
-    assert by_id[1] is True
-    assert by_id[2] is True
-    assert by_id[3] is False
-    assert by_id[4] is False
-
-
-def test_build_persisters_attaches_pool_without_starting_pipeline():
-    sentinel_pool = object()
-    persist_game, persist_prop = loader._build_persisters("postgresql://x", sentinel_pool)
-    # Both are bound methods on a LiveIngestionPipeline whose _db is our pool —
-    # i.e. the real persist path, never started (no Redis/HTTP/WS).
-    assert persist_game.__self__ is persist_prop.__self__
-    assert persist_game.__self__._db is sentinel_pool
-    # SIM-555 changed these names on purpose: the loader writes one offer's
-    # rows in one batch.
-    assert persist_game.__name__ == "_persist_odds_many"
-    assert persist_prop.__name__ == "_persist_prop_odds_many"
-
-
-@pytest.mark.asyncio
-async def test_persisters_emit_game_and_prop_inserts_against_mock_conn():
-    # End-to-end through the REAL _persist_odds/_persist_prop_odds against a mock
-    # connection: asserts the loader's persist path writes raw.game_odds /
-    # raw.prop_odds INSERTs carrying the line_type we pass (opening + closing).
-    conn = _RecordingConn()
-    persist_game, persist_prop = loader._build_persisters("postgresql://x", conn)
-
-    provider = _FakeProvider()
-    await loader._load_game_odds(provider, persist_game, 555)
-    await loader._load_prop_odds(provider, persist_prop, 555, [(111, True)])
-
-    sqls = [sql for sql, _ in conn.executes]
-    assert any("INSERT INTO raw.game_odds" in s for s in sqls)
-    assert any("INSERT INTO raw.prop_odds" in s for s in sqls)
-    assert all("ON CONFLICT" in s for s in sqls)  # idempotent dedup on every write
-    # opening + closing both reached the DB (line_type is positional arg #5 in
-    # the game-odds INSERT; assert both appear across the recorded executes).
-    game_line_types = {args[4] for sql, args in conn.executes if "raw.game_odds" in sql}
-    assert game_line_types == {"opening", "closing"}
-    # SIM-555: every write went through executemany (one batch per offer).
-    assert len(conn.batches) == len(conn.executes)
+    rows = [row for sql, batch in pool.batches if "raw.prop_odds" in sql for row in batch]
+    pitcher = {row[4] for row in rows if row[1] == BRYCE_MILLER}
+    batter = {row[4] for row in rows if row[1] == JULIO_RODRIGUEZ}
+    assert pitcher == {"strikeouts", "hits_allowed"} <= set(PITCHER_PROP_STATS)
+    assert batter == {"singles"} <= set(BATTER_PROP_STATS)
+    # Each player reads only his own markets: the pitcher five, the batter ten.
+    market_ids = [p["market_id"] for path, p in provider.bp_calls if path == "offers"]
+    assert len(set(market_ids)) == len(PITCHER_PROP_STATS) + len(BATTER_PROP_STATS)

@@ -115,7 +115,7 @@ mounted: a script change reaches a container only after an image build.
 
 | Store | Where | Holds | Written by |
 |---|---|---|---|
-| Postgres `raw.*` | the `db` service | The facts: games, pitches, play events, lineups, the official box, the bullpens, players, venues, the Savant boards, every book's odds. Alembic head **0031**. | The historical loader (nightly finals), the live service, the odds loaders. |
+| Postgres `raw.*` | the `db` service | The facts: games, pitches, play events, lineups, the official box, the bullpens, players, venues, the Savant boards, every book's odds. Alembic head **0031**. | The historical loader (nightly finals), the live service, the odds loader (`betting/history.py`). |
 | Postgres `sim.*` | the `db` service | The run jobs (`sim.sim_runs`) and the live game state (`sim.lineup_state`). | The app (runs), the live service (state). |
 | DuckDB file | `/data/baseball_sim.duckdb` | `derived.*` profiles (pitchers, batters, fielders, runners, catchers, managers, park factors, run expectancy, league averages) and `sim.*` play pools (pitch, outcome, steal, advancement, intentional-walk rates). DuckDB schema **v32**. | The nightly profile build only. |
 | Engine-artifact bundle | `/data/play_pool/engine_artifacts` | Everything a worker draws from: the per-hand pitch and batted-ball pools, the steal, advancement and pitching-change pools, the park geometry, the pitcher-by-pitcher matrix, the actor score matrices, the reference tables (intentional-walk rates, venue run factors), the catcher receiving document. | The nightly bundle build. |
@@ -237,7 +237,7 @@ calibration's reliability curve
 every game market from the inning grids
 ([`simulation/game_market_distributions.py`](../../simulation/game_market_distributions.py)).
 It then compares each price with the book's stored line
-([`betting/bet_signal.py`](../../betting/bet_signal.py)).
+([`betting/pricing.py`](../../betting/pricing.py)).
 
 `GET /simulate` and `POST /what-if` use the same runner. The what-if queues two runs with
 one seed from a real plate appearance: the game as it stood, and the game with the
@@ -255,9 +255,9 @@ user's changes ([`simulation/whatif.py`](../../simulation/whatif.py),
 3. For a live game, the league's WebSocket is only a change signal. On each message the
    service re-fetches the game's feed, rebuilds the game state, and writes `raw.games`
    and `sim.lineup_state`.
-4. The service stores the pre-game odds of the configured provider (`ODDS_PROVIDER`) in
-   `raw.game_odds` and `raw.prop_odds`, and promotes each game's closing rows at first
-   pitch.
+4. The service stores every book's current BettingPros odds in `raw.game_odds` and
+   `raw.prop_odds` through `betting.load`, and promotes each game's closing rows at first
+   pitch ([betting.md](betting.md)).
 5. The service publishes each browser-bound message on the Redis channel
    `live:game:{game_pk}`. The app's bridge subscribes while a browser watches the game
    and forwards each message to that browser's socket on `/ws/games/{game_pk}`
@@ -285,7 +285,7 @@ inside `scripts/with_mark.sh` and the crash wrapper `scripts/with_retry.sh`.
 | 10:00 daily | `nightly-backup-postgres` | db | Dumps Postgres into `/backups` (`db/backup/pg_backup.sh`). |
 | 10:00 daily | `nightly-backup-data` | jobs | Copies the DuckDB file, the small `/data` files and the bundle version into `/backups` (`pipeline.backup.data_stores`). It waits while a writer's mark is present. |
 | 10:30 daily | `nightly-backup-offsite` | jobs | Copies the newest complete sets into the OneDrive folder (`pipeline.backup.offsite`). |
-| 10:30 daily | `nightly-closing-lines` | app | Loads the closing lines of the last two days' games, as a fallback to the live promotion (`scripts/nightly_closing_lines.sh`). |
+| 10:30 daily | `nightly-closing-lines` | app | Loads the opening and closing lines of the last two days' games; the closing lines are the fallback to the live promotion (`scripts/nightly_closing_lines.sh`). |
 
 The rebuild is the step that reaches users. The profile build
 ([`pipeline/batch/player_profile_computor.py`](../../pipeline/batch/player_profile_computor.py))

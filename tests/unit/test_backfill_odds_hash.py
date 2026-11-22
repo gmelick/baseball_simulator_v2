@@ -3,7 +3,7 @@
 Unit tests for the odds_hash backfill script
 (``scripts/probes/backfill_odds_hash.py``).  These tests confirm:
 
-  * The hashing logic in `LiveIngestionPipeline._odds_hash` is what the
+  * The hashing logic in `betting.load._odds_hash` is what the
     backfill script uses (byte-for-byte identical fingerprints).
   * The Alembic migration `0012` chains correctly off `0011`.
 
@@ -33,7 +33,7 @@ class TestOddsHashConsistency(unittest.TestCase):
     live pipeline — otherwise post-backfill inserts won't dedup."""
 
     def test_backfill_hash_matches_live_pipeline_hash(self):
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
         mod = _load_script_module()
         # Sanity: the script's column ordering matches the live pipeline's.
@@ -69,15 +69,16 @@ class TestOddsHashConsistency(unittest.TestCase):
             "over_ml": -110,
             "under_ml": -110,
         }
-        h_live = LiveIngestionPipeline._odds_hash(payload)
+        h_live = _odds_hash(payload)
         # Backfill calls the same function — confirm it's wired correctly
         # rather than reimplementing the format
-        h_via_script = mod.LiveIngestionPipeline._odds_hash(payload)
+        self.assertIs(mod._odds_hash, _odds_hash)
+        h_via_script = mod._odds_hash(payload)
         self.assertEqual(h_live, h_via_script)
         self.assertEqual(len(h_live), 64, "SHA-256 hex digest must be 64 chars")
 
     def test_hash_is_stable_across_dict_orderings(self):
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
         keys = (
             "book",
@@ -97,12 +98,12 @@ class TestOddsHashConsistency(unittest.TestCase):
         payload_a = dict.fromkeys(keys, 1)
         payload_b = {k: payload_a[k] for k in reversed(keys)}
         self.assertEqual(
-            LiveIngestionPipeline._odds_hash(payload_a),
-            LiveIngestionPipeline._odds_hash(payload_b),
+            _odds_hash(payload_a),
+            _odds_hash(payload_b),
         )
 
     def test_distinct_payloads_produce_distinct_hashes(self):
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
         base = {
             "book": "consensus",
@@ -121,8 +122,8 @@ class TestOddsHashConsistency(unittest.TestCase):
         }
         modified = dict(base, home_ml=-160)  # 1pp price change → different hash
         self.assertNotEqual(
-            LiveIngestionPipeline._odds_hash(base),
-            LiveIngestionPipeline._odds_hash(modified),
+            _odds_hash(base),
+            _odds_hash(modified),
         )
 
 

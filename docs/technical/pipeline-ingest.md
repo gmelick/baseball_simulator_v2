@@ -5,6 +5,8 @@ sources are the MLB Stats API (the league's public game, schedule and box-score 
 Baseball Savant (the league's Statcast leaderboards) and the BettingPros odds API. The
 nightly builds ([pipeline-batch.md](pipeline-batch.md)) read these tables; the live service
 also feeds the browsers through Redis. The table layouts are on [database.md](database.md).
+The odds code itself lives in `betting/` and has its own page, [betting.md](betting.md);
+this page covers only the live service's odds hooks.
 
 ## How it fits together
 
@@ -47,12 +49,11 @@ Four paths bring data in.
    `live:game:{game_pk}` (`broadcast.RedisBroadcaster`). The app's `RedisBridge` forwards
    it to the browsers that watch the game.
 
-**3. The odds.** Every writer reads odds through one seam, `odds_provider.get_odds_provider`.
-The provider returns one row per book. The load guard (`odds_row_guard.check_row`) refuses
-a row that cannot be one bet. The kept rows go to `raw.game_odds` and `raw.prop_odds`. Four
-writers use the seam: the live cycles, the nightly closing pass
-([`scripts/load_historical_odds.py`](../../scripts/load_historical_odds.py), run by
-`nightly_closing_lines.sh`), the opening-line job and the historical odds backfill.
+**3. The odds.** Two callers load the odds through `betting.load`
+([betting.md](betting.md)). The live service loads every watched game's current lines
+once a minute and stamps the closing rows at first pitch. The historical loader
+(`python -m betting.history`), run each night by `scripts/nightly_closing_lines.sh`,
+loads the opening and closing lines of the last two days' games.
 
 **4. The reference loaders.** The Savant leaderboards, the per-pitch tracking export, the
 sprint speeds, the venue backfill and the bullpen availability each have a command-line
@@ -68,7 +69,7 @@ entry point. No scheduler job runs them; an operator runs them by hand.
 | `savant_pitch_tracking_loader` | by hand | `raw.savant_pitch_tracking` |
 | `SprintSpeedLoader` | by hand | `raw.sprint_speed` |
 | `VenueBackfillJob` | by hand | `raw.games.venue_id`, `raw.pipeline_run_log` |
-| `OpeningLineJob` | by hand | `raw.game_odds`, `raw.prop_odds` (`line_type='opening'`), `raw.pipeline_run_log` |
+| `betting.history` | the `nightly-closing-lines` job; by hand for a backfill | `raw.game_odds`, `raw.prop_odds` |
 | `BullpenAvailabilityIngest` | by hand | `raw.game_bullpen_availability` |
 | `LiveIngestionPipeline` | the compose `live` service | `raw.games`, `raw.game_lineups` (published rows), `raw.game_odds`, `raw.prop_odds`, `sim.lineup_state`, Redis keys |
 
@@ -341,91 +342,10 @@ pure; the tests run them on recorded feeds in `tests/fixtures/mlb_game_feed/`.
 
 ## Odds
 
-The odds layer fetches every book's prices for every market of a game, checks each row and
-hands it to the writers. Three places hold it: the shared names and the provider switch
-(`odds_provider.py`), the load guard (`odds_row_guard.py`) and the BettingPros provider
-(`pipeline/bettingpros/`). The mock provider is `pipeline/live/ingestion/mock_odds.py`.
-
-### `pipeline/odds_provider.py`
-
-[Source](../../pipeline/odds_provider.py) · 606 lines · Tests: [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py), [test_odds_provider_seam.py](../../tests/unit/test_odds_provider_seam.py), [test_odds_book_vocabulary.py](../../tests/unit/test_odds_book_vocabulary.py), [test_odds_readers.py](../../tests/unit/test_odds_readers.py)
-
-The names every odds reader and writer shares, and the switch between the two providers.
-
-| Name | What it does | Called from |
-|---|---|---|
-| `PROP_STATS` / `PITCHER_PROP_STATS` / `BATTER_PROP_STATS` | The fifteen prop markets: five pitcher markets and ten batter markets. | every odds writer and reader |
-| `PROP_STAT_TO_MODEL_PROP` | Each market's name in the simulator's prop output (`strikeouts` → `K`). | `scripts/probes/rescore_graded_book.py` |
-| `GAME_MARKET_TYPES` / `FULL_GAME_MARKET_TYPES` / `GAME_MARKET_KIND` / `GAME_MARKET_SEGMENT` / `GAME_MARKET_SIDE` / `GAME_MARKET_NAMES` | The fifteen game markets, the three full-game ones among them. The kind says which columns a market fills (`moneyline`, `three_way`, `runline`, `total`, `yes_no`). | every odds writer and reader, `simulation/game_market_distributions.py` |
-| `BOOK_NAMES` / `BOOK_KIND` / `GRADED_BOOK_PREFERENCE` / `BETTABLE_KINDS` and the `book_*` helpers | The books. A row names its book as `'bp:<id>'`. Only a listed sportsbook is bettable. The readers grade against the first book on the preference list that has a row. | the readers, the BettingPros provider |
-| `OddsProvider` | The interface: `get_odds` (the one row the live service broadcasts), `get_odds_by_book` and `get_prop_odds_by_book`. | the live pipeline, the writers |
-| `odds_rows_by_book` / `prop_rows_by_book` | Every book's rows of one market, through the by-book read (or a test fake's one-row read). | the live cycles, the opening-line job, `scripts/load_historical_odds.py` |
-| `get_odds_provider` / `register_odds_provider` | Pick the provider by name, else `ODDS_PROVIDER`, else `mock`. Tests register fakes. | the live pipeline, the opening-line job, the odds loader |
-
-**Flags:** `ODDS_PROVIDER` (`mock` by default, `bettingpros` for the vendor). The compose
-stack reads it from `.env`; `tests/conftest.py` pins `mock`.
-
-**Watch out:** a new prop market goes in four places together: the tuples here, a migration
-that widens the `raw.prop_odds` CHECK, `MockOddsAPI`'s config and the BettingPros market
-ids. Import-time guards and the vocabulary test fail when one is missing.
-
-### `pipeline/odds_row_guard.py`
-
-[Source](../../pipeline/odds_row_guard.py) · 401 lines · Tests: [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_book_census.py](../../tests/unit/test_odds_book_census.py)
-
-The load guard: it refuses an odds row that no single book could post. Every writer calls it
-before it stores a row; the API's stored-odds read calls it again. The module is pure.
-
-| Name | What it does | Called from |
-|---|---|---|
-| `check_row` | Returns a `Refusal` (a rule and a plain reason) or `None`. The 13 rules: a missing side; run-line spreads of different size; equal spreads priced like a pair; an over and an under at two lines; a first-five row that carries first-inning prices or a first-inning tie; a placeholder team-total line; a three-way row whose prices cannot be one market; a closing line stamped more than 15 minutes after the start; a price for a postponed game's original date. | the live cycles, the opening-line job, `scripts/load_historical_odds.py`, `api/routes/betting_stored_odds.py` |
-| `RefusalTally` | Counts the refusals by rule, market and book, and warns when the refused share passes a limit. | the writers |
-| `implied_probability` | The chance an American price stands for (+150 → 0.40). | `check_row`, the BettingPros twin rule, the census probe |
-
-### `pipeline/bettingpros/`
-
-[Source](../../pipeline/bettingpros/) · 8 modules, 2029 lines · Tests: [test_bettingpros_provider.py](../../tests/unit/test_bettingpros_provider.py), [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_provider_retry.py](../../tests/unit/test_odds_provider_retry.py), [test_odds_census_sql.py](../../tests/unit/test_odds_census_sql.py)
-
-The BettingPros provider, `BettingProsOddsProvider(OfferRowsMixin, ProviderBase)`.
-`OfferRowsMixin` extends `EventMatchMixin`, which extends `TransportMixin`. Every part logs
-as `pipeline.bettingpros`.
-
-| Module | Lines | What it holds |
-|---|---|---|
-| [`provider.py`](../../pipeline/bettingpros/provider.py) | 191 | The class: its settings and the three reads. `get_odds_by_book` / `get_prop_odds_by_book` give one row per book; `get_odds` gives the graded book's row for the live broadcast. |
-| [`transport.py`](../../pipeline/bettingpros/transport.py) | 184 | The HTTP reads, with the retry policy, and the two network seams `_bp_get` and `_mlb_get` that the tests stub. |
-| [`events.py`](../../pipeline/bettingpros/events.py) | 548 | The game-to-event match (double-headers, postponed and suspended games), the player-name lookup, the paged `/offers` read and the caches. `forget_game` and `forget_failed_lookups` drop cached facts. |
-| [`schedule.py`](../../pipeline/bettingpros/schedule.py) | 147 | The schedule facts the match reads: the dates a game touched, its double-header number, its postponed start. |
-| [`rows.py`](../../pipeline/bettingpros/rows.py) | 594 | One row per book for a market, the opening row, and the first-five rules. |
-| [`parsing.py`](../../pipeline/bettingpros/parsing.py) | 202 | Pure helpers: one book's usable line, the shared opener, the vendor's stamp, the name key. |
-| [`markets.py`](../../pipeline/bettingpros/markets.py) | 122 | The vendor's market id for every game and prop market, and the first-five rules: the dated exclusion (DraftKings from 2025-03-01) and the twin price tolerance. |
-| [`base.py`](../../pipeline/bettingpros/base.py) | 41 | Type declarations of the settings and caches every part sees. |
-
-**Flags:** `ODDS_API_KEY` (the vendor key). `ODDS_OFFERS_CACHE_TTL_S` (default 30 seconds,
-half the live cadence; 0 turns the caches off). `BETTINGPROS_MAX_RETRIES` (default 0) and
-`BETTINGPROS_RETRY_WAIT_S` (default 2.0).
-
-**Watch out:**
-
-* Leave `BETTINGPROS_MAX_RETRIES` unset in the app and the live service. A retry waits with
-  `time.sleep`, which stalls the opening-line job's event loop and the live pipeline's odds
-  thread. Only the offline loaders turn retries on.
-* Game 2 of a straight double-header has a placeholder start, so the match takes the later of
-  the two teams' events on that date.
-* A made-up game's rows carry `postponed_start`, and the guard refuses a price stamped no
-  later than 15 minutes after it.
-
-### `pipeline/etl/opening_line_job.py`
-
-[Source](../../pipeline/etl/opening_line_job.py) · 652 lines · Tests: [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_etl_flow.py](../../tests/integration/test_etl_flow.py)
-
-`OpeningLineJob.run` captures the opening lines of every game in the next seven days that has
-none: the moneyline's opening rows (`_fetch_opening_rows`) and, once a starter is announced,
-his five pitcher prop markets (`_capture_prop_opening_lines`). It stores every by-book
-opening row the guard keeps, with `line_type='opening'`, and logs a `raw.pipeline_run_log`
-row. Run it as `python -m pipeline.etl.opening_line_job`. `schedule_opening_line_job`
-registers it on an APScheduler instance, but nothing in the stack calls that hook: the job
-runs only by hand.
+The odds code lives in the `betting/` folder: the market names, the BettingPros game
+match and row building, the load guard, the load path, the closing stamp and the
+historical loader. [betting.md](betting.md) describes each module. The live service's odds
+hooks stay here, under [`pipeline/live/ingestion/`](#pipelineliveingestion).
 
 ## The live service
 
@@ -443,7 +363,7 @@ publishers would double-write every table.
 
 ### `pipeline/live/live_ingestion_pipeline.py`
 
-[Source](../../pipeline/live/live_ingestion_pipeline.py) · 1147 lines · Tests: [test_live_pipeline.py](../../tests/unit/test_live_pipeline.py), [test_live_pipeline_setup.py](../../tests/unit/test_live_pipeline_setup.py), [test_odds_hash_dedup.py](../../tests/unit/test_odds_hash_dedup.py), [test_live_resimulate_cooldown.py](../../tests/unit/test_live_resimulate_cooldown.py), [test_odds_provider_ingestion.py](../../tests/unit/test_odds_provider_ingestion.py)
+[Source](../../pipeline/live/live_ingestion_pipeline.py) · 1126 lines · Tests: [test_live_pipeline.py](../../tests/unit/test_live_pipeline.py), [test_live_pipeline_setup.py](../../tests/unit/test_live_pipeline_setup.py), [test_odds_hash_dedup.py](../../tests/unit/test_odds_hash_dedup.py), [test_live_resimulate_cooldown.py](../../tests/unit/test_live_resimulate_cooldown.py), [test_odds_provider_ingestion.py](../../tests/unit/test_odds_provider_ingestion.py)
 
 `LiveIngestionPipeline`: the day's games, their live state and their odds. It mixes in the
 game-odds and prop-odds cycles from `pipeline/live/ingestion/`. The file also holds
@@ -459,34 +379,34 @@ game-odds and prop-odds cycles from `pipeline/live/ingestion/`. The file also ho
 | `_should_resimulate` / `_signal_resimulation` | True once per completed plate appearance (`about.isComplete`). The signal calls the callback, or logs it when none is set. | `_refresh_game_state` |
 | `_upsert_game_record` / `_upsert_schedule_fields` | The game row from the schedule entry, with the schedule's fields (Alembic 0029 columns). | `_sync_live_games` |
 | `_write_preview_lineup` / `_write_live_lineup` | Hand a game to the published-lineup writer. | `_sync_live_games` |
-| `create_app` | The live app: the pipeline's lifespan, the WebSocket and odds routers, `/health` (the heartbeat's age), `/api/pipeline/status` and a resimulate route with a 10-second cooldown per game. | `run_live.main` |
+| `create_app` | The live app: the pipeline's lifespan, the WebSocket router, `/health` (the heartbeat's age), `/api/pipeline/status` and a resimulate route with a 10-second cooldown per game. | `run_live.main` |
 
-**Flags:** `ODDS_PROVIDER` (through the seam), `REDIS_URL`, `BASEBALL_DB_DSN`.
+**Flags:** `ODDS_API_KEY` (read by the BettingPros provider), `REDIS_URL`, `BASEBALL_DB_DSN`.
 
-**Watch out:** the app mounts `ws_router` and `odds_router` from this module whether or not
-the pipeline runs in its process.
+**Watch out:** the app mounts `ws_router` from this module whether or not the pipeline runs
+in its process.
 
 ### `pipeline/live/ingestion/`
 
-[Source](../../pipeline/live/ingestion/) · 10 modules, 2592 lines · Tests: [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_live_game_state_builder.py](../../tests/unit/test_live_game_state_builder.py), [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_live_connection_manager.py](../../tests/unit/test_live_connection_manager.py)
+[Source](../../pipeline/live/ingestion/) · 7 modules, 1242 lines · Tests: [test_live_pipeline.py](../../tests/unit/test_live_pipeline.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_live_game_state_builder.py](../../tests/unit/test_live_game_state_builder.py), [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_live_connection_manager.py](../../tests/unit/test_live_connection_manager.py)
 
-The live pipeline's parts.
+The live pipeline's parts. The three odds modules are hooks: they keep the cadence clock
+and the first-pitch trigger, and call `betting.load` for the fetch, the check, the write
+and the closing stamp ([betting.md](betting.md#bettingloadpy)).
 
 | Module | Lines | What it holds |
 |---|---|---|
-| [`base.py`](../../pipeline/live/ingestion/base.py) | 137 | `PipelineBase`: the shared state, `_off_loop` (a vendor read on the pipeline's one worker thread, off the event loop), `_odds_provider` and `_guard_rows` (the load guard over one offer). |
-| [`constants.py`](../../pipeline/live/ingestion/constants.py) | 74 | The settings: the MLB endpoints, the 30-second poll, the socket reconnect backoff (2 to 60 seconds), the Redis lifetimes (60 seconds live, an hour done), the 10-second resimulate cooldown, the 60-second odds cadence and the pre-game cadences. |
-| [`game_odds.py`](../../pipeline/live/ingestion/game_odds.py) | 212 | `GameOddsMixin`: every book's row of all fifteen game markets, once a minute per game (`_persist_game_odds_cycle`), and `mark_closing_lines`. |
-| [`prop_odds.py`](../../pipeline/live/ingestion/prop_odds.py) | 437 | `PropOddsMixin`: the players each market needs (a pitcher gets the pitcher markets, a hitter the batter markets), the prop cycle on the same cadence, `capture_opening_prop_lines` and `mark_closing_prop_lines`. |
-| [`closing_rows.py`](../../pipeline/live/ingestion/closing_rows.py) | 296 | The closing-row rule: per (market, book) or (player, prop, book), the latest pre-pitch `current` row stamped no later than the start plus 15 minutes becomes `closing`; a key that holds a closing row is done. The row's hash is rewritten so the nightly loader's identical row deduplicates against it. |
-| [`odds_rows.py`](../../pipeline/live/ingestion/odds_rows.py) | 376 | The insert statements and their arguments, the dedup hash (`ON CONFLICT (game_pk, source, odds_hash) DO NOTHING`; the live writers re-stamp `last_seen_at` instead), the pre-game cadence and the staleness test for a postponed or suspended game. |
+| [`base.py`](../../pipeline/live/ingestion/base.py) | 100 | `PipelineBase`: the shared state, `_off_loop` (a vendor read on the pipeline's one worker thread, off the event loop), `_odds_provider` (the provider set in `__init__`, else `betting.load.odds_source()`), `_refusal_tally` and `_last_seen_available` (whether Alembic 0029's `last_seen_at` exists). |
+| [`constants.py`](../../pipeline/live/ingestion/constants.py) | 66 | The settings: the MLB endpoints, the 30-second poll, the socket reconnect backoff (2 to 60 seconds), the Redis lifetimes (60 seconds live, an hour done), the 10-second resimulate cooldown, the 60-second odds cadence and the pre-game cadences (600 seconds, 60 seconds inside 15 minutes of the start). |
+| [`game_odds.py`](../../pipeline/live/ingestion/game_odds.py) | 100 | `GameOddsMixin`: every book's row of all fifteen game markets, once a minute per game (`_persist_game_odds_cycle`: `game_offers` on the vendor thread, then `write_offers`); the graded book's moneyline the refresh broadcasts and never stores (`_fetch_odds`); `mark_closing_lines` (`promote_closing_game_rows`); `_forget_odds_game` (drop the provider's cached facts of a postponed game). |
+| [`prop_odds.py`](../../pipeline/live/ingestion/prop_odds.py) | 206 | `PropOddsMixin`: each player's role from the game state or, before first pitch, from the schedule's probable pitchers and posted lineups (a pitcher gets the pitcher markets, a hitter the batter markets, an unknown or two-way player both); the prop cycle on the same one-minute clock (`prop_offers`, then `write_offers`); `mark_closing_prop_lines` (`promote_closing_prop_rows`). |
+| [`odds_cycle.py`](../../pipeline/live/ingestion/odds_cycle.py) | 105 | The pre-game cadence (`pregame_odds_cadence_s`), the test for a postponed or suspended game whose cached facts may be old (`_odds_facts_may_be_stale`), and the JSON form of a broadcast row (`_jsonable_odds` drops the guard-only keys). |
 | [`game_state_builder.py`](../../pipeline/live/ingestion/game_state_builder.py) | 499 | `GameStateBuilder.build`: one feed to the game-state JSON (inning, count, runners, lineups, bullpen with rest, bench, play history, linescore). It keeps each game's play history and parses only the new plays. |
 | [`mlb_websocket.py`](../../pipeline/live/ingestion/mlb_websocket.py) | 166 | `MLBGameWebSocket` (one game's MLB push socket; any message is a change signal; it reconnects with backoff) and `ConnectionManager` (the browser sockets per game). |
-| [`mock_odds.py`](../../pipeline/live/ingestion/mock_odds.py) | 343 | `MockOddsAPI`: deterministic lines seeded on the game, one book (`consensus`), for the tests and a stack without a vendor key. |
-| [`odds_routes.py`](../../pipeline/live/ingestion/odds_routes.py) | 52 | `odds_router` at `/api/odds`: `/{game_pk}` and `/today/all`. Both serve mock lines and require a login. |
 
 **Watch out:** the closing rows depend on the poll's own clock. A key with no closing row at
 first pitch (a book that first posts in play) can take an in-play row on a later promotion.
+The live service stores no opening row; the nightly pass loads it.
 
 ### `pipeline/live/lineup_writer.py`
 

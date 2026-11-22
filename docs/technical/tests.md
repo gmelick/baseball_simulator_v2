@@ -13,8 +13,8 @@ GitHub Actions workflows under `.github/workflows/` run the lanes.
    `bench_*.py`, runs async tests in auto mode, and rejects an unknown marker
    (`--strict-markers`) or config key (`--strict-config`).
 2. [`tests/conftest.py`](../../tests/conftest.py) runs before every lane. At import it
-   pins the production `SIM_*` flags to their OFF values, pins the odds provider to
-   the mock, and turns the API login off. Before every test it restores a usable
+   pins the production `SIM_*` flags to their OFF values, removes the odds vendor's
+   key, and turns the API login off. Before every test it restores a usable
    event loop.
 3. The **unit lane** (`tests/unit/`) needs no database, no Redis and no network. It
    builds the production `StateMachine` and `FullPoolSampler` over an in-memory bundle
@@ -136,8 +136,7 @@ attribute directly, or uses `monkeypatch`.
 | `SIM_RESTART_ON_NEW_BUNDLE`, `SIM_BOOT_LOCK_WAIT_S` | `0` | A test never restarts PID 1 and never waits for a DuckDB writer |
 | `BASEBALL_ENGINE_ARTIFACT_DIR` | removed | A test never reads a bundle version a lifespan pinned |
 | `AUTH_DISABLED` | `1` (a default, not a pin) | Route tests need no login; two auth test files delete it |
-| `ODDS_PROVIDER` | `mock` (a hard pin) | The stack's `.env` names the vendor; the pin keeps every test off the network |
-| `ODDS_API_KEY` | removed | A test that still builds the vendor's provider sends no BettingPros request |
+| `ODDS_API_KEY` | removed | No test reaches BettingPros: a provider without the key sends no request and returns no rows. The odds tests feed the recorded responses in `tests/fixtures/bettingpros/` instead |
 
 `SIM_STEAL_PITCH_CLASS` (the running game on the pitch, SIM-554) is NOT pinned, on
 purpose: the unit lane builds its samplers directly, so the no-database tests run
@@ -522,16 +521,16 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_published_lineup_writer.py](../../tests/unit/test_published_lineup_writer.py) | The published-lineup writer |
 | [test_schedule_client.py](../../tests/unit/test_schedule_client.py), [test_game_feed.py](../../tests/unit/test_game_feed.py) | The schedule client; the game feed parser and route |
 
-### Odds and betting (`pipeline/odds_provider.py`, `pipeline/bettingpros/`, `betting/`)
+### Odds and betting (`betting/`)
 
 | File | What it pins |
 |---|---|
-| [test_odds_provider_seam.py](../../tests/unit/test_odds_provider_seam.py), [test_odds_provider_pin.py](../../tests/unit/test_odds_provider_pin.py), [test_odds_provider_ingestion.py](../../tests/unit/test_odds_provider_ingestion.py), [test_odds_provider_retry.py](../../tests/unit/test_odds_provider_retry.py) | The provider seam, the test lane's pin, the prop ingestion, the retry |
+| [test_odds_provider_pin.py](../../tests/unit/test_odds_provider_pin.py), [test_odds_provider_ingestion.py](../../tests/unit/test_odds_provider_ingestion.py), [test_odds_provider_retry.py](../../tests/unit/test_odds_provider_retry.py) | The test lane's key removal, the live prop cycle, the retry |
 | [test_bettingpros_provider.py](../../tests/unit/test_bettingpros_provider.py), [test_historical_odds_load.py](../../tests/unit/test_historical_odds_load.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py) | The BettingPros provider, the historical loader, its retry option |
 | [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_book_vocabulary.py](../../tests/unit/test_odds_book_vocabulary.py) | The fifteen prop markets, the fifteen game markets, the book labels |
 | [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_readers.py](../../tests/unit/test_odds_readers.py), [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py) | One book per odds row (SIM-555): the guard, the writers, the readers, the played-schedule matcher; migrations 0028 and 0031 |
 | [test_odds_hash_dedup.py](../../tests/unit/test_odds_hash_dedup.py), [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_backfill_odds_hash.py](../../tests/unit/test_backfill_odds_hash.py) | Quote dedup, the last-seen stamp, the live closing rows, the hash backfill |
-| [test_bet_signal_pricing.py](../../tests/unit/test_bet_signal_pricing.py), [test_bet_signal_run_line.py](../../tests/unit/test_bet_signal_run_line.py), [test_bet_signal.py](../../tests/unit/test_bet_signal.py) | Prices, no-vig, edge and EV; the run line; the bet gate and stake |
+| [test_bet_signal_pricing.py](../../tests/unit/test_bet_signal_pricing.py), [test_bet_signal_run_line.py](../../tests/unit/test_bet_signal_run_line.py), [test_bet_signal.py](../../tests/unit/test_bet_signal.py) | `betting/pricing.py`: prices, no-vig, edge and EV; the run line; the bet gate and stake |
 
 ### The API (`api/`) and the replay store (`db/sim_store.py`)
 

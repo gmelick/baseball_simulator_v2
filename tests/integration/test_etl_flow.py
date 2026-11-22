@@ -27,8 +27,8 @@ production code:
 
   * ``HistoricalDataLoader._log_freshness()`` (pipeline/etl/etl_historical_loader.py)
     — the sole writer of raw.etl_data_freshness.
-  * ``OpeningLineJob._start_log_row()`` / ``._finish_log_row()``
-    (pipeline/etl/opening_line_job.py) — a real writer of raw.pipeline_run_log.
+  * ``VenueBackfillJob._start_log_row()`` / ``._finish_log_row()``
+    (pipeline/etl/venue_backfill_job.py) — a real writer of raw.pipeline_run_log.
 
 That keeps the DDL and the production upserts provably in sync: if either drifts,
 these tests fail.
@@ -47,6 +47,7 @@ Run:
 from __future__ import annotations
 
 import datetime
+import json
 from collections.abc import Generator
 from typing import Any
 
@@ -55,7 +56,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from pipeline.etl.etl_historical_loader import HistoricalDataLoader
-from pipeline.etl.opening_line_job import OpeningLineJob
+from pipeline.etl.venue_backfill_job import VenueBackfillJob
 from tests.integration.conftest import assert_table_exists
 
 pytestmark = pytest.mark.integration
@@ -79,7 +80,7 @@ _FRESHNESS_COLUMNS = {
 }
 
 #: job_name values written by the pipeline_run_log tests (cleaned up on teardown).
-_TEST_JOB_NAMES = ("opening_line_job",)
+_TEST_JOB_NAMES = ("venue_backfill_job",)
 
 
 # ---------------------------------------------------------------------------
@@ -109,13 +110,13 @@ def etl_loader(pg_container, pg_engine: sa.Engine) -> Generator[HistoricalDataLo
 
 
 @pytest.fixture()
-def opening_line_job(asyncpg_pool) -> Generator[OpeningLineJob]:
-    """Yield an ``OpeningLineJob`` whose ``_db`` is the test asyncpg pool.
+def venue_job(asyncpg_pool) -> Generator[VenueBackfillJob]:
+    """Yield a ``VenueBackfillJob`` whose ``_db`` is the test asyncpg pool.
 
     ``__init__`` only stores config (it does not connect), so we construct it
     normally and inject the pool that ``_connect()`` would otherwise build.
     """
-    job = OpeningLineJob(dsn="postgresql://unused")
+    job = VenueBackfillJob(dsn="postgresql://unused")
     job._db = asyncpg_pool
     yield job
 
@@ -371,15 +372,15 @@ class TestPipelineRunLog:
         assert_table_exists(pg_connection, "raw", "pipeline_run_log")
 
     async def test_write_successful_run_log(
-        self, opening_line_job: OpeningLineJob, asyncpg_pool
+        self, venue_job: VenueBackfillJob, asyncpg_pool
     ) -> None:
         """The real start→finish lifecycle records a completed run.
 
-        Drives ``OpeningLineJob._start_log_row()`` / ``._finish_log_row()``,
+        Drives ``VenueBackfillJob._start_log_row()`` / ``._finish_log_row()``,
         the production writers, so the run-log DDL and their column lists stay
         in sync.
         """
-        run_id = await opening_line_job._start_log_row()
+        run_id = await venue_job._start_log_row()
         assert isinstance(run_id, int)
 
         # A freshly started run is 'running' with no finish timestamp.
@@ -388,53 +389,42 @@ class TestPipelineRunLog:
             "FROM raw.pipeline_run_log WHERE id = $1",
             run_id,
         )
-        assert started["job_name"] == "opening_line_job"
+        assert started["job_name"] == "venue_backfill_job"
         assert started["status"] == "running"
         assert started["started_at"] is not None
         assert started["finished_at"] is None
 
-        await opening_line_job._finish_log_row(
-            run_id,
-            "success",
-            {"opening_line_games_captured": 15, "opening_prop_lines_captured": 120},
-        )
+        summary = {"games_processed": 15, "venues_resolved": 15, "http_errors": 0}
+        await venue_job._finish_log_row(run_id, summary)
 
         finished = await asyncpg_pool.fetchrow(
-            "SELECT status, finished_at, opening_line_games_captured, "
-            "       opening_prop_lines_captured, error_message "
+            "SELECT status, finished_at, games_processed, metadata, error_message "
             "FROM raw.pipeline_run_log WHERE id = $1",
             run_id,
         )
         assert finished["status"] == "success"
         assert finished["finished_at"] is not None
-        assert finished["opening_line_games_captured"] == 15
-        assert finished["opening_prop_lines_captured"] == 120
+        assert finished["games_processed"] == 15
+        assert json.loads(finished["metadata"]) == summary
         assert finished["error_message"] is None
 
-    async def test_write_failed_run_log(
-        self, opening_line_job: OpeningLineJob, asyncpg_pool
-    ) -> None:
-        """A failed run records status='error' plus the error message.
+    async def test_write_partial_run_log(self, venue_job: VenueBackfillJob, asyncpg_pool) -> None:
+        """A run with HTTP errors records status='partial'.
 
         Also pins the status CHECK constraint: only the four documented states
         are storable, so a typo'd status fails loudly instead of being persisted.
         """
         import asyncpg
 
-        error = "ConnectionError: MLB Stats API returned 503 after 3 retries"
-
-        run_id = await opening_line_job._start_log_row()
-        await opening_line_job._finish_log_row(run_id, "error", {}, error_message=error)
+        run_id = await venue_job._start_log_row()
+        await venue_job._finish_log_row(run_id, {"games_processed": 4, "http_errors": 2})
 
         row = await asyncpg_pool.fetchrow(
-            "SELECT status, error_message, opening_line_games_captured "
-            "FROM raw.pipeline_run_log WHERE id = $1",
+            "SELECT status, games_processed FROM raw.pipeline_run_log WHERE id = $1",
             run_id,
         )
-        assert row["status"] == "error"
-        assert row["error_message"] == error
-        # An empty summary dict falls back to the documented 0 counts.
-        assert row["opening_line_games_captured"] == 0
+        assert row["status"] == "partial"
+        assert row["games_processed"] == 4
 
         with pytest.raises(asyncpg.exceptions.CheckViolationError):
             await asyncpg_pool.execute(

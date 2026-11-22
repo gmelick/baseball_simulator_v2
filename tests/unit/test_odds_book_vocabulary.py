@@ -180,5 +180,5 @@ class TestBookVocabulary:
             "graded_row_order_sql",
         ):
             assert name in markets.__all__, name
-        assert callable(load.odds_rows_by_book)
-        assert callable(load.prop_rows_by_book)
+        assert callable(load.load_odds)
+        assert callable(load.keep_rows)

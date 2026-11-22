@@ -99,7 +99,7 @@ calls yet. The deep review does that.
     prices each game market from the inning-by-inning scores.
 11. **The edge.** `get_game_edges` in [api/routes/betting.py](../../api/routes/betting.py)
     compares the model's probabilities with the bookmaker's prices through
-    [betting/bet_signal.py](../../betting/bet_signal.py).
+    [betting/pricing.py](../../betting/pricing.py).
 12. **The screen.** The game page shows the run in
     [SimulationCard.tsx](../../frontend/src/components/games/SimulationCard.tsx) and
     the prices in [BettingCard.tsx](../../frontend/src/components/games/BettingCard.tsx).
@@ -431,19 +431,25 @@ code turns the games into win probabilities, a distribution for each player stat
 
 ## 9. Odds and betting
 
-**What it does.** The odds providers fetch the bookmakers' prices and store one row per
-book. The betting code removes the bookmaker's margin from a price, compares the fair
-price with the model's probability, and reports the edge and the expected value.
+**What it does.** The `betting/` folder fetches every book's prices from BettingPros,
+checks each row, and stores one row per book. The pricing code removes the bookmaker's
+margin from a price, compares the fair price with the model's probability, and reports
+the edge and the expected value. The files follow the steps of the work.
 
 **Read in this order.**
 
-1. [pipeline/odds_provider.py](../../pipeline/odds_provider.py): the market vocabulary
-   and the provider interface.
-2. [pipeline/bettingpros/](../../pipeline/bettingpros/): the vendor's provider, starting
-   at `provider.py`.
-3. [pipeline/odds_row_guard.py](../../pipeline/odds_row_guard.py): the load guard.
-4. [betting/bet_signal.py](../../betting/bet_signal.py): implied probability, margin
-   removal, edge and expected value, then the bet signal's gate, stake and rank.
+1. [betting/markets.py](../../betting/markets.py): our market names and book labels.
+2. [betting/bettingpros/match_games.py](../../betting/bettingpros/match_games.py): the
+   HTTP client, and the match of an MLB game to its BettingPros event.
+3. [betting/bettingpros/fetch_odds.py](../../betting/bettingpros/fetch_odds.py): the
+   vendor's market ids, the first-five rules and one row per book.
+4. [betting/validate.py](../../betting/validate.py): the load guard.
+5. [betting/load.py](../../betting/load.py): the one load path, the odds hash and the
+   closing stamp.
+6. [betting/history.py](../../betting/history.py): the loader of finished games, which
+   the nightly pass runs for the opening and closing lines.
+7. [betting/pricing.py](../../betting/pricing.py): implied probability, margin removal,
+   edge and expected value, then the bet signal's gate, stake and rank.
 
 **Check.**
 
@@ -452,10 +458,11 @@ price with the model's probability, and reports the edge and the expected value.
 - Does any number reach a bet signal before it is calibrated? (Owner ruling
   2026-09-08: no betting-value measurement until every graded band is green.)
 
-**Tests.** `test_bet_signal_pricing.py`, `test_bet_signal_run_line.py`, `test_bet_signal.py`,
-`test_odds_one_book_per_row.py`, `test_odds_readers.py`, `test_bettingpros_provider.py`.
+**Tests.** `test_bettingpros_provider.py`, `test_odds_one_book_per_row.py`,
+`test_odds_writers.py`, `test_historical_odds_load.py`, `test_odds_readers.py`, and the
+pricing tests `test_bet_signal_pricing.py`, `test_bet_signal_run_line.py`, `test_bet_signal.py`.
 
-**Reference.** [Betting](betting.md) and [Pipeline: getting data in](pipeline-ingest.md).
+**Reference.** [Betting](betting.md).
 
 <a id="stage-10"></a>
 
@@ -506,7 +513,7 @@ through Redis.
    [pipeline/live/live_ingestion_pipeline.py](../../pipeline/live/live_ingestion_pipeline.py):
    the service and its loop.
 3. [pipeline/live/ingestion/](../../pipeline/live/ingestion/): the WebSocket, the game
-   state builder and the odds cycles.
+   state builder and the odds hooks, which call `betting/load.py`.
 4. [pipeline/live/lineup_writer.py](../../pipeline/live/lineup_writer.py) and
    [pipeline/live/broadcast.py](../../pipeline/live/broadcast.py).
 

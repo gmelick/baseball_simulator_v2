@@ -23,11 +23,11 @@ These tests pin the loader half of the fix:
     rows;
   * a clean game is listed and a clean run exits 0.
 
-No network and no database: a stub provider serves one moneyline row (and one
-prop row) per request and adds to its own ``read_failures`` for the games told
-to fail, as the BettingPros provider does when it gives up on a read. One class
-(``TestTheRealProvider``) runs the real BettingPros provider instead, built by
-the registry, over a scripted ``urlopen``: it pins the seam between the two
+No network and no database: the real BettingPros provider reads game 746437's
+recorded responses (``tests/bp_recorded.py``), and a subclass adds to its own
+``read_failures`` for the games told to fail, as the provider does when it gives
+up on a read. One class (``TestTheRealProvider``) runs the plain BettingPros
+provider, as ``odds_source`` builds it, over a scripted ``urlopen``: it pins the seam between the two
 halves, from the flags to the provider's retry and back to the done-file.
 """
 
@@ -47,56 +47,23 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from tests.bp_recorded import BRYCE_MILLER, Recorded92857
 
 import betting.history as loader
-from betting.load import register_odds_provider
-
-#: The registry name the stub providers are served under.
-_STUB = "sim555_retry_stub"
+from betting.bettingpros.fetch_odds import BettingProsOddsProvider
+from betting.markets import PROP_ROLE_PITCHER
 
 
-def _moneyline(game_pk: int, line_type: str, market_type: str) -> dict[str, Any]:
-    """One book's moneyline row that the load guard keeps."""
-    return {
-        "game_pk": game_pk,
-        "source": "bettingpros",
-        "is_mock": False,
-        "book": "bp:12",
-        "line_type": line_type,
-        "market_type": market_type,
-        "is_sharp_book": False,
-        "home_ml": -120,
-        "away_ml": 105,
-    }
+class _CountingProvider(Recorded92857):
+    """The recorded provider; it takes a retry policy and counts the reads it gave up on.
 
-
-def _prop(game_pk: int, player_id: int, prop_stat: str, line_type: str) -> dict[str, Any]:
-    """One book's prop row that the load guard keeps."""
-    return {
-        "game_pk": game_pk,
-        "player_id": player_id,
-        "prop_stat": prop_stat,
-        "line": 5.5,
-        "over_ml": -110,
-        "under_ml": -110,
-        "book": "bp:12",
-        "line_type": line_type,
-        "is_sharp_book": False,
-        "source": "bettingpros",
-        "is_mock": False,
-    }
-
-
-class _CountingProvider:
-    """A provider that takes a retry policy and counts the reads it gave up on.
-
-    ``fail_game_odds`` maps game_pk to the failed reads one game-odds request
-    for that game costs; ``fail_props`` does the same for one prop request.
-    ``raise_game_odds`` names the games whose game-odds request raises past
-    the provider (an error the loader catches). ``start_failures`` is the
-    count before the run (a failure from before the first game must not mark
-    that game). ``calls`` records each ``forget_failed_lookups`` and each
-    game-odds request, in order.
+    The rows are the real provider's over game 746437's recording. ``fail_game_odds``
+    maps game_pk to the failed reads one game-odds request for that game costs;
+    ``fail_props`` does the same for one prop request. ``raise_game_odds`` names the
+    games whose game-odds request raises past the provider (an error the loader
+    catches). ``start_failures`` is the count before the run (a failure from before
+    the first game must not mark that game). ``calls`` records each
+    ``forget_failed_lookups`` and each game-odds request, in order.
     """
 
     def __init__(
@@ -107,9 +74,12 @@ class _CountingProvider:
         raise_game_odds: set[int] | None = None,
         start_failures: int = 0,
     ) -> None:
-        self.read_failures = start_failures
+        # The constructor hands over the default policy: record from the start.
         self.policies: list[tuple[int, float]] = []
         self.calls: list[str] = []
+        super().__init__()
+        self.policies.clear()
+        self.read_failures = start_failures
         self._fail_game_odds = dict(fail_game_odds or {})
         self._fail_props = dict(fail_props or {})
         self._raise_game_odds = set(raise_game_odds or ())
@@ -119,81 +89,97 @@ class _CountingProvider:
 
     def forget_failed_lookups(self) -> None:
         self.calls.append("forget")
+        super().forget_failed_lookups()
 
-    def get_odds(self, game_pk, *, line_type="current", market_type="moneyline"):
+    def get_odds_by_book(self, game_pk, *, line_type="current", market_type="moneyline"):
         self.calls.append(f"odds {game_pk}")
         if game_pk in self._raise_game_odds:
             raise KeyError("participants")
         self.read_failures += self._fail_game_odds.get(game_pk, 0)
-        return _moneyline(game_pk, line_type, market_type)
+        return super().get_odds_by_book(game_pk, line_type=line_type, market_type=market_type)
 
-    def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
+    def get_prop_odds_by_book(self, game_pk, player_id, prop_stat, *, line_type="current"):
         self.read_failures += self._fail_props.get(game_pk, 0)
-        return _prop(game_pk, player_id, prop_stat, line_type)
+        return super().get_prop_odds_by_book(game_pk, player_id, prop_stat, line_type=line_type)
 
 
 class _PlainProvider:
-    """A provider with neither ``set_retry_policy`` nor ``read_failures`` (the mock's shape)."""
+    """A provider with neither ``set_retry_policy`` nor ``read_failures``.
 
-    def get_odds(self, game_pk, *, line_type="current", market_type="moneyline"):
-        return _moneyline(game_pk, line_type, market_type)
-
-
-class _Recorder:
-    """Records each batch the loader hands its writers; the games in ``fail_writes`` raise."""
+    Its rows are the recorded provider's.
+    """
 
     def __init__(self) -> None:
-        self.game_rows: list[tuple[int, dict]] = []
-        self.prop_rows: list[dict] = []
+        self._recorded = Recorded92857()
+
+    def get_odds_by_book(self, game_pk, *, line_type="current", market_type="moneyline"):
+        return self._recorded.get_odds_by_book(
+            game_pk, line_type=line_type, market_type=market_type
+        )
+
+
+class _RecordingPool:
+    """A stand-in asyncpg pool: records each batch; the games in ``fail_writes`` raise."""
+
+    def __init__(self) -> None:
+        self.game_batches: list[list[tuple]] = []
+        self.prop_batches: list[list[tuple]] = []
         self.fail_writes: set[int] = set()
 
-    async def game(self, game_pk: int, rows: list[dict]) -> int:
-        if game_pk in self.fail_writes:
+    async def executemany(self, sql: str, params: Any) -> None:
+        rows = [tuple(p) for p in params]
+        if rows and rows[0][0] in self.fail_writes:
             raise ConnectionError("the database connection dropped")
-        self.game_rows.extend((game_pk, row) for row in rows)
-        return len(rows)
+        (self.prop_batches if "raw.prop_odds" in sql else self.game_batches).append(rows)
 
-    async def prop(self, rows: list[dict]) -> int:
-        self.prop_rows.extend(rows)
-        return len(rows)
+    async def close(self) -> None:
+        return None
+
+    def game_pks(self) -> list[int]:
+        """The games of the game-odds batches, in write order."""
+        return [batch[0][0] for batch in self.game_batches]
+
+    def prop_rows(self) -> list[tuple]:
+        return [row for batch in self.prop_batches for row in batch]
 
 
 def _wire(monkeypatch, provider: Any, game_pks: list[int], *, with_players: bool = False):
-    """Point ``run()`` at ``provider``, the given games and a recording writer; no DB."""
-    rec = _Recorder()
-    register_odds_provider(_STUB, lambda: provider)
+    """Point ``run()`` at ``provider``, the given games and a recording pool; no DB.
+
+    ``provider=None`` keeps a real BettingPros provider as ``odds_source``.
+    """
+    pool = _RecordingPool()
 
     async def _games(dsn, seasons, max_games, **kw):
         return [{"game_pk": pk} for pk in game_pks]
 
-    class _Pool:
-        async def close(self) -> None:
-            return None
-
     async def _create_pool(*args, **kwargs):
-        return _Pool()
+        return pool
 
-    async def _players(pool, game_pk):
-        return [(682243, True)] if with_players else []
+    async def _roles(pool, game_pk):
+        return {BRYCE_MILLER: PROP_ROLE_PITCHER} if with_players else {}
+
+    async def _no_column(*args, **kwargs):
+        return False
 
     monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(create_pool=_create_pool))
     # run() sets the offline cache time-to-live only when it is unset; pin it
     # here so monkeypatch restores the environment afterwards.
     monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "0")
-    monkeypatch.delenv("ODDS_PROVIDER", raising=False)
     monkeypatch.setattr(loader, "_fetch_final_games", _games)
-    monkeypatch.setattr(loader, "_fetch_lineup_players", _players)
-    monkeypatch.setattr(loader, "_build_persisters", lambda dsn, pool: (rec.game, rec.prop))
-    return rec
+    monkeypatch.setattr(loader, "_fetch_lineup_roles", _roles)
+    monkeypatch.setattr(loader, "pg_column_exists_async", _no_column)
+    monkeypatch.setattr(
+        loader, "odds_source", BettingProsOddsProvider if provider is None else lambda: provider
+    )
+    return pool
 
 
 def _args(*extra: str, props: bool = False) -> list[str]:
-    """The command line of a one-market, one-line-type run against the stub."""
+    """The command line of a one-market, one-line-type run."""
     base = [
         "--seasons",
         "2024",
-        "--provider",
-        _STUB,
         "--game-markets",
         "moneyline",
         "--line-types",
@@ -284,7 +270,7 @@ class TestRetryPolicyHandOff:
         caplog.set_level(logging.INFO, logger="betting.history")
         assert await loader.run(loader.parse_args(_args("--done-file", str(done)))) == 0
         assert "_PlainProvider does not retry a failed read" in caplog.text
-        assert [pk for pk, _row in rec.game_rows] == [746001, 746002]
+        assert rec.game_pks() == [746001, 746002]
         # No read_failures count: every game is complete.
         assert done.read_text(encoding="utf-8").split() == ["746001", "746002"]
 
@@ -308,7 +294,7 @@ class TestIncompleteGames:
         # The incomplete game is not listed; the clean games are, in order.
         assert done.read_text(encoding="utf-8").split() == ["746001", "746003"]
         # Its rows so far stay written.
-        assert [pk for pk, _row in rec.game_rows] == [746001, 746002, 746003]
+        assert rec.game_pks() == [746001, 746002, 746003]
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         per_game = [
             r.getMessage() for r in warnings if "game 746002 is incomplete" in r.getMessage()
@@ -331,7 +317,7 @@ class TestIncompleteGames:
         # The vendor answers this time (the wrapper's run a minute later).
         rec = _wire(monkeypatch, _CountingProvider(), [746001, 746002, 746003])
         assert await loader.run(loader.parse_args(_args("--done-file", str(done)))) == 0
-        assert [pk for pk, _row in rec.game_rows] == [746002]
+        assert rec.game_pks() == [746002]
         assert loader.read_done_file(str(done)) == {746001, 746002, 746003}
 
     @pytest.mark.asyncio
@@ -344,7 +330,7 @@ class TestIncompleteGames:
         rc = await loader.run(loader.parse_args(_args("--done-file", str(done), props=True)))
         assert rc == 1
         assert done.read_text(encoding="utf-8").split() == ["746002"]
-        assert [row["game_pk"] for row in rec.prop_rows] == [746001, 746002]
+        assert sorted({row[0] for row in rec.prop_rows()}) == [746001, 746002]
 
     @pytest.mark.asyncio
     async def test_a_clean_run_lists_every_game_and_exits_0(
@@ -390,7 +376,7 @@ class TestIncompleteGames:
         rc = await loader.run(loader.parse_args(_args("--done-file", str(done))))
         assert rc == loader.EXIT_INCOMPLETE
         assert done.read_text(encoding="utf-8").split() == ["746001", "746003"]
-        assert [pk for pk, _row in rec.game_rows] == [746001, 746003]
+        assert rec.game_pks() == [746001, 746003]
         assert "game odds fetch failed game 746002 closing/moneyline" in caplog.text
         assert "game 746002 is incomplete (failed fetches: 1); it stays off" in caplog.text
 
@@ -517,7 +503,7 @@ class _Vendor:
 
 
 class TestTheRealProvider:
-    """The registry's BettingPros provider, driven by ``run()`` (SIM-555).
+    """The BettingPros provider ``odds_source`` builds, driven by ``run()`` (SIM-555).
 
     Only the network is fake. The flags reach ``set_retry_policy``, the
     provider's ``_http_get_json`` retries, its ``read_failures`` grows when a
@@ -527,7 +513,7 @@ class TestTheRealProvider:
     @pytest.fixture
     def vendor(self, monkeypatch):
         """Wire ``run()`` to the real provider over a scripted vendor; return the waits."""
-        _wire(monkeypatch, _PlainProvider(), [746001, 746002])
+        _wire(monkeypatch, None, [746001, 746002])
         monkeypatch.setenv("ODDS_API_KEY", "k")
         monkeypatch.delenv("BETTINGPROS_MAX_RETRIES", raising=False)
         monkeypatch.delenv("BETTINGPROS_RETRY_WAIT_S", raising=False)
@@ -550,7 +536,6 @@ class TestTheRealProvider:
         done = tmp_path / "load.done"
         caplog.set_level(logging.INFO, logger="betting.history")
         argv = _args("--done-file", str(done), "--retries", "3", "--retry-wait", "0.25")
-        argv[argv.index(_STUB)] = "bettingpros"
         assert await loader.run(loader.parse_args(argv)) == 0
         # Two 502s, then the schedule answers: two waits, doubled.
         assert waits == [0.25, 0.5]
@@ -566,7 +551,6 @@ class TestTheRealProvider:
         done = tmp_path / "load.done"
         caplog.set_level(logging.INFO, logger="betting.history")
         argv = _args("--done-file", str(done), "--retries", "2", "--retry-wait", "0.25")
-        argv[argv.index(_STUB)] = "bettingpros"
         assert await loader.run(loader.parse_args(argv)) == loader.EXIT_INCOMPLETE
         # One schedule read per game, three attempts each, then the provider gives up.
         assert waits == [0.25, 0.5, 0.25, 0.5]
@@ -586,7 +570,7 @@ class TestTheRealProvider:
         loader drops it before the second game, which reads him again and loads his
         props. Before that, the second game got the stored failure, no count, no
         props, and went on the done-list."""
-        rec = _wire(monkeypatch, _PlainProvider(), [746001, 746002], with_players=True)
+        rec = _wire(monkeypatch, None, [746001, 746002], with_players=True)
         monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "600")  # the loader's own value
         monkeypatch.setenv("ODDS_API_KEY", "k")
         monkeypatch.delenv("BETTINGPROS_MAX_RETRIES", raising=False)
@@ -594,13 +578,12 @@ class TestTheRealProvider:
         monkeypatch.setattr(urllib.request, "urlopen", fake)
         done = tmp_path / "load.done"
         argv = _args("--done-file", str(done), "--retries", "0", "--no-game-odds", props=True)
-        argv[argv.index(_STUB)] = "bettingpros"
         assert await loader.run(loader.parse_args(argv)) == loader.EXIT_INCOMPLETE
         # The first game is incomplete; the second loads the pitcher's props and is listed.
         assert done.read_text(encoding="utf-8").split() == ["746002"]
-        assert {row["game_pk"] for row in rec.prop_rows} == {746002}
-        assert {row["player_id"] for row in rec.prop_rows} == {682243}
-        assert fake.paths.count("/api/v1/people/682243") == 2
+        assert {row[0] for row in rec.prop_rows()} == {746002}
+        assert {row[1] for row in rec.prop_rows()} == {BRYCE_MILLER}
+        assert fake.paths.count(f"/api/v1/people/{BRYCE_MILLER}") == 2
 
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"

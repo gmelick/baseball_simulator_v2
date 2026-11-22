@@ -274,7 +274,7 @@
         "type": "object"
       },
       "CardOddsResponse": {
-        "description": "The book's pregame lines for one slate card (SIM-519 Part I).\n\nEach market is the graded book's row (``GRADED_BOOK_PREFERENCE``): its\nclosing row once stored, else its latest current row while the game is in\nPreview. A market with no stored row is null. Never the mock.",
+        "description": "The book's pregame lines for one slate card (SIM-519 Part I).\n\nEach market is the graded book's row (``GRADED_BOOK_PREFERENCE``): its\nclosing row once stored, else its latest current row while the game is in\nPreview. A market with no stored row is null.",
         "properties": {
           "game_pk": {
             "title": "Game Pk",
@@ -590,7 +590,7 @@
       },
       "EdgeReportModel": {
         "additionalProperties": false,
-        "description": "Response model for :class:`betting.pricing.EdgeReport` (SIM-339).\n\nThe edge / EV report for one side of one market or prop.  ``side`` is the\nMarketSide enum's ``.value`` (a JSON-native string, e.g. \"home\" / \"over\").\n``positive_edge`` mirrors the source's derived property (edge > 0).\n\nSIM-555: when the betting routes price a market from the stored lines (the\nclosing line; before the game starts, also the current line),\n``price_book`` names the book whose price is ``offered_american`` (the best\nprice a bettor can take at this line, e.g. ``bp:10``) and\n``price_book_name`` its display name (\"FanDuel\"). Both are None for an\ninjected or mock price. The source dataclass carries no book, so the route\nsets them.",
+        "description": "Response model for :class:`betting.pricing.EdgeReport` (SIM-339).\n\nThe edge / EV report for one side of one market or prop.  ``side`` is the\nMarketSide enum's ``.value`` (a JSON-native string, e.g. \"home\" / \"over\").\n``positive_edge`` mirrors the source's derived property (edge > 0).\n\nSIM-555: when the betting routes price a market from the stored lines (the\nclosing line; before the game starts, also the current line),\n``price_book`` names the book whose price is ``offered_american`` (the best\nprice a bettor can take at this line, e.g. ``bp:10``) and\n``price_book_name`` its display name (\"FanDuel\"). Both are None for an\ninjected price. The source dataclass carries no book, so the route\nsets them.",
         "properties": {
           "edge": {
             "title": "Edge",
@@ -688,7 +688,7 @@
         "type": "object"
       },
       "EdgesResponse": {
-        "description": "The ``GET /api/betting/games/{game_pk}/edges`` envelope.\n\nCarries the per-market :class:`EdgeReportModel` list plus the run metadata\n(n_iterations / base_seed) and the per-market ``odds_source`` flags\n(\"injected\" / \"stored\" / \"mock\") so a consumer knows where each market's\nprices came from. SIM-555: \"stored\" = each book's stored closing line, or,\nbefore the game starts, its latest stored current line. A stored market\nnames its graded book in\n``fair_book`` (the book whose row gave the fair probability), and each\nreport names the book of its offered price (``price_book``).",
+        "description": "The ``GET /api/betting/games/{game_pk}/edges`` envelope.\n\nCarries the per-market :class:`EdgeReportModel` list plus the run metadata\n(n_iterations / base_seed) and the per-market ``odds_source`` flags\n(\"injected\" / \"stored\" / \"none\") so a consumer knows where each market's\nprices came from. SIM-555: \"stored\" = each book's stored closing line, or,\nbefore the game starts, its latest stored current line. A stored market\nnames its graded book in\n``fair_book`` (the book whose row gave the fair probability), and each\nreport names the book of its offered price (``price_book``).",
         "properties": {
           "base_seed": {
             "anyOf": [
@@ -4700,7 +4700,7 @@
         "type": "object"
       },
       "SignalsResponse": {
-        "description": "The ``GET /api/betting/games/{game_pk}/signals`` envelope.\n\nCarries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the\nrun metadata, the gate config that produced them (min_edge / min_ev /\nkelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags\n(\"injected\" / \"stored\" / \"mock\"). SIM-555: ``fair_book`` as on /edges; each\nsignal names the book of its offered price (``price_book``).",
+        "description": "The ``GET /api/betting/games/{game_pk}/signals`` envelope.\n\nCarries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the\nrun metadata, the gate config that produced them (min_edge / min_ev /\nkelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags\n(\"injected\" / \"stored\" / \"none\"). SIM-555: ``fair_book`` as on /edges; each\nsignal names the book of its offered price (``price_book``).",
         "properties": {
           "base_seed": {
             "anyOf": [
@@ -6849,7 +6849,7 @@
     },
     "/api/betting/games/{game_pk}/card-odds": {
       "get": {
-        "description": "The graded book's moneyline, run line and total for one game, from the stored rows only (never the mock): the closing row once stored, else the latest current row while the game is in Preview. On a final game `settled` says how each line settled. 404 when the game has no stored row for any of the three.",
+        "description": "The graded book's moneyline, run line and total for one game, from the stored rows only: the closing row once stored, else the latest current row while the game is in Preview. On a final game `settled` says how each line settled. 404 when the game has no stored row for any of the three.",
         "operationId": "get_card_odds_api_betting_games__game_pk__card_odds_get",
         "parameters": [
           {
@@ -6892,7 +6892,7 @@
     },
     "/api/betting/games/{game_pk}/edges": {
       "get": {
-        "description": "Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (SIM-546: the fifteen game markets by default, every side of each) off the GameSimSummary + market odds. The three full-game markets keep their labels (moneyline, total, run_line); every segment or team market's label is its market type. Odds come from the injected query params or the prices document when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book); else the deterministic mock provider. odds_source flags each market: injected, stored or mock. market_names gives each label its plain name. A cached summary with no inning grid prices the full-game markets only. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.",
+        "description": "Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (SIM-546: the fifteen game markets by default, every side of each) off the GameSimSummary + market odds. The three full-game markets keep their labels (moneyline, total, run_line); every segment or team market's label is its market type. Odds come from the injected query params or the prices document when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book). A market with neither an injected nor a stored price gets no report. odds_source flags each market: injected, stored or none. market_names gives each label its plain name. A cached summary with no inning grid prices the full-game markets only. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.",
         "operationId": "get_game_edges_api_betting_games__game_pk__edges_get",
         "parameters": [
           {
@@ -7111,7 +7111,7 @@
             }
           },
           {
-            "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+            "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml when injected, else a flat 1.05 margin",
             "in": "query",
             "name": "away_run_line",
             "required": false,
@@ -7124,7 +7124,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+              "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml when injected, else a flat 1.05 margin",
               "title": "Away Run Line"
             }
           },
@@ -7177,7 +7177,7 @@
     },
     "/api/betting/games/{game_pk}/signals": {
       "get": {
-        "description": "Build the per-market EdgeReports (as /edges, with the same injected / stored / mock odds sources and the same prices document; SIM-546: the fifteen game markets by default, a tie side included), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. The segment and team markets' probabilities are not calibrated. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.",
+        "description": "Build the per-market EdgeReports (as /edges, with the same injected / stored / none odds sources and the same prices document; SIM-546: the fifteen game markets by default, a tie side included), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. The segment and team markets' probabilities are not calibrated. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market or a bad prices document.",
         "operationId": "get_game_signals_api_betting_games__game_pk__signals_get",
         "parameters": [
           {
@@ -7452,7 +7452,7 @@
             }
           },
           {
-            "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+            "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml when injected, else a flat 1.05 margin",
             "in": "query",
             "name": "away_run_line",
             "required": false,
@@ -7465,7 +7465,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+              "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml when injected, else a flat 1.05 margin",
               "title": "Away Run Line"
             }
           },
@@ -8963,78 +8963,6 @@
         "summary": "A what-if's two runs and the real final",
         "tags": [
           "games"
-        ]
-      }
-    },
-    "/api/odds/today/all": {
-      "get": {
-        "description": "Returns mock odds for every game scheduled today.",
-        "operationId": "get_todays_odds_api_odds_today_all_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response Get Todays Odds Api Odds Today All Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Get Todays Odds",
-        "tags": [
-          "odds"
-        ]
-      }
-    },
-    "/api/odds/{game_pk}": {
-      "get": {
-        "description": "Returns mock betting lines for a game.  This handler calls MockOddsAPI\ndirectly (it predates the SIM-370 seam); the live ingestion path instead\ngoes through get_odds_provider(), so ODDS_PROVIDER=bettingpros yields real\nlines (is_mock=False) there.",
-        "operationId": "get_game_odds_api_odds__game_pk__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "game_pk",
-            "required": true,
-            "schema": {
-              "title": "Game Pk",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Game Odds Api Odds  Game Pk  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Game Odds",
-        "tags": [
-          "odds"
         ]
       }
     },

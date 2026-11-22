@@ -8,7 +8,7 @@ one (one book per odds row, SIM-555). These tests pin two rules:
     price is injected: the fair probability from ONE book's row (the graded
     book, first on the preference list), the offered price of each side from
     the best stored price at that line, with both books named. No pool, no
-    stored row or a failed read gives the mock;
+    stored row or a failed read gives no price (the source "none", no report);
   * the stored lines are each book's closing row, plus its latest ``current``
     row while the game is in ``Preview`` (not started). A current row of a game
     in any other state (an in-play price, or one taken after the game) is
@@ -588,32 +588,34 @@ class TestStoredEdges:
         assert resp.status_code == 200, resp.text
         assert pool.odds_calls == []
 
-    def test_no_stored_row_gives_the_mock(self, make_client):
+    def test_no_stored_row_gives_no_price(self, make_client):
         body = (
             make_client(_StubPool([]))
             .get("/api/betting/games/745001/edges?n_iterations=30&base_seed=7&markets=moneyline")
             .json()
         )
-        assert body["odds_source"] == {"moneyline": "mock"}
+        assert body["odds_source"] == {"moneyline": "none"}
         assert body["fair_book"] == {} and body["fair_book_name"] == {}
-        assert all(e["price_book"] is None for e in body["edges"])
+        assert body["edges"] == []
 
-    def test_only_non_bettable_rows_give_the_mock(self, make_client):
+    def test_only_non_bettable_rows_give_no_price(self, make_client):
         rows = [_stored_ml("bp:0", -150, 130), _stored_ml("consensus", -150, 130)]
         body = (
             make_client(_StubPool(rows))
             .get("/api/betting/games/745001/edges?n_iterations=30&base_seed=7&markets=moneyline")
             .json()
         )
-        assert body["odds_source"] == {"moneyline": "mock"}
+        assert body["odds_source"] == {"moneyline": "none"}
+        assert body["edges"] == []
 
-    def test_a_failed_read_logs_a_warning_and_gives_the_mock(self, make_client, caplog):
+    def test_a_failed_read_logs_a_warning_and_gives_no_price(self, make_client, caplog):
         with caplog.at_level(logging.WARNING, logger="api.routes.betting"):
             resp = make_client(_StubPool(MONEYLINE_ROWS, fail=True)).get(
                 "/api/betting/games/745001/edges?n_iterations=30&base_seed=7&markets=moneyline"
             )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["odds_source"] == {"moneyline": "mock"}
+        assert resp.json()["odds_source"] == {"moneyline": "none"}
+        assert resp.json()["edges"] == []
         assert any("stored odds read failed" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.parametrize("status", ["Live", "Final", None])
@@ -631,11 +633,9 @@ class TestStoredEdges:
             .get("/api/betting/games/745001/signals?n_iterations=60&base_seed=11&markets=moneyline")
             .json()
         )
-        assert body["odds_source"] == {"moneyline": "mock"}
+        assert body["odds_source"] == {"moneyline": "none"}
         assert body["fair_book"] == {}
-        for signal in body["signals"]:
-            assert signal["offered_american"] not in (1100.0, 1200.0)
-            assert signal["price_book"] is None
+        assert body["signals"] == []
 
     def test_a_preview_game_is_priced_from_its_current_rows(self, make_client):
         # Before first pitch the live pipeline stores every book's current

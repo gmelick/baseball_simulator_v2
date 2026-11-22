@@ -163,11 +163,11 @@ def test_get_prop_odds_unknown_stat_raises():
         _FixtureProvider().get_prop_odds_by_book(746437, 682243, "innings_pitched")
 
 
-# --------------------------------------------------------------------------- registry
-def test_registry_resolves_bettingpros():
-    from betting.load import get_odds_provider
+# --------------------------------------------------------------------------- the odds source
+def test_the_odds_source_is_bettingpros():
+    from betting.load import odds_source
 
-    assert isinstance(get_odds_provider("bettingpros"), BettingProsOddsProvider)
+    assert isinstance(odds_source(), BettingProsOddsProvider)
 
 
 # --------------------------------------------------------------------------- SIM-536

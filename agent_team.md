@@ -142,8 +142,9 @@ builds that turn it into what the simulator reads.
 - `pipeline/etl/` and `pipeline/live/`: the historical loaders and the live service.
 - `pipeline/batch/`: the profile computor, the pools and the engine-artifact bundle.
 - `pipeline/backup/`: the nightly backups and the off-site copy.
-- The odds providers (`pipeline/odds_provider.py`, `pipeline/bettingpros/`) and the
-  loaders in `scripts/`.
+- The odds load in `betting/`: the BettingPros fetch (`betting/bettingpros/`), the load
+  guard, the load path and the historical loader (`betting/history.py`); and the loaders in
+  `scripts/`.
 
 **Guards.**
 
@@ -231,11 +232,11 @@ adds the simulations, projections and odds on top.
 
 **Owns.**
 
-- `betting/`: implied probability, removing the bookmaker's margin, edge, expected
-  value, and the bet signal and its stake.
+- `betting/pricing.py`: implied probability, removing the bookmaker's margin, edge,
+  expected value, and the bet signal and its stake.
 - `api/routes/betting*.py`: the edges and signals routes.
 - The market vocabulary: the fifteen player-prop markets and the fifteen game markets
-  in `pipeline/odds_provider.py`.
+  in `betting/markets.py`.
 - The accuracy comparison (`scripts/accuracy_comparison.py`, `scripts/accuracy/`,
   `scripts/pair_accuracy.py`).
 

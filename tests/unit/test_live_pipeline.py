@@ -19,9 +19,10 @@ Units covered:
     cleanup (SIM-103)
   * LiveIngestionPipeline._refresh_game_state — the WS-signal → REST-refetch →
     build → persist → broadcast → resim flow (orchestration)
-  * _persist_odds / _persist_prop_odds — INSERT + dedup-hash + ON CONFLICT
+  * _persist_game_odds_cycle / _persist_prop_roles_cycle — the load through
+    betting.load (game_offers / prop_offers, then write_offers) and the cadence gate
   * mark_closing_lines / mark_closing_prop_lines — closing-line designation
-  * _collect_prop_player_ids + _persist_prop_odds_cycle cadence gate (SIM-340)
+  * _collect_prop_player_roles (SIM-421)
   * _should_resimulate + _signal_resimulation callback dispatch
   * create_app manual /resimulate endpoint cooldown/429 (SIM-104)
   * __init__ runtime guards (SIM-106 sync-callback, SIM-153 missing DSN/Redis)
@@ -49,11 +50,19 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from betting.markets import PITCHER_PROP_STATS, PROP_STATS  # noqa: E402
+from tests.bp_recorded import (  # noqa: E402
+    BRYCE_MILLER,
+    GAME_92857,
+    JULIO_RODRIGUEZ,
+    Recorded92857,
+)
+
+from betting.load import _odds_hash, _prop_odds_hash, game_offers, prop_offers  # noqa: E402
+from betting.markets import PROP_ROLE_BATTER, PROP_ROLE_PITCHER  # noqa: E402
+from betting.validate import check_row  # noqa: E402
 from pipeline.live.ingestion.constants import RESIM_COOLDOWN_S  # noqa: E402
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder  # noqa: E402
 from pipeline.live.ingestion.mlb_websocket import ConnectionManager  # noqa: E402
-from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
     LiveIngestionPipeline,
     create_app,
@@ -69,8 +78,11 @@ def _bare_pipeline(**attrs) -> LiveIngestionPipeline:
 
     Sets the handful of instance attributes the methods under test read so a
     test can drive a single method in isolation.  Override / add via **attrs.
+    The odds source is the real BettingPros provider over the recorded game
+    746437 (no network, no made-up price).
     """
     p = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
+    p._odds = Recorded92857()
     p._db = None
     p._redis = None
     p._http = None
@@ -539,47 +551,56 @@ class TestFetchFeed:
 
 
 # ===========================================================================
-# _persist_odds / _persist_prop_odds — INSERT + dedup hash
+# The game-odds cycle: game_offers on the vendor thread, then write_offers
 # ===========================================================================
 
 
-class TestPersistOdds:
+def _kept_count(offers) -> int:
+    """The rows of ``offers`` the load guard keeps."""
+    return sum(1 for _label, rows in offers for row in rows if check_row(row) is None)
+
+
+class TestGameOddsCycle:
     @pytest.mark.asyncio
-    async def test_persist_odds_executes_insert_with_hash(self, mock_db_pool) -> None:
+    async def test_cycle_writes_every_kept_book_row_one_batch_per_offer(self, mock_db_pool) -> None:
         pipeline = _bare_pipeline(_db=mock_db_pool)
-        odds = MockOddsAPI.get_odds(745000)
-        await pipeline._persist_odds(745000, odds)
-        mock_db_pool.execute.assert_awaited_once()
-        sql = mock_db_pool.execute.await_args.args[0]
+        written = await pipeline._persist_game_odds_cycle(GAME_92857)
+        offers = game_offers(Recorded92857(), GAME_92857)
+        # The recording holds the three full-game markets.
+        assert {label for label, _ in offers} == {
+            "current/moneyline",
+            "current/total",
+            "current/runline",
+        }
+        assert written == _kept_count(offers) > 0
+        assert mock_db_pool.executemany.await_count == len(offers)
+        sql, params = mock_db_pool.executemany.await_args_list[0].args
         assert "raw.game_odds" in sql
         assert "ON CONFLICT" in sql
-        # Last positional arg is the odds_hash (64-char sha256 hex).
-        odds_hash = mock_db_pool.execute.await_args.args[-1]
-        assert isinstance(odds_hash, str) and len(odds_hash) == 64
-
-    def test_odds_hash_is_deterministic(self) -> None:
-        odds = MockOddsAPI.get_odds(745000)
-        assert LiveIngestionPipeline._odds_hash(odds) == LiveIngestionPipeline._odds_hash(odds)
-
-    def test_odds_hash_differs_for_different_book(self) -> None:
-        a = MockOddsAPI.get_odds(745000, book="pinnacle")
-        b = MockOddsAPI.get_odds(745000, book="draftkings")
-        assert LiveIngestionPipeline._odds_hash(a) != LiveIngestionPipeline._odds_hash(b)
+        # The last bind is the odds_hash (64-char sha256 hex).
+        assert all(isinstance(p[-1], str) and len(p[-1]) == 64 for p in params)
+        # Every row is a real book's row under its own label.
+        assert all(p[3].startswith("bp:") for p in params)
 
     @pytest.mark.asyncio
-    async def test_persist_prop_odds_executes_insert(self, mock_db_pool) -> None:
+    async def test_cycle_is_throttled_within_the_cadence(self, mock_db_pool) -> None:
         pipeline = _bare_pipeline(_db=mock_db_pool)
-        prop = MockOddsAPI.get_prop_odds(745000, 100001, "strikeouts")
-        await pipeline._persist_prop_odds(prop)
-        mock_db_pool.execute.assert_awaited_once()
-        sql = mock_db_pool.execute.await_args.args[0]
-        assert "raw.prop_odds" in sql
-        assert "ON CONFLICT" in sql
+        assert await pipeline._persist_game_odds_cycle(GAME_92857) > 0
+        batches = mock_db_pool.executemany.await_count
+        assert await pipeline._persist_game_odds_cycle(GAME_92857) == 0
+        assert mock_db_pool.executemany.await_count == batches
 
-    def test_prop_odds_hash_differs_per_prop_stat(self) -> None:
-        a = MockOddsAPI.get_prop_odds(745000, 100001, "strikeouts")
-        b = MockOddsAPI.get_prop_odds(745000, 100001, "hits")
-        assert LiveIngestionPipeline._prop_odds_hash(a) != LiveIngestionPipeline._prop_odds_hash(b)
+    @pytest.mark.asyncio
+    async def test_restamp_follows_the_last_seen_column(self, mock_db_pool) -> None:
+        pipeline = _bare_pipeline(_db=mock_db_pool, _last_seen_column=True)
+        await pipeline._persist_game_odds_cycle(GAME_92857)
+        sql = mock_db_pool.executemany.await_args_list[0].args[0]
+        assert "last_seen_at" in sql
+
+    def test_the_odds_hash_tells_two_books_apart(self) -> None:
+        rows = game_offers(Recorded92857(), GAME_92857, game_markets=("moneyline",))[0][1]
+        assert len({_odds_hash(row) for row in rows}) == len(rows)
+        assert _odds_hash(rows[0]) == _odds_hash(dict(rows[0]))
 
 
 # ===========================================================================
@@ -608,7 +629,7 @@ def _closing_game_row(row_id: int, market: str, book: str, *, line_type: str = "
         "over_ml": None,
         "under_ml": None,
     }
-    row["odds_hash"] = LiveIngestionPipeline._odds_hash(row)
+    row["odds_hash"] = _odds_hash(row)
     return row
 
 
@@ -637,9 +658,7 @@ class TestClosingLines:
         assert "raw.game_odds" in sql
         assert "closing" in sql
         assert ids == [1, 2]
-        assert hashes == [
-            LiveIngestionPipeline._odds_hash({**row, "line_type": "closing"}) for row in rows
-        ]
+        assert hashes == [_odds_hash({**row, "line_type": "closing"}) for row in rows]
 
     @pytest.mark.asyncio
     async def test_mark_closing_lines_zero_when_no_rows(self) -> None:
@@ -675,7 +694,7 @@ class TestClosingLines:
             "over_ml": -200,
             "under_ml": 160,
         }
-        prop["odds_hash"] = LiveIngestionPipeline._prop_odds_hash(prop)
+        prop["odds_hash"] = _prop_odds_hash(prop)
         db.fetch.side_effect = [[prop], []]
         db.execute.return_value = "UPDATE 1"
         pipeline = _bare_pipeline(_db=db)
@@ -687,43 +706,43 @@ class TestClosingLines:
 
 
 # ===========================================================================
-# Prop-odds cadence + player-id collection (SIM-340)
+# The prop-odds cycle: roles, cadence, prop_offers then write_offers (SIM-340)
 # ===========================================================================
 
 
 class TestPropOddsCycle:
-    def test_collect_prop_player_ids_dedupes_and_filters(self, sample_game_state) -> None:
-        ids = LiveIngestionPipeline._collect_prop_player_ids(sample_game_state)
-        # current_pitcher_id (999) + home/away lineup ids; order-stable, no dupes.
+    def test_collect_prop_player_roles_dedupes_and_filters(self, sample_game_state) -> None:
+        roles = LiveIngestionPipeline._collect_prop_player_roles(sample_game_state)
+        ids = list(roles)
+        # current_pitcher_id (999) first, then the lineups; order-stable, no dupes.
         assert ids[0] == 999
+        assert roles[999] == "pitcher"
+        # The lineup entries carry no position: the role is unknown, so "both".
+        assert all(roles[pid] == "both" for pid in (401, 402, 501, 502))
         assert len(ids) == len(set(ids))
-        assert None not in ids
 
-    def test_collect_prop_player_ids_empty_when_no_players(self) -> None:
-        ids = LiveIngestionPipeline._collect_prop_player_ids(
+    def test_collect_prop_player_roles_empty_when_no_players(self) -> None:
+        roles = LiveIngestionPipeline._collect_prop_player_roles(
             {"current_pitcher_id": None, "home_lineup": [], "away_lineup": []}
         )
-        assert ids == []
+        assert roles == {}
 
     @pytest.mark.asyncio
-    async def test_prop_cycle_persists_quotes_when_gate_open(
-        self, mock_db_pool, sample_game_state
-    ) -> None:
+    async def test_prop_cycle_writes_the_recorded_rows_when_gate_open(self, mock_db_pool) -> None:
+        roles = {BRYCE_MILLER: PROP_ROLE_PITCHER, JULIO_RODRIGUEZ: PROP_ROLE_BATTER}
         pipeline = _bare_pipeline(_db=mock_db_pool)
-        written = await pipeline._persist_prop_odds_cycle(745000, sample_game_state)
-        # SIM-421 changed this expectation deliberately (it was every player ×
-        # every market). The current pitcher (999) is asked for the pitcher
-        # markets only; the four lineup entries carry no position, so their
-        # role is unknown and they are asked for every market (the safe default).
-        roles = LiveIngestionPipeline._collect_prop_player_roles(sample_game_state)
-        assert roles[999] == "pitcher"
-        assert all(roles[pid] == "both" for pid in (401, 402, 501, 502))
-        # SIM-555 changed this deliberately: there is no PROP_BOOKS multiplier.
-        # The one-book mock gives one row per offer, and each offer goes to the
-        # database in one executemany batch.
-        expected = len(PITCHER_PROP_STATS) + 4 * len(PROP_STATS)
-        assert written == expected
-        assert mock_db_pool.executemany.await_count == expected
+        written = await pipeline._persist_prop_roles_cycle(GAME_92857, roles)
+        offers = prop_offers(Recorded92857(), GAME_92857, roles)
+        assert written == _kept_count(offers) > 0
+        assert mock_db_pool.executemany.await_count == len(offers)
+        sent = [row for call in mock_db_pool.executemany.await_args_list for row in call.args[1]]
+        # player_id and prop_stat are the second and fifth binds of the prop INSERT.
+        stats = {(row[1], row[4]) for row in sent}
+        assert (BRYCE_MILLER, "strikeouts") in stats
+        assert (JULIO_RODRIGUEZ, "singles") in stats
+        # A pitcher is never asked for a batter market, nor a batter for a pitcher one.
+        assert all(stat != "singles" for pid, stat in stats if pid == BRYCE_MILLER)
+        assert all(stat != "hits_allowed" for pid, stat in stats if pid == JULIO_RODRIGUEZ)
         mock_db_pool.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -746,19 +765,6 @@ class TestPropOddsCycle:
         assert written == 0
         # No eligible players → clock not stamped, so a later signal retries.
         assert 745000 not in pipeline._last_prop_fetch
-
-    @pytest.mark.asyncio
-    async def test_capture_opening_prop_lines_writes_opening(self, mock_db_pool) -> None:
-        pipeline = _bare_pipeline(_db=mock_db_pool)
-        written = await pipeline.capture_opening_prop_lines(745000, [100001])
-        # No ``roles`` passed → every market for the player (SIM-421 safe default).
-        # SIM-555: one row per market from the one-book mock (no PROP_BOOKS).
-        expected = 1 * len(PROP_STATS)
-        assert written == expected
-        sent = [row for call in mock_db_pool.executemany.await_args_list for row in call.args[1]]
-        assert len(sent) == expected
-        # line_type is the tenth bind of the prop INSERT.
-        assert {params[9] for params in sent} == {"opening"}
 
 
 # ===========================================================================

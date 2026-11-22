@@ -7,14 +7,15 @@ and the CHECK-constraint migration.
 
 What this file pins:
 
-  1. The vocabulary has ONE source (``betting/markets.py``). The mock
-     provider, the BettingPros market map, the live pipeline, the opening-line
-     job and the historical loader all agree with it.
-  2. ``MockOddsAPI`` quotes every new market in the raw.prop_odds shape.
+  1. The vocabulary has ONE source (``betting/markets.py``). The BettingPros
+     market map and the historical loader agree with it.
+  2. Every market hashes to its own dedup key.
   3. Alembic migration 0022 lists the 15 values and its downgrade deletes the
      rows of the eight new markets before it restores the seven-value CHECK.
-  4. The live pipeline asks a pitcher for the pitcher markets only and a hitter
-     for the batter markets only; an unknown role gets every market.
+  4. ``prop_markets_for`` asks a pitcher for the pitcher markets only and a
+     hitter for the batter markets only; an unknown role gets every market. The
+     live pipeline's roles and ``prop_offers`` follow it, over the real provider
+     fed by recorded responses (``tests/bp_recorded.py``).
   5. The BettingPros provider prices a new batter market and a new pitcher
      market from captured-shape fixtures; its offers cache collapses repeat
      calls for the same (event, market) and expires after the time-to-live;
@@ -23,10 +24,9 @@ What this file pins:
      provider stays bounded; a paged batter market reaches the players on
      page 2, and a failure on page 2 keeps the page-1 players priced without
      caching the partial market.
-  6. The historical loader routes the new markets by role, ``--prop-stats``
-     narrows them (an unknown value stops the run), ``--line-types`` narrows
-     the line types, and the offline cache time-to-live is applied only when
-     the operator left it unset.
+  6. The historical loader's ``--prop-stats`` narrows the markets (an unknown
+     value stops the run), ``--line-types`` narrows the line types, and the
+     offline cache time-to-live is applied only when the operator left it unset.
 
 No network and no live DB: the provider's ``_bp_get`` / ``_mlb_get`` seams are
 stubbed with fixtures under ``tests/fixtures/bettingpros/``; the pipeline is
@@ -48,27 +48,32 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from tests.bp_recorded import (  # noqa: E402
+    BRYCE_MILLER,
+    GAME_92857,
+    JULIO_RODRIGUEZ,
+    Recorded92857,
+    recorded_prop_rows,
+)
+
 import betting.history as loader  # noqa: E402
 from betting import markets as odds_provider  # noqa: E402
 from betting.bettingpros.fetch_odds import (
     _PROP_MARKET_IDS,  # noqa: E402
     BettingProsOddsProvider,  # noqa: E402
 )
+from betting.load import _prop_odds_hash, prop_offers  # noqa: E402
 from betting.markets import (  # noqa: E402
     BATTER_PROP_STATS,
     PITCHER_PROP_STATS,
-    PROP_STAT_TO_MODEL_PROP,
-    PROP_STATS,
-)
-from pipeline.etl import opening_line_job  # noqa: E402
-from pipeline.live.ingestion import prop_odds  # noqa: E402
-from pipeline.live.ingestion.constants import (  # noqa: E402
-    PROP_FETCH_CADENCE_S,  # noqa: E402
     PROP_ROLE_BATTER,
     PROP_ROLE_BOTH,
     PROP_ROLE_PITCHER,
+    PROP_STAT_TO_MODEL_PROP,
+    PROP_STATS,
+    prop_markets_for,
 )
-from pipeline.live.ingestion.mock_odds import MockOddsAPI  # noqa: E402
+from pipeline.live.ingestion.constants import PROP_FETCH_CADENCE_S  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
@@ -168,28 +173,11 @@ class TestVocabularySingleSource:
         assert PROP_STAT_TO_MODEL_PROP == _CONTRACT_MODEL_MAP
         assert set(PROP_STAT_TO_MODEL_PROP) == set(PROP_STATS)
 
-    def test_the_live_prop_cycle_reads_the_source_tuples(self) -> None:
-        assert prop_odds.PROP_STATS is odds_provider.PROP_STATS
-        assert prop_odds.PITCHER_PROP_STATS is odds_provider.PITCHER_PROP_STATS
-        assert prop_odds.BATTER_PROP_STATS is odds_provider.BATTER_PROP_STATS
-
-    def test_mock_provider_config_keys_equal_the_vocabulary(self) -> None:
-        assert set(MockOddsAPI._PROP_CONFIG) == set(PROP_STATS)
-
     def test_bettingpros_market_ids_equal_the_vocabulary_and_the_contract(self) -> None:
         assert set(_PROP_MARKET_IDS) == set(PROP_STATS)
         assert _PROP_MARKET_IDS == _CONTRACT_MARKET_IDS
         # Every market id is distinct — two stats never share a BettingPros market.
         assert len(set(_PROP_MARKET_IDS.values())) == len(_PROP_MARKET_IDS)
-
-    def test_opening_line_job_aliases_the_source_tuples(self) -> None:
-        assert opening_line_job.PITCHER_PROP_TYPES is odds_provider.PITCHER_PROP_STATS
-        assert opening_line_job.BATTER_PROP_TYPES is odds_provider.BATTER_PROP_STATS
-
-    def test_historical_loader_imports_the_source_tuples(self) -> None:
-        assert loader.PITCHER_PROP_STATS is odds_provider.PITCHER_PROP_STATS
-        assert loader.BATTER_PROP_STATS is odds_provider.BATTER_PROP_STATS
-        assert loader.PROP_STATS is odds_provider.PROP_STATS
 
     def test_source_exports_the_vocabulary(self) -> None:
         for name in (
@@ -197,63 +185,27 @@ class TestVocabularySingleSource:
             "PITCHER_PROP_STATS",
             "BATTER_PROP_STATS",
             "PROP_STAT_TO_MODEL_PROP",
+            "PROP_ROLE_PITCHER",
+            "PROP_ROLE_BATTER",
+            "PROP_ROLE_BOTH",
+            "prop_markets_for",
         ):
             assert name in odds_provider.__all__
 
+    def test_historical_loader_imports_the_source_tuple(self) -> None:
+        assert loader.PROP_STATS is odds_provider.PROP_STATS
+
 
 # ===========================================================================
-# 2. The mock provider quotes every new market
+# 2. Every market has its own dedup key
 # ===========================================================================
 
 
-class TestMockProviderNewMarkets:
-    _REQUIRED_KEYS = {
-        "game_pk",
-        "player_id",
-        "prop_stat",
-        "line",
-        "over_ml",
-        "under_ml",
-        "book",
-        "line_type",
-        "is_sharp_book",
-        "source",
-        "is_mock",
-    }
-
-    @pytest.mark.parametrize("prop_stat", _NEW_EIGHT)
-    def test_new_market_quote_has_the_prop_odds_shape(self, prop_stat: str) -> None:
-        quote = MockOddsAPI.get_prop_odds(745000, 101, prop_stat, book="pinnacle")
-        assert self._REQUIRED_KEYS.issubset(quote)
-        assert quote["prop_stat"] == prop_stat
-        assert quote["book"] == "pinnacle"
-        assert quote["is_mock"] is True
-
-    @pytest.mark.parametrize("prop_stat", _NEW_EIGHT)
-    def test_new_market_line_and_vig_stay_inside_the_config(self, prop_stat: str) -> None:
-        center, half_spread, over_vig, under_vig = MockOddsAPI._PROP_CONFIG[prop_stat]
-        quote = MockOddsAPI.get_prop_odds(745000, 101, prop_stat)
-        # The line snaps to the nearest 0.5 inside centre ± spread.
-        assert quote["line"] * 2 == int(quote["line"] * 2)
-        assert center - half_spread - 0.25 <= quote["line"] <= center + half_spread + 0.25
-        assert over_vig[0] <= quote["over_ml"] <= over_vig[1]
-        assert under_vig[0] <= quote["under_ml"] <= under_vig[1]
-
-    @pytest.mark.parametrize("prop_stat", _NEW_EIGHT)
-    def test_new_market_quote_is_deterministic(self, prop_stat: str) -> None:
-        a = MockOddsAPI.get_prop_odds(745000, 101, prop_stat)
-        b = MockOddsAPI.get_prop_odds(745000, 101, prop_stat)
-        assert a == b
-
-    def test_unknown_market_still_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown prop_stat"):
-            MockOddsAPI.get_prop_odds(745000, 101, "innings_pitched")
-
+class TestEveryMarketHashesApart:
     def test_every_market_hashes_differently_for_the_dedup(self) -> None:
-        hashes = {
-            LiveIngestionPipeline._prop_odds_hash(MockOddsAPI.get_prop_odds(745000, 101, s))
-            for s in PROP_STATS
-        }
+        """One recorded strikeout row, relabelled per market, gives 15 hashes."""
+        row = recorded_prop_rows(BRYCE_MILLER, "strikeouts")[0]
+        hashes = {_prop_odds_hash({**row, "prop_stat": s}) for s in PROP_STATS}
         assert len(hashes) == len(PROP_STATS)
 
 
@@ -306,6 +258,7 @@ def _make_pipeline() -> LiveIngestionPipeline:
     p = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
     p._db = AsyncMock()
     p._last_prop_fetch = {}
+    p._last_seen_column = False
     return p
 
 
@@ -339,85 +292,75 @@ class TestLivePipelineRoleSplit:
         roles = LiveIngestionPipeline._collect_prop_player_roles(state)
         assert roles == {660271: PROP_ROLE_BOTH}
 
-    def test_collect_prop_player_ids_is_the_role_keys(self) -> None:
-        state = {
-            "current_pitcher_id": 9,
-            "home_lineup": [{"player_id": 1, "position": "CF"}, {"player_id": 1, "position": "CF"}],
-            "away_lineup": [{"player_id": None}],
-        }
-        assert LiveIngestionPipeline._collect_prop_player_ids(state) == [9, 1]
+    def test_prop_markets_for_each_role(self) -> None:
+        assert prop_markets_for(PROP_ROLE_PITCHER) == PITCHER_PROP_STATS
+        assert prop_markets_for(PROP_ROLE_BATTER) == BATTER_PROP_STATS
+        assert prop_markets_for(PROP_ROLE_BOTH) == PROP_STATS
+        assert prop_markets_for("something-else") == PROP_STATS
 
-    def test_prop_stats_for_role(self) -> None:
-        f = LiveIngestionPipeline._prop_stats_for_role
-        assert f(PROP_ROLE_PITCHER, PROP_STATS) == PITCHER_PROP_STATS
-        assert f(PROP_ROLE_BATTER, PROP_STATS) == BATTER_PROP_STATS
-        assert f(PROP_ROLE_BOTH, PROP_STATS) == PROP_STATS
-        assert f("something-else", PROP_STATS) == PROP_STATS
-        # A narrowed prop_stats stays narrowed, in the caller's order.
+    def test_prop_markets_for_keeps_a_subset_in_the_callers_order(self) -> None:
         narrowed = ("hits_allowed", "singles", "strikeouts")
-        assert f(PROP_ROLE_PITCHER, narrowed) == ("hits_allowed", "strikeouts")
-        assert f(PROP_ROLE_BATTER, narrowed) == ("singles",)
+        assert prop_markets_for(PROP_ROLE_PITCHER, narrowed) == ("hits_allowed", "strikeouts")
+        assert prop_markets_for(PROP_ROLE_BATTER, narrowed) == ("singles",)
+        assert prop_markets_for(PROP_ROLE_BOTH, narrowed) == narrowed
 
-    def test_fetch_prop_odds_splits_markets_by_role(self) -> None:
-        pipeline = _make_pipeline()
-        roles = {1: PROP_ROLE_PITCHER, 2: PROP_ROLE_BATTER, 3: PROP_ROLE_BOTH}
-        quotes = pipeline._fetch_prop_odds(745000, [1, 2, 3, 4], roles=roles)
-        by_player: dict[int, set[str]] = {}
-        for q in quotes:
-            by_player.setdefault(q["player_id"], set()).add(q["prop_stat"])
-        assert by_player[1] == set(PITCHER_PROP_STATS)
-        assert by_player[2] == set(BATTER_PROP_STATS)
-        assert by_player[3] == set(PROP_STATS)
-        assert by_player[4] == set(PROP_STATS)  # missing from roles → every market
-        # SIM-555: no PROP_BOOKS multiplier; the one-book mock gives one row per
-        # (player, market).
-        expected = 5 + 10 + 15 + 15
-        assert len(quotes) == expected
+    def test_hits_and_hits_allowed_never_cross(self) -> None:
+        both = ("hits", "hits_allowed")
+        assert prop_markets_for(PROP_ROLE_PITCHER, both) == ("hits_allowed",)
+        assert prop_markets_for(PROP_ROLE_BATTER, both) == ("hits",)
 
-    def test_fetch_prop_odds_without_roles_is_the_old_behaviour(self) -> None:
-        pipeline = _make_pipeline()
-        quotes = pipeline._fetch_prop_odds(745000, [1])
-        assert {q["prop_stat"] for q in quotes} == set(PROP_STATS)
+    def test_prop_offers_asks_each_role_for_its_markets(self) -> None:
+        provider = _SpyRecorded()
+        roles = {BRYCE_MILLER: PROP_ROLE_PITCHER, JULIO_RODRIGUEZ: PROP_ROLE_BATTER, 7: "both"}
+        offers = prop_offers(provider, GAME_92857, roles, line_types=("current", "closing"))
+        asked: dict[int, set[str]] = {}
+        for player_id, prop_stat, _ in provider.prop_calls:
+            asked.setdefault(player_id, set()).add(prop_stat)
+        assert asked[BRYCE_MILLER] == set(PITCHER_PROP_STATS)
+        assert asked[JULIO_RODRIGUEZ] == set(BATTER_PROP_STATS)
+        assert asked[7] == set(PROP_STATS)
+        assert {lt for _, _, lt in provider.prop_calls} == {"current", "closing"}
+        # The recording prices Miller's strikeouts and hits allowed and Rodriguez's
+        # singles; an offer with no priced row is left out.
+        stats = {(rows[0]["player_id"], rows[0]["prop_stat"]) for _, rows in offers}
+        assert stats == {
+            (BRYCE_MILLER, "strikeouts"),
+            (BRYCE_MILLER, "hits_allowed"),
+            (JULIO_RODRIGUEZ, "singles"),
+        }
+        assert all(r["source"] == "bettingpros" for _, rows in offers for r in rows)
 
     @pytest.mark.asyncio
     async def test_cycle_never_asks_a_hitter_for_a_pitcher_market(self) -> None:
         pipeline = _make_pipeline()
-        captured: list[dict] = []
-
-        async def _spy(rows: list[dict]) -> int:
-            captured.extend(rows)
-            return len(rows)
-
-        # SIM-555: the cycle persists each offer's rows in one batch.
-        pipeline._persist_prop_odds_many = AsyncMock(side_effect=_spy)
+        provider = _SpyRecorded()
+        pipeline._odds = provider
         state = {
-            "game_pk": 745000,
-            "current_pitcher_id": 999,
-            "home_lineup": [{"player_id": 1, "position": "CF"}],
+            "game_pk": GAME_92857,
+            "current_pitcher_id": BRYCE_MILLER,
+            "home_lineup": [{"player_id": JULIO_RODRIGUEZ, "position": "CF"}],
             "away_lineup": [{"player_id": 2, "position": "SS"}],
         }
-        written = await pipeline._persist_prop_odds_cycle(745000, state)
-        assert written == 5 + 10 + 10  # SIM-555: one book (the mock), no PROP_BOOKS
-        assert len(captured) == written
-        for q in captured:
-            if q["player_id"] == 999:
-                assert q["prop_stat"] in PITCHER_PROP_STATS
+        written = await pipeline._persist_prop_odds_cycle(GAME_92857, state)
+        for player_id, prop_stat, _ in provider.prop_calls:
+            if player_id == BRYCE_MILLER:
+                assert prop_stat in PITCHER_PROP_STATS
             else:
-                assert q["prop_stat"] in BATTER_PROP_STATS
+                assert prop_stat in BATTER_PROP_STATS
+        sent = [row for call in pipeline._db.executemany.await_args_list for row in call.args[1]]
+        assert written == len(sent) > 0
 
-    @pytest.mark.asyncio
-    async def test_opening_capture_accepts_roles(self) -> None:
-        pipeline = _make_pipeline()
-        captured: list[dict] = []
-        pipeline._persist_prop_odds_many = AsyncMock(
-            side_effect=lambda rows: captured.extend(rows) or len(rows)
-        )
-        written = await pipeline.capture_opening_prop_lines(
-            745000, [7], roles={7: PROP_ROLE_PITCHER}
-        )
-        assert written == len(PITCHER_PROP_STATS)  # SIM-555: one book (the mock)
-        assert {q["prop_stat"] for q in captured} == set(PITCHER_PROP_STATS)
-        assert all(q["line_type"] == "opening" for q in captured)
+
+class _SpyRecorded(Recorded92857):
+    """The recorded provider, with every prop request listed."""
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.prop_calls: list[tuple[int, str, str]] = []
+
+    def get_prop_odds_by_book(self, game_pk, player_id, prop_stat, *, line_type="current"):
+        self.prop_calls.append((int(player_id), prop_stat, line_type))
+        return super().get_prop_odds_by_book(game_pk, player_id, prop_stat, line_type=line_type)
 
 
 # ===========================================================================
@@ -806,46 +749,6 @@ class TestBettingProsLaterPageFailure:
 # ===========================================================================
 
 
-class _RecordingProvider:
-    """Records every prop request; returns a fixed non-null line.
-
-    It has only the one-row methods, so the loader reaches it through the
-    by-book helpers' fallback (SIM-555). A game row is the mock's full row for
-    the market: SIM-555's load guard refuses a row with a side missing, so a
-    bare ``home_ml`` no longer stands for "a quote".
-    """
-
-    def __init__(self) -> None:
-        self.prop_calls: list[tuple[int, int, str, str]] = []
-        self.game_calls: list[tuple[int, str, str]] = []
-
-    def get_odds(self, game_pk, *, line_type="current", market_type="moneyline"):
-        self.game_calls.append((game_pk, line_type, market_type))
-        return MockOddsAPI.get_odds(game_pk, line_type=line_type, market_type=market_type)
-
-    def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
-        self.prop_calls.append((game_pk, player_id, prop_stat, line_type))
-        return {
-            "game_pk": game_pk,
-            "player_id": player_id,
-            "prop_stat": prop_stat,
-            "line": 1.5,
-            "over_ml": -110,
-            "under_ml": -110,
-            "book": "consensus",
-            "line_type": line_type,
-            "is_sharp_book": False,
-            "source": "bettingpros",
-            "is_mock": False,
-        }
-
-
-async def _collect(rows: list[dict], sink: list[dict]) -> int:
-    """SIM-555: a batch writer stand-in — keeps the rows, returns how many."""
-    sink.extend(rows)
-    return len(rows)
-
-
 class TestLoaderSelection:
     def test_no_prop_stats_means_every_market(self) -> None:
         assert loader._select_prop_stats(None) is PROP_STATS
@@ -896,75 +799,3 @@ class TestLoaderSelection:
         assert BettingProsOddsProvider(api_key="k")._offers_cache_ttl_s == 600.0
         monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "45")
         assert loader._configure_offline_cache() == 45.0
-
-
-class TestLoaderRouting:
-    @pytest.mark.asyncio
-    async def test_new_markets_only_pass_routes_by_role(self) -> None:
-        provider = _RecordingProvider()
-        persisted: list[dict] = []
-
-        async def persist(rows):
-            return await _collect(rows, persisted)
-
-        written = await loader._load_prop_odds(
-            provider, persist, 999, [(111, True), (222, False)], prop_stats=_NEW_EIGHT
-        )
-        pitcher = {q["prop_stat"] for q in persisted if q["player_id"] == 111}
-        batter = {q["prop_stat"] for q in persisted if q["player_id"] == 222}
-        assert pitcher == {"outs_recorded", "hits_allowed"}
-        assert batter == {"singles", "doubles", "triples", "runs", "stolen_bases", "hits_runs_rbis"}
-        assert written == (2 + 6) * 2  # × opening + closing
-
-    @pytest.mark.asyncio
-    async def test_pitcher_only_and_batter_only_markets(self) -> None:
-        provider = _RecordingProvider()
-        persisted: list[dict] = []
-
-        async def persist(rows):
-            return await _collect(rows, persisted)
-
-        # A pitcher-only subset asks nothing of the hitter, and the reverse.
-        await loader._load_prop_odds(
-            provider, persist, 1, [(111, True), (222, False)], prop_stats=("hits_allowed",)
-        )
-        assert {q["player_id"] for q in persisted} == {111}
-        persisted.clear()
-        await loader._load_prop_odds(
-            provider, persist, 1, [(111, True), (222, False)], prop_stats=("hits",)
-        )
-        assert {q["player_id"] for q in persisted} == {222}
-
-    @pytest.mark.asyncio
-    async def test_line_types_narrow_the_prop_fetch(self) -> None:
-        provider = _RecordingProvider()
-        persisted: list[dict] = []
-
-        async def persist(rows):
-            return await _collect(rows, persisted)
-
-        await loader._load_prop_odds(
-            provider, persist, 1, [(111, True)], prop_stats=("strikeouts",), line_types=("closing",)
-        )
-        assert [c[3] for c in provider.prop_calls] == ["closing"]
-        assert len(persisted) == 1
-
-    @pytest.mark.asyncio
-    async def test_line_types_narrow_the_game_fetch(self) -> None:
-        provider = _RecordingProvider()
-        persisted: list[tuple[int, dict]] = []
-
-        async def persist(game_pk, rows):
-            persisted.extend((game_pk, odds) for odds in rows)
-            return len(rows)
-
-        written = await loader._load_game_odds(provider, persist, 1, line_types=("opening",))
-        # Updated on purpose 2026-09-12: the loader fetches every game market the
-        # book posts (15), not the three full-game markets it used to.
-        assert written == len(loader.GAME_MARKET_TYPES) == 15
-        assert {lt for _, lt, _ in provider.game_calls} == {"opening"}
-
-    def test_prop_stats_for_player_keeps_hits_and_hits_allowed_apart(self) -> None:
-        both = ("hits", "hits_allowed")
-        assert loader._prop_stats_for_player(True, both) == ("hits_allowed",)
-        assert loader._prop_stats_for_player(False, both) == ("hits",)

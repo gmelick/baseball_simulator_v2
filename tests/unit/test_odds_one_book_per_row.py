@@ -5,10 +5,10 @@ These tests drive the build plan's tests 1-13
 pieces they rest on:
 
   * the book vocabulary in ``betting/markets.py`` (labels, kinds, names,
-    the graded-book preference, the SQL helpers) and the by-book protocol seam;
+    the graded-book preference, the SQL helpers);
   * the BettingPros provider's one-row-per-book reads, the opener's row, the
     stamps, the first-five exclusions and the one-row methods on top;
-  * the load guard (``betting/validate.py``) and its tally;
+  * the load guard (``betting/validate.py``), its zero-price rule and its tally;
   * migration 0028, and migration 0031 (SIM-582: the archives' ``last_seen_at``).
 
 No network and no database. The provider's ``_bp_get`` / ``_mlb_get`` seams are
@@ -37,12 +37,12 @@ from betting.bettingpros.fetch_odds import (
     TWIN_PRICE_TOLERANCE,
     BettingProsOddsProvider,
     _book_line,
+    _same_line,
     _usable,
     f5_excluded_markets,
     is_f5_dated_excluded,
     twin_price_tolerance,
 )
-from betting.load import OddsProvider, odds_rows_by_book, prop_rows_by_book
 from betting.markets import (
     GAME_ODDS_FIELDS,
     GRADED_BOOK_PREFERENCE,
@@ -50,6 +50,7 @@ from betting.markets import (
     graded_book_labels,
     is_bettable,
 )
+from betting.pricing import implied_prob_from_american
 from betting.validate import (
     CLOSING_STAMP_GRACE,
     F5_TIE_IMPLIED_MAX,
@@ -64,9 +65,7 @@ from betting.validate import (
     Refusal,
     RefusalTally,
     check_row,
-    implied_probability,
 )
-from pipeline.live.ingestion.mock_odds import MockOddsAPI
 
 _ROOT = Path(__file__).resolve().parents[2]
 _FIX = _ROOT / "tests" / "fixtures" / "bettingpros"
@@ -250,97 +249,6 @@ _APPENDIX_B = _offers(
 
 def _by_book(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {r["book"]: r for r in rows}
-
-
-# ===========================================================================
-# The by-book protocol seam
-# ===========================================================================
-
-
-class _OneRowFake:
-    """A test fake with only the one-row methods (no by-book methods)."""
-
-    def get_odds(self, game_pk, *, line_type="current", market_type="moneyline"):
-        return {"game_pk": game_pk, "line_type": line_type, "market_type": market_type}
-
-    def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
-        return {"game_pk": game_pk, "player_id": player_id, "prop_stat": prop_stat}
-
-
-class _BrokenByBook(_OneRowFake):
-    """An unconfigured mock-like object: its by-book method returns a non-list."""
-
-    def get_odds_by_book(self, *args, **kwargs):
-        return object()
-
-    def get_prop_odds_by_book(self, *args, **kwargs):
-        return object()
-
-
-class TestByBookSeam:
-    def test_every_provider_conforms(self) -> None:
-        for provider in (
-            MockOddsAPI(),
-            BettingProsOddsProvider(api_key="k"),
-        ):
-            assert isinstance(provider, OddsProvider)
-            assert callable(provider.get_odds_by_book)
-            assert callable(provider.get_prop_odds_by_book)
-
-    def test_the_mock_gives_its_one_row(self) -> None:
-        mock = MockOddsAPI()
-        rows = mock.get_odds_by_book(745000, line_type="closing", market_type="total")
-        assert rows == [MockOddsAPI.get_odds(745000, line_type="closing", market_type="total")]
-        assert rows[0]["book"] == "consensus"
-        # The mock keeps its all-three-markets full-game row.
-        assert rows[0]["home_ml"] is not None and rows[0]["home_spread"] is not None
-        props = mock.get_prop_odds_by_book(745000, 101, "strikeouts", line_type="opening")
-        assert props == [MockOddsAPI.get_prop_odds(745000, 101, "strikeouts", line_type="opening")]
-
-    def test_the_mock_by_book_methods_read_a_subclass_override(self) -> None:
-        """Review fix: the by-book methods call ``self.get_odds``, so a subclass that
-        overrides the one-row method (as a static or an instance method) answers."""
-
-        class _StaticFlaky(MockOddsAPI):
-            @staticmethod
-            def get_odds(game_pk, *, line_type="current", market_type="moneyline", **kw):
-                if market_type == "f5_total":
-                    raise RuntimeError("boom")
-                return MockOddsAPI.get_odds(game_pk, line_type=line_type, market_type=market_type)
-
-        class _InstanceFlaky(MockOddsAPI):
-            def get_odds(self, game_pk, *, line_type="current", market_type="moneyline", **kw):
-                return {"game_pk": game_pk, "market_type": market_type, "fake": True}
-
-            def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current", **kw):
-                return {"player_id": player_id, "fake": True}
-
-        with pytest.raises(RuntimeError, match="boom"):
-            odds_rows_by_book(_StaticFlaky(), 745000, market_type="f5_total")
-        assert len(odds_rows_by_book(_StaticFlaky(), 745000, market_type="f1_total")) == 1
-        assert odds_rows_by_book(_InstanceFlaky(), 7, market_type="total") == [
-            {"game_pk": 7, "market_type": "total", "fake": True}
-        ]
-        assert prop_rows_by_book(_InstanceFlaky(), 7, 9, "hits") == [{"player_id": 9, "fake": True}]
-
-    def test_the_helpers_fall_back_to_the_one_row_methods(self) -> None:
-        fake = _OneRowFake()
-        assert odds_rows_by_book(fake, 7, line_type="closing", market_type="total") == [
-            {"game_pk": 7, "line_type": "closing", "market_type": "total"}
-        ]
-        assert prop_rows_by_book(fake, 7, 9, "hits", line_type="opening") == [
-            {"game_pk": 7, "player_id": 9, "prop_stat": "hits"}
-        ]
-        broken = _BrokenByBook()
-        assert len(odds_rows_by_book(broken, 7)) == 1
-        assert len(prop_rows_by_book(broken, 7, 9, "hits")) == 1
-
-    def test_the_helpers_use_the_by_book_methods(self) -> None:
-        provider = _Fixture92857()
-        rows = odds_rows_by_book(provider, 746437, line_type="closing", market_type="moneyline")
-        assert len(rows) == 10
-        props = prop_rows_by_book(provider, 746437, 682243, "strikeouts", line_type="closing")
-        assert len(props) == 8
 
 
 # ===========================================================================
@@ -714,11 +622,11 @@ def _runline(hs, hml, as_, aml, *, market="runline", line_type="closing", **extr
 
 
 class TestGuard:
-    def test_implied_probability(self) -> None:
-        assert implied_probability(150) == pytest.approx(0.40)
-        assert implied_probability(-150) == pytest.approx(0.60)
-        assert implied_probability(100) == pytest.approx(0.5)
-        assert implied_probability(-100) == pytest.approx(0.5)
+    def test_the_guard_reads_the_one_price_formula(self) -> None:
+        assert implied_prob_from_american(150) == pytest.approx(0.40)
+        assert implied_prob_from_american(-150) == pytest.approx(0.60)
+        assert implied_prob_from_american(100) == pytest.approx(0.5)
+        assert implied_prob_from_american(-100) == pytest.approx(0.5)
 
     def test_the_constants(self) -> None:
         assert PAIR_PRICE_BAND == (1.00, 1.10)
@@ -731,6 +639,7 @@ class TestGuard:
         assert TEAM_TOTAL_LINE_MAX == 1.0
         assert timedelta(minutes=15) == CLOSING_STAMP_GRACE
         assert RULES == (
+            "zero_price",
             "missing_side",
             "spread_size",
             "equal_spreads_priced_like_a_pair",
@@ -798,10 +707,81 @@ class TestGuard:
         )
 
     def test_a_row_without_side_lines_skips_the_line_rule(self) -> None:
-        # A mock or hand-built total row carries no over_line / under_line keys.
-        assert check_row(MockOddsAPI.get_odds(745000, market_type="total")) is None
-        mock_prop = MockOddsAPI.get_prop_odds(745000, 101, "strikeouts")
-        assert check_row(mock_prop) is None
+        # A recorded total row and prop row with the over_line / under_line keys removed.
+        provider = _Fixture92857()
+        total = provider.get_odds_by_book(746437, line_type="closing", market_type="total")[0]
+        prop = provider.get_prop_odds_by_book(746437, 682243, "strikeouts", line_type="closing")[0]
+        for row in (total, prop):
+            bare = {k: v for k, v in row.items() if k not in ("over_line", "under_line")}
+            assert check_row(bare) is None
+
+
+class TestZeroPrice:
+    """The first rule: BettingPros sends 0 as a placeholder for a price a book lacks."""
+
+    def test_it_is_the_first_rule(self) -> None:
+        assert RULES[0] == "zero_price"
+
+    @pytest.mark.parametrize(
+        "market_type, field",
+        [
+            ("moneyline", "home_ml"),
+            ("moneyline", "away_ml"),
+            ("total", "over_ml"),
+            ("total", "under_ml"),
+            ("runline", "home_spread_ml"),
+            ("runline", "away_spread_ml"),
+        ],
+    )
+    def test_a_recorded_game_row_with_a_zero_price_is_refused(
+        self, market_type: str, field: str
+    ) -> None:
+        rows = _Fixture92857().get_odds_by_book(
+            746437, line_type="closing", market_type=market_type
+        )
+        row = next(r for r in rows if check_row(r) is None)
+        refusal = check_row({**row, field: 0})
+        assert refusal is not None and refusal.rule == "zero_price"
+        assert field in refusal.message
+
+    def test_a_three_way_tie_price_of_zero_is_refused(self) -> None:
+        rows = _Fixture99026().get_odds_by_book(1, market_type="f1_moneyline")
+        row = next(r for r in rows if r["draw_ml"] is not None and check_row(r) is None)
+        refusal = check_row({**row, "draw_ml": 0.0})
+        assert refusal is not None and refusal.rule == "zero_price"
+
+    @pytest.mark.parametrize("field", ["over_ml", "under_ml"])
+    def test_a_recorded_prop_row_with_a_zero_price_is_refused(self, field: str) -> None:
+        rows = _Fixture92857().get_prop_odds_by_book(
+            746437, 682243, "strikeouts", line_type="closing"
+        )
+        row = next(r for r in rows if check_row(r) is None)
+        refusal = check_row({**row, field: 0})
+        assert refusal is not None and refusal.rule == "zero_price"
+
+    def test_a_missing_price_is_not_a_zero_price(self) -> None:
+        rows = _Fixture92857().get_odds_by_book(746437, line_type="closing", market_type="total")
+        refusal = check_row({**rows[0], "under_ml": None})
+        assert refusal is not None and refusal.rule == "missing_side"
+
+    def test_a_zero_line_is_not_a_price(self) -> None:
+        # A pick'em run line of 0 / 0 carries real prices: the rule reads prices only.
+        assert check_row(_runline(0, 105, 0, -125, market="f5_runline")) is None
+
+
+class TestSameLineZero:
+    """``_same_line`` compares a first-five entry with its first-inning twin."""
+
+    def test_two_zero_prices_match(self) -> None:
+        assert _same_line({"line": 0.5, "cost": 0}, {"line": 0.5, "cost": 0}, 0.0)
+
+    def test_a_zero_and_a_real_price_do_not_match(self) -> None:
+        assert not _same_line({"line": 0.5, "cost": 0}, {"line": 0.5, "cost": -110}, 1.0)
+        assert not _same_line({"line": 0.5, "cost": -110}, {"line": 0.5, "cost": 0}, 1.0)
+
+    def test_real_prices_still_match_inside_the_tolerance(self) -> None:
+        assert _same_line({"line": 0.5, "cost": -110}, {"line": 0.5, "cost": -110}, 0.0)
+        assert not _same_line({"line": 0.5, "cost": -110}, {"line": 0.5, "cost": -150}, 0.01)
 
     def test_the_first_five_rules(self) -> None:
         """Plan test 10 (the guard's two first-five rules)."""
@@ -1002,7 +982,8 @@ class TestGuard:
         draw_prob = THREE_WAY_SUM_MAX - 2 * 100 / 350
         draw = -round(100 * draw_prob / (1 - draw_prob), 6)
         row = three_way(home, away, draw)
-        assert implied_probability(home) * 2 + implied_probability(draw) == pytest.approx(1.18)
+        p_teams = implied_prob_from_american(home) * 2
+        assert p_teams + implied_prob_from_american(draw) == pytest.approx(1.18)
         assert check_row({**row, "draw_ml": draw + 0.5}) is None  # a hair under 1.18
 
     def test_the_closing_stamp_grace(self) -> None:

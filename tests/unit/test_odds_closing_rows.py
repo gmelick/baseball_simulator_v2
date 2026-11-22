@@ -43,9 +43,13 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from tests.bp_recorded import Recorded92857
+
 import betting.validate as odds_row_guard
 import pipeline.live.ingestion.constants as live_constants
 from betting.load import (
+    _odds_hash,
+    _prop_odds_hash,
     closing_candidates,
     closing_hash,
     promote_closing_game_rows,
@@ -136,7 +140,7 @@ def _game_row(
         "under_ml": None,
     }
     row.update(_prices(market, step))
-    row["odds_hash"] = LiveIngestionPipeline._odds_hash(row)
+    row["odds_hash"] = _odds_hash(row)
     return row
 
 
@@ -166,7 +170,7 @@ def _prop_row(
         "over_ml": -115 - step,
         "under_ml": -105 + step,
     }
-    row["odds_hash"] = LiveIngestionPipeline._prop_odds_hash(row)
+    row["odds_hash"] = _prop_odds_hash(row)
     return row
 
 
@@ -293,7 +297,7 @@ class TestOneClosingRowPerMarketAndBook:
         assert len({(by_id[i]["market_type"], by_id[i]["book"]) for i, _ in picks}) == 180
         for row_id, new_hash in picks:
             row = by_id[row_id]
-            assert new_hash == LiveIngestionPipeline._odds_hash({**row, "line_type": "closing"})
+            assert new_hash == _odds_hash({**row, "line_type": "closing"})
             assert new_hash != row["odds_hash"]
 
     @pytest.mark.asyncio
@@ -312,10 +316,8 @@ class TestOneClosingRowPerMarketAndBook:
         row = _game_row(1, "f5_moneyline", "bp:12", FETCHES[-1])
         [(row_id, new_hash)] = closing_candidates([row], scheduled_start=SCHEDULED_START)
         assert row_id == 1
-        assert new_hash == LiveIngestionPipeline._odds_hash({**row, "line_type": "closing"})
-        assert new_hash != LiveIngestionPipeline._odds_hash(
-            {**row, "line_type": "closing", "draw_ml": None}
-        )
+        assert new_hash == _odds_hash({**row, "line_type": "closing"})
+        assert new_hash != _odds_hash({**row, "line_type": "closing", "draw_ml": None})
 
 
 # ===========================================================================
@@ -533,7 +535,7 @@ class TestExistingLoaderRow:
             "line_type": "closing",
             "fetched_at": FIRST_PITCH + timedelta(hours=14),
         }
-        loader_row["odds_hash"] = LiveIngestionPipeline._odds_hash(loader_row)
+        loader_row["odds_hash"] = _odds_hash(loader_row)
         db = _FakeOddsDb([promoted, loader_row])
         assert await promote_closing_game_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=None) == 0
         assert promoted["line_type"] == "current"
@@ -562,12 +564,10 @@ class TestExistingLoaderRow:
             "over_ml": float(written["over_ml"]),
             "under_ml": float(written["under_ml"]),
         }
-        stored = {**written, "odds_hash": LiveIngestionPipeline._odds_hash(as_written)}
+        stored = {**written, "odds_hash": _odds_hash(as_written)}
         loaders_row = {**as_written, "line_type": "closing"}
-        assert closing_hash(stored) == LiveIngestionPipeline._odds_hash(loaders_row)
-        assert closing_hash(stored) != LiveIngestionPipeline._odds_hash(
-            {**written, "line_type": "closing"}
-        )
+        assert closing_hash(stored) == _odds_hash(loaders_row)
+        assert closing_hash(stored) != _odds_hash({**written, "line_type": "closing"})
 
     def test_a_row_with_no_stored_hash_takes_the_loader_typing(self) -> None:
         row = {**_game_row(1, "total", "bp:12", FETCHES[-1]), "odds_hash": None}
@@ -577,7 +577,7 @@ class TestExistingLoaderRow:
             "over_ml": float(row["over_ml"]),
             "under_ml": float(row["under_ml"]),
         }
-        assert closing_hash(row) == LiveIngestionPipeline._odds_hash(float_typed)
+        assert closing_hash(row) == _odds_hash(float_typed)
 
 
 # ===========================================================================
@@ -605,9 +605,7 @@ class TestPropsPromote:
         for row_id, new_hash in picks:
             row = by_id[row_id]
             assert row["fetched_at"] == FETCHES[-1]
-            assert new_hash == LiveIngestionPipeline._prop_odds_hash(
-                {**row, "line_type": "closing"}
-            )
+            assert new_hash == _prop_odds_hash({**row, "line_type": "closing"})
         db = _FakeOddsDb(rows)
         assert await promote_closing_prop_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=None) == 36
         assert await promote_closing_prop_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=None) == 0
@@ -858,12 +856,12 @@ class TestLoaderGameDates:
             return []
 
         monkeypatch.setattr(loader, "_fetch_final_games", _fetch)
+        monkeypatch.setattr(loader, "odds_source", Recorded92857)
+        monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "0")
         args = loader.parse_args(
             [
                 "--seasons",
                 "2026",
-                "--provider",
-                "mock",
                 "--line-types",
                 "closing",
                 "--game-dates",
@@ -892,7 +890,7 @@ def _run_script(tmp_path: Path, **env_over: str) -> tuple[subprocess.CompletedPr
         newline="\n",
     )
     fake.chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if k not in ("ODDS_PROVIDER", "ODDS_API_KEY")}
+    env = {k: v for k, v in os.environ.items() if k != "ODDS_API_KEY"}
     env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
     env.setdefault("BASEBALL_DB_DSN", "postgresql://u:dummy_pw@db:5432/x")
     env.update(env_over)
@@ -910,23 +908,16 @@ def _run_script(tmp_path: Path, **env_over: str) -> tuple[subprocess.CompletedPr
 
 @pytest.mark.skipif(_SH is None, reason="no POSIX sh on this host")
 class TestNightlyScript:
-    def test_nightly_script_skips_the_mock_provider(self, tmp_path: Path) -> None:
+    def test_without_a_key_the_script_fails_loudly(self, tmp_path: Path) -> None:
         proc, record = _run_script(tmp_path)
-        assert proc.returncode == 0, proc.stderr
-        assert "skipped" in proc.stdout and "unset" in proc.stdout
-        assert not record.exists()  # the loader never ran: nothing written
-        proc, record = _run_script(tmp_path, ODDS_PROVIDER="mock")
-        assert proc.returncode == 0, proc.stderr
-        assert not record.exists()
-
-    def test_the_real_provider_without_a_key_fails_loudly(self, tmp_path: Path) -> None:
-        proc, record = _run_script(tmp_path, ODDS_PROVIDER="bettingpros")
         assert proc.returncode == 1
         assert "ODDS_API_KEY is not set" in proc.stdout
-        assert not record.exists()
+        assert not record.exists()  # the loader never ran: nothing written
 
-    def test_the_real_provider_runs_the_closing_pass_over_two_dates(self, tmp_path: Path) -> None:
-        proc, record = _run_script(tmp_path, ODDS_PROVIDER="BettingPros", ODDS_API_KEY="k")
+    def test_the_script_runs_the_opening_and_closing_pass_over_two_dates(
+        self, tmp_path: Path
+    ) -> None:
+        proc, record = _run_script(tmp_path, ODDS_API_KEY="k")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         args = record.read_text(encoding="utf-8").split()
         assert args[:2] == ["-m", "betting.history"]
@@ -934,9 +925,9 @@ class TestNightlyScript:
         d1, d2 = today - timedelta(days=1), today - timedelta(days=2)
         i = args.index("--game-dates")
         assert args[i + 1 : i + 3] == [d1.isoformat(), d2.isoformat()]
-        assert args[args.index("--line-types") + 1] == "closing"
-        assert args[args.index("--provider") + 1] == "bettingpros"
-        assert str(d1.year) in args[args.index("--seasons") + 1 : i]
+        j = args.index("--line-types")
+        assert args[j + 1 : j + 3] == ["opening", "closing"]
+        assert str(d1.year) in args[args.index("--seasons") + 1 : j]
 
 
 def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
@@ -957,7 +948,7 @@ def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
     # bundle (SIM-563).
     assert "schedule = 0 30 10 * * *" in job
     assert "container = baseball_simulator_v2-app-1" in job
-    assert "command = env ODDS_PROVIDER=bettingpros sh /app/scripts/nightly_closing_lines.sh" in job
+    assert "command = sh /app/scripts/nightly_closing_lines.sh" in job
     assert "volume" not in job
     assert "image =" not in job
     # The vendor key is a secret: it never sits in the committed config.

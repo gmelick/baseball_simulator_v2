@@ -1,8 +1,9 @@
 """The load guard: it refuses an odds row that cannot be one bet.
 
-Both writers (the historical loader and the live cycle) call :func:`check_row`
-on every non-empty row before they write it. The writer logs a refused row,
-skips it, and counts it in a :class:`RefusalTally`. The module does no I/O.
+The one load path (:func:`betting.load.keep_rows`) calls :func:`check_row` on
+every priced row before the write. It logs a refused row, skips it, and counts it
+in a :class:`RefusalTally`. The API's stored-odds read calls :func:`check_row`
+again. The module does no I/O.
 
 An implied probability is the chance a price stands for: 100 / (price + 100)
 for a plus price, -price / (-price + 100) for a minus price. The sum over the
@@ -10,6 +11,8 @@ sides of one market is 1 plus the vig (the vig: the book's margin).
 
 The rules (the audit docs ``docs/audit/2026-09-25-sim555-*.md`` hold the evidence):
 
+* ``zero_price``: a price of 0. BettingPros sends 0 as a placeholder for a price
+  a book does not offer; no American price is 0.
 * ``missing_side``: a side has no price, or a total has no line.
 * ``spread_size``: a run line with spreads of two sizes (-1 / +1.5). No book posts that pair.
 * ``equal_spreads_priced_like_a_pair``: equal non-zero spreads whose prices add

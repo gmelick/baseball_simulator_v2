@@ -7,7 +7,8 @@ appearance. ``create_app`` serves it on its own (the ``live`` service, which
 publishes to Redis); the API mounts ``ws_router``. The parts live in
 ``pipeline/live/ingestion/``: the settings, the odds cycle's timing, the
 game-state builder, the WebSocket parts and the game-odds and prop-odds mixins.
-The odds load itself is :func:`betting.load.load_odds`.
+The odds load itself is in :mod:`betting.load` (``game_offers``, ``prop_offers``
+and ``write_offers``).
 
 The flow
 --------

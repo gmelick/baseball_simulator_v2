@@ -1,178 +1,55 @@
 #!/usr/bin/env python
-"""
-betting/history.py
-===============================
-The historical odds loader. It backfills the OPENING and CLOSING betting lines
-of completed games into ``raw.game_odds`` / ``raw.prop_odds``, so the
-accuracy comparison has an entry line and a closing line to score against.
+"""Load the odds of finished games: the nightly pass and the backfills.
 
-WHY
----
-The accuracy comparison needs, per completed game, an entry (opening) line and a
-closing line. The live pipeline captures these lines going forward (the live closing
-marker), but it holds no history. This script walks the Final games already in
-``raw.games`` and pulls their opening + closing lines from the configured odds
-provider (BettingPros by default — set ``ODDS_PROVIDER=bettingpros`` +
-``ODDS_API_KEY``). It persists them through the SAME write path the live
-pipeline uses, so the odds_hash ON CONFLICT dedup keeps re-runs idempotent.
+The loader walks the Final games in ``raw.games`` and loads each game's odds into
+``raw.game_odds`` and ``raw.prop_odds`` through :func:`betting.load.load_odds`. It
+loads the opening and the closing line by default (``--line-types``). BettingPros
+returns each market's opener with every offer, so the loader recovers an opening
+line at any time.
 
-WHAT IT WRITES
---------------
-ONE ROW PER BOOK. The provider's payload lists every book's line on every
-side; the loader stores each book's prices as its own row, labelled
-``book = 'bp:<id>'`` (the BettingPros id; ``bp:0`` is the vendor's blended
-line, stored and never graded) and stamped ``book_line_at`` (the vendor's
-stamp on the line; migration 0028). A row never mixes two books.
+What it writes. Each book's prices go to their own row, labelled ``book = 'bp:<id>'``
+(``bp:0`` is the vendor's blended line, stored and never graded). A closing row is
+written for every book that prices every side of the market. An opening row is
+written only for the opener, the one book that opened every side. The loader asks a
+pitcher for the pitcher markets and every other player for the batter markets
+(:func:`betting.markets.prop_markets_for`); the roles come from ``raw.game_lineups``.
+The load guard (:mod:`betting.validate`) checks each row before the write, and the
+odds hash makes a rerun write nothing new. The run ends with the guard's summary,
+the rows written per book, and a warning when the guard refused more than 5% of
+the rows.
 
-Per Final game (ordered by game_pk for reproducibility), for each line type
-(``opening`` and ``closing`` by default):
-  * game odds: every game market the book posts (the three full-game markets
-    plus the twelve segment and team markets; owner ruling 2026-09-12,
-    SIM-421). ``closing``: one ``raw.game_odds`` row per book that quotes
-    every side of the market.
-    ``opening``: at most one row, the opener's (none when the sides name two
-    openers). Each market fills only its own columns.
-  * prop odds: the same per (player, prop_stat) for every player in the game's
-    lineup. The pitcher markets (``PITCHER_PROP_STATS``: strikeouts /
-    earned_runs / walks / outs_recorded / hits_allowed) are fetched only for
-    pitchers; the batter markets (``BATTER_PROP_STATS``: hits / home_runs /
-    total_bases / rbis / singles / doubles / triples / runs / stolen_bases /
-    hits_runs_rbis) only for non-pitchers. Both tuples come from
-    ``betting/markets.py`` (the one source of the vocabulary).
+Retries. ``--retries`` (default 3) and ``--retry-wait`` (default 5 s, doubled per
+retry, at most 60 s) set the provider's retry policy for each vendor read. The live
+service keeps the provider's default of one attempt.
 
-Before a row is written, the load guard (``betting/validate.py``)
-checks it. A row with no price at all is skipped silently. A row that cannot
-be one bet (a missing side, spreads of different size, equal spreads priced
-like a pair, a first-five row with a first-inning shape, an over and an under
-at two lines, a closing line stamped more than 15 minutes after the scheduled
-start) is refused: it is logged at INFO and counted by rule, market and book.
-The kept rows of one offer (one market, or one player's market, at one line
-type) go to the database in ONE ``executemany``. The run ends with the guard's
-summary, the rows written per book, and a WARNING when the guard refused more
-than 5% of the rows it saw.
+Incomplete games and the resume. A game is incomplete when a vendor read failed
+after its retries, or when the loader caught a failed fetch or write. Its rows so
+far stay written. ``--done-file`` lists each complete game, forced to disk, and a
+later run skips the games it lists, so a rerun loads only the incomplete ones.
+``--skip-loaded-since`` skips every game that already holds rows from this kind of
+run since that instant. It also skips an incomplete game with rows, so resume with
+``--done-file`` alone to fill those.
 
-``--book NAME`` (``draftkings``, ``DraftKings``, ``bp:12``) restricts a run to
-that one book's rows (a smoke run, or a top-up of one book). An unknown name
-stops the run before any fetch.
+Exit codes: 0 when every game is complete; 1 (``EXIT_INCOMPLETE``) when at least
+one game is incomplete, or on an uncaught error; 2 on a usage error.
 
-RETRIES AND INCOMPLETE GAMES
-----------------------------
-A vendor read can fail for a passing reason: a time-out, or a burst of HTTP
-502 / 503 answers. The BettingPros provider catches such a failure, logs a
-WARNING and goes on with an empty or partial result. A game listed in the
-done-file after such a failure would keep a silent, permanent gap. Two
-defences close the gap:
+The offers cache. The job sets ``ODDS_OFFERS_CACHE_TTL_S`` to 600 s when it is
+unset (the live service uses 30 s). A finished game's lines do not move, so one
+fetch per market serves every player of the game.
 
-  * The loader hands the provider a retry policy. ``--retries`` (default 3)
-    sets the retries per read; ``--retry-wait`` (default 5 s) sets the wait
-    before the first retry, and each later wait is twice as long (the provider
-    caps one wait at 60 s). The provider's own default stays one attempt, so
-    the live pipeline and the opening-line job keep their behaviour. The mock
-    does not retry, and the loader logs that once.
-  * The provider counts each read it caught and gave up on
-    (``read_failures``). The loader counts each fetch error and each write
-    error it caught itself. A game whose counts grew is INCOMPLETE: its rows
-    so far stay written, the loader does NOT list it in the done-file, and one
-    WARNING names it. The run ends with the number of incomplete games and up
-    to 20 of their game_pks. A legitimate absence (no event on the vendor's
-    slate, no offer for a player) is not a failed read: that game is finished.
-    Before each game the loader calls the provider's
-    ``forget_failed_lookups``. A failed player lookup is stored for the cache
-    time-to-live (600 s here) and counted once; without the call, a later game
-    with the same player gets the stored failure with no count.
+Usage (``ODDS_API_KEY`` and ``BASEBALL_DB_DSN`` come from ``.env``; without the
+key every vendor read fails and every game is incomplete)::
 
-Exit codes: 0 = every game loaded; 1 = at least one game is incomplete
-(``EXIT_INCOMPLETE``; an uncaught exception also exits 1); 2 = a usage error
-(a bad flag, or the mock without ``--provider mock``). The crash-safe form
-runs the loader inside a shell loop, one loop per season, with
-``--done-file``. The loop runs the loader at most 30 times in all, a minute
-apart, and stops on exit 0 or 2. Each later run skips the finished games, so
-it loads only the incomplete ones again. A game whose read fails on every run
-stays on the list after the last one. A run without ``--done-file`` only
-reports the list. ``--skip-loaded-since`` drops a game that already holds
-rows before the done-file is read, so it skips an incomplete game with rows
-too; resume with ``--done-file`` alone to load those again.
-
-Persistence reuses ``LiveIngestionPipeline._persist_odds_many`` /
-``_persist_prop_odds_many`` (so the ``odds_hash`` dedup and the
-``raw.prop_odds`` CHECK constraint apply unchanged). The loader builds the
-pipeline WITHOUT starting it (no Redis / WS / HTTP loop). It attaches its own
-asyncpg pool to ``pipeline._db`` and calls the two persist coroutines directly.
-
-USAGE
------
-    # From the host, with this checkout's scripts/ mounted over the
-    # image's copy (scripts/ is not bind-mounted) and the provider named:
-    MSYS_NO_PATHCONV=1 docker compose run -d --name odds_load_2024 \
-        -v "$PWD:/app" app \
-        python -m betting.history --seasons 2024 --provider bettingpros
-
-    # The crash-safe form the shell loop runs. --done-file skips the
-    # games the file lists and appends each game once it is complete;
-    # --retries / --retry-wait set the vendor-read retry policy (the values
-    # shown are the defaults). Exit 1 = some game is incomplete (see above).
-    python -m betting.history --seasons 2024 --provider bettingpros
-        --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
-
-    # In the app container, with a real provider configured:
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=… \
-        python -m betting.history --seasons 2024 --max-games 200
-    python -m betting.history --seasons 2023 2024            # game + prop
-    python -m betting.history --seasons 2024 --no-props      # game odds only
-
-    # A follow-up pass: fetch ONLY these eight prop markets for a season whose
-    # other seven markets are already loaded. The game lines are skipped
-    # (--no-game-odds); a re-run is idempotent through the odds_hash dedup.
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
-        --seasons 2024 --no-game-odds
-        --prop-stats singles doubles triples runs stolen_bases hits_runs_rbis
-                     outs_recorded hits_allowed
-
-    # --prop-stats takes any subset of the 15-market vocabulary (an unknown value
-    # stops the run before any fetch); --line-types defaults to "opening closing".
-
-    # One book only (a smoke run, or a top-up of one book's rows):
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
-        --seasons 2024 --max-games 20 --book draftkings
-
-    # The nightly closing pass (scripts/nightly_closing_lines.sh) loads
-    # the closing rows of two official dates only, after the live marker ran:
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
-        --seasons 2026 --line-types closing --game-dates 2026-10-08 2026-10-07
-
-    # Every game market the book posts loads by default (owner ruling
-    # 2026-09-12, SIM-421): the three full-game markets plus the twelve segment
-    # and team markets (first-inning / first-five moneyline, total, run line;
-    # each side's full-game and first-five team total; first team to score;
-    # a run in the first inning). --game-markets narrows the set the same way
-    # --prop-stats does, e.g. a pass for the twelve segment and team markets:
-    ODDS_PROVIDER=bettingpros ODDS_API_KEY=... python -m betting.history
-        --seasons 2024 --no-props
-        --game-markets f1_moneyline f5_moneyline f1_total f5_total f1_runline
-                       f5_runline team_total_home team_total_away
-                       f5_team_total_home f5_team_total_away first_to_score
-                       first_inning_run
-
-    # Via a Makefile wrapper (mirror make validate-props):
     make load-historical-odds FLAGS="--seasons 2024 --max-games 200"
-
-This is an OFFLINE backfill job. It is network-bound; cap a smoke run with
-``--max-games``. The job refuses the deterministic MockOddsAPI unless
-``--provider mock`` is on the command line. The registry's default is the
-mock, and the mock writes made-up prices: without the refusal, a run with no
-``--provider`` would write them into a real season. The app container reads
-``ODDS_PROVIDER`` and ``ODDS_API_KEY`` from the stack's ``.env``
-(bettingpros). The unit-test lane pins the mock in ``tests/conftest.py``.
-``--provider mock`` gives the no-network synthetic-line smoke / wiring
-check.
-
-The BettingPros provider caches one ``/offers`` response per (event, market)
-for a time-to-live. The live pipeline needs a short one (30 s) so a
-60-second cycle never re-uses a stale line. This job does not: its games are
-over, their lines are final, and every player x market x line type of one game
-is requested back-to-back. The job therefore sets ``ODDS_OFFERS_CACHE_TTL_S``
-to ``OFFLINE_OFFERS_CACHE_TTL_S`` (600 s) when the variable is unset, which
-collapses a game's several hundred prop requests into one fetch per market.
+    python -m betting.history --seasons 2024
+    python -m betting.history --seasons 2024 --no-props
+    python -m betting.history --seasons 2024 --no-game-odds --prop-stats singles doubles
+    python -m betting.history --seasons 2024 --max-games 20 --book draftkings
+    python -m betting.history --seasons 2024 \
+        --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
+    # The nightly pass (scripts/nightly_closing_lines.sh):
+    python -m betting.history --seasons 2026 --line-types opening closing \
+        --game-dates 2026-10-08 2026-10-07
 """
 
 from __future__ import annotations
@@ -189,9 +66,7 @@ from typing import Any
 
 from betting.load import load_odds, odds_source
 
-# The prop-market vocabulary is imported, never copied: the pitcher / batter
-# split routes which markets a player is asked for. The book vocabulary and the
-# by-book seam come from the same source.
+# The market and book vocabulary is imported, never copied.
 from betting.markets import (
     BOOK_IDS_BY_NAME,
     GAME_MARKET_TYPES,
@@ -216,8 +91,8 @@ log = logging.getLogger("betting.history")
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
-#: line_types to backfill by default (entry + closing — the two CLV reference
-#: points). ``--line-types`` overrides it with any subset of KNOWN_LINE_TYPES.
+#: The line types a run loads by default: the opening and the closing line.
+#: ``--line-types`` overrides it with any subset of KNOWN_LINE_TYPES.
 LINE_TYPES: tuple[str, ...] = ("opening", "closing")
 KNOWN_LINE_TYPES: tuple[str, ...] = ("opening", "current", "closing")
 
@@ -241,9 +116,6 @@ _PITCHER_POSITIONS = frozenset({"P", "SP", "RP", "1"})
 #: rows it saw.
 REFUSAL_WARN_SHARE = 0.05
 
-#: The odds fields of a prop row; a row with all three empty is not a quote.
-_PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
-
 #: The vendor-read retry policy this job hands the provider
 #: (``--retries`` / ``--retry-wait``). The provider's own default is one
 #: attempt, so the live pipeline keeps it; this offline job can afford to wait.
@@ -254,7 +126,7 @@ DEFAULT_RETRY_WAIT_S = 5.0
 #: failed after its retries). An uncaught exception also exits 1 (Python's
 #: exit status after a traceback). The crash-safe shell loop runs the loader
 #: again a minute later on both. 0 = every game loaded;
-#: 2 = a usage error (the parser's, or the refused mock), never run again.
+#: 2 = a usage error (the parser's), never run again.
 EXIT_INCOMPLETE = 1
 
 #: The end-of-run summary names at most this many incomplete games.
@@ -350,9 +222,8 @@ def _select_retry_policy(retries: int, retry_wait_s: float) -> tuple[int, float]
 def _hand_over_retry_policy(provider: Any, retries: int, retry_wait_s: float) -> None:
     """Give the provider this run's retry policy, when it takes one.
 
-    The BettingPros provider takes it through ``set_retry_policy``. The mock
-    and the test fakes have no such method; the loader logs that once and
-    goes on.
+    The BettingPros provider takes it through ``set_retry_policy``. A test
+    fake has no such method; the loader logs that once and goes on.
     """
     set_policy = getattr(provider, "set_retry_policy", None)
     if not callable(set_policy):
@@ -373,9 +244,9 @@ def _read_failures(provider: Any) -> int:
     """The provider's count of the failed reads it caught (0 if it keeps none).
 
     The BettingPros provider adds 1 to ``read_failures`` each time it catches a
-    failed read and goes on with an empty or partial result. The mock keeps no
-    count. A value that is not a whole number (a ``MagicMock`` attribute)
-    counts as 0.
+    failed read and goes on with an empty or partial result. A test fake may
+    keep no count. A value that is not a whole number (a ``MagicMock``
+    attribute) counts as 0.
     """
     value = getattr(provider, "read_failures", 0)
     if isinstance(value, bool) or not isinstance(value, int):
@@ -389,18 +260,12 @@ def _forget_failed_lookups(provider: Any) -> None:
     The BettingPros provider stores a failed player lookup for one cache
     time-to-live (600 s here) and counts it once. A later game that names the
     same player inside that window would get the stored failure with no new
-    count, and go on the done-list without the player's props. The mock and
-    the test fakes have no such method.
+    count, and go on the done-list without the player's props. A test fake
+    may have no such method.
     """
     forget = getattr(provider, "forget_failed_lookups", None)
     if callable(forget):
         forget()
-
-
-def _count_failure(failures: Counter[str] | None, step: str) -> None:
-    """Count one fetch or write the loader caught (``None`` counts nothing)."""
-    if failures is not None:
-        failures[step] += 1
 
 
 def _incomplete_reasons(failed_reads: int, caught: Mapping[str, int]) -> str:
@@ -455,7 +320,7 @@ def _configure_offline_cache() -> float:
 
     Only sets ``ODDS_OFFERS_CACHE_TTL_S`` when the operator left it unset, so an
     explicit value always wins. The provider reads the variable when it is
-    built (``get_odds_provider``), so this runs before that call.
+    built (:func:`betting.load.odds_source`), so this runs before that call.
     """
     os.environ.setdefault(_OFFERS_CACHE_TTL_ENV, str(OFFLINE_OFFERS_CACHE_TTL_S))
     return float(os.environ[_OFFERS_CACHE_TTL_ENV])

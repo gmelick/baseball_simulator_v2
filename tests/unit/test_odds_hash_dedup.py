@@ -1,7 +1,7 @@
 """The live pipeline stores a game-odds quote once: ``raw.game_odds`` carries
 an ``odds_hash`` (SHA-256 of the quote) and a partial unique index on
-(game_pk, source, odds_hash), and ``_persist_odds`` inserts with
-ON CONFLICT … DO NOTHING."""
+(game_pk, source, odds_hash), and ``betting.load.insert_game_odds_rows`` inserts
+with ON CONFLICT … DO NOTHING."""
 
 from __future__ import annotations
 
@@ -57,9 +57,9 @@ class TestOddsDedup:
     # ----- Hash function semantics -----
 
     def test_odds_hash_is_deterministic(self) -> None:
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
-        h1 = LiveIngestionPipeline._odds_hash(
+        h1 = _odds_hash(
             {
                 "home_ml": -150,
                 "away_ml": 130,
@@ -71,7 +71,7 @@ class TestOddsDedup:
                 "is_sharp_book": False,
             }
         )
-        h2 = LiveIngestionPipeline._odds_hash(
+        h2 = _odds_hash(
             {
                 "home_ml": -150,
                 "away_ml": 130,
@@ -87,7 +87,7 @@ class TestOddsDedup:
         assert len(h1) == 64, "SHA-256 hex digest must be 64 chars"
 
     def test_odds_hash_changes_when_line_moves(self) -> None:
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
         base = {
             "home_ml": -150,
@@ -99,30 +99,30 @@ class TestOddsDedup:
             "market_type": "moneyline",
             "is_sharp_book": False,
         }
-        h0 = LiveIngestionPipeline._odds_hash(base)
-        h1 = LiveIngestionPipeline._odds_hash({**base, "home_ml": -160})
+        h0 = _odds_hash(base)
+        h1 = _odds_hash({**base, "home_ml": -160})
         assert h0 != h1, "Line move must produce a different hash"
 
     def test_odds_hash_normalizes_float_precision(self) -> None:
         """1.5 and 1.50 must hash identically — same line."""
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
-        h1 = LiveIngestionPipeline._odds_hash({"home_spread": 1.5})
-        h2 = LiveIngestionPipeline._odds_hash({"home_spread": 1.50})
+        h1 = _odds_hash({"home_spread": 1.5})
+        h2 = _odds_hash({"home_spread": 1.50})
         assert h1 == h2
 
     def test_odds_hash_independent_of_dict_order(self) -> None:
         """Iteration order of the source dict must not change the hash."""
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
-        a = LiveIngestionPipeline._odds_hash(
+        a = _odds_hash(
             {
                 "home_ml": -150,
                 "away_ml": 130,
                 "total_line": 8.5,
             }
         )
-        b = LiveIngestionPipeline._odds_hash(
+        b = _odds_hash(
             {
                 "total_line": 8.5,
                 "away_ml": 130,
@@ -133,15 +133,15 @@ class TestOddsDedup:
 
     def test_odds_hash_differs_by_book(self) -> None:
         """Two books at the same price are still distinct quotes."""
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
-        h_consensus = LiveIngestionPipeline._odds_hash(
+        h_consensus = _odds_hash(
             {
                 "home_ml": -150,
                 "book": "consensus",
             }
         )
-        h_pinnacle = LiveIngestionPipeline._odds_hash(
+        h_pinnacle = _odds_hash(
             {
                 "home_ml": -150,
                 "book": "pinnacle",
@@ -151,74 +151,50 @@ class TestOddsDedup:
 
     def test_odds_hash_handles_missing_keys_consistently(self) -> None:
         """A payload missing every key still hashes — to a stable value."""
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        from betting.load import _odds_hash
 
-        h1 = LiveIngestionPipeline._odds_hash({})
-        h2 = LiveIngestionPipeline._odds_hash({})
+        h1 = _odds_hash({})
+        h2 = _odds_hash({})
         assert h1 == h2 and len(h1) == 64
 
-    # ----- _persist_odds() integration -----
+    # ----- insert_game_odds_rows() integration -----
 
-    def test_persist_odds_writes_hash_and_uses_on_conflict(self) -> None:
-        """_persist_odds() passes odds_hash as the LAST positional argument
+    def test_insert_writes_hash_last_and_uses_on_conflict(self) -> None:
+        """The game-odds insert passes odds_hash as the LAST positional argument
         (book_line_at comes just before it), and its INSERT uses
-        ON CONFLICT … DO NOTHING."""
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+        ON CONFLICT … DO NOTHING. The row is a real recorded BettingPros row."""
+        from tests.bp_recorded import GAME_92857, recorded_game_rows
 
-        pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
-        pipeline._db = MagicMock()
-        pipeline._db.execute = AsyncMock()
+        from betting.load import _odds_hash, insert_game_odds_rows
 
-        odds_payload = {
-            "source": "mock",
-            "is_mock": True,
-            "book": "consensus",
-            "line_type": "current",
-            "market_type": "moneyline",
-            "is_sharp_book": False,
-            "home_ml": -150,
-            "away_ml": 130,
-            "home_spread": -1.5,
-            "home_spread_ml": -110,
-            "away_spread": 1.5,
-            "away_spread_ml": -110,
-            "total_line": 8.5,
-            "over_ml": -110,
-            "under_ml": -110,
-        }
+        row = recorded_game_rows("moneyline")[0]
+        conn = MagicMock()
+        conn.executemany = AsyncMock()
 
-        asyncio.run(pipeline._persist_odds(745001, odds_payload))
+        asyncio.run(insert_game_odds_rows(conn, GAME_92857, [row]))
 
-        assert pipeline._db.execute.call_count == 1
-        call = pipeline._db.execute.call_args
-        sql_text = call.args[0]
-        assert "ON CONFLICT" in sql_text and "DO NOTHING" in sql_text, (
-            "SIM-092: _persist_odds must use ON CONFLICT … DO NOTHING"
-        )
-        assert "odds_hash" in sql_text, "SIM-092: INSERT must include odds_hash column"
-        # The last positional argument is the hash: a 64-character hex string.
-        actual_hash = call.args[-1]
+        assert conn.executemany.call_count == 1
+        sql_text, args = conn.executemany.call_args.args
+        assert "ON CONFLICT" in sql_text and "DO NOTHING" in sql_text
+        assert "odds_hash" in sql_text
+        actual_hash = args[0][-1]
         assert isinstance(actual_hash, str) and len(actual_hash) == 64
-        # It equals _odds_hash() of the same payload.
-        expected = LiveIngestionPipeline._odds_hash(odds_payload)
-        assert actual_hash == expected, (
-            "SIM-092: _persist_odds must use _odds_hash() to compute the value"
-        )
+        assert actual_hash == _odds_hash(dict(row))
 
-    def test_persist_odds_identical_call_produces_same_hash(self) -> None:
-        """Two identical _persist_odds() calls produce two identical hashes
-        passed to PostgreSQL; the unique index is what dedupes server-side."""
-        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+    def test_an_identical_row_sent_twice_carries_the_same_hash(self) -> None:
+        """Two identical inserts pass identical hashes to PostgreSQL; the unique
+        index is what dedupes server-side."""
+        from tests.bp_recorded import GAME_92857, recorded_game_rows
 
-        pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
-        pipeline._db = MagicMock()
-        pipeline._db.execute = AsyncMock()
+        from betting.load import insert_game_odds_rows
 
-        payload = {"home_ml": -150, "away_ml": 130, "total_line": 8.5}
-        asyncio.run(pipeline._persist_odds(745001, payload))
-        asyncio.run(pipeline._persist_odds(745001, payload))
+        row = recorded_game_rows("total")[0]
+        conn = MagicMock()
+        conn.executemany = AsyncMock()
+        asyncio.run(insert_game_odds_rows(conn, GAME_92857, [row]))
+        asyncio.run(insert_game_odds_rows(conn, GAME_92857, [row]))
 
-        assert pipeline._db.execute.call_count == 2
-        h1 = pipeline._db.execute.call_args_list[0].args[-1]
-        h2 = pipeline._db.execute.call_args_list[1].args[-1]
+        assert conn.executemany.call_count == 2
+        h1 = conn.executemany.call_args_list[0].args[1][0][-1]
+        h2 = conn.executemany.call_args_list[1].args[1][0][-1]
         assert h1 == h2

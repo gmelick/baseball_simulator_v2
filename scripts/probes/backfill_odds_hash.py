@@ -49,11 +49,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-# `LiveIngestionPipeline._odds_hash` is the canonical hash function — reuse
-# it so backfill hashes are byte-identical to live-pipeline hashes.
+# `betting.load._odds_hash` is the one hash function — reuse it so backfill
+# hashes are byte-identical to the writers' hashes.
 import asyncpg  # noqa: E402
 
-from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
+from betting.load import _odds_hash  # noqa: E402
 
 log = logging.getLogger("backfill_odds_hash")
 
@@ -114,7 +114,7 @@ async def _backfill_hashes(conn: asyncpg.Connection, dry_run: bool) -> int:
         updates = []
         for r in rows:
             payload = {k: r[k] for k in ODDS_COLUMNS}
-            h = LiveIngestionPipeline._odds_hash(payload)
+            h = _odds_hash(payload)
             updates.append((r["id"], h))
 
         if dry_run:
