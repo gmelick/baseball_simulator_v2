@@ -1,3 +1,75 @@
+# BUILT, ready to merge — the odds and the pricing move into one betting folder, with one load path and no made-up prices — SIM-645, 2026-11-23
+
+**Why it matters.** The odds code lived in five places. The owner asked for one folder that
+follows the steps of the work, so a reader finds each step in one file. The review behind the
+plan (`docs/audit/2026-11-21-sim645-betting-folder-plan.md`) found three more problems. The
+mock odds source made up prices, and the API's pricing route computed edges and bet signals
+from them. The three odds callers repeated one another's fetch, keep, check and write steps.
+The opening-line job had no schedule, so it never ran. The branch removes all three.
+
+**Step A: the move, with no behaviour change (Data Engineer).**
+
+- `betting/` now holds the whole odds path, one file per step: `markets.py` (our market
+  names), `bettingpros/match_games.py` (the HTTP client, BettingPros' games and the match to
+  the MLB schedule), `bettingpros/fetch_odds.py` (the market ids, the first-five rules, the
+  offer reading and the row building), `validate.py` (the load guard), `load.py` (the insert
+  path, the odds hash and the closing stamp), `history.py` (finished games) and `pricing.py`
+  (the old `bet_signal.py`).
+- Every import names the new home; no shim re-exports an old path.
+- `docker-compose.yml` mounts `./betting` into `app`, `live` and `jobs`.
+- An AST comparison proved each moved statement unchanged.
+
+**Step B: the behaviour changes (Data Engineer, Betting / Markets Analyst, Backend Developer,
+UX Designer).**
+
+- **One load path.** `betting/load.py` has `load_odds`: it fetches every book's rows, drops
+  the rows with no price (`has_price`), runs the guard, counts each refusal and writes the
+  rows. The live hook and `python -m betting.history` both call it. `prop_markets_for(role)`
+  picks a player's prop markets in one place. The historical loader no longer builds a live
+  pipeline object to borrow its writers.
+- **No mock source.** `MockOddsAPI`, the provider registry and the `ODDS_PROVIDER` setting are
+  gone. The odds source is BettingPros. Without `ODDS_API_KEY` each read fails with "needs an
+  API key", counts as a failed read and returns no rows.
+- **The pricing route invents no price.** A market with no injected price and no stored row
+  gets `odds_source` "none" and no report, edge or bet signal. A full-game market given only
+  some of its injected prices answers 422. The Betting card shows no section for such a market;
+  one note names them.
+- **The mock odds routes are gone** (`GET /api/odds/{game_pk}` and `GET /api/odds/today/all`;
+  this closes the retire-the-mock-routes ticket, SIM-627). The API snapshot falls from 52 to 50
+  paths; `frontend/openapi.json` and `schema.d.ts` are regenerated.
+- **The opening lines come from the nightly pass.** The opening-line job and
+  `capture_opening_prop_lines` are deleted. `scripts/nightly_closing_lines.sh` loads
+  `--line-types opening closing` for the last two days' games. The capture-the-opening-lines
+  ticket (SIM-625) keeps only its venue-backfill half.
+- **One price formula.** `pricing.implied_prob_from_american` is the one copy; the guard and
+  the scripts import it. The guard gets a new first rule, `zero_price`: BettingPros sends 0
+  for a price a book does not offer. 88 stored rows carry a 0 (10 game rows, 78 prop rows,
+  2026-09-29 to 2026-10-01). From now on the guard refuses such a row; the stored rows stay.
+
+**Tests (QA / DevOps).** Owner ruling: no test invents prices through a mock. The odds tests
+run the real `BettingProsOddsProvider` over recorded real responses (`tests/bp_recorded.py`,
+`tests/fixtures/bettingpros/`). `tests/unit/test_betting_load.py` is new (25 tests). Gates:
+ruff, the format check and mypy (199 files) pass; the container unit lane passes in two halves
+(3,787 + 2,608); the API snapshot and file-index guards pass; the frontend type check passes.
+
+**The row comparison at scale.** `scripts/probes/odds_row_compare.py` ran the old loader over
+every game of 2026-08-01 to 2026-08-20, recording the 12,897 vendor responses and capturing
+the writes instead of sending them. The new loader replayed the same responses. Both wrote
+519,073 rows, and the two row files are byte-identical, odds hashes and order included. The
+window holds no zero-price row, so the `zero_price` rule is proved by its unit tests only.
+
+**Independent QA pass.** Its findings, all fixed: a stale file index; the historical loader's
+column probe no longer tolerating a failed read; the odds-book census crashing on a price of
+0; a fixture docstring; a stale coverage omit line; a misplaced shellcheck comment.
+
+**Deploy.** Rebuild the three images (`docker compose build app live jobs`), then
+`docker compose up -d app live jobs`. Recreate the scheduler for the new `config.ini`. Do both
+after about 11:00 UTC. Until the rebuild, the baked-in nightly script passes `--provider`,
+which the new loader rejects. `.env`'s `ODDS_PROVIDER` line is now unused.
+
+**Open, for the owner.** Two backlog rows describe code the betting clean-up (SIM-642)
+deleted: the line-movement raise (SIM-609) and item 7 of the seven small defects (SIM-610).
+
 # CLOSED — the odds layer loses its unused reads and names, and its docs are rewritten short — SIM-644, 2026-11-15
 
 **Why it matters.** After the betting module's clean-up (SIM-643), the owner asked for the same

@@ -20,7 +20,6 @@ import datetime as dt
 import decimal
 import json
 import os
-import pickle
 import sys
 from collections import Counter
 from typing import Any
@@ -67,45 +66,49 @@ class _Writes:
 
 
 def _install_http(mode: str, directory: str) -> None:
-    path = os.path.join(directory, "responses.pkl")
+    """Record every vendor response to ``responses.jsonl`` as it arrives, or replay them.
+
+    A response is kept as its JSON; a failed read as its exception's type and message,
+    replayed as a ``RuntimeError`` with the same text (the loader catches any error the
+    same way, and the comparison runs with no retries).
+    """
+    path = os.path.join(directory, "responses.jsonl")
     original = TransportMixin._http_get_json
     if mode == "record":
-        store: dict[str, list[tuple[str, Any]]] = {}
+        out = open(path, "w", encoding="utf8")
 
         def recording(self: Any, url: str, headers: dict[str, str] | None = None) -> Any:
             try:
                 result = original(self, url, headers)
             except Exception as exc:
-                store.setdefault(url, []).append(("raise", exc))
+                failed = f"{type(exc).__name__}: {exc}"
+                out.write(json.dumps({"url": url, "raise": failed}) + "\n")
+                out.flush()
                 raise
-            store.setdefault(url, []).append(("ok", result))
+            out.write(json.dumps({"url": url, "ok": result}) + "\n")
+            out.flush()
             return result
 
         TransportMixin._http_get_json = recording  # type: ignore[method-assign]
-        import atexit
+        return
+    saved: dict[str, list[dict[str, Any]]] = {}
+    with open(path, encoding="utf8") as fh:
+        for line in fh:
+            rec = json.loads(line)
+            saved.setdefault(rec["url"], []).append(rec)
+    served: Counter[str] = Counter()
 
-        def _save() -> None:
-            with open(path, "wb") as fh:
-                pickle.dump(store, fh)
+    def replaying(self: Any, url: str, headers: dict[str, str] | None = None) -> Any:
+        calls = saved.get(url)
+        if not calls:
+            raise RuntimeError(f"replay: no recorded response for {url}")
+        rec = calls[min(served[url], len(calls) - 1)]
+        served[url] += 1
+        if "raise" in rec:
+            raise RuntimeError(rec["raise"])
+        return rec["ok"]
 
-        atexit.register(_save)
-    else:
-        with open(path, "rb") as fh:
-            saved: dict[str, list[tuple[str, Any]]] = pickle.load(fh)
-        served: Counter[str] = Counter()
-
-        def replaying(self: Any, url: str, headers: dict[str, str] | None = None) -> Any:
-            calls = saved.get(url)
-            if not calls:
-                raise RuntimeError(f"replay: no recorded response for {url}")
-            i = min(served[url], len(calls) - 1)
-            served[url] += 1
-            kind, value = calls[i]
-            if kind == "raise":
-                raise value
-            return value
-
-        TransportMixin._http_get_json = replaying  # type: ignore[method-assign]
+    TransportMixin._http_get_json = replaying  # type: ignore[method-assign]
 
 
 def _install_writes(out_dir: str) -> None:
