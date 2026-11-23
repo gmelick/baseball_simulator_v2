@@ -1,4 +1,4 @@
-# BUILT, ready to merge — three betting files get names that say what they do — SIM-646, 2026-11-23
+# CLOSED + DEPLOYED — three betting files get names that say what they do — SIM-646, 2026-11-23
 
 **Why it matters.** The owner found three names in the betting folder unclear. Each new name
 says what the file does. No code changes.
@@ -20,6 +20,10 @@ does not change. The container unit lane passes in two halves (3,788 + 2,608, 0 
 **Deploy.** The nightly script is baked into the images and names the module, so rebuild them:
 `docker compose build app live jobs`, then `docker compose up -d app live jobs`, after about
 11:00 UTC. The scheduler's entry does not change.
+
+Deployed 2026-11-23 at about 17:40 UTC from master 226bd8d. The app, live and jobs images were
+rebuilt and the three containers recreated; all came up healthy. Each container imports the
+three new modules, and the baked-in nightly script runs `python -m betting.historical_loader`.
 
 # CLOSED + DEPLOYED — the odds and the pricing move into one betting folder, with one load path and no made-up prices — SIM-645, 2026-11-23
 
