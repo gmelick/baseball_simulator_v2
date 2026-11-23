@@ -1,4 +1,4 @@
-# BUILT, ready to merge — the code layout, part 1: the nightly jobs, the backups and the secrets move into operations/ — SIM-647, 2026-11-23
+# DEPLOYED — the code layout, part 1: the nightly jobs, the backups and the secrets move into operations/ — SIM-647, 2026-11-23
 
 **Why it matters.** This is the first of the seven parts of the code-layout plan
 (`docs/audit/2026-11-23-sim647-code-layout-plan.md`). It ends the trap that nearly broke the
@@ -49,6 +49,15 @@ and the plan's file map, which now records `postgres/` and the moved tests.
 finals, with no `.running` mark: the mounted `pipeline/` loses `backup/` as soon as the checkout
 moves, and the old scheduler entries for the two backup jobs fail until the recreate. Rebuild
 `app`, `live` and `jobs`; recreate them, `db` (a short Postgres restart) and the scheduler.
+
+Deployed 2026-11-23 at about 20:25 UTC from master a882395. The `db` container came back
+healthy first. Docker could not stop the old `app` container: one of its processes was a zombie
+(a finished process its parent never reaped). The old `app` and `live` then exited, and a
+second `docker compose up -d app live jobs` started the new containers under temporary names
+(`<id>_baseball_simulator_v2-app-1`). The scheduler runs jobs inside the container by name, so
+`docker rename` restored the three standard names. All five came up healthy. The scheduler
+registered every job with its `operations/` path; the `db` container sees both Postgres
+scripts; the backup and off-site status reads list all three stores, mirrored.
 
 # BACKLOG — the line-movement ticket closed, two rows trimmed, five rows brought up to the code — 2026-11-23
 

@@ -1,6 +1,7 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
-Status: PLANNED, 2026-11-23. Every owner decision of section 8 is taken. No part has started.
+Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed
+(2026-11-23, master a882395); parts 2 to 7 have not started.
 
 ## 1. Why
 
