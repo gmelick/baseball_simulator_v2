@@ -1,6 +1,6 @@
 # The betting folder: one place for the odds and the pricing (SIM-645) — plan
 
-Status: BUILT, 2026-11-23 (branch sim645-betting-folder). The row comparison passed: 519,073 rows, byte-identical. Owner decisions taken in the session of 2026-11-21 are marked
+Status: CLOSED and DEPLOYED, 2026-11-23 (master 26c8172). The row comparison passed: 519,073 rows, byte-identical. Owner decisions taken in the session of 2026-11-21 are marked
 "decided"; §7 lists the last two. No question is open.
 
 ## 1. Why

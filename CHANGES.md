@@ -1,4 +1,4 @@
-# BUILT, ready to merge — the odds and the pricing move into one betting folder, with one load path and no made-up prices — SIM-645, 2026-11-23
+# CLOSED + DEPLOYED — the odds and the pricing move into one betting folder, with one load path and no made-up prices — SIM-645, 2026-11-23
 
 **Why it matters.** The odds code lived in five places. The owner asked for one folder that
 follows the steps of the work, so a reader finds each step in one file. The review behind the
@@ -66,6 +66,13 @@ column probe no longer tolerating a failed read; the odds-book census crashing o
 `docker compose up -d app live jobs`. Recreate the scheduler for the new `config.ini`. Do both
 after about 11:00 UTC. Until the rebuild, the baked-in nightly script passes `--provider`,
 which the new loader rejects. `.env`'s `ODDS_PROVIDER` line is now unused.
+
+Deployed 2026-11-23 at 16:12 UTC from master 26c8172. The three images were rebuilt, and app,
+live, jobs and the scheduler were recreated. All four came up healthy. Before the deploy the app
+had failed its health check for about 32 hours with no log output, and the recreate cleared it.
+The scheduler registered `nightly-closing-lines` with the new command. Each of the three
+containers imports `betting.history`, and the app serves 50 paths with no `/api/odds` route.
+The first scheduled run of the new nightly pass is 2026-11-24 at 10:30 UTC.
 
 **Open, for the owner.** Two backlog rows describe code the betting clean-up (SIM-642)
 deleted: the line-movement raise (SIM-609) and item 7 of the seven small defects (SIM-610).
