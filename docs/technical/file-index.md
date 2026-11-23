@@ -25,8 +25,8 @@ Every source and config file in the repository, in the order of the [code review
 | [12. The frontend](#stage-12) | 82 | 26,173 |
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,104 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 38,367 |
-| [15. Tests and CI](#stage-15) | 315 | 124,515 |
-| **All** | **781** | **283,032** |
+| [15. Tests and CI](#stage-15) | 315 | 124,520 |
+| **All** | **781** | **283,037** |
 
 <a id="stage-1"></a>
 
@@ -768,7 +768,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_live_bridge.py`](../../tests/unit/test_live_bridge.py) | 258 | SIM-519 Part C — the live service: the Redis bridge, the heartbeat, the poll window, the Preview-to-Live hook and the vendor reads off the loop. | — |
 | [`tests/unit/test_live_connection_manager.py`](../../tests/unit/test_live_connection_manager.py) | 51 | The live service's WebSocket connection manager: `broadcast` iterates a snapshot of a game's subscribers, so a client that connects during a send cannot break the loop. | — |
 | [`tests/unit/test_live_game_state_builder.py`](../../tests/unit/test_live_game_state_builder.py) | 136 | The live service's game-state builder: the pitcher role it infers from a box line, and the play history it keeps across refreshes. | — |
-| [`tests/unit/test_live_pipeline.py`](../../tests/unit/test_live_pipeline.py) | 941 | SIM-348 — Live-ingestion-pipeline coverage. | — |
+| [`tests/unit/test_live_pipeline.py`](../../tests/unit/test_live_pipeline.py) | 946 | SIM-348 — Live-ingestion-pipeline coverage. | — |
 | [`tests/unit/test_live_pipeline_bugs.py`](../../tests/unit/test_live_pipeline_bugs.py) | 471 | Permanent regression suite for the three P0 bugs fixed in this sprint. | — |
 | [`tests/unit/test_live_pipeline_setup.py`](../../tests/unit/test_live_pipeline_setup.py) | 66 | What the live ingestion pipeline sets up at construction: the set of completed games a poll skips (hydrated from `raw.games` at boot), and a simulation callback that must be an async function. | — |
 | [`tests/unit/test_live_resimulate_cooldown.py`](../../tests/unit/test_live_resimulate_cooldown.py) | 37 | The live service's manual resimulate endpoint is rate limited: a Redis cooldown key per game, and an HTTP 429 envelope with `retry_after_seconds` while the key lives. | — |
