@@ -38,7 +38,7 @@ env:
   # here run the same interpreter as local dev, the weekly + docker workflows.
   PYTHON_VERSION: '3.13'
   # Minimum line-coverage threshold for the measured packages
-  # (similarity/ + pipeline/ + simulation/ + betting/ + api/).
+  # (similarity/ + pipeline/ + simulation/ + betting/ + api/ + operations/ + db/).
   # Scope is configured in pyproject.toml's [tool.coverage.run] section —
   # CLI / diagnostic / real-time streaming files are excluded since they're
   # exercised by regression + integration tests, not unit tests.

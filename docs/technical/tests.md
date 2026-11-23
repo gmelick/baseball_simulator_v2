@@ -374,7 +374,7 @@ in the same commit as the change.
 | [test_band_arithmetic.py](../../tests/acceptance/test_band_arithmetic.py) | Floor citations name a file and section; the lane's flags match compose |
 | [test_no_default_password.py](../../tests/unit/test_no_default_password.py) | No tracked file holds the retired default password; compose publishes the internal ports on loopback and reads every secret with no default; the scheduler INI holds no DSN; the nightly shell scripts need `BASEBALL_DB_DSN` |
 | [test_secrets_baseline.py](../../tests/unit/test_secrets_baseline.py) | `.env.example` documents the required variables; `.gitignore` keeps `.env` out |
-| [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py) | The three Ofelia backup jobs (10:00 and 10:30 UTC) and the compose mounts of the backup folders |
+| [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py) | The three Ofelia backup jobs (10:00 and 10:30 UTC) and the compose mounts of the backup folders |
 | [test_nginx_resolve.py](../../tests/unit/test_nginx_resolve.py) | nginx re-resolves the app's name while it runs |
 | [test_migration_chain.py](../../tests/unit/test_migration_chain.py), [test_schema_pitch_indexes.py](../../tests/unit/test_schema_pitch_indexes.py) | The first eleven Alembic migrations chain; the `raw.pitches` indexes match their migrations |
 
@@ -546,7 +546,7 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_api_data_health.py](../../tests/unit/test_api_data_health.py), [test_read_only_routes.py](../../tests/unit/test_read_only_routes.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_sql_safety.py](../../tests/unit/test_sql_safety.py) | The Data Lab: freshness, the read-only pool, the SQL console guard |
 | [test_game_type_filter.py](../../tests/unit/test_game_type_filter.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py) | The Data Lab's regular-season default (SIM-572) and its pitch-result codes (SIM-571) |
 | [test_similarity_endpoint.py](../../tests/unit/test_similarity_endpoint.py), [test_similarity_explorer_adapters.py](../../tests/unit/test_similarity_explorer_adapters.py) | The pitcher similarity explorer and the engine adapters |
-| [test_metrics_endpoint.py](../../tests/unit/test_metrics_endpoint.py), [test_backup_age_gauge.py](../../tests/unit/test_backup_age_gauge.py) | `/metrics` and the backup-age gauges |
+| [test_metrics_endpoint.py](../../tests/unit/test_metrics_endpoint.py), [test_backup_age_gauge.py](../../tests/unit/operations/test_backup_age_gauge.py) | `/metrics` and the backup-age gauges |
 
 ### The database schema (`db/`)
 
@@ -561,10 +561,10 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 
 | File | What it pins |
 |---|---|
-| [test_backup_data_stores.py](../../tests/unit/test_backup_data_stores.py), [test_backup_status.py](../../tests/unit/test_backup_status.py), [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py) | The DuckDB and bundle backups, the set reader, the off-site copy |
-| [test_backup_drill.py](../../tests/unit/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py), [test_pg_backup_script.py](../../tests/unit/test_pg_backup_script.py) | The restore drill; the scheduler wiring; the Postgres dump and restore scripts |
-| [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py), [test_retry_wrapper.py](../../tests/unit/test_retry_wrapper.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py) | The rebuild waits for the finals; the crash-retry wrapper; the shell scripts need `BASEBALL_DB_DSN` |
-| [test_no_default_password.py](../../tests/unit/test_no_default_password.py), [test_secrets_baseline.py](../../tests/unit/test_secrets_baseline.py), [test_gen_secrets.py](../../tests/unit/test_gen_secrets.py) | No default password; the secrets baseline; the secrets generator |
+| [test_backup_data_stores.py](../../tests/unit/operations/test_backup_data_stores.py), [test_backup_status.py](../../tests/unit/operations/test_backup_status.py), [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py) | The DuckDB and bundle backups, the set reader, the off-site copy |
+| [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_pg_backup_script.py](../../tests/unit/operations/test_pg_backup_script.py) | The restore drill; the scheduler wiring; the Postgres dump and restore scripts |
+| [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_retry_wrapper.py](../../tests/unit/operations/test_retry_wrapper.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py) | The rebuild waits for the finals; the crash-retry wrapper; the shell scripts need `BASEBALL_DB_DSN` |
+| [test_no_default_password.py](../../tests/unit/test_no_default_password.py), [test_secrets_baseline.py](../../tests/unit/test_secrets_baseline.py), [test_gen_secrets.py](../../tests/unit/operations/test_gen_secrets.py) | No default password; the secrets baseline; the secrets generator |
 | [test_nginx_resolve.py](../../tests/unit/test_nginx_resolve.py), [test_check_file_integrity.py](../../tests/unit/test_check_file_integrity.py), [test_sweep_streaming.py](../../tests/unit/test_sweep_streaming.py) | nginx re-resolves the app; the file-integrity guard; the sweep wrapper streams its child's output |
 
 **Watch out:** the five shell-script tests (`test_ingest_wait.py`, `test_retry_wrapper.py`,

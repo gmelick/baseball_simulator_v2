@@ -24,13 +24,14 @@ codebase.
 |---|---|
 | [Simulation](simulation.md) | The pitch-by-pitch state machine, the sampler that makes every draw, the runner that plays 100 games, and the outputs: win odds, prop distributions, market prices. |
 | [Similarity engines](similarity.md) | The eleven engines that score how alike two players or situations are, how a score becomes a draw weight, calibration and backtesting. |
-| [Pipeline: the nightly builds](pipeline-batch.md) | The profile computor, the pools of real plays, the engine-artifact bundle the sampler reads, and the backups. |
+| [Pipeline: the nightly builds](pipeline-batch.md) | The profile computor, the pools of real plays, and the engine-artifact bundle the sampler reads. |
 | [Pipeline: getting data in](pipeline-ingest.md) | The historical loaders, the Savant loaders and the live game-day service with its odds hooks. |
-| [Database](database.md) | Every Postgres and DuckDB table, the migrations, the database roles, backup and restore. |
+| [Database](database.md) | Every Postgres and DuckDB table, the migrations, the database roles and the database address reader. |
 | [Betting](betting.md) | The `betting/` folder: the BettingPros odds, the load guard, the odds load and the nightly pass, and the pricing math (implied probability, margin removal, edge, expected value, the bet signal). |
 | [API](api.md) | The FastAPI app: its boot, the login, every route, the run jobs. |
 | [Frontend](frontend.md) | The React app: its pages, components, API client, login and design tokens. |
-| [Scripts](scripts.md) | The nightly jobs, the loaders, the pool rebuilds, the measurement tools and the probes. |
+| [Scripts](scripts.md) | The loaders, the pool rebuilds, the measurement tools, the repository tools and the probes. |
+| [Operations](operations.md) | The `operations/` folder: the nightly shell jobs and their wrappers, the backups, the off-site copy, the restore drill and the secrets generator. |
 | [Tests and CI](tests.md) | The test lanes, what each proves, how to run it, and what CI runs. |
 
 The operator's manual is [WORKFLOW.md](../../WORKFLOW.md) at the repository root. The

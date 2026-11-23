@@ -70,7 +70,7 @@ Python 3.13. The commands are for Windows Command Prompt (cmd.exe).
 git clone https://github.com/gmelick/baseball_simulator_v2.git
 cd baseball_simulator_v2
 copy .env.example .env
-py scripts\gen_secrets.py --append .env
+py operations\gen_secrets.py --append .env
 make dev-bg
 make migrate
 ```
@@ -102,12 +102,13 @@ takes hours; the [operator's manual](WORKFLOW.md) gives the steps in order. Then
 |---|---|
 | `simulation/` | The simulator: the state machine (`sim_loop.py`, `loop/`), the sampler that makes every draw (`full_pool_sampler.py`, `sampler/`), the runner and the outputs. |
 | `similarity/` | The eleven similarity engines, their calibration and the backtester. |
-| `pipeline/` | The loaders (`etl/`), the live game-day service (`live/`), the nightly builds (`batch/`), the odds providers and the backups (`backup/`). |
-| `betting/` | The pricing math: implied probability, margin removal, edge, expected value, closing line value, the bet signal. |
+| `pipeline/` | The loaders (`etl/`), the live game-day service (`live/`), the nightly builds (`batch/`) and the odds providers. |
+| `betting/` | The pricing math: implied probability, margin removal, edge, expected value, the bet signal. |
 | `api/` | The FastAPI app: its boot, the login, the routes, the run jobs. |
-| `db/` | The Postgres and DuckDB schemas, the migrations, the database roles and the backup scripts. |
+| `db/` | The Postgres and DuckDB schemas, the migrations, the database roles and the database address reader (`dsn.py`). |
 | `frontend/` | The React 18 + Vite + TypeScript app. |
-| `scripts/` | The nightly shell jobs, the loaders, the pool rebuilds, the measurement tools and the probes. |
+| `operations/` | The nightly shell jobs and their wrappers, the backups, the off-site copy, the restore drill and the secrets generator. |
+| `scripts/` | The loaders, the pool rebuilds, the measurement tools and the probes. |
 | `tests/` | The unit, regression, acceptance, integration and performance lanes. |
 | `deploy/` | nginx, Prometheus and Grafana, and the job scheduler's config. |
 | `docs/` | The technical reference, the decision records, the plans and the archive. |

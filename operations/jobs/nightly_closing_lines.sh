@@ -51,7 +51,7 @@ if [ "${Y2}" != "${Y1}" ]; then
     SEASONS="${Y2} ${Y1}"
 fi
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 log "start: opening and closing pass for the games of ${D1} and ${D2} (seasons ${SEASONS})"
 # SEASONS is one or two words; the split is intended.

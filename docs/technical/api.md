@@ -734,7 +734,7 @@ confidence discount. The adapter weights are copies of the engines' weights.
 
 ### `api/routes/metrics.py`
 
-[Source](../../api/routes/metrics.py) · 633 lines · Tests: [test_metrics_endpoint.py](../../tests/unit/test_metrics_endpoint.py), [test_backup_age_gauge.py](../../tests/unit/test_backup_age_gauge.py)
+[Source](../../api/routes/metrics.py) · 633 lines · Tests: [test_metrics_endpoint.py](../../tests/unit/test_metrics_endpoint.py), [test_backup_age_gauge.py](../../tests/unit/operations/test_backup_age_gauge.py)
 
 `GET /metrics` in the Prometheus text format. It uses `prometheus_client` when it imports, else
 a hand-written writer with the same series names.

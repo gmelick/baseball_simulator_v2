@@ -1,13 +1,13 @@
-# Nightly builds and backups
+# Nightly builds
 
 The nightly batch turns the raw Postgres tables into what the simulator reads. It
 writes the player profiles and the play pools into the DuckDB file, then exports the
-engine-artifact bundle (the files every simulation worker loads) onto disk. After the
-build, two backup jobs copy the data stores, and a third job copies the backups into
-the owner's OneDrive folder. The input is Postgres `raw.*`, which the ingest jobs load
-([Data ingestion](pipeline-ingest.md)). The scheduler's jobs, the `make` targets and the
-one-off rebuild scripts call this code. The run book (how to run, check and recover
-each step) is the operator manual, [WORKFLOW.md](../../WORKFLOW.md).
+engine-artifact bundle (the files every simulation worker loads) onto disk. The input is
+Postgres `raw.*`, which the ingest jobs load ([Data ingestion](pipeline-ingest.md)). The
+scheduler's jobs, the `make` targets and the one-off rebuild scripts call this code. The
+nightly shell jobs and the backups live in `operations/` ([Operations](operations.md)).
+The run book (how to run, check and recover each step) is the operator manual,
+[WORKFLOW.md](../../WORKFLOW.md).
 
 ## How it fits together
 
@@ -332,89 +332,14 @@ half-written file.
 | Function / class | What it does | Called from |
 |---|---|---|
 | `stage_bundle_version` | Creates a new version folder seeded with a copy of the current version, so a partial build (`--what park`) and the hand-written files carry over. The in-use markers are not copied. | `engine_artifacts.main` |
-| `publish_bundle_version` | Writes the `.published` marker and moves a temporary link onto the link with `os.replace`, which is atomic. | `engine_artifacts.main`, `data_stores.restore_bundle` |
+| `publish_bundle_version` | Writes the `.published` marker and moves a temporary link onto the link with `os.replace`, which is atomic. | `engine_artifacts.main`, `back_up_data_stores.restore_bundle` |
 | `discard_bundle_version` | Deletes a staged version that failed. | `engine_artifacts.main` |
 | `prune_bundle_versions` | Keeps the newest `KEEP_VERSIONS` (3) published versions, the current one, and every version with an in-use marker. It deletes an unpublished folder older than the current version (a build that died). | `engine_artifacts.main` |
 | `mark_in_use` / `unmark_in_use` | The `.in_use.<host>` marker a running app writes into the version it pinned. | `api/bundle_watch.py`, `api/startup.py` |
-| `convert_legacy_bundle` / `resolve_bundle_dir` | Turns a real folder at the link path into the first version; resolves the link to its folder. | `api/bundle_watch.py`, `publish_bundle_version`, `data_stores` |
+| `convert_legacy_bundle` / `resolve_bundle_dir` | Turns a real folder at the link path into the first version; resolves the link to its folder. | `api/bundle_watch.py`, `publish_bundle_version`, `back_up_data_stores` |
 
 **Watch out:** Never edit a published version in place. Build a new version instead.
 
 ## The backups
 
-Three stores are backed up nightly: the Postgres statistics database, the DuckDB file
-and the bundle. A *set* is one backup of one store, a folder named by the run's UTC
-start time (`%Y%m%dT%H%M%SZ`). A set is complete only when its `manifest.json` exists;
-the writer writes the manifest last. The Postgres job is a shell script in the `db`
-container ([Database](database.md)); the two Python jobs below run in the `jobs`
-container as `appuser`. The backup sets land in `/backups` (the host folder
-`BACKUP_DIR`), the off-site copies in `/offsite` (the host folder
-`OFFSITE_BACKUP_DIR`, a OneDrive folder).
-
-### `operations/backup/__init__.py`
-
-[Source](../../operations/backup/__init__.py) · 8 lines · Tests: none
-
-The package docstring: which module does what.
-
-### `operations/backup/backup_status.py`
-
-[Source](../../operations/backup/backup_status.py) · 121 lines · Tests: [test_backup_status.py](../../tests/unit/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/test_backup_age_gauge.py)
-
-Which sets exist and how old they are. Pure standard library, because the API imports it.
-
-| Function / class | What it does | Called from |
-|---|---|---|
-| `SetInfo` | One complete set: store, set id, path, creation time, bytes. | the backup modules |
-| `complete_sets` / `newest_complete_set` / `newest_complete_sets` | Every complete set of a store (oldest first); the newest; the newest of each store (`postgres`, `duckdb`, `bundle`). | `data_stores`, `offsite`, `api/routes/metrics.py` |
-| `age_hours` | Hours since a set's creation; −1.0 when there is none. | `api/routes/metrics.py` (the gauges `baseball_sim_backup_age_hours` and `baseball_sim_offsite_backup_age_hours`) |
-
-### `operations/backup/common.py`
-
-[Source](../../operations/backup/common.py) · 91 lines · Tests: [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py)
-
-The helpers both backup jobs share, pure standard library: `env_float`, `human_bytes`,
-`sha256_file` (in 8 MiB reads), `fsync_path`, `copy_file_synced`, and `fresh_marks` (the
-jobs whose `.running` mark exists and is younger than the stale limit).
-
-### `operations/backup/back_up_data_stores.py`
-
-[Source](../../operations/backup/back_up_data_stores.py) · 915 lines · Tests: [test_backup_data_stores.py](../../tests/unit/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/test_backup_drill.py)
-
-Back up, verify and restore the DuckDB file and the bundle. The module docstring is the
-design. Exit codes: 0 every store succeeded; 1 a store failed (the other was still
-attempted); 2 a refusal before any write.
-
-| Function / class | What it does | Called from |
-|---|---|---|
-| `run_backup` | Refuses when the backup root is missing or read-only; deletes dead `*.partial` sets; checks free space; waits for the writer jobs; backs up each store under one set id; prunes each store to `BACKUP_KEEP` (3) sets only when every store succeeded. A crash retry within an hour skips a store that already has its set (`recent_sets`); `--new-set` turns that off. | `main` |
-| `wait_for_marks` | Waits while the rebuild, the finals load or the Sunday sweep runs (their `.running` marks), up to two hours. | `run_backup` |
-| `backup_duckdb` | Opens the file read-only, counts every table, copies the file and its `.wal` while it holds the handle, then opens the copy and requires the same counts. Adds the small files (`backup_small_files`: the calibration report, the prop validation, the `*.last` marks). | `run_backup` |
-| `backup_bundle` | Copies the published version behind the link into `bundle/<set>/<build id>/`, without the in-use markers. | `run_backup` |
-| `free_space_ok` | Needs max(`BACKUP_MIN_FREE_GB` 10 GiB, `BACKUP_FREE_FACTOR` 1.5 × the newest set) free. When short, deletes the oldest set while more than two remain, then refuses. | `run_backup` |
-| `verify_set` / `check_hashes` | Checks every file's size and sha256, then the DuckDB copy's counts or a bundle load. | `main --verify-set`, `operations/backup/backup_drill.py` |
-| `restore_duckdb` / `restore_bundle` | Puts a DuckDB set back with `os.replace`; copies a bundle set back as a new version and publishes it. Both need `--yes`. | `main` |
-| `status_rows` / `print_status` | The newest set of each store, as text or JSON. | `main --status`, `make backup-status` |
-
-### `operations/backup/copy_offsite.py`
-
-[Source](../../operations/backup/copy_offsite.py) · 991 lines · Tests: [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
-
-The off-site copy (SIM-568). It copies the newest complete sets of each store from
-`/backups` to `/offsite`; the OneDrive client uploads them, and this module cannot see
-that upload. Pure standard library. Exit codes as above.
-
-| Function / class | What it does | Called from |
-|---|---|---|
-| `run_copy` / `_copy_locked` | Refuses when a root is missing, the off-site root is read-only, or the two roots are one folder; takes the copy lock; waits for the backup jobs; checks free space once; per store, deletes dead off-site folders, copies each wanted set that is not mirrored (oldest first), then prunes. | `main` |
-| `take_lock` / `lock_holder` / `release_lock` | One copy run at a time (`offsite-copy.lock` in the mark folder). | `run_copy` |
-| `busy_reasons` / `wait_until_quiet` | The data job's `nightly-backup` mark and the Postgres job's lock; waits up to two hours, then copies anyway (a complete set is always safe to copy). | `_copy_locked` |
-| `copy_set` | Copies one set file by file, the manifest last, with no `.partial` folder and no rename (OneDrive holds new files open). A rerun keeps each file that already matches. | `mirror_store` |
-| `is_mirrored` | True when the off-site manifest equals the local one byte for byte and every listed file has its size. | `plan_store`, `status_rows` |
-| `prune_offsite` | Keeps the newest `keep` complete off-site sets and never prunes a set the local side still wants. | `mirror_store` |
-| `resolve_keep` | `--keep`, else `OFFSITE_KEEP`, else `BACKUP_KEEP`, else 3. | `main` |
-
-**Watch out:** `status.py`, `common.py` and `offsite.py` import no duckdb, and their
-docstrings forbid it: the API imports `status.py`. The API
-reads the backup root from `BACKUPS_ROOT`; the backup jobs read `BACKUP_ROOT`. Both
-default to `/backups`.
+The backups of the three data stores live in `operations/backup/`; see [Operations](operations.md#the-backups).

@@ -1,8 +1,9 @@
 """operations/backup/common.py — the helpers the backup modules share.
 
-The data-store backup (``data_stores``) and the off-site copy (``offsite``) use
-them. This module is pure standard library: ``data_stores`` imports duckdb at
-module level, and the off-site copy must never import it.
+The data-store backup (``back_up_data_stores``) and the off-site copy
+(``copy_offsite``) use them. This module is pure standard library:
+``back_up_data_stores`` imports duckdb at module level, and the off-site copy must
+never import it.
 """
 
 from __future__ import annotations

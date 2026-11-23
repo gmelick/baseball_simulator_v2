@@ -84,7 +84,9 @@
   `docker exec` into `baseball_simulator_v2-jobs-1` as `appuser` (an exec with no `user =`
   line runs as root). A stopped `jobs` container fails all five; Ofelia logs the exec error.
   The Sunday 08:00 pair shares the container's memory cap (`JOBS_MEM_LIMIT`, default 10g).
-  Recreate the scheduler after an edit of `deploy/ofelia/config.ini`.
+  Recreate the scheduler after an edit of `deploy/ofelia/config.ini`. The jobs' shell scripts
+  and backup modules live in `operations/`, which compose mounts into `jobs`. A job runs the
+  checkout's copy at its next start, with no image rebuild.
 - **The deploy window.** The off-site copy runs from 10:30 to about 10:45 UTC. Recreate `jobs`,
   `app` or `scheduler` only after about 11:00 UTC, and only when `/data/ingest_marks/` holds no
   `.running` mark.
@@ -111,7 +113,9 @@
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
 - **`scripts/` is NOT volume-mounted** into the running app container; only `api/`,
-  `pipeline/`, `betting/`, `similarity/`, `simulation/` and `db/` are. Edits to `scripts/` reach the
+  `pipeline/`, `betting/`, `operations/`, `similarity/`, `simulation/` and `db/` are. The
+  nightly jobs and the backups live in `operations/`, so they are mounted. `scripts/` is baked
+  into the image. Edits to `scripts/` reach the
   running container only after `docker compose build app` and `docker compose up -d app`.
   Edits to the mounted folders need only `docker compose restart app`. Run a script that is
   not in the image yet with `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.
@@ -320,7 +324,7 @@ and the three paths (a simulation request, game day, the nightly builds).
   (`make calibrate`'s fit), `backtesting/`. `api/state.py`'s `ENGINE_REGISTRY` builds the engines.
 - `pipeline/` — `etl/` (the historical and Savant loaders), `live/` (the game-day service),
   `batch/` (the profile computor in `profiles/`, the bundle builder in `artifacts/`, the
-  versioned link), `backup/`, and the schedule and feed parsers. `live/ingestion/` keeps the
+  versioned link), and the schedule and feed parsers. `live/ingestion/` keeps the
   live odds hooks; they call `betting/load_odds_to_db.py`.
 - `betting/` — the odds and the pricing, one file per step: `markets.py` (our market names
   and book labels), `bettingpros/match_games.py` (the HTTP client and the game match),
@@ -331,10 +335,14 @@ and the three paths (a simulation request, game day, the nightly builds).
   `bundle_watch.py`, `routes/` (`games*.py`, `betting*.py`, the Data Lab routes), `schemas/`.
 - `db/` — `schemas/`, `migrations/` (Alembic `versions/` and DuckDB `duckdb/`), `sim_store.py`
   (the replay file), `introspect.py` (the one table / column existence probe), `roles/`,
-  `backup/`.
+  and `dsn.py` (the database address reader: `BASEBALL_DB_DSN`, with no default).
+- `operations/` — keeps the stack running: `jobs/` (the nightly shell jobs and their wrappers
+  `with_mark.sh`, `with_retry.sh` and `wait_for_ingest.sh`), `backup/` (the backups of the
+  three stores, the off-site copy, the restore drill, and `postgres/`, the two scripts the `db`
+  container runs) and `gen_secrets.py` (the secrets generator).
 - `frontend/` — the React app; `frontend/openapi.json` is the API snapshot and
   `src/api/schema.d.ts` is generated from it.
-- `scripts/` — the nightly shell jobs, the loaders, the pool rebuilds (with their step packages),
+- `scripts/` — the loaders, the pool rebuilds (with their step packages),
   the measurement tools (with `accuracy/`), and the one-off probes in `scripts/probes/`. Every
   run output goes to `results/` (ignored by git and Docker); a record a doc cites is committed
   to `docs/audit/records/`.
@@ -428,7 +436,7 @@ consolidates; QA cross-validates and never self-certifies its own work.
   `STAGES`. The file index shows each file's first docstring sentence, so fix a poor
   description in the docstring. `docs/technical/README.md` says what to update when.
 - **Secrets:** never commit credentials; the DSN is read from `BASEBALL_DB_DSN`, and no script
-  has a default (`pipeline/db_dsn.require_dsn`). There is a CI `secrets-check` job and a
+  has a default (`db/dsn.require_dsn`). There is a CI `secrets-check` job and a
   `file-integrity` guard (`scripts/check_file_integrity.py`, ast.parse + null-byte scan).
 
 ## 8. Commands (run from the repo root; Windows cmd.exe)

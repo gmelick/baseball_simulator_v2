@@ -304,14 +304,6 @@ resolver (per game), so the pool and the live candidates share one definition.
 **Watch out:** the windows end strictly before the game DATE, so the two games of a
 double-header do not see each other's usage.
 
-### `db/dsn.py`
-
-[Source](../../db/dsn.py) · 65 lines · Tests: [test_db_dsn.py](../../tests/unit/test_db_dsn.py)
-
-`require_dsn` returns `BASEBALL_DB_DSN` or raises an error that names the variable. The code
-carries no default password. `dsn_label` gives `host[:port]/dbname` for a log line. The
-scripts and the pool chain use them.
-
 ## The league schedule and game feed
 
 ### `pipeline/mlb_schedule.py`

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "operations" / "jobs"
+SCRIPTS = Path(__file__).resolve().parents[3] / "operations" / "jobs"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("sh") is None or os.name == "nt",

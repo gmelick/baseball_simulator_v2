@@ -1,4 +1,4 @@
-<!-- file-index-key: 0729225967b2bf9f -->
+<!-- file-index-key: 76e0ac303e623753 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -23,10 +23,10 @@ Every source and config file in the repository, in the order of the [code review
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,117 |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,124 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 38,368 |
 | [15. Tests and CI](#stage-15) | 315 | 124,522 |
-| **All** | **782** | **283,053** |
+| **All** | **782** | **283,060** |
 
 <a id="stage-1"></a>
 
@@ -491,14 +491,14 @@ How the services run, what runs every night, and how the data is backed up. The 
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`docker-compose.yml`](../../docker-compose.yml) | 796 | MLB Baseball Simulation Platform — Docker Compose | — |
+| [`docker-compose.yml`](../../docker-compose.yml) | 797 | MLB Baseball Simulation Platform — Docker Compose | — |
 | [`Dockerfile`](../../Dockerfile) | 182 | MLB Baseball Simulation Platform — Dockerfile | — |
 | [`Makefile`](../../Makefile) | 318 | MLB Baseball Simulation Platform — Makefile | — |
 | [`.env.example`](../../.env.example) | 263 | MLB Baseball Simulation Platform — Environment Variables | — |
 | [`.env.staging.example`](../../.env.staging.example) | 132 | MLB Baseball Simulation Platform — STAGING environment template | — |
 | [`.env.production.example`](../../.env.production.example) | 126 | MLB Baseball Simulation Platform — PRODUCTION environment template | — |
 | [`deploy/nginx/nginx.conf`](../../deploy/nginx/nginx.conf) | 293 | MLB Baseball Simulation Platform — nginx reverse proxy | — |
-| [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini) | 164 | Ofelia scheduler config — the nightly and weekly data jobs (docker-native cron). | — |
+| [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini) | 169 | Ofelia scheduler config — the nightly and weekly data jobs (docker-native cron). | — |
 | [`operations/__init__.py`](../../operations/__init__.py) | 1 | operations — keep the stack running: the nightly jobs, the backups and the secrets. | — |
 | [`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh) | 45 | operations/jobs/with_mark.sh — mark an ingest job as running, run it, record its exit. | — |
 | [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 57 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
@@ -511,7 +511,7 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 16 | operations/backup — the backups of the data stores and their off-site copy. | 3: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
 | [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 915 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB analytics file and the engine-artifact bundle. | 2: `test_backup_offsite.py`, `test_backup_data_stores.py` |
 | [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 121 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
-| [`operations/backup/common.py`](../../operations/backup/common.py) | 91 | operations/backup/common.py — the helpers the backup modules share. | 1: `test_backup_offsite.py` |
+| [`operations/backup/common.py`](../../operations/backup/common.py) | 92 | operations/backup/common.py — the helpers the backup modules share. | 1: `test_backup_offsite.py` |
 | [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 991 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 1: `test_backup_offsite.py` |
 | [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) | 305 | SIM-525: the nightly Postgres backup (the scheduled backups of the data stores). | — |
 | [`operations/backup/postgres/pg_restore.sh`](../../operations/backup/postgres/pg_restore.sh) | 147 | SIM-525: restore one Postgres backup set into an EMPTY database. | — |
@@ -642,6 +642,17 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/acceptance/test_band_arithmetic.py`](../../tests/acceptance/test_band_arithmetic.py) | 1,494 | The band rule of the acceptance lane (SIM-450), tested on synthetic inputs. | — |
 | [`tests/acceptance/test_pool_label_check.py`](../../tests/acceptance/test_pool_label_check.py) | 259 | SIM-553 — the standing label check: the pitch pool's count chain against real play. | — |
 | [`tests/acceptance/test_production_bands.py`](../../tests/acceptance/test_production_bands.py) | 720 | The acceptance lane (SIM-450): the PRODUCTION simulator against reference rates. | — |
+| [`tests/unit/operations/test_backup_age_gauge.py`](../../tests/unit/operations/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
+| [`tests/unit/operations/test_backup_data_stores.py`](../../tests/unit/operations/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
+| [`tests/unit/operations/test_backup_drill.py`](../../tests/unit/operations/test_backup_drill.py) | 771 | The restore drill for the scheduled backups. | — |
+| [`tests/unit/operations/test_backup_offsite.py`](../../tests/unit/operations/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
+| [`tests/unit/operations/test_backup_schedule.py`](../../tests/unit/operations/test_backup_schedule.py) | 384 | The scheduled backups of the three data stores: the wiring. | — |
+| [`tests/unit/operations/test_backup_status.py`](../../tests/unit/operations/test_backup_status.py) | 76 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
+| [`tests/unit/operations/test_gen_secrets.py`](../../tests/unit/operations/test_gen_secrets.py) | 147 | The secrets generator writes the eight secrets; `--append` and `--check` never print one. | — |
+| [`tests/unit/operations/test_ingest_wait.py`](../../tests/unit/operations/test_ingest_wait.py) | 163 | The nightly rebuild waits for the finals load. | — |
+| [`tests/unit/operations/test_pg_backup_script.py`](../../tests/unit/operations/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (operations/backup/postgres). | — |
+| [`tests/unit/operations/test_retry_wrapper.py`](../../tests/unit/operations/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`operations/jobs/with_retry.sh`). | — |
+| [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 67 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/test_accuracy_comparison.py`](../../tests/unit/test_accuracy_comparison.py) | 1,160 | Unit tests for the sim-vs-closing-line accuracy comparison (`scripts/accuracy_comparison.py`). | — |
 | [`tests/unit/test_accuracy_comparison_markets.py`](../../tests/unit/test_accuracy_comparison_markets.py) | 111 | Unit tests for the plain data in `scripts/accuracy/records.py`: the 15-market prop vocabulary map (the original seven plus the eight of the prop-market work, SIM-421) and the market trust labels. | — |
 | [`tests/unit/test_accuracy_comparison_props.py`](../../tests/unit/test_accuracy_comparison_props.py) | 713 | The backtest wiring for the fifteen prop markets (the prop-market work, SIM-421) and the official box-score ground truth (the owner's ruling to grade props on the box, SIM-545), in `scripts/accuracy_comparison.py` and... | — |
@@ -668,12 +679,6 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_arsenal_fit_reproducible.py`](../../tests/unit/test_arsenal_fit_reproducible.py) | 204 | The pitcher arsenal fit gives the same arsenal whatever order the pitch rows arrive in. | — |
 | [`tests/unit/test_arsenal_w2_standardization.py`](../../tests/unit/test_arsenal_w2_standardization.py) | 351 | The arsenal W₂ distance reads a GMM's mean and covariance on one scale. | — |
 | [`tests/unit/test_backfill_odds_hash.py`](../../tests/unit/test_backfill_odds_hash.py) | 146 | Unit tests for the odds_hash backfill script (`scripts/probes/backfill_odds_hash.py`). | — |
-| [`tests/unit/test_backup_age_gauge.py`](../../tests/unit/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
-| [`tests/unit/test_backup_data_stores.py`](../../tests/unit/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
-| [`tests/unit/test_backup_drill.py`](../../tests/unit/test_backup_drill.py) | 771 | The restore drill for the scheduled backups. | — |
-| [`tests/unit/test_backup_offsite.py`](../../tests/unit/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
-| [`tests/unit/test_backup_schedule.py`](../../tests/unit/test_backup_schedule.py) | 384 | The scheduled backups of the three data stores: the wiring. | — |
-| [`tests/unit/test_backup_status.py`](../../tests/unit/test_backup_status.py) | 76 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
 | [`tests/unit/test_barrel_definition.py`](../../tests/unit/test_barrel_definition.py) | 203 | Validates :func:`pipeline.batch.profiles.sql._barrel_case_sql`, the DuckDB boolean expression that classifies a batted ball as a *barrel*. | — |
 | [`tests/unit/test_base_invariants.py`](../../tests/unit/test_base_invariants.py) | 369 | The base-state invariants and the runner-conservation check on `Bases`. | — |
 | [`tests/unit/test_baseball_sniff.py`](../../tests/unit/test_baseball_sniff.py) | 484 | The **baseball sniff-test suite**: does the loop produce sane baseball? | — |
@@ -752,14 +757,12 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_game_sim_summary.py`](../../tests/unit/test_game_sim_summary.py) | 254 | The **multi-iteration aggregation contract** :class:`simulation.results.GameSimSummary`. | — |
 | [`tests/unit/test_game_state_contract.py`](../../tests/unit/test_game_state_contract.py) | 297 | Tests of the `GameState` / `PlayResult` dataclass contract. | — |
 | [`tests/unit/test_game_type_filter.py`](../../tests/unit/test_game_type_filter.py) | 492 | The Data Lab reads the regular season alone by default (the Data Lab game-type filter, SIM-572). | — |
-| [`tests/unit/test_gen_secrets.py`](../../tests/unit/test_gen_secrets.py) | 147 | The secrets generator writes the eight secrets; `--append` and `--check` never print one. | — |
 | [`tests/unit/test_gmm_batch_pipeline.py`](../../tests/unit/test_gmm_batch_pipeline.py) | 157 | Unit tests for SIM-113 — GMM batch pipeline performance. | — |
 | [`tests/unit/test_historical_odds_load.py`](../../tests/unit/test_historical_odds_load.py) | 242 | SIM-435 — unit tests for (1) the BettingPros provider's CLOSING-line parsing and (2) the historical-odds loader (betting/historical_loader.py). | — |
 | [`tests/unit/test_hit_by_pitch.py`](../../tests/unit/test_hit_by_pitch.py) | 132 | Tests that a hit by pitch (HBP) is its own pitch outcome, never a walk. | — |
 | [`tests/unit/test_ibb_rates.py`](../../tests/unit/test_ibb_rates.py) | 170 | The measured intentional-walk (IBB) rate table. | — |
 | [`tests/unit/test_incomplete_lineup_api.py`](../../tests/unit/test_incomplete_lineup_api.py) | 238 | A known game whose lineup rows do not make a playable game answers 503, not 404. | — |
 | [`tests/unit/test_index_acceptance_harness.py`](../../tests/unit/test_index_acceptance_harness.py) | 140 | Pure-string unit tests for the index-acceptance harness (`scripts/probes/run_index_acceptance.py`). | — |
-| [`tests/unit/test_ingest_wait.py`](../../tests/unit/test_ingest_wait.py) | 163 | The nightly rebuild waits for the finals load. | — |
 | [`tests/unit/test_inning_grid.py`](../../tests/unit/test_inning_grid.py) | 273 | The inning grid on the per-game result and the cached summary. | — |
 | [`tests/unit/test_invalid_state_detection.py`](../../tests/unit/test_invalid_state_detection.py) | 450 | The **invalid-state detection harness** for the simulation loop. | — |
 | [`tests/unit/test_lead_distance.py`](../../tests/unit/test_lead_distance.py) | 1,525 | Tests of lead distance in the stolen-base and baserunning models. | — |
@@ -817,7 +820,6 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_park_factors.py`](../../tests/unit/test_park_factors.py) | 482 | Unit tests for SIM-336 (park-factor UNPIVOT/factor_overall fix + real L/R splits + pool-neutralization policy) and SIM-345 (data-layer fixes: incremental watermark `>=` + row-count guard, canonical cross-pool recency_... | — |
 | [`tests/unit/test_park_geometry_builder.py`](../../tests/unit/test_park_geometry_builder.py) | 870 | The fence certification (SIM-478/479/480; the plan at docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §4 and §5.1): the version-2 park-geometry builder's pure pieces on toy numpy balls (no DuckDB), and t... | — |
 | [`tests/unit/test_persistent_process_pool.py`](../../tests/unit/test_persistent_process_pool.py) | 286 | The **persistent (warm) ProcessPool + shared-memory lifecycle** of :class:`simulation.batch_runner.BatchRunner` for the long-lived API. | — |
-| [`tests/unit/test_pg_backup_script.py`](../../tests/unit/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (operations/backup/postgres). | — |
 | [`tests/unit/test_pitch_cell_index.py`](../../tests/unit/test_pitch_cell_index.py) | 432 | The pitch-draw CELL INDEX (plan: docs/audit/2026-09-04-sim467-518-plan.md §5). | — |
 | [`tests/unit/test_pitch_pitch_engine.py`](../../tests/unit/test_pitch_pitch_engine.py) | 274 | The pitch-to-pitch similarity engine (a FAISS nearest-neighbour index). | — |
 | [`tests/unit/test_pitch_result_split.py`](../../tests/unit/test_pitch_result_split.py) | 729 | Tests of the PITCH / PITCH-RESULT split (the play-picker redesign, SIM-523). | — |
@@ -864,7 +866,6 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_rescore_graded_book.py`](../../tests/unit/test_rescore_graded_book.py) | 337 | `scripts/probes/rescore_graded_book.py`: the re-pricing of a tiny fake report. | — |
 | [`tests/unit/test_rescore_runlines.py`](../../tests/unit/test_rescore_runlines.py) | 280 | The re-score of stored accuracy reports (`scripts/probes/rescore_runlines.py`). | — |
 | [`tests/unit/test_retire_consensus_odds.py`](../../tests/unit/test_retire_consensus_odds.py) | 318 | `scripts/probes/retire_consensus_odds.py`: the refusal, the dry run and the archive-then-delete, on a stub connection (never a real database). | — |
-| [`tests/unit/test_retry_wrapper.py`](../../tests/unit/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`operations/jobs/with_retry.sh`). | — |
 | [`tests/unit/test_rng_streams.py`](../../tests/unit/test_rng_streams.py) | 279 | Tests that the loop rng and the full-pool rng are INDEPENDENT streams. | — |
 | [`tests/unit/test_route_auth_coverage.py`](../../tests/unit/test_route_auth_coverage.py) | 319 | The API requires a login on every data route, in every environment. | — |
 | [`tests/unit/test_run_ledger.py`](../../tests/unit/test_run_ledger.py) | 717 | The run-value ledger is TOLD its two base-out states. | — |
@@ -883,7 +884,6 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_segment_edges.py`](../../tests/unit/test_segment_edges.py) | 725 | The twelve segment and team markets on /edges and /signals. | — |
 | [`tests/unit/test_segment_markets.py`](../../tests/unit/test_segment_markets.py) | 606 | The simulator prices every game market the book posts. | — |
 | [`tests/unit/test_shared_memory_attach.py`](../../tests/unit/test_shared_memory_attach.py) | 285 | The **shared-memory zero-copy ATTACH** of the read-only payload (the engine-artifact arrays) into worker processes: :func:`simulation.batch_runner.publish_shared_arrays` (parent) + :func:`~simulation.batch_runner._wor... | — |
-| [`tests/unit/test_shell_dsn_guards.py`](../../tests/unit/test_shell_dsn_guards.py) | 67 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/test_sim_jobs.py`](../../tests/unit/test_sim_jobs.py) | 419 | The simulation run jobs: the runner's chunked job, the registry and the routes. | 1: `test_game_page_whatif.py` |
 | [`tests/unit/test_sim_kwargs.py`](../../tests/unit/test_sim_kwargs.py) | 1,497 | The shared `simulate_game` kwargs builder + the park-factor resolver. | — |
 | [`tests/unit/test_sim_store.py`](../../tests/unit/test_sim_store.py) | 467 | SIM-356 -- unit tests for db/sim_store.py (durable sim-result + pitch-snapshot persistence) and its two migrations (Alembic 0014 / DuckDB 0008). | — |

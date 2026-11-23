@@ -82,13 +82,20 @@ in brackets is the class or function that moves.
 | `pipeline/backup/status.py` | `operations/backup/backup_status.py` |
 | `pipeline/backup/common.py` | `operations/backup/common.py` |
 | `scripts/backup_drill.py` | `operations/backup/backup_drill.py` |
-| `db/backup/pg_backup.sh`, `pg_restore.sh` | `operations/backup/` |
+| `db/backup/pg_backup.sh`, `pg_restore.sh` | `operations/backup/postgres/` (as built: the `db` container mounts only this folder) |
 | `scripts/gen_secrets.py` | `operations/gen_secrets.py` |
 | `pipeline/db_dsn.py` | `db/dsn.py` |
 
 The config that names these paths: `deploy/ofelia/config.ini` (11 lines), the Makefile, the
-compose file (a new `./operations` mount in `app`, `live` and `jobs`), the Dockerfile's `COPY`
-lines. The scheduler is recreated in this part's deploy.
+compose file (a new `./operations` mount in `app`, `live` and `jobs`; the `db` service's backup
+mount moves to `./operations/backup/postgres`), the Dockerfile's `COPY` lines. The tests move to
+`tests/unit/operations/`.
+
+The deploy (as built): merge and recreate in one window, after about 11:00 UTC and before the
+07:00 UTC finals, with no `.running` mark. The mounted `pipeline/` loses `backup/` the moment the
+host checkout moves, so the old scheduler entries for the two backup jobs fail until the
+recreate. Rebuild `app`, `live` and `jobs`; recreate them, `db` (a short Postgres restart) and the
+scheduler.
 
 ### Part 2 — `ingest/`
 

@@ -572,9 +572,9 @@ off the machine.
 1. [docker-compose.yml](../../docker-compose.yml), [Dockerfile](../../Dockerfile) and
    [Makefile](../../Makefile).
 2. [deploy/ofelia/config.ini](../../deploy/ofelia/config.ini): the schedule. Then the
-   shell jobs it runs (`scripts/nightly_*.sh`) and their wrappers
-   (`with_mark.sh`, `with_retry.sh`, `wait_for_ingest.sh`).
+   shell jobs it runs and their wrappers, in [operations/jobs/](../../operations/jobs/).
 3. [operations/backup/](../../operations/backup/) and [operations/backup/postgres/](../../operations/backup/postgres/).
+   Then the secrets generator, [operations/gen_secrets.py](../../operations/gen_secrets.py).
 4. [db/roles/](../../db/roles/) and [deploy/](../../deploy/).
 
 **Check.**
@@ -587,8 +587,8 @@ off the machine.
 `test_backup_schedule.py`, `test_retry_wrapper.py`, `test_ingest_wait.py`,
 `test_no_default_password.py`, `test_nginx_resolve.py`.
 
-**Reference.** [Architecture](architecture.md), the operator's manual
-([WORKFLOW.md](../../WORKFLOW.md)) and [deploy/README.md](../../deploy/README.md).
+**Reference.** [Operations](operations.md), [Architecture](architecture.md), the
+operator's manual ([WORKFLOW.md](../../WORKFLOW.md)) and [deploy/README.md](../../deploy/README.md).
 
 <a id="stage-14"></a>
 

@@ -6,7 +6,7 @@ simulation run. A DuckDB analytics file holds what the nightly builds compute fr
 Postgres: the player profiles and the play pools the simulator draws from. A second,
 small DuckDB file holds the replay of simulated games that the game page shows. This page
 lists every table, says who writes it and who reads it, and then covers the migrations,
-the database roles and the backup scripts.
+the database roles and the modules of `db/`.
 
 Two more stores sit outside the databases. The engine-artifact bundle is a folder of
 array files built from the analytics file; the workers load it (see
@@ -332,10 +332,10 @@ a later migration creates gets the same grants. A NEW schema needs its own lines
 
 ## Backup and restore
 
-The two Postgres scripts run inside the `db` container as the `postgres` OS user over the
-unix socket, so they need no password. The DuckDB file and the bundle are backed up by
-`operations/backup/back_up_data_stores.py` (see [the nightly builds](pipeline-batch.md)). The run
-book is the operator's manual, [WORKFLOW.md](../../WORKFLOW.md).
+The backups of all three stores live in `operations/backup/`. The two Postgres scripts
+are in `operations/backup/postgres/`; the `db` container runs them. See
+[Operations](operations.md#the-backups). The run book is the operator's manual,
+[WORKFLOW.md](../../WORKFLOW.md).
 
 ## The modules
 
@@ -450,14 +450,10 @@ also resets the owner's password. It refuses to run when a password is missing. 
 receives the passwords as psql variables and quotes them as literals; the script never
 echoes a command.
 
-### `operations/backup/postgres/`
+### `db/dsn.py`
 
-[pg_backup.sh](../../operations/backup/postgres/pg_backup.sh) · 305 lines · [pg_restore.sh](../../operations/backup/postgres/pg_restore.sh) · 147 lines · Tests: [test_pg_backup_script.py](../../tests/unit/test_pg_backup_script.py), [test_backup_drill.py](../../tests/unit/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
+[Source](../../db/dsn.py) · 65 lines · Tests: [test_db_dsn.py](../../tests/unit/test_db_dsn.py)
 
-| Script | What it does | Called from |
-|---|---|---|
-| `pg_backup.sh` | Dumps the database in directory format (`pg_dump -Fd`, the format that restores in parallel) into `$BACKUP_ROOT/postgres/<TS>/`, with the row count of every table just before and just after the dump. It builds the set as `<TS>.partial`, opens its permissions so the jobs container can read it, writes `manifest.json` last, then renames the folder. It keeps the newest `BACKUP_KEEP` (3) complete sets. A lock folder allows one run at a time; a free-space guard needs the larger of 10 GiB and 1.5 × the newest set. Exit 2 is a refusal before any write. | the Ofelia job `nightly-backup-postgres` at 10:00 UTC; `make backup` |
-| `pg_restore.sh <set>` | Restores one set into an EMPTY database. It waits for the server, drops the empty `raw` and `sim` schemas without CASCADE (a populated database fails the drop, and the script exits 3 before it restores anything), runs `pg_restore` in parallel with `--exit-on-error`, then checks each table's count against the two counts in the set. | `make restore-postgres SET=<ts>`; the restore drill (`operations/backup/backup_drill.py`) |
-
-**Watch out:** after a restore, run `make db-roles` (the grants), then
-`docker compose run --rm migrate alembic current` (expect the head).
+`require_dsn` returns `BASEBALL_DB_DSN` or raises an error that names the variable. The code
+carries no default password. `dsn_label` gives `host[:port]/dbname` for a log line. The
+scripts, the pool chain and the historical odds loader use them.

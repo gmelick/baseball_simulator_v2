@@ -1,3 +1,55 @@
+# BUILT, ready to merge — the code layout, part 1: the nightly jobs, the backups and the secrets move into operations/ — SIM-647, 2026-11-23
+
+**Why it matters.** This is the first of the seven parts of the code-layout plan
+(`docs/audit/2026-11-23-sim647-code-layout-plan.md`). It ends the trap that nearly broke the
+nightly odds pass: the nightly shell jobs lived in `scripts/`, which the images bake in. They now
+live in `operations/`, which compose mounts into `app`, `live` and `jobs`, so an edit reaches the
+next run with no rebuild. No code changes; Step A only (the part has no Step B).
+
+**What moved (Data Engineer, QA / DevOps).**
+
+- The eight nightly shell jobs and their wrappers: `scripts/*.sh` → `operations/jobs/`.
+- The backups: `pipeline/backup/` → `operations/backup/`, one file per step:
+  `back_up_data_stores.py` (was `data_stores.py`), `copy_offsite.py` (was `offsite.py`),
+  `backup_status.py` (was `status.py`), `common.py`, and `backup_drill.py` (was
+  `scripts/backup_drill.py`).
+- The two Postgres scripts: `db/backup/` → `operations/backup/postgres/`. The `db` container
+  mounts that folder at the same path as before, `/opt/baseball/backup`.
+- The secrets generator: `scripts/gen_secrets.py` → `operations/gen_secrets.py`.
+- The database address reader: `pipeline/db_dsn.py` → `db/dsn.py`.
+- The eleven tests of these files: `tests/unit/` → `tests/unit/operations/`.
+- `operations/` joins the compose mounts, the Dockerfile, the mypy and coverage scopes, and
+  ruff's first-party list. `db/` joins the mypy and coverage scopes (it held `db_dsn.py` before
+  only through `pipeline/`).
+- The docs: a new page, `docs/technical/operations.md`, takes the jobs from `scripts.md`, the
+  backups from `pipeline-batch.md` and the restore scripts from `database.md`.
+
+**Proof of no behaviour change.** An AST comparison (each moved file's code with docstrings and
+imports removed) against master: the only differences are import lines, path strings, the
+module names in two `--help` texts, and one depth fix. `backup_drill.py` finds the repository
+from its own place, so `parents[1]` became `parents[2]`; the QA pass found the same depth fix
+was needed in `nightly_closing_lines.sh` (`/..` became `/../..`). New backup manifests carry the
+new module name in their `tool` field; no code reads that field, so the old sets stay readable.
+
+**Checks.** ruff, the format check and mypy (204 files) pass. The container unit lane passes
+in four pieces: 2,191 + 1,391 + 2,567 + 246 (the moved operations tests), 6,396 in all, the
+same count as before the move. The Docker VM was in the repeat-crash state of the SIM-445
+segfault class that day: two runs died at collection on files this part does not touch, and
+both files pass on the host. One websocket login test
+(`test_websocket_with_a_credential_is_accepted[cookie]`) failed once; it fails now and then on
+master's code too, and passed three times in a row on this branch.
+
+**Independent QA pass.** Its findings, all fixed: two scheduler comment lines past the 80-column
+wrap a test holds; the closing pass's repository depth; the `db` container's recreate missing
+from the deploy; the window between the merge and the recreate; three `scripts\gen_secrets.py`
+paths in backslash form; stale module names in one docstring, one doc page and one CI comment;
+and the plan's file map, which now records `postgres/` and the moved tests.
+
+**Deploy.** Merge and recreate in one window, after about 11:00 UTC and before the 07:00 UTC
+finals, with no `.running` mark: the mounted `pipeline/` loses `backup/` as soon as the checkout
+moves, and the old scheduler entries for the two backup jobs fail until the recreate. Rebuild
+`app`, `live` and `jobs`; recreate them, `db` (a short Postgres restart) and the scheduler.
+
 # BACKLOG — the line-movement ticket closed, two rows trimmed, five rows brought up to the code — 2026-11-23
 
 **Why it matters.** The owner asked me to close the line-movement raise, to trim item 7 of the

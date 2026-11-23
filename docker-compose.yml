@@ -536,8 +536,9 @@ services:
   # fresh container whose DSN, password included, sat in the INI: Ofelia's INI
   # does not expand variables, so a fresh container could get a credential only
   # as a literal. This container gets the composed app-role DSN and .env here.
-  # It idles (sleep infinity) between jobs. scripts/ is baked into the image,
-  # so a script edit needs `docker compose build jobs`.
+  # It idles (sleep infinity) between jobs. The jobs and the backups live in
+  # operations/, mounted below, so an edit there needs no rebuild. scripts/ is
+  # baked into the image, so an edit there needs `docker compose build jobs`.
   # ---------------------------------------------------------------------------
   jobs:
     build:

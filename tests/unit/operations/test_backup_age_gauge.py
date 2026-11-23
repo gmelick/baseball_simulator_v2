@@ -1,5 +1,5 @@
 """
-tests/unit/test_backup_age_gauge.py
+tests/unit/operations/test_backup_age_gauge.py
 ======================================
 The backup-age gauge on /metrics (the scheduled backups, SIM-525).
 

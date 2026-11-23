@@ -71,6 +71,6 @@ def test_age_hours(tmp_path):
 
 def test_status_does_not_import_duckdb():
     code = "import sys; import operations.backup.backup_status; sys.exit(1 if 'duckdb' in sys.modules else 0)"
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True)
     assert result.returncode == 0, result.stderr

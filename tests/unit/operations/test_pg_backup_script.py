@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-BACKUP_DIR = Path(__file__).resolve().parents[2] / "operations" / "backup" / "postgres"
+BACKUP_DIR = Path(__file__).resolve().parents[3] / "operations" / "backup" / "postgres"
 BACKUP_SH = BACKUP_DIR / "pg_backup.sh"
 RESTORE_SH = BACKUP_DIR / "pg_restore.sh"
 

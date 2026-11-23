@@ -784,7 +784,7 @@ def test_offsite_and_common_never_import_duckdb():
         "import sys; import operations.backup.copy_offsite, operations.backup.common; "
         "sys.exit(1 if 'duckdb' in sys.modules else 0)"
     )
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True)
     assert result.returncode == 0, result.stderr
 

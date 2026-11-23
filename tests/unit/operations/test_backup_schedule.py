@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 COMPOSE = ROOT / "docker-compose.yml"
 OFELIA = ROOT / "deploy" / "ofelia" / "config.ini"
 MAKEFILE = ROOT / "Makefile"

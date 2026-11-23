@@ -59,15 +59,17 @@ the environment tiers.
 
 ### Which code a container runs
 
-The `app` service mounts five folders from the checkout: `api/`, `pipeline/`,
-`similarity/`, `simulation/` and `db/`. The `jobs` service mounts the same
-five. `scripts/`, `betting/` and `tests/` are baked into the image at build
-time.
+The `app` service mounts seven folders from the checkout: `api/`, `pipeline/`,
+`betting/`, `operations/`, `similarity/`, `simulation/` and `db/`. The `jobs`
+service mounts the same seven. The `live` service mounts all of them except
+`similarity/`. The nightly jobs and the backups live in `operations/`, so a
+scheduled job runs the checkout's copy. `scripts/` and `tests/` are baked into
+the image at build time.
 
 - A change to a mounted folder reaches the app after `docker compose restart app`.
   uvicorn's `--reload` may restart it by itself, but a file event does not
   always cross the Windows bind mount: check the log.
-- A change to `scripts/` or `betting/` reaches a container only after a rebuild:
+- A change to `scripts/` reaches a container only after a rebuild:
   `docker compose build app`, then `docker compose up -d app` (and the same for
   `jobs`).
 - A change to a service's `environment:` block in `docker-compose.yml` needs a
@@ -98,7 +100,7 @@ time.
 git clone https://github.com/gmelick/baseball_simulator_v2.git
 cd baseball_simulator_v2
 copy .env.example .env
-py scripts\gen_secrets.py --append .env
+py operations\gen_secrets.py --append .env
 make dev-bg
 make migrate
 ```
@@ -581,7 +583,7 @@ analytics set's `data_files\` folder into `/data` by hand.
 
 | Symptom | Cause and fix |
 |---|---|
-| `required variable POSTGRES_PASSWORD is missing a value` (or another secret) on any `docker compose` or `make` command | `.env` lacks a secret. Run `py scripts\gen_secrets.py --append .env`; then `py scripts\gen_secrets.py --check .env` exits 0. A worktree needs its own `.env`. |
+| `required variable POSTGRES_PASSWORD is missing a value` (or another secret) on any `docker compose` or `make` command | `.env` lacks a secret. Run `py operations\gen_secrets.py --append .env`; then `py operations\gen_secrets.py --check .env` exits 0. A worktree needs its own `.env`. |
 | `password authentication failed for user "baseball_user"` (or `baseball_app`, `baseball_ro`) although `.env` looks right | The volume is older than the password: Postgres reads `POSTGRES_PASSWORD` only when it creates a volume. Run `make db-roles ROTATE_ADMIN_PASSWORD=1`; it resets all three passwords from `.env` over the socket. |
 | `401 Unauthorized` from an `/api/` route | Send `X-API-Key: <key>` or `Authorization: Bearer <key>` with a key from `API_KEYS`, or log in in the browser. |
 | The SQL console, the assistant or a Data Lab page answers 503 | The read-only pool is missing or refused. `/health` shows `"sql_console"`; `docker compose logs app \| findstr SIM-443e` names the reason. Run `make db-roles` if `baseball_ro` does not exist. |
@@ -593,7 +595,7 @@ analytics set's `data_files\` folder into `/data` by hand.
 | `Fatal Python error: Segmentation fault` (exit 139) in a container | A known, random crash of this image's Python. Treat it as a retry: the nightly jobs rerun by themselves (`with_retry.sh`), and the loaders resume. |
 | Ofelia logs `No such container: baseball_simulator_v2-jobs-1` | The `jobs` container is stopped. Run `docker compose up -d jobs`; `docker compose ps jobs` shows it healthy. A stack under another project name needs its own `container =` lines in `deploy\ofelia\config.ini`. |
 | A backup set is missing this morning (`make backup-status` shows a store over 24 h old, or a gauge reads -1) | 1. `docker compose logs scheduler \| findstr nightly-backup` shows each job's exit; an exec error means the `db` or `jobs` container was down at 10:00 UTC. 2. Exit 2 is a refusal before any write: the root is missing or read-only, the disk is short, or another run holds the lock. 3. The data job's exit 1 can mean a writer mark stayed fresh for 2 hours, or a writer held the analytics file for 30 minutes, so it skipped that store. 4. A `.partial` folder is a dead run's; the next run deletes it. Then run `make backup`. |
-| The app fails to import after an `api/` edit | The edit imports a `betting/` name the image does not have. Rebuild: `docker compose build app`, then `docker compose up -d app`. |
+| The app fails to import after an `api/` edit | The edit imports a name from a folder the app does not mount, such as `scripts/`. Rebuild: `docker compose build app`, then `docker compose up -d app`. |
 | `C:/Program Files/Git/` in an error | Git Bash rewrote a container path. Use cmd.exe, or prefix the command with `MSYS_NO_PATHCONV=1`. |
 | The disk fills during image builds | Run `docker builder prune -f`. |
 
