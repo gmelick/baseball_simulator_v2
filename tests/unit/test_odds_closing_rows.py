@@ -37,7 +37,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import betting.history
+import betting.historical_loader
 
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -45,9 +45,9 @@ if str(_ROOT) not in sys.path:
 
 from tests.bp_recorded import Recorded92857
 
-import betting.validate as odds_row_guard
+import betting.validate_odds as odds_row_guard
 import pipeline.live.ingestion.constants as live_constants
-from betting.load import (
+from betting.load_odds_to_db import (
     _odds_hash,
     _prop_odds_hash,
     closing_candidates,
@@ -790,7 +790,7 @@ class TestPregameCadence:
 
 
 def _load_loader() -> Any:
-    return betting.history
+    return betting.historical_loader
 
 
 class TestLoaderGameDates:
@@ -920,7 +920,7 @@ class TestNightlyScript:
         proc, record = _run_script(tmp_path, ODDS_API_KEY="k")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         args = record.read_text(encoding="utf-8").split()
-        assert args[:2] == ["-m", "betting.history"]
+        assert args[:2] == ["-m", "betting.historical_loader"]
         today = datetime.now(UTC).date()
         d1, d2 = today - timedelta(days=1), today - timedelta(days=2)
         i = args.index("--game-dates")

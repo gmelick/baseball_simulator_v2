@@ -3,7 +3,7 @@
 A vendor read can fail for a passing reason (a time-out, a burst of HTTP 502 /
 503 answers). The BettingPros provider catches the failure, logs a WARNING and
 goes on with an empty or partial result. The historical loader
-(``betting/history.py``) used to list that game in its done-file
+(``betting/historical_loader.py``) used to list that game in its done-file
 anyway, so the gap was silent and permanent: game 717171 lost every row to one
 schedule time-out.
 
@@ -49,7 +49,7 @@ from unittest.mock import MagicMock
 import pytest
 from tests.bp_recorded import BRYCE_MILLER, Recorded92857
 
-import betting.history as loader
+import betting.historical_loader as loader
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider
 from betting.markets import PROP_ROLE_PITCHER
 
@@ -256,7 +256,7 @@ class TestRetryPolicyHandOff:
     async def test_run_hands_over_the_defaults(self, monkeypatch, caplog) -> None:
         provider = _CountingProvider()
         _wire(monkeypatch, provider, [746001])
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         assert await loader.run(loader.parse_args(_args())) == 0
         assert provider.policies == [(3, 5.0)]
         assert "up to 3 retries each, the first after 5.0 s" in caplog.text
@@ -267,7 +267,7 @@ class TestRetryPolicyHandOff:
     ) -> None:
         rec = _wire(monkeypatch, _PlainProvider(), [746001, 746002])
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         assert await loader.run(loader.parse_args(_args("--done-file", str(done)))) == 0
         assert "_PlainProvider does not retry a failed read" in caplog.text
         assert rec.game_pks() == [746001, 746002]
@@ -288,7 +288,7 @@ class TestIncompleteGames:
         provider = _CountingProvider(fail_game_odds={746002: 2})
         rec = _wire(monkeypatch, provider, [746001, 746002, 746003])
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         rc = await loader.run(loader.parse_args(_args("--done-file", str(done))))
         assert rc == loader.EXIT_INCOMPLETE == 1
         # The incomplete game is not listed; the clean games are, in order.
@@ -340,7 +340,7 @@ class TestIncompleteGames:
         provider = _CountingProvider(start_failures=7)
         _wire(monkeypatch, provider, [746001, 746002])
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         assert await loader.run(loader.parse_args(_args("--done-file", str(done)))) == 0
         assert done.read_text(encoding="utf-8").split() == ["746001", "746002"]
         assert "incomplete games: none" in caplog.text
@@ -353,7 +353,7 @@ class TestIncompleteGames:
         monkeypatch.chdir(tmp_path)
         provider = _CountingProvider(fail_game_odds={746001: 1, 746003: 4})
         _wire(monkeypatch, provider, [746001, 746002, 746003])
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         assert await loader.run(loader.parse_args(_args())) == 1
         assert list(tmp_path.iterdir()) == []  # no done-file is written
         text = caplog.text
@@ -372,7 +372,7 @@ class TestIncompleteGames:
         provider = _CountingProvider(raise_game_odds={746002})
         rec = _wire(monkeypatch, provider, [746001, 746002, 746003])
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         rc = await loader.run(loader.parse_args(_args("--done-file", str(done))))
         assert rc == loader.EXIT_INCOMPLETE
         assert done.read_text(encoding="utf-8").split() == ["746001", "746003"]
@@ -388,7 +388,7 @@ class TestIncompleteGames:
         rec = _wire(monkeypatch, provider, [746001, 746002, 746003])
         rec.fail_writes = {746001, 746003}
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         rc = await loader.run(loader.parse_args(_args("--done-file", str(done))))
         assert rc == loader.EXIT_INCOMPLETE
         assert done.read_text(encoding="utf-8").split() == ["746002"]
@@ -417,7 +417,7 @@ class TestIncompleteGames:
         provider = _CountingProvider(fail_game_odds={746002: 1})
         _wire(monkeypatch, provider, [746001, 746002])
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         argv = _args("--done-file", str(done), "--skip-loaded-since", "2026-09-28T10:00:00+00:00")
         assert await loader.run(loader.parse_args(argv)) == loader.EXIT_INCOMPLETE
         assert "--skip-loaded-since also skips a game an earlier run left incomplete" in (
@@ -534,7 +534,7 @@ class TestTheRealProvider:
     ) -> None:
         fake, waits = vendor(fail_first=2)
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         argv = _args("--done-file", str(done), "--retries", "3", "--retry-wait", "0.25")
         assert await loader.run(loader.parse_args(argv)) == 0
         # Two 502s, then the schedule answers: two waits, doubled.
@@ -549,7 +549,7 @@ class TestTheRealProvider:
     ) -> None:
         fake, waits = vendor(fail_first=10**9)
         done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         argv = _args("--done-file", str(done), "--retries", "2", "--retry-wait", "0.25")
         assert await loader.run(loader.parse_args(argv)) == loader.EXIT_INCOMPLETE
         # One schedule read per game, three attempts each, then the provider gives up.

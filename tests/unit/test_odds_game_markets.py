@@ -21,9 +21,9 @@ from unittest.mock import AsyncMock
 import pytest
 from tests.bp_recorded import GAME_99026, Recorded99026
 
-import betting.history
+import betting.historical_loader
 from betting.bettingpros.fetch_odds import _GAME_MARKET_IDS, BettingProsOddsProvider
-from betting.load import _odds_hash, insert_game_odds_rows, load_odds
+from betting.load_odds_to_db import _odds_hash, insert_game_odds_rows, load_odds
 from betting.markets import (
     FULL_GAME_MARKET_TYPES,
     GAME_MARKET_KIND,
@@ -32,7 +32,7 @@ from betting.markets import (
     GAME_MARKET_TYPES,
     GAME_ODDS_FIELDS,
 )
-from betting.validate import RefusalTally
+from betting.validate_odds import RefusalTally
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
@@ -400,7 +400,7 @@ class TestLiveGameMarketCycle:
 
 class TestLoaderGameMarkets:
     def _loader(self):
-        return betting.history
+        return betting.historical_loader
 
     def test_default_is_every_market(self):
         loader = self._loader()

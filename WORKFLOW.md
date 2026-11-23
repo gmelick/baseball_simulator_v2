@@ -188,7 +188,7 @@ times are UTC; Eastern time is four hours earlier in summer and five in winter.
 | 10:00 daily | `nightly-backup-postgres` | `db`, `postgres` | `db/backup/pg_backup.sh`: dumps the statistics database. | its own lock |
 | 10:00 daily | `nightly-backup-data` | `jobs`, `appuser` | `python -m pipeline.backup.data_stores`: copies the analytics file, the bundle and the small `/data` files. | the rebuild, finals and sweep marks |
 | 10:30 daily | `nightly-backup-offsite` | `jobs`, `appuser` | `python -m pipeline.backup.offsite`: copies the newest backup sets into the OneDrive folder. Takes about 10 to 25 minutes. | the data backup's mark and the Postgres backup's lock |
-| 10:30 daily | `nightly-closing-lines` | `app`, root | `scripts/nightly_closing_lines.sh`: runs `python -m betting.history` for the opening and closing odds of yesterday's and the day before's games. The closing rows are the fallback to the live service; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
+| 10:30 daily | `nightly-closing-lines` | `app`, root | `scripts/nightly_closing_lines.sh`: runs `python -m betting.historical_loader` for the opening and closing odds of yesterday's and the day before's games. The closing rows are the fallback to the live service; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
 
 Each data job runs inside two wrappers:
 
@@ -391,7 +391,7 @@ make load-historical-odds FLAGS="--seasons 2024"
 make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --book draftkings"
 ```
 
-The odds loader (`python -m betting.history`) writes the opening and closing
+The odds loader (`python -m betting.historical_loader`) writes the opening and closing
 lines of Final games, one row per book, into `raw.game_odds` and
 `raw.prop_odds`. It needs `ODDS_API_KEY` in `.env`; without the key every game
 ends incomplete and the loader exits 1. The historical game loader

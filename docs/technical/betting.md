@@ -9,9 +9,9 @@ probabilities with the stored prices. Each step of the work has one file.
 | Our market names and book labels | [`betting/markets.py`](../../betting/markets.py) |
 | 1. Match an MLB game to its BettingPros event | [`betting/bettingpros/match_games.py`](../../betting/bettingpros/match_games.py) |
 | 2. Fetch the odds and build one row per book | [`betting/bettingpros/fetch_odds.py`](../../betting/bettingpros/fetch_odds.py) |
-| 3. Validate each row (the load guard) | [`betting/validate.py`](../../betting/validate.py) |
-| 4. Load the kept rows, and stamp the closing line | [`betting/load.py`](../../betting/load.py) |
-| 5. Load the finished games (the nightly pass and the backfills) | [`betting/history.py`](../../betting/history.py) |
+| 3. Validate each row (the load guard) | [`betting/validate_odds.py`](../../betting/validate_odds.py) |
+| 4. Load the kept rows, and stamp the closing line | [`betting/load_odds_to_db.py`](../../betting/load_odds_to_db.py) |
+| 5. Load the finished games (the nightly pass and the backfills) | [`betting/historical_loader.py`](../../betting/historical_loader.py) |
 | 6. Price the markets: no-vig probability, edge, expected value, bet signal | [`betting/pricing.py`](../../betting/pricing.py) |
 
 The odds tables are on the [database page](database.md#odds). The betting routes are on
@@ -43,7 +43,7 @@ closing price). The model is not judged by it (owner ruling 2026-09-28).
 
 **Getting the odds in.**
 
-1. `betting.load.odds_source()` builds the one odds source, `BettingProsOddsProvider`. It
+1. `betting.load_odds_to_db.odds_source()` builds the one odds source, `BettingProsOddsProvider`. It
    reads the vendor key from `ODDS_API_KEY`. Without the key, every BettingPros read fails
    with one plain message; the provider logs it, counts it in `read_failures` and returns
    no rows.
@@ -53,8 +53,8 @@ closing price). The model is not judged by it (owner ruling 2026-09-28).
    per book (`fetch_odds.py`). A closing or current row is written for each book that prices
    every side. An opening row is written only for the opener: the one book that opened
    every side.
-4. `betting.load` drops a row with no price (`has_price`), runs the load guard on the rest
-   (`validate.check_row`), logs and counts each refusal, and writes the kept rows of one
+4. `betting.load_odds_to_db` drops a row with no price (`has_price`), runs the load guard on the rest
+   (`validate_odds.check_row`), logs and counts each refusal, and writes the kept rows of one
    offer in one `executemany`. The odds hash skips a row already stored.
 5. Two callers run steps 3 and 4.
    * The live service (`pipeline/live/ingestion/`) loads the current lines of every
@@ -62,7 +62,7 @@ closing price). The model is not judged by it (owner ruling 2026-09-28).
      `prop_offers`) and writes on its event loop (`write_offers`). At first pitch it stamps
      each book's last pre-pitch row as `closing` (`promote_closing_game_rows`,
      `promote_closing_prop_rows`).
-   * The historical loader (`python -m betting.history`) calls `load_odds` for each Final
+   * The historical loader (`python -m betting.historical_loader`) calls `load_odds` for each Final
      game. The scheduler's `nightly-closing-lines` job
      ([`scripts/nightly_closing_lines.sh`](../../scripts/nightly_closing_lines.sh)) runs it
      at 10:30 UTC over the games of the last two days, for the opening and the closing
@@ -103,18 +103,18 @@ functions.
 
 | Name | What it does | Called from |
 |---|---|---|
-| `PROP_STATS` / `PITCHER_PROP_STATS` / `BATTER_PROP_STATS` | The fifteen prop markets: five pitcher markets and ten batter markets. `hits` is a batter market; `hits_allowed` is a pitcher market. | `fetch_odds.py`, `load.py`, `history.py`, migration 0022 |
+| `PROP_STATS` / `PITCHER_PROP_STATS` / `BATTER_PROP_STATS` | The fifteen prop markets: five pitcher markets and ten batter markets. `hits` is a batter market; `hits_allowed` is a pitcher market. | `fetch_odds.py`, `load_odds_to_db.py`, `historical_loader.py`, migration 0022 |
 | `PROP_STAT_TO_MODEL_PROP` | Each market's name in the simulator's prop output (`strikeouts` → `K`). | `scripts/probes/rescore_graded_book.py` |
-| `PROP_ROLE_PITCHER` / `PROP_ROLE_BATTER` / `PROP_ROLE_BOTH` | A player's role. `both` is the safe default for an unknown role or a two-way player. | `history.py`, `pipeline/live/ingestion/prop_odds.py` |
-| `prop_markets_for(role, prop_stats)` | The markets a player in that role is asked for. | `load.prop_offers` |
+| `PROP_ROLE_PITCHER` / `PROP_ROLE_BATTER` / `PROP_ROLE_BOTH` | A player's role. `both` is the safe default for an unknown role or a two-way player. | `historical_loader.py`, `pipeline/live/ingestion/prop_odds.py` |
+| `prop_markets_for(role, prop_stats)` | The markets a player in that role is asked for. | `load_odds_to_db.prop_offers` |
 | `GAME_MARKET_TYPES` / `FULL_GAME_MARKET_TYPES` | The fifteen game markets; the three full-game ones (`moneyline`, `runline`, `total`). | the routes, the loaders, `scripts/accuracy/`, `simulation/game_market_distributions.py` |
-| `GAME_MARKET_KIND` / `GAME_MARKET_SEGMENT` / `GAME_MARKET_SIDE` / `GAME_MARKET_NAMES` | Per market: the kind (`moneyline`, `three_way`, `runline`, `total`, `yes_no`), which says the columns it fills; the segment (full game, first inning, first five); the team of a team total; the display name. | the same, `validate.py` |
-| `GAME_ODDS_FIELDS` | The price and line columns of a game row. | `fetch_odds.py`, `load.has_price`, `validate.py` |
-| `BOOK_NAMES` / `BOOK_KIND` / `BOOK_IDS_BY_NAME` / `BETTABLE_KINDS` | The books by id, their kind (sportsbook, fantasy app, exchange, prediction market, blend) and their short names. Only a sportsbook is bettable. | the `book_*` helpers, `history.py` |
-| `book_label` / `book_id_from_label` / `book_kind` / `is_bettable` / `book_display_name` / `resolve_book` | Move between a book id, its stored label `bp:<id>`, its kind and its display name. `resolve_book` reads an id, a label or a short name (`draftkings`). | `fetch_odds.py`, `load.py`, `history.py`, the betting routes, `scripts/accuracy/`, the probes |
+| `GAME_MARKET_KIND` / `GAME_MARKET_SEGMENT` / `GAME_MARKET_SIDE` / `GAME_MARKET_NAMES` | Per market: the kind (`moneyline`, `three_way`, `runline`, `total`, `yes_no`), which says the columns it fills; the segment (full game, first inning, first five); the team of a team total; the display name. | the same, `validate_odds.py` |
+| `GAME_ODDS_FIELDS` | The price and line columns of a game row. | `fetch_odds.py`, `load_odds_to_db.has_price`, `validate_odds.py` |
+| `BOOK_NAMES` / `BOOK_KIND` / `BOOK_IDS_BY_NAME` / `BETTABLE_KINDS` | The books by id, their kind (sportsbook, fantasy app, exchange, prediction market, blend) and their short names. Only a sportsbook is bettable. | the `book_*` helpers, `historical_loader.py` |
+| `book_label` / `book_id_from_label` / `book_kind` / `is_bettable` / `book_display_name` / `resolve_book` | Move between a book id, its stored label `bp:<id>`, its kind and its display name. `resolve_book` reads an id, a label or a short name (`draftkings`). | `fetch_odds.py`, `load_odds_to_db.py`, `historical_loader.py`, the betting routes, `scripts/accuracy/`, the probes |
 | `GRADED_BOOK_PREFERENCE` / `graded_book_labels` / `graded_row_order_sql` | The graded book order (DraftKings first), as ids, as labels and as an SQL `ORDER BY` tail. | `fetch_odds.get_odds`, `api/routes/betting_stored_odds.py`, `betting_card.py`, `scripts/accuracy/pricing.py`, the probes |
 | `bettable_labels` | The bettable books' labels. | `betting_stored_odds.py`, `scripts/accuracy/pricing.py`, the probes |
-| `STORED_BOOK_FILTER_SQL` | `book LIKE 'bp:%'`: a reader keeps only one-book rows, because an old mixed `consensus` row may still exist. | `betting_stored_odds.py`, `history.py`, `scripts/accuracy/pricing.py`, the probes |
+| `STORED_BOOK_FILTER_SQL` | `book LIKE 'bp:%'`: a reader keeps only one-book rows, because an old mixed `consensus` row may still exist. | `betting_stored_odds.py`, `historical_loader.py`, `scripts/accuracy/pricing.py`, the probes |
 | `ODDS_ROW_VERSION` | The stamp of the one-book-per-row format (`sim555.2`) that an accuracy report records. | `scripts/accuracy/pricing.py`, the probes |
 
 **Watch out:** a new prop market goes in three places together: the tuples here, a
@@ -136,11 +136,11 @@ logs as `betting.bettingpros`.
 | `ProviderBase` | Type declarations of the provider's settings and caches, so every mixin sees them. | `fetch_odds.BettingProsOddsProvider` |
 | `TransportMixin._http_get_json` | One GET with the retry policy. It retries a time-out, an HTTP 429 or a 5xx, waits twice as long each time (at most 60 s, a `Retry-After` included), and removes the key from an error message. | `_bp_get`, `_mlb_get`; `scripts/probes/odds_row_compare.py` records and replays it |
 | `TransportMixin._bp_get` / `_mlb_get` | The two network seams the tests stub: a BettingPros v3 read (it raises at once with no key) and an MLB Stats API read. | every read |
-| `TransportMixin.set_retry_policy` | Sets the retries and the first wait. | the provider's constructor, `history.py` |
+| `TransportMixin.set_retry_policy` | Sets the retries and the first wait. | the provider's constructor, `historical_loader.py` |
 | `_read_schedule` / `_ScheduleInfo` / `_is_postponed` | The schedule facts of one game from `schedule?gamePk=`: the official date, the teams, the start, the double-header number, the postponed start. The played entry wins over a postponed one. | `_resolve_game_meta` |
 | `EventMatchMixin._resolve_game_meta` | Game → (official date, home name, away name, UTC start). The date is `officialDate`, never the UTC `gameDate`. | `_resolve_event`, the row builders |
 | `EventMatchMixin._resolve_event` / `_match_by_start` / `_match_game_two` | Game → its BettingPros event. With a known start, the nearest event of the same teams on that date wins. Game 2 of a straight double-header has a placeholder start, so it takes the later event. | `fetch_odds` row builders |
-| `forget_game` / `forget_failed_lookups` | Drop one game's cached facts; drop every stored failed lookup. | `pipeline/live/ingestion/game_odds.py`; `history.py` before each game |
+| `forget_game` / `forget_failed_lookups` | Drop one game's cached facts; drop every stored failed lookup. | `pipeline/live/ingestion/game_odds.py`; `historical_loader.py` before each game |
 | `_postponed_start` | A made-up game's original start, so the guard can refuse a row that priced the game not played. | `fetch_odds` row builders |
 | `_parse_utc` / `_normalize_name` | Parse a timestamp from either source; the name key (lower case, no accents or punctuation). | this module, `fetch_odds.py` |
 
@@ -159,8 +159,8 @@ Gets BettingPros' odds for a game and builds one row per book. The provider clas
 | Name | What it does | Called from |
 |---|---|---|
 | `_GAME_MARKET_IDS` / `_PROP_MARKET_IDS` | Our market name → the vendor's market id. Two import-time guards fail when the keys differ from `GAME_MARKET_TYPES` or `PROP_STATS`. | the row builders |
-| `BettingProsOddsProvider.get_odds_by_book` | One row per book for one game market and line type. An unknown market raises `ValueError`; a game with no match gives `[]`. | `load.game_offers` |
-| `BettingProsOddsProvider.get_prop_odds_by_book` | One row per book for one player's prop market. | `load.prop_offers` |
+| `BettingProsOddsProvider.get_odds_by_book` | One row per book for one game market and line type. An unknown market raises `ValueError`; a game with no match gives `[]`. | `load_odds_to_db.game_offers` |
+| `BettingProsOddsProvider.get_prop_odds_by_book` | One row per book for one player's prop market. | `load_odds_to_db.prop_offers` |
 | `BettingProsOddsProvider.get_odds` | The graded book's row of one market, else the first other sportsbook's, else a row of `None` prices. The live service broadcasts it and never stores it. | `pipeline/live/ingestion/game_odds.py` |
 | `OfferRowsMixin._rows` | One row per book for a market's sides. `opening`: at most one row, the opener's; a tie joins only when the same book opened it. Another line type: a row for each book with a usable line on every required side. `book_line_at` is the newest stamp of the row's sides. | `_game_market_rows`, `_prop_market_rows` |
 | `OfferRowsMixin._game_market_rows` / `_prop_market_rows` | The rows of one game market or one player's prop market, with `source = 'bettingpros'`, the scheduled start, the official date and the postponed start for the guard. | the three reads |
@@ -179,38 +179,38 @@ half the live cadence; 0 turns the caches off). `BETTINGPROS_MAX_RETRIES` (defau
   `time.sleep`, which stalls the live service's vendor thread. Only the historical loader
   turns retries on (`--retries`).
 * The provider reads every price as a float (`-110.0`). The closing stamp's hash
-  (`load.closing_hash`) depends on that typing.
+  (`load_odds_to_db.closing_hash`) depends on that typing.
 
-### `betting/validate.py`
+### `betting/validate_odds.py`
 
-[Source](../../betting/validate.py) · 426 lines · Tests: [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_book_census.py](../../tests/unit/test_odds_book_census.py)
+[Source](../../betting/validate_odds.py) · 426 lines · Tests: [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_book_census.py](../../tests/unit/test_odds_book_census.py)
 
 The load guard: it refuses a row that no single book could post. The module does no I/O.
 
 | Name | What it does | Called from |
 |---|---|---|
-| `check_row(row)` | Returns a `Refusal` (a rule and a plain reason) or `None`. The checks run in the order of `RULES`. | `load.keep_rows`, `api/routes/betting_stored_odds.py`, `scripts/probes/odds_book_census.py` |
+| `check_row(row)` | Returns a `Refusal` (a rule and a plain reason) or `None`. The checks run in the order of `RULES`. | `load_odds_to_db.keep_rows`, `api/routes/betting_stored_odds.py`, `scripts/probes/odds_book_census.py` |
 | `RULES` | The 14 rules: `zero_price` (BettingPros sends 0 for a price a book does not offer); a missing side; run-line spreads of two sizes; equal spreads priced like a pair; a first-five "+0.5 / +0.5" pair priced like a first-inning tie; an over and an under at two lines; a first-five total at a first-inning line; a placeholder team-total line; a first-five tie at a first-inning price; three three-way rules (a sum below 0.98, team prices that refund a tie, a sum above 1.18); a closing row stamped more than 15 minutes after the start; a price stamped before a postponed game's original start. | `check_row`, `RefusalTally.summary` |
-| `RefusalTally` | Counts the rows offered and the refusals by rule, market and book; `summary()` prints them; `warn_if_share_above` warns past a share. | `load.keep_rows`, `history.py`, `pipeline/live/ingestion/base.py` |
-| `CLOSING_STAMP_GRACE` | 15 minutes: how late a closing row may be stamped. | `check_row`, `load.py` (the closing stamp) |
+| `RefusalTally` | Counts the rows offered and the refusals by rule, market and book; `summary()` prints them; `warn_if_share_above` warns past a share. | `load_odds_to_db.keep_rows`, `historical_loader.py`, `pipeline/live/ingestion/base.py` |
+| `CLOSING_STAMP_GRACE` | 15 minutes: how late a closing row may be stamped. | `check_row`, `load_odds_to_db.py` (the closing stamp) |
 
 The guard reads prices through `betting.pricing.implied_prob_from_american`, the one price
 formula. `zero_price` runs first, so the formula never sees a price of 0.
 
-### `betting/load.py`
+### `betting/load_odds_to_db.py`
 
-[Source](../../betting/load.py) · 796 lines · Tests: [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py)
+[Source](../../betting/load_odds_to_db.py) · 796 lines · Tests: [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py)
 
 The one load path, the insert statements, the odds hash and the closing stamp.
 
 | Name | What it does | Called from |
 |---|---|---|
-| `odds_source()` | A new `BettingProsOddsProvider`, the one odds source. | `history.py`, `pipeline/live/ingestion/base.py`, `live_ingestion_pipeline.py` |
+| `odds_source()` | A new `BettingProsOddsProvider`, the one odds source. | `historical_loader.py`, `pipeline/live/ingestion/base.py`, `live_ingestion_pipeline.py` |
 | `has_price(row)` | True when a game or prop row has at least one price or line. A row with none is skipped with no log line. | `game_offers`, `prop_offers` |
 | `game_offers` / `prop_offers` | Every book's priced rows, one offer per (line type, market) or per (player, market, line type). A fetch that raises is logged, counted under `fetch`, and the next market runs. These block on the network. | `load_odds`; the live cycles on their vendor thread |
 | `keep_rows` | The rows of one offer the guard keeps; logs each refusal at INFO and counts it. `book_id` keeps one book. | `write_offers` |
 | `write_offers` | Checks and writes each offer, one `executemany` per offer. A write that raises is logged, counted under `write`, and the next offer runs. Returns the rows sent. | `load_odds`; the live cycles |
-| `load_odds(conn, provider, game_pk, ...)` | Fetch, keep, check and write one game's odds. `game_markets=None` skips the game markets; `roles=None` skips the props. | `history.py` |
+| `load_odds(conn, provider, game_pk, ...)` | Fetch, keep, check and write one game's odds. `game_markets=None` skips the game markets; `roles=None` skips the props. | `historical_loader.py` |
 | `insert_game_odds_rows` / `insert_prop_odds_rows` / `game_odds_insert_args` / `prop_odds_insert_args` | The two INSERTs, `ON CONFLICT ... DO NOTHING` on the odds hash. With `restamp`, a row the book still posts gets `last_seen_at = NOW()` instead (Alembic 0029). | `write_offers` |
 | `_odds_hash` / `_prop_odds_hash` | The SHA-256 of the row's book, line type, market and prices. The vendor stamp is not in it, so an unchanged price fetched again deduplicates. | the insert arguments; `scripts/probes/backfill_odds_hash.py` |
 | `_stamp_param` | A row's stamp as an aware UTC datetime. | the insert arguments, `pipeline/live/ingestion/odds_cycle.py` |
@@ -221,9 +221,9 @@ The one load path, the insert statements, the odds hash and the closing stamp.
 first, and the live row stays `current`. A key with no closing row at first pitch (a book
 that first posts in play) can take an in-play row on a later promotion.
 
-### `betting/history.py`
+### `betting/historical_loader.py`
 
-[Source](../../betting/history.py) · 871 lines · Tests: [test_historical_odds_load.py](../../tests/unit/test_historical_odds_load.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py)
+[Source](../../betting/historical_loader.py) · 871 lines · Tests: [test_historical_odds_load.py](../../tests/unit/test_historical_odds_load.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py)
 
 Loads the odds of finished games. It walks the Final games in `raw.games` and calls
 `load_odds` for each: the game markets, then the props of every player in
@@ -253,7 +253,7 @@ markets).
 far stay written, and the done-file leaves it out); 2 on a usage error.
 
 Run: `make load-historical-odds FLAGS="--seasons 2024"`, or
-`python -m betting.history --seasons 2024` in the app container. Without
+`python -m betting.historical_loader --seasons 2024` in the app container. Without
 `ODDS_API_KEY`, every read fails and every game is incomplete.
 
 ### `betting/pricing.py`
@@ -268,7 +268,7 @@ fetch. The caller passes the prices in. The module has seven sections, in this o
 | Name | What it does | Called from |
 |---|---|---|
 | `american_to_decimal` | American odds to decimal odds. | `expected_value`, `stake_fraction`; `betting_stored_odds.py`; `scripts/accuracy/pricing.py`, `hypothetical_return.py` |
-| `implied_prob_from_american` | A price's implied probability, vig included. The one copy of the formula; a price of 0 raises. | `devig`, `devig_one_sided`, `reference_margin_from_prices`; `validate.py`; the twin rule in `fetch_odds.py`; `scripts/accuracy/pricing.py`, `scripts/market_skill.py`, the census probe |
+| `implied_prob_from_american` | A price's implied probability, vig included. The one copy of the formula; a price of 0 raises. | `devig`, `devig_one_sided`, `reference_margin_from_prices`; `validate_odds.py`; the twin rule in `fetch_odds.py`; `scripts/accuracy/pricing.py`, `scripts/market_skill.py`, the census probe |
 | `prob_to_american` | A probability's fair price. Raises on 0 or 1. | `edge_report` (the report's `sim_fair_american`); `scripts/accuracy/grading.py` (to skip a 0 or 1 probability) |
 
 **2. The de-vig.**
@@ -356,7 +356,7 @@ comparison skip that side.
 | Caller | What it uses |
 |---|---|
 | [`pipeline/live/ingestion/`](../../pipeline/live/ingestion/) | `odds_source`, `game_offers`, `prop_offers`, `write_offers`, the two closing stamps, `RefusalTally`, the prop roles ([pipeline-ingest.md](pipeline-ingest.md#the-live-service)) |
-| [`scripts/nightly_closing_lines.sh`](../../scripts/nightly_closing_lines.sh) | `python -m betting.history` for the last two days' games |
+| [`scripts/nightly_closing_lines.sh`](../../scripts/nightly_closing_lines.sh) | `python -m betting.historical_loader` for the last two days' games |
 | [`api/routes/betting.py`](../../api/routes/betting.py) | `/edges` and `/signals`; `BetSignalConfig`, `bet_signals_from_edges` |
 | [`api/routes/betting_pricing.py`](../../api/routes/betting_pricing.py) | Every report builder, the de-vigs and the margin rule |
 | [`api/routes/betting_stored_odds.py`](../../api/routes/betting_stored_odds.py) | `check_row`, the book helpers, `reference_margin_from_prices`, `american_to_decimal` |

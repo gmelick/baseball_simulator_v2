@@ -1,3 +1,26 @@
+# BUILT, ready to merge — three betting files get names that say what they do — SIM-646, 2026-11-23
+
+**Why it matters.** The owner found three names in the betting folder unclear. Each new name
+says what the file does. No code changes.
+
+**What changed (Data Engineer).**
+
+- `betting/history.py` is `betting/historical_loader.py`. The nightly pass and the Makefile's
+  `load-historical-odds` target run `python -m betting.historical_loader`.
+- `betting/load.py` is `betting/load_odds_to_db.py`.
+- `betting/validate.py` is `betting/validate_odds.py`.
+- Every import, `mock.patch` target and logger name follows the new module name. The loggers
+  are now `betting.historical_loader`, `betting.load_odds_to_db` and `betting.validate_odds`.
+- The living docs, CLAUDE.md, the two migration docstrings and the file index use the new
+  names. The dated records (`CHANGES.md`, `docs/audit/`) keep the old ones.
+
+**Checks (QA / DevOps).** ruff, the format check and mypy (199 files) pass. The API snapshot
+does not change. The container unit lane passes in two halves (3,788 + 2,608, 0 failed).
+
+**Deploy.** The nightly script is baked into the images and names the module, so rebuild them:
+`docker compose build app live jobs`, then `docker compose up -d app live jobs`, after about
+11:00 UTC. The scheduler's entry does not change.
+
 # CLOSED + DEPLOYED — the odds and the pricing move into one betting folder, with one load path and no made-up prices — SIM-645, 2026-11-23
 
 **Why it matters.** The odds code lived in five places. The owner asked for one folder that

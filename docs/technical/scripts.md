@@ -82,7 +82,7 @@ Run: `docker compose run --rm app sh /app/scripts/nightly_ingest.sh`.
 
 [Source](../../scripts/nightly_closing_lines.sh) · 64 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
 
-The nightly odds pass. It runs the historical odds loader, `python -m betting.history --line-types opening closing`, over the games of yesterday and the day before (UTC dates, so a late West Coast game is not missed). A closing row is the last price a book posted before first pitch. The live service stamps each game's closing rows at first pitch; this pass is the fallback and the reconciliation. The live service stores no opening row, so this pass is the only place an opening line comes from: BettingPros returns each market's opener with every offer. Without `ODDS_API_KEY`, the script exits 1 before it loads anything.
+The nightly odds pass. It runs the historical odds loader, `python -m betting.historical_loader --line-types opening closing`, over the games of yesterday and the day before (UTC dates, so a late West Coast game is not missed). A closing row is the last price a book posted before first pitch. The live service stamps each game's closing rows at first pitch; this pass is the fallback and the reconciliation. The live service stores no opening row, so this pass is the only place an opening line comes from: BettingPros returns each market's opener with every offer. Without `ODDS_API_KEY`, the script exits 1 before it loads anything.
 
 Run: the scheduler at 10:30 UTC, inside the running `app` container (`sh /app/scripts/nightly_closing_lines.sh`). The `app` container reads `ODDS_API_KEY` from `.env`. The loader is described on [betting.md](betting.md#bettinghistorypy).
 
@@ -110,7 +110,7 @@ The rebuild's first step. It makes sure the finals load ran today before the reb
 
 ### The historical odds loader
 
-The loader is `betting/history.py`, run as `python -m betting.history` or
+The loader is `betting/historical_loader.py`, run as `python -m betting.historical_loader` or
 `make load-historical-odds FLAGS="--seasons 2024"`. It loads the opening and closing lines of
 finished games. Its options and exit codes are on [betting.md](betting.md#bettinghistorypy).
 

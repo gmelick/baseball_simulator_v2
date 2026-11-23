@@ -18,7 +18,7 @@ import pytest
 from tests.script_loader import load_script
 
 from betting.markets import graded_book_labels
-from betting.validate import F5_TOTAL_LINE_MAX, THREE_WAY_SUM_MIN
+from betting.validate_odds import F5_TOTAL_LINE_MAX, THREE_WAY_SUM_MIN
 
 probe = load_script("odds_book_census")
 
@@ -602,7 +602,7 @@ class TestProbeRead:
             "book_line_at": datetime(2025, 6, 1, 23, 45, tzinfo=UTC),
             "scheduled_start": start,
         }
-        from betting.validate import check_row
+        from betting.validate_odds import check_row
 
         rec = probe.row_record(row, check_row(row))
         assert rec["stamp_minus_start_min"] == pytest.approx(40.0)
@@ -795,7 +795,7 @@ class TestProbeCensusFixes:
         assert params["f5_total_line_max"] == F5_TOTAL_LINE_MAX
 
     def test_the_new_guard_rules_name_a_first_inning_shape(self):
-        from betting.validate import RULES
+        from betting.validate_odds import RULES
 
         shapes = probe.FIRST_INNING_SHAPE_RULES
         expected = {
@@ -933,7 +933,7 @@ _START = datetime(2025, 7, 3, 23, 5, tzinfo=UTC)
 
 def _saved_row(book: str, market: str, *, minutes: float = 3.0, old=None, dated=False, **cols):
     """A row as an earlier census saved it: :func:`row_record` under the OLD verdict."""
-    from betting.validate import Refusal
+    from betting.validate_odds import Refusal
 
     row = {
         "book": book,
@@ -1103,7 +1103,7 @@ class TestProbeRegate:
         view = probe.guard_view(rec)
         assert view["under_line"] is None
         assert view["book_line_at"] == _START + timedelta(minutes=3)
-        from betting.validate import check_row
+        from betting.validate_odds import check_row
 
         refusal = check_row(view)
         assert refusal is not None and refusal.rule == "total_line_mismatch"
@@ -1111,7 +1111,7 @@ class TestProbeRegate:
     def test_the_guard_view_keeps_a_made_up_games_postponed_start(self):
         """A saved row of a made-up game keeps its postponed start, so a re-grade
         refuses a price stamped before it; any other row saves no such key."""
-        from betting.validate import check_row
+        from betting.validate_odds import check_row
 
         # The game was postponed 50 days before it was played; bet365 stamped its
         # price 29 minutes before the postponed start.

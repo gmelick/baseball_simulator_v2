@@ -20,7 +20,7 @@ Units covered:
   * LiveIngestionPipeline._refresh_game_state — the WS-signal → REST-refetch →
     build → persist → broadcast → resim flow (orchestration)
   * _persist_game_odds_cycle / _persist_prop_roles_cycle — the load through
-    betting.load (game_offers / prop_offers, then write_offers) and the cadence gate
+    betting.load_odds_to_db (game_offers / prop_offers, then write_offers) and the cadence gate
   * mark_closing_lines / mark_closing_prop_lines — closing-line designation
   * _collect_prop_player_roles (SIM-421)
   * _should_resimulate + _signal_resimulation callback dispatch
@@ -57,9 +57,14 @@ from tests.bp_recorded import (  # noqa: E402
     Recorded92857,
 )
 
-from betting.load import _odds_hash, _prop_odds_hash, game_offers, prop_offers  # noqa: E402
+from betting.load_odds_to_db import (  # noqa: E402
+    _odds_hash,
+    _prop_odds_hash,
+    game_offers,
+    prop_offers,
+)
 from betting.markets import PROP_ROLE_BATTER, PROP_ROLE_PITCHER  # noqa: E402
-from betting.validate import check_row  # noqa: E402
+from betting.validate_odds import check_row  # noqa: E402
 from pipeline.live.ingestion.constants import RESIM_COOLDOWN_S  # noqa: E402
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder  # noqa: E402
 from pipeline.live.ingestion.mlb_websocket import ConnectionManager  # noqa: E402

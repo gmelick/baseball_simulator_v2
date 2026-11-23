@@ -22,7 +22,7 @@ from betting.markets import (
     graded_book_labels,
     is_bettable,
 )
-from betting.validate import (
+from betting.validate_odds import (
     F5_TOTAL_LINE_MAX,
     THREE_WAY_SUM_MAX,
     THREE_WAY_SUM_MIN,
@@ -80,7 +80,7 @@ class TestCensusSql:
         assert f"NOT {tie_last}" in sections["13"]
 
     def test_the_team_total_line_of_one_is_checked(self):
-        from betting.validate import TEAM_TOTAL_LINE_MAX
+        from betting.validate_odds import TEAM_TOTAL_LINE_MAX
 
         body = self._sections(self.SQL)["6b"]
         assert "o.market_type IN ('team_total_home', 'team_total_away')" in body

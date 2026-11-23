@@ -2,7 +2,7 @@
 """Load the odds of finished games: the nightly pass and the backfills.
 
 The loader walks the Final games in ``raw.games`` and loads each game's odds into
-``raw.game_odds`` and ``raw.prop_odds`` through :func:`betting.load.load_odds`. It
+``raw.game_odds`` and ``raw.prop_odds`` through :func:`betting.load_odds_to_db.load_odds`. It
 loads the opening and the closing line by default (``--line-types``). BettingPros
 returns each market's opener with every offer, so the loader recovers an opening
 line at any time.
@@ -13,7 +13,7 @@ written for every book that prices every side of the market. An opening row is
 written only for the opener, the one book that opened every side. The loader asks a
 pitcher for the pitcher markets and every other player for the batter markets
 (:func:`betting.markets.prop_markets_for`); the roles come from ``raw.game_lineups``.
-The load guard (:mod:`betting.validate`) checks each row before the write, and the
+The load guard (:mod:`betting.validate_odds`) checks each row before the write, and the
 odds hash makes a rerun write nothing new. The run ends with the guard's summary,
 the rows written per book, and a warning when the guard refused more than 5% of
 the rows.
@@ -41,14 +41,14 @@ Usage (``ODDS_API_KEY`` and ``BASEBALL_DB_DSN`` come from ``.env``; without the
 key every vendor read fails and every game is incomplete)::
 
     make load-historical-odds FLAGS="--seasons 2024 --max-games 200"
-    python -m betting.history --seasons 2024
-    python -m betting.history --seasons 2024 --no-props
-    python -m betting.history --seasons 2024 --no-game-odds --prop-stats singles doubles
-    python -m betting.history --seasons 2024 --max-games 20 --book draftkings
-    python -m betting.history --seasons 2024 \
+    python -m betting.historical_loader --seasons 2024
+    python -m betting.historical_loader --seasons 2024 --no-props
+    python -m betting.historical_loader --seasons 2024 --no-game-odds --prop-stats singles doubles
+    python -m betting.historical_loader --seasons 2024 --max-games 20 --book draftkings
+    python -m betting.historical_loader --seasons 2024 \
         --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
     # The nightly pass (scripts/nightly_closing_lines.sh):
-    python -m betting.history --seasons 2026 --line-types opening closing \
+    python -m betting.historical_loader --seasons 2026 --line-types opening closing \
         --game-dates 2026-10-08 2026-10-07
 """
 
@@ -64,7 +64,7 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
-from betting.load import load_odds, odds_source
+from betting.load_odds_to_db import load_odds, odds_source
 
 # The market and book vocabulary is imported, never copied.
 from betting.markets import (
@@ -81,11 +81,11 @@ from betting.markets import (
 )
 
 # The load guard (pure; no I/O).
-from betting.validate import RefusalTally
+from betting.validate_odds import RefusalTally
 from db.introspect import pg_column_exists_async
 from pipeline.db_dsn import require_dsn
 
-log = logging.getLogger("betting.history")
+log = logging.getLogger("betting.historical_loader")
 
 #: No default password. main() resolves a blank value through
 #: pipeline.db_dsn.require_dsn, which names the missing variable.
@@ -320,7 +320,7 @@ def _configure_offline_cache() -> float:
 
     Only sets ``ODDS_OFFERS_CACHE_TTL_S`` when the operator left it unset, so an
     explicit value always wins. The provider reads the variable when it is
-    built (:func:`betting.load.odds_source`), so this runs before that call.
+    built (:func:`betting.load_odds_to_db.odds_source`), so this runs before that call.
     """
     os.environ.setdefault(_OFFERS_CACHE_TTL_ENV, str(OFFLINE_OFFERS_CACHE_TTL_S))
     return float(os.environ[_OFFERS_CACHE_TTL_ENV])

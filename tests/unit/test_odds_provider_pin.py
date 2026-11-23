@@ -31,7 +31,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider  # noqa: E402
-from betting.load import odds_source  # noqa: E402
+from betting.load_odds_to_db import odds_source  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 # The environment name comes from its reader, so a rename fails the conftest check.

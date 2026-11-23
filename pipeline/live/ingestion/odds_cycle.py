@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
-from betting.load import _stamp_param
+from betting.load_odds_to_db import _stamp_param
 from pipeline.live.ingestion.constants import (
     PREGAME_NEAR_START_CADENCE_S,
     PREGAME_NEAR_START_WINDOW_S,

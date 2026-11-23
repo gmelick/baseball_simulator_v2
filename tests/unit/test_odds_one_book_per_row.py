@@ -8,7 +8,7 @@ pieces they rest on:
     the graded-book preference, the SQL helpers);
   * the BettingPros provider's one-row-per-book reads, the opener's row, the
     stamps, the first-five exclusions and the one-row methods on top;
-  * the load guard (``betting/validate.py``), its zero-price rule and its tally;
+  * the load guard (``betting/validate_odds.py``), its zero-price rule and its tally;
   * migration 0028, and migration 0031 (SIM-582: the archives' ``last_seen_at``).
 
 No network and no database. The provider's ``_bp_get`` / ``_mlb_get`` seams are
@@ -51,7 +51,7 @@ from betting.markets import (
     is_bettable,
 )
 from betting.pricing import implied_prob_from_american
-from betting.validate import (
+from betting.validate_odds import (
     CLOSING_STAMP_GRACE,
     F5_TIE_IMPLIED_MAX,
     F5_TOTAL_LINE_MAX,

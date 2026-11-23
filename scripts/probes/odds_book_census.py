@@ -8,7 +8,7 @@ WHY THIS EXISTS
 The re-load stores one odds row per book (``book = 'bp:<id>'``). Before it runs,
 this probe reads a few hundred games from the vendor through the provider's
 own by-book methods (``BettingProsOddsProvider.get_odds_by_book`` /
-``get_prop_odds_by_book``) and the load guard (``betting/validate.py``),
+``get_prop_odds_by_book``) and the load guard (``betting/validate_odds.py``),
 exactly as the loader will, and writes nothing to the database. It answers
 three questions the plan (§8 step 3) makes a gate:
 
@@ -144,7 +144,7 @@ from betting.markets import (  # noqa: E402
     is_bettable,
 )
 from betting.pricing import implied_prob_from_american  # noqa: E402
-from betting.validate import (  # noqa: E402
+from betting.validate_odds import (  # noqa: E402
     F5_TIE_IMPLIED_MAX,
     F5_TOTAL_LINE_MAX,
     F5_WIN_OR_TIE_SUM_MAX,

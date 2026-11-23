@@ -1,6 +1,6 @@
 """The live pipeline stores a game-odds quote once: ``raw.game_odds`` carries
 an ``odds_hash`` (SHA-256 of the quote) and a partial unique index on
-(game_pk, source, odds_hash), and ``betting.load.insert_game_odds_rows`` inserts
+(game_pk, source, odds_hash), and ``betting.load_odds_to_db.insert_game_odds_rows`` inserts
 with ON CONFLICT … DO NOTHING."""
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ class TestOddsDedup:
     # ----- Hash function semantics -----
 
     def test_odds_hash_is_deterministic(self) -> None:
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         h1 = _odds_hash(
             {
@@ -87,7 +87,7 @@ class TestOddsDedup:
         assert len(h1) == 64, "SHA-256 hex digest must be 64 chars"
 
     def test_odds_hash_changes_when_line_moves(self) -> None:
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         base = {
             "home_ml": -150,
@@ -105,7 +105,7 @@ class TestOddsDedup:
 
     def test_odds_hash_normalizes_float_precision(self) -> None:
         """1.5 and 1.50 must hash identically — same line."""
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         h1 = _odds_hash({"home_spread": 1.5})
         h2 = _odds_hash({"home_spread": 1.50})
@@ -113,7 +113,7 @@ class TestOddsDedup:
 
     def test_odds_hash_independent_of_dict_order(self) -> None:
         """Iteration order of the source dict must not change the hash."""
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         a = _odds_hash(
             {
@@ -133,7 +133,7 @@ class TestOddsDedup:
 
     def test_odds_hash_differs_by_book(self) -> None:
         """Two books at the same price are still distinct quotes."""
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         h_consensus = _odds_hash(
             {
@@ -151,7 +151,7 @@ class TestOddsDedup:
 
     def test_odds_hash_handles_missing_keys_consistently(self) -> None:
         """A payload missing every key still hashes — to a stable value."""
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         h1 = _odds_hash({})
         h2 = _odds_hash({})
@@ -165,7 +165,7 @@ class TestOddsDedup:
         ON CONFLICT … DO NOTHING. The row is a real recorded BettingPros row."""
         from tests.bp_recorded import GAME_92857, recorded_game_rows
 
-        from betting.load import _odds_hash, insert_game_odds_rows
+        from betting.load_odds_to_db import _odds_hash, insert_game_odds_rows
 
         row = recorded_game_rows("moneyline")[0]
         conn = MagicMock()
@@ -186,7 +186,7 @@ class TestOddsDedup:
         index is what dedupes server-side."""
         from tests.bp_recorded import GAME_92857, recorded_game_rows
 
-        from betting.load import insert_game_odds_rows
+        from betting.load_odds_to_db import insert_game_odds_rows
 
         row = recorded_game_rows("total")[0]
         conn = MagicMock()

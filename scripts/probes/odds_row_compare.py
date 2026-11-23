@@ -26,7 +26,7 @@ from typing import Any
 
 import asyncpg
 
-import betting.history as loader
+import betting.historical_loader as loader
 from betting.bettingpros.match_games import TransportMixin
 
 

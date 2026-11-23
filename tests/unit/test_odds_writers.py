@@ -2,9 +2,9 @@
 
 These tests drive the writer half of the SIM-555 build plan
 (``docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`` §5.4, test 14), on
-the one load path of SIM-645 (``betting/load.py``):
+the one load path of SIM-645 (``betting/load_odds_to_db.py``):
 
-  * the historical loader (``betting/history.py``): ``--book`` restricts a run
+  * the historical loader (``betting/historical_loader.py``): ``--book`` restricts a run
     to one book; the resume query counts only the one-row-per-book rows; the
     done-file; the run's guard summary and its rows by book;
   * the live cycle (``pipeline/live/live_ingestion_pipeline.py``) persists
@@ -44,9 +44,9 @@ from tests.bp_recorded import (
     recorded_prop_rows,
 )
 
-import betting.history as loader
+import betting.historical_loader as loader
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider
-from betting.load import (
+from betting.load_odds_to_db import (
     _GAME_ODDS_INSERT_SQL,
     _PROP_ODDS_INSERT_SQL,
     _odds_hash,
@@ -61,7 +61,7 @@ from betting.markets import (
     PROP_ROLE_BOTH,
     PROP_ROLE_PITCHER,
 )
-from betting.validate import RefusalTally
+from betting.validate_odds import RefusalTally
 from pipeline.live import live_ingestion_pipeline as live
 from pipeline.live.ingestion.constants import (
     PREGAME_ODDS_CADENCE_S,
@@ -396,7 +396,7 @@ class TestLoaderRunSummary:
             raise AssertionError("a --no-props run reads no lineup")
 
         pool = _patch_run(monkeypatch, [GAME_99026], _roles, Recorded99026())
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         args = loader.parse_args(
             [
                 "--seasons",
@@ -473,7 +473,7 @@ class TestLoaderDoneFile:
             return {}
 
         _patch_run(monkeypatch, [776465, 776466, 776467], _roles, Recorded92857())
-        caplog.set_level(logging.INFO, logger="betting.history")
+        caplog.set_level(logging.INFO, logger="betting.historical_loader")
         args = loader.parse_args(
             [
                 "--seasons",
@@ -546,7 +546,7 @@ class TestLiveCyclePersistsEveryBook:
     @pytest.mark.asyncio
     async def test_the_guard_sits_in_front_of_the_live_cycle(self, caplog) -> None:
         p = _bare_pipeline(_odds=Recorded99026())
-        caplog.set_level(logging.INFO, logger="betting.load")
+        caplog.set_level(logging.INFO, logger="betting.load_odds_to_db")
         await p._persist_game_odds_cycle(GAME_99026)
         assert p._refusal_tally().counts() == {
             ("three_way_two_way_team_prices", "f5_moneyline", "bp:0"): 1,
@@ -583,7 +583,7 @@ class TestLiveCyclePersistsEveryBook:
                 return super().get_prop_odds_by_book(game_pk, player_id, prop_stat, **kw)
 
         p = _bare_pipeline(_odds=_Broken())
-        caplog.set_level(logging.WARNING, logger="betting.load")
+        caplog.set_level(logging.WARNING, logger="betting.load_odds_to_db")
         state = {"current_pitcher_id": BRYCE_MILLER, "home_lineup": [], "away_lineup": []}
         assert await p._persist_prop_odds_cycle(GAME_92857, state) == 2  # the hits allowed
         assert f"prop fetch failed game {GAME_92857} current/strikeouts" in caplog.text

@@ -11,7 +11,7 @@ from datetime import (
 )
 from typing import Any
 
-from betting.load import game_offers, promote_closing_game_rows, write_offers
+from betting.load_odds_to_db import game_offers, promote_closing_game_rows, write_offers
 from pipeline.live.ingestion.base import PipelineBase
 from pipeline.live.ingestion.constants import PROP_FETCH_CADENCE_S
 
@@ -42,7 +42,7 @@ class GameOddsMixin(PipelineBase):
         """Load every book's row of every game market, at most once a minute per game.
 
         The fetch runs on the vendor thread; the check and the writes run here
-        (:func:`betting.load.write_offers`). Returns the rows sent (0 while the
+        (:func:`betting.load_odds_to_db.write_offers`). Returns the rows sent (0 while the
         cadence gate is closed).
         """
         now = datetime.now(UTC)

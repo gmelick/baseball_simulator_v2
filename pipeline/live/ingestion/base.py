@@ -13,8 +13,8 @@ import asyncpg
 import redis.asyncio as aioredis
 
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider
-from betting.load import odds_source
-from betting.validate import RefusalTally
+from betting.load_odds_to_db import odds_source
+from betting.validate_odds import RefusalTally
 from db.introspect import pg_column_exists_async
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 from pipeline.live.ingestion.mlb_websocket import MLBGameWebSocket

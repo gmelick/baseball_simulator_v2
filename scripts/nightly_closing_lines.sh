@@ -5,7 +5,7 @@
 # A closing row is the last price a book posted before first pitch. The live
 # pipeline promotes each game's closing rows at first pitch. This job is the
 # fallback and the reconciliation: it runs the historical loader
-# (python -m betting.history) over the games of yesterday and the day before
+# (python -m betting.historical_loader) over the games of yesterday and the day before
 # (UTC dates; two dates cover a
 # late West-coast game that turns Final after midnight UTC).
 #
@@ -57,7 +57,7 @@ log "start: opening and closing pass for the games of ${D1} and ${D2} (seasons $
 # SEASONS is one or two words; the split is intended.
 cd "${REPO_DIR}"
 # shellcheck disable=SC2086
-python -m betting.history \
+python -m betting.historical_loader \
     --seasons ${SEASONS} \
     --line-types opening closing \
     --game-dates "${D1}" "${D2}"

@@ -143,7 +143,7 @@ builds that turn it into what the simulator reads.
 - `pipeline/batch/`: the profile computor, the pools and the engine-artifact bundle.
 - `pipeline/backup/`: the nightly backups and the off-site copy.
 - The odds load in `betting/`: the BettingPros fetch (`betting/bettingpros/`), the load
-  guard, the load path and the historical loader (`betting/history.py`); and the loaders in
+  guard, the load path and the historical loader (`betting/historical_loader.py`); and the loaders in
   `scripts/`.
 
 **Guards.**

@@ -49,11 +49,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-# `betting.load._odds_hash` is the one hash function — reuse it so backfill
+# `betting.load_odds_to_db._odds_hash` is the one hash function — reuse it so backfill
 # hashes are byte-identical to the writers' hashes.
 import asyncpg  # noqa: E402
 
-from betting.load import _odds_hash  # noqa: E402
+from betting.load_odds_to_db import _odds_hash  # noqa: E402
 
 log = logging.getLogger("backfill_odds_hash")
 

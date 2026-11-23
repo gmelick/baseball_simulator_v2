@@ -463,7 +463,7 @@ class OfferRowsMixin(EventMatchMixin):
 
         Each market fills only its own columns; two markets never share one row.
         A total, yes / no or prop row also gets ``over_line`` / ``under_line``.
-        The load guard (``betting/validate.py``) reads those two lines.
+        The load guard (``betting/validate_odds.py``) reads those two lines.
         """
 
         def cost(key: str) -> float | None:

@@ -12,7 +12,7 @@ from datetime import (
 )
 from typing import Any
 
-from betting.load import promote_closing_prop_rows, prop_offers, write_offers
+from betting.load_odds_to_db import promote_closing_prop_rows, prop_offers, write_offers
 from betting.markets import PROP_ROLE_BATTER, PROP_ROLE_BOTH, PROP_ROLE_PITCHER
 from pipeline.live.ingestion.base import PipelineBase
 from pipeline.live.ingestion.constants import _PITCHER_POSITION_CODES, PROP_FETCH_CADENCE_S
@@ -124,10 +124,10 @@ class PropOddsMixin(PipelineBase):
           1. Collects prop-eligible players + their roles from the game_state
              (pitcher, batter or both).
           2. Fetches every book's rows of each offer on the vendor thread
-             (:func:`betting.load.prop_offers`): the pitcher markets for
+             (:func:`betting.load_odds_to_db.prop_offers`): the pitcher markets for
              pitchers and the batter markets for hitters.
           3. Runs the load guard on each row and writes each offer's kept
-             rows in one batch (:func:`betting.load.write_offers`).
+             rows in one batch (:func:`betting.load_odds_to_db.write_offers`).
 
         Returns the number of prop rows sent this cycle (0 when the cadence
         gate is closed or no eligible players were found).

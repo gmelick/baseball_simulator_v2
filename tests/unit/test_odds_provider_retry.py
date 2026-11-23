@@ -47,7 +47,7 @@ from typing import Any
 import pytest
 
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider
-from betting.load import odds_source
+from betting.load_odds_to_db import odds_source
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 

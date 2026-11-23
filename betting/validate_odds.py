@@ -1,6 +1,6 @@
 """The load guard: it refuses an odds row that cannot be one bet.
 
-The one load path (:func:`betting.load.keep_rows`) calls :func:`check_row` on
+The one load path (:func:`betting.load_odds_to_db.keep_rows`) calls :func:`check_row` on
 every priced row before the write. It logs a refused row, skips it, and counts it
 in a :class:`RefusalTally`. The API's stored-odds read calls :func:`check_row`
 again. The module does no I/O.
@@ -57,7 +57,7 @@ from betting.markets import (
 )
 from betting.pricing import implied_prob_from_american
 
-_log = logging.getLogger("betting.validate")
+_log = logging.getLogger("betting.validate_odds")
 
 #: Equal non-zero spreads whose prices add inside this band are one book's mislabelled pair.
 PAIR_PRICE_BAND = (1.00, 1.10)

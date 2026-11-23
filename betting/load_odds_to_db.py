@@ -22,9 +22,9 @@ from betting.markets import (
     book_id_from_label,
     prop_markets_for,
 )
-from betting.validate import CLOSING_STAMP_GRACE, RefusalTally, check_row
+from betting.validate_odds import CLOSING_STAMP_GRACE, RefusalTally, check_row
 
-log = logging.getLogger("betting.load")
+log = logging.getLogger("betting.load_odds_to_db")
 
 # ---------------------------------------------------------------------------
 # The odds source

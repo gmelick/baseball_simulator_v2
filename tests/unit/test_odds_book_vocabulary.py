@@ -157,7 +157,7 @@ class TestBookVocabulary:
         assert FULL_GAME_MARKET_TYPES == ("moneyline", "runline", "total")
 
     def test_the_exports(self) -> None:
-        from betting import load, markets
+        from betting import load_odds_to_db, markets
 
         for name in (
             "BOOK_NAMES",
@@ -180,5 +180,5 @@ class TestBookVocabulary:
             "graded_row_order_sql",
         ):
             assert name in markets.__all__, name
-        assert callable(load.load_odds)
-        assert callable(load.keep_rows)
+        assert callable(load_odds_to_db.load_odds)
+        assert callable(load_odds_to_db.keep_rows)

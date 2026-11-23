@@ -165,7 +165,7 @@ def test_get_prop_odds_unknown_stat_raises():
 
 # --------------------------------------------------------------------------- the odds source
 def test_the_odds_source_is_bettingpros():
-    from betting.load import odds_source
+    from betting.load_odds_to_db import odds_source
 
     assert isinstance(odds_source(), BettingProsOddsProvider)
 

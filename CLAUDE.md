@@ -116,7 +116,7 @@
   Edits to the mounted folders need only `docker compose restart app`. Run a script that is
   not in the image yet with `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.
 - **`betting/` is mounted into `app`, `live` and `jobs`**, like `pipeline/`. An edit to
-  `betting/` needs no image rebuild; the nightly odds pass (`python -m betting.history`)
+  `betting/` needs no image rebuild; the nightly odds pass (`python -m betting.historical_loader`)
   runs the mounted copy too.
 - **The container test and lint targets run the checkout (SIM-567).** The seven Makefile
   targets (`test`, `test-unit`, `test-regression`, `test-integration`, `lint`, `format`,
@@ -322,11 +322,11 @@ and the three paths (a simulation request, game day, the nightly builds).
 - `pipeline/` — `etl/` (the historical and Savant loaders), `live/` (the game-day service),
   `batch/` (the profile computor in `profiles/`, the bundle builder in `artifacts/`, the
   versioned link), `backup/`, and the schedule and feed parsers. `live/ingestion/` keeps the
-  live odds hooks; they call `betting/load.py`.
+  live odds hooks; they call `betting/load_odds_to_db.py`.
 - `betting/` — the odds and the pricing, one file per step: `markets.py` (our market names
   and book labels), `bettingpros/match_games.py` (the HTTP client and the game match),
-  `bettingpros/fetch_odds.py` (one row per book), `validate.py` (the load guard), `load.py`
-  (the one load path and the closing stamp), `history.py` (finished games; the nightly
+  `bettingpros/fetch_odds.py` (one row per book), `validate_odds.py` (the load guard), `load_odds_to_db.py`
+  (the one load path and the closing stamp), `historical_loader.py` (finished games; the nightly
   pass) and `pricing.py` (the no-vig probabilities, the edge, the EV and the bet signal).
 - `api/` — `main.py` and `startup.py` (the boot), `auth.py`, `state.py`, `sim_jobs.py`,
   `bundle_watch.py`, `routes/` (`games*.py`, `betting*.py`, the Data Lab routes), `schemas/`.
@@ -402,7 +402,7 @@ consolidates; QA cross-validates and never self-certifies its own work.
   `validation/replay_chi_squared.py`, the bundle builder and the profile computor. (b) `SIM-421`
   the ticket is the prop-market work. Its tags talk about prop markets, odds, the box score and
   the per-player prop lines; they live in `simulation/prop_distributions.py`, the odds
-  providers, the live odds cycles, `betting/history.py` (the historical odds loader),
+  providers, the live odds cycles, `betting/historical_loader.py` (the historical odds loader),
   the accuracy comparison, the props route and schema,
   migration 0022, and any `SIM-421 fix` on a box-line credit in the loop. Reconcile a realism
   tag if you touch it.

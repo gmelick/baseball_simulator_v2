@@ -50,7 +50,7 @@ from betting.bettingpros.match_games import (
     _read_schedule,
 )
 from betting.markets import GAME_MARKET_TYPES
-from betting.validate import RULES, RefusalTally, check_row
+from betting.validate_odds import RULES, RefusalTally, check_row
 
 _LOGGER = "betting.bettingpros"
 

@@ -4,7 +4,7 @@ test_odds_provider_ingestion.py
 SIM-340 — Real odds provider + prop ingestion (multi-book, sharp flag, cadence)
 
 Permanent regression suite for the live odds cycle. SIM-645 moved the load into
-``betting.load``: the cycle runs ``game_offers`` / ``prop_offers`` on the vendor
+``betting.load_odds_to_db``: the cycle runs ``game_offers`` / ``prop_offers`` on the vendor
 thread, then ``write_offers`` into the pool. These tests check:
 
   1. The prop cycle writes its rows into raw.prop_odds, one batch per offer.
@@ -56,9 +56,9 @@ from tests.bp_recorded import (  # noqa: E402
 )
 
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider  # noqa: E402
-from betting.load import _prop_odds_hash, game_offers, prop_offers  # noqa: E402
+from betting.load_odds_to_db import _prop_odds_hash, game_offers, prop_offers  # noqa: E402
 from betting.markets import BATTER_PROP_STATS, PITCHER_PROP_STATS  # noqa: E402
-from betting.validate import check_row  # noqa: E402
+from betting.validate_odds import check_row  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 # ===========================================================================
@@ -240,7 +240,7 @@ class TestGuardAndFailures:
         """SIM-645: a prop fetch error no longer escapes the live cycle."""
         provider = _RaisingPropProvider("strikeouts")
         pipeline = _make_pipeline(provider)
-        with caplog.at_level(logging.WARNING, logger="betting.load"):
+        with caplog.at_level(logging.WARNING, logger="betting.load_odds_to_db"):
             written = await pipeline._persist_prop_roles_cycle(
                 GAME_92857, {BRYCE_MILLER: "pitcher", JULIO_RODRIGUEZ: "batter"}
             )
@@ -255,7 +255,7 @@ class TestGuardAndFailures:
         offers = _expected_offers()
         first_batch = sum(1 for row in offers[0][1] if check_row(row) is None)
         pipeline._db.executemany.side_effect = [OSError("connection lost")] + [None] * 100
-        with caplog.at_level(logging.WARNING, logger="betting.load"):
+        with caplog.at_level(logging.WARNING, logger="betting.load_odds_to_db"):
             written = await pipeline._persist_prop_odds_cycle(GAME_92857, _make_game_state())
         assert "odds write failed" in caplog.text
         assert written == _kept(offers) - first_batch

@@ -30,7 +30,7 @@ Postgres cannot restore the three-value constraint while a row holds one of
 the twelve new values. The downgrade therefore DELETES every ``raw.game_odds``
 row whose ``market_type`` is one of the twelve new markets, drops ``draw_ml``,
 then restores the three-value constraint. Those quotes are gone after a
-downgrade; re-load them with ``python -m betting.history --game-markets
+downgrade; re-load them with ``python -m betting.historical_loader --game-markets
 ...`` after the next upgrade.
 """
 

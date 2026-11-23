@@ -1,7 +1,7 @@
-"""The one load path (SIM-645): ``betting/load.py`` fetches, keeps, checks and writes.
+"""The one load path (SIM-645): ``betting/load_odds_to_db.py`` fetches, keeps, checks and writes.
 
 The live cycle and the historical loader both load odds through
-:func:`betting.load.load_odds` (or its parts, :func:`game_offers`,
+:func:`betting.load_odds_to_db.load_odds` (or its parts, :func:`game_offers`,
 :func:`prop_offers` and :func:`write_offers`). These tests pin each part:
 
   * ``odds_source`` is the BettingPros provider;
@@ -39,9 +39,9 @@ from tests.bp_recorded import (
     recorded_prop_rows,
 )
 
-import betting.history as history
+import betting.historical_loader as history
 from betting.bettingpros.fetch_odds import BettingProsOddsProvider
-from betting.load import (
+from betting.load_odds_to_db import (
     _GAME_ODDS_INSERT_SQL,
     _GAME_ODDS_RESTAMP_SQL,
     _PROP_ODDS_INSERT_SQL,
@@ -59,7 +59,7 @@ from betting.markets import (
     PROP_ROLE_BOTH,
     PROP_ROLE_PITCHER,
 )
-from betting.validate import RefusalTally
+from betting.validate_odds import RefusalTally
 
 
 class _RecordingPool:
@@ -141,7 +141,7 @@ class TestGameOffers:
 
     def test_a_fetch_that_raises_is_counted_and_the_next_market_runs(self, caplog) -> None:
         failures: Counter[str] = Counter()
-        caplog.set_level(logging.WARNING, logger="betting.load")
+        caplog.set_level(logging.WARNING, logger="betting.load_odds_to_db")
         offers = game_offers(
             _RaisingOnMoneyline(),
             GAME_92857,
@@ -212,7 +212,7 @@ class TestKeepRows:
         # post two-way team prices beside a tie price.
         rows = Recorded99026().get_odds_by_book(GAME_99026, market_type="f5_moneyline")
         tally = RefusalTally()
-        caplog.set_level(logging.INFO, logger="betting.load")
+        caplog.set_level(logging.INFO, logger="betting.load_odds_to_db")
         kept = keep_rows(rows, game_pk=GAME_99026, tally=tally)
         assert [row["book"] for row in kept] == ["bp:10"]
         assert tally.counts() == {
@@ -266,7 +266,7 @@ class TestWriteOffers:
         total = recorded_game_rows("total")
         failures: Counter[str] = Counter()
         by_book: Counter[str] = Counter()
-        caplog.set_level(logging.WARNING, logger="betting.load")
+        caplog.set_level(logging.WARNING, logger="betting.load_odds_to_db")
         written = await write_offers(
             pool,
             GAME_92857,

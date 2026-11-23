@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import api.routes.betting_stored_odds as stored_odds
-from betting.load import (
+from betting.load_odds_to_db import (
     _GAME_ODDS_INSERT_SQL,
     _GAME_ODDS_RESTAMP_SQL,
     _PROP_ODDS_RESTAMP_SQL,

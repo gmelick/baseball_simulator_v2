@@ -49,10 +49,10 @@ Four paths bring data in.
    `live:game:{game_pk}` (`broadcast.RedisBroadcaster`). The app's `RedisBridge` forwards
    it to the browsers that watch the game.
 
-**3. The odds.** Two callers load the odds through `betting.load`
+**3. The odds.** Two callers load the odds through `betting.load_odds_to_db`
 ([betting.md](betting.md)). The live service loads every watched game's current lines
 once a minute and stamps the closing rows at first pitch. The historical loader
-(`python -m betting.history`), run each night by `scripts/nightly_closing_lines.sh`,
+(`python -m betting.historical_loader`), run each night by `scripts/nightly_closing_lines.sh`,
 loads the opening and closing lines of the last two days' games.
 
 **4. The reference loaders.** The Savant leaderboards, the per-pitch tracking export, the
@@ -69,7 +69,7 @@ entry point. No scheduler job runs them; an operator runs them by hand.
 | `savant_pitch_tracking_loader` | by hand | `raw.savant_pitch_tracking` |
 | `SprintSpeedLoader` | by hand | `raw.sprint_speed` |
 | `VenueBackfillJob` | by hand | `raw.games.venue_id`, `raw.pipeline_run_log` |
-| `betting.history` | the `nightly-closing-lines` job; by hand for a backfill | `raw.game_odds`, `raw.prop_odds` |
+| `betting.historical_loader` | the `nightly-closing-lines` job; by hand for a backfill | `raw.game_odds`, `raw.prop_odds` |
 | `BullpenAvailabilityIngest` | by hand | `raw.game_bullpen_availability` |
 | `LiveIngestionPipeline` | the compose `live` service | `raw.games`, `raw.game_lineups` (published rows), `raw.game_odds`, `raw.prop_odds`, `sim.lineup_state`, Redis keys |
 
@@ -391,12 +391,12 @@ in its process.
 [Source](../../pipeline/live/ingestion/) · 7 modules, 1242 lines · Tests: [test_live_pipeline.py](../../tests/unit/test_live_pipeline.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_live_game_state_builder.py](../../tests/unit/test_live_game_state_builder.py), [test_odds_last_seen.py](../../tests/unit/test_odds_last_seen.py), [test_live_connection_manager.py](../../tests/unit/test_live_connection_manager.py)
 
 The live pipeline's parts. The three odds modules are hooks: they keep the cadence clock
-and the first-pitch trigger, and call `betting.load` for the fetch, the check, the write
+and the first-pitch trigger, and call `betting.load_odds_to_db` for the fetch, the check, the write
 and the closing stamp ([betting.md](betting.md#bettingloadpy)).
 
 | Module | Lines | What it holds |
 |---|---|---|
-| [`base.py`](../../pipeline/live/ingestion/base.py) | 100 | `PipelineBase`: the shared state, `_off_loop` (a vendor read on the pipeline's one worker thread, off the event loop), `_odds_provider` (the provider set in `__init__`, else `betting.load.odds_source()`), `_refusal_tally` and `_last_seen_available` (whether Alembic 0029's `last_seen_at` exists). |
+| [`base.py`](../../pipeline/live/ingestion/base.py) | 100 | `PipelineBase`: the shared state, `_off_loop` (a vendor read on the pipeline's one worker thread, off the event loop), `_odds_provider` (the provider set in `__init__`, else `betting.load_odds_to_db.odds_source()`), `_refusal_tally` and `_last_seen_available` (whether Alembic 0029's `last_seen_at` exists). |
 | [`constants.py`](../../pipeline/live/ingestion/constants.py) | 66 | The settings: the MLB endpoints, the 30-second poll, the socket reconnect backoff (2 to 60 seconds), the Redis lifetimes (60 seconds live, an hour done), the 10-second resimulate cooldown, the 60-second odds cadence and the pre-game cadences (600 seconds, 60 seconds inside 15 minutes of the start). |
 | [`game_odds.py`](../../pipeline/live/ingestion/game_odds.py) | 100 | `GameOddsMixin`: every book's row of all fifteen game markets, once a minute per game (`_persist_game_odds_cycle`: `game_offers` on the vendor thread, then `write_offers`); the graded book's moneyline the refresh broadcasts and never stores (`_fetch_odds`); `mark_closing_lines` (`promote_closing_game_rows`); `_forget_odds_game` (drop the provider's cached facts of a postponed game). |
 | [`prop_odds.py`](../../pipeline/live/ingestion/prop_odds.py) | 206 | `PropOddsMixin`: each player's role from the game state or, before first pitch, from the schedule's probable pitchers and posted lineups (a pitcher gets the pitcher markets, a hitter the batter markets, an unknown or two-way player both); the prop cycle on the same one-minute clock (`prop_offers`, then `write_offers`); `mark_closing_prop_lines` (`promote_closing_prop_rows`). |

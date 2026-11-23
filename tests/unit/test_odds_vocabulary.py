@@ -56,13 +56,13 @@ from tests.bp_recorded import (  # noqa: E402
     recorded_prop_rows,
 )
 
-import betting.history as loader  # noqa: E402
+import betting.historical_loader as loader  # noqa: E402
 from betting import markets as odds_provider  # noqa: E402
 from betting.bettingpros.fetch_odds import (
     _PROP_MARKET_IDS,  # noqa: E402
     BettingProsOddsProvider,  # noqa: E402
 )
-from betting.load import _prop_odds_hash, prop_offers  # noqa: E402
+from betting.load_odds_to_db import _prop_odds_hash, prop_offers  # noqa: E402
 from betting.markets import (  # noqa: E402
     BATTER_PROP_STATS,
     PITCHER_PROP_STATS,

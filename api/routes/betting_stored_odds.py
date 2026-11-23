@@ -67,7 +67,7 @@ from betting.markets import (
     is_bettable,
 )
 from betting.pricing import MarketSide, american_to_decimal, reference_margin_from_prices
-from betting.validate import check_row
+from betting.validate_odds import check_row
 
 log = logging.getLogger("api.routes.betting")
 
@@ -301,7 +301,7 @@ def _stored_rows_by_market(
     counts (:func:`_latest_pregame_rows`).
     That row is kept when its book is one a bettor can use, every price and
     line of its market is present, no price is 0 (no such American price) and
-    the load guard (:func:`betting.validate.check_row`) passes it. Each
+    the load guard (:func:`betting.validate_odds.check_row`) passes it. Each
     market's list is sorted by :func:`_graded_order`: the first row is the
     graded book's.
 

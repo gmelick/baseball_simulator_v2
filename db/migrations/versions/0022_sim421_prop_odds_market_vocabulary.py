@@ -28,7 +28,7 @@ Postgres cannot restore the seven-value constraint while a row holds one of
 the eight new values. The downgrade therefore DELETES every ``raw.prop_odds``
 row whose ``prop_stat`` is one of the eight new markets, then restores the
 seven-value constraint. Those quotes are gone after a downgrade; re-load them
-with ``python -m betting.history --prop-stats ...`` after the next
+with ``python -m betting.historical_loader --prop-stats ...`` after the next
 upgrade.
 """
 

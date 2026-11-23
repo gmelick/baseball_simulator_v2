@@ -3,7 +3,7 @@
 Unit tests for the odds_hash backfill script
 (``scripts/probes/backfill_odds_hash.py``).  These tests confirm:
 
-  * The hashing logic in `betting.load._odds_hash` is what the
+  * The hashing logic in `betting.load_odds_to_db._odds_hash` is what the
     backfill script uses (byte-for-byte identical fingerprints).
   * The Alembic migration `0012` chains correctly off `0011`.
 
@@ -33,7 +33,7 @@ class TestOddsHashConsistency(unittest.TestCase):
     live pipeline — otherwise post-backfill inserts won't dedup."""
 
     def test_backfill_hash_matches_live_pipeline_hash(self):
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         mod = _load_script_module()
         # Sanity: the script's column ordering matches the live pipeline's.
@@ -78,7 +78,7 @@ class TestOddsHashConsistency(unittest.TestCase):
         self.assertEqual(len(h_live), 64, "SHA-256 hex digest must be 64 chars")
 
     def test_hash_is_stable_across_dict_orderings(self):
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         keys = (
             "book",
@@ -103,7 +103,7 @@ class TestOddsHashConsistency(unittest.TestCase):
         )
 
     def test_distinct_payloads_produce_distinct_hashes(self):
-        from betting.load import _odds_hash
+        from betting.load_odds_to_db import _odds_hash
 
         base = {
             "book": "consensus",

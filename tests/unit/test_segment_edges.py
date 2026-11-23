@@ -53,7 +53,7 @@ from betting.pricing import (
     samples_over_under_edge_report,
     three_way_edge_report,
 )
-from betting.validate import check_row
+from betting.validate_odds import check_row
 from simulation.game_market_distributions import SegmentRuns, side_probabilities
 from simulation.game_state import GameState
 from simulation.results import GameSimSummary

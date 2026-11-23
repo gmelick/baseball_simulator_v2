@@ -2,12 +2,12 @@
 test_historical_odds_load.py
 ==============================
 SIM-435 — unit tests for (1) the BettingPros provider's CLOSING-line parsing and
-(2) the historical-odds loader (betting/history.py).
+(2) the historical-odds loader (betting/historical_loader.py).
 
 No network and no live DB:
   * the provider's _bp_get / _mlb_get seams are stubbed with the captured
     fixtures (tests/fixtures/bettingpros/) — same pattern as the SIM-405 tests;
-  * the loader's load path (betting.load.load_odds) runs the real provider over
+  * the loader's load path (betting.load_odds_to_db.load_odds) runs the real provider over
     the recorded responses (tests/bp_recorded.py) into a recording pool, so the
     opening and closing writes are asserted without Postgres.
 
@@ -174,15 +174,15 @@ from tests.bp_recorded import (  # noqa: E402
     Recorded92857,
 )
 
-import betting.history as loader  # noqa: E402
-from betting.load import load_odds  # noqa: E402
+import betting.historical_loader as loader  # noqa: E402
+from betting.load_odds_to_db import load_odds  # noqa: E402
 from betting.markets import (  # noqa: E402
     BATTER_PROP_STATS,
     PITCHER_PROP_STATS,
     PROP_ROLE_BATTER,
     PROP_ROLE_PITCHER,
 )
-from betting.validate import RefusalTally  # noqa: E402
+from betting.validate_odds import RefusalTally  # noqa: E402
 
 
 class _RecordingPool:

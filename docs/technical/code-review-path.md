@@ -443,10 +443,10 @@ the edge and the expected value. The files follow the steps of the work.
    HTTP client, and the match of an MLB game to its BettingPros event.
 3. [betting/bettingpros/fetch_odds.py](../../betting/bettingpros/fetch_odds.py): the
    vendor's market ids, the first-five rules and one row per book.
-4. [betting/validate.py](../../betting/validate.py): the load guard.
-5. [betting/load.py](../../betting/load.py): the one load path, the odds hash and the
+4. [betting/validate_odds.py](../../betting/validate_odds.py): the load guard.
+5. [betting/load_odds_to_db.py](../../betting/load_odds_to_db.py): the one load path, the odds hash and the
    closing stamp.
-6. [betting/history.py](../../betting/history.py): the loader of finished games, which
+6. [betting/historical_loader.py](../../betting/historical_loader.py): the loader of finished games, which
    the nightly pass runs for the opening and closing lines.
 7. [betting/pricing.py](../../betting/pricing.py): implied probability, margin removal,
    edge and expected value, then the bet signal's gate, stake and rank.
@@ -513,7 +513,7 @@ through Redis.
    [pipeline/live/live_ingestion_pipeline.py](../../pipeline/live/live_ingestion_pipeline.py):
    the service and its loop.
 3. [pipeline/live/ingestion/](../../pipeline/live/ingestion/): the WebSocket, the game
-   state builder and the odds hooks, which call `betting/load.py`.
+   state builder and the odds hooks, which call `betting/load_odds_to_db.py`.
 4. [pipeline/live/lineup_writer.py](../../pipeline/live/lineup_writer.py) and
    [pipeline/live/broadcast.py](../../pipeline/live/broadcast.py).
 
