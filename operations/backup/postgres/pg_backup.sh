@@ -271,7 +271,7 @@ host=$(uname -n)
     printf '  "seconds": %s.0,\n' "$seconds"
     printf '  "bytes": %s,\n' "$total"
     printf '  "host": "%s",\n' "$(json_esc "$host")"
-    printf '  "tool": "db/backup/pg_backup.sh",\n'
+    printf '  "tool": "operations/backup/postgres/pg_backup.sh",\n'
     printf '  "database": "%s",\n' "$(json_esc "$pg_db")"
     printf '  "server_version": "%s",\n' "$(json_esc "$server_version")"
     printf '  "client_version": "%s",\n' "$(json_esc "$client_version")"

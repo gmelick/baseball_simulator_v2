@@ -337,7 +337,7 @@ def _duckdb_path() -> str:
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # no default password (SIM-443b)
+    from db.dsn import require_dsn  # no default password (SIM-443b)
 
     return require_dsn()
 

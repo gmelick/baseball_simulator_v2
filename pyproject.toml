@@ -57,7 +57,7 @@ ignore = ["E501", "B008", "B904", "SIM102", "SIM103", "SIM105", "SIM108", "SIM11
 "scripts/**" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["api", "pipeline", "similarity", "simulation", "betting", "db"]
+known-first-party = ["api", "pipeline", "similarity", "simulation", "betting", "db", "operations"]
 
 [tool.mypy]
 python_version         = "3.13"
@@ -82,7 +82,7 @@ exclude                = ["tests/", "db/migrations/"]
 # covered exceptions.
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
-source = ["similarity", "pipeline", "simulation", "betting", "api"]
+source = ["similarity", "pipeline", "simulation", "betting", "api", "operations", "db"]
 omit = [
     "similarity/similarity_calibration.py",
     "similarity/calibration/*",

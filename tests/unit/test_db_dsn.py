@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.db_dsn import dsn_label, require_dsn
+from db.dsn import dsn_label, require_dsn
 
 
 def test_returns_the_stripped_value(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,7 +37,7 @@ def test_custom_variable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_no_default_password_in_the_module() -> None:
-    import pipeline.db_dsn as mod
+    import db.dsn as mod
 
     assert mod.__file__ is not None
     with open(mod.__file__, encoding="utf-8") as fh:

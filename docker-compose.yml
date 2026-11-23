@@ -25,7 +25,7 @@
 #
 # Secrets (SIM-443b/f): every password comes from .env. A missing one fails
 # every compose command and names the variable; create them with
-#   python scripts/gen_secrets.py --append .env
+#   python operations/gen_secrets.py --append .env
 # The containers build every DSN from those passwords; no DSN is a literal here.
 #
 # DuckDB is intentionally absent — it runs in-process inside the app container.
@@ -44,14 +44,14 @@ services:
       # migrate service and the admin scripts log in as it. The password has
       # no default: .env must carry it.
       POSTGRES_USER:     ${POSTGRES_USER:-baseball_user}
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}"
       POSTGRES_DB:       ${POSTGRES_DB:-baseball_sim}
       # SIM-443b: the passwords of the two least-privilege roles. Only the role
       # script reads them (db/roles/setup_roles.sh): baseball_app (the app, the
       # live service and the jobs; read and write rows in raw and sim) and
       # baseball_ro (the SQL console; read raw only).
-      BASEBALL_APP_DB_PASSWORD: "${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
-      BASEBALL_RO_DB_PASSWORD:  "${BASEBALL_RO_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
+      BASEBALL_APP_DB_PASSWORD: "${BASEBALL_APP_DB_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}"
+      BASEBALL_RO_DB_PASSWORD:  "${BASEBALL_RO_DB_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}"
       # SIM-525, the scheduled backups: this service has no env_file, and an
       # Ofelia job-exec passes no environment, so the Postgres backup reads
       # its retention and free-space floor from here. The same .env values
@@ -79,8 +79,8 @@ services:
       # keeps a worktree without the value working (no `:?` on purpose).
       - ${BACKUP_DIR:-./backups}:/backups
       # SIM-525: the backup and restore scripts run in this container as the
-      # postgres OS user, over the socket (db/backup/pg_backup.sh, pg_restore.sh).
-      - ./db/backup:/opt/baseball/backup:ro
+      # postgres OS user, over the socket (operations/backup/postgres/pg_backup.sh, pg_restore.sh).
+      - ./operations/backup/postgres:/opt/baseball/backup:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baseball_user} -d ${POSTGRES_DB:-baseball_sim}"]
       interval: 10s
@@ -109,14 +109,14 @@ services:
     # REDISCLI_AUTH, so the health check and `docker compose exec redis
     # redis-cli` log in without the password on their command line.
     environment:
-      REDISCLI_AUTH: "${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
+      REDISCLI_AUTH: "${REDIS_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}"
     command: >
       redis-server
       --save 60 1
       --loglevel warning
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-      --requirepass ${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}
+      --requirepass ${REDIS_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}
     healthcheck:
       # A wrong password answers NOAUTH with exit 0, so the check reads PONG.
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
@@ -162,13 +162,13 @@ services:
       # tools) never reaches the container. The app logs in as baseball_app: it
       # reads and writes rows in raw and sim, and it cannot create, drop or
       # alter anything (the migrate service does that as the owner).
-      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
       # SIM-443e: the SQL console's pool. baseball_ro reads raw only, and every
       # transaction it opens is read-only. The app refuses this pool (the
       # console answers 503) when the role is a superuser or can write.
-      BASEBALL_DB_RO_DSN: "postgresql://baseball_ro:${BASEBALL_RO_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      BASEBALL_DB_RO_DSN: "postgresql://baseball_ro:${BASEBALL_RO_DB_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
       # SIM-443f: Redis asks for its password.
-      REDIS_URL:       "redis://:${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@redis:6379/0"
+      REDIS_URL:       "redis://:${REDIS_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@redis:6379/0"
       # SIM-443b: env_file hands this container every secret in .env. Blank the
       # passwords it never reads (its own are inside the DSNs above), so a
       # process here cannot read the owner's password from its environment.
@@ -433,6 +433,7 @@ services:
       - ./api:/app/api
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
+      - ./operations:/app/operations
       - ./similarity:/app/similarity
       # SIM-375: mount the real Phase-5 simulation package (not the dead
       # ``simulator`` stub) so the Monte-Carlo loop/runner code hot-reloads in dev.
@@ -496,8 +497,8 @@ services:
       - .env
     environment:
       # SIM-443b/f: the app role and the Redis password, as in the app service.
-      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
-      REDIS_URL:       "redis://:${REDIS_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@redis:6379/0"
+      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      REDIS_URL:       "redis://:${REDIS_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@redis:6379/0"
       # SIM-443b: env_file hands this container every secret in .env. Blank the
       # passwords it never reads (its own are inside the DSNs above), so a
       # process here cannot read the owner's password from its environment.
@@ -521,6 +522,7 @@ services:
     volumes:
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
+      - ./operations:/app/operations
       - ./db:/app/db
       - ./api:/app/api
       - ./simulation:/app/simulation
@@ -551,7 +553,7 @@ services:
     env_file:
       - .env
     environment:
-      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      BASEBALL_DB_DSN: "postgresql://baseball_app:${BASEBALL_APP_DB_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
       BASEBALL_DUCKDB_PATH: /data/baseball_sim.duckdb
       # SIM-443b: env_file hands this container every secret in .env. Blank the
       # passwords it never reads (its own are inside the DSNs above), so a
@@ -569,13 +571,14 @@ services:
       - ./api:/app/api
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
+      - ./operations:/app/operations
       - ./similarity:/app/similarity
       - ./simulation:/app/simulation
       - ./db:/app/db
       # SIM-525: the data backup writes the DuckDB file, the bundle and the small
-      # /data files into the host folder BACKUP_DIR (pipeline/backup/data_stores.py).
+      # /data files into the host folder BACKUP_DIR (operations/backup/back_up_data_stores.py).
       - ${BACKUP_DIR:-./backups}:/backups
-      # SIM-568: the off-site copy (pipeline/backup/offsite.py) writes the newest
+      # SIM-568: the off-site copy (operations/backup/copy_offsite.py) writes the newest
       # complete sets from /backups into the host folder OFFSITE_BACKUP_DIR (the
       # OneDrive folder; its client uploads them off the machine). Read-write.
       - ${OFFSITE_BACKUP_DIR:-./backups_offsite}:/offsite
@@ -649,7 +652,7 @@ services:
     # (see db/migrations/env.py). Run another alembic command through it:
     #   docker compose run --rm migrate alembic current
     environment:
-      BASEBALL_DB_DSN: "postgresql://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
+      BASEBALL_DB_DSN: "postgresql://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}@db:5432/${POSTGRES_DB:-baseball_sim}"
     command: alembic upgrade head
     # Mount the migrations, as the app service mounts ./db. Without the mount,
     # alembic reads the tree baked into this image when it was first built,
@@ -715,7 +718,7 @@ services:
       # SIM-443a: no default password. Grafana reads it only when its volume is
       # new; on an existing volume reset it with `grafana cli admin
       # reset-admin-password` (the cutover run book in docs/audit/).
-      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?is not set - run: python scripts/gen_secrets.py --append .env}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?is not set - run: python operations/gen_secrets.py --append .env}"
       # Disabled sign-up; default org dashboards come from provisioning.
       GF_USERS_ALLOW_SIGN_UP:     "false"
     ports:
@@ -745,7 +748,7 @@ services:
   # stack (SIM-519 D6). Jobs (deploy/ofelia/config.ini): the three-day finals
   # load nightly at 07:00 UTC, the profile + bundle rebuild at 08:00 UTC and the
   # season sweep on Sunday, each run inside the `jobs` container through
-  # scripts/with_retry.sh (SIM-443b); the SIM-546 closing pass inside the app
+  # operations/jobs/with_retry.sh (SIM-443b); the SIM-546 closing pass inside the app
   # container. SIM-525: the two backup jobs at 10:00 UTC, the Postgres dump in
   # the db container and the DuckDB + bundle copy in the `jobs` container.
   # SIM-568: the off-site copy at 10:30 UTC in the `jobs` container. A stopped

@@ -1,4 +1,4 @@
-<!-- file-index-key: 9dd5e3349d13cc68 -->
+<!-- file-index-key: 0729225967b2bf9f -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -23,10 +23,10 @@ Every source and config file in the repository, in the order of the [code review
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,104 |
-| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,367 |
-| [15. Tests and CI](#stage-15) | 315 | 124,520 |
-| **All** | **781** | **283,037** |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,117 |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,368 |
+| [15. Tests and CI](#stage-15) | 315 | 124,522 |
+| **All** | **782** | **283,053** |
 
 <a id="stage-1"></a>
 
@@ -237,7 +237,7 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | [`pipeline/etl/mlb_venue_dimensions.py`](../../pipeline/etl/mlb_venue_dimensions.py) | 156 | The MLB Stats API's PUBLISHED fence distances, the floor under a new park's fence line (the fence certification plan, SIM-478, `docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`, §4 and §5.1). | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
 | [`pipeline/etl/venue_backfill_job.py`](../../pipeline/etl/venue_backfill_job.py) | 349 | Backfill NULL venue_id rows on raw.games. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
 | [`pipeline/bullpen_usage.py`](../../pipeline/bullpen_usage.py) | 303 | The pen's facts from the official box score and the MLB API's per-game bullpen listing, for the pitching-change draw and the reliever draw. | 1: `test_bullpen_usage.py` |
-| [`pipeline/db_dsn.py`](../../pipeline/db_dsn.py) | 65 | The one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |
+| [`db/dsn.py`](../../db/dsn.py) | 65 | The one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |
 | [`db/introspect.py`](../../db/introspect.py) | 119 | Ask a database whether a table or a column exists. | 2: `test_db_introspect.py`, `test_outfield_arm_block.py` |
 | [`alembic.ini`](../../alembic.ini) | 150 | A generic, single database configuration. | — |
 | [`db/migrations/env.py`](../../db/migrations/env.py) | 114 | Alembic environment configuration. | — |
@@ -491,33 +491,34 @@ How the services run, what runs every night, and how the data is backed up. The 
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`docker-compose.yml`](../../docker-compose.yml) | 793 | MLB Baseball Simulation Platform — Docker Compose | — |
-| [`Dockerfile`](../../Dockerfile) | 181 | MLB Baseball Simulation Platform — Dockerfile | — |
+| [`docker-compose.yml`](../../docker-compose.yml) | 796 | MLB Baseball Simulation Platform — Docker Compose | — |
+| [`Dockerfile`](../../Dockerfile) | 182 | MLB Baseball Simulation Platform — Dockerfile | — |
 | [`Makefile`](../../Makefile) | 318 | MLB Baseball Simulation Platform — Makefile | — |
 | [`.env.example`](../../.env.example) | 263 | MLB Baseball Simulation Platform — Environment Variables | — |
 | [`.env.staging.example`](../../.env.staging.example) | 132 | MLB Baseball Simulation Platform — STAGING environment template | — |
 | [`.env.production.example`](../../.env.production.example) | 126 | MLB Baseball Simulation Platform — PRODUCTION environment template | — |
 | [`deploy/nginx/nginx.conf`](../../deploy/nginx/nginx.conf) | 293 | MLB Baseball Simulation Platform — nginx reverse proxy | — |
 | [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini) | 164 | Ofelia scheduler config — the nightly and weekly data jobs (docker-native cron). | — |
-| [`scripts/with_mark.sh`](../../scripts/with_mark.sh) | 45 | scripts/with_mark.sh — mark an ingest job as running, run it, record its exit. | — |
-| [`scripts/with_retry.sh`](../../scripts/with_retry.sh) | 57 | scripts/with_retry.sh — run a command again after a crash. | — |
-| [`scripts/wait_for_ingest.sh`](../../scripts/wait_for_ingest.sh) | 62 | scripts/wait_for_ingest.sh — the nightly rebuild's first step: make sure the finals load has run today before the rebuild reads Postgres. | — |
-| [`scripts/nightly_finals.sh`](../../scripts/nightly_finals.sh) | 51 | scripts/nightly_finals.sh — load the last few days' final games. | — |
-| [`scripts/nightly_ingest.sh`](../../scripts/nightly_ingest.sh) | 75 | scripts/nightly_ingest.sh — nightly data ingestion chain. | — |
-| [`scripts/nightly_closing_lines.sh`](../../scripts/nightly_closing_lines.sh) | 64 | scripts/nightly_closing_lines.sh — the nightly closing pass. | — |
-| [`scripts/nightly_rebuild.sh`](../../scripts/nightly_rebuild.sh) | 35 | scripts/nightly_rebuild.sh — rebuild the profiles and the engine bundle for the current season (steps 2 and 3 of scripts/nightly_ingest.sh). | — |
-| [`scripts/weekly_refresh.sh`](../../scripts/weekly_refresh.sh) | 29 | scripts/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
-| [`pipeline/backup/__init__.py`](../../pipeline/backup/__init__.py) | 8 | pipeline/backup — the backups of the data stores and their off-site copy. | 3: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
-| [`pipeline/backup/common.py`](../../pipeline/backup/common.py) | 91 | pipeline/backup/common.py — the helpers the backup modules share. | 1: `test_backup_offsite.py` |
-| [`pipeline/backup/data_stores.py`](../../pipeline/backup/data_stores.py) | 915 | pipeline/backup/data_stores.py — back up, verify and restore the DuckDB analytics file and the engine-artifact bundle. | 2: `test_backup_data_stores.py`, `test_backup_offsite.py` |
-| [`pipeline/backup/offsite.py`](../../pipeline/backup/offsite.py) | 991 | pipeline/backup/offsite.py — the off-site copy of the backup sets. | 1: `test_backup_offsite.py` |
-| [`pipeline/backup/status.py`](../../pipeline/backup/status.py) | 121 | pipeline/backup/status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
-| [`db/backup/pg_backup.sh`](../../db/backup/pg_backup.sh) | 305 | SIM-525: the nightly Postgres backup (the scheduled backups of the data stores). | — |
-| [`db/backup/pg_restore.sh`](../../db/backup/pg_restore.sh) | 147 | SIM-525: restore one Postgres backup set into an EMPTY database. | — |
-| [`scripts/backup_drill.py`](../../scripts/backup_drill.py) | 535 | The restore drill for the scheduled backups. | 1: `test_backup_drill.py` |
+| [`operations/__init__.py`](../../operations/__init__.py) | 1 | operations — keep the stack running: the nightly jobs, the backups and the secrets. | — |
+| [`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh) | 45 | operations/jobs/with_mark.sh — mark an ingest job as running, run it, record its exit. | — |
+| [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 57 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
+| [`operations/jobs/wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh) | 62 | operations/jobs/wait_for_ingest.sh — the nightly rebuild's first step: make sure the finals load has run today before the rebuild reads Postgres. | — |
+| [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh) | 51 | operations/jobs/nightly_finals.sh — load the last few days' final games. | — |
+| [`operations/jobs/nightly_ingest.sh`](../../operations/jobs/nightly_ingest.sh) | 75 | operations/jobs/nightly_ingest.sh — nightly data ingestion chain. | — |
+| [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | 64 | operations/jobs/nightly_closing_lines.sh — the nightly closing pass. | — |
+| [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 35 | operations/jobs/nightly_rebuild.sh — rebuild the profiles and the engine bundle for the current season (steps 2 and 3 of operations/jobs/nightly_ingest.sh). | — |
+| [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 29 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
+| [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 16 | operations/backup — the backups of the data stores and their off-site copy. | 3: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
+| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 915 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB analytics file and the engine-artifact bundle. | 2: `test_backup_offsite.py`, `test_backup_data_stores.py` |
+| [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 121 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
+| [`operations/backup/common.py`](../../operations/backup/common.py) | 91 | operations/backup/common.py — the helpers the backup modules share. | 1: `test_backup_offsite.py` |
+| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 991 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 1: `test_backup_offsite.py` |
+| [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) | 305 | SIM-525: the nightly Postgres backup (the scheduled backups of the data stores). | — |
+| [`operations/backup/postgres/pg_restore.sh`](../../operations/backup/postgres/pg_restore.sh) | 147 | SIM-525: restore one Postgres backup set into an EMPTY database. | — |
+| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 535 | The restore drill for the scheduled backups. | 1: `test_backup_drill.py` |
 | [`db/roles/setup_roles.sh`](../../db/roles/setup_roles.sh) | 79 | SIM-443b: create the two least-privilege Postgres roles and grant them. | — |
 | [`db/roles/setup_roles.sql`](../../db/roles/setup_roles.sql) | 72 | SIM-443b: the two least-privilege roles and their grants (idempotent). | — |
-| [`scripts/gen_secrets.py`](../../scripts/gen_secrets.py) | 208 | Generate the stack's secrets. | 1: `test_gen_secrets.py` |
+| [`operations/gen_secrets.py`](../../operations/gen_secrets.py) | 208 | Generate the stack's secrets. | 1: `test_gen_secrets.py` |
 | [`deploy/monitoring/grafana/baseball_sim_dashboard.json`](../../deploy/monitoring/grafana/baseball_sim_dashboard.json) | 162 | The Grafana dashboard of the app's metrics. | — |
 | [`deploy/monitoring/grafana/dashboards.yml`](../../deploy/monitoring/grafana/dashboards.yml) | 24 | Grafana dashboard provider — MLB Baseball Simulation Platform (SIM-374) | — |
 | [`deploy/monitoring/grafana/datasource.yml`](../../deploy/monitoring/grafana/datasource.yml) | 22 | Grafana datasource provisioning — MLB Baseball Simulation Platform (SIM-374) | — |
@@ -586,7 +587,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/accuracy_split_arm.sh`](../../scripts/accuracy_split_arm.sh) | 24 | The pitch / pitch-result split as one paired accuracy arm (the accuracy fit, SIM-548). | — |
 | [`scripts/boxscore_audit.py`](../../scripts/boxscore_audit.py) | 475 | The validation study for the official box-score ground truth: how far each per-player total the platform derives from `raw.pitches` sits from the official box score. | 1: `test_boxscore_reader.py` |
 | [`scripts/check_file_integrity.py`](../../scripts/check_file_integrity.py) | 176 | The file-integrity guard: it catches a `.py` file that a file bridge truncated or filled with NUL bytes. | 1: `test_check_file_integrity.py` |
-| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 837 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
+| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 838 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
 | [`scripts/export_openapi.py`](../../scripts/export_openapi.py) | 45 | Export the FastAPI OpenAPI schema to `frontend/openapi.json`. | — |
 | [`scripts/genexpr_crash_probe.py`](../../scripts/genexpr_crash_probe.py) | 434 | The SIM-445 crash class — a probe that re-runs the workload that segfaulted, with and without the database. | — |
 | [`scripts/measure_filter_cells.py`](../../scripts/measure_filter_cells.py) | 1,378 | Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy measurement, SIM-451). | 2: `test_filter_cells.py`, `test_pitch_cell_index.py` |
@@ -629,7 +630,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`tests/conftest.py`](../../tests/conftest.py) | 373 | Root test configuration: shared fixtures and pytest hooks. | — |
-| [`tests/script_loader.py`](../../tests/script_loader.py) | 60 | Load a script from `scripts/` as a module, for a test. | 44: `test_sim_kwargs.py`, `test_gen_secrets.py`, `test_backup_drill.py` +41 |
+| [`tests/script_loader.py`](../../tests/script_loader.py) | 60 | Load a script from `scripts/` as a module, for a test. | 42: `test_sim_kwargs.py`, `test_filter_cells.py`, `test_odds_readers.py` +39 |
 | [`tests/__init__.py`](../../tests/__init__.py) | 1 | Package marker. | — |
 | [`tests/regression/__init__.py`](../../tests/regression/__init__.py) | 10 | Package marker. | — |
 | [`tests/regression/conftest.py`](../../tests/regression/conftest.py) | 323 | Fixtures that build deterministic synthetic similarity engines for the regression gate (the engine invariant tests). | — |
@@ -668,11 +669,11 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_arsenal_w2_standardization.py`](../../tests/unit/test_arsenal_w2_standardization.py) | 351 | The arsenal W₂ distance reads a GMM's mean and covariance on one scale. | — |
 | [`tests/unit/test_backfill_odds_hash.py`](../../tests/unit/test_backfill_odds_hash.py) | 146 | Unit tests for the odds_hash backfill script (`scripts/probes/backfill_odds_hash.py`). | — |
 | [`tests/unit/test_backup_age_gauge.py`](../../tests/unit/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
-| [`tests/unit/test_backup_data_stores.py`](../../tests/unit/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (pipeline/backup/data_stores.py). | — |
-| [`tests/unit/test_backup_drill.py`](../../tests/unit/test_backup_drill.py) | 772 | The restore drill for the scheduled backups. | — |
-| [`tests/unit/test_backup_offsite.py`](../../tests/unit/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (pipeline/backup/offsite.py). | — |
-| [`tests/unit/test_backup_schedule.py`](../../tests/unit/test_backup_schedule.py) | 382 | The scheduled backups of the three data stores: the wiring. | — |
-| [`tests/unit/test_backup_status.py`](../../tests/unit/test_backup_status.py) | 78 | SIM-525 — the reader of the backup sets (pipeline/backup/status.py). | — |
+| [`tests/unit/test_backup_data_stores.py`](../../tests/unit/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
+| [`tests/unit/test_backup_drill.py`](../../tests/unit/test_backup_drill.py) | 771 | The restore drill for the scheduled backups. | — |
+| [`tests/unit/test_backup_offsite.py`](../../tests/unit/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
+| [`tests/unit/test_backup_schedule.py`](../../tests/unit/test_backup_schedule.py) | 384 | The scheduled backups of the three data stores: the wiring. | — |
+| [`tests/unit/test_backup_status.py`](../../tests/unit/test_backup_status.py) | 76 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
 | [`tests/unit/test_barrel_definition.py`](../../tests/unit/test_barrel_definition.py) | 203 | Validates :func:`pipeline.batch.profiles.sql._barrel_case_sql`, the DuckDB boolean expression that classifies a batted ball as a *barrel*. | — |
 | [`tests/unit/test_base_invariants.py`](../../tests/unit/test_base_invariants.py) | 369 | The base-state invariants and the runner-conservation check on `Bases`. | — |
 | [`tests/unit/test_baseball_sniff.py`](../../tests/unit/test_baseball_sniff.py) | 484 | The **baseball sniff-test suite**: does the loop produce sane baseball? | — |
@@ -722,7 +723,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_etl_connection_pool.py`](../../tests/unit/test_etl_connection_pool.py) | 212 | Before SIM-090, `HistoricalDataLoader._get_conn()` opened a fresh `psycopg2.connect(self.dsn)` and `conn.close()`-d it on every single DB round-trip. | — |
 | [`tests/unit/test_etl_ensure_rows.py`](../../tests/unit/test_etl_ensure_rows.py) | 369 | The historical loader's per-table prerequisite writers: _ensure_teams, _ensure_players, _ensure_managers and _ensure_game. | — |
 | [`tests/unit/test_etl_error_ledger.py`](../../tests/unit/test_etl_error_ledger.py) | 182 | The ETL error ledger: `raw.etl_errors` holds one row per pitch the historical loader skips, the loader writes it on the pitch insert's cursor, and `reprocess_errored_games` lists the games to load again. | — |
-| [`tests/unit/test_etl_hardening.py`](../../tests/unit/test_etl_hardening.py) | 757 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
+| [`tests/unit/test_etl_hardening.py`](../../tests/unit/test_etl_hardening.py) | 759 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
 | [`tests/unit/test_etl_historical_loader.py`](../../tests/unit/test_etl_historical_loader.py) | 1,677 | Targets: - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in pipeline/etl/coercion.py) - _build_row_dict column rename + coercion - _validate_row two-tier validation rules - _parse_height... | 1: `test_play_events.py` |
 | [`tests/unit/test_etl_reload_game.py`](../../tests/unit/test_etl_reload_game.py) | 1,232 | Covers: * `HistoricalDataLoader.reload_game` — DELETE + re-INSERT in ONE transaction, the only way to repair already-loaded `raw.pitches` rows (the INSERT carries `ON CONFLICT … DO NOTHING`, so plain `load_game` write... | — |
 | [`tests/unit/test_etl_schedule_final_filter.py`](../../tests/unit/test_etl_schedule_final_filter.py) | 33 | Unit tests for the historical loader's future/non-Final game guard (_schedule_game_is_final). | — |
@@ -751,7 +752,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_game_sim_summary.py`](../../tests/unit/test_game_sim_summary.py) | 254 | The **multi-iteration aggregation contract** :class:`simulation.results.GameSimSummary`. | — |
 | [`tests/unit/test_game_state_contract.py`](../../tests/unit/test_game_state_contract.py) | 297 | Tests of the `GameState` / `PlayResult` dataclass contract. | — |
 | [`tests/unit/test_game_type_filter.py`](../../tests/unit/test_game_type_filter.py) | 492 | The Data Lab reads the regular season alone by default (the Data Lab game-type filter, SIM-572). | — |
-| [`tests/unit/test_gen_secrets.py`](../../tests/unit/test_gen_secrets.py) | 148 | The secrets generator writes the eight secrets; `--append` and `--check` never print one. | — |
+| [`tests/unit/test_gen_secrets.py`](../../tests/unit/test_gen_secrets.py) | 147 | The secrets generator writes the eight secrets; `--append` and `--check` never print one. | — |
 | [`tests/unit/test_gmm_batch_pipeline.py`](../../tests/unit/test_gmm_batch_pipeline.py) | 157 | Unit tests for SIM-113 — GMM batch pipeline performance. | — |
 | [`tests/unit/test_historical_odds_load.py`](../../tests/unit/test_historical_odds_load.py) | 242 | SIM-435 — unit tests for (1) the BettingPros provider's CLOSING-line parsing and (2) the historical-odds loader (betting/historical_loader.py). | — |
 | [`tests/unit/test_hit_by_pitch.py`](../../tests/unit/test_hit_by_pitch.py) | 132 | Tests that a hit by pitch (HBP) is its own pitch outcome, never a walk. | — |
@@ -816,7 +817,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_park_factors.py`](../../tests/unit/test_park_factors.py) | 482 | Unit tests for SIM-336 (park-factor UNPIVOT/factor_overall fix + real L/R splits + pool-neutralization policy) and SIM-345 (data-layer fixes: incremental watermark `>=` + row-count guard, canonical cross-pool recency_... | — |
 | [`tests/unit/test_park_geometry_builder.py`](../../tests/unit/test_park_geometry_builder.py) | 870 | The fence certification (SIM-478/479/480; the plan at docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §4 and §5.1): the version-2 park-geometry builder's pure pieces on toy numpy balls (no DuckDB), and t... | — |
 | [`tests/unit/test_persistent_process_pool.py`](../../tests/unit/test_persistent_process_pool.py) | 286 | The **persistent (warm) ProcessPool + shared-memory lifecycle** of :class:`simulation.batch_runner.BatchRunner` for the long-lived API. | — |
-| [`tests/unit/test_pg_backup_script.py`](../../tests/unit/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (db/backup). | — |
+| [`tests/unit/test_pg_backup_script.py`](../../tests/unit/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (operations/backup/postgres). | — |
 | [`tests/unit/test_pitch_cell_index.py`](../../tests/unit/test_pitch_cell_index.py) | 432 | The pitch-draw CELL INDEX (plan: docs/audit/2026-09-04-sim467-518-plan.md §5). | — |
 | [`tests/unit/test_pitch_pitch_engine.py`](../../tests/unit/test_pitch_pitch_engine.py) | 274 | The pitch-to-pitch similarity engine (a FAISS nearest-neighbour index). | — |
 | [`tests/unit/test_pitch_result_split.py`](../../tests/unit/test_pitch_result_split.py) | 729 | Tests of the PITCH / PITCH-RESULT split (the play-picker redesign, SIM-523). | — |
@@ -863,7 +864,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_rescore_graded_book.py`](../../tests/unit/test_rescore_graded_book.py) | 337 | `scripts/probes/rescore_graded_book.py`: the re-pricing of a tiny fake report. | — |
 | [`tests/unit/test_rescore_runlines.py`](../../tests/unit/test_rescore_runlines.py) | 280 | The re-score of stored accuracy reports (`scripts/probes/rescore_runlines.py`). | — |
 | [`tests/unit/test_retire_consensus_odds.py`](../../tests/unit/test_retire_consensus_odds.py) | 318 | `scripts/probes/retire_consensus_odds.py`: the refusal, the dry run and the archive-then-delete, on a stub connection (never a real database). | — |
-| [`tests/unit/test_retry_wrapper.py`](../../tests/unit/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`scripts/with_retry.sh`). | — |
+| [`tests/unit/test_retry_wrapper.py`](../../tests/unit/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`operations/jobs/with_retry.sh`). | — |
 | [`tests/unit/test_rng_streams.py`](../../tests/unit/test_rng_streams.py) | 279 | Tests that the loop rng and the full-pool rng are INDEPENDENT streams. | — |
 | [`tests/unit/test_route_auth_coverage.py`](../../tests/unit/test_route_auth_coverage.py) | 319 | The API requires a login on every data route, in every environment. | — |
 | [`tests/unit/test_run_ledger.py`](../../tests/unit/test_run_ledger.py) | 717 | The run-value ledger is TOLD its two base-out states. | — |
@@ -937,7 +938,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/performance/bench_simulation.py`](../../tests/performance/bench_simulation.py) | 635 | The performance benchmark harness. | — |
 | [`tests/fixtures/mlb_game_feed/record_fixtures.py`](../../tests/fixtures/mlb_game_feed/record_fixtures.py) | 203 | Record trimmed league game feeds for the tests that parse the feed. | — |
 | [`tests/bp_recorded.py`](../../tests/bp_recorded.py) | 183 | The real BettingPros provider, fed by recorded real responses. | 11: `test_betting_load.py`, `test_odds_writers.py`, `test_live_pipeline.py` +8 |
-| [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) | 753 | MLB Baseball Simulation Platform — CI Pipeline (SIM-146) | — |
+| [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) | 755 | MLB Baseball Simulation Platform — CI Pipeline (SIM-146) | — |
 | [`.github/workflows/acceptance-nightly.yml`](../../.github/workflows/acceptance-nightly.yml) | 343 | MLB Baseball Simulation Platform — Production-config acceptance bands (SIM-450) | — |
 | [`.github/workflows/docker-release.yml`](../../.github/workflows/docker-release.yml) | 89 | MLB Baseball Simulation Platform — Docker Release (SIM-146) | — |
 | [`.github/workflows/frontend-release.yml`](../../.github/workflows/frontend-release.yml) | 84 | MLB Baseball Simulation Platform — Frontend Docker Release (SIM-401) | — |

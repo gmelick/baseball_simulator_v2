@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/wait_for_ingest.sh — the nightly rebuild's first step: make sure the
+# operations/jobs/wait_for_ingest.sh — the nightly rebuild's first step: make sure the
 # finals load has run today before the rebuild reads Postgres.
 #
 # Why: the finals load (07:00 UTC) and the rebuild (08:00 UTC) rely on the hour
 # between them. A host that sleeps through both times fires both jobs in the
 # same second on wake (seen on 2026-10-11), and nothing else orders them.
 #
-# What it does, reading the marks scripts/with_mark.sh writes:
+# What it does, reading the marks operations/jobs/with_mark.sh writes:
 #   1. waits INGEST_GRACE_S (default 60 s), so a job fired in the same second
 #      has time to write its mark;
 #   2. while the finals load or the Sunday season sweep runs, waits (at most
@@ -24,7 +24,7 @@ GRACE_S="${INGEST_GRACE_S:-60}"
 WAIT_S="${INGEST_WAIT_S:-7200}"
 POLL_S="${INGEST_POLL_S:-30}"
 STALE_S="${INGEST_STALE_S:-21600}"
-FINALS_CMD="${INGEST_FINALS_CMD:-sh /app/scripts/with_mark.sh nightly-finals sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh}"
+FINALS_CMD="${INGEST_FINALS_CMD:-sh /app/operations/jobs/with_mark.sh nightly-finals sh /app/operations/jobs/with_retry.sh 6 sh /app/operations/jobs/nightly_finals.sh}"
 
 log() { echo "[wait-for-ingest $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 

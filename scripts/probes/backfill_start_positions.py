@@ -64,7 +64,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from db.dsn import require_dsn  # noqa: E402
 from pipeline.etl.boxscore_ingest import (  # noqa: E402
     BoxscoreIngest,
     StartingPosition,
@@ -75,7 +75,7 @@ from pipeline.etl.boxscore_ingest import (  # noqa: E402
 log = logging.getLogger("backfill_start_positions")
 
 #: SIM-443b: no default password. A blank value is resolved in main() through
-#: pipeline.db_dsn.require_dsn, which names the missing variable.
+#: db.dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_MAX_CONSECUTIVE_FAILURES = 5
 PROGRESS_EVERY = 100

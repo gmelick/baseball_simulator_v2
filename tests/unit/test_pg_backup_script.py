@@ -1,10 +1,10 @@
-"""The scheduled Postgres backup and its restore (db/backup).
+"""The scheduled Postgres backup and its restore (operations/backup/postgres).
 
-``db/backup/pg_backup.sh`` dumps the database in directory format, counts every
+``operations/backup/postgres/pg_backup.sh`` dumps the database in directory format, counts every
 table before and after the dump, and writes a manifest last. The tests run the
 real script under ``sh`` with fake ``pg_dump``, ``psql``, ``pg_restore`` and
 ``df`` binaries placed first on PATH, so no database is needed.
-``db/backup/pg_restore.sh`` refuses a populated target and checks each restored
+``operations/backup/postgres/pg_restore.sh`` refuses a populated target and checks each restored
 table's count against the bracket the backup took.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-BACKUP_DIR = Path(__file__).resolve().parents[2] / "db" / "backup"
+BACKUP_DIR = Path(__file__).resolve().parents[2] / "operations" / "backup" / "postgres"
 BACKUP_SH = BACKUP_DIR / "pg_backup.sh"
 RESTORE_SH = BACKUP_DIR / "pg_restore.sh"
 
@@ -211,7 +211,7 @@ def test_a_backup_writes_a_complete_set(fake):
     assert m["set"] == s.name
     assert m["created_at"].endswith("Z")
     assert isinstance(m["seconds"], float)
-    assert m["tool"] == "db/backup/pg_backup.sh"
+    assert m["tool"] == "operations/backup/postgres/pg_backup.sh"
     assert m["database"] == "baseball_sim"
     assert m["server_version"] == "15.18 (Alpine)"
     assert m["client_version"] == "pg_dump (PostgreSQL) 15.18"

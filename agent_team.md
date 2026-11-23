@@ -141,7 +141,7 @@ builds that turn it into what the simulator reads.
   numbered migrations with the version file, the database roles, the backup scripts.
 - `pipeline/etl/` and `pipeline/live/`: the historical loaders and the live service.
 - `pipeline/batch/`: the profile computor, the pools and the engine-artifact bundle.
-- `pipeline/backup/`: the nightly backups and the off-site copy.
+- `operations/backup/`: the nightly backups and the off-site copy.
 - The odds load in `betting/`: the BettingPros fetch (`betting/bettingpros/`), the load
   guard, the load path and the historical loader (`betting/historical_loader.py`); and the loaders in
   `scripts/`.

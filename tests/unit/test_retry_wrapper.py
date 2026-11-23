@@ -1,4 +1,4 @@
-"""The crash-retry wrapper (``scripts/with_retry.sh``)."""
+"""The crash-retry wrapper (``operations/jobs/with_retry.sh``)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-WRAPPER = ROOT / "scripts" / "with_retry.sh"
+WRAPPER = ROOT / "operations" / "jobs" / "with_retry.sh"
 SH = shutil.which("sh")
 
 pytestmark = pytest.mark.skipif(SH is None, reason="no POSIX sh on this host")

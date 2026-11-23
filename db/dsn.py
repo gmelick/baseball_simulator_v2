@@ -1,5 +1,5 @@
 """
-pipeline/db_dsn.py
+db/dsn.py
 ==================
 The one reader of the Postgres connection string for scripts and jobs.
 
@@ -32,7 +32,7 @@ def require_dsn(var: str = "BASEBALL_DB_DSN") -> str:
     if not value:
         raise RuntimeError(
             f"{var} is not set. Set it to a postgresql:// connection string "
-            "(see .env.example; the secrets come from scripts/gen_secrets.py). "
+            "(see .env.example; the secrets come from operations/gen_secrets.py). "
             "No default database password exists."
         )
     return value

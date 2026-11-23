@@ -1,10 +1,10 @@
-"""pipeline/backup/offsite.py — the off-site copy of the backup sets.
+"""operations/backup/copy_offsite.py — the off-site copy of the backup sets.
 
 Run it in the jobs container as ``appuser``:
 
-    python -m pipeline.backup.offsite              # copy the newest sets off-site
-    python -m pipeline.backup.offsite --status     # the newest local and off-site sets
-    python -m pipeline.backup.offsite --dry-run    # what a run would copy and prune
+    python -m operations.backup.copy_offsite              # copy the newest sets off-site
+    python -m operations.backup.copy_offsite --status     # the newest local and off-site sets
+    python -m operations.backup.copy_offsite --dry-run    # what a run would copy and prune
 
 The off-site root (``/offsite``) is the owner's OneDrive folder, bind-mounted.
 The OneDrive client uploads whatever lands there, so the cloud copy is the
@@ -62,7 +62,16 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from pipeline.backup.common import (
+from operations.backup.backup_status import (
+    MANIFEST,
+    PARTIAL_SUFFIX,
+    STORES,
+    SetInfo,
+    age_hours,
+    complete_sets,
+    newest_complete_set,
+)
+from operations.backup.common import (
     CHUNK,
     GIB,
     Clock,
@@ -72,15 +81,6 @@ from pipeline.backup.common import (
     fsync_path,
     human_bytes,
     sha256_file,
-)
-from pipeline.backup.status import (
-    MANIFEST,
-    PARTIAL_SUFFIX,
-    STORES,
-    SetInfo,
-    age_hours,
-    complete_sets,
-    newest_complete_set,
 )
 
 #: The mark of the data job of the scheduled backups. The copy waits while it runs.
@@ -932,7 +932,7 @@ def print_status(backups_root: Path, offsite_root: Path, as_json: bool) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="python -m pipeline.backup.offsite",
+        prog="python -m operations.backup.copy_offsite",
         description="Copy the newest complete backup sets to the off-site folder (OneDrive).",
     )
     p.add_argument(

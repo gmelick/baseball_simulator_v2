@@ -58,7 +58,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from db.dsn import require_dsn  # noqa: E402
 from pipeline.etl.boxscore_ingest import (  # noqa: E402
     BoxscoreIngest,
     parse_boxscore,
@@ -70,7 +70,7 @@ from pipeline.etl.boxscore_ingest import (  # noqa: E402
 log = logging.getLogger("load_official_boxscores")
 
 #: No default password. main() resolves a blank value through
-#: pipeline.db_dsn.require_dsn, which names the missing variable.
+#: db.dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 #: Games between progress log lines.

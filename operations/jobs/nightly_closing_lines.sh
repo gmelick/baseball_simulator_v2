@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/nightly_closing_lines.sh — the nightly closing pass.
+# operations/jobs/nightly_closing_lines.sh — the nightly closing pass.
 #
 # A closing row is the last price a book posted before first pitch. The live
 # pipeline promotes each game's closing rows at first pitch. This job is the
@@ -26,7 +26,7 @@
 # host's .env, where ODDS_API_KEY lives; see deploy/ofelia/config.ini. It is a
 # separate job from nightly_ingest.sh on purpose: a vendor outage must not stop
 # the profile and artifact rebuild. Safe to run by hand:
-#   docker compose exec app sh /app/scripts/nightly_closing_lines.sh
+#   docker compose exec app sh /app/operations/jobs/nightly_closing_lines.sh
 # =============================================================================
 set -eu
 

@@ -55,7 +55,7 @@ the environment tiers.
 | The engine-artifact bundle (the files the simulator draws from) | `/data/play_pool/engine_artifacts`, a link to one folder under `engine_artifacts.versions/` | the bundle build |
 | The replay file (one simulated game per run, for the game page) | `/data/replay.duckdb` | the app only |
 | The calibration report | `/data/calibration.json` | `make calibrate`, `make validate-props` |
-| The job marks | `/data/ingest_marks/` | `scripts/with_mark.sh` |
+| The job marks | `/data/ingest_marks/` | `operations/jobs/with_mark.sh` |
 
 ### Which code a container runs
 
@@ -89,7 +89,7 @@ time.
 | Docker Desktop | with the WSL2 back end. The app alone may use 16 GB, so give the WSL VM about 20 GB (`.wslconfig`). |
 | Git for Windows | the checkout |
 | GNU Make | the `make` targets (`choco install make`) |
-| Python 3.13 with the `py` launcher | the Makefile's helper lines, `scripts/gen_secrets.py` and the restore drill run on the host |
+| Python 3.13 with the `py` launcher | the Makefile's helper lines, `operations/gen_secrets.py` and the restore drill run on the host |
 | curl | ships with Windows |
 
 ### 2.2 The steps
@@ -144,8 +144,8 @@ already loaded, so a rerun resumes.
 
 | Step | Command | What it fills |
 |---|---|---|
-| 1a. The completed seasons | `docker compose run -d --rm --name first-load app sh /app/scripts/with_retry.sh 6 python -m pipeline.etl.etl_historical_loader` | Every Final game from 2017 through last season: `raw.games`, `raw.pitches`, `raw.play_events`, the lineups, the official box score (`raw.game_player_stats`) and the bullpen listing (`raw.game_bullpen`). Follow it with `docker logs -f first-load`. |
-| 1b. The current season | `docker compose run --rm app sh /app/scripts/with_retry.sh 6 sh /app/scripts/weekly_refresh.sh` | The same tables for this season's Final games. The bare loader of step 1a stops at last season. |
+| 1a. The completed seasons | `docker compose run -d --rm --name first-load app sh /app/operations/jobs/with_retry.sh 6 python -m pipeline.etl.etl_historical_loader` | Every Final game from 2017 through last season: `raw.games`, `raw.pitches`, `raw.play_events`, the lineups, the official box score (`raw.game_player_stats`) and the bullpen listing (`raw.game_bullpen`). Follow it with `docker logs -f first-load`. |
+| 1b. The current season | `docker compose run --rm app sh /app/operations/jobs/with_retry.sh 6 sh /app/operations/jobs/weekly_refresh.sh` | The same tables for this season's Final games. The bare loader of step 1a stops at last season. |
 | 2. Sprint speed | `docker compose run --rm app python -m pipeline.etl.etl_sprint_speed_loader --seasons 2023 2024 2025 2026` | `raw.sprint_speed` |
 | 3. The Savant leaderboards | `docker compose run --rm app python -m pipeline.etl.savant_loader --seasons 2023 2024 2025 2026` | the `raw.savant_*` tables |
 | 4. The profiles and pools | `docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild` | the `derived.*` profiles and the `sim.*` play pools in the analytics file |
@@ -181,27 +181,27 @@ times are UTC; Eastern time is four hours earlier in summer and five in winter.
 
 | Time (UTC) | Job | Runs in, as | What it does | What it waits for |
 |---|---|---|---|---|
-| 07:00 daily | `nightly-finals` | `jobs`, `appuser` | `scripts/nightly_finals.sh`: loads the Final games of the last three days (Eastern dates). Postgres only. | nothing |
-| 08:00 Sunday | `weekly-refresh` | `jobs`, `appuser` | `scripts/weekly_refresh.sh`: sweeps the whole current season for a Final game the window missed. Postgres only. | nothing |
-| 08:00 daily | `nightly-rebuild` | `jobs`, `appuser` | `scripts/nightly_rebuild.sh`: rebuilds the current season's profiles and pools, then builds and publishes a new bundle version. Ends near 09:30. | the finals load and the Sunday sweep (see below) |
+| 07:00 daily | `nightly-finals` | `jobs`, `appuser` | `operations/jobs/nightly_finals.sh`: loads the Final games of the last three days (Eastern dates). Postgres only. | nothing |
+| 08:00 Sunday | `weekly-refresh` | `jobs`, `appuser` | `operations/jobs/weekly_refresh.sh`: sweeps the whole current season for a Final game the window missed. Postgres only. | nothing |
+| 08:00 daily | `nightly-rebuild` | `jobs`, `appuser` | `operations/jobs/nightly_rebuild.sh`: rebuilds the current season's profiles and pools, then builds and publishes a new bundle version. Ends near 09:30. | the finals load and the Sunday sweep (see below) |
 | after the rebuild | the app's restart | `app` | When the bundle link moves, the app waits for its running simulation jobs (at most 10 minutes) and for any DuckDB writer, then restarts itself to load the new data ([`api/bundle_watch.py`](api/bundle_watch.py)). It is down for a few minutes. | the run jobs |
-| 10:00 daily | `nightly-backup-postgres` | `db`, `postgres` | `db/backup/pg_backup.sh`: dumps the statistics database. | its own lock |
-| 10:00 daily | `nightly-backup-data` | `jobs`, `appuser` | `python -m pipeline.backup.data_stores`: copies the analytics file, the bundle and the small `/data` files. | the rebuild, finals and sweep marks |
-| 10:30 daily | `nightly-backup-offsite` | `jobs`, `appuser` | `python -m pipeline.backup.offsite`: copies the newest backup sets into the OneDrive folder. Takes about 10 to 25 minutes. | the data backup's mark and the Postgres backup's lock |
-| 10:30 daily | `nightly-closing-lines` | `app`, root | `scripts/nightly_closing_lines.sh`: runs `python -m betting.historical_loader` for the opening and closing odds of yesterday's and the day before's games. The closing rows are the fallback to the live service; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
+| 10:00 daily | `nightly-backup-postgres` | `db`, `postgres` | `operations/backup/postgres/pg_backup.sh`: dumps the statistics database. | its own lock |
+| 10:00 daily | `nightly-backup-data` | `jobs`, `appuser` | `python -m operations.backup.back_up_data_stores`: copies the analytics file, the bundle and the small `/data` files. | the rebuild, finals and sweep marks |
+| 10:30 daily | `nightly-backup-offsite` | `jobs`, `appuser` | `python -m operations.backup.copy_offsite`: copies the newest backup sets into the OneDrive folder. Takes about 10 to 25 minutes. | the data backup's mark and the Postgres backup's lock |
+| 10:30 daily | `nightly-closing-lines` | `app`, root | `operations/jobs/nightly_closing_lines.sh`: runs `python -m betting.historical_loader` for the opening and closing odds of yesterday's and the day before's games. The closing rows are the fallback to the live service; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
 
 Each data job runs inside two wrappers:
 
-- [`scripts/with_retry.sh`](scripts/with_retry.sh) reruns the command after a
+- [`operations/jobs/with_retry.sh`](operations/jobs/with_retry.sh) reruns the command after a
   crash (exit 139, or "Fatal Python error" in its output), 30 seconds apart.
   Any other failure stops it at once.
-- [`scripts/with_mark.sh`](scripts/with_mark.sh) writes
+- [`operations/jobs/with_mark.sh`](operations/jobs/with_mark.sh) writes
   `/data/ingest_marks/<job>.running` while the job runs, then
   `<job>.last` with one line: `<UTC date> <exit code> <UTC timestamp>`.
 
 The waits read those marks. The rebuild waits 60 s, then waits while the finals
 load or the Sunday sweep runs (at most 2 hours). When the finals load has not
-run that day, the rebuild runs it first ([`scripts/wait_for_ingest.sh`](scripts/wait_for_ingest.sh)).
+run that day, the rebuild runs it first ([`operations/jobs/wait_for_ingest.sh`](operations/jobs/wait_for_ingest.sh)).
 A mark older than 6 hours counts as a dead run's.
 
 **The deploy window.** Recreate `jobs`, `app` or `scheduler` only after about
@@ -519,7 +519,7 @@ curl -s -H "X-API-Key: %API_KEY%" http://localhost:8000/metrics | findstr backup
 ```
 
 `make backup` passes `--new-set`, so it always makes a fresh set.
-`docker compose exec -T jobs python -m pipeline.backup.offsite --dry-run` prints
+`docker compose exec -T jobs python -m operations.backup.copy_offsite --dry-run` prints
 what the copy would do and writes nothing.
 
 ### 8.3 The restore drill
@@ -532,7 +532,7 @@ make backup-drill SET=20261015T100000Z
 make backup-drill OFFSITE=1
 ```
 
-[`scripts/backup_drill.py`](scripts/backup_drill.py) runs on the host. It
+[`operations/backup/backup_drill.py`](operations/backup/backup_drill.py) runs on the host. It
 starts a scratch Postgres container (`sim525_drill_pg`, no network), restores
 the set with the real `pg_restore.sh`, verifies the analytics-file and bundle
 copies in the `jobs` container, removes the scratch container and writes a
@@ -562,12 +562,12 @@ docker compose run --rm migrate alembic current
 
 :: The analytics file: checks the size and sha256, moves a live .wal aside, replaces the file.
 docker compose stop scheduler
-docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-duckdb PASTE_TS --yes
+docker compose exec -T jobs python -m operations.backup.back_up_data_stores --restore-duckdb PASTE_TS --yes
 docker compose restart app
 docker compose start scheduler
 
 :: The bundle: copies the version back and publishes it; the app restarts itself.
-docker compose exec -T jobs python -m pipeline.backup.data_stores --restore-bundle PASTE_TS --yes
+docker compose exec -T jobs python -m operations.backup.back_up_data_stores --restore-bundle PASTE_TS --yes
 ```
 
 The Postgres restore carries no owners or grants, so `make db-roles` puts the

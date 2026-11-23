@@ -239,7 +239,7 @@ def test_the_ofelia_ini_holds_no_credential() -> None:
 
 @pytest.mark.parametrize("script", GUARDED_SCRIPTS)
 def test_the_nightly_script_requires_the_dsn(script: str) -> None:
-    text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    text = (ROOT / "operations" / "jobs" / script).read_text(encoding="utf-8")
     assert "${BASEBALL_DB_DSN:?" in text
     assert "${BASEBALL_DB_DSN:-" not in text
     assert RETIRED_PASSWORD not in text

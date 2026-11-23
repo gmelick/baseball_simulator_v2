@@ -285,7 +285,7 @@ def balanced_game_pks() -> tuple[int, ...]:
 async def _real_kwargs(game_pks: tuple[int, ...]) -> dict[int, dict[str, Any]]:
     import asyncpg
 
-    from pipeline.db_dsn import require_dsn
+    from db.dsn import require_dsn
     from simulation.lineup_resolver import resolve_game_state
     from simulation.sim_kwargs import build_sim_kwargs, open_sim_duckdb
 

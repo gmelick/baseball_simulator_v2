@@ -36,12 +36,12 @@ OFFSITE_SOURCE = "${OFFSITE_BACKUP_DIR:-./backups_offsite}"
 DB_CONTAINER = "baseball_simulator_v2-db-1"
 JOBS_CONTAINER = "baseball_simulator_v2-jobs-1"
 DATA_COMMAND = (
-    "sh /app/scripts/with_mark.sh nightly-backup sh /app/scripts/with_retry.sh 2 "
-    "python -m pipeline.backup.data_stores"
+    "sh /app/operations/jobs/with_mark.sh nightly-backup sh /app/operations/jobs/with_retry.sh 2 "
+    "python -m operations.backup.back_up_data_stores"
 )
 OFFSITE_COMMAND = (
-    "sh /app/scripts/with_mark.sh nightly-backup-offsite sh /app/scripts/with_retry.sh 2 "
-    "python -m pipeline.backup.offsite"
+    "sh /app/operations/jobs/with_mark.sh nightly-backup-offsite sh /app/operations/jobs/with_retry.sh 2 "
+    "python -m operations.backup.copy_offsite"
 )
 MARK_DIR = "/data/ingest_marks"
 GUARD_PREFIX = 'docker compose exec -T jobs sh -c "'
@@ -162,8 +162,8 @@ def test_the_rebuild_leaves_a_mark_the_backup_waits_on() -> None:
     lines = _lines(_section("nightly-rebuild"))
     commands = [line for line in lines if line.startswith("command = ")]
     assert commands == [
-        "command = sh /app/scripts/with_mark.sh nightly-rebuild "
-        "sh /app/scripts/with_retry.sh 3 sh /app/scripts/nightly_rebuild.sh"
+        "command = sh /app/operations/jobs/with_mark.sh nightly-rebuild "
+        "sh /app/operations/jobs/with_retry.sh 3 sh /app/operations/jobs/nightly_rebuild.sh"
     ]
 
 
@@ -183,7 +183,7 @@ def test_the_backup_jobs_hold_no_credential() -> None:
 def test_the_db_service_mounts_the_backup_folder_and_scripts() -> None:
     volumes = _volumes("db")
     assert f"{BACKUP_SOURCE}:/backups" in volumes
-    assert "./db/backup:/opt/baseball/backup:ro" in volumes
+    assert "./operations/backup/postgres:/opt/baseball/backup:ro" in volumes
 
 
 def test_the_db_service_passes_the_backup_settings_to_the_postgres_backup() -> None:
@@ -260,8 +260,8 @@ def test_the_makefile_has_the_five_backup_targets() -> None:
         assert f"\n{target}:" in text, target
         assert target in phony, target
     assert "sh /opt/baseball/backup/pg_backup.sh" in text
-    assert "python -m pipeline.backup.data_stores --status" in text
-    assert "py scripts/backup_drill.py --set $(or $(SET),latest)" in text
+    assert "python -m operations.backup.back_up_data_stores --status" in text
+    assert "py operations/backup/backup_drill.py --set $(or $(SET),latest)" in text
     assert "sh /opt/baseball/backup/pg_restore.sh /backups/postgres/$(SET)" in text
     assert "Take a backup first: make backup" in text
 
@@ -293,8 +293,8 @@ def test_the_makefile_runs_the_offsite_copy_marked() -> None:
     assert len(recipe) == 2, recipe
     assert recipe[0].startswith(GUARD_PREFIX)
     assert recipe[1] == (
-        "docker compose exec -T jobs sh /app/scripts/with_mark.sh nightly-backup-offsite "
-        "python -m pipeline.backup.offsite"
+        "docker compose exec -T jobs sh /app/operations/jobs/with_mark.sh nightly-backup-offsite "
+        "python -m operations.backup.copy_offsite"
     )
 
 
@@ -347,8 +347,8 @@ def test_the_offsite_guard_refuses_only_while_a_fresh_mark_exists(tmp_path: Path
 def test_the_backup_status_shows_the_offsite_copy() -> None:
     text = MAKEFILE.read_text(encoding="utf-8")
     assert _recipe(text, "backup-status") == [
-        "docker compose exec -T jobs python -m pipeline.backup.data_stores --status",
-        "docker compose exec -T jobs python -m pipeline.backup.offsite --status",
+        "docker compose exec -T jobs python -m operations.backup.back_up_data_stores --status",
+        "docker compose exec -T jobs python -m operations.backup.copy_offsite --status",
     ]
 
 
@@ -357,7 +357,7 @@ def test_the_backup_drill_restores_from_the_copy_on_offsite() -> None:
     # value 1 does: OFFSITE=0 must not run the off-site drill.
     text = MAKEFILE.read_text(encoding="utf-8")
     assert _recipe(text, "backup-drill") == [
-        "py scripts/backup_drill.py --set $(or $(SET),latest) "
+        "py operations/backup/backup_drill.py --set $(or $(SET),latest) "
         "$(if $(filter 1,$(OFFSITE)),--offsite,)"
     ]
 
@@ -374,9 +374,11 @@ def test_only_offsite_1_turns_on_the_offsite_drill(value: str | None, offsite: b
     if value is not None:
         argv.append(f"OFFSITE={value}")
     out = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True, check=True).stdout
-    drill = [line for line in out.splitlines() if line.startswith("py scripts/backup_drill.py")]
+    drill = [
+        line for line in out.splitlines() if line.startswith("py operations/backup/backup_drill.py")
+    ]
     assert len(drill) == 1, out
-    expected = ["py", "scripts/backup_drill.py", "--set", "latest"]
+    expected = ["py", "operations/backup/backup_drill.py", "--set", "latest"]
     if offsite:
         expected.append("--offsite")
     assert drill[0].split() == expected

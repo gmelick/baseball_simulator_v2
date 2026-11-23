@@ -67,7 +67,7 @@ _STARTER_SHARE = 0.6
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # no default password
+    from db.dsn import require_dsn  # no default password
 
     return require_dsn()
 

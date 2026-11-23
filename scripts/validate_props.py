@@ -91,7 +91,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from db.dsn import require_dsn  # noqa: E402
 from simulation.prop_distributions import PropDistributionSet  # noqa: E402
 from simulation.prop_validation import (  # noqa: E402
     BOXSCORE_BATTER_PROPS,
@@ -109,7 +109,7 @@ from simulation.prop_validation import (  # noqa: E402
 log = logging.getLogger("validate_props")
 
 #: No default password. main() resolves a blank value through
-#: pipeline.db_dsn.require_dsn, which names the missing variable.
+#: db.dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_CALIBRATION_PATH = os.environ.get("CALIBRATION_REPORT_PATH", "/data/calibration.json")
 DEFAULT_OUTPUT = os.environ.get("PROP_VALIDATION_PATH", "/data/prop_validation.json")

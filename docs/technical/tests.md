@@ -61,12 +61,12 @@ The Makefile wraps each Python lane in `docker compose run --rm -v "$(CURDIR):/a
 
 | Target | Command inside the app container |
 |---|---|
-| `make test` | `pytest tests/ -v --tb=short --timeout=60` with coverage of the five program packages |
+| `make test` | `pytest tests/ -v --tb=short --timeout=60` with coverage of the seven program folders |
 | `make test-unit` | `pytest $(TESTS) -v --tb=short --timeout=30` with coverage; `TESTS` defaults to `tests/unit/` |
 | `make test-regression` | `pytest tests/regression/ -v --tb=short --timeout=60 -m regression` |
 | `make test-integration` | `pytest tests/integration/ -v --tb=short --timeout=120 -m integration` |
 | `make lint` / `make format` | `ruff check . --output-format=full` / `ruff format .` |
-| `make type-check` | `mypy similarity/ pipeline/ api/ simulation/ betting/ --ignore-missing-imports --python-version 3.13` |
+| `make type-check` | `mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports --python-version 3.13` |
 
 - **The mount.** The `-v "$(CURDIR):/app"` mount puts the whole checkout over the
   image's copy, so a run tests the checkout's `tests/`, `scripts/` and
@@ -601,7 +601,7 @@ Node 20 and `npm ci`. A newer run on the same ref cancels an older one.
 | Job | What it runs | Needs |
 |---|---|---|
 | `lint` | `ruff check .` and `ruff format --check .` with ruff 0.16.7 | — |
-| `type-check` | `mypy similarity/ pipeline/ api/ simulation/ betting/` | — |
+| `type-check` | `mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/` | — |
 | `unit-tests` | the fast unit lane at `--timeout=30` with `--tb=native`, then the 80% coverage gate | — |
 | `slow-tests` | `tests/unit/ -m slow` at `--timeout=120` | — |
 | `regression` | `tests/regression/` at `--timeout=60` | `unit-tests` |

@@ -1,8 +1,8 @@
 """The nightly rebuild waits for the finals load.
 
 The scheduler can fire the finals load and the rebuild in the same second.
-``scripts/with_mark.sh`` marks an ingest job while it runs and records
-its last exit; ``scripts/wait_for_ingest.sh`` holds the rebuild until the finals
+``operations/jobs/with_mark.sh`` marks an ingest job while it runs and records
+its last exit; ``operations/jobs/wait_for_ingest.sh`` holds the rebuild until the finals
 load has run today, and runs it when it has not.
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[2] / "operations" / "jobs"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("sh") is None or os.name == "nt",

@@ -1,20 +1,20 @@
-"""pipeline/backup/data_stores.py — back up, verify and restore the DuckDB
+"""operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB
 analytics file and the engine-artifact bundle.
 
 Run it in the jobs container as ``appuser``:
 
-    python -m pipeline.backup.data_stores                 # back up both stores
-    python -m pipeline.backup.data_stores --status        # the newest set of each store
-    python -m pipeline.backup.data_stores --verify-set latest
-    python -m pipeline.backup.data_stores --restore-duckdb <set> --yes
-    python -m pipeline.backup.data_stores --restore-bundle <set> --yes
+    python -m operations.backup.back_up_data_stores                 # back up both stores
+    python -m operations.backup.back_up_data_stores --status        # the newest set of each store
+    python -m operations.backup.back_up_data_stores --verify-set latest
+    python -m operations.backup.back_up_data_stores --restore-duckdb <set> --yes
+    python -m operations.backup.back_up_data_stores --restore-bundle <set> --yes
 
 What a backup run does:
 
 1. It refuses (exit 2) when the backup root is missing or cannot be written,
    or when the disk is short of space after pruning (the free-space guard).
 2. It waits while the nightly rebuild, the finals load or the weekly refresh
-   runs (the marks ``scripts/with_mark.sh`` writes). A rebuild WRITES the
+   runs (the marks ``operations/jobs/with_mark.sh`` writes). A rebuild WRITES the
    DuckDB file, and a read-only handle we hold makes its connect fail.
 3. The DuckDB store: it opens the file read-only, counts every table, and
    copies the file (and its ``.wal`` sidecar) while it holds the handle. Then
@@ -51,7 +51,18 @@ from typing import Any
 
 import duckdb
 
-from pipeline.backup.common import (  # the shared helpers moved there
+from operations.backup.backup_status import (
+    MANIFEST,
+    PARTIAL_SUFFIX,
+    SET_ID_FORMAT,
+    STORES,
+    SetInfo,
+    age_hours,
+    complete_sets,
+    newest_complete_set,
+    parse_set_id,
+)
+from operations.backup.common import (  # the shared helpers moved there
     CHUNK,  # noqa: F401  (re-exported under its old name)
     GIB,
     Clock,
@@ -63,17 +74,6 @@ from pipeline.backup.common import (  # the shared helpers moved there
     human_bytes,
     sha256_file,
 )
-from pipeline.backup.status import (
-    MANIFEST,
-    PARTIAL_SUFFIX,
-    SET_ID_FORMAT,
-    STORES,
-    SetInfo,
-    age_hours,
-    complete_sets,
-    newest_complete_set,
-    parse_set_id,
-)
 from pipeline.batch.bundle_versions import (
     IN_USE_PREFIX,
     PUBLISHED_MARKER,
@@ -82,7 +82,7 @@ from pipeline.batch.bundle_versions import (
     versions_root,
 )
 
-TOOL = "pipeline.backup.data_stores"
+TOOL = "operations.backup.back_up_data_stores"
 
 #: The stores this module backs up (the db container backs up Postgres).
 DATA_STORES = ("duckdb", "bundle")
@@ -724,7 +724,7 @@ def print_status(root: Path, as_json: bool) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="python -m pipeline.backup.data_stores",
+        prog="python -m operations.backup.back_up_data_stores",
         description="Back up, verify and restore the DuckDB file and the engine bundle.",
     )
     p.add_argument("--only", action="append", choices=DATA_STORES, help="back up this store only")

@@ -16,15 +16,15 @@ each step) is the operator manual, [WORKFLOW.md](../../WORKFLOW.md).
 The scheduler is Ofelia, a cron for Docker containers. Its jobs live in
 [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini). Ofelia has no job
 dependencies, so the jobs order themselves through marks: every job runs inside
-[`scripts/with_mark.sh`](../../scripts/with_mark.sh), which writes
+[`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh), which writes
 `/data/ingest_marks/<job>.running` while the job runs and `<job>.last` when it ends.
-[`scripts/with_retry.sh`](../../scripts/with_retry.sh) reruns a job after a crash.
+[`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) reruns a job after a crash.
 
 1. **07:00 UTC — the finals load** (`nightly-finals`) loads the last three days' final
    games into Postgres. On Sunday at 08:00, `weekly-refresh` sweeps the whole season.
 2. **08:00 UTC — the rebuild** (`nightly-rebuild`) runs
-   [`scripts/nightly_rebuild.sh`](../../scripts/nightly_rebuild.sh) in the `jobs`
-   container. Its first step, [`scripts/wait_for_ingest.sh`](../../scripts/wait_for_ingest.sh),
+   [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) in the `jobs`
+   container. Its first step, [`operations/jobs/wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh),
    waits for the finals load's mark, and runs the load itself when it has not run today.
 3. **The profile build:** `python -m pipeline.batch.player_profile_computor --seasons <year>`.
    `PlayerProfileComputor.run` rebuilds the profile tables and the pools for the season
@@ -38,14 +38,14 @@ dependencies, so the jobs order themselves through marks: every job runs inside
    for its run jobs (at most 10 minutes) and for any DuckDB writer, then restarts. The
    new boot pins the new version ([API](api.md)).
 6. **10:00 UTC — the backups.** `nightly-backup-postgres` runs
-   [`db/backup/pg_backup.sh`](../../db/backup/pg_backup.sh) in the `db` container.
-   `nightly-backup-data` runs `python -m pipeline.backup.data_stores` in the `jobs`
+   [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) in the `db` container.
+   `nightly-backup-data` runs `python -m operations.backup.back_up_data_stores` in the `jobs`
    container; it waits while the rebuild, the finals load or the Sunday sweep runs.
 7. **10:30 UTC — the off-site copy** (`nightly-backup-offsite`) runs
-   `python -m pipeline.backup.offsite`. It waits for both backup jobs, then copies the
+   `python -m operations.backup.copy_offsite`. It waits for both backup jobs, then copies the
    newest complete sets into the OneDrive folder.
 
-[`scripts/nightly_ingest.sh`](../../scripts/nightly_ingest.sh) runs steps 1 to 4 in one
+[`operations/jobs/nightly_ingest.sh`](../../operations/jobs/nightly_ingest.sh) runs steps 1 to 4 in one
 command, for a run by hand. The scheduler does not use it.
 
 ### Inside one rebuild
@@ -104,7 +104,7 @@ line. The class is the sum of one mixin per profile group (the modules below).
 | `PlayerProfileComputor.run` | The run order: (1) park factors; (2) pitcher profiles with the arsenal fit; (3) batter profiles; (4) baserunner profiles and the two steal-engine tables; (5) manager profiles; (6) the run-expectancy matrix, then the catcher and fielder metrics and their season aggregates; (7) the pools, the outfield arm block, the intentional-walk rates and the plate-appearance situations. | the command line, `scripts/rebuild_pitch_pool.py`, `scripts/rebuild_steal_pool.py` |
 | `_connect` / `_run_schema_ddl` | Opens DuckDB, attaches Postgres read-only, and applies `db/schemas/02_duckdb_schema.sql` when the schema is absent. | `run` |
 | `_delete_seasons` | The full rebuild's delete over a named list of season-keyed tables. It drops the secondary indexes first and recreates them in a `finally` (`_recreate_indexes`), checking each one in `duckdb_indexes()`. | `run` |
-| `__main__` | `--seasons`, `--full-rebuild`, `--asof`, `--dsn` (default `BASEBALL_DB_DSN`), `--duckdb-path`; then `LeagueAverageProfiles.compute` unless `--skip-league-averages`. | `scripts/nightly_rebuild.sh`, `make profile-computor` |
+| `__main__` | `--seasons`, `--full-rebuild`, `--asof`, `--dsn` (default `BASEBALL_DB_DSN`), `--duckdb-path`; then `LeagueAverageProfiles.compute` unless `--skip-league-averages`. | `operations/jobs/nightly_rebuild.sh`, `make profile-computor` |
 
 **Watch out:** The step order carries data between steps. The run-expectancy matrix
 must precede the double-play value; the baserunner profiles (sprint speed) must precede
@@ -281,12 +281,12 @@ thin profiles, so the matrices cover every runner in the pools.
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `main` / `_build` | `--what pool \| pitcher_sim \| actors \| actors_sim \| park \| manager \| receiving \| reference \| all`. Without `--out-dir` it stages a version, builds, publishes and prunes; a failed build discards the staged folder. With `--out-dir` it writes in place. `--matrix NAME` rebuilds one actor matrix and merges its size into the manifest. | `scripts/nightly_rebuild.sh`, `make engine-artifacts`, the rebuild scripts |
+| `main` / `_build` | `--what pool \| pitcher_sim \| actors \| actors_sim \| park \| manager \| receiving \| reference \| all`. Without `--out-dir` it stages a version, builds, publishes and prunes; a failed build discards the staged folder. With `--out-dir` it writes in place. `--matrix NAME` rebuilds one actor matrix and merges its size into the manifest. | `operations/jobs/nightly_rebuild.sh`, `make engine-artifacts`, the rebuild scripts |
 | `build_actor_sim_matrices` | Builds every matrix above from the engines, writes the manifest, then the concentration report. | `_build` |
 | `_matrix_from_queries` | Scores every profile against every other through the engine's query. | `build_actor_sim_matrices` |
 | `concentration_report` / `concentration_share` | For each catcher-season (pitch pool) and fielder-season (batted-ball pool): his matrix row's weighted share of draw weight on his own staff's rows, over the unweighted share. A p90 ratio above `CONCENTRATION_MAX_RATIO` (3.0) logs a warning, or fails the build with `--strict-concentration`. | `build_actor_sim_matrices` |
 | `EngineArtifacts` | The loaded bundle: both hands' pitch and batted-ball pools, the steal, advancement and change pools, the pitcher matrix, the actor matrices and embeddings, the park geometry, the receiving document and the reference tables. A missing part loads empty or None, and its factor stays neutral. | `simulation/production_factory.py`, `api/startup.py` |
-| `EngineArtifacts.load` | One loader per artifact. With `shared_views`, the large arrays come from shared memory and their disk reads are skipped. | `api/startup.py`, `simulation/production_factory.py`, `pipeline/backup/data_stores.py` |
+| `EngineArtifacts.load` | One loader per artifact. With `shared_views`, the large arrays come from shared memory and their disk reads are skipped. | `api/startup.py`, `simulation/production_factory.py`, `operations/backup/back_up_data_stores.py` |
 | `extract_shared_arrays` / `attach_shared_views` | The app extracts the large numeric arrays once, and the runner publishes them into shared memory. A worker passes those views to `load`. `attach_shared_views` swaps a loaded bundle's arrays for views; only tests call it. | `api/startup.py` (extract) |
 
 **Watch out:**
@@ -351,15 +351,15 @@ container as `appuser`. The backup sets land in `/backups` (the host folder
 `BACKUP_DIR`), the off-site copies in `/offsite` (the host folder
 `OFFSITE_BACKUP_DIR`, a OneDrive folder).
 
-### `pipeline/backup/__init__.py`
+### `operations/backup/__init__.py`
 
-[Source](../../pipeline/backup/__init__.py) · 8 lines · Tests: none
+[Source](../../operations/backup/__init__.py) · 8 lines · Tests: none
 
 The package docstring: which module does what.
 
-### `pipeline/backup/status.py`
+### `operations/backup/backup_status.py`
 
-[Source](../../pipeline/backup/status.py) · 121 lines · Tests: [test_backup_status.py](../../tests/unit/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/test_backup_age_gauge.py)
+[Source](../../operations/backup/backup_status.py) · 121 lines · Tests: [test_backup_status.py](../../tests/unit/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/test_backup_age_gauge.py)
 
 Which sets exist and how old they are. Pure standard library, because the API imports it.
 
@@ -369,17 +369,17 @@ Which sets exist and how old they are. Pure standard library, because the API im
 | `complete_sets` / `newest_complete_set` / `newest_complete_sets` | Every complete set of a store (oldest first); the newest; the newest of each store (`postgres`, `duckdb`, `bundle`). | `data_stores`, `offsite`, `api/routes/metrics.py` |
 | `age_hours` | Hours since a set's creation; −1.0 when there is none. | `api/routes/metrics.py` (the gauges `baseball_sim_backup_age_hours` and `baseball_sim_offsite_backup_age_hours`) |
 
-### `pipeline/backup/common.py`
+### `operations/backup/common.py`
 
-[Source](../../pipeline/backup/common.py) · 91 lines · Tests: [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py)
+[Source](../../operations/backup/common.py) · 91 lines · Tests: [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py)
 
 The helpers both backup jobs share, pure standard library: `env_float`, `human_bytes`,
 `sha256_file` (in 8 MiB reads), `fsync_path`, `copy_file_synced`, and `fresh_marks` (the
 jobs whose `.running` mark exists and is younger than the stale limit).
 
-### `pipeline/backup/data_stores.py`
+### `operations/backup/back_up_data_stores.py`
 
-[Source](../../pipeline/backup/data_stores.py) · 915 lines · Tests: [test_backup_data_stores.py](../../tests/unit/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/test_backup_drill.py)
+[Source](../../operations/backup/back_up_data_stores.py) · 915 lines · Tests: [test_backup_data_stores.py](../../tests/unit/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/test_backup_drill.py)
 
 Back up, verify and restore the DuckDB file and the bundle. The module docstring is the
 design. Exit codes: 0 every store succeeded; 1 a store failed (the other was still
@@ -392,13 +392,13 @@ attempted); 2 a refusal before any write.
 | `backup_duckdb` | Opens the file read-only, counts every table, copies the file and its `.wal` while it holds the handle, then opens the copy and requires the same counts. Adds the small files (`backup_small_files`: the calibration report, the prop validation, the `*.last` marks). | `run_backup` |
 | `backup_bundle` | Copies the published version behind the link into `bundle/<set>/<build id>/`, without the in-use markers. | `run_backup` |
 | `free_space_ok` | Needs max(`BACKUP_MIN_FREE_GB` 10 GiB, `BACKUP_FREE_FACTOR` 1.5 × the newest set) free. When short, deletes the oldest set while more than two remain, then refuses. | `run_backup` |
-| `verify_set` / `check_hashes` | Checks every file's size and sha256, then the DuckDB copy's counts or a bundle load. | `main --verify-set`, `scripts/backup_drill.py` |
+| `verify_set` / `check_hashes` | Checks every file's size and sha256, then the DuckDB copy's counts or a bundle load. | `main --verify-set`, `operations/backup/backup_drill.py` |
 | `restore_duckdb` / `restore_bundle` | Puts a DuckDB set back with `os.replace`; copies a bundle set back as a new version and publishes it. Both need `--yes`. | `main` |
 | `status_rows` / `print_status` | The newest set of each store, as text or JSON. | `main --status`, `make backup-status` |
 
-### `pipeline/backup/offsite.py`
+### `operations/backup/copy_offsite.py`
 
-[Source](../../pipeline/backup/offsite.py) · 991 lines · Tests: [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
+[Source](../../operations/backup/copy_offsite.py) · 991 lines · Tests: [test_backup_offsite.py](../../tests/unit/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
 
 The off-site copy (SIM-568). It copies the newest complete sets of each store from
 `/backups` to `/offsite`; the OneDrive client uploads them, and this module cannot see

@@ -1,5 +1,5 @@
 """SIM-525 — the backups of the DuckDB file and the engine bundle
-(pipeline/backup/data_stores.py).
+(operations/backup/back_up_data_stores.py).
 
 Every test runs on tmp_path: a real small DuckDB file, a fake bundle tree with
 a relative link, and fake clocks, sleeps and openers, so the waits take no time.
@@ -16,8 +16,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.backup import data_stores as ds
-from pipeline.backup.status import complete_sets
+from operations.backup import back_up_data_stores as ds
+from operations.backup.backup_status import complete_sets
 
 BUILD_ID = "20261014T080000Z"
 
@@ -145,7 +145,7 @@ def test_the_duckdb_copy_round_trips_with_the_manifest_counts(backups, data_root
     (info,) = complete_sets(backups, "duckdb")
     manifest = _manifest(info.path)
     assert manifest["store"] == "duckdb"
-    assert manifest["tool"] == "pipeline.backup.data_stores"
+    assert manifest["tool"] == "operations.backup.back_up_data_stores"
     assert manifest["counts"] == {"derived.batters": 7, "main.misc": 0, "sim.pool": 3}
     assert manifest["wal_included"] is False
     assert ds.count_copy(info.path / "baseball_sim.duckdb") == manifest["counts"]

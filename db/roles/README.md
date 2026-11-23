@@ -49,7 +49,7 @@ Both files are idempotent: a rerun changes nothing but the passwords.
   is older than the password in `.env`: Postgres reads `POSTGRES_PASSWORD` only
   when it creates a volume.
 
-Create the passwords with `python scripts/gen_secrets.py --append .env`.
+Create the passwords with `python operations/gen_secrets.py --append .env`.
 
 ## How the app checks the read-only role
 

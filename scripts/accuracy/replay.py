@@ -63,7 +63,7 @@ from .records import GROUND_TRUTH_EVENT_LABEL, GROUND_TRUTH_OFFICIAL, AccuracyRe
 log = logging.getLogger("accuracy_comparison")
 
 #: No default password. The command line's ``main`` resolves a blank value
-#: through ``pipeline.db_dsn.require_dsn``, which names the missing variable.
+#: through ``db.dsn.require_dsn``, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 #: The fitted reliability curve the live API applies at boot (the default of

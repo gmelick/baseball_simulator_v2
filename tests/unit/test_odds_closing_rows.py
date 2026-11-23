@@ -874,7 +874,7 @@ class TestLoaderGameDates:
         assert captured["line_types"] == ("closing",)
 
 
-_SCRIPT = _ROOT / "scripts" / "nightly_closing_lines.sh"
+_SCRIPT = _ROOT / "operations" / "jobs" / "nightly_closing_lines.sh"
 _SH = shutil.which("sh")
 
 
@@ -948,7 +948,7 @@ def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
     # bundle (SIM-563).
     assert "schedule = 0 30 10 * * *" in job
     assert "container = baseball_simulator_v2-app-1" in job
-    assert "command = sh /app/scripts/nightly_closing_lines.sh" in job
+    assert "command = sh /app/operations/jobs/nightly_closing_lines.sh" in job
     assert "volume" not in job
     assert "image =" not in job
     # The vendor key is a secret: it never sits in the committed config.

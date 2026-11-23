@@ -1,4 +1,4 @@
-"""SIM-525 — the reader of the backup sets (pipeline/backup/status.py).
+"""SIM-525 — the reader of the backup sets (operations/backup/backup_status.py).
 
 A set is complete only when its manifest exists. The API's backup-age gauge
 reads this module, so it must not import duckdb.
@@ -12,7 +12,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pipeline.backup import status
+from operations.backup import backup_status as status
 
 
 def _make_set(root: Path, store: str, set_id: str, *, complete: bool = True, **manifest) -> Path:
@@ -70,9 +70,7 @@ def test_age_hours(tmp_path):
 
 
 def test_status_does_not_import_duckdb():
-    code = (
-        "import sys; import pipeline.backup.status; sys.exit(1 if 'duckdb' in sys.modules else 0)"
-    )
+    code = "import sys; import operations.backup.backup_status; sys.exit(1 if 'duckdb' in sys.modules else 0)"
     root = Path(__file__).resolve().parents[2]
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True)
     assert result.returncode == 0, result.stderr

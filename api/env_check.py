@@ -62,7 +62,7 @@ def validate_environment() -> None:
     if missing_auth:
         raise RuntimeError(
             f"Missing required auth variable(s): {', '.join(missing_auth)}. "
-            f"Run: python scripts/gen_secrets.py --append .env "
+            f"Run: python operations/gen_secrets.py --append .env "
             f"(or set AUTH_DISABLED=1 to run with no login)."
         )
     log.info("SIM-443c: login enforced on every API route and the live WebSocket.")

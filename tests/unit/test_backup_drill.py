@@ -1,6 +1,6 @@
 """The restore drill for the scheduled backups.
 
-``scripts/backup_drill.py`` runs on the host. It restores the newest Postgres
+``operations/backup/backup_drill.py`` runs on the host. It restores the newest Postgres
 backup set into a scratch cluster, verifies the DuckDB and bundle copies, and
 removes the scratch cluster. These tests replace every docker call with a fake
 seam, so they run on any OS and never touch Docker.
@@ -16,9 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.script_loader import load_script
 
-drill = load_script("backup_drill", module_name="backup_drill_under_test")
+import operations.backup.backup_drill as drill
 
 
 @pytest.fixture(autouse=True)
@@ -159,7 +158,7 @@ def test_the_picker_refuses_a_missing_or_incomplete_set(tmp_path: Path) -> None:
 
 def test_the_docker_run_argv_carries_every_flag_in_order(tmp_path: Path) -> None:
     set_dir = tmp_path / "postgres" / "20261014T100000Z"
-    scripts = tmp_path / "db" / "backup"
+    scripts = tmp_path / "operations" / "backup" / "postgres"
     argv = drill.docker_run_argv(set_dir, scripts)
     assert argv == [
         "docker",
@@ -228,7 +227,7 @@ def _setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeDocker) ->
     backups = tmp_path / "backups"
     for store in ("postgres", "duckdb", "bundle"):
         _make_set(backups, store, "20261014T100000Z")
-    (tmp_path / "db" / "backup").mkdir(parents=True)
+    (tmp_path / "operations" / "backup" / "postgres").mkdir(parents=True)
     monkeypatch.setattr(drill, "REPO", tmp_path)
     monkeypatch.setattr(drill, "_run", fake)
     monkeypatch.setattr(drill, "_sleep", lambda s: None)
@@ -284,7 +283,7 @@ def test_a_good_drill_exits_0_and_writes_the_report(
             "jobs",
             "python",
             "-m",
-            "pipeline.backup.data_stores",
+            "operations.backup.back_up_data_stores",
             "--verify-set",
             "20261014T100000Z",
         ]
@@ -396,7 +395,7 @@ def test_a_missing_restore_script_folder_refuses_with_exit_2(
 ) -> None:
     fake = FakeDocker()
     backups = _setup(tmp_path, monkeypatch, fake)
-    (tmp_path / "db" / "backup").rmdir()
+    (tmp_path / "operations" / "backup" / "postgres").rmdir()
     assert drill.main(["--backup-dir", str(backups)]) == 2
     assert not fake.find("docker", "run")
     assert not (backups / "drills").exists()
@@ -621,7 +620,7 @@ def test_offsite_restores_from_the_env_folder_and_verifies_under_offsite(
             "jobs",
             "python",
             "-m",
-            "pipeline.backup.data_stores",
+            "operations.backup.back_up_data_stores",
             "--verify-set",
             "20261015T100000Z",
             "--backups-root",

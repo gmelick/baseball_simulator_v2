@@ -64,7 +64,7 @@ closing price). The model is not judged by it (owner ruling 2026-09-28).
      `promote_closing_prop_rows`).
    * The historical loader (`python -m betting.historical_loader`) calls `load_odds` for each Final
      game. The scheduler's `nightly-closing-lines` job
-     ([`scripts/nightly_closing_lines.sh`](../../scripts/nightly_closing_lines.sh)) runs it
+     ([`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh)) runs it
      at 10:30 UTC over the games of the last two days, for the opening and the closing
      lines. Nothing else stores an opening line.
 
@@ -356,7 +356,7 @@ comparison skip that side.
 | Caller | What it uses |
 |---|---|
 | [`pipeline/live/ingestion/`](../../pipeline/live/ingestion/) | `odds_source`, `game_offers`, `prop_offers`, `write_offers`, the two closing stamps, `RefusalTally`, the prop roles ([pipeline-ingest.md](pipeline-ingest.md#the-live-service)) |
-| [`scripts/nightly_closing_lines.sh`](../../scripts/nightly_closing_lines.sh) | `python -m betting.historical_loader` for the last two days' games |
+| [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | `python -m betting.historical_loader` for the last two days' games |
 | [`api/routes/betting.py`](../../api/routes/betting.py) | `/edges` and `/signals`; `BetSignalConfig`, `bet_signals_from_edges` |
 | [`api/routes/betting_pricing.py`](../../api/routes/betting_pricing.py) | Every report builder, the de-vigs and the margin rule |
 | [`api/routes/betting_stored_odds.py`](../../api/routes/betting_stored_odds.py) | `check_row`, the book helpers, `reference_margin_from_prices`, `american_to_decimal` |

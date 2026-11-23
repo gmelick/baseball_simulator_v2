@@ -121,7 +121,7 @@ mounted: a script change reaches a container only after an image build.
 | Engine-artifact bundle | `/data/play_pool/engine_artifacts` | Everything a worker draws from: the per-hand pitch and batted-ball pools, the steal, advancement and pitching-change pools, the park geometry, the pitcher-by-pitcher matrix, the actor score matrices, the reference tables (intentional-walk rates, venue run factors), the catcher receiving document. | The nightly bundle build. |
 | Replay file | `/data/replay.duckdb` | One recorded game per run: the play stream, the state after each pitch, the linescore and the pitcher decisions. It keeps 5 runs per game. | The app only; it holds the file open writable. |
 | Calibration | `/data/calibration.json`, `/data/prop_validation.json` | The engines' fitted calibration and the win-probability reliability curve. | `make calibrate`, `make validate-props`. The app loads it at boot. |
-| Job marks | `/data/ingest_marks/` | `<job>.running` while a job runs, `<job>.last` after it ends. | `scripts/with_mark.sh`. |
+| Job marks | `/data/ingest_marks/` | `<job>.running` while a job runs, `<job>.last` after it ends. | `operations/jobs/with_mark.sh`. |
 | Redis | the `redis` service | The sim cache (typed JSON, keys `sim443:`; a summary lives 60 s, a seeded prop set 15 minutes, a pool query 5 minutes), the similarity cache (24 hours), the live channels `live:game:{game_pk}` and the `live:heartbeat` key. | The app and the live service. |
 | Backups | `BACKUP_DIR` at `/backups`, `OFFSITE_BACKUP_DIR` at `/offsite` | Three sets per store, and their off-site copy. | The nightly backup jobs. |
 
@@ -275,17 +275,17 @@ listing.
 ## The nightly path
 
 The scheduler runs these jobs (UTC; `deploy/ofelia/config.ini`). Each data job runs
-inside `scripts/with_mark.sh` and the crash wrapper `scripts/with_retry.sh`.
+inside `operations/jobs/with_mark.sh` and the crash wrapper `operations/jobs/with_retry.sh`.
 
 | Time (UTC) | Job | Container | What it does |
 |---|---|---|---|
-| 07:00 daily | `nightly-finals` | jobs | Loads every game that became Final in the last three days into Postgres (`scripts/nightly_finals.sh`). |
+| 07:00 daily | `nightly-finals` | jobs | Loads every game that became Final in the last three days into Postgres (`operations/jobs/nightly_finals.sh`). |
 | 08:00 Sunday | `weekly-refresh` | jobs | Sweeps the current season for any final game the nightly window missed. |
-| 08:00 daily | `nightly-rebuild` | jobs | Waits for the finals load, rebuilds the current season's profiles and pools into DuckDB, then builds and publishes a new bundle version (`scripts/nightly_rebuild.sh`). |
-| 10:00 daily | `nightly-backup-postgres` | db | Dumps Postgres into `/backups` (`db/backup/pg_backup.sh`). |
-| 10:00 daily | `nightly-backup-data` | jobs | Copies the DuckDB file, the small `/data` files and the bundle version into `/backups` (`pipeline.backup.data_stores`). It waits while a writer's mark is present. |
-| 10:30 daily | `nightly-backup-offsite` | jobs | Copies the newest complete sets into the OneDrive folder (`pipeline.backup.offsite`). |
-| 10:30 daily | `nightly-closing-lines` | app | Loads the opening and closing lines of the last two days' games; the closing lines are the fallback to the live promotion (`scripts/nightly_closing_lines.sh`). |
+| 08:00 daily | `nightly-rebuild` | jobs | Waits for the finals load, rebuilds the current season's profiles and pools into DuckDB, then builds and publishes a new bundle version (`operations/jobs/nightly_rebuild.sh`). |
+| 10:00 daily | `nightly-backup-postgres` | db | Dumps Postgres into `/backups` (`operations/backup/postgres/pg_backup.sh`). |
+| 10:00 daily | `nightly-backup-data` | jobs | Copies the DuckDB file, the small `/data` files and the bundle version into `/backups` (`operations.backup.back_up_data_stores`). It waits while a writer's mark is present. |
+| 10:30 daily | `nightly-backup-offsite` | jobs | Copies the newest complete sets into the OneDrive folder (`operations.backup.copy_offsite`). |
+| 10:30 daily | `nightly-closing-lines` | app | Loads the opening and closing lines of the last two days' games; the closing lines are the fallback to the live promotion (`operations/jobs/nightly_closing_lines.sh`). |
 
 The rebuild is the step that reaches users. The profile build
 ([`pipeline/batch/player_profile_computor.py`](../../pipeline/batch/player_profile_computor.py))
@@ -306,4 +306,4 @@ new version. The app's bundle watch then restarts the app, which loads both. See
   [`db/roles/README.md`](../../db/roles/README.md).
 - Every API route and the WebSocket require a login: the session cookie, `X-API-Key` or a
   Bearer key ([`api/auth.py`](../../api/auth.py)). `AUTH_DISABLED=1` is the one opt-out.
-- Every password comes from `.env` with no default (`scripts/gen_secrets.py`).
+- Every password comes from `.env` with no default (`operations/gen_secrets.py`).

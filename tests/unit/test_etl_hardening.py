@@ -679,7 +679,9 @@ class TestNightlyIngestScript:
 
     @staticmethod
     def _script() -> str:
-        return (_REPO_ROOT / "scripts" / "nightly_ingest.sh").read_text(encoding="utf-8")
+        return (_REPO_ROOT / "operations" / "jobs" / "nightly_ingest.sh").read_text(
+            encoding="utf-8"
+        )
 
     def test_no_shell_interpolation_inside_a_quoted_heredoc(self):
         script = self._script()

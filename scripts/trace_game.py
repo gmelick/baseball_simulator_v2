@@ -46,7 +46,7 @@ _FACTORY = "simulation.production_factory:production_machine_factory"
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # the DSN or a loud error: no default password
+    from db.dsn import require_dsn  # the DSN or a loud error: no default password
 
     return require_dsn()
 

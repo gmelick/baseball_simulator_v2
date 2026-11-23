@@ -14,7 +14,7 @@ Four paths bring data in.
 
 **1. The nightly finals load (the historical loader).**
 
-1. The `nightly-finals` scheduler job runs [`scripts/nightly_finals.sh`](../../scripts/nightly_finals.sh)
+1. The `nightly-finals` scheduler job runs [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh)
    at 07:00 UTC. It calls `HistoricalDataLoader.load_date_range` for the last few days in
    Eastern time. The Sunday `weekly-refresh` job calls `refresh_seasons` for the current
    season.
@@ -52,7 +52,7 @@ Four paths bring data in.
 **3. The odds.** Two callers load the odds through `betting.load_odds_to_db`
 ([betting.md](betting.md)). The live service loads every watched game's current lines
 once a minute and stamps the closing rows at first pitch. The historical loader
-(`python -m betting.historical_loader`), run each night by `scripts/nightly_closing_lines.sh`,
+(`python -m betting.historical_loader`), run each night by `operations/jobs/nightly_closing_lines.sh`,
 loads the opening and closing lines of the last two days' games.
 
 **4. The reference loaders.** The Savant leaderboards, the per-pitch tracking export, the
@@ -86,8 +86,8 @@ those names stay in this file.
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `HistoricalDataLoader.load_date_range` | Loads every Final game in a date range. It cuts the range into schedule windows and warns when a window comes back short. `reload=True` sends every game through `reload_game`. | `scripts/nightly_finals.sh`, `scripts/nightly_ingest.sh` |
-| `HistoricalDataLoader.refresh_seasons` | Loads every Final game of a range of seasons. The default end is last season. `reload=True` re-ingests. | `scripts/weekly_refresh.sh`, `scripts/resumable_sweep.py` |
+| `HistoricalDataLoader.load_date_range` | Loads every Final game in a date range. It cuts the range into schedule windows and warns when a window comes back short. `reload=True` sends every game through `reload_game`. | `operations/jobs/nightly_finals.sh`, `operations/jobs/nightly_ingest.sh` |
+| `HistoricalDataLoader.refresh_seasons` | Loads every Final game of a range of seasons. The default end is last season. `reload=True` re-ingests. | `operations/jobs/weekly_refresh.sh`, `scripts/resumable_sweep.py` |
 | `HistoricalDataLoader.load_game` | Loads one game. The pitch insert skips a row that exists (`ON CONFLICT ... DO NOTHING`). | `_dispatch_game` |
 | `HistoricalDataLoader.reload_game` | Deletes and re-inserts one game's pitch rows in one transaction. It refuses to store fewer rows than before (`ReloadShrinkError`) unless `allow_shrink=True`. | `_dispatch_game`, `scripts/reload_games.py` |
 | `HistoricalDataLoader._dispatch_game` | Routes one game to a load or a reload and counts the outcome. It contains a single game's failure; `ETL_CONSECUTIVE_FAILURE_LIMIT` (default 5) failures in a row raise. | `load_date_range`, `refresh_seasons` |
@@ -304,9 +304,9 @@ resolver (per game), so the pool and the live candidates share one definition.
 **Watch out:** the windows end strictly before the game DATE, so the two games of a
 double-header do not see each other's usage.
 
-### `pipeline/db_dsn.py`
+### `db/dsn.py`
 
-[Source](../../pipeline/db_dsn.py) · 65 lines · Tests: [test_db_dsn.py](../../tests/unit/test_db_dsn.py)
+[Source](../../db/dsn.py) · 65 lines · Tests: [test_db_dsn.py](../../tests/unit/test_db_dsn.py)
 
 `require_dsn` returns `BASEBALL_DB_DSN` or raises an error that names the variable. The code
 carries no default password. `dsn_label` gives `host[:port]/dbname` for a log line. The

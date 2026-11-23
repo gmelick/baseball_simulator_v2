@@ -7,9 +7,9 @@ the live stack's database:
 1. It refuses to start while any ``sim525_*`` container or volume exists.
 2. It starts a scratch Postgres cluster (``sim525_drill_pg``) with no network,
    on a named volume, with the backup set mounted read-only at ``/restore``.
-3. It runs the real ``db/backup/pg_restore.sh`` against the scratch cluster.
+3. It runs the real ``operations/backup/postgres/pg_restore.sh`` against the scratch cluster.
 4. It asks the jobs container to verify the DuckDB and bundle copies
-   (``python -m pipeline.backup.data_stores --verify-set``).
+   (``python -m operations.backup.back_up_data_stores --verify-set``).
 5. It removes the scratch container and its volume, whatever happened.
 6. It writes ``<backup dir>/drills/<start time>.json`` and prints a report.
 
@@ -31,14 +31,14 @@ Exit 0 when every step passes, 1 when a step fails, 2 when the drill refuses
 to start: a leftover scratch container or volume, no complete set,
 ``--offsite`` with a ``--backup-dir`` that is not the off-site folder, a
 backup folder that is neither the local folder nor the off-site folder the
-jobs container reads, or no ``db/backup`` folder in the repo.
+jobs container reads, or no ``operations/backup/postgres`` folder in the repo.
 
 The design and the restore run book: ``docs/audit/2026-10-14-sim525-backups-plan.md``;
 the off-site copy: ``docs/audit/2026-10-17-sim568-offsite-copy.md``.
 
 Usage::
 
-    py scripts/backup_drill.py [--set TS|latest] [--data-set TS|latest]
+    py operations/backup/backup_drill.py [--set TS|latest] [--data-set TS|latest]
                                [--backup-dir PATH] [--offsite]
                                [--keep-cluster] [--skip-data]
                                [--timeout-s 7200]
@@ -58,7 +58,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePath
 from typing import Any
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 # timezone.utc, not datetime.UTC, so the drill also runs on Python 3.10.
 UTC = timezone.utc  # noqa: UP017
 
@@ -363,7 +363,7 @@ def _step(set_id: str, started: float, code: int, ok: bool, output: str) -> dict
 def _restore_postgres(set_id: str, set_dir: Path, timeout_s: float) -> dict[str, Any]:
     started = time.monotonic()
     log(f"starting the scratch cluster {NAME} for postgres set {set_id}")
-    run = _run(docker_run_argv(set_dir, REPO / "db" / "backup"))
+    run = _run(docker_run_argv(set_dir, REPO / "operations" / "backup" / "postgres"))
     if run.returncode != 0:
         output = run.stdout + run.stderr
         log(f"docker run failed (exit {run.returncode})")
@@ -389,7 +389,7 @@ def verify_argv(data_set: str, container_root: str = LOCAL_ROOT) -> list[str]:
     ``--backups-root <root>``.
     """
     argv = ["docker", "compose", "run", "--rm", "-T", "jobs", "python", "-m"]
-    argv += ["pipeline.backup.data_stores", "--verify-set", data_set]
+    argv += ["operations.backup.back_up_data_stores", "--verify-set", data_set]
     if container_root != LOCAL_ROOT:
         argv += ["--backups-root", container_root]
     return argv
@@ -480,8 +480,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "OFFSITE_BACKUP_DIR); pass --skip-data or drop --backup-dir"
                 )
             data_set_id = pick_data_set(backup_dir, args.data_set)
-        if not (REPO / "db" / "backup").is_dir():
-            raise DrillError(f"{REPO / 'db' / 'backup'} is missing")
+        if not (REPO / "operations" / "backup" / "postgres").is_dir():
+            raise DrillError(f"{REPO / 'operations' / 'backup' / 'postgres'} is missing")
     except DrillError as exc:
         print(f"backup_drill: refused: {exc}", file=sys.stderr)
         return 2

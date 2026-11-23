@@ -1,4 +1,4 @@
-"""SIM-568 — the off-site copy of the backup sets (pipeline/backup/offsite.py).
+"""SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py).
 
 Every test runs on tmp_path: fake sets with real files and a real manifest
 (bytes, sha256, created_at), and a fake clock whose sleep moves time, so the
@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.backup import offsite as off
-from pipeline.backup.common import GIB
-from pipeline.backup.status import STORES, complete_sets, parse_set_id
+from operations.backup import copy_offsite as off
+from operations.backup.backup_status import STORES, complete_sets, parse_set_id
+from operations.backup.common import GIB
 
 SET_ID = "20261015T100000Z"
 FILES = {"payload.bin": b"x" * 10, "sub/part.bin": b"y" * 5}
@@ -781,7 +781,7 @@ def test_a_dry_run_writes_no_probe_file(backups, offsite, monkeypatch, capsys):
 
 def test_offsite_and_common_never_import_duckdb():
     code = (
-        "import sys; import pipeline.backup.offsite, pipeline.backup.common; "
+        "import sys; import operations.backup.copy_offsite, operations.backup.common; "
         "sys.exit(1 if 'duckdb' in sys.modules else 0)"
     )
     root = Path(__file__).resolve().parents[2]
@@ -790,8 +790,8 @@ def test_offsite_and_common_never_import_duckdb():
 
 
 def test_data_stores_reuses_the_common_helpers(tmp_path):
-    from pipeline.backup import common
-    from pipeline.backup import data_stores as ds
+    from operations.backup import back_up_data_stores as ds
+    from operations.backup import common
 
     assert ds.sha256_file is common.sha256_file
     assert ds.GIB == common.GIB

@@ -328,7 +328,7 @@ def _read_ages(env_name: str, default_root: str) -> dict[str, float]:
     gives -1 for every store. The reader never raises.
     """
     try:
-        from pipeline.backup.status import age_hours, newest_complete_sets
+        from operations.backup.backup_status import age_hours, newest_complete_sets
     except ImportError:
         return _no_backup_ages()
     ages = _no_backup_ages()

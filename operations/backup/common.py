@@ -1,4 +1,4 @@
-"""pipeline/backup/common.py — the helpers the backup modules share.
+"""operations/backup/common.py — the helpers the backup modules share.
 
 The data-store backup (``data_stores``) and the off-site copy (``offsite``) use
 them. This module is pure standard library: ``data_stores`` imports duckdb at
@@ -76,7 +76,7 @@ def fresh_marks(mark_dir: Path, names: Iterable[str], stale_s: float, now: float
     """The jobs among ``names`` that run now.
 
     A job runs while its ``<name>.running`` mark exists and is younger than
-    ``stale_s``. ``scripts/with_mark.sh`` writes the start epoch into the mark.
+    ``stale_s``. ``operations/jobs/with_mark.sh`` writes the start epoch into the mark.
     An older mark was left by a job that died.
     """
     fresh: list[str] = []

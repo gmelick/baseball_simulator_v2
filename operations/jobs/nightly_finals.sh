@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/nightly_finals.sh — load the last few days' final games.
+# operations/jobs/nightly_finals.sh — load the last few days' final games.
 #
 # Loads every game that became Final from (today - DAYS) to today, today in
 # Eastern time (the league's day). DAYS defaults to 3: the window catches a
@@ -8,10 +8,10 @@
 # that was off for a night. The loader skips games already loaded, so the
 # window costs a few schedule reads. Postgres only: no DuckDB write, so it is
 # safe while the app runs (the profile + artifact rebuild is
-# scripts/nightly_rebuild.sh, the 08:00 UTC job that takes the DuckDB lock).
+# operations/jobs/nightly_rebuild.sh, the 08:00 UTC job that takes the DuckDB lock).
 #
 # Ofelia runs it nightly through the crash wrapper:
-#   sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
+#   sh /app/operations/jobs/with_retry.sh 6 sh /app/operations/jobs/nightly_finals.sh
 # By hand, a longer window:  make ingest-catch-up DAYS=14
 # Exits non-zero when any game failed, so the record is honest.
 # =============================================================================

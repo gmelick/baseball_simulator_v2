@@ -6,9 +6,8 @@ import re
 from pathlib import Path
 
 import pytest
-from tests.script_loader import load_script
 
-gen = load_script("gen_secrets")
+import operations.gen_secrets as gen
 
 EXPECTED_KEYS = (
     "POSTGRES_PASSWORD",

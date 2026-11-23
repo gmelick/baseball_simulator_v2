@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/nightly_rebuild.sh — rebuild the profiles and the engine bundle for
-# the current season (steps 2 and 3 of scripts/nightly_ingest.sh).
+# operations/jobs/nightly_rebuild.sh — rebuild the profiles and the engine bundle for
+# the current season (steps 2 and 3 of operations/jobs/nightly_ingest.sh).
 #
 # Step 1 writes DuckDB and needs its write lock; step 2 opens it read-only and
 # writes the bundle. The running app holds no handle on the file (the rebuild
 # beside the app, SIM-524), so the scheduler runs this at 08:00 UTC beside the
 # app (deploy/ofelia/config.ini). By hand:
-#   docker compose run --rm app sh /app/scripts/nightly_rebuild.sh
+#   docker compose run --rm app sh /app/operations/jobs/nightly_rebuild.sh
 # Step 2 publishes a new bundle version; the app then restarts itself
 # to load the new profiles and bundle (api/bundle_watch.py).
 # =============================================================================
@@ -22,9 +22,9 @@ export BASEBALL_DUCKDB_PATH="${BASEBALL_DUCKDB_PATH:-/data/baseball_sim.duckdb}"
 log() { echo "[nightly-rebuild $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
 # The profiles read Postgres, so the night's finals must be
-# loaded first. The wait never fails the rebuild (scripts/wait_for_ingest.sh).
+# loaded first. The wait never fails the rebuild (operations/jobs/wait_for_ingest.sh).
 log "0/2 wait for the finals load"
-sh /app/scripts/wait_for_ingest.sh
+sh /app/operations/jobs/wait_for_ingest.sh
 
 log "1/2 player_profile_computor --seasons ${YEAR}"
 python -m pipeline.batch.player_profile_computor --seasons "${YEAR}"

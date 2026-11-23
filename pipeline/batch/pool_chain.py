@@ -108,7 +108,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.db_dsn import require_dsn
+from db.dsn import require_dsn
 
 #: The six pitch-pool classes, in the column order of a count matrix row.
 OUTCOMES: tuple[str, ...] = (

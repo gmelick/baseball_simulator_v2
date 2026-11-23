@@ -41,7 +41,7 @@ from pipeline.bullpen_usage import fetch_pen_for_game  # noqa: E402
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # SIM-443b: no default password
+    from db.dsn import require_dsn  # SIM-443b: no default password
 
     return require_dsn()
 

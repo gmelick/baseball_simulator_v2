@@ -334,7 +334,7 @@ a later migration creates gets the same grants. A NEW schema needs its own lines
 
 The two Postgres scripts run inside the `db` container as the `postgres` OS user over the
 unix socket, so they need no password. The DuckDB file and the bundle are backed up by
-`pipeline/backup/data_stores.py` (see [the nightly builds](pipeline-batch.md)). The run
+`operations/backup/back_up_data_stores.py` (see [the nightly builds](pipeline-batch.md)). The run
 book is the operator's manual, [WORKFLOW.md](../../WORKFLOW.md).
 
 ## The modules
@@ -450,14 +450,14 @@ also resets the owner's password. It refuses to run when a password is missing. 
 receives the passwords as psql variables and quotes them as literals; the script never
 echoes a command.
 
-### `db/backup/`
+### `operations/backup/postgres/`
 
-[pg_backup.sh](../../db/backup/pg_backup.sh) · 305 lines · [pg_restore.sh](../../db/backup/pg_restore.sh) · 147 lines · Tests: [test_pg_backup_script.py](../../tests/unit/test_pg_backup_script.py), [test_backup_drill.py](../../tests/unit/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
+[pg_backup.sh](../../operations/backup/postgres/pg_backup.sh) · 305 lines · [pg_restore.sh](../../operations/backup/postgres/pg_restore.sh) · 147 lines · Tests: [test_pg_backup_script.py](../../tests/unit/test_pg_backup_script.py), [test_backup_drill.py](../../tests/unit/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
 
 | Script | What it does | Called from |
 |---|---|---|
 | `pg_backup.sh` | Dumps the database in directory format (`pg_dump -Fd`, the format that restores in parallel) into `$BACKUP_ROOT/postgres/<TS>/`, with the row count of every table just before and just after the dump. It builds the set as `<TS>.partial`, opens its permissions so the jobs container can read it, writes `manifest.json` last, then renames the folder. It keeps the newest `BACKUP_KEEP` (3) complete sets. A lock folder allows one run at a time; a free-space guard needs the larger of 10 GiB and 1.5 × the newest set. Exit 2 is a refusal before any write. | the Ofelia job `nightly-backup-postgres` at 10:00 UTC; `make backup` |
-| `pg_restore.sh <set>` | Restores one set into an EMPTY database. It waits for the server, drops the empty `raw` and `sim` schemas without CASCADE (a populated database fails the drop, and the script exits 3 before it restores anything), runs `pg_restore` in parallel with `--exit-on-error`, then checks each table's count against the two counts in the set. | `make restore-postgres SET=<ts>`; the restore drill (`scripts/backup_drill.py`) |
+| `pg_restore.sh <set>` | Restores one set into an EMPTY database. It waits for the server, drops the empty `raw` and `sim` schemas without CASCADE (a populated database fails the drop, and the script exits 3 before it restores anything), runs `pg_restore` in parallel with `--exit-on-error`, then checks each table's count against the two counts in the set. | `make restore-postgres SET=<ts>`; the restore drill (`operations/backup/backup_drill.py`) |
 
 **Watch out:** after a restore, run `make db-roles` (the grants), then
 `docker compose run --rm migrate alembic current` (expect the head).

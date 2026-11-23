@@ -101,7 +101,7 @@ only `127.0.0.1:` or `[::1]:` addresses, and `:80` lists `0.0.0.0`.
 
 `docker-compose.yml` has no default for any password. It reads each one as
 `${VAR:?...}`, so a missing value fails every compose command and names the
-variable. `python scripts/gen_secrets.py --append .env` writes every missing or
+variable. `python operations/gen_secrets.py --append .env` writes every missing or
 blank secret and prints key names only.
 
 | Variable | What it protects |

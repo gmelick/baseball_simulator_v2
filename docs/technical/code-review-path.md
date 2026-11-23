@@ -574,7 +574,7 @@ off the machine.
 2. [deploy/ofelia/config.ini](../../deploy/ofelia/config.ini): the schedule. Then the
    shell jobs it runs (`scripts/nightly_*.sh`) and their wrappers
    (`with_mark.sh`, `with_retry.sh`, `wait_for_ingest.sh`).
-3. [pipeline/backup/](../../pipeline/backup/) and [db/backup/](../../db/backup/).
+3. [operations/backup/](../../operations/backup/) and [operations/backup/postgres/](../../operations/backup/postgres/).
 4. [db/roles/](../../db/roles/) and [deploy/](../../deploy/).
 
 **Check.**

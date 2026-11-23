@@ -57,14 +57,14 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from pipeline.db_dsn import require_dsn  # noqa: E402
+from db.dsn import require_dsn  # noqa: E402
 from pipeline.statcast_events import sql_outs_recorded, sql_steal_success  # noqa: E402
 from simulation.prop_validation import real_props_from_boxscore_rows  # noqa: E402
 
 log = logging.getLogger("boxscore_audit")
 
 #: No default password. main() resolves a blank value through
-#: pipeline.db_dsn.require_dsn, which names the missing variable.
+#: db.dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 #: The batter stats the derivation produces, in report order.

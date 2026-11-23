@@ -173,7 +173,7 @@ from accuracy.selection import (  # noqa: E402
     bundle_provenance,
 )
 
-from pipeline.db_dsn import dsn_label, require_dsn  # noqa: E402
+from db.dsn import dsn_label, require_dsn  # noqa: E402
 from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap  # noqa: E402
 
 log = logging.getLogger("accuracy_comparison")

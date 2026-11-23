@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/with_retry.sh — run a command again after a crash.
+# operations/jobs/with_retry.sh — run a command again after a crash.
 #
-#   sh scripts/with_retry.sh <max_attempts> <command...>
+#   sh operations/jobs/with_retry.sh <max_attempts> <command...>
 #
 # The app image's Python dies now and then with a segmentation fault (the
 # SIM-445 crash class, CLAUDE.md §2a). The loaders are idempotent per game, so a

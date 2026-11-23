@@ -47,7 +47,7 @@ key every vendor read fails and every game is incomplete)::
     python -m betting.historical_loader --seasons 2024 --max-games 20 --book draftkings
     python -m betting.historical_loader --seasons 2024 \
         --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
-    # The nightly pass (scripts/nightly_closing_lines.sh):
+    # The nightly pass (operations/jobs/nightly_closing_lines.sh):
     python -m betting.historical_loader --seasons 2026 --line-types opening closing \
         --game-dates 2026-10-08 2026-10-07
 """
@@ -82,13 +82,13 @@ from betting.markets import (
 
 # The load guard (pure; no I/O).
 from betting.validate_odds import RefusalTally
+from db.dsn import require_dsn
 from db.introspect import pg_column_exists_async
-from pipeline.db_dsn import require_dsn
 
 log = logging.getLogger("betting.historical_loader")
 
 #: No default password. main() resolves a blank value through
-#: pipeline.db_dsn.require_dsn, which names the missing variable.
+#: db.dsn.require_dsn, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 #: The line types a run loads by default: the opening and the closing line.
@@ -793,7 +793,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="YYYY-MM-DD",
         help="SIM-546: load only the games of these official dates (one or more). "
-        "The nightly closing pass (scripts/nightly_closing_lines.sh) loads yesterday "
+        "The nightly closing pass (operations/jobs/nightly_closing_lines.sh) loads yesterday "
         "and the day before.",
     )
     p.add_argument(

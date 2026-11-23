@@ -73,7 +73,7 @@ db-roles: _require_env_file
 ## SIM-443b: append every missing secret to .env (a present key, even blank,
 ## is left alone). It prints key names only, never a value.
 gen-secrets:
-	py scripts/gen_secrets.py --append .env
+	py operations/gen_secrets.py --append .env
 
 # ---------------------------------------------------------------------------
 # Backups of the three data stores (SIM-525)
@@ -91,14 +91,14 @@ gen-secrets:
 ## Run it from cmd.exe: Git Bash rewrites the container paths (CLAUDE.md 2a).
 backup: _require_env_file
 	docker compose exec -T -u postgres db sh /opt/baseball/backup/pg_backup.sh
-	docker compose exec -T jobs sh /app/scripts/with_mark.sh nightly-backup python -m pipeline.backup.data_stores --new-set
+	docker compose exec -T jobs sh /app/operations/jobs/with_mark.sh nightly-backup python -m operations.backup.back_up_data_stores --new-set
 
 ## Show the newest complete set of each store, its age and its size. The
 ## second line shows the off-site copy of each store (SIM-568): MIRRORED when
 ## it holds the newest local set, else BEHIND or none.
 backup-status: _require_env_file
-	docker compose exec -T jobs python -m pipeline.backup.data_stores --status
-	docker compose exec -T jobs python -m pipeline.backup.offsite --status
+	docker compose exec -T jobs python -m operations.backup.back_up_data_stores --status
+	docker compose exec -T jobs python -m operations.backup.copy_offsite --status
 
 ## The off-site copy now (SIM-568): copy the newest complete set of each store
 ## from BACKUP_DIR into OFFSITE_BACKUP_DIR (the OneDrive folder), mounted at
@@ -114,7 +114,7 @@ backup-status: _require_env_file
 ## cmd.exe pass it to the container unchanged.
 backup-offsite: _require_env_file
 	docker compose exec -T jobs sh -c "if find /data/ingest_marks -maxdepth 1 -name nightly-backup-offsite.running -mmin -360 2>/dev/null | grep -q .; then echo 'another off-site copy runs (a nightly-backup-offsite.running mark under 6 hours old)' >&2; exit 2; fi"
-	docker compose exec -T jobs sh /app/scripts/with_mark.sh nightly-backup-offsite python -m pipeline.backup.offsite
+	docker compose exec -T jobs sh /app/operations/jobs/with_mark.sh nightly-backup-offsite python -m operations.backup.copy_offsite
 
 ## The restore drill: restore a Postgres set into a scratch cluster, check the
 ## table counts, verify the DuckDB and bundle copies, then remove the cluster.
@@ -125,7 +125,7 @@ backup-offsite: _require_env_file
 ##   make backup-drill SET=20261015T100000Z
 ##   make backup-drill OFFSITE=1
 backup-drill: _require_env_file
-	py scripts/backup_drill.py --set $(or $(SET),latest) $(if $(filter 1,$(OFFSITE)),--offsite,)
+	py operations/backup/backup_drill.py --set $(or $(SET),latest) $(if $(filter 1,$(OFFSITE)),--offsite,)
 
 ## Restore one Postgres set into the running db container. The script refuses
 ## a database that still holds the raw or sim schema, so it never overwrites
@@ -142,14 +142,14 @@ restore-postgres: _require_env_file
 # These run in order each night: the profile computor rebuilds the DuckDB
 # pools (sim.pitch_pool / sim.outcome_pool), then the engine-artifact builder
 # (SIM-422) materializes the bundle the full-pool sampler reads.  The bundle
-# build MUST run AFTER the profile computor (scripts/nightly_ingest.sh runs
+# build MUST run AFTER the profile computor (operations/jobs/nightly_ingest.sh runs
 # the chain).
 
 ## SIM-519 Part D: load the final games of the last DAYS days (default 3) by
 ## hand, through the crash wrapper. Postgres only; safe while the app runs.
 ##   make ingest-catch-up DAYS=14
 ingest-catch-up: _require_env_file
-	docker compose run --rm -e DAYS=$(or $(DAYS),3) app sh /app/scripts/with_mark.sh nightly-finals sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
+	docker compose run --rm -e DAYS=$(or $(DAYS),3) app sh /app/operations/jobs/with_mark.sh nightly-finals sh /app/operations/jobs/with_retry.sh 6 sh /app/operations/jobs/nightly_finals.sh
 
 ## SIM-519 Part C: follow the live service's log (schedule polls, lineup writes,
 ## push subscriptions).
@@ -221,7 +221,7 @@ TESTS = tests/unit/
 test: _require_env_file
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/ -v --tb=short --timeout=60 \
-	       --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api \
+	       --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=operations --cov=db \
 	       --cov-report=term-missing --cov-report=xml:coverage.xml
 
 ## Unit tests only — no live DB or Redis required, fast feedback loop
@@ -230,7 +230,7 @@ test: _require_env_file
 test-unit:
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest $(TESTS) -v --tb=short --timeout=30 \
-	         --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api \
+	         --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=operations --cov=db \
 	         --cov-report=term-missing
 
 ## Regression tests — the engine invariant gate (no snapshots; CLAUDE.md §7).
@@ -261,7 +261,7 @@ format:
 ## Mypy: static type checking (same config as CI Job 2)
 type-check:
 	docker compose run --rm -v "$(CURDIR):/app" app \
-	  mypy similarity/ pipeline/ api/ simulation/ betting/ --ignore-missing-imports \
+	  mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports \
 	       --python-version 3.13
 
 # ---------------------------------------------------------------------------
@@ -315,4 +315,4 @@ nuke:
 ## prerequisite (see requirements.txt + Dockerfile), so introducing it
 ## here adds no new dependency.
 _require_env_file:
-	@py -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then: py scripts/gen_secrets.py --append .env\n', file=sys.stderr) or sys.exit(1)"
+	@py -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then: py operations/gen_secrets.py --append .env\n', file=sys.stderr) or sys.exit(1)"

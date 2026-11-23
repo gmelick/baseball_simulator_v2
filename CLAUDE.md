@@ -71,7 +71,7 @@
   has no default password: `POSTGRES_PASSWORD`, `BASEBALL_APP_DB_PASSWORD`,
   `BASEBALL_RO_DB_PASSWORD`, `REDIS_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` use `${VAR:?}`, so a
   missing one fails `docker compose` at once, `make test-unit` included. A worktree needs its
-  own `.env`; `python scripts/gen_secrets.py --append .env` adds any secret that is missing and
+  own `.env`; `python operations/gen_secrets.py --append .env` adds any secret that is missing and
   never changes one that has a value.
 - **The app, live and jobs services blank three passwords over their `env_file`.** They set
   `POSTGRES_PASSWORD`, `BASEBALL_RO_DB_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` to `""`, so the
@@ -150,7 +150,7 @@
   **The shape of the code is NOT the trigger**: `scripts/genexpr_crash_probe.py` ran every
   synthetic shape clean over 6.7 million evaluations. A sweep that rewrote the hot-path
   generators fixes nothing proven and was not landed (owner decision 2026-10-07). Treat a
-  segfault as a retry, not a failure; `scripts/with_retry.sh` reruns a data job after one. On
+  segfault as a retry, not a failure; `operations/jobs/with_retry.sh` reruns a data job after one. On
   the day it recurs, run the probe first. The root cause is open, and no ticket tracks it.
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development and tests run through Docker (`docker compose run --rm app ...`).
@@ -446,7 +446,7 @@ make test-unit           # unit tests (TESTS="tests/unit/test_x.py" names files)
 make test-regression     # engine invariant gate (no snapshots — see §7)
 make test-integration    # integration tests (testcontainers; they skip without a Docker socket)
 make lint / make format  # ruff check / ruff format
-make type-check          # mypy over the five program packages
+make type-check          # mypy over the seven program folders
 make profile-computor    # rebuild the DuckDB profiles + pools
 make engine-artifacts    # build + publish a new bundle version
 make calibrate           # fit /data/calibration.json (drops the reliability curve — §2b)
@@ -464,9 +464,9 @@ make restore-postgres SET=<ts>  # restore one Postgres set (refuses a populated 
 Raw equivalents (target **Python 3.13**):
 
 ```
-pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api
+pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=operations --cov=db
 ruff check .   &&   ruff format --check .
-mypy similarity/ pipeline/ api/ simulation/ betting/   # CI scope; config in pyproject.toml
+mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/   # CI scope; config in pyproject.toml
 python scripts/docs_file_index.py                      # regenerate the file index (stdlib + git)
 ```
 

@@ -137,7 +137,7 @@ _REALISM_FLAGS = (
 
 
 def _dsn() -> str:
-    from pipeline.db_dsn import require_dsn  # the DSN or a loud error: no default password
+    from db.dsn import require_dsn  # the DSN or a loud error: no default password
 
     return require_dsn()
 

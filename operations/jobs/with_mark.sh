@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/with_mark.sh — mark an ingest job as running, run it, record its exit.
+# operations/jobs/with_mark.sh — mark an ingest job as running, run it, record its exit.
 #
-#   sh /app/scripts/with_mark.sh <name> <command...>
+#   sh /app/operations/jobs/with_mark.sh <name> <command...>
 #
 # While the command runs, $INGEST_MARK_DIR/<name>.running holds its start time.
 # When it ends, the mark is removed and <name>.last holds one line:
 #   <UTC date> <exit code> <UTC timestamp>
 # The mark spans the whole command, so it covers every attempt of a
-# with_retry.sh wrapper inside it. scripts/wait_for_ingest.sh reads the marks:
+# with_retry.sh wrapper inside it. operations/jobs/wait_for_ingest.sh reads the marks:
 # the nightly rebuild waits for the finals load before it reads Postgres.
 # The scheduler marks the profile + bundle rebuild (nightly-rebuild) and the
 # data backup (nightly-backup) too. The data backup waits for the

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/nightly_ingest.sh — nightly data ingestion chain.
+# operations/jobs/nightly_ingest.sh — nightly data ingestion chain.
 #
 # Runs the three steps in dependency order for the CURRENT season:
 #   1. refresh_seasons(YEAR)        — load games that have newly become Final
@@ -9,12 +9,12 @@
 #   3. engine_artifacts             — rebuild the engine-artifact bundle the
 #                                     full-pool sampler reads
 #
-# The scheduler does not run this chain. It runs scripts/nightly_finals.sh
-# (step 1's job, a three-day window) nightly and scripts/weekly_refresh.sh on
-# Sunday; steps 2 and 3 are scripts/nightly_rebuild.sh, the 08:00 UTC job (it
+# The scheduler does not run this chain. It runs operations/jobs/nightly_finals.sh
+# (step 1's job, a three-day window) nightly and operations/jobs/weekly_refresh.sh on
+# Sunday; steps 2 and 3 are operations/jobs/nightly_rebuild.sh, the 08:00 UTC job (it
 # runs beside the app, which holds no DuckDB handle). This script is the whole
 # chain for a by-hand run:
-#   docker compose run --rm app sh /app/scripts/nightly_ingest.sh
+#   docker compose run --rm app sh /app/operations/jobs/nightly_ingest.sh
 #
 # BASEBALL_DB_DSN must point at the in-container DB (db:5432). The script has no
 # default: it exits at once, naming the variable, when the DSN is not set.

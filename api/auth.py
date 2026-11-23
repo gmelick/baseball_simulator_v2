@@ -128,11 +128,11 @@ def _configured_api_keys() -> set[str]:
 #   SESSION_TTL_HOURS  — the cookie and token lifetime in hours (default 8).
 #
 # validate_environment() (api/env_check.py) refuses to boot without the first
-# two, unless AUTH_DISABLED=1. scripts/gen_secrets.py writes both into .env.
+# two, unless AUTH_DISABLED=1. operations/gen_secrets.py writes both into .env.
 # ---------------------------------------------------------------------------
 
 SESSION_COOKIE_NAME = "sim_session"
-_GEN_SECRETS_HINT = "run: python scripts/gen_secrets.py --append .env"
+_GEN_SECRETS_HINT = "run: python operations/gen_secrets.py --append .env"
 
 
 def _session_ttl_seconds() -> int:

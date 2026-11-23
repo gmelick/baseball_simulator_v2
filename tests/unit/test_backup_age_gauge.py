@@ -10,7 +10,7 @@ every store and never raises. The reading is cached on ``app.state`` for
 600 seconds.
 
 The tests build real backup sets under ``tmp_path``: a set is complete when
-its ``manifest.json`` exists. The reader module (``pipeline.backup.status``)
+its ``manifest.json`` exists. The reader module (``operations.backup.backup_status``)
 is built in parallel; a test that needs it xfails when it cannot import.
 
 The off-site copy (SIM-568) adds a second gauge,
@@ -46,10 +46,10 @@ _LINE = re.compile(r'^baseball_sim_backup_age_hours\{store="(\w+)"\} (\S+)$', re
 def _need_status_module() -> None:
     """Xfail the calling test when the reader module is not importable yet."""
     try:
-        import pipeline.backup.status  # noqa: F401
+        import operations.backup.backup_status  # noqa: F401
     except ImportError as exc:
         pytest.xfail(
-            f"pipeline.backup.status is not built yet ({exc}); the integration stage reruns"
+            f"operations.backup.backup_status is not built yet ({exc}); the integration stage reruns"
         )
 
 
@@ -65,7 +65,7 @@ def _make_set(root: Path, store: str, set_id: str, created_at: datetime) -> Path
         "seconds": 1.0,
         "bytes": 10,
         "host": "test",
-        "tool": "db/backup/pg_backup.sh",
+        "tool": "operations/backup/postgres/pg_backup.sh",
         "files": [{"path": "data.bin", "bytes": 10, "sha256": None}],
     }
     (set_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -155,7 +155,7 @@ def test_the_reading_is_cached_for_600_seconds(monkeypatch: pytest.MonkeyPatch) 
 
 def test_a_reader_failure_reads_minus_one(monkeypatch: pytest.MonkeyPatch) -> None:
     _need_status_module()
-    import pipeline.backup.status as status
+    import operations.backup.backup_status as status
 
     def boom(root: Path) -> dict[str, object]:
         raise OSError("disk gone")

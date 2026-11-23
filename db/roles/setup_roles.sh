@@ -41,7 +41,7 @@
         missing="$missing POSTGRES_PASSWORD"
     fi
     if [ -n "$missing" ]; then
-        echo "setup_roles: not set:$missing - run: python scripts/gen_secrets.py --append .env" >&2
+        echo "setup_roles: not set:$missing - run: python operations/gen_secrets.py --append .env" >&2
         exit 1
     fi
     if [ ! -r "$roles_sql" ]; then

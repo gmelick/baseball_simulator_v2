@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # =============================================================================
-# scripts/weekly_refresh.sh — sweep the current season for any final game the
+# operations/jobs/weekly_refresh.sh — sweep the current season for any final game the
 # nightly window missed. Postgres only; safe while the app runs.
 # Ofelia runs it on Sunday through the crash wrapper.
 # =============================================================================

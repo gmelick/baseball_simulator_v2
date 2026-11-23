@@ -13,7 +13,7 @@ Every script runs in one of three places:
 Four rules apply to every script:
 
 - **`scripts/` is baked into the app image.** Compose does not bind-mount it ([docker-compose.yml](../../docker-compose.yml) mounts only `api/`, `pipeline/`, `similarity/`, `simulation/` and `db/`). A script edit reaches the `app` and `jobs` containers only after `docker compose build app` (or `jobs`) and a recreate. To run the checkout's copy now, mount it: `docker compose run --rm -v "$PWD:/app" app python scripts/<name>.py`. From Git Bash, prefix `MSYS_NO_PATHCONV=1`, or Git Bash rewrites `/app/...` into a Windows path.
-- **No database password has a default.** A script reads `BASEBALL_DB_DSN` through `pipeline.db_dsn.require_dsn` and stops, naming the variable, when it is missing. The containers compose the DSN from `.env`; on the host you set it yourself.
+- **No database password has a default.** A script reads `BASEBALL_DB_DSN` through `db.dsn.require_dsn` and stops, naming the variable, when it is missing. The containers compose the DSN from `.env`; on the host you set it yourself.
 - **Run outputs go to `results/`**, which git and Docker ignore. A small record that a document cites goes to `docs/audit/records/`.
 - **A test loads a script through [tests/script_loader.py](../../tests/script_loader.py).** `load_script(name)` looks in `scripts/` and `scripts/probes/`, and `scripts_on_path()` lets a test import a stage package (`accuracy`, `pitch_pool_rebuild`, `steal_pool_rebuild`) by name. [test_script_flag_names.py](../../tests/unit/test_script_flag_names.py) fails when a script outside `scripts/probes/` names a `SIM_*` flag that `simulation/flags.py` does not register.
 
@@ -24,10 +24,10 @@ The scheduler fires these jobs every day (UTC). Each runs inside `with_mark.sh`,
 1. **07:00** — `nightly_finals.sh` loads the last three days' Final games into Postgres, through `with_retry.sh 6`.
 2. **08:00** — `nightly_rebuild.sh` waits for the finals load (`wait_for_ingest.sh`), rebuilds the current season's DuckDB profiles and pools (`pipeline.batch.player_profile_computor`), then builds and publishes a new engine-artifact bundle (`pipeline.batch.engine_artifacts --what all`). The app sees the new bundle and restarts itself.
 3. **08:00 on Sunday** — `weekly_refresh.sh` sweeps the whole current season for any Final game the three-day window missed.
-4. **10:00** — the backups of the three data stores (`db/backup/pg_backup.sh` in the `db` container; `python -m pipeline.backup.data_stores` in `jobs`). The data backup waits for the rebuild's mark.
-5. **10:30** — the off-site copy (`python -m pipeline.backup.offsite`, in `jobs`) and `nightly_closing_lines.sh`, which runs in the `app` container because it needs the vendor key from `.env`.
+4. **10:00** — the backups of the three data stores (`operations/backup/postgres/pg_backup.sh` in the `db` container; `python -m operations.backup.back_up_data_stores` in `jobs`). The data backup waits for the rebuild's mark.
+5. **10:30** — the off-site copy (`python -m operations.backup.copy_offsite`, in `jobs`) and `nightly_closing_lines.sh`, which runs in the `app` container because it needs the vendor key from `.env`.
 
-The backup modules live in `pipeline/backup/`; see [Pipeline: the nightly builds](pipeline-batch.md).
+The backup modules live in `operations/backup/`; see [Pipeline: the nightly builds](pipeline-batch.md).
 
 ### The measurement path
 
@@ -44,63 +44,63 @@ The acceptance lane (`tests/acceptance/`) also reads `sim_stats.py`, `balanced_g
 
 All of these are POSIX `sh` scripts that run in the Debian app image. Each one stops at once without `BASEBALL_DB_DSN`. [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py) and [test_no_default_password.py](../../tests/unit/test_no_default_password.py) hold that rule.
 
-### `scripts/nightly_finals.sh`
+### `operations/jobs/nightly_finals.sh`
 
-[Source](../../scripts/nightly_finals.sh) · 51 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/nightly_finals.sh) · 51 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Loads every game that became Final from today minus `DAYS` (default 3) to today, with "today" in Eastern time, the league's day. It calls `HistoricalDataLoader.load_date_range`, which skips games already loaded. Postgres only, so it runs while the app serves. It exits 1 when any game failed.
 
 Run: the scheduler at 07:00 UTC, as `with_mark.sh nightly-finals with_retry.sh 6 nightly_finals.sh`. By hand: `make ingest-catch-up DAYS=14`.
 
-### `scripts/weekly_refresh.sh`
+### `operations/jobs/weekly_refresh.sh`
 
-[Source](../../scripts/weekly_refresh.sh) · 29 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/weekly_refresh.sh) · 29 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Calls `HistoricalDataLoader.refresh_seasons(year, year)` on the current season, to catch a Final game that the three-day window missed. Postgres only. It exits 1 when any game failed.
 
 Run: the scheduler on Sunday at 08:00 UTC, through `with_mark.sh weekly-refresh` and `with_retry.sh 6`.
 
-### `scripts/nightly_rebuild.sh`
+### `operations/jobs/nightly_rebuild.sh`
 
-[Source](../../scripts/nightly_rebuild.sh) · 35 lines · Tests: [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_rebuild.sh) · 35 lines · Tests: [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
 
 Rebuilds the current season's profiles and the engine-artifact bundle, in three steps: `wait_for_ingest.sh`, `python -m pipeline.batch.player_profile_computor --seasons <year>`, `python -m pipeline.batch.engine_artifacts --what all`. The profile step writes DuckDB and needs its write lock; the bundle step opens it read-only. The app holds no handle on that file, so the job runs beside the app. The bundle step publishes a new bundle version, and the app restarts itself on the new version (`api/bundle_watch.py`).
 
-Run: the scheduler at 08:00 UTC, through `with_mark.sh nightly-rebuild` and `with_retry.sh 3`. By hand: `docker compose run --rm app sh /app/scripts/nightly_rebuild.sh`.
+Run: the scheduler at 08:00 UTC, through `with_mark.sh nightly-rebuild` and `with_retry.sh 3`. By hand: `docker compose run --rm app sh /app/operations/jobs/nightly_rebuild.sh`.
 
-### `scripts/nightly_ingest.sh`
+### `operations/jobs/nightly_ingest.sh`
 
-[Source](../../scripts/nightly_ingest.sh) · 75 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_ingest.sh) · 75 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
 
 The whole chain in one by-hand run: `refresh_seasons` for the current season, then the profile computor, then the bundle build. It stops before the rebuild when any game failed, so it never rebuilds on a season it knows is incomplete. The scheduler does not run this script; it runs the three jobs above instead.
 
-Run: `docker compose run --rm app sh /app/scripts/nightly_ingest.sh`.
+Run: `docker compose run --rm app sh /app/operations/jobs/nightly_ingest.sh`.
 
 **Watch out:** the Python heredoc's delimiter is quoted (`'PY'`), so the shell does not expand `${YEAR}` inside it. The year crosses into Python through the environment (`os.environ["YEAR"]`).
 
-### `scripts/nightly_closing_lines.sh`
+### `operations/jobs/nightly_closing_lines.sh`
 
-[Source](../../scripts/nightly_closing_lines.sh) · 64 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_closing_lines.sh) · 64 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/test_shell_dsn_guards.py)
 
 The nightly odds pass. It runs the historical odds loader, `python -m betting.historical_loader --line-types opening closing`, over the games of yesterday and the day before (UTC dates, so a late West Coast game is not missed). A closing row is the last price a book posted before first pitch. The live service stamps each game's closing rows at first pitch; this pass is the fallback and the reconciliation. The live service stores no opening row, so this pass is the only place an opening line comes from: BettingPros returns each market's opener with every offer. Without `ODDS_API_KEY`, the script exits 1 before it loads anything.
 
-Run: the scheduler at 10:30 UTC, inside the running `app` container (`sh /app/scripts/nightly_closing_lines.sh`). The `app` container reads `ODDS_API_KEY` from `.env`. The loader is described on [betting.md](betting.md#bettinghistorypy).
+Run: the scheduler at 10:30 UTC, inside the running `app` container (`sh /app/operations/jobs/nightly_closing_lines.sh`). The `app` container reads `ODDS_API_KEY` from `.env`. The loader is described on [betting.md](betting.md#bettinghistorypy).
 
-### `scripts/with_retry.sh`
+### `operations/jobs/with_retry.sh`
 
-[Source](../../scripts/with_retry.sh) · 57 lines · Tests: [test_retry_wrapper.py](../../tests/unit/test_retry_wrapper.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
+[Source](../../operations/jobs/with_retry.sh) · 57 lines · Tests: [test_retry_wrapper.py](../../tests/unit/test_retry_wrapper.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
 
 `with_retry.sh <max_attempts> <command...>` runs the command again after a crash, up to `max_attempts` times, 30 seconds apart (`RETRY_SLEEP_S`). A crash is exit 139 (a segmentation fault) or output that holds "Fatal Python error": the stochastic interpreter crash of the app image (the SIM-445 crash class, CLAUDE.md §2a). Any other non-zero exit stops the wrapper at once with that code. The loaders are idempotent per game, so a rerun resumes where the crash stopped.
 
-### `scripts/with_mark.sh`
+### `operations/jobs/with_mark.sh`
 
-[Source](../../scripts/with_mark.sh) · 45 lines · Tests: [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
+[Source](../../operations/jobs/with_mark.sh) · 45 lines · Tests: [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
 
 `with_mark.sh <name> <command...>` writes `$INGEST_MARK_DIR/<name>.running` (default `/data/ingest_marks`) with the start time, runs the command, then removes the mark and writes `<name>.last` as one line: the UTC date, the exit code and the UTC timestamp. The mark spans every attempt of a `with_retry.sh` inside it. When the folder cannot be written, the command still runs, unmarked.
 
-### `scripts/wait_for_ingest.sh`
+### `operations/jobs/wait_for_ingest.sh`
 
-[Source](../../scripts/wait_for_ingest.sh) · 62 lines · Tests: [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py)
+[Source](../../operations/jobs/wait_for_ingest.sh) · 62 lines · Tests: [test_ingest_wait.py](../../tests/unit/test_ingest_wait.py)
 
 The rebuild's first step. It makes sure the finals load ran today before the rebuild reads Postgres. It waits `INGEST_GRACE_S` (60 s), so a job fired in the same second can write its mark. Then it waits while a fresh `nightly-finals` or `weekly-refresh` mark exists (at most `INGEST_WAIT_S`, 2 hours; a mark older than 6 hours is stale). When `nightly-finals.last` shows today, the rebuild goes on. When it does not, the script runs the finals load first. It never fails the rebuild.
 
@@ -327,19 +327,19 @@ Run: `python scripts/boxscore_audit.py --seasons 2024 --max-games 500` in the ap
 
 ## Operations
 
-### `scripts/gen_secrets.py`
+### `operations/gen_secrets.py`
 
-[Source](../../scripts/gen_secrets.py) · 208 lines · Tests: [test_gen_secrets.py](../../tests/unit/test_gen_secrets.py)
+[Source](../../operations/gen_secrets.py) · 208 lines · Tests: [test_gen_secrets.py](../../tests/unit/test_gen_secrets.py)
 
 Generates the stack's eight secrets: the three Postgres role passwords, the Redis password, the Grafana admin password, the session-signing key, the login password and one API key. Each value is `secrets.token_urlsafe(32)`. `--append .env` adds only the missing or blank keys and never changes a value; `--check .env` exits 1 when a secret is missing. It prints key names only, never a value. Standard library only.
 
-Run on the host: `make gen-secrets` (`py scripts/gen_secrets.py --append .env`).
+Run on the host: `make gen-secrets` (`py operations/gen_secrets.py --append .env`).
 
-### `scripts/backup_drill.py`
+### `operations/backup/backup_drill.py`
 
-[Source](../../scripts/backup_drill.py) · 535 lines · Tests: [test_backup_drill.py](../../tests/unit/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
+[Source](../../operations/backup/backup_drill.py) · 535 lines · Tests: [test_backup_drill.py](../../tests/unit/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/test_backup_schedule.py)
 
-The restore drill. It proves a backup set restores, without touching the live database: a scratch Postgres cluster with no network, the real `db/backup/pg_restore.sh` against it, a verify of the DuckDB and bundle copies in the `jobs` container (`python -m pipeline.backup.data_stores --verify-set`), then the scratch cluster's removal, whatever happened. It writes `<backup dir>/drills/<start>.json`. `--offsite` restores from the OneDrive copy instead. It exits 0 on a pass, 1 when a step fails, 2 when it refuses to start. Standard library only; it needs about 20 GB free in Docker's disk image while it runs.
+The restore drill. It proves a backup set restores, without touching the live database: a scratch Postgres cluster with no network, the real `operations/backup/postgres/pg_restore.sh` against it, a verify of the DuckDB and bundle copies in the `jobs` container (`python -m operations.backup.back_up_data_stores --verify-set`), then the scratch cluster's removal, whatever happened. It writes `<backup dir>/drills/<start>.json`. `--offsite` restores from the OneDrive copy instead. It exits 0 on a pass, 1 when a step fails, 2 when it refuses to start. Standard library only; it needs about 20 GB free in Docker's disk image while it runs.
 
 Run on the host: `make backup-drill` or `make backup-drill OFFSITE=1`.
 
