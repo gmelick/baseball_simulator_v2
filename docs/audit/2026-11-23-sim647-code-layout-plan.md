@@ -1,6 +1,6 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
-Status: PLANNED, 2026-11-23. Section 8 lists the owner decisions this plan needs. No part has
+Status: PLANNED, 2026-11-23. Section 8 lists the owner decisions; the first is decided. No part has
 started.
 
 ## 1. Why
@@ -273,9 +273,9 @@ number, so the order does not touch the fit.
 
 ## 8. Owner decisions
 
-1. **Flat folders or one parent package.** Flat folders (`ingest/`, `runs/`) keep the imports
-   short and need about twelve compose mounts. One parent package (`mlb/ingest/`) needs one
-   mount and makes every import longer. Recommended: flat.
+1. **Flat folders (decided, 2026-11-23).** Each step is a top-level folder (`ingest/`,
+   `runs/`). The imports stay short; the compose file carries about twelve mounts. The owner
+   chose this over one parent package (`mlb/ingest/`).
 2. **The priority.** Filed P2, after the model defects, because each part touches files those
    tickets edit. The owner may move it.
 3. **The frontend.** It is out of this plan. Its folders already follow the screens
