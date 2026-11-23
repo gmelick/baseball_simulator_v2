@@ -222,8 +222,7 @@ of the old `BACKLOG.md` is frozen at `docs/archive/BACKLOG-history.md`.
 - **The closing line is the benchmark (owner decision 2026-09-10)**, because the simulator has a
   probability only once both lineups post, and nearly every game has a closing line. **Closing
   line value is not a metric the model is judged by (owner ruling 2026-09-28):** it describes
-  the market. The open owner-decision ticket on four similarity points (SIM-611) asks how the
-  project's framing should read.
+  the market. Section 1 states the framing.
 - **Every market the book posts is stored and priced (owner ruling 2026-09-12):** fifteen
   player-prop markets and fifteen game markets (`pipeline/odds_provider.py`), one row per book.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review

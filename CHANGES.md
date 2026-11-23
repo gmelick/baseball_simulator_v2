@@ -1,3 +1,36 @@
+# BACKLOG — the line-movement ticket closed, two rows trimmed, five rows brought up to the code — 2026-11-23
+
+**Why it matters.** The owner asked me to close the line-movement raise, to trim item 7 of the
+seven small defects, and to check every other row against the code. I checked each row's file
+paths and code names against the checkout, then read the betting and odds rows in full.
+
+**Closed.**
+- **The line-movement raise (SIM-609).** It asked `line_movement_from_quotes` to raise on a
+  wrong market or side. The betting clean-up (SIM-642) deleted the function and its
+  `_side_columns` helper, so the defect no longer exists. The row is deleted.
+
+**Trimmed.**
+- **The small similarity and betting defects (SIM-610)** keep six items. Item 7 said
+  `sharp_consensus` was always None; SIM-642 deleted `sharp_consensus`.
+- **The owner's similarity design points (SIM-611)** keep three points. Point 4 said CLAUDE.md
+  section 1 called CLV the gold-standard metric. The documentation rebuild (SIM-624) rewrote
+  section 1 to the owner's ruling of 2026-09-28. CLAUDE.md section 2b no longer cites the row.
+
+**Brought up to the code.**
+- **The backup path and the env templates (SIM-632):** the betting folder work (SIM-645)
+  removed `ODDS_PROVIDER`, `ODDS_PROVIDER_API_KEY` and `ODDS_API_BASE` from the templates. The
+  row now lists the five unread keys that remain.
+- **The steal draw's balance weight (SIM-556):** the steal draw moved to
+  `simulation/sampler/steal.py` in the code clean-up (SIM-493). The solution names
+  `steal_weights` and its `_actor_factor` terms in place of `_steal_actor_factor`.
+- **The manager-draw follow-ons (SIM-547):** the response models are a package; the solution
+  names `api/schemas/live.py`.
+- **A price that returns to an earlier value (SIM-608):** the row names the writer's file,
+  `betting/load_odds_to_db.py`.
+
+Every other row still describes the code as it is. I did not re-run each row's evidence. I
+checked that each named file, function and text still exists and still reads as the row says.
+
 # CLOSED + DEPLOYED — three betting files get names that say what they do — SIM-646, 2026-11-23
 
 **Why it matters.** The owner found three names in the betting folder unclear. Each new name
