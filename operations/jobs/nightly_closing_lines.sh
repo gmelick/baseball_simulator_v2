@@ -24,7 +24,7 @@
 # Invoked by the Ofelia scheduler (docker-compose `scheduler` profile) at 10:30
 # UTC, inside the running app container (job-exec): that container reads the
 # host's .env, where ODDS_API_KEY lives; see deploy/ofelia/config.ini. It is a
-# separate job from nightly_ingest.sh on purpose: a vendor outage must not stop
+# separate job from the nightly rebuild on purpose: a vendor outage must not stop
 # the profile and artifact rebuild. Safe to run by hand:
 #   docker compose exec app sh /app/operations/jobs/nightly_closing_lines.sh
 # =============================================================================

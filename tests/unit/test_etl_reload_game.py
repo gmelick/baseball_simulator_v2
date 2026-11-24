@@ -415,7 +415,7 @@ class TestReloadSweeps:
         """SIM-441: one malformed feed must not abort the nightly run.
 
         The incremental path used to call load_game bare. Because
-        nightly_ingest.sh runs under `set -eu` with this as step 1 of 3, a single
+        the nightly chain ran under `set -eu` with this as step 1 of 3, a single
         KeyError meant the profile rebuild and the FAISS tile build never ran —
         and since the poison game genuinely has no pitch rows,
         `_game_already_loaded` reported it unloaded, so the chain re-wedged on

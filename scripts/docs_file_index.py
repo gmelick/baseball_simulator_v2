@@ -361,7 +361,6 @@ STAGES: list[tuple[int, str, str, list[str]]] = [
             "operations/jobs/with_retry.sh",
             "operations/jobs/wait_for_ingest.sh",
             "operations/jobs/nightly_finals.sh",
-            "operations/jobs/nightly_ingest.sh",
             "operations/jobs/nightly_closing_lines.sh",
             "operations/jobs/nightly_rebuild.sh",
             "operations/jobs/weekly_refresh.sh",

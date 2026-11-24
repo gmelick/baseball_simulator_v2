@@ -45,9 +45,6 @@ dependencies, so the jobs order themselves through marks: every job runs inside
    `python -m operations.backup.copy_offsite`. It waits for both backup jobs, then copies the
    newest complete sets into the OneDrive folder.
 
-[`operations/jobs/nightly_ingest.sh`](../../operations/jobs/nightly_ingest.sh) runs steps 1 to 4 in one
-command, for a run by hand. The scheduler does not use it.
-
 ### Inside one rebuild
 
 ```

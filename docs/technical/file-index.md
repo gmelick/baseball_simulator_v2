@@ -1,4 +1,4 @@
-<!-- file-index-key: 41ab4eabcc0ef517 -->
+<!-- file-index-key: 6472df729b0ed0c2 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -23,10 +23,10 @@ Every source and config file in the repository, in the order of the [code review
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,050 |
-| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,368 |
-| [15. Tests and CI](#stage-15) | 316 | 124,671 |
-| **All** | **783** | **283,127** |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 6,987 |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,367 |
+| [15. Tests and CI](#stage-15) | 316 | 124,668 |
+| **All** | **782** | **283,060** |
 
 <a id="stage-1"></a>
 
@@ -504,7 +504,6 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 56 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
 | [`operations/jobs/wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh) | 61 | operations/jobs/wait_for_ingest.sh — make sure the finals load ran today before the rebuild. | — |
 | [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh) | 48 | operations/jobs/nightly_finals.sh — load the last few days' final games. | — |
-| [`operations/jobs/nightly_ingest.sh`](../../operations/jobs/nightly_ingest.sh) | 63 | operations/jobs/nightly_ingest.sh — the whole nightly data chain, for a run by hand. | — |
 | [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | 64 | operations/jobs/nightly_closing_lines.sh — the nightly closing pass. | — |
 | [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 32 | operations/jobs/nightly_rebuild.sh — rebuild the current season's profiles and the engine bundle. | — |
 | [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 30 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
@@ -587,7 +586,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/accuracy_split_arm.sh`](../../scripts/accuracy_split_arm.sh) | 24 | The pitch / pitch-result split as one paired accuracy arm (the accuracy fit, SIM-548). | — |
 | [`scripts/boxscore_audit.py`](../../scripts/boxscore_audit.py) | 475 | The validation study for the official box-score ground truth: how far each per-player total the platform derives from `raw.pitches` sits from the official box score. | 1: `test_boxscore_reader.py` |
 | [`scripts/check_file_integrity.py`](../../scripts/check_file_integrity.py) | 176 | The file-integrity guard: it catches a `.py` file that a file bridge truncated or filled with NUL bytes. | 1: `test_check_file_integrity.py` |
-| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 838 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
+| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 837 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
 | [`scripts/export_openapi.py`](../../scripts/export_openapi.py) | 45 | Export the FastAPI OpenAPI schema to `frontend/openapi.json`. | — |
 | [`scripts/genexpr_crash_probe.py`](../../scripts/genexpr_crash_probe.py) | 434 | The SIM-445 crash class — a probe that re-runs the workload that segfaulted, with and without the database. | — |
 | [`scripts/measure_filter_cells.py`](../../scripts/measure_filter_cells.py) | 1,378 | Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy measurement, SIM-451). | 2: `test_filter_cells.py`, `test_pitch_cell_index.py` |
@@ -653,7 +652,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/operations/test_ingest_wait.py`](../../tests/unit/operations/test_ingest_wait.py) | 163 | The nightly rebuild waits for the finals load. | — |
 | [`tests/unit/operations/test_pg_backup_script.py`](../../tests/unit/operations/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (operations/backup/postgres). | — |
 | [`tests/unit/operations/test_retry_wrapper.py`](../../tests/unit/operations/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`operations/jobs/with_retry.sh`). | — |
-| [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 67 | The nightly shell scripts carry no default DSN. | — |
+| [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 66 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/test_accuracy_comparison.py`](../../tests/unit/test_accuracy_comparison.py) | 1,160 | Unit tests for the sim-vs-closing-line accuracy comparison (`scripts/accuracy_comparison.py`). | — |
 | [`tests/unit/test_accuracy_comparison_markets.py`](../../tests/unit/test_accuracy_comparison_markets.py) | 111 | Unit tests for the plain data in `scripts/accuracy/records.py`: the 15-market prop vocabulary map (the original seven plus the eight of the prop-market work, SIM-421) and the market trust labels. | — |
 | [`tests/unit/test_accuracy_comparison_props.py`](../../tests/unit/test_accuracy_comparison_props.py) | 713 | The backtest wiring for the fifteen prop markets (the prop-market work, SIM-421) and the official box-score ground truth (the owner's ruling to grade props on the box, SIM-545), in `scripts/accuracy_comparison.py` and... | — |
@@ -729,7 +728,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_etl_connection_pool.py`](../../tests/unit/test_etl_connection_pool.py) | 212 | Before SIM-090, `HistoricalDataLoader._get_conn()` opened a fresh `psycopg2.connect(self.dsn)` and `conn.close()`-d it on every single DB round-trip. | — |
 | [`tests/unit/test_etl_ensure_rows.py`](../../tests/unit/test_etl_ensure_rows.py) | 369 | The historical loader's per-table prerequisite writers: _ensure_teams, _ensure_players, _ensure_managers and _ensure_game. | — |
 | [`tests/unit/test_etl_error_ledger.py`](../../tests/unit/test_etl_error_ledger.py) | 182 | The ETL error ledger: `raw.etl_errors` holds one row per pitch the historical loader skips, the loader writes it on the pitch insert's cursor, and `reprocess_errored_games` lists the games to load again. | — |
-| [`tests/unit/test_etl_hardening.py`](../../tests/unit/test_etl_hardening.py) | 759 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
+| [`tests/unit/test_etl_hardening.py`](../../tests/unit/test_etl_hardening.py) | 758 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
 | [`tests/unit/test_etl_historical_loader.py`](../../tests/unit/test_etl_historical_loader.py) | 1,677 | Targets: - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in pipeline/etl/coercion.py) - _build_row_dict column rename + coercion - _validate_row two-tier validation rules - _parse_height... | 1: `test_play_events.py` |
 | [`tests/unit/test_etl_reload_game.py`](../../tests/unit/test_etl_reload_game.py) | 1,232 | Covers: * `HistoricalDataLoader.reload_game` — DELETE + re-INSERT in ONE transaction, the only way to repair already-loaded `raw.pitches` rows (the INSERT carries `ON CONFLICT … DO NOTHING`, so plain `load_game` write... | — |
 | [`tests/unit/test_etl_schedule_final_filter.py`](../../tests/unit/test_etl_schedule_final_filter.py) | 33 | Unit tests for the historical loader's future/non-Final game guard (_schedule_game_is_final). | — |
@@ -790,7 +789,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_metrics_endpoint.py`](../../tests/unit/test_metrics_endpoint.py) | 216 | The Prometheus metrics route (`api/routes/metrics.py`) and the monitoring config. | — |
 | [`tests/unit/test_migration_chain.py`](../../tests/unit/test_migration_chain.py) | 40 | The first eleven Alembic migrations form one unbroken chain: each names the one before it as its `down_revision`. | — |
 | [`tests/unit/test_nginx_resolve.py`](../../tests/unit/test_nginx_resolve.py) | 79 | nginx re-resolves the app's name while it runs. | — |
-| [`tests/unit/test_no_default_password.py`](../../tests/unit/test_no_default_password.py) | 272 | Text guards on the deployment configuration. | — |
+| [`tests/unit/test_no_default_password.py`](../../tests/unit/test_no_default_password.py) | 271 | Text guards on the deployment configuration. | — |
 | [`tests/unit/test_no_pitch_readers.py`](../../tests/unit/test_no_pitch_readers.py) | 574 | Every reader of a per-pitch result handles the no-pitch result. | — |
 | [`tests/unit/test_odds_book_census.py`](../../tests/unit/test_odds_book_census.py) | 1,148 | `scripts/probes/odds_book_census.py`: the sample, the gate math on synthetic rows, one game read through the provider with a stubbed vendor, and the re-grade of a saved census. | — |
 | [`tests/unit/test_odds_book_vocabulary.py`](../../tests/unit/test_odds_book_vocabulary.py) | 184 | The odds book vocabulary: the stored book labels, the kinds, the bettable books and the graded-book order. | — |

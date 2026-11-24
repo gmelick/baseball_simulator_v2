@@ -58,9 +58,6 @@ ends. `with_retry.sh` reruns a job after a crash.
    waits for both backups, then copies the newest complete sets into the OneDrive folder.
    `nightly-closing-lines` runs `nightly_closing_lines.sh` in the `app` container.
 
-`nightly_ingest.sh` runs the finals sweep, the profile build and the bundle build in one
-command, for a run by hand. The scheduler does not use it.
-
 **The backup sets.** Three stores are backed up nightly: the Postgres statistics database,
 the DuckDB analytics file and the bundle. A *set* is one backup of one store: a folder
 named by the run's UTC start time (`%Y%m%dT%H%M%SZ`). A set is complete only when its
@@ -104,11 +101,15 @@ Run: the scheduler at 07:00 UTC, as `with_mark.sh nightly-finals with_retry.sh 6
 
 ### `operations/jobs/weekly_refresh.sh`
 
-[Source](../../operations/jobs/weekly_refresh.sh) · 30 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/weekly_refresh.sh) · 30 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Calls `HistoricalDataLoader.refresh_seasons(year, year)` on the current season. It catches
 a Final game that the three-day window missed. It writes Postgres only. It exits 1 when
 any game failed.
+
+**Watch out:** the Python heredoc's delimiter is quoted (`'PY'`), so the shell does not
+expand `${YEAR}` inside it. The year crosses into Python through the environment
+(`os.environ["YEAR"]`).
 
 Run: the scheduler on Sunday at 08:00 UTC, through `with_mark.sh weekly-refresh` and `with_retry.sh 6`.
 
@@ -128,21 +129,6 @@ bundle step publishes a new bundle version, and the app restarts itself on the n
 version (`api/bundle_watch.py`).
 
 Run: the scheduler at 08:00 UTC, through `with_mark.sh nightly-rebuild` and `with_retry.sh 3`. By hand: `docker compose run --rm app sh /app/operations/jobs/nightly_rebuild.sh`.
-
-### `operations/jobs/nightly_ingest.sh`
-
-[Source](../../operations/jobs/nightly_ingest.sh) · 63 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
-
-The whole chain in one run by hand: `refresh_seasons` for the current season, then the
-profile computor, then the bundle build. It stops before the rebuild when any game
-failed, so it never rebuilds on a season it knows is incomplete. The scheduler does not
-run this script; it runs the three jobs above instead.
-
-Run: `docker compose run --rm app sh /app/operations/jobs/nightly_ingest.sh`.
-
-**Watch out:** the Python heredoc's delimiter is quoted (`'PY'`), so the shell does not
-expand `${YEAR}` inside it. The year crosses into Python through the environment
-(`os.environ["YEAR"]`).
 
 ### `operations/jobs/nightly_closing_lines.sh`
 

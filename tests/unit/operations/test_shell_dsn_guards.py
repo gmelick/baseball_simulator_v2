@@ -19,7 +19,6 @@ SCRIPTS = Path(__file__).resolve().parents[3] / "operations" / "jobs"
 GUARDED = (
     "nightly_finals.sh",
     "nightly_rebuild.sh",
-    "nightly_ingest.sh",
     "weekly_refresh.sh",
     "nightly_closing_lines.sh",
 )
