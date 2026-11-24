@@ -1,4 +1,4 @@
-# COMMITTED (branch `sim647-part2-ingest`, not merged) — the code layout, part 2: the loaders move into ingest/, one MLB client, the clean-up — SIM-647, 2026-11-24
+# DEPLOYED — the code layout, part 2: the loaders move into ingest/, one MLB client, the clean-up — SIM-647, 2026-11-24
 
 **Why it matters.** Part 2 of the code-layout plan
 (`docs/audit/2026-11-23-sim647-code-layout-plan.md`). The loaders of the raw data now sit in
@@ -70,6 +70,11 @@ migration).
 **Checks.** ruff, the format check and mypy (207 files) pass. The container unit lane passes
 in quarters: 1,069 + 1,275 + 1,638 + 2,449 = 6,431 tests. The SIM-445 segfault struck four runs at random
 points; each rerun passed.
+
+**The deploy (2026-11-24, 21:06 UTC, master 8775d1e).** `app`, `live` and `jobs` rebuilt and
+recreated; each mounts `ingest/`. The scheduler is unchanged. Smoke: the jobs' imports load; the
+sync GET and the async reader each read the 15 games of 2026-09-27; the live service's schedule
+poll writes its heartbeat on the new client with no error.
 
 # DEPLOYED — one odds backfill that loads only the games missing odds — SIM-648 (filed and closed), 2026-11-24
 

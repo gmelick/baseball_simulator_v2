@@ -1,8 +1,8 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
 Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
-to C (2026-11-24, master 0f0fd61). Part 2's Steps A to C are committed on branch
-`sim647-part2-ingest` (2026-11-24), not yet merged or deployed. Parts 3 to 7 have not started.
+to C (2026-11-24, master 0f0fd61). Part 2 is deployed, Steps A to C
+(2026-11-24, master 8775d1e). Parts 3 to 7 have not started.
 
 ## 1. Why
 
