@@ -61,7 +61,10 @@ ends. `with_retry.sh` reruns a job after a crash.
 **The backup sets.** Three stores are backed up nightly: the Postgres statistics database,
 the DuckDB analytics file and the bundle. A *set* is one backup of one store: a folder
 named by the run's UTC start time (`%Y%m%dT%H%M%SZ`). A set is complete only when its
-`manifest.json` exists; the writer writes the manifest last. The sets land in `/backups`,
+`manifest.json` exists and reads as a JSON object; the writer writes the manifest last. A
+set whose manifest does not read is *broken*: the status, the pruning and the restore skip
+it, pruning never deletes it and logs it instead, and the off-site copy deletes a broken
+copy as dead. The sets land in `/backups`,
 the host folder `BACKUP_DIR`. The off-site copies land in `/offsite`, the host folder
 `OFFSITE_BACKUP_DIR` (a OneDrive folder).
 

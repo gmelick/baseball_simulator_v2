@@ -180,18 +180,27 @@ def resolve_dir(flag: str | None, repo: Path, *, offsite: bool = False) -> Path:
     return path.resolve()
 
 
+def _manifest_reads(set_dir: Path) -> bool:
+    """True when the set's manifest parses as a JSON object."""
+    try:
+        return isinstance(json.loads((set_dir / "manifest.json").read_text(encoding="utf-8")), dict)
+    except (OSError, ValueError):
+        return False
+
+
 def complete_sets(store_dir: Path) -> list[str]:
     """Return the complete set names in a store folder, oldest first.
 
     This copy of ``backup_status.complete_sets`` exists because the drill runs
-    as a host script and cannot import the package.
+    as a host script and cannot import the package. Both count a set only when
+    its manifest reads.
     """
     if not store_dir.is_dir():
         return []
     return sorted(
         p.name
         for p in store_dir.iterdir()
-        if p.is_dir() and not p.name.endswith(".partial") and (p / "manifest.json").is_file()
+        if p.is_dir() and not p.name.endswith(".partial") and _manifest_reads(p)
     )
 
 
@@ -203,7 +212,9 @@ def pick_set(store_dir: Path, which: str) -> str:
             raise DrillError(f"no complete set in {store_dir}")
         return names[-1]
     if which not in names:
-        raise DrillError(f"set {which} is missing or has no manifest.json in {store_dir}")
+        raise DrillError(
+            f"set {which} is missing or has no manifest.json that reads in {store_dir}"
+        )
     return which
 
 
@@ -227,7 +238,7 @@ def pick_data_set(backup_dir: Path, which: str) -> str:
     for store, names in (("duckdb", duckdb_sets), ("bundle", bundle_sets)):
         if which not in names:
             raise DrillError(
-                f"set {which} is missing or has no manifest.json in {backup_dir / store}"
+                f"set {which} is missing or has no manifest.json that reads in {backup_dir / store}"
             )
     return which
 

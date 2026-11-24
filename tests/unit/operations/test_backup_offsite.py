@@ -798,3 +798,11 @@ def test_data_stores_reuses_the_common_helpers(tmp_path):
     (tmp_path / "nightly-rebuild.running").write_text("100\n")
     (tmp_path / "nightly-backup.running").write_text("100\n")  # not a writer mark
     assert common.fresh_marks(tmp_path, ds.WRITER_MARKS, 21600, 200.0) == ["nightly-rebuild"]
+
+
+def test_an_off_site_copy_whose_manifest_does_not_read_is_dead(offsite):
+    good = _fake_set(offsite, "duckdb", "20261013T100000Z")
+    broken = _fake_set(offsite, "duckdb", "20261014T100000Z")
+    (broken / "manifest.json").write_text("{not json", encoding="utf-8")
+    assert off.dead_folders(offsite, "duckdb", wanted=set()) == [broken]
+    assert good.is_dir()

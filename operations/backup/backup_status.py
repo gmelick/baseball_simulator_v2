@@ -3,8 +3,9 @@
 The backup root holds one folder per store (``postgres``, ``duckdb``,
 ``bundle``). Each store holds one folder per set, named by the run's UTC start
 time (``%Y%m%dT%H%M%SZ``). A set is complete only when its ``manifest.json``
-exists; the writer writes it last. A ``.partial`` folder is a set in progress
-or one a dead run left.
+exists and reads as a JSON object; the writer writes it last. A ``.partial``
+folder is a set in progress or one a dead run left. A set whose manifest does
+not read is broken: no reader counts it, and no prune deletes it.
 
 The API imports this module for its backup-age gauges, so it is pure standard
 library and never imports duckdb.
@@ -62,22 +63,23 @@ def _parse_created_at(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _read_set(store: str, path: Path) -> SetInfo | None:
-    """Return the set in ``path``, or None when it has no manifest or no time.
+def read_manifest_file(path: Path) -> dict[str, object] | None:
+    """Return the manifest in the set folder ``path``, or None when it is missing or does not read.
 
-    A manifest that does not parse still marks the set complete; the folder
-    name then gives the time.
+    A manifest reads when it parses as a JSON object.
     """
-    manifest_path = path / MANIFEST
-    if not manifest_path.is_file():
-        return None
-    manifest: dict[str, object] = {}
     try:
-        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            manifest = loaded
+        loaded = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        manifest = {}
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _read_set(store: str, path: Path) -> SetInfo | None:
+    """Return the set in ``path``, or None when it is not a complete set."""
+    manifest = read_manifest_file(path)
+    if manifest is None:
+        return None
     created_at = _parse_created_at(manifest.get("created_at")) or parse_set_id(path.name)
     if created_at is None:
         return None
@@ -89,6 +91,22 @@ def _read_set(store: str, path: Path) -> SetInfo | None:
         created_at=created_at,
         bytes=int(size) if isinstance(size, int | float) else 0,
     )
+
+
+def broken_sets(root: Path, store: str) -> list[Path]:
+    """Return the set folders of ``store`` whose manifest exists but does not read."""
+    try:
+        entries = sorted((Path(root) / store).iterdir())
+    except OSError:
+        return []
+    return [
+        entry
+        for entry in entries
+        if entry.is_dir()
+        and not entry.name.endswith(PARTIAL_SUFFIX)
+        and (entry / MANIFEST).is_file()
+        and read_manifest_file(entry) is None
+    ]
 
 
 def complete_sets(root: Path, store: str) -> list[SetInfo]:

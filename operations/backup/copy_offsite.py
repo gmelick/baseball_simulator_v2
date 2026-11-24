@@ -62,6 +62,7 @@ from operations.backup.backup_status import (
     age_hours,
     complete_sets,
     newest_complete_set,
+    read_manifest_file,
 )
 from operations.backup.common import (
     CHUNK,
@@ -607,8 +608,9 @@ def copy_set(
 def dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list[Path]:
     """Return the dead off-site folders of ``store`` that no wanted set needs.
 
-    A folder is dead when it ends in ``.partial`` or has no manifest. A wanted
-    set's dead folder is left for the copy to resume.
+    A folder is dead when it ends in ``.partial`` or has no manifest that reads.
+    The local set is the truth, so a broken off-site copy is safe to delete. A
+    wanted set's dead folder is left for the copy to resume.
     """
     try:
         entries = sorted((offsite_root / store).iterdir())
@@ -618,7 +620,7 @@ def dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list[Path]
     for entry in entries:
         if not entry.is_dir() or entry.name in wanted:
             continue
-        if entry.name.endswith(PARTIAL_SUFFIX) or not (entry / MANIFEST).is_file():
+        if entry.name.endswith(PARTIAL_SUFFIX) or read_manifest_file(entry) is None:
             dead.append(entry)
     return dead
 

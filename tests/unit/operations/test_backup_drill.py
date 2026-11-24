@@ -769,3 +769,11 @@ def test_the_streaming_runner_returns_the_output_and_exit_code() -> None:
     )
     assert result.returncode == 3
     assert result.stdout.splitlines() == ["one", "two"]
+
+
+def test_the_drill_skips_a_set_whose_manifest_does_not_read(tmp_path):
+    for name, body in (("20261013T100000Z", "{}"), ("20261014T100000Z", "{not json")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "manifest.json").write_text(body, encoding="utf-8")
+    assert drill.complete_sets(tmp_path) == ["20261013T100000Z"]
+    assert drill.pick_set(tmp_path, "latest") == "20261013T100000Z"

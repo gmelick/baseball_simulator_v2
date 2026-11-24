@@ -23,10 +23,10 @@ Every source and config file in the repository, in the order of the [code review
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 6,987 |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,037 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 38,367 |
-| [15. Tests and CI](#stage-15) | 316 | 124,668 |
-| **All** | **782** | **283,060** |
+| [15. Tests and CI](#stage-15) | 316 | 124,738 |
+| **All** | **782** | **283,180** |
 
 <a id="stage-1"></a>
 
@@ -508,13 +508,13 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 32 | operations/jobs/nightly_rebuild.sh — rebuild the current season's profiles and the engine bundle. | — |
 | [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 30 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
 | [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 14 | operations/backup — the backups of the data stores and their off-site copy. | 4: `test_backup_common.py`, `test_backup_status.py`, `test_backup_offsite.py` +1 |
-| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 900 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
-| [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 127 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
+| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 921 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
+| [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 145 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
 | [`operations/backup/common.py`](../../operations/backup/common.py) | 146 | operations/backup/common.py — the helpers the two backup jobs share. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
-| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 953 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
+| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 955 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
 | [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) | 298 | operations/backup/postgres/pg_backup.sh — the nightly Postgres backup. | — |
 | [`operations/backup/postgres/pg_restore.sh`](../../operations/backup/postgres/pg_restore.sh) | 144 | operations/backup/postgres/pg_restore.sh — restore one Postgres backup set into an empty database. | — |
-| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 494 | operations/backup/backup_drill.py — prove that a backup set restores. | 1: `test_backup_drill.py` |
+| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 503 | operations/backup/backup_drill.py — prove that a backup set restores. | 1: `test_backup_drill.py` |
 | [`db/roles/setup_roles.sh`](../../db/roles/setup_roles.sh) | 79 | SIM-443b: create the two least-privilege Postgres roles and grant them. | — |
 | [`db/roles/setup_roles.sql`](../../db/roles/setup_roles.sql) | 72 | SIM-443b: the two least-privilege roles and their grants (idempotent). | — |
 | [`operations/gen_secrets.py`](../../operations/gen_secrets.py) | 202 | operations/gen_secrets.py — generate the stack's secrets into `.env`. | 1: `test_gen_secrets.py` |
@@ -643,11 +643,11 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/acceptance/test_production_bands.py`](../../tests/acceptance/test_production_bands.py) | 720 | The acceptance lane (SIM-450): the PRODUCTION simulator against reference rates. | — |
 | [`tests/unit/operations/test_backup_age_gauge.py`](../../tests/unit/operations/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
 | [`tests/unit/operations/test_backup_common.py`](../../tests/unit/operations/test_backup_common.py) | 149 | The helpers that the data-store backup and the off-site copy share. | — |
-| [`tests/unit/operations/test_backup_data_stores.py`](../../tests/unit/operations/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
-| [`tests/unit/operations/test_backup_drill.py`](../../tests/unit/operations/test_backup_drill.py) | 771 | The restore drill for the scheduled backups. | — |
-| [`tests/unit/operations/test_backup_offsite.py`](../../tests/unit/operations/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
+| [`tests/unit/operations/test_backup_data_stores.py`](../../tests/unit/operations/test_backup_data_stores.py) | 645 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
+| [`tests/unit/operations/test_backup_drill.py`](../../tests/unit/operations/test_backup_drill.py) | 779 | The restore drill for the scheduled backups. | — |
+| [`tests/unit/operations/test_backup_offsite.py`](../../tests/unit/operations/test_backup_offsite.py) | 808 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
 | [`tests/unit/operations/test_backup_schedule.py`](../../tests/unit/operations/test_backup_schedule.py) | 384 | The scheduled backups of the three data stores: the wiring. | — |
-| [`tests/unit/operations/test_backup_status.py`](../../tests/unit/operations/test_backup_status.py) | 76 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
+| [`tests/unit/operations/test_backup_status.py`](../../tests/unit/operations/test_backup_status.py) | 92 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
 | [`tests/unit/operations/test_gen_secrets.py`](../../tests/unit/operations/test_gen_secrets.py) | 147 | The secrets generator writes the eight secrets; `--append` and `--check` never print one. | — |
 | [`tests/unit/operations/test_ingest_wait.py`](../../tests/unit/operations/test_ingest_wait.py) | 163 | The nightly rebuild waits for the finals load. | — |
 | [`tests/unit/operations/test_pg_backup_script.py`](../../tests/unit/operations/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (operations/backup/postgres). | — |

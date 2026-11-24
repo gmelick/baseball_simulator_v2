@@ -53,9 +53,11 @@ from operations.backup.backup_status import (
     STORES,
     SetInfo,
     age_hours,
+    broken_sets,
     complete_sets,
     newest_complete_set,
     parse_set_id,
+    read_manifest_file,
 )
 from operations.backup.common import (
     GIB,
@@ -188,7 +190,13 @@ def free_space_ok(
 
 
 def prune_sets(root: Path, store: str, keep: int, current: str | None) -> list[str]:
-    """Keep the newest ``keep`` sets of ``store``, and ``current`` always. Return the deleted ids."""
+    """Keep the newest ``keep`` sets of ``store``, and ``current`` always. Return the deleted ids.
+
+    A broken set (its manifest does not read) is neither counted nor deleted; the
+    run logs it for a person to check.
+    """
+    for path in broken_sets(root, store):
+        log(f"the {store} set {path.name} has a manifest that does not read; prune leaves it")
     sets = complete_sets(root, store)
     by_id = {s.set_id: s for s in sets}
     protect = {current} if current is not None else set()
@@ -503,10 +511,23 @@ def find_set(root: Path, store: str, set_id: str) -> SetInfo | None:
 
 
 def read_manifest(info: SetInfo) -> dict[str, Any]:
-    """Return the manifest of a complete set."""
-    loaded = json.loads((info.path / MANIFEST).read_text(encoding="utf-8"))
-    if not isinstance(loaded, dict):
-        raise BackupError(f"the manifest of {info.store}/{info.set_id} is not an object")
+    """Return the manifest of a complete set. Raise BackupError when it does not read.
+
+    Every file entry must name a path, so the checks that follow never meet a
+    malformed entry.
+    """
+    name = f"{info.store}/{info.set_id}"
+    loaded = read_manifest_file(info.path)
+    if loaded is None:
+        raise BackupError(f"the manifest of {name} does not read")
+    files = loaded.get("files", [])
+    if not isinstance(files, list) or not all(
+        isinstance(e, dict) and isinstance(e.get("path"), str) and e["path"] for e in files
+    ):
+        raise BackupError(f"the manifest of {name} has a bad file list")
+    counts = loaded.get("counts", {})
+    if not isinstance(counts, dict):
+        raise BackupError(f"the manifest of {name} has bad table counts")
     return loaded
 
 
