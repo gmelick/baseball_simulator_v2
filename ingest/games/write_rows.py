@@ -1,25 +1,22 @@
 """The loader's writes: the pitch rows, the play events, the error ledger, the
-ingest outcome and the freshness and quality reports.
+ingest outcome and the freshness report.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
 
-from db.introspect import pg_relation_exists
 from ingest.games.base import LoaderBase
 from ingest.games.pitch_rows import (
     _build_row_dict,
     _validate_row,
 )
 
-log = logging.getLogger("etl_historical_loader")
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +94,7 @@ class WritesMixin(LoaderBase):
         flagged_count = 0
 
         for raw_row in raw_rows:
-            row = _build_row_dict(raw_row, game_pk, season, raw_row.get("game_date", ""))
+            row = _build_row_dict(raw_row, game_pk, season)
             vr = _validate_row(row)
 
             if not vr.is_valid:
@@ -221,35 +218,94 @@ class WritesMixin(LoaderBase):
             (game_pk, season, outcome, pitch_rows, skipped_rows),
         )
 
-    def reprocess_errored_games(self, since: date) -> list[int]:
-        """
-        Return distinct game_pks that have raw.etl_errors rows
-        on or after ``since``.  Caller iterates the list and reruns
-        load_game(game_pk, season) for each — typical use is "after a
-        validator bug-fix, find all games that were affected and re-ingest".
+    #: Tri-state cache of "does `raw.play_events` exist" (``None`` means not
+    #: yet probed; see ``LoaderBase._exists_once``).
+    _play_events_table_exists: bool | None = None
 
-        Returns an empty list if no errors are recorded in the window.
-        """
-        sql = """
-            SELECT DISTINCT game_pk
-            FROM   raw.etl_errors
-            WHERE  created_at >= %s
-              AND  game_pk IS NOT NULL
-            ORDER BY game_pk
-        """
-        with self._get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (since,))
-            return [r[0] for r in cur.fetchall()]
+    #: One pitch row.  ON CONFLICT DO NOTHING keeps an ordinary load
+    #: idempotent; the reload path DELETEs the game first.
+    INSERT_SQL = """
+        INSERT INTO raw.pitches (
+            game_pk, at_bat_number, pitch_number, game_date, season, venue_id, venue,
+            home_id, home_team, away_id, away_team,
+            home_manager_id, home_manager_name, away_manager_id, away_manager_name,
+            inning, inning_topbot, pitcher, p_throws, batter, stand, bat_hand,
+            home_score, away_score, bat_score, fld_score, balls, strikes, outs,
+            type, description, pitch_type, pitch_name, events,
+            sz_top, sz_bot, release_speed, end_speed,
+            release_pos_x, release_pos_y, release_pos_z,
+            vx0, vy0, vz0, ax, ay, az,
+            pfx_x, pfx_z, plate_x, plate_z, x, y,
+            release_spin_rate, spin_axis,
+            break_angle, break_length, break_y,
+            break_vertical, break_vertical_induced, break_horizontal,
+            zone, release_extension,
+            launch_speed, launch_angle, hit_distance_sc, hc_x, hc_y,
+            spray_angle, bb_type, hit_location, des,
+            on_1b, on_2b, on_3b, post_on_1b, post_on_2b, post_on_3b,
+            fielder_2, fielder_3, fielder_4, fielder_5, fielder_6,
+            fielder_7, fielder_8, fielder_9,
+            runs_on_pitch, outs_on_pitch, rbis_on_pitch, earned_runs_on_pitch,
+            runner_1b_scored, runner_2b_scored, runner_3b_scored,
+            runner_1b_out_advancing, runner_2b_out_advancing, runner_3b_out_advancing,
+            sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
+            sb_success_2b, sb_success_3b, sb_success_home,
+            passed_ball_wild_pitch, pinch_hitter, pinch_runner,
+            pitcher_sub, defensive_sub,
+            fielded_by, fielding_error, dropped_ball, of_assist,
+            field_assist_1, field_assist_2, field_assist_3, field_assist_4, field_assist_5,
+            field_putout_1, field_putout_2, field_putout_3,
+            throwing_error_1, throwing_error_2,
+            field_assist_6_plus,
+            data_quality_flag
+        ) VALUES (
+            %(game_pk)s, %(at_bat_number)s, %(pitch_number)s, %(game_date)s, %(season)s,
+            %(venue_id)s, %(venue)s,
+            %(home_id)s, %(home_team)s, %(away_id)s, %(away_team)s,
+            %(home_manager_id)s, %(home_manager_name)s,
+            %(away_manager_id)s, %(away_manager_name)s,
+            %(inning)s, %(inning_topbot)s, %(pitcher)s, %(p_throws)s,
+            %(batter)s, %(stand)s, %(bat_hand)s,
+            %(home_score)s, %(away_score)s, %(bat_score)s, %(fld_score)s,
+            %(balls)s, %(strikes)s, %(outs)s,
+            %(type)s, %(description)s, %(pitch_type)s, %(pitch_name)s, %(events)s,
+            %(sz_top)s, %(sz_bot)s, %(release_speed)s, %(end_speed)s,
+            %(release_pos_x)s, %(release_pos_y)s, %(release_pos_z)s,
+            %(vx0)s, %(vy0)s, %(vz0)s, %(ax)s, %(ay)s, %(az)s,
+            %(pfx_x)s, %(pfx_z)s, %(plate_x)s, %(plate_z)s, %(x)s, %(y)s,
+            %(release_spin_rate)s, %(spin_axis)s,
+            %(break_angle)s, %(break_length)s, %(break_y)s,
+            %(break_vertical)s, %(break_vertical_induced)s, %(break_horizontal)s,
+            %(zone)s, %(release_extension)s,
+            %(launch_speed)s, %(launch_angle)s, %(hit_distance_sc)s,
+            %(hc_x)s, %(hc_y)s, %(spray_angle)s, %(bb_type)s,
+            %(hit_location)s, %(des)s,
+            %(on_1b)s, %(on_2b)s, %(on_3b)s,
+            %(post_on_1b)s, %(post_on_2b)s, %(post_on_3b)s,
+            %(fielder_2)s, %(fielder_3)s, %(fielder_4)s, %(fielder_5)s,
+            %(fielder_6)s, %(fielder_7)s, %(fielder_8)s, %(fielder_9)s,
+            %(runs_on_pitch)s, %(outs_on_pitch)s, %(rbis_on_pitch)s,
+            %(earned_runs_on_pitch)s,
+            %(runner_1b_scored)s, %(runner_2b_scored)s, %(runner_3b_scored)s,
+            %(runner_1b_out_advancing)s, %(runner_2b_out_advancing)s, %(runner_3b_out_advancing)s,
+            %(sb_attempt_2b)s, %(sb_attempt_3b)s, %(sb_attempt_home)s,
+            %(sb_success_2b)s, %(sb_success_3b)s, %(sb_success_home)s,
+            %(passed_ball_wild_pitch)s, %(pinch_hitter)s, %(pinch_runner)s,
+            %(pitcher_sub)s, %(defensive_sub)s,
+            %(fielded_by)s, %(fielding_error)s, %(dropped_ball)s, %(of_assist)s,
+            %(field_assist_1)s, %(field_assist_2)s, %(field_assist_3)s,
+            %(field_assist_4)s, %(field_assist_5)s,
+            %(field_putout_1)s, %(field_putout_2)s, %(field_putout_3)s,
+            %(throwing_error_1)s, %(throwing_error_2)s,
+            %(field_assist_6_plus)s,
+            %(data_quality_flag)s
+        )
+        ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING;
+    """
 
     #: Non-pitch play events.  ON CONFLICT DO NOTHING makes a partial
     #: re-run idempotent; the reload path DELETEs first so a genuine replace still
     #: replaces rather than silently keeping the old rows.
-    #: Tri-state cache of "does `raw.play_events` exist".  ``None`` means
-    #: not yet probed.  Cached because a 2,430-game sweep must not run 2,430
-    #: identical catalogue lookups, and because the answer cannot change mid-run:
-    #: applying a migration while a sweep is in flight is not a supported move.
-    _play_events_table_exists: bool | None = None
-
     PLAY_EVENTS_INSERT_SQL = """
         INSERT INTO raw.play_events (
             game_pk, at_bat_number, play_index, game_date, season, event_type,
@@ -292,14 +348,16 @@ class WritesMixin(LoaderBase):
         # Alembic 0018 creates `raw.play_events`. On a database without it the
         # statements below would raise `UndefinedTable` and abort the whole game
         # transaction, so the probe skips them (it answers once per run).
-        if self._play_events_table_exists is None:
-            self._play_events_table_exists = pg_relation_exists(cur, "raw.play_events")
-            if not self._play_events_table_exists:
-                log.info(
-                    "raw.play_events is absent (Alembic 0018 not applied) — "
-                    "SIM-502 play-event capture is INERT for this run"
-                )
-        if not self._play_events_table_exists:
+        if not self._exists_once(
+            cur,
+            "_play_events_table_exists",
+            "raw.play_events",
+            absent_message=(
+                "raw.play_events is absent (Alembic 0018 not applied) — "
+                "SIM-502 play-event capture is INERT for this run"
+            ),
+            level=logging.INFO,
+        ):
             return 0
 
         if replace:
@@ -512,44 +570,3 @@ class WritesMixin(LoaderBase):
             with conn.cursor() as cur:
                 psycopg2.extras.execute_batch(cur, upsert_sql, entries)
             conn.commit()
-
-    # ------------------------------------------------------------------
-    # Post-load quality report
-    # ------------------------------------------------------------------
-
-    def quality_report(self, game_pk: int | None = None) -> None:
-        """
-        Prints a summary of data_quality_flag=TRUE rows.
-        Scoped to a specific game if game_pk is provided.
-        """
-        with self._get_conn() as conn, conn.cursor() as cur:
-            if game_pk:
-                cur.execute(
-                    """
-                        SELECT pitcher, COUNT(*) AS flagged_pitches
-                        FROM raw.pitches
-                        WHERE data_quality_flag = TRUE AND game_pk = %s
-                        GROUP BY pitcher ORDER BY flagged_pitches DESC
-                        """,
-                    (game_pk,),
-                )
-            else:
-                cur.execute(
-                    """
-                        SELECT game_date, COUNT(*) AS flagged_pitches
-                        FROM raw.pitches
-                        WHERE data_quality_flag = TRUE
-                        GROUP BY game_date ORDER BY game_date DESC
-                        LIMIT 30
-                        """
-                )
-            rows = cur.fetchall()
-
-        if not rows:
-            log.info("No flagged rows found.")
-            return
-
-        header = "pitcher / flagged" if game_pk else "date / flagged"
-        log.info("Quality report (%s):", header)
-        for r in rows:
-            log.info("  %s -> %s flagged rows", r[0], r[1])

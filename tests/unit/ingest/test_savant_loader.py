@@ -12,10 +12,18 @@ No test here touches the network.
 
 from __future__ import annotations
 
+import io
+import urllib.error
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import Response, RetryPolicy
 from ingest.savant import load_leaderboards as sl
 from ingest.savant.boards import BOARDS, PROBE_SEASON, SavantBoard
+from ingest.savant.load_sprint_speed import SprintSpeedLoader
 
 # ---------------------------------------------------------------------------
 # The season parameter
@@ -188,6 +196,106 @@ def test_every_target_column_appears_exactly_once_in_the_insert() -> None:
     for board in BOARDS.values():
         cols = board.target_columns
         assert len(cols) == len(set(cols)), f"{board.name} repeats a target column"
+
+
+def test_the_shared_upsert_builder_updates_every_column_outside_the_key() -> None:
+    """The boards, the per-pitch tracking and the sprint speeds share one builder."""
+    assert sl.upsert_sql_for("raw.t", ("a", "b", "c"), ("a",)) == (
+        "INSERT INTO raw.t (a, b, c, scraped_at) VALUES (%(a)s, %(b)s, %(c)s, NOW()) "
+        "ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b, c = EXCLUDED.c, "
+        "scraped_at = EXCLUDED.scraped_at;"
+    )
+    assert "ON CONFLICT (player_id, season) DO UPDATE SET sprint_speed = EXCLUDED.sprint_speed" in (
+        SprintSpeedLoader.UPSERT_SQL
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fetching
+# ---------------------------------------------------------------------------
+
+_URL = "https://baseballsavant.mlb.com/leaderboard/poptime?year=2024&csv=true"
+
+
+def _fake_get(body: str, seen: dict[str, Any]) -> Callable[..., Response]:
+    """A stand-in for ``ingest.mlb.client.get`` that records its call."""
+
+    def get(url: str, params: Any = None, **kwargs: Any) -> Response:
+        seen["url"] = url
+        seen.update(kwargs)
+        return Response(200, {}, body, url)
+
+    return get
+
+
+def test_fetch_csv_strips_a_byte_order_mark(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A kept mark sticks to a quoted first header, so the column would not be ``id``."""
+    monkeypatch.setattr(mlb_client, "get", _fake_get('﻿"id",name\n1,A\n', {}))
+    body = sl.fetch_csv(_URL)
+    assert body == '"id",name\n1,A\n'
+    assert sl.parse_rows(body) == [{"id": "1", "name": "A"}]
+
+
+def test_a_marked_html_page_still_trips_the_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mlb_client, "get", _fake_get("﻿<!DOCTYPE html><html></html>", {}))
+    with pytest.raises(sl.SavantFetchError, match="HTML"):
+        sl.parse_rows(sl.fetch_csv(_URL))
+
+
+def test_fetch_csv_sends_the_headers_the_timeout_and_the_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(mlb_client, "get", _fake_get("id\n", seen))
+    sl.fetch_csv(_URL)
+    assert seen["url"] == _URL
+    assert seen["headers"] == sl.HEADERS
+    assert seen["timeout_s"] == 180
+    assert seen["policy"] == RetryPolicy(retries=2, first_wait_s=2.0)
+
+
+def _failing_urlopen(code: int, calls: list[str]) -> Callable[..., Any]:
+    def urlopen(req: Any, timeout: float | None = None) -> Any:
+        calls.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, code, "status", None, io.BytesIO())
+
+    return urlopen
+
+
+def test_fetch_csv_retries_a_server_error_twice_then_raises_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three attempts, two and four seconds apart; the last error reaches the caller."""
+    calls: list[str] = []
+    waits: list[float] = []
+    monkeypatch.setattr(mlb_client.urllib.request, "urlopen", _failing_urlopen(503, calls))
+    monkeypatch.setattr(mlb_client.time, "sleep", waits.append)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        sl.fetch_csv(_URL)
+    assert err.value.code == 503
+    assert len(calls) == 3
+    assert waits == [2.0, 4.0]
+
+
+def test_fetch_csv_raises_a_client_error_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    waits: list[float] = []
+    monkeypatch.setattr(mlb_client.urllib.request, "urlopen", _failing_urlopen(404, calls))
+    monkeypatch.setattr(mlb_client.time, "sleep", waits.append)
+    with pytest.raises(urllib.error.HTTPError):
+        sl.fetch_csv(_URL)
+    assert len(calls) == 1
+    assert waits == []
+
+
+def test_the_sprint_fetch_raises_on_an_empty_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(mlb_client, "get", _fake_get(" \n", seen))
+    with pytest.raises(ValueError, match="Empty response"):
+        SprintSpeedLoader("postgresql://unused")._fetch_csv(2024)
+    assert seen["url"].startswith("https://baseballsavant.mlb.com/leaderboard/sprint_speed?")
+    assert "year=2024" in seen["url"] and "min=0" in seen["url"]
+    assert seen["headers"] == sl.HEADERS
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from typing import Any
 
 from ingest.games.coercion import to_str
 
-log = logging.getLogger("etl_historical_loader")
+log = logging.getLogger(__name__)
 
 
 class MissingVenueError(RuntimeError):

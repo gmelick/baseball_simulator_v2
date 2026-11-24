@@ -57,13 +57,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from db.dsn import require_dsn
 from ingest.mlb import client as mlb_client
+from ingest.mlb.schedule import played_index, schedule_entries
 
 log = logging.getLogger("ingest.load_bullpen_availability")
 
@@ -91,7 +92,6 @@ class PitcherStatus:
     pitcher_id: int
     on_active_roster: bool
     on_il: bool
-    is_pitcher: bool = True
 
 
 @dataclass
@@ -189,7 +189,8 @@ class BullpenAvailabilityIngest:
         meta: _GameMeta | None = None
         try:
             data = self._mlb_get("schedule", {"sportId": 1, "gamePk": game_pk})
-            game = data["dates"][0]["games"][0]
+            entries = schedule_entries(data)
+            game = entries[played_index(entries)][1]  # IndexError when none: caught below
             meta = _GameMeta(
                 date=str(game["officialDate"]),
                 home_team_id=int(game["teams"]["home"]["team"]["id"]),
@@ -288,9 +289,7 @@ class BullpenAvailabilityIngest:
     def decide(
         self,
         *,
-        pitcher_id: int,
         status: PitcherStatus | None,
-        days_rest: int | None,
         pitches_last_3d: int,
         back_to_back: bool,
     ) -> tuple[bool, str]:
@@ -361,9 +360,7 @@ class BullpenAvailabilityIngest:
                 emitted.add((tid, pid))
                 days_rest, pitches_last_3d, back_to_back = _rest_for(tid, pid)
                 available, reason = self.decide(
-                    pitcher_id=pid,
                     status=status,
-                    days_rest=days_rest,
                     pitches_last_3d=pitches_last_3d,
                     back_to_back=back_to_back,
                 )
@@ -391,9 +388,7 @@ class BullpenAvailabilityIngest:
             back_to_back = bool(rec.get("back_to_back"))
             status = PitcherStatus(pitcher_id=pid, on_active_roster=True, on_il=False)
             available, reason = self.decide(
-                pitcher_id=pid,
                 status=status,
-                days_rest=days_rest,
                 pitches_last_3d=pitches_last_3d,
                 back_to_back=back_to_back,
             )
@@ -589,12 +584,11 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
     ap = argparse.ArgumentParser(description="SIM-433 bullpen availability ingest")
     ap.add_argument("--seasons", nargs="+", type=int, required=True)
-    ap.add_argument("--dsn", default=os.environ.get("BASEBALL_DB_DSN"))
+    ap.add_argument("--dsn", default="", help="Postgres DSN (default: BASEBALL_DB_DSN).")
     ap.add_argument("--duckdb", required=True, help="Path to the DuckDB profile file")
     ap.add_argument("--rest-pitches-3d", type=int, default=REST_PITCHES_3D)
     args = ap.parse_args(argv)
-    if not args.dsn:
-        ap.error("--dsn or BASEBALL_DB_DSN is required")
+    args.dsn = args.dsn or require_dsn()
 
     records = _load_workload_records(args.duckdb, args.dsn, args.seasons)
     ingest = BullpenAvailabilityIngest(pg_dsn=args.dsn, rest_pitches_3d=args.rest_pitches_3d)

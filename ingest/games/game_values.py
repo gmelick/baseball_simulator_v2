@@ -8,9 +8,9 @@ import logging
 import re
 from typing import Any
 
-from ingest.load_boxscores import starting_position
+from ingest.mlb.game_feed import starting_position
 
-log = logging.getLogger("etl_historical_loader")
+log = logging.getLogger(__name__)
 
 
 def _manager_from_coaches(game_pk: int, side: str, coaches: list[dict]) -> tuple[Any, str]:

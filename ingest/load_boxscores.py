@@ -141,37 +141,36 @@ class PlayerGameStats:
         """Positional tuple in :data:`COLUMNS` order (the INSERT value list)."""
         return tuple(getattr(self, name) for name in COLUMNS)
 
-    def as_dict(self) -> dict[str, Any]:
-        """The row as a mapping keyed by column name (what the reader consumes)."""
-        return {name: getattr(self, name) for name in COLUMNS}
-
 
 #: The INSERT column list, derived from the dataclass so the two cannot drift.
 COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(PlayerGameStats))
 
-#: Every column the upsert refreshes on conflict (all but the primary key).
-_UPDATE_COLUMNS: tuple[str, ...] = tuple(c for c in COLUMNS if c not in ("game_pk", "player_id"))
+
+def _upsert_sql(
+    table: str, columns: Sequence[str], key: Sequence[str], placeholders: Sequence[str]
+) -> str:
+    """The upsert of ``columns`` into ``table``: a conflict on ``key`` refreshes every other column."""
+    sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns if c not in key)
+    return (
+        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT ({', '.join(key)}) DO UPDATE SET {sets}, fetched_at = now()"
+    )
 
 
-def _upsert_sql(placeholders: Sequence[str]) -> str:
-    """Render the upsert with the driver's placeholder style."""
-    cols = ", ".join(COLUMNS)
-    vals = ", ".join(placeholders)
-    sets = ",\n                ".join(f"{c} = EXCLUDED.{c}" for c in _UPDATE_COLUMNS)
-    return f"""
-            INSERT INTO raw.game_player_stats ({cols})
-            VALUES ({vals})
-            ON CONFLICT (game_pk, player_id) DO UPDATE SET
-                {sets},
-                fetched_at = now()
-    """
+def _asyncpg_marks(n: int) -> list[str]:
+    """asyncpg's placeholders: ``$1 … $n``."""
+    return [f"${i}" for i in range(1, n + 1)]
 
 
-#: The upsert for asyncpg (``$1 … $n`` placeholders).
-UPSERT_SQL_ASYNCPG: str = _upsert_sql([f"${i}" for i in range(1, len(COLUMNS) + 1)])
+_PLAYER_KEY = ("game_pk", "player_id")
 
-#: The upsert for psycopg2 (``%s`` placeholders) — the historical loader's driver.
-UPSERT_SQL_PSYCOPG2: str = _upsert_sql(["%s"] * len(COLUMNS))
+#: The player-row upsert for asyncpg (``$n``) and for psycopg2 (``%s``, the game loader's driver).
+UPSERT_SQL_ASYNCPG: str = _upsert_sql(
+    "raw.game_player_stats", COLUMNS, _PLAYER_KEY, _asyncpg_marks(len(COLUMNS))
+)
+UPSERT_SQL_PSYCOPG2: str = _upsert_sql(
+    "raw.game_player_stats", COLUMNS, _PLAYER_KEY, ["%s"] * len(COLUMNS)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +194,12 @@ def _batting_order(value: Any) -> int | None:
         return int(value) // 100
     except (TypeError, ValueError):
         return None
+
+
+def side_team_id(team_box: Mapping[str, Any], fallback: int | None) -> int | None:
+    """A side's team id from the box, else the caller's id from ``raw.games``."""
+    team_id = (team_box.get("team") or {}).get("id")
+    return fallback if team_id is None else team_id
 
 
 def parse_boxscore(
@@ -227,9 +232,7 @@ def parse_boxscore(
     rows: list[PlayerGameStats] = []
     for side in SIDES:
         team_box = teams.get(side) or {}
-        team_id = (team_box.get("team") or {}).get("id")
-        if team_id is None:
-            team_id = fallback_team[side]
+        team_id = side_team_id(team_box, fallback_team[side])
         for pdata in (team_box.get("players") or {}).values():
             pid = (pdata.get("person") or {}).get("id")
             if pid is None:
@@ -275,32 +278,32 @@ def parse_boxscore(
 # ---------------------------------------------------------------------------
 
 
-async def persist(conn: Any, rows: Iterable[PlayerGameStats]) -> int:
-    """UPSERT rows through an asyncpg connection (or pool). Returns rows written.
-
-    ``ON CONFLICT (game_pk, player_id) DO UPDATE`` so a re-run refreshes a
-    game's rows in place. Empty input writes nothing and returns 0.
-    """
+async def _write_async(conn: Any, sql: str, rows: Iterable[Any]) -> int:
+    """Run ``sql`` once per row through asyncpg. Returns the rows written; no rows writes nothing."""
     batch = [r.as_tuple() for r in rows]
-    if not batch:
-        return 0
-    await conn.executemany(UPSERT_SQL_ASYNCPG, batch)
+    if batch:
+        await conn.executemany(sql, batch)
     return len(batch)
+
+
+def _write_sync(cur: Any, sql: str, rows: Iterable[Any]) -> int:
+    """Run ``sql`` once per row on a psycopg2 cursor, inside the caller's transaction."""
+    batch = [r.as_tuple() for r in rows]
+    if batch:
+        from psycopg2.extras import execute_batch
+
+        execute_batch(cur, sql, batch)
+    return len(batch)
+
+
+async def persist(conn: Any, rows: Iterable[PlayerGameStats]) -> int:
+    """Upsert player rows through asyncpg. Returns the rows written."""
+    return await _write_async(conn, UPSERT_SQL_ASYNCPG, rows)
 
 
 def persist_sync(cur: Any, rows: Iterable[PlayerGameStats]) -> int:
-    """UPSERT rows on a psycopg2 CURSOR (the historical loader's driver).
-
-    Runs on the caller's cursor so it shares the caller's transaction; the
-    caller commits. Returns rows written; empty input writes nothing.
-    """
-    batch = [r.as_tuple() for r in rows]
-    if not batch:
-        return 0
-    from psycopg2.extras import execute_batch
-
-    execute_batch(cur, UPSERT_SQL_PSYCOPG2, batch)
-    return len(batch)
+    """Upsert player rows on a psycopg2 cursor (the game loader's). The caller commits."""
+    return _write_sync(cur, UPSERT_SQL_PSYCOPG2, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -336,20 +339,13 @@ class BullpenListing:
 BULLPEN_COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(BullpenListing))
 
 
-def _bullpen_upsert_sql(placeholders: Sequence[str]) -> str:
-    cols = ", ".join(BULLPEN_COLUMNS)
-    return (
-        f"INSERT INTO raw.game_bullpen ({cols}) VALUES ({', '.join(placeholders)}) "
-        "ON CONFLICT (game_pk, pitcher_id) DO UPDATE SET "
-        "team_id = EXCLUDED.team_id, side = EXCLUDED.side, listed = EXCLUDED.listed, "
-        "fetched_at = now()"
-    )
-
-
-BULLPEN_UPSERT_SQL_ASYNCPG: str = _bullpen_upsert_sql(
-    [f"${i}" for i in range(1, len(BULLPEN_COLUMNS) + 1)]
+_BULLPEN_KEY = ("game_pk", "pitcher_id")
+BULLPEN_UPSERT_SQL_ASYNCPG: str = _upsert_sql(
+    "raw.game_bullpen", BULLPEN_COLUMNS, _BULLPEN_KEY, _asyncpg_marks(len(BULLPEN_COLUMNS))
 )
-BULLPEN_UPSERT_SQL_PSYCOPG2: str = _bullpen_upsert_sql(["%s"] * len(BULLPEN_COLUMNS))
+BULLPEN_UPSERT_SQL_PSYCOPG2: str = _upsert_sql(
+    "raw.game_bullpen", BULLPEN_COLUMNS, _BULLPEN_KEY, ["%s"] * len(BULLPEN_COLUMNS)
+)
 
 
 def parse_bullpen_listing(
@@ -368,9 +364,7 @@ def parse_bullpen_listing(
     rows: list[BullpenListing] = []
     for side in SIDES:
         team_box = teams.get(side) or {}
-        team_id = (team_box.get("team") or {}).get("id")
-        if team_id is None:
-            team_id = fallback_team[side]
+        team_id = side_team_id(team_box, fallback_team[side])
         if team_id is None:
             log.warning("SIM-427: game %s %s side has no team id — no bullpen rows.", game_pk, side)
             continue
@@ -397,163 +391,13 @@ def parse_bullpen_listing(
 
 
 async def persist_bullpen(conn: Any, rows: Iterable[BullpenListing]) -> int:
-    """UPSERT bullpen listings through an asyncpg connection. Returns rows written."""
-    batch = [r.as_tuple() for r in rows]
-    if not batch:
-        return 0
-    await conn.executemany(BULLPEN_UPSERT_SQL_ASYNCPG, batch)
-    return len(batch)
+    """Upsert bullpen listings through asyncpg. Returns the rows written."""
+    return await _write_async(conn, BULLPEN_UPSERT_SQL_ASYNCPG, rows)
 
 
 def persist_bullpen_sync(cur: Any, rows: Iterable[BullpenListing]) -> int:
-    """UPSERT bullpen listings on a psycopg2 cursor (the historical loader)."""
-    batch = [r.as_tuple() for r in rows]
-    if not batch:
-        return 0
-    from psycopg2.extras import execute_batch
-
-    execute_batch(cur, BULLPEN_UPSERT_SQL_PSYCOPG2, batch)
-    return len(batch)
-
-
-# ---------------------------------------------------------------------------
-# The starting position
-# ---------------------------------------------------------------------------
-
-
-def starting_position(pdata: Mapping[str, Any]) -> str | None:
-    """The position a player held when he entered the game.
-
-    The box's ``position`` is the LAST position the player held in the game.
-    ``allPositions`` lists every position he held, in order, so its first entry
-    is where he started. A two-way starter who pitches and bats as the
-    designated hitter lists P then DH and reads 'P'. A payload without
-    ``allPositions``, or with a blank first entry, falls back to ``position``.
-    None when neither names a position.
-    """
-    all_positions = pdata.get("allPositions") or []
-    first = all_positions[0] if all_positions else None
-    abbr = first.get("abbreviation") if isinstance(first, Mapping) else None
-    if not abbr:
-        abbr = (pdata.get("position") or {}).get("abbreviation")
-    return str(abbr)[:5] if abbr else None
-
-
-@dataclass(frozen=True, slots=True)
-class StartingPosition:
-    """One starter's starting and last positions in a game.
-
-    ``position_code`` is the starting position (``allPositions[0]``);
-    ``last_position_code`` is the box's ``position``, the value the lineup
-    rows loaded before the starting-position fix (SIM-559) carry.
-    ``batting_order`` is the slot (1-9).
-    """
-
-    game_pk: int
-    team_id: int
-    player_id: int
-    batting_order: int
-    position_code: str
-    last_position_code: str | None
-
-    @property
-    def moved(self) -> bool:
-        """True when the player ended the game at another position."""
-        return self.position_code != self.last_position_code
-
-
-def parse_starting_positions(
-    teams: Mapping[str, Any],
-    *,
-    game_pk: int,
-    home_team_id: int | None = None,
-    away_team_id: int | None = None,
-) -> list[StartingPosition]:
-    """The starting position of every batting-order STARTER in a box.
-
-    A starter is a player whose ``battingOrder`` ends in ``00``. The starting
-    pitcher of a designated-hitter game has no batting order and no row here:
-    his lineup row is coded 'P' already. The same ``teams`` dict
-    :func:`parse_boxscore` reads, so one fetch serves the backfill.
-    """
-    fallback_team = {"home": home_team_id, "away": away_team_id}
-    rows: list[StartingPosition] = []
-    for side in SIDES:
-        team_box = teams.get(side) or {}
-        team_id = (team_box.get("team") or {}).get("id")
-        if team_id is None:
-            team_id = fallback_team[side]
-        if team_id is None:
-            log.warning("SIM-559: game %s %s side has no team id — no rows.", game_pk, side)
-            continue
-        for pdata in (team_box.get("players") or {}).values():
-            pid = (pdata.get("person") or {}).get("id")
-            bo = pdata.get("battingOrder")
-            if pid is None or bo in (None, ""):
-                continue
-            try:
-                bo_int = int(bo)
-            except (TypeError, ValueError):
-                continue
-            if bo_int % 100 != 0:
-                continue  # a later occupant of the slot, not the starter
-            pos = starting_position(pdata)
-            if pos is None:
-                continue
-            last = (pdata.get("position") or {}).get("abbreviation")
-            rows.append(
-                StartingPosition(
-                    game_pk=int(game_pk),
-                    team_id=int(team_id),
-                    player_id=int(pid),
-                    batting_order=bo_int // 100,
-                    position_code=pos,
-                    last_position_code=(str(last)[:5] if last else None),
-                )
-            )
-    return rows
-
-
-#: Repair the starters' lineup rows in one statement per game. Only a
-#: row whose code differs is written, so ``updated_at`` (the table's trigger)
-#: marks exactly the repaired rows.
-STARTING_POSITION_UPDATE_SQL_ASYNCPG: str = """
-    UPDATE raw.game_lineups AS l
-    SET    position_code = v.position_code
-    FROM   unnest($1::int[], $2::int[], $3::int[], $4::text[])
-           AS v(game_pk, team_id, player_id, position_code)
-    WHERE  l.game_pk = v.game_pk
-      AND  l.team_id = v.team_id
-      AND  l.player_id = v.player_id
-      AND  l.sequence = 1
-      AND  l.is_starter
-      AND  l.position_code IS DISTINCT FROM v.position_code
-"""
-
-
-async def persist_starting_positions(conn: Any, rows: Iterable[StartingPosition]) -> int:
-    """Write the starting positions onto the lineup rows (asyncpg). Returns the
-    number of rows whose code changed (a row already right is not written)."""
-    batch = list(rows)
-    if not batch:
-        return 0
-    status = await conn.execute(
-        STARTING_POSITION_UPDATE_SQL_ASYNCPG,
-        [r.game_pk for r in batch],
-        [r.team_id for r in batch],
-        [r.player_id for r in batch],
-        [r.position_code for r in batch],
-    )
-    return _rows_from_status(status)
-
-
-def _rows_from_status(status: Any) -> int:
-    """The row count in an asyncpg command tag such as ``'UPDATE 3'``; 0 when
-    the tag is absent or not of that shape."""
-    try:
-        return int(str(status).split()[-1])
-    except (ValueError, IndexError):
-        return 0
+    """Upsert bullpen listings on a psycopg2 cursor (the game loader's). The caller commits."""
+    return _write_sync(cur, BULLPEN_UPSERT_SQL_PSYCOPG2, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -603,56 +447,26 @@ class BoxscoreIngest:
             raise ValueError(f"boxscore for game {game_pk} carries no 'teams' block")
         return teams
 
-    # --------------------------------------------------------------- pipeline
-    def fetch_rows(
-        self,
-        game_pk: int,
-        *,
-        season: int,
-        game_date: date,
-        home_team_id: int | None = None,
-        away_team_id: int | None = None,
-    ) -> list[PlayerGameStats]:
-        """Fetch + parse one game's box score into rows (no persistence)."""
-        teams = self.fetch_boxscore(game_pk)
-        return parse_boxscore(
-            teams,
-            game_pk=game_pk,
-            season=season,
-            game_date=game_date,
-            home_team_id=home_team_id,
-            away_team_id=away_team_id,
-        )
-
-    async def persist(self, conn: Any, rows: Iterable[PlayerGameStats]) -> int:
-        """UPSERT rows through an asyncpg connection — see :func:`persist`."""
-        return await persist(conn, rows)
-
 
 __all__ = [
     "BATTING_FIELDS",
     "BULLPEN_COLUMNS",
     "BULLPEN_UPSERT_SQL_ASYNCPG",
     "BULLPEN_UPSERT_SQL_PSYCOPG2",
+    "BoxscoreIngest",
     "BullpenListing",
     "COLUMNS",
-    "BoxscoreIngest",
     "PITCHING_FIELDS",
     "PlayerGameStats",
     "SIDES",
-    "STARTING_POSITION_UPDATE_SQL_ASYNCPG",
-    "StartingPosition",
     "UPSERT_SQL_ASYNCPG",
-    "parse_bullpen_listing",
-    "persist_bullpen",
-    "persist_bullpen_sync",
     "UPSERT_SQL_PSYCOPG2",
     "parse_boxscore",
-    "parse_starting_positions",
+    "parse_bullpen_listing",
     "persist",
-    "persist_starting_positions",
+    "persist_bullpen",
+    "persist_bullpen_sync",
     "persist_sync",
-    "starting_position",
 ]
 
 
@@ -749,12 +563,6 @@ def final_games_sql(
     """
 
 
-def _as_date(value: Any) -> date:
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(str(value)[:10])
-
-
 async def _fetch_final_games(conn: Any, args: argparse.Namespace) -> list[GameRef]:
     rows = await conn.fetch(
         final_games_sql(
@@ -762,18 +570,14 @@ async def _fetch_final_games(conn: Any, args: argparse.Namespace) -> list[GameRe
             args.max_games,
             sorted({int(g) for g in args.game_pks}),
             args.only_missing,
-            missing_table=(
-                "raw.game_bullpen"
-                if getattr(args, "bullpen_only", False)
-                else "raw.game_player_stats"
-            ),
+            missing_table=("raw.game_bullpen" if args.bullpen_only else "raw.game_player_stats"),
         )
     )
     return [
         GameRef(
             game_pk=int(r["game_pk"]),
             season=int(r["season"]),
-            game_date=_as_date(r["game_date"]),
+            game_date=r["game_date"],
             home_team_id=int(r["home_team_id"]),
             away_team_id=int(r["away_team_id"]),
         )
@@ -838,9 +642,7 @@ async def run(args: argparse.Namespace) -> int:
         consecutive_failures = 0
         for i, ref in enumerate(games, start=1):
             try:
-                written = await load_game(
-                    ingest, conn, ref, bullpen_only=bool(getattr(args, "bullpen_only", False))
-                )
+                written = await load_game(ingest, conn, ref, bullpen_only=args.bullpen_only)
             except Exception as exc:  # noqa: BLE001 — one game must never end the run
                 summary.failures += 1
                 consecutive_failures += 1

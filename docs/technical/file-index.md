@@ -1,4 +1,4 @@
-<!-- file-index-key: a6f154072bf1b7b7 -->
+<!-- file-index-key: 9f1250c580df15c4 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -14,19 +14,19 @@ Every source and config file in the repository, in the order of the [code review
 | [1. The game's vocabulary](#stage-1) | 7 | 1,876 |
 | [2. One pitch: the loop](#stage-2) | 9 | 3,546 |
 | [3. The draws: the sampler](#stage-3) | 13 | 4,583 |
-| [4. The sampler's data: the bundle](#stage-4) | 15 | 4,772 |
+| [4. The sampler's data: the bundle](#stage-4) | 15 | 4,768 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
-| [7. Getting data in: the raw tables](#stage-7) | 64 | 15,627 |
+| [7. Getting data in: the raw tables](#stage-7) | 64 | 15,276 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
-| [9. Odds and betting](#stage-9) | 8 | 4,873 |
+| [9. Odds and betting](#stage-9) | 8 | 4,858 |
 | [10. The API](#stage-10) | 41 | 13,766 |
-| [11. Game day: the live service](#stage-11) | 11 | 2,953 |
+| [11. Game day: the live service](#stage-11) | 11 | 2,946 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,016 |
-| [14. Measurement and maintenance tools](#stage-14) | 75 | 37,360 |
-| [15. Tests and CI](#stage-15) | 317 | 124,632 |
-| **All** | **783** | **282,795** |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,028 |
+| [14. Measurement and maintenance tools](#stage-14) | 75 | 37,478 |
+| [15. Tests and CI](#stage-15) | 317 | 124,673 |
+| **All** | **783** | **282,589** |
 
 <a id="stage-1"></a>
 
@@ -106,7 +106,7 @@ The nightly build that exports the pools and the score matrices the sampler read
 | [`pipeline/batch/artifacts/receiving.py`](../../pipeline/batch/artifacts/receiving.py) | 184 | The catcher receiving document: each catcher's framing and blocking multipliers on taken pitches. | 1: `test_receiving_ratio.py` |
 | [`pipeline/batch/artifacts/reference.py`](../../pipeline/batch/artifacts/reference.py) | 81 | The reference tables the workers read from the bundle: the intentional-walk rates and the venue run factors. | — |
 | [`pipeline/batch/bundle_versions.py`](../../pipeline/batch/bundle_versions.py) | 207 | pipeline/batch/bundle_versions.py — the engine-artifact bundle as published versions. | 1: `test_bundle_versions.py` |
-| [`pipeline/batch/pool_chain.py`](../../pipeline/batch/pool_chain.py) | 536 | The count chain of the pitch pool, and the label check against real plate appearances. | 2: `test_pool_chain.py`, `test_pool_label_check.py` |
+| [`pipeline/batch/pool_chain.py`](../../pipeline/batch/pool_chain.py) | 532 | The count chain of the pitch pool, and the label check against real plate appearances. | 2: `test_pool_chain.py`, `test_pool_label_check.py` |
 
 <a id="stage-5"></a>
 
@@ -218,30 +218,30 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 |---|--:|---|---|
 | [`db/schemas/01_postgres_schema.sql`](../../db/schemas/01_postgres_schema.sql) | 1,352 | BASEBALL SIMULATION SYSTEM — PostgreSQL Schema | — |
 | [`ingest/statcast_events.py`](../../ingest/statcast_events.py) | 493 | The Statcast `events` out-label vocabulary. | 6: `test_out_label.py`, `test_steal_labels.py`, `test_transition_pool.py` +3 |
-| [`ingest/mlb/client.py`](../../ingest/mlb/client.py) | 279 | The one MLB Stats API client: the endpoint addresses, one GET with a retry, one async reader. | 3: `test_mlb_client.py`, `test_etl_hardening.py`, `test_park_geometry_builder.py` |
-| [`ingest/mlb/schedule.py`](../../ingest/mlb/schedule.py) | 306 | The league schedule client (the live slate, SIM-519). | 1: `test_schedule_client.py` |
-| [`ingest/mlb/game_feed.py`](../../ingest/mlb/game_feed.py) | 681 | The league's per-game live feed → the slate card's detail (the live slate, SIM-519). | 2: `test_game_feed.py`, `test_game_page_whatif.py` |
-| [`ingest/games/load_games.py`](../../ingest/games/load_games.py) | 1,606 | The historical loader: MLB Stats API games into Postgres `raw.*`. | 12: `test_etl_flow.py`, `test_mlb_client.py`, `test_play_events.py` +9 |
-| [`ingest/games/base.py`](../../ingest/games/base.py) | 84 | The state every part of the historical loader shares. | 1: `test_etl_connection_pool.py` |
+| [`ingest/mlb/client.py`](../../ingest/mlb/client.py) | 259 | The one MLB Stats API client: the endpoint addresses, one GET with a retry, one async reader. | 4: `test_mlb_client.py`, `test_etl_hardening.py`, `test_savant_loader.py` +1 |
+| [`ingest/mlb/schedule.py`](../../ingest/mlb/schedule.py) | 330 | The league schedule client (the live slate, SIM-519). | 2: `test_schedule_client.py`, `test_odds_matcher.py` |
+| [`ingest/mlb/game_feed.py`](../../ingest/mlb/game_feed.py) | 680 | The league's per-game live feed → the slate card's detail (the live slate, SIM-519). | 3: `test_game_feed.py`, `test_game_page_whatif.py`, `test_starting_position.py` |
+| [`ingest/games/load_games.py`](../../ingest/games/load_games.py) | 1,504 | The historical loader: MLB Stats API games into Postgres `raw.*`. | 12: `test_etl_flow.py`, `test_mlb_client.py`, `test_play_events.py` +9 |
+| [`ingest/games/base.py`](../../ingest/games/base.py) | 116 | The state every part of the historical loader shares. | 1: `test_etl_connection_pool.py` |
 | [`ingest/games/date_windows.py`](../../ingest/games/date_windows.py) | 51 | The schedule helpers: the date windows of a range load, the final-game filter and the circuit-breaker limit. | 3: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_etl_schedule_final_filter.py` |
 | [`ingest/games/game_values.py`](../../ingest/games/game_values.py) | 168 | The game, lineup and player values the loader reads from the feed: the manager, the height, the wind, the game status and the starting lineup rows. | 4: `test_etl_hardening.py`, `test_starting_position.py`, `test_etl_starting_lineups.py` +1 |
-| [`ingest/games/pitch_rows.py`](../../ingest/games/pitch_rows.py) | 429 | The pitch row: the required fields, the feed-to-column map, the row builder and the two-tier validation. | 4: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_release_speed_bounds.py` +1 |
-| [`ingest/games/reference_rows.py`](../../ingest/games/reference_rows.py) | 420 | The reference rows a game needs before its pitches: the teams, the managers, the game row and the starting lineups. | — |
+| [`ingest/games/pitch_rows.py`](../../ingest/games/pitch_rows.py) | 427 | The pitch row: the required fields, the feed-to-column map, the row builder and the two-tier validation. | 4: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_release_speed_bounds.py` +1 |
+| [`ingest/games/reference_rows.py`](../../ingest/games/reference_rows.py) | 413 | The reference rows a game needs before its pitches: the teams, the managers, the game row and the starting lineups. | — |
 | [`ingest/games/venues.py`](../../ingest/games/venues.py) | 95 | The venue of a game, read from the feed, with the overrides for the neutral-site games that ship without one. | 1: `test_venue_resolution.py` |
-| [`ingest/savant/page_json.py`](../../ingest/savant/page_json.py) | 50 | The parser for the JSON that Baseball Savant embeds in its HTML pages. | 1: `test_etl_hardening.py` |
-| [`ingest/games/write_rows.py`](../../ingest/games/write_rows.py) | 555 | The loader's writes: the pitch rows, the play events, the error ledger, the ingest outcome and the freshness and quality reports. | 2: `test_etl_reload_game.py`, `test_etl_historical_loader.py` |
+| [`ingest/savant/page_json.py`](../../ingest/savant/page_json.py) | 46 | The parser for the JSON that Baseball Savant embeds in its HTML pages. | 1: `test_etl_hardening.py` |
+| [`ingest/games/write_rows.py`](../../ingest/games/write_rows.py) | 572 | The loader's writes: the pitch rows, the play events, the error ledger, the ingest outcome and the freshness report. | 2: `test_etl_reload_game.py`, `test_etl_historical_loader.py` |
 | [`ingest/games/play_events.py`](../../ingest/games/play_events.py) | 403 | Extract the non-pitch play events `raw.pitches` cannot represent. | 1: `test_play_events.py` |
-| [`ingest/games/reload_games.py`](../../ingest/games/reload_games.py) | 374 | reload_games.py — corrective reload for SPECIFIC games, or for every gap it can find. | — |
-| [`ingest/games/resumable_sweep.py`](../../ingest/games/resumable_sweep.py) | 287 | resumable_sweep.py — drive the corrective reload sweep to completion despite a stochastic interpreter crash. | 1: `test_sweep_streaming.py` |
-| [`ingest/load_boxscores.py`](../../ingest/load_boxscores.py) | 949 | The official per-player box score as the prop ground truth (SIM-545, part of the unpriced prop markets, SIM-421). | 6: `test_mlb_client.py`, `test_boxscore_ingest.py`, `test_boxscore_reader.py` +3 |
+| [`ingest/games/reload_games.py`](../../ingest/games/reload_games.py) | 368 | reload_games.py — corrective reload for SPECIFIC games, or for every gap it can find. | — |
+| [`ingest/games/resumable_sweep.py`](../../ingest/games/resumable_sweep.py) | 289 | resumable_sweep.py — drive the corrective reload sweep to completion despite a stochastic interpreter crash. | 1: `test_sweep_streaming.py` |
+| [`ingest/load_boxscores.py`](../../ingest/load_boxscores.py) | 751 | The official per-player box score as the prop ground truth (SIM-545, part of the unpriced prop markets, SIM-421). | 5: `test_mlb_client.py`, `test_boxscore_ingest.py`, `test_boxscore_reader.py` +2 |
 | [`ingest/games/coercion.py`](../../ingest/games/coercion.py) | 62 | MLB Baseball Simulation Platform | 1: `test_etl_historical_loader.py` |
-| [`ingest/savant/load_leaderboards.py`](../../ingest/savant/load_leaderboards.py) | 448 | One loader for every Baseball Savant leaderboard in `savant_boards.BOARDS`. | 4: `test_savant_loader.py`, `test_lead_distance.py`, `test_point_in_time_batter.py` +1 |
-| [`ingest/savant/boards.py`](../../ingest/savant/boards.py) | 555 | The declarative registry of Baseball Savant leaderboards this platform ingests. | 6: `test_savant_oaa_jump_boards.py`, `test_savant_loader.py`, `test_lead_distance.py` +3 |
-| [`ingest/savant/load_pitch_tracking.py`](../../ingest/savant/load_pitch_tracking.py) | 283 | The per-PITCH tracking measurements, loaded one day at a time. | 1: `test_point_in_time_batter.py` |
-| [`ingest/savant/load_sprint_speed.py`](../../ingest/savant/load_sprint_speed.py) | 297 | MLB Baseball Simulation Platform | — |
-| [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 162 | The MLB Stats API's PUBLISHED fence distances, the floor under a new park's fence line (the fence certification plan, SIM-478, `docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`, §4 and §5.1). | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
-| [`ingest/venues/backfill_venues.py`](../../ingest/venues/backfill_venues.py) | 351 | Backfill NULL venue_id rows on raw.games. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
-| [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 614 | Per-game bullpen availability ingestion. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
+| [`ingest/savant/load_leaderboards.py`](../../ingest/savant/load_leaderboards.py) | 459 | One loader for every Baseball Savant leaderboard in `savant_boards.BOARDS`. | 4: `test_savant_loader.py`, `test_lead_distance.py`, `test_point_in_time_batter.py` +1 |
+| [`ingest/savant/boards.py`](../../ingest/savant/boards.py) | 554 | The declarative registry of Baseball Savant leaderboards this platform ingests. | 6: `test_savant_oaa_jump_boards.py`, `test_savant_loader.py`, `test_lead_distance.py` +3 |
+| [`ingest/savant/load_pitch_tracking.py`](../../ingest/savant/load_pitch_tracking.py) | 276 | The per-PITCH tracking measurements, loaded one day at a time. | 1: `test_point_in_time_batter.py` |
+| [`ingest/savant/load_sprint_speed.py`](../../ingest/savant/load_sprint_speed.py) | 226 | MLB Baseball Simulation Platform | 1: `test_savant_loader.py` |
+| [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 154 | The MLB Stats API's PUBLISHED fence distances, the floor under a new park's fence line (the fence certification plan, SIM-478, `docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`, §4 and §5.1). | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
+| [`ingest/venues/backfill_venues.py`](../../ingest/venues/backfill_venues.py) | 347 | Backfill NULL venue_id rows on raw.games. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
+| [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 608 | Per-game bullpen availability ingestion. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
 | [`ingest/__init__.py`](../../ingest/__init__.py) | 13 | Get the real data into the Postgres `raw.*` tables: the first step of the program. | 3: `test_boxscore_ingest.py`, `test_game_bullpen_listing.py`, `test_pitch_result_vocabulary.py` |
 | [`pipeline/bullpen_usage.py`](../../pipeline/bullpen_usage.py) | 303 | The pen's facts from the official box score and the MLB API's per-game bullpen listing, for the pitching-change draw and the reliever draw. | 1: `test_bullpen_usage.py` |
 | [`db/dsn.py`](../../db/dsn.py) | 57 | db/dsn.py — the one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |
@@ -317,7 +317,7 @@ Where the bookmakers' prices come from, and how the model's numbers become edges
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`betting/markets.py`](../../betting/markets.py) | 453 | Our market names and our book labels: the vocabulary every odds reader and writer shares. | 22: `test_segment_markets.py`, `test_odds_game_markets.py`, `test_betting_load.py` +19 |
-| [`betting/bettingpros/match_games.py`](../../betting/bettingpros/match_games.py) | 676 | Find BettingPros' event for an MLB game. | 2: `test_odds_matcher.py`, `test_bettingpros_provider.py` |
+| [`betting/bettingpros/match_games.py`](../../betting/bettingpros/match_games.py) | 661 | Find BettingPros' event for an MLB game. | 2: `test_odds_matcher.py`, `test_bettingpros_provider.py` |
 | [`betting/bettingpros/fetch_odds.py`](../../betting/bettingpros/fetch_odds.py) | 1,091 | Get BettingPros' odds for an MLB game and build one row per book. | 13: `test_betting_load.py`, `test_odds_matcher.py`, `test_odds_writers.py` +10 |
 | [`betting/validate_odds.py`](../../betting/validate_odds.py) | 426 | The load guard: it refuses an odds row that cannot be one bet. | 12: `test_betting_load.py`, `test_odds_matcher.py`, `test_odds_writers.py` +9 |
 | [`betting/load_odds_to_db.py`](../../betting/load_odds_to_db.py) | 796 | Load the odds into the database. | 15: `test_betting_load.py`, `test_odds_writers.py`, `test_live_pipeline.py` +12 |
@@ -384,9 +384,9 @@ The service that follows today's games, writes the posted lineups and pushes upd
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`pipeline/live/run_live.py`](../../pipeline/live/run_live.py) | 71 | The live service's entry point (the live slate, SIM-519; decision D2). | — |
-| [`pipeline/live/live_ingestion_pipeline.py`](../../pipeline/live/live_ingestion_pipeline.py) | 1,120 | The live ingestion pipeline: the day's games, their live state and their odds. | 20: `test_live_bridge.py`, `test_odds_writers.py`, `test_live_pipeline.py` +17 |
+| [`pipeline/live/live_ingestion_pipeline.py`](../../pipeline/live/live_ingestion_pipeline.py) | 1,116 | The live ingestion pipeline: the day's games, their live state and their odds. | 20: `test_live_bridge.py`, `test_odds_writers.py`, `test_live_pipeline.py` +17 |
 | [`pipeline/live/ingestion/base.py`](../../pipeline/live/ingestion/base.py) | 100 | The state every part of the live pipeline shares. | — |
-| [`pipeline/live/ingestion/constants.py`](../../pipeline/live/ingestion/constants.py) | 64 | The live pipeline's settings: the MLB socket address, the poll and reconnect intervals, the cache lifetimes, the re-simulation cooldown and the odds cadences. | 4: `test_odds_writers.py`, `test_live_pipeline.py`, `test_odds_vocabulary.py` +1 |
+| [`pipeline/live/ingestion/constants.py`](../../pipeline/live/ingestion/constants.py) | 61 | The live pipeline's settings: the MLB socket address, the poll and reconnect intervals, the cache lifetimes, the re-simulation cooldown and the odds cadences. | 4: `test_odds_writers.py`, `test_live_pipeline.py`, `test_odds_vocabulary.py` +1 |
 | [`pipeline/live/ingestion/mlb_websocket.py`](../../pipeline/live/ingestion/mlb_websocket.py) | 166 | The WebSocket parts: the client of MLB's live game socket and the manager of the app's own subscribers. | 2: `test_odds_writers.py`, `test_live_pipeline.py` |
 | [`pipeline/live/ingestion/game_state_builder.py`](../../pipeline/live/ingestion/game_state_builder.py) | 499 | The game-state builder: one live game's feed turned into the state the simulator starts from. | 2: `test_live_pipeline.py`, `test_live_pipeline_bugs.py` |
 | [`pipeline/live/ingestion/game_odds.py`](../../pipeline/live/ingestion/game_odds.py) | 100 | The live cycle's game odds: the broadcast row, the cadence of the load, and the closing-line stamp at first pitch. | — |
@@ -506,10 +506,10 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh) | 42 | operations/jobs/with_mark.sh — mark a job as running, run it, record its exit. | — |
 | [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 56 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
 | [`operations/jobs/wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh) | 61 | operations/jobs/wait_for_ingest.sh — make sure the finals load ran today before the rebuild. | — |
-| [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh) | 48 | operations/jobs/nightly_finals.sh — load the last few days' final games. | — |
+| [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh) | 54 | operations/jobs/nightly_finals.sh — load the last few days' final games. | — |
 | [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | 38 | operations/jobs/nightly_closing_lines.sh — load the odds of every finished game that is missing them. | — |
 | [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 32 | operations/jobs/nightly_rebuild.sh — rebuild the current season's profiles and the engine bundle. | — |
-| [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 30 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
+| [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 36 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
 | [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 14 | operations/backup — the backups of the data stores and their off-site copy. | 4: `test_backup_common.py`, `test_backup_status.py`, `test_backup_offsite.py` +1 |
 | [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 921 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
 | [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 145 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
@@ -596,7 +596,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/probes/arm_angle_probe.py`](../../scripts/probes/arm_angle_probe.py) | 1,223 | scripts/probes/arm_angle_probe.py — the evidence behind the arm-angle decision (SIM-533): what Savant's arm angle, active spin and spin-axis deviation add to the pitcher model. | 1: `test_arm_angle_decision.py` |
 | [`scripts/probes/arsenal_reproducibility_check.py`](../../scripts/probes/arsenal_reproducibility_check.py) | 230 | scripts/probes/arsenal_reproducibility_check.py — two pitcher profile builds of one season from the same data, compared by content: do they write the same arsenals (SIM-580)? | — |
 | [`scripts/probes/backfill_odds_hash.py`](../../scripts/probes/backfill_odds_hash.py) | 279 | One-shot backfill that fills `raw.game_odds.odds_hash` for every legacy row that predates SIM-092 (which began populating the column at write time but left history alone). | 1: `test_backfill_odds_hash.py` |
-| [`scripts/probes/backfill_start_positions.py`](../../scripts/probes/backfill_start_positions.py) | 352 | Repair the starters' positions in `raw.game_lineups` (SIM-559). | — |
+| [`scripts/probes/backfill_start_positions.py`](../../scripts/probes/backfill_start_positions.py) | 470 | Repair the starters' positions in `raw.game_lineups` (SIM-559). | 1: `test_starting_position.py` |
 | [`scripts/probes/book_sharpness.py`](../../scripts/probes/book_sharpness.py) | 911 | scripts/probes/book_sharpness.py — SIM-555: which book's closing line forecasts the real outcome best? | 1: `test_book_sharpness.py` |
 | [`scripts/probes/bullpen_check.py`](../../scripts/probes/bullpen_check.py) | 227 | scripts/probes/bullpen_check.py — SIM-427 part 4b's check: the real pen against reality. | — |
 | [`scripts/probes/catcher_receiving_probe.py`](../../scripts/probes/catcher_receiving_probe.py) | 198 | scripts/probes/catcher_receiving_probe.py — SIM-523 part E: the catcher receiving RATIO, on vs off. | — |
@@ -641,26 +641,26 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/acceptance/test_band_arithmetic.py`](../../tests/acceptance/test_band_arithmetic.py) | 1,494 | The band rule of the acceptance lane (SIM-450), tested on synthetic inputs. | — |
 | [`tests/acceptance/test_pool_label_check.py`](../../tests/acceptance/test_pool_label_check.py) | 259 | SIM-553 — the standing label check: the pitch pool's count chain against real play. | — |
 | [`tests/acceptance/test_production_bands.py`](../../tests/acceptance/test_production_bands.py) | 720 | The acceptance lane (SIM-450): the PRODUCTION simulator against reference rates. | — |
-| [`tests/unit/ingest/test_boxscore_ingest.py`](../../tests/unit/ingest/test_boxscore_ingest.py) | 768 | The official box-score ground truth (SIM-545): the parser over a REAL captured payload, the persist seams over in-memory fakes, and the fetch seam's retry. | — |
-| [`tests/unit/ingest/test_bullpen_availability.py`](../../tests/unit/ingest/test_bullpen_availability.py) | 639 | SIM-433 — per-game bullpen availability + IL ingestion. | — |
+| [`tests/unit/ingest/test_boxscore_ingest.py`](../../tests/unit/ingest/test_boxscore_ingest.py) | 763 | The official box-score ground truth (SIM-545): the parser over a REAL captured payload, the persist seams over in-memory fakes, and the fetch seam's retry. | — |
+| [`tests/unit/ingest/test_bullpen_availability.py`](../../tests/unit/ingest/test_bullpen_availability.py) | 644 | SIM-433 — per-game bullpen availability + IL ingestion. | — |
 | [`tests/unit/ingest/test_etl_connection_pool.py`](../../tests/unit/ingest/test_etl_connection_pool.py) | 212 | Before SIM-090, `HistoricalDataLoader._get_conn()` opened a fresh `psycopg2.connect(self.dsn)` and `conn.close()`-d it on every single DB round-trip. | — |
 | [`tests/unit/ingest/test_etl_ensure_rows.py`](../../tests/unit/ingest/test_etl_ensure_rows.py) | 369 | The historical loader's per-table prerequisite writers: _ensure_teams, _ensure_players, _ensure_managers and _ensure_game. | — |
-| [`tests/unit/ingest/test_etl_error_ledger.py`](../../tests/unit/ingest/test_etl_error_ledger.py) | 182 | The ETL error ledger: `raw.etl_errors` holds one row per pitch the historical loader skips, the loader writes it on the pitch insert's cursor, and `reprocess_errored_games` lists the games to load again. | — |
-| [`tests/unit/ingest/test_etl_hardening.py`](../../tests/unit/ingest/test_etl_hardening.py) | 738 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
-| [`tests/unit/ingest/test_etl_historical_loader.py`](../../tests/unit/ingest/test_etl_historical_loader.py) | 1,377 | Targets: - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in ingest/games/coercion.py) - _build_row_dict column rename + coercion - _validate_row two-tier validation rules - _parse_height... | 1: `test_play_events.py` |
+| [`tests/unit/ingest/test_etl_error_ledger.py`](../../tests/unit/ingest/test_etl_error_ledger.py) | 146 | The ETL error ledger: `raw.etl_errors` holds one row per pitch the historical loader skips, and the loader writes it on the pitch insert's cursor. | — |
+| [`tests/unit/ingest/test_etl_hardening.py`](../../tests/unit/ingest/test_etl_hardening.py) | 749 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
+| [`tests/unit/ingest/test_etl_historical_loader.py`](../../tests/unit/ingest/test_etl_historical_loader.py) | 1,339 | Targets: - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in ingest/games/coercion.py) - _build_row_dict column rename + coercion - _validate_row two-tier validation rules - _parse_height... | 1: `test_play_events.py` |
 | [`tests/unit/ingest/test_etl_reload_game.py`](../../tests/unit/ingest/test_etl_reload_game.py) | 1,232 | Covers: * `HistoricalDataLoader.reload_game` — DELETE + re-INSERT in ONE transaction, the only way to repair already-loaded `raw.pitches` rows (the INSERT carries `ON CONFLICT … DO NOTHING`, so plain `load_game` write... | — |
 | [`tests/unit/ingest/test_etl_schedule_final_filter.py`](../../tests/unit/ingest/test_etl_schedule_final_filter.py) | 33 | Unit tests for the historical loader's future/non-Final game guard (_schedule_game_is_final). | — |
 | [`tests/unit/ingest/test_etl_starting_lineups.py`](../../tests/unit/ingest/test_etl_starting_lineups.py) | 102 | Unit tests for SIM-409's starting-lineup builder (_build_starting_lineup_rows), which turns a feed/live boxscore into raw.game_lineups rows. | — |
-| [`tests/unit/ingest/test_game_bullpen_listing.py`](../../tests/unit/ingest/test_game_bullpen_listing.py) | 173 | The per-game bullpen listing (Alembic 0025, `raw.game_bullpen`). | — |
+| [`tests/unit/ingest/test_game_bullpen_listing.py`](../../tests/unit/ingest/test_game_bullpen_listing.py) | 172 | The per-game bullpen listing (Alembic 0025, `raw.game_bullpen`). | — |
 | [`tests/unit/ingest/test_game_feed.py`](../../tests/unit/ingest/test_game_feed.py) | 214 | The card detail from the league's per-game feed. | — |
-| [`tests/unit/ingest/test_mlb_client.py`](../../tests/unit/ingest/test_mlb_client.py) | 294 | The one MLB Stats API client: the sync GET, its retry policy and the async reader. | — |
+| [`tests/unit/ingest/test_mlb_client.py`](../../tests/unit/ingest/test_mlb_client.py) | 290 | The one MLB Stats API client: the sync GET, its retry policy and the async reader. | — |
 | [`tests/unit/ingest/test_out_label.py`](../../tests/unit/ingest/test_out_label.py) | 277 | SIM-501a/c — the events-based out label, and the guard on `outs_on_pitch`. | — |
 | [`tests/unit/ingest/test_play_events.py`](../../tests/unit/ingest/test_play_events.py) | 456 | SIM-502: the non-pitch play events `raw.pitches` cannot represent. | — |
 | [`tests/unit/ingest/test_release_speed_bounds.py`](../../tests/unit/ingest/test_release_speed_bounds.py) | 154 | The release-speed bounds: the historical loader's validator and the database trigger both accept 50 to 110 mph (a slow curve, an eephus, the real high-velocity tail) and flag anything outside it. | — |
-| [`tests/unit/ingest/test_savant_loader.py`](../../tests/unit/ingest/test_savant_loader.py) | 285 | SIM-528 — the shared Baseball Savant loader. | — |
+| [`tests/unit/ingest/test_savant_loader.py`](../../tests/unit/ingest/test_savant_loader.py) | 393 | SIM-528 — the shared Baseball Savant loader. | — |
 | [`tests/unit/ingest/test_savant_oaa_jump_boards.py`](../../tests/unit/ingest/test_savant_oaa_jump_boards.py) | 427 | SIM-532 — the loader side of the fielder's hand split and the outfield jump. | — |
-| [`tests/unit/ingest/test_schedule_client.py`](../../tests/unit/ingest/test_schedule_client.py) | 201 | SIM-519 Part A — the schedule client over recorded league responses. | — |
-| [`tests/unit/ingest/test_starting_position.py`](../../tests/unit/ingest/test_starting_position.py) | 359 | SIM-559: the lineup loader stores each starter's STARTING position (`allPositions[0]`), not the last position he held (`position`). | — |
+| [`tests/unit/ingest/test_schedule_client.py`](../../tests/unit/ingest/test_schedule_client.py) | 199 | SIM-519 Part A — the schedule client over recorded league responses. | — |
+| [`tests/unit/ingest/test_starting_position.py`](../../tests/unit/ingest/test_starting_position.py) | 360 | SIM-559: the lineup loader stores each starter's STARTING position (`allPositions[0]`), not the last position he held (`position`). | — |
 | [`tests/unit/ingest/test_sweep_streaming.py`](../../tests/unit/ingest/test_sweep_streaming.py) | 197 | `ingest/games/resumable_sweep.py` must STREAM its child's output. | — |
 | [`tests/unit/ingest/test_venue_id_fallback.py`](../../tests/unit/ingest/test_venue_id_fallback.py) | 142 | A game with no venue is stored with `venue_id` NULL, never a 0 sentinel: `raw.games.venue_id` is nullable (migration 0006), the live pipeline's `_upsert_game_record` binds None when the feed has no venue, and the venu... | — |
 | [`tests/unit/ingest/test_venue_resolution.py`](../../tests/unit/ingest/test_venue_resolution.py) | 162 | SIM-447: venue resolution for games whose feed omits `gameData.venue`. | — |
@@ -678,7 +678,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 66 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/test_accuracy_comparison.py`](../../tests/unit/test_accuracy_comparison.py) | 1,160 | Unit tests for the sim-vs-closing-line accuracy comparison (`scripts/accuracy_comparison.py`). | — |
 | [`tests/unit/test_accuracy_comparison_markets.py`](../../tests/unit/test_accuracy_comparison_markets.py) | 111 | Unit tests for the plain data in `scripts/accuracy/records.py`: the 15-market prop vocabulary map (the original seven plus the eight of the prop-market work, SIM-421) and the market trust labels. | — |
-| [`tests/unit/test_accuracy_comparison_props.py`](../../tests/unit/test_accuracy_comparison_props.py) | 713 | The backtest wiring for the fifteen prop markets (the prop-market work, SIM-421) and the official box-score ground truth (the owner's ruling to grade props on the box, SIM-545), in `scripts/accuracy_comparison.py` and... | — |
+| [`tests/unit/test_accuracy_comparison_props.py`](../../tests/unit/test_accuracy_comparison_props.py) | 714 | The backtest wiring for the fifteen prop markets (the prop-market work, SIM-421) and the official box-score ground truth (the owner's ruling to grade props on the box, SIM-545), in `scripts/accuracy_comparison.py` and... | — |
 | [`tests/unit/test_accuracy_fit_instruments.py`](../../tests/unit/test_accuracy_fit_instruments.py) | 462 | The instruments of the joint-fit plan (the accuracy fit, SIM-548), on synthetic inputs (no DB, no bundle): | — |
 | [`tests/unit/test_accuracy_hypothetical_return.py`](../../tests/unit/test_accuracy_hypothetical_return.py) | 406 | Unit tests for the hypothetical dollar return, an OPT-IN companion report to the accuracy comparison in `scripts/accuracy_comparison.py`. | — |
 | [`tests/unit/test_accuracy_minimum_sample.py`](../../tests/unit/test_accuracy_minimum_sample.py) | 547 | Unit tests for the stated MINIMUM SAMPLE SIZE of the accuracy reports that need one (`scripts/accuracy/confidence.py`): the sim-vs-closing-line accuracy comparison and the hypothetical dollar return. | — |
@@ -721,7 +721,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_bettingpros_provider.py`](../../tests/unit/test_bettingpros_provider.py) | 534 | Unit tests for the SIM-405 BettingPros odds provider. | — |
 | [`tests/unit/test_book_sharpness.py`](../../tests/unit/test_book_sharpness.py) | 330 | `scripts/probes/book_sharpness.py`: the odds-against-outcome read that ranks the books (plan test 17), on a synthetic season. | — |
 | [`tests/unit/test_boxscore_extended.py`](../../tests/unit/test_boxscore_extended.py) | 533 | The extended per-player box score: the batting fields `b2` (doubles), `b3` (triples), `r` (runs scored) and `sb` (stolen bases), the pitching fields `h_allowed` and `r_allowed`, and the exact total-bases formula of `p... | — |
-| [`tests/unit/test_boxscore_reader.py`](../../tests/unit/test_boxscore_reader.py) | 485 | The official box-score ground truth (SIM-545): the reader `real_props_from_boxscore_rows` on rows parsed from the real captured payload, the `pair_props_for_validation` prop-tuple keyword, and the audit script's deriv... | — |
+| [`tests/unit/test_boxscore_reader.py`](../../tests/unit/test_boxscore_reader.py) | 486 | The official box-score ground truth (SIM-545): the reader `real_props_from_boxscore_rows` on rows parsed from the real captured payload, the `pair_props_for_validation` prop-tuple keyword, and the audit script's deriv... | — |
 | [`tests/unit/test_bullpen_usage.py`](../../tests/unit/test_bullpen_usage.py) | 127 | SIM-427 — the pen's facts from the box (`pipeline/bullpen_usage.py`). | — |
 | [`tests/unit/test_bundle_no_pickle.py`](../../tests/unit/test_bundle_no_pickle.py) | 134 | The engine-artifact bundle loads without a pickle (SIM-565). | — |
 | [`tests/unit/test_bundle_versions.py`](../../tests/unit/test_bundle_versions.py) | 190 | SIM-563 — the engine-artifact bundle is published as a version behind a link. | — |

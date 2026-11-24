@@ -74,21 +74,22 @@ _HEARTBEAT_EVERY = 25
 # The child does the real work. It is run as a SUBPROCESS on purpose: the fault
 # kills the interpreter outright, so it cannot be caught in-process.
 _CHILD = r"""
-import os, sys, pathlib, re
+import logging, os, sys, pathlib
 sys.path.insert(0, r"{repo}")
 season = int(sys.argv[1])
 progress = pathlib.Path(sys.argv[2])
 
-env = {{}}
-for line in pathlib.Path(r"{repo}", ".env").read_text(encoding="utf-8").splitlines():
-    line = line.strip()
-    if line and not line.startswith("#") and "=" in line:
-        k, v = line.split("=", 1)
-        env[k.strip()] = v.strip().strip('"').strip("'")
-dsn = env["BASEBALL_DB_DSN"]
-if {native}:
-    dsn = re.sub(r"@[^/:]+:\d+/", "@127.0.0.1:" + env.get("DB_HOST_PORT", "5432") + "/", dsn)
-os.environ["BASEBALL_DB_DSN"] = dsn
+# The per-game log lines are the progress the driver streams and counts.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+from ingest.games.reload_games import _host_dsn, _load_env
+
+env = _load_env()
+os.environ["BASEBALL_DB_DSN"] = _host_dsn(env) if {native} else env["BASEBALL_DB_DSN"]
 
 done = set()
 if progress.exists():
@@ -134,6 +135,11 @@ try:
 finally:
     loader.close()
 """
+
+
+def _done_count(progress: Path) -> int:
+    """The number of games the progress file records as done."""
+    return len(progress.read_text().split()) if progress.exists() else 0
 
 
 def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tuple[int, bool, int]:
@@ -215,14 +221,14 @@ def main() -> int:
 
     for season in range(args.season, end + 1):
         progress = PROGRESS_DIR / f"{season}.txt"
-        started = len(progress.read_text().split()) if progress.exists() else 0
+        started = _done_count(progress)
         print(f"\n=== season {season} — {started} game(s) already done ===", flush=True)
 
         for attempt in range(1, args.max_attempts + 1):
-            before = len(progress.read_text().split()) if progress.exists() else 0
+            before = _done_count(progress)
             t0 = time.time()
             rc, complete, failed = _run_attempt(season, progress, not args.in_docker, args.quiet)
-            after = len(progress.read_text().split()) if progress.exists() else 0
+            after = _done_count(progress)
             gained = after - before
             mins = (time.time() - t0) / 60
 
@@ -271,11 +277,7 @@ def main() -> int:
             print(f"  exhausted --max-attempts for season {season}", flush=True)
             return 1
 
-    total = sum(
-        len((PROGRESS_DIR / f"{s}.txt").read_text().split())
-        for s in range(args.season, end + 1)
-        if (PROGRESS_DIR / f"{s}.txt").exists()
-    )
+    total = sum(_done_count(PROGRESS_DIR / f"{s}.txt") for s in range(args.season, end + 1))
     print(
         f"\nALL SEASONS COMPLETE — {total} games in {(time.time() - overall_start) / 60:.1f} min",
         flush=True,

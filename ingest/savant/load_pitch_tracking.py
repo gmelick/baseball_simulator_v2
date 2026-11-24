@@ -55,7 +55,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
-import os
 import sys
 import time
 from urllib.parse import urlencode
@@ -63,15 +62,16 @@ from urllib.parse import urlencode
 import psycopg2
 from psycopg2.extras import execute_batch
 
+from db.dsn import require_dsn
 from ingest.games.coercion import to_float, to_int
-from ingest.savant.load_leaderboards import PAUSE_BETWEEN_FETCHES_S, fetch_csv, parse_rows
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+from ingest.savant.load_leaderboards import (
+    PAUSE_BETWEEN_FETCHES_S,
+    fetch_csv,
+    parse_rows,
+    upsert_sql_for,
 )
-log = logging.getLogger("savant_pitch_tracking")
+
+log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://baseballsavant.mlb.com/statcast_search/csv"
 
@@ -155,25 +155,16 @@ def check_day(rows: list[dict[str, str]], day: dt.date) -> None:
         raise RuntimeError(f"{day}: rows carry other dates {sorted(wrong)[:5]!r}")
 
 
-UPSERT_SQL = """
-    INSERT INTO raw.savant_pitch_tracking ({cols}, scraped_at)
-    VALUES ({vals}, NOW())
-    ON CONFLICT (game_pk, at_bat_number, pitch_number) DO UPDATE SET {updates};
-"""
+#: The upsert of one pitch, keyed on the game, the plate appearance and the pitch.
+UPSERT_SQL = upsert_sql_for(
+    "raw.savant_pitch_tracking",
+    (*_KEY_COLUMNS, *_META_COLUMNS, *(t for _, t in TRACKING_COLUMNS)),
+    _KEY_COLUMNS,
+)
 
 
-def upsert_sql() -> str:
-    cols = [*_KEY_COLUMNS, *_META_COLUMNS, *(t for _, t in TRACKING_COLUMNS)]
-    updates = [c for c in cols if c not in _KEY_COLUMNS] + ["scraped_at"]
-    return UPSERT_SQL.format(
-        cols=", ".join(cols),
-        vals=", ".join(f"%({c})s" for c in cols),
-        updates=", ".join(f"{c} = EXCLUDED.{c}" for c in updates),
-    )
-
-
-def load_day(conn, day: dt.date, *, dry_run: bool = False, fetcher=fetch_csv) -> int:
-    rows = parse_rows(fetcher(build_url(day)))
+def load_day(conn, day: dt.date, *, dry_run: bool = False) -> int:
+    rows = parse_rows(fetch_csv(build_url(day)))
     if not rows:
         return 0
     check_day(rows, day)
@@ -183,11 +174,11 @@ def load_day(conn, day: dt.date, *, dry_run: bool = False, fetcher=fetch_csv) ->
     if dry_run:
         return len(payload)
     with conn.cursor() as cur:
-        execute_batch(cur, upsert_sql(), payload, page_size=500)
+        execute_batch(cur, UPSERT_SQL, payload, page_size=500)
     return len(payload)
 
 
-def season_days(season: int, conn=None, today: dt.date | None = None) -> list[dt.date]:
+def season_days(season: int, conn=None) -> list[dt.date]:
     """The days to request for ``season``.
 
     Prefers the dates our own database says had games — roughly 185 a season
@@ -205,9 +196,8 @@ def season_days(season: int, conn=None, today: dt.date | None = None) -> list[dt
         if days:
             return days
         log.warning("season %d: no games in raw.pitches; falling back to the calendar.", season)
-    today = today or dt.date.today()
     first = dt.date(season, *SEASON_FIRST_MONTH_DAY)
-    last = min(dt.date(season, *SEASON_LAST_MONTH_DAY), today)
+    last = min(dt.date(season, *SEASON_LAST_MONTH_DAY), dt.date.today())
     if last < first:
         return []
     return [first + dt.timedelta(days=i) for i in range((last - first).days + 1)]
@@ -223,6 +213,11 @@ def loaded_days(conn, season: int) -> set[dt.date]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     ap = argparse.ArgumentParser(description="Load per-pitch Savant tracking (SIM-534).")
     ap.add_argument("--seasons", nargs="+", type=int)
     ap.add_argument("--start", type=dt.date.fromisoformat)
@@ -235,10 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    dsn = os.environ.get("BASEBALL_DB_DSN")
-    if not dsn and not args.dry_run:
-        raise SystemExit("BASEBALL_DB_DSN is not set.")
-    conn = None if args.dry_run else psycopg2.connect(dsn)
+    dsn = None if args.dry_run else require_dsn()
+    conn = None if dsn is None else psycopg2.connect(dsn)
 
     if args.start and args.end:
         days = [args.start + dt.timedelta(days=i) for i in range((args.end - args.start).days + 1)]

@@ -11,6 +11,7 @@ the ``/api/v1/game/746437/boxscore`` response for SEA @ DET, 2024-08-15.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import urllib.error
@@ -275,7 +276,7 @@ class TestRowShape:
         assert expected == COLUMNS
         r = rows[0]
         assert len(r.as_tuple()) == len(COLUMNS)
-        assert tuple(r.as_dict()) == COLUMNS
+        assert tuple(dataclasses.asdict(r)) == COLUMNS
 
     def test_upsert_sql_refreshes_every_non_key_column(self):
         for sql in (UPSERT_SQL_ASYNCPG, UPSERT_SQL_PSYCOPG2):
@@ -335,11 +336,6 @@ class TestPersistSeams:
     def test_sync_persist_empty_writes_nothing(self):
         assert persist_sync(object(), []) == 0
 
-    def test_ingest_persist_method_delegates(self, rows):
-        conn = _FakeAsyncConn()
-        n = asyncio.run(BoxscoreIngest().persist(conn, rows[:3]))
-        assert n == 3
-
 
 # ===========================================================================
 # The fetch seam
@@ -366,7 +362,7 @@ def _serve(monkeypatch, handler):
 
 
 class TestFetch:
-    def test_fetch_rows_goes_through_the_one_seam(self, teams):
+    def test_fetch_boxscore_goes_through_the_one_seam(self, teams):
         seen: list[tuple[str, dict]] = []
 
         class Stub(BoxscoreIngest):
@@ -374,9 +370,8 @@ class TestFetch:
                 seen.append((path, dict(params or {})))
                 return {"teams": teams}
 
-        rows = Stub().fetch_rows(GAME_PK, season=SEASON, game_date=GAME_DATE)
+        assert Stub().fetch_boxscore(GAME_PK) == teams
         assert seen == [(f"game/{GAME_PK}/boxscore", {})]
-        assert len(rows) == 27
 
     def test_fetch_boxscore_rejects_a_payload_without_teams(self):
         class Stub(BoxscoreIngest):

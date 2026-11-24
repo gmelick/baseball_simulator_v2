@@ -40,7 +40,6 @@ MLB_BASE = "https://statsapi.mlb.com"
 API_V1 = f"{MLB_BASE}/api/v1"
 SCHEDULE_URL = f"{API_V1}/schedule"
 GAME_FEED_URL = f"{MLB_BASE}/api/v1.1/game/{{game_pk}}/feed/live"
-BOXSCORE_URL = f"{API_V1}/game/{{game_pk}}/boxscore"
 PEOPLE_URL = f"{API_V1}/people/{{player_id}}"
 VENUES_URL = f"{API_V1}/venues"
 VENUE_URL = f"{API_V1}/venues/{{venue_id}}"
@@ -129,14 +128,6 @@ class Response:
     text: str
     url: str
 
-    def header(self, name: str) -> str | None:
-        """The header ``name``, matched without regard to case."""
-        target = name.lower()
-        for key, value in self.headers.items():
-            if key.lower() == target:
-                return value
-        return None
-
     def json(self) -> Any:
         """The body parsed as JSON."""
         return json.loads(self.text)
@@ -155,13 +146,6 @@ def _decode_body(body: bytes, headers: Any) -> str:
         return body.decode(charset, errors="replace")
     except LookupError:  # a charset Python does not know
         return body.decode("utf-8", errors="replace")
-
-
-def with_query(url: str, params: Mapping[str, Any] | None) -> str:
-    """``url`` with ``params`` as its query string (a list value repeats its key)."""
-    if not params:
-        return url
-    return f"{url}?{urllib.parse.urlencode(dict(params), doseq=True)}"
 
 
 def get(
@@ -183,7 +167,8 @@ def get(
     ``sleep`` defaults to ``time.sleep``, looked up at each wait.
     After the last retry, or on any other failure, the original error raises.
     """
-    full = with_query(url, params)
+    # A list value repeats its key (``gameTypes=R&gameTypes=F``).
+    full = f"{url}?{urllib.parse.urlencode(dict(params), doseq=True)}" if params else url
     retry = 0
     while True:
         try:
@@ -223,14 +208,6 @@ def get_json(url: str, params: Mapping[str, Any] | None = None, **kwargs: Any) -
     return get(url, params, **kwargs).json()
 
 
-def feed_timeout_s() -> float:
-    """The async reader's per-request timeout, ``SLATE_FEED_TIMEOUT_S`` (default 5 seconds)."""
-    try:
-        return float(os.environ.get("SLATE_FEED_TIMEOUT_S", "5"))
-    except ValueError:
-        return 5.0
-
-
 class LeagueFeed:
     """The async reader: GETs over one lazy ``aiohttp`` session.
 
@@ -240,11 +217,14 @@ class LeagueFeed:
     ``aiohttp.ClientResponseError``.
     """
 
-    def __init__(
-        self, *, timeout_s: float | None = None, user_agent: str = "daily-diamond/1.0"
-    ) -> None:
-        self._timeout_s = feed_timeout_s() if timeout_s is None else timeout_s
-        self._user_agent = user_agent
+    def __init__(self, *, timeout_s: float | None = None) -> None:
+        """``timeout_s`` defaults to ``SLATE_FEED_TIMEOUT_S`` (5 seconds when unset or bad)."""
+        if timeout_s is None:
+            try:
+                timeout_s = float(os.environ.get("SLATE_FEED_TIMEOUT_S", "5"))
+            except ValueError:
+                timeout_s = 5.0
+        self._timeout_s = timeout_s
         self._session: Any = None
 
     async def get_json(self, url: str, params: Mapping[str, Any] | None = None) -> Any:
@@ -254,7 +234,7 @@ class LeagueFeed:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self._timeout_s),
-                headers={"User-Agent": self._user_agent},
+                headers={"User-Agent": "daily-diamond/1.0"},
             )
         async with self._session.get(url, params=dict(params) if params else None) as resp:
             resp.raise_for_status()

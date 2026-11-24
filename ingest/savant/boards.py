@@ -73,10 +73,10 @@ pull when a ticket needs it.
 HOW THE LOADER PROVES THE SEASON WAS HONOURED
 ---------------------------------------------
 Half these boards return no season column at all, so a per-row check is not
-always possible. Every board therefore declares ``probe_season`` — a year with
-no possible Statcast data. The loader asks for it once per board per run. An
-honoured parameter returns zero rows; an ignored one returns the current
-season's rows, and the loader fails loudly instead of writing the wrong year.
+always possible. The loader therefore asks every board for ``PROBE_SEASON`` — a
+year with no possible Statcast data — once per board per run. An honoured
+parameter returns zero rows; an ignored one returns the current season's rows,
+and the loader fails loudly instead of writing the wrong year.
 
 FULL ROSTER, NOT QUALIFIERS (owner ruling 2026-09-16)
 ------------------------------------------------------
@@ -150,7 +150,6 @@ class SavantBoard:
     #: pitcher-hand splits (a switch hitter is two batters, not one) and the
     #: per-position pull (the figure is AT that position).
     splits: tuple[tuple[str, str], ...] = ()
-    probe_season: int = PROBE_SEASON
     #: The board accepts ``dateStart`` / ``dateEnd``, so it can be
     #: pulled "as of" a date instead of as a whole season. Only the bat-tracking
     #: family does; the fielding and running boards have no date control at all.

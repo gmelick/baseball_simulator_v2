@@ -837,7 +837,7 @@ class TestVenueDimensions:
             def read(self):
                 raise http.client.IncompleteRead(b'{"venues": [')
 
-        with caplog.at_level("WARNING", logger="mlb_venue_dimensions"):
+        with caplog.at_level("WARNING", logger="ingest.venues.load_venue_dimensions"):
             monkey = pytest.MonkeyPatch()
             monkey.setattr(mlb_client.urllib.request, "urlopen", lambda req, timeout=None: _Cut())
             try:
@@ -853,7 +853,7 @@ class TestVenueDimensions:
         def down(season):
             raise OSError("no network")
 
-        with caplog.at_level("WARNING", logger="mlb_venue_dimensions"):
+        with caplog.at_level("WARNING", logger="ingest.venues.load_venue_dimensions"):
             assert mvd.write_venue_dimensions(str(tmp_path), [2026], fetch=down) == {}
         assert "no copy exists" in caplog.text
         assert mvd.read_venue_dimensions(str(tmp_path)) == {}

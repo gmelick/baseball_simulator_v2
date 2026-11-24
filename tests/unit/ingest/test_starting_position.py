@@ -19,16 +19,17 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from tests.script_loader import load_script
 
 from ingest.games.game_values import _build_starting_lineup_rows
-from ingest.load_boxscores import (
-    STARTING_POSITION_UPDATE_SQL_ASYNCPG,
-    StartingPosition,
-    parse_starting_positions,
-    persist_starting_positions,
-    starting_position,
-)
+from ingest.mlb.game_feed import starting_position
 from simulation.lineup_resolver import build_team_defense_map, resolve_lineup_from_rows
+
+_probe = load_script("backfill_start_positions")
+STARTING_POSITION_UPDATE_SQL_ASYNCPG = _probe.STARTING_POSITION_UPDATE_SQL_ASYNCPG
+StartingPosition = _probe.StartingPosition
+parse_starting_positions = _probe.parse_starting_positions
+persist_starting_positions = _probe.persist_starting_positions
 
 HOME, AWAY = 134, 119  # Pittsburgh, Los Angeles (NL) — the real game 823372's sides
 

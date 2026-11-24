@@ -133,28 +133,23 @@ def _host_dsn(env: dict[str, str]) -> str:
     return re.sub(r"@[^/:]+:\d+/", f"@127.0.0.1:{env.get('DB_HOST_PORT', '5432')}/", dsn)
 
 
-def _fetch(dsn: str, sql: str) -> list[tuple]:
+def _fetch(dsn: str, sql: str, params: tuple | None = None) -> list[tuple]:
+    """Run one query on its own connection and return every row."""
     import psycopg2
 
     conn = psycopg2.connect(dsn)
     try:
         with conn, conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql, params)
             return cur.fetchall()
     finally:
         conn.close()
 
 
 def _row_count(dsn: str, game_pk: int) -> int:
-    import psycopg2
-
-    conn = psycopg2.connect(dsn)
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM raw.pitches WHERE game_pk = %s", (game_pk,))
-            return int(cur.fetchone()[0])
-    finally:
-        conn.close()
+    """The game's row count in ``raw.pitches``."""
+    rows = _fetch(dsn, "SELECT count(*) FROM raw.pitches WHERE game_pk = %s", (game_pk,))
+    return int(rows[0][0])
 
 
 def _discover(dsn: str, season: int | None) -> tuple[list[tuple[int, int, str]], list[tuple]]:
@@ -223,9 +218,8 @@ def main() -> int:
     if args.game_pk:
         rows = _fetch(
             dsn,
-            "SELECT season, game_pk FROM raw.games WHERE game_pk IN ("
-            + ",".join(str(int(p)) for p in args.game_pk)
-            + ")",
+            "SELECT season, game_pk FROM raw.games WHERE game_pk = ANY(%s)",
+            (list(args.game_pk),),
         )
         found = {pk: s for s, pk in rows}
         missing = [p for p in args.game_pk if p not in found]

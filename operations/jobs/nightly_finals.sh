@@ -23,6 +23,7 @@ log() { echo "[nightly-finals $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 log "start — the last ${DAYS} day(s), Eastern"
 
 python - <<'PY'
+import logging
 import os
 import sys
 from datetime import datetime, timedelta
@@ -30,6 +31,11 @@ from zoneinfo import ZoneInfo
 
 from ingest.games.load_games import HistoricalDataLoader
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 days = int(os.environ["DAYS"])
 end = datetime.now(ZoneInfo("America/New_York")).date()
 start = end - timedelta(days=days)

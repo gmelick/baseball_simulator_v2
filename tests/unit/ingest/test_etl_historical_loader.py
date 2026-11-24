@@ -9,7 +9,7 @@ Targets:
   - HistoricalDataLoader constructor DSN resolution (SIM-153)
   - HistoricalDataLoader DB methods (psycopg2 mocked end-to-end)
   - _process_and_insert orchestration including hard-error / warning paths
-  - _log_etl_errors, _batch_insert, _log_freshness, quality_report, reprocess_errored_games
+  - _write_error_ledger, _batch_insert, _log_freshness
   - _ensure_prerequisites short-circuit (the per-table _ensure_* writers are tested in
     tests/unit/ingest/test_etl_ensure_rows.py)
   - _fetch_game_pitches end-to-end with a minimal feed/live payload
@@ -243,6 +243,7 @@ def _minimal_raw() -> dict:
     """A bare-minimum 'write_rows-style' dict for _build_row_dict."""
     return {
         "game_pk": 745001,
+        "game_date": "2024-08-15",
         "at_bat_number": 1,
         "pitch_number": 1,
         "venue_id": 17,
@@ -291,14 +292,17 @@ def _minimal_raw() -> dict:
 
 class TestBuildRowDict:
     def test_primary_key_populated_from_args(self):
-        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024)
         assert row["game_pk"] == 745001
         assert row["season"] == 2024
+
+    def test_game_date_is_the_rows_own(self):
+        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024)
         assert row["game_date"] == "2024-08-15"
 
     def test_renames_via_column_map(self):
         raw = _minimal_raw()
-        row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
         # pitch_code → type, pitch_type_description → pitch_name, start_speed → release_speed
         assert row["type"] == "B"
         assert row["pitch_name"] == "4-Seam Fastball"
@@ -307,25 +311,25 @@ class TestBuildRowDict:
     def test_top_bot_normalised_to_capitalised(self):
         raw = _minimal_raw()
         raw["top_bot"] = "top"
-        row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
         assert row["inning_topbot"] == "Top"
 
     def test_bottom_normalised(self):
         raw = _minimal_raw()
         raw["top_bot"] = "bottom"
-        row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
         assert row["inning_topbot"] == "Bot"
 
     def test_empty_strings_become_none(self):
         raw = _minimal_raw()
         raw["launch_speed"] = ""
         raw["launch_angle"] = ""
-        row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
         assert row["launch_speed"] is None
         assert row["launch_angle"] is None
 
     def test_data_quality_flag_initialised_false(self):
-        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024)
         assert row["data_quality_flag"] is False
 
     def test_score_count_defaults_to_zero_when_missing(self):
@@ -343,7 +347,7 @@ class TestBuildRowDict:
             "bat_hand": "R",
             # home_score, away_score, balls, etc. omitted — should default to 0
         }
-        row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
         assert row["home_score"] == 0
         assert row["away_score"] == 0
         assert row["balls"] == 0
@@ -354,7 +358,7 @@ class TestBuildRowDict:
         raw = _minimal_raw()
         raw["pre_play_runner_on_first"] = 0
         raw["pre_play_runner_on_second"] = 200002
-        row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
         # `to_int(0) or None` collapses 0 → None for runner IDs
         assert row["on_1b"] is None
         assert row["on_2b"] == 200002
@@ -567,7 +571,6 @@ class TestLoaderInit:
     def test_explicit_dsn_used(self):
         loader = HistoricalDataLoader(dsn="postgresql://test/db")
         assert loader.dsn == "postgresql://test/db"
-        assert loader.write_csv is False
 
     def test_falls_back_to_env_dsn(self, monkeypatch):
         monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://env/db")
@@ -576,16 +579,8 @@ class TestLoaderInit:
 
     def test_raises_when_no_dsn_available(self, monkeypatch):
         monkeypatch.delenv("BASEBALL_DB_DSN", raising=False)
-        with pytest.raises(RuntimeError, match="no DSN"):
+        with pytest.raises(RuntimeError, match="BASEBALL_DB_DSN is not set"):
             HistoricalDataLoader()
-
-    def test_write_csv_flag(self):
-        loader = HistoricalDataLoader(dsn="postgresql://test/db", write_csv=True)
-        assert loader.write_csv is True
-
-    def test_custom_csv_dir(self):
-        loader = HistoricalDataLoader(dsn="postgresql://test/db", csv_output_dir="/tmp/csv")
-        assert loader.csv_output_dir == "/tmp/csv"
 
 
 # ===========================================================================
@@ -653,18 +648,6 @@ class TestLoaderDBMethods:
         sql = eb.call_args.args[1]
         assert "ON CONFLICT (game_pk, at_bat_number, pitch_number, error_type)" in sql
 
-    def test_reprocess_errored_games(self):
-        loader, _, cur = _make_loader_with_mock_conn(rows_returned=[(745001,), (745002,)])
-        result = loader.reprocess_errored_games(date(2024, 1, 1))
-        assert result == [745001, 745002]
-        # SQL bound parameter shape
-        args = cur.execute.call_args
-        assert args.args[1] == (date(2024, 1, 1),)
-
-    def test_reprocess_errored_games_empty(self):
-        loader, _, _ = _make_loader_with_mock_conn(rows_returned=[])
-        assert loader.reprocess_errored_games(date(2024, 1, 1)) == []
-
     def test_batch_insert_zero_rows_returns_zero(self):
         loader, conn, _ = _make_loader_with_mock_conn()
         assert loader._batch_insert([]) == 0
@@ -701,27 +684,6 @@ class TestLoaderDBMethods:
         types = sorted({e[0] for e in entries})
         assert types == ["batter", "pitcher"]
         conn.commit.assert_called_once()
-
-    def test_quality_report_no_rows(self, caplog):
-        loader, _, _ = _make_loader_with_mock_conn(rows_returned=[])
-        with caplog.at_level("INFO"):
-            loader.quality_report()
-        assert any("No flagged rows" in rec.message for rec in caplog.records)
-
-    def test_quality_report_with_game_pk(self):
-        loader, _, cur = _make_loader_with_mock_conn(rows_returned=[(100001, 5)])
-        loader.quality_report(game_pk=745001)
-        # Verify the SQL bound parameter contains the game_pk
-        args = cur.execute.call_args
-        assert args.args[1] == (745001,)
-        assert "data_quality_flag" in args.args[0]
-
-    def test_quality_report_global(self):
-        loader, _, cur = _make_loader_with_mock_conn(rows_returned=[("2024-08-15", 10)])
-        loader.quality_report()
-        # When no game_pk, no bind param tuple
-        sql_called = cur.execute.call_args.args[0]
-        assert "GROUP BY game_date" in sql_called
 
 
 # ===========================================================================

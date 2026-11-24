@@ -189,10 +189,6 @@ class TestGet:
         ):
             assert client.get("http://example.com").text == "ok"
 
-    def test_a_header_is_found_without_regard_to_case(self) -> None:
-        resp = client.Response(200, {"retry-after": "9"}, "", "u")
-        assert resp.header("Retry-After") == "9" and resp.header("X") is None
-
 
 class TestNoCompression:
     def test_compression_is_not_requested_without_decompression_support(self) -> None:

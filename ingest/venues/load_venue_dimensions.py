@@ -33,14 +33,12 @@ import http.client
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from typing import Any
 
 from ingest.mlb import client as mlb_client
 
-log = logging.getLogger("mlb_venue_dimensions")
+log = logging.getLogger(__name__)
 
 #: The Stats API venues call the design session used (2026-09-20).
 VENUES_URL = mlb_client.VENUES_URL + "?sportId=1&season={season}&hydrate=fieldInfo"
@@ -138,13 +136,7 @@ def write_venue_dimensions(
     for season in sorted(int(s) for s in seasons):
         try:
             answer = fetch_fn(season)
-        except (
-            urllib.error.URLError,
-            http.client.HTTPException,
-            OSError,
-            ValueError,
-            TimeoutError,
-        ) as exc:
+        except (OSError, http.client.HTTPException, ValueError) as exc:
             log.warning("venue_dimensions: the venues call for %d failed (%s)", season, exc)
             fetched[str(season)] = "failed"
             continue

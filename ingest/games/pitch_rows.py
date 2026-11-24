@@ -124,12 +124,11 @@ HALF_INNING_MAP = {
 # ---------------------------------------------------------------------------
 # Row builder — rename + coerce every field
 # ---------------------------------------------------------------------------
-def _build_row_dict(
-    raw: dict[str, Any], game_pk: int, season: int, game_date: str
-) -> dict[str, Any]:
+def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int) -> dict[str, Any]:
     """
-    Takes the flat dict produced by write_rows() for a single pitch and
-    returns a dict whose keys match raw.pitches column names exactly.
+    Takes the flat dict produced by _fetch_game_pitches() for a single pitch and
+    returns a dict whose keys match raw.pitches column names exactly. The row's
+    own ``game_date`` is kept.
 
     All empty-string values are converted to None (→ SQL NULL).
     Types are coerced to match the PostgreSQL column types.
@@ -146,7 +145,6 @@ def _build_row_dict(
 
     # Ensure primary key fields are present
     renamed["game_pk"] = game_pk
-    renamed["game_date"] = game_date
 
     row: dict[str, Any] = {
         # --- Natural key ---

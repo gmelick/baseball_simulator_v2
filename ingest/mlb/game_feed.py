@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ingest.mlb.schedule import FINAL, LIVE, card_state_of
+from ingest.mlb.schedule import FINAL, LIVE, card_state_of, int_or_none
 
 #: The defense keys of the feed's linescore → the design's position labels.
 _FIELD_POSITIONS = (
@@ -43,24 +43,28 @@ def feed_state(status: Mapping[str, Any]) -> str:
     )
 
 
-def _int(v: Any) -> int | None:
-    try:
-        return None if v is None or v == "" else int(v)
-    except (TypeError, ValueError):
-        return None
-
-
 def _person(v: Any) -> dict[str, Any] | None:
-    if not isinstance(v, Mapping) or _int(v.get("id")) is None:
+    if not isinstance(v, Mapping) or int_or_none(v.get("id")) is None:
         return None
     return {"id": int(v["id"]), "name": str(v.get("fullName") or "")}
 
 
-def _position(p: Mapping[str, Any]) -> str | None:
-    """The starting position (``allPositions[0]``, SIM-559), else the last."""
-    allp = p.get("allPositions") or []
-    first = allp[0] if allp else p.get("position") or {}
-    return first.get("abbreviation") if isinstance(first, Mapping) else None
+def starting_position(pdata: Mapping[str, Any]) -> str | None:
+    """The position a player held when he entered the game.
+
+    The box's ``position`` is the LAST position the player held in the game.
+    ``allPositions`` lists every position he held, in order, so its first entry
+    is where he started. A two-way starter who pitches and bats as the
+    designated hitter lists P then DH and reads 'P'. A payload without
+    ``allPositions``, or with a blank first entry, falls back to ``position``.
+    None when neither names a position.
+    """
+    all_positions = pdata.get("allPositions") or []
+    first = all_positions[0] if all_positions else None
+    abbr = first.get("abbreviation") if isinstance(first, Mapping) else None
+    if not abbr:
+        abbr = (pdata.get("position") or {}).get("abbreviation")
+    return str(abbr)[:5] if abbr else None
 
 
 def _linescore(ls: Mapping[str, Any], state: str) -> dict[str, Any] | None:
@@ -72,9 +76,9 @@ def _linescore(ls: Mapping[str, Any], state: str) -> dict[str, Any] | None:
         away, home = inn.get("away") or {}, inn.get("home") or {}
         rows.append(
             {
-                "num": _int(inn.get("num")),
-                "away": _int(away.get("runs")),
-                "home": _int(home.get("runs")),
+                "num": int_or_none(inn.get("num")),
+                "away": int_or_none(away.get("runs")),
+                "home": int_or_none(home.get("runs")),
             }
         )
     teams = ls.get("teams") or {}
@@ -82,9 +86,9 @@ def _linescore(ls: Mapping[str, Any], state: str) -> dict[str, Any] | None:
     def totals(side: str) -> dict[str, int | None]:
         t = teams.get(side) or {}
         return {
-            "runs": _int(t.get("runs")),
-            "hits": _int(t.get("hits")),
-            "errors": _int(t.get("errors")),
+            "runs": int_or_none(t.get("runs")),
+            "hits": int_or_none(t.get("hits")),
+            "errors": int_or_none(t.get("errors")),
         }
 
     return {
@@ -93,7 +97,7 @@ def _linescore(ls: Mapping[str, Any], state: str) -> dict[str, Any] | None:
         "home": totals("home"),
         # On a final game a missing home half is the "X" of a home win.
         "home_did_not_bat_last": state == FINAL and rows[-1]["home"] is None,
-        "current_inning": _int(ls.get("currentInning")) if state == LIVE else None,
+        "current_inning": int_or_none(ls.get("currentInning")) if state == LIVE else None,
         "inning_half": ls.get("inningHalf") if state == LIVE else None,
     }
 
@@ -101,22 +105,22 @@ def _linescore(ls: Mapping[str, Any], state: str) -> dict[str, Any] | None:
 def _batter_row(p: Mapping[str, Any]) -> dict[str, Any]:
     s = (p.get("stats") or {}).get("batting") or {}
     season = (p.get("seasonStats") or {}).get("batting") or {}
-    order = _int(p.get("battingOrder"))
+    order = int_or_none(p.get("battingOrder"))
     person = p.get("person") or {}
     return {
-        "id": _int(person.get("id")),
+        "id": int_or_none(person.get("id")),
         "name": str(person.get("fullName") or ""),
-        "pos": _position(p),
+        "pos": starting_position(p),
         "batting_order": order,
         # The feed numbers a substitute 101, 102 ... after the starter's 100.
         "is_sub": order is not None and order % 100 != 0,
-        "ab": _int(s.get("atBats")),
-        "r": _int(s.get("runs")),
-        "h": _int(s.get("hits")),
-        "rbi": _int(s.get("rbi")),
-        "bb": _int(s.get("baseOnBalls")),
-        "k": _int(s.get("strikeOuts")),
-        "hr": _int(s.get("homeRuns")),
+        "ab": int_or_none(s.get("atBats")),
+        "r": int_or_none(s.get("runs")),
+        "h": int_or_none(s.get("hits")),
+        "rbi": int_or_none(s.get("rbi")),
+        "bb": int_or_none(s.get("baseOnBalls")),
+        "k": int_or_none(s.get("strikeOuts")),
+        "hr": int_or_none(s.get("homeRuns")),
         "avg": season.get("avg"),
     }
 
@@ -126,16 +130,16 @@ def _pitcher_row(p: Mapping[str, Any]) -> dict[str, Any]:
     season = (p.get("seasonStats") or {}).get("pitching") or {}
     person = p.get("person") or {}
     return {
-        "id": _int(person.get("id")),
+        "id": int_or_none(person.get("id")),
         "name": str(person.get("fullName") or ""),
-        "outs": _int(s.get("outs")),
+        "outs": int_or_none(s.get("outs")),
         "ip": s.get("inningsPitched"),
-        "h": _int(s.get("hits")),
-        "r": _int(s.get("runs")),
-        "er": _int(s.get("earnedRuns")),
-        "bb": _int(s.get("baseOnBalls")),
-        "k": _int(s.get("strikeOuts")),
-        "np": _int(s.get("numberOfPitches")),
+        "h": int_or_none(s.get("hits")),
+        "r": int_or_none(s.get("runs")),
+        "er": int_or_none(s.get("earnedRuns")),
+        "bb": int_or_none(s.get("baseOnBalls")),
+        "k": int_or_none(s.get("strikeOuts")),
+        "np": int_or_none(s.get("numberOfPitches")),
         "era": season.get("era"),
     }
 
@@ -165,9 +169,9 @@ def _lineup_side(t: Mapping[str, Any]) -> list[dict[str, Any]]:
         out.append(
             {
                 "order": i + 1,
-                "id": _int(person.get("id")),
+                "id": int_or_none(person.get("id")),
                 "name": str(person.get("fullName") or ""),
-                "pos": _position(p),
+                "pos": starting_position(p),
             }
         )
     return out
@@ -188,10 +192,12 @@ def _live(
 ) -> dict[str, Any]:
     offense, defense = ls.get("offense") or {}, ls.get("defense") or {}
     # The batting side: the offense team's id against the two box teams.
-    off_id = _int((offense.get("team") or {}).get("id"))
+    off_id = int_or_none((offense.get("team") or {}).get("id"))
     side = None
     for s in ("away", "home"):
-        if off_id is not None and off_id == _int(((box.get(s) or {}).get("team") or {}).get("id")):
+        if off_id is not None and off_id == int_or_none(
+            ((box.get(s) or {}).get("team") or {}).get("id")
+        ):
             side = s
     if side is None:
         side = "away" if ls.get("isTopInning", ls.get("inningHalf") == "Top") else "home"
@@ -202,11 +208,11 @@ def _live(
     if pitcher is not None:
         field_side = "home" if side == "away" else "away"
         p = ((box.get(field_side) or {}).get("players") or {}).get(f"ID{pitcher['id']}") or {}
-        np = _int(((p.get("stats") or {}).get("pitching") or {}).get("numberOfPitches"))
+        np = int_or_none(((p.get("stats") or {}).get("pitching") or {}).get("numberOfPitches"))
     return {
-        "balls": _int(count.get("balls", ls.get("balls"))),
-        "strikes": _int(count.get("strikes", ls.get("strikes"))),
-        "outs": _int(count.get("outs", ls.get("outs"))),
+        "balls": int_or_none(count.get("balls", ls.get("balls"))),
+        "strikes": int_or_none(count.get("strikes", ls.get("strikes"))),
+        "outs": int_or_none(count.get("outs", ls.get("outs"))),
         "offense": side,
         "runners": {base: _person(offense.get(base)) for base in ("first", "second", "third")},
         "batter": _person(offense.get("batter")),
@@ -232,7 +238,7 @@ def parse_game_feed(payload: Mapping[str, Any]) -> dict[str, Any]:
     lineups = {s: _lineup_side(box_teams.get(s) or {}) for s in ("away", "home")}
     played = state in (LIVE, FINAL)
     return {
-        "game_pk": _int(payload.get("gamePk")),
+        "game_pk": int_or_none(payload.get("gamePk")),
         "status": state,
         "detailed_state": status.get("detailedState"),
         "linescore": _linescore(ls, state) if played else None,
@@ -264,17 +270,6 @@ SUB_EVENTS = frozenset(
         "defensive_switch",
         "pitching_substitution",
     }
-)
-_DEFENSE_KEYS = (
-    ("pitcher", "P"),
-    ("catcher", "C"),
-    ("first", "1B"),
-    ("second", "2B"),
-    ("third", "3B"),
-    ("shortstop", "SS"),
-    ("left", "LF"),
-    ("center", "CF"),
-    ("right", "RF"),
 )
 _BASES = ("first", "second", "third")
 
@@ -326,7 +321,7 @@ def finished_flags(plays: list[Mapping[str, Any]]) -> list[bool]:
 
 
 def _pid(v: Any) -> int | None:
-    return _int(v.get("id")) if isinstance(v, Mapping) else None
+    return int_or_none(v.get("id")) if isinstance(v, Mapping) else None
 
 
 def _side_of(play: Mapping[str, Any], fielding: bool) -> str:
@@ -374,7 +369,7 @@ def parse_plays(payload: Mapping[str, Any]) -> dict[str, Any]:
             runners = dict(prev_post) if same_half else dict.fromkeys(_BASES)
         res = p.get("result") or {}
         matchup = p.get("matchup") or {}
-        after = (_int(res.get("awayScore")) or 0, _int(res.get("homeScore")) or 0)
+        after = (int_or_none(res.get("awayScore")) or 0, int_or_none(res.get("homeScore")) or 0)
         pitches = [
             {
                 "call": ((e.get("details") or {}).get("call") or {}).get("description")
@@ -395,10 +390,10 @@ def parse_plays(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "event": res.get("event"),
                 "event_type": res.get("eventType"),
                 "description": res.get("description"),
-                "rbi": _int(res.get("rbi")) or 0,
+                "rbi": int_or_none(res.get("rbi")) or 0,
                 "batter_finished": flags[i],
                 "outs_before": prev_outs_after if same_half else 0,
-                "outs_after": _int((p.get("count") or {}).get("outs")) or 0,
+                "outs_after": int_or_none((p.get("count") or {}).get("outs")) or 0,
                 "away_score_before": prev_score[0],
                 "home_score_before": prev_score[1],
                 "away_score_after": after[0],
@@ -422,11 +417,11 @@ def _roster(payload: Mapping[str, Any], side: str) -> dict[str, Any]:
     starters: list[int | None] = [None] * 9
     positions: dict[int, str] = {}
     for p in players.values():
-        order = _int(p.get("battingOrder"))
+        order = int_or_none(p.get("battingOrder"))
         pid = _pid(p.get("person"))
         if order is not None and pid is not None and order % 100 == 0 and 1 <= order // 100 <= 9:
             starters[order // 100 - 1] = pid
-            positions[pid] = _position(p) or "DH"
+            positions[pid] = starting_position(p) or "DH"
     pitchers = [int(x) for x in box.get("pitchers") or []]
     arms = [int(x) for x in (box.get("pitchers") or []) + (box.get("bullpen") or [])]
     # The box's `batters` lists every player who appeared, relievers included. A
@@ -435,7 +430,8 @@ def _roster(payload: Mapping[str, Any], side: str) -> dict[str, Any]:
     batted = {
         pid
         for p in players.values()
-        if (pid := _pid(p.get("person"))) is not None and _int(p.get("battingOrder")) is not None
+        if (pid := _pid(p.get("person"))) is not None
+        and int_or_none(p.get("battingOrder")) is not None
     }
     arm_set = set(arms)
     hitters = [
@@ -456,7 +452,7 @@ def _hands(payload: Mapping[str, Any]) -> tuple[dict[int, str], dict[int, str]]:
     bats: dict[int, str] = {}
     throws: dict[int, str] = {}
     for p in ((payload.get("gameData") or {}).get("players") or {}).values():
-        pid = _int(p.get("id"))
+        pid = int_or_none(p.get("id"))
         if pid is None:
             continue
         b = (p.get("batSide") or {}).get("code")
@@ -470,7 +466,7 @@ def _hands(payload: Mapping[str, Any]) -> tuple[dict[int, str], dict[int, str]]:
 
 def _defense_of(event: Mapping[str, Any]) -> dict[str, int]:
     d = event.get("defense") or {}
-    return {pos: pid for key, pos in _DEFENSE_KEYS if (pid := _pid(d.get(key))) is not None}
+    return {pos: pid for key, pos in _FIELD_POSITIONS if (pid := _pid(d.get(key))) is not None}
 
 
 class PlateAppearanceNotFound(LookupError):
@@ -523,7 +519,7 @@ def state_at_pa(payload: Mapping[str, Any], at_bat: int | None) -> dict[str, Any
             return
         side = _side_of(play, fielding=kind != "offensive_substitution")
         pos = (event.get("position") or {}).get("abbreviation")
-        order = _int(event.get("battingOrder"))
+        order = int_or_none(event.get("battingOrder"))
         replaced = _pid(event.get("replacedPlayer"))
         if order is not None and 1 <= order // 100 <= 9:
             slot = order // 100 - 1
@@ -614,8 +610,11 @@ def state_at_pa(payload: Mapping[str, Any], at_bat: int | None) -> dict[str, Any
             # before his is the last one used.
             last_slot[batting] = (lineup[batting].index(batter) - (0 if finished else 1)) % 9
         res = play.get("result") or {}
-        score = (_int(res.get("awayScore")) or score[0], _int(res.get("homeScore")) or score[1])
-        outs = _int((play.get("count") or {}).get("outs")) or 0
+        score = (
+            int_or_none(res.get("awayScore")) or score[0],
+            int_or_none(res.get("homeScore")) or score[1],
+        )
+        outs = int_or_none((play.get("count") or {}).get("outs")) or 0
         half_pa += 1
         mu = play.get("matchup") or {}
         post = {b: _pid(mu.get(f"postOn{b.capitalize()}")) for b in _BASES}

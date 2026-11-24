@@ -74,7 +74,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import threading
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -83,7 +82,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
-from db.introspect import pg_relation_exists
+from db.dsn import require_dsn
 from ingest.games.base import LoaderBase
 from ingest.games.date_windows import (
     _CONSECUTIVE_FAILURE_LIMIT,
@@ -117,16 +116,7 @@ from ingest.savant.page_json import (
     _parse_savant_embedded_json,
 )
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("etl_historical_loader")
+log = logging.getLogger(__name__)
 
 
 #: The loader's reads: ten attempts, the first retry after two seconds.
@@ -159,6 +149,24 @@ def _connect(url: str, params: dict | None = None) -> dict:
     return _http_get(url, params).json()
 
 
+def _empty_summary() -> dict[str, int]:
+    """The counts a range load returns, all zero."""
+    return {"attempted": 0, "loaded": 0, "failed": 0, "skipped": 0, "rows_written": 0}
+
+
+def _log_summary(label: str, summary: dict[str, int]) -> None:
+    """Log a range load's closing counts under the caller's label."""
+    log.info(
+        "%s: %d attempted, %d loaded, %d already-loaded, %d failed, %d pitch rows written",
+        label,
+        summary["attempted"],
+        summary["loaded"],
+        summary["skipped"],
+        summary["failed"],
+        summary["rows_written"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Core per-game fetch — adapted from your write_rows()
 # Returns a list of raw dicts (one per pitch) instead of writing to a file.
@@ -186,9 +194,6 @@ def _fetch_game_pitches(
     away_team = game_dict["gameData"]["teams"]["away"]["abbreviation"]
     # Neutral-site games can ship with NO gameData.venue at all.
     venue_id, venue_name = _resolve_venue(game_pk, game_dict["gameData"])
-
-    home_manager_id, home_manager_name = "", ""
-    away_manager_id, away_manager_name = "", ""
 
     home_coaches = _connect(
         mlb_client.COACHES_URL.format(team_id=home_team_id) + f"?date={game_date}"
@@ -729,7 +734,6 @@ def _fetch_game_pitches(
             strikes = play_event["count"]["strikes"]
             home_score_before = home_score_after
             away_score_before = away_score_after
-            prev_half = top_bot
         # Carry the POST-play out count so a pitch-less play that follows
         # still knows the state it began in. Reset to 0 on a half-inning change
         # above, because the last play of a half-inning posts 3.
@@ -769,111 +773,14 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     dsn : str
         psycopg2 connection string, e.g.
         "postgresql://user:password@localhost:5432/baseball"
-    write_csv : bool
-        If True, also write per-season CSVs to csv_output_dir (for audit).
-    csv_output_dir : str
-        Directory for optional CSV output. Defaults to current directory.
     """
 
-    INSERT_SQL = """
-        INSERT INTO raw.pitches (
-            game_pk, at_bat_number, pitch_number, game_date, season, venue_id, venue,
-            home_id, home_team, away_id, away_team,
-            home_manager_id, home_manager_name, away_manager_id, away_manager_name,
-            inning, inning_topbot, pitcher, p_throws, batter, stand, bat_hand,
-            home_score, away_score, bat_score, fld_score, balls, strikes, outs,
-            type, description, pitch_type, pitch_name, events,
-            sz_top, sz_bot, release_speed, end_speed,
-            release_pos_x, release_pos_y, release_pos_z,
-            vx0, vy0, vz0, ax, ay, az,
-            pfx_x, pfx_z, plate_x, plate_z, x, y,
-            release_spin_rate, spin_axis,
-            break_angle, break_length, break_y,
-            break_vertical, break_vertical_induced, break_horizontal,
-            zone, release_extension,
-            launch_speed, launch_angle, hit_distance_sc, hc_x, hc_y,
-            spray_angle, bb_type, hit_location, des,
-            on_1b, on_2b, on_3b, post_on_1b, post_on_2b, post_on_3b,
-            fielder_2, fielder_3, fielder_4, fielder_5, fielder_6,
-            fielder_7, fielder_8, fielder_9,
-            runs_on_pitch, outs_on_pitch, rbis_on_pitch, earned_runs_on_pitch,
-            runner_1b_scored, runner_2b_scored, runner_3b_scored,
-            runner_1b_out_advancing, runner_2b_out_advancing, runner_3b_out_advancing,
-            sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
-            sb_success_2b, sb_success_3b, sb_success_home,
-            passed_ball_wild_pitch, pinch_hitter, pinch_runner,
-            pitcher_sub, defensive_sub,
-            fielded_by, fielding_error, dropped_ball, of_assist,
-            field_assist_1, field_assist_2, field_assist_3, field_assist_4, field_assist_5,
-            field_putout_1, field_putout_2, field_putout_3,
-            throwing_error_1, throwing_error_2,
-            field_assist_6_plus,
-            data_quality_flag
-        ) VALUES (
-            %(game_pk)s, %(at_bat_number)s, %(pitch_number)s, %(game_date)s, %(season)s,
-            %(venue_id)s, %(venue)s,
-            %(home_id)s, %(home_team)s, %(away_id)s, %(away_team)s,
-            %(home_manager_id)s, %(home_manager_name)s,
-            %(away_manager_id)s, %(away_manager_name)s,
-            %(inning)s, %(inning_topbot)s, %(pitcher)s, %(p_throws)s,
-            %(batter)s, %(stand)s, %(bat_hand)s,
-            %(home_score)s, %(away_score)s, %(bat_score)s, %(fld_score)s,
-            %(balls)s, %(strikes)s, %(outs)s,
-            %(type)s, %(description)s, %(pitch_type)s, %(pitch_name)s, %(events)s,
-            %(sz_top)s, %(sz_bot)s, %(release_speed)s, %(end_speed)s,
-            %(release_pos_x)s, %(release_pos_y)s, %(release_pos_z)s,
-            %(vx0)s, %(vy0)s, %(vz0)s, %(ax)s, %(ay)s, %(az)s,
-            %(pfx_x)s, %(pfx_z)s, %(plate_x)s, %(plate_z)s, %(x)s, %(y)s,
-            %(release_spin_rate)s, %(spin_axis)s,
-            %(break_angle)s, %(break_length)s, %(break_y)s,
-            %(break_vertical)s, %(break_vertical_induced)s, %(break_horizontal)s,
-            %(zone)s, %(release_extension)s,
-            %(launch_speed)s, %(launch_angle)s, %(hit_distance_sc)s,
-            %(hc_x)s, %(hc_y)s, %(spray_angle)s, %(bb_type)s,
-            %(hit_location)s, %(des)s,
-            %(on_1b)s, %(on_2b)s, %(on_3b)s,
-            %(post_on_1b)s, %(post_on_2b)s, %(post_on_3b)s,
-            %(fielder_2)s, %(fielder_3)s, %(fielder_4)s, %(fielder_5)s,
-            %(fielder_6)s, %(fielder_7)s, %(fielder_8)s, %(fielder_9)s,
-            %(runs_on_pitch)s, %(outs_on_pitch)s, %(rbis_on_pitch)s,
-            %(earned_runs_on_pitch)s,
-            %(runner_1b_scored)s, %(runner_2b_scored)s, %(runner_3b_scored)s,
-            %(runner_1b_out_advancing)s, %(runner_2b_out_advancing)s, %(runner_3b_out_advancing)s,
-            %(sb_attempt_2b)s, %(sb_attempt_3b)s, %(sb_attempt_home)s,
-            %(sb_success_2b)s, %(sb_success_3b)s, %(sb_success_home)s,
-            %(passed_ball_wild_pitch)s, %(pinch_hitter)s, %(pinch_runner)s,
-            %(pitcher_sub)s, %(defensive_sub)s,
-            %(fielded_by)s, %(fielding_error)s, %(dropped_ball)s, %(of_assist)s,
-            %(field_assist_1)s, %(field_assist_2)s, %(field_assist_3)s,
-            %(field_assist_4)s, %(field_assist_5)s,
-            %(field_putout_1)s, %(field_putout_2)s, %(field_putout_3)s,
-            %(throwing_error_1)s, %(throwing_error_2)s,
-            %(field_assist_6_plus)s,
-            %(data_quality_flag)s
-        )
-        ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING;
-    """
-
-    def __init__(
-        self,
-        dsn: str | None = None,
-        write_csv: bool = False,
-        csv_output_dir: str = ".",
-    ) -> None:
+    def __init__(self, dsn: str | None = None) -> None:
         # The DSN defaults to the BASEBALL_DB_DSN environment variable.
         # Pass an explicit DSN to override (test fixtures, ad-hoc backfills).
-        # Raises a clear error if neither is set, rather than letting psycopg2
-        # surface a confusing "could not connect" error mid-run.
-        resolved = dsn or os.environ.get("BASEBALL_DB_DSN")
-        if not resolved:
-            raise RuntimeError(
-                "HistoricalDataLoader: no DSN provided and BASEBALL_DB_DSN "
-                "environment variable is not set.  Pass dsn=… or set "
-                "BASEBALL_DB_DSN per .env.example."
-            )
-        self.dsn = resolved
-        self.write_csv = write_csv
-        self.csv_output_dir = csv_output_dir
+        # require_dsn raises a clear error if neither is set, rather than
+        # letting psycopg2 surface a confusing "could not connect" error mid-run.
+        self.dsn = dsn or require_dsn()
 
         # Lazily-initialised connection pool.  Created on first DB use
         # (see _ensure_pool) and shared across every game in a backfill run,
@@ -893,9 +800,6 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         Fetch and load a single game.  Returns a summary dict with counts
         of inserted, skipped (hard errors), and flagged (warnings) rows.
         """
-        if batter_hand_cache is None:
-            batter_hand_cache = {}
-
         return self._load_game(game_pk, season, batter_hand_cache, replace=False)
 
     def reload_game(
@@ -928,8 +832,6 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         raised rather than committing the deletion.  Pass ``allow_shrink=True``
         only when the game genuinely has fewer pitches than the stored copy.
         """
-        if batter_hand_cache is None:
-            batter_hand_cache = {}
         return self._load_game(
             game_pk, season, batter_hand_cache, replace=True, allow_shrink=allow_shrink
         )
@@ -938,12 +840,14 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         self,
         game_pk: int,
         season: int,
-        batter_hand_cache: dict,
+        batter_hand_cache: dict | None,
         *,
         replace: bool,
         allow_shrink: bool = False,
     ) -> dict:
         """Shared body of :meth:`load_game` / :meth:`reload_game`."""
+        if batter_hand_cache is None:
+            batter_hand_cache = {}
         log.info("%s game %s …", "Reloading" if replace else "Loading", game_pk)
         raw_rows, game_dict = _fetch_game_pitches(game_pk, batter_hand_cache)
         play_event_rows = game_dict.get("_play_events") or []
@@ -986,7 +890,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             raise ValueError(f"end_date {end_date} precedes start_date {start_date}")
 
         batter_hand_cache: dict[int, str] = {}
-        summary = {"attempted": 0, "loaded": 0, "failed": 0, "skipped": 0, "rows_written": 0}
+        summary = _empty_summary()
 
         for chunk_start, chunk_end in _date_chunks(start_date, end_date):
             params = {
@@ -1012,35 +916,15 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                         len(schedule),
                     )
 
-            for date_entry in schedule:
-                log.info("Processing date %s", date_entry["date"])
-                for game in date_entry["games"]:
-                    if "rescheduleGameDate" in game or "resumeGameDate" in game:
-                        continue
-                    # Same Final gate refresh_seasons has: only completed games
-                    # carry full pitch-by-pitch Statcast data, and a half-ingested
-                    # in-progress game would be skipped forever afterwards.
-                    if not _schedule_game_is_final(game):
-                        continue
-                    self._dispatch_game(
-                        game["gamePk"],
-                        int(date_entry["date"][:4]),
-                        batter_hand_cache,
-                        reload=reload,
-                        summary=summary,
-                    )
+            self._load_schedule_dates(
+                schedule,
+                batter_hand_cache,
+                reload=reload,
+                summary=summary,
+                date_log="Processing date %s",
+            )
 
-        log.info(
-            "load_date_range %s→%s: %d attempted, %d loaded, %d already-loaded, "
-            "%d failed, %d pitch rows written",
-            start_date,
-            end_date,
-            summary["attempted"],
-            summary["loaded"],
-            summary["skipped"],
-            summary["failed"],
-            summary["rows_written"],
-        )
+        _log_summary(f"load_date_range {start_date}→{end_date}", summary)
         return summary
 
     def refresh_seasons(
@@ -1063,7 +947,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         if end_year is None:
             end_year = datetime.today().year - 1  # don't include current season here
 
-        summary = {"attempted": 0, "loaded": 0, "failed": 0, "skipped": 0, "rows_written": 0}
+        summary = _empty_summary()
 
         for season in range(start_year, end_year + 1):
             log.info("=== Season %d ===", season)
@@ -1074,40 +958,55 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             }
             schedule = _connect(mlb_client.SCHEDULE_URL, params)["dates"]
             batter_hand_cache: dict[int, str] = {}
+            self._load_schedule_dates(
+                schedule,
+                batter_hand_cache,
+                reload=reload,
+                summary=summary,
+                date_log="  %s",
+                season=season,
+            )
 
-            for date_entry in schedule:
-                log.info("  %s", date_entry["date"])
-                for game in date_entry["games"]:
-                    if "rescheduleGameDate" in game or "resumeGameDate" in game:
-                        continue
-                    # Only completed games have full pitch-by-pitch Statcast data.
-                    # Skip future / in-progress / postponed games — otherwise the
-                    # current season pulls thousands of unplayed games (0 pitches,
-                    # one wasted fetch + an empty raw.games stub each). This also
-                    # makes refresh_seasons a correct nightly incremental updater:
-                    # each run picks up games that have newly become Final.
-                    if not _schedule_game_is_final(game):
-                        continue
-                    self._dispatch_game(
-                        game["gamePk"],
-                        season,
-                        batter_hand_cache,
-                        reload=reload,
-                        summary=summary,
-                    )
-
-        log.info(
-            "refresh_seasons %d–%d: %d attempted, %d loaded, %d already-loaded, "
-            "%d failed, %d pitch rows written",
-            start_year,
-            end_year,
-            summary["attempted"],
-            summary["loaded"],
-            summary["skipped"],
-            summary["failed"],
-            summary["rows_written"],
-        )
+        _log_summary(f"refresh_seasons {start_year}–{end_year}", summary)
         return summary
+
+    def _load_schedule_dates(
+        self,
+        schedule: list[dict],
+        batter_hand_cache: dict,
+        *,
+        reload: bool,
+        summary: dict[str, int],
+        date_log: str,
+        season: int | None = None,
+    ) -> None:
+        """Send every Final game of the schedule's dates to :meth:`_dispatch_game`.
+
+        The loop skips the entry of a rescheduled or resumed game. It loads
+        Final games only: only a completed game carries full pitch-by-pitch
+        data, and a game loaded in progress reads as loaded and is never
+        completed. The gate also keeps the current season from pulling
+        thousands of unplayed games (0 pitches, one wasted fetch and an empty
+        ``raw.games`` stub each), so each nightly run picks up the games that
+        have newly become Final.
+
+        ``date_log`` is the caller's log line for each date. ``season`` is the
+        season of every game; without it, each game takes its date's year.
+        """
+        for date_entry in schedule:
+            log.info(date_log, date_entry["date"])
+            for game in date_entry["games"]:
+                if "rescheduleGameDate" in game or "resumeGameDate" in game:
+                    continue
+                if not _schedule_game_is_final(game):
+                    continue
+                self._dispatch_game(
+                    game["gamePk"],
+                    season if season is not None else int(date_entry["date"][:4]),
+                    batter_hand_cache,
+                    reload=reload,
+                    summary=summary,
+                )
 
     def _dispatch_game(
         self,
@@ -1285,10 +1184,6 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         roof_raw = field.get("roofType", "Open")
         roof_map = {"Open": "Open", "Retractable": "Retractable", "Indoor": "Dome", "Dome": "Dome"}
         roof_type = roof_map.get(roof_raw, "Open")
-
-        # Foul territory: not directly in API; default to Medium
-        foul_map = {"Large": "Large", "Medium": "Medium", "Small": "Small"}
-        foul_map.get(field.get("leftLine", ""), "Medium")
 
         coords = location.get("defaultCoordinates", {})
         elevation = location.get("elevation", 0) or 0
@@ -1529,16 +1424,15 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             with self._get_conn() as conn:
                 try:
                     with conn.cursor() as cur:
-                        if self._game_player_stats_table_exists is None:
-                            self._game_player_stats_table_exists = pg_relation_exists(
-                                cur, "raw.game_player_stats"
-                            )
-                            if not self._game_player_stats_table_exists:
-                                log.warning(
-                                    "raw.game_player_stats is absent (Alembic 0023 not "
-                                    "applied) — the official box score is not stored."
-                                )
-                        if not self._game_player_stats_table_exists:
+                        if not self._exists_once(
+                            cur,
+                            "_game_player_stats_table_exists",
+                            "raw.game_player_stats",
+                            absent_message=(
+                                "raw.game_player_stats is absent (Alembic 0023 not "
+                                "applied) — the official box score is not stored."
+                            ),
+                        ):
                             conn.rollback()
                             return
                         written = persist_sync(cur, rows)
@@ -1546,16 +1440,15 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                         # 0025) — the simulator's pen for the game. The same
                         # payload, no extra call; absent table = not stored.
                         pen_written = 0
-                        if self._game_bullpen_table_exists is None:
-                            self._game_bullpen_table_exists = pg_relation_exists(
-                                cur, "raw.game_bullpen"
-                            )
-                            if not self._game_bullpen_table_exists:
-                                log.warning(
-                                    "raw.game_bullpen is absent (Alembic 0025 not applied) "
-                                    "— the per-game bullpen listing is not stored."
-                                )
-                        if self._game_bullpen_table_exists:
+                        if self._exists_once(
+                            cur,
+                            "_game_bullpen_table_exists",
+                            "raw.game_bullpen",
+                            absent_message=(
+                                "raw.game_bullpen is absent (Alembic 0025 not applied) "
+                                "— the per-game bullpen listing is not stored."
+                            ),
+                        ):
                             # Best-effort inside the same transaction: a bad
                             # listing must never cost the box rows their commit.
                             try:
@@ -1596,6 +1489,11 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     # No default password. The loader reads BASEBALL_DB_DSN and raises
     # a clear error when it is not set.
     loader = HistoricalDataLoader()

@@ -87,11 +87,11 @@ class TestPoolCreatedOnce:
             return_value=mock_pool,
         ) as pool_ctor:
             # Drive several DB round-trips spanning what would be multiple games.
-            # _game_already_loaded / quality_report both go through _get_conn.
+            # Each _game_already_loaded call goes through _get_conn.
             loader._game_already_loaded(745001)
             loader._game_already_loaded(745002)
             loader._game_already_loaded(745003)
-            loader.quality_report(game_pk=745001)
+            loader._game_already_loaded(745004)
 
         assert pool_ctor.call_count == 1, (
             "SIM-090: the ThreadedConnectionPool must be created exactly once "

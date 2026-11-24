@@ -8,7 +8,6 @@ import logging
 from datetime import date
 from typing import TYPE_CHECKING
 
-from db.introspect import pg_column_exists
 from ingest.games.base import LoaderBase
 from ingest.games.game_values import (
     _build_starting_lineup_rows,
@@ -20,7 +19,7 @@ from ingest.games.venues import (
     _resolve_venue_id,
 )
 
-log = logging.getLogger("etl_historical_loader")
+log = logging.getLogger(__name__)
 
 
 class ReferenceRowsMixin(LoaderBase):
@@ -131,11 +130,7 @@ class ReferenceRowsMixin(LoaderBase):
 
         if not candidates:
             return
-        check_managers = []
-        if managers["home_manager_id"] != "":
-            check_managers.append(managers["home_manager_id"])
-        if managers["away_manager_id"] != "":
-            check_managers.append(managers["away_manager_id"])
+        check_managers = [mid for mid, _, _ in candidates]
         with self._get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -393,11 +388,9 @@ class ReferenceRowsMixin(LoaderBase):
             # authority: those rows go first, in this transaction, or a
             # pre-game row would win the unique slot below and a player
             # scratched after the last pre-game poll would stay in the lineup.
-            if self._lineup_source_column_exists is None:
-                self._lineup_source_column_exists = pg_column_exists(
-                    cur, "raw", "game_lineups", "source"
-                )
-            if self._lineup_source_column_exists:
+            if self._exists_once(
+                cur, "_lineup_source_column_exists", "raw.game_lineups", column="source"
+            ):
                 cur.execute(
                     "DELETE FROM raw.game_lineups WHERE game_pk = %s AND source <> 'box'",
                     (game_pk,),

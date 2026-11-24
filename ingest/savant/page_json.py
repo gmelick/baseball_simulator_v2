@@ -5,10 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# API helpers  (preserve original retry-forever behaviour, now with cap + backoff)
-# ---------------------------------------------------------------------------
-
 
 class SavantScrapeError(RuntimeError):
     """Baseball-Savant returned a page this loader cannot parse.

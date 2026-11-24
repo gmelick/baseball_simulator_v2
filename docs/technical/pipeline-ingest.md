@@ -123,7 +123,7 @@ The parts of `HistoricalDataLoader`, one job per module. The class mixes in
 | [`pitch_rows.py`](../../ingest/games/pitch_rows.py) | 429 | The pitch row: `_build_row_dict` maps the feed fields to `raw.pitches` columns; `_validate_row` sorts problems into hard errors (the row is skipped and logged to `raw.etl_errors`) and warnings (the row is kept with `data_quality_flag = TRUE`). |
 | [`date_windows.py`](../../ingest/games/date_windows.py) | 51 | `_date_chunks` (windows of at most 364 days), `_schedule_game_is_final` and the failure limit. |
 | [`venues.py`](../../ingest/games/venues.py) | 95 | `_resolve_venue`: the venue a game was PLAYED at, with overrides for neutral-site games whose feed has none; `MissingVenueError` otherwise. |
-| [`write_rows.py`](../../ingest/games/write_rows.py) | 555 | `WritesMixin`: `_game_already_loaded`, `_process_and_insert` (500-row batches), the error ledger, the per-game outcome (`raw.etl_game_ingest`: `loaded` or `empty`), `_write_play_events`, `_log_freshness`, `reprocess_errored_games` and `quality_report`. |
+| [`write_rows.py`](../../ingest/games/write_rows.py) | 555 | `WritesMixin`: `_game_already_loaded`, `_process_and_insert` (500-row batches), the error ledger, the per-game outcome (`raw.etl_game_ingest`: `loaded` or `empty`), `_write_play_events` and `_log_freshness`. |
 
 **Watch out:** `_validate_row` mirrors the database's CHECK ranges. A value outside a CHECK
 is a hard error, never a warning, because the insert would fail.
@@ -213,10 +213,12 @@ know, upsert. Run it as `python -m ingest.savant.load_leaderboards --boards all 
 
 | Function / class | What it does | Called from |
 |---|---|---|
+| `fetch_csv` | GETs one Savant CSV through `ingest.mlb.client.get` (three minutes per attempt; two retries of a transient failure, two then four seconds apart) and strips a leading byte-order mark. Any other failure, and the last retry's, raises the original error. | `load_board_season`, `probe_season_param`; `load_pitch_tracking.load_day`; `SprintSpeedLoader`; `scripts/probes/outfield_arm_recompute.py` |
+| `upsert_sql_for` / `upsert_sql` | The one upsert builder: insert the columns with `scraped_at = NOW()`, and on a key conflict overwrite every column outside the key. `upsert_sql` keys a board on the player, the season, the split and the cutoff. | `load_board_season`; `load_pitch_tracking`; `load_sprint_speed` |
 | `probe_season_param` | Asks each board for 1990 (`PROBE_SEASON`). A board that returns rows ignored the season, and the load raises `SeasonParamError`. | `main` |
 | `check_row_seasons` | Where a board returns a season column, every row must carry the season asked for. | `load_board_season` |
 | `load_board_season` | Fetches, parses, coerces and upserts one board for one season. `--asof` keeps games up to a date on the boards that support it. | `main`; the profile recompute probes |
-| `coerce_row` / `filter_to_known_players` | One CSV row to one upsert payload (a blank is `None`, never 0); drop rows whose player is not in `raw.players`. | `load_board_season` |
+| `coerce_row` / `filter_to_known_players` | One CSV row to one upsert payload (a blank is `None`, never 0); drop rows whose player is not in `raw.players`. | `load_board_season`; `filter_to_known_players` also `SprintSpeedLoader` |
 
 **Flags:** `BASEBALL_DB_DSN` (required unless `--dry-run`).
 
@@ -239,9 +241,10 @@ season average that contains the future.
 [Source](../../ingest/savant/load_sprint_speed.py) · 297 lines · Tests: none
 
 `SprintSpeedLoader` fetches Savant's sprint-speed leaderboard per season and upserts
-`raw.sprint_speed`, one row per player and season. `refresh_seasons` is the entry point;
-`_filter_to_known_players` drops a player missing from `raw.players`. Run it as
-`python -m ingest.savant.load_sprint_speed --seasons ...`.
+`raw.sprint_speed`, one row per player and season. `refresh_seasons` is the entry point.
+The loader reads through the leaderboard loader's `fetch_csv` and raises `ValueError` on an
+empty body; the leaderboard loader's `filter_to_known_players` drops a player missing from
+`raw.players`. Run it as `python -m ingest.savant.load_sprint_speed --seasons ...`.
 
 ### `ingest/venues/load_venue_dimensions.py`
 

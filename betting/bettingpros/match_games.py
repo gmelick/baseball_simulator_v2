@@ -17,6 +17,7 @@ from typing import Any, ClassVar, NamedTuple, TypeVar
 
 from ingest.mlb import client as mlb_client
 from ingest.mlb.client import RetryPolicy
+from ingest.mlb.schedule import is_postponed, played_index, schedule_entries
 
 _K = TypeVar("_K")
 
@@ -105,18 +106,6 @@ def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
     return _ScheduleInfo((date_str,), anchors, None, None)
 
 
-def _is_postponed(game: Mapping[str, Any]) -> bool:
-    """True when an MLB schedule entry is a postponed game.
-
-    The entry is postponed when ``detailedState`` starts with "Postponed" or
-    ``codedGameState`` is "D". A suspended game is not postponed: MLB marks
-    both of its entries "Final".
-    """
-    status = game.get("status") or {}
-    detailed = str(status.get("detailedState") or "")
-    return detailed.startswith("Postponed") or status.get("codedGameState") == "D"
-
-
 def _read_schedule(
     data: Mapping[str, Any],
 ) -> tuple[tuple[str, str, str, datetime | None], _ScheduleInfo]:
@@ -132,14 +121,10 @@ def _read_schedule(
     Raises ``LookupError`` when the answer lists no entry. Raises ``KeyError``
     when the played entry lacks a field the meta needs.
     """
-    entries: list[tuple[Any, Mapping[str, Any]]] = [
-        (day.get("date"), game)
-        for day in data.get("dates") or []
-        for game in day.get("games") or []
-    ]
+    entries = schedule_entries(data)
     if not entries:
         raise LookupError("the schedule lists no entry for the game")
-    played_i = next((i for i, (_d, g) in enumerate(entries) if not _is_postponed(g)), 0)
+    played_i = played_index(entries)
     played = entries[played_i][1]
     date_str = str(played["officialDate"])
     home = str(played["teams"]["home"]["team"]["name"])
@@ -148,7 +133,7 @@ def _read_schedule(
     slate_dates = [date_str]
     anchors = [] if game_dt is None else [game_dt]
     for day_date, game in entries[played_i + 1 :]:
-        if _is_postponed(game):
+        if is_postponed(game):
             continue
         for value in (day_date, game.get("officialDate")):
             if value and str(value) not in slate_dates:
@@ -170,7 +155,7 @@ def _read_schedule(
         postponed_start=postponed_start,
         played_entry=played_i,
         n_entries=len(entries),
-        never_played=_is_postponed(played),
+        never_played=is_postponed(played),
         game_number=game_number if isinstance(game_number, int) else None,
         start_tbd=(played.get("status") or {}).get("startTimeTBD") is True,
     )

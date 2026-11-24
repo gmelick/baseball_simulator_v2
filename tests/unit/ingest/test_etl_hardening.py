@@ -429,8 +429,9 @@ class TestParserHygiene:
         assert rows[0]["field_assist_6_plus"] is expected
 
     def test_overflow_flag_reaches_the_pitch_insert(self):
-        src = (_REPO_ROOT / "ingest" / "games" / "load_games.py").read_text(encoding="utf-8")
-        assert "%(field_assist_6_plus)s" in src, "must be bound into the pitch INSERT"
+        assert "%(field_assist_6_plus)s" in HistoricalDataLoader.INSERT_SQL, (
+            "must be bound into the pitch INSERT"
+        )
 
     def test_overflow_column_exists_in_schema_and_migration(self):
         schema = (_REPO_ROOT / "db" / "schemas" / "01_postgres_schema.sql").read_text(
@@ -719,6 +720,16 @@ class TestHttpHygiene:
 
         assert "urlopen(" not in code(mod) and "requests.get(" not in code(mod)
         assert code(client).count("urlopen(") == 1
+
+    def test_no_savant_module_opens_a_url_of_its_own(self):
+        """The Savant loaders read through ``ingest.mlb.client.get`` as well:
+        no module under ``ingest/savant/`` calls ``urlopen``."""
+        paths = sorted((_REPO_ROOT / "ingest" / "savant").glob("*.py"))
+        assert paths, "ingest/savant/ holds no module"
+        for path in paths:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            code = "\n".join(ln for ln in lines if not ln.strip().startswith("#"))
+            assert "urlopen(" not in code, f"{path.name} calls urlopen"
 
     def test_requests_is_never_imported(self):
         """Importing ``requests`` brings in the C extensions whose removal let a

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
@@ -85,9 +85,6 @@ class ScheduleTeam:
     wins: int | None
     losses: int | None
     score: int | None
-    hits: int | None
-    errors: int | None
-    is_winner: bool | None
     probable_pitcher: SchedulePlayer | None
     lineup: tuple[SchedulePlayer, ...] = ()
 
@@ -119,8 +116,6 @@ class ScheduleGame:
     n_innings: int | None
     rescheduled_to: date | None
     rescheduled_from: date | None
-    resumed_from: date | None
-    raw: Mapping[str, Any] = field(repr=False, compare=False, default_factory=dict)
 
     @property
     def lineups_posted(self) -> bool:
@@ -133,7 +128,8 @@ class ScheduleGame:
 # ---------------------------------------------------------------------------
 
 
-def _int(v: Any) -> int | None:
+def int_or_none(v: Any) -> int | None:
+    """``v`` as an int; None when it is missing, blank or not a number."""
     try:
         return None if v is None or v == "" else int(v)
     except (TypeError, ValueError):
@@ -162,7 +158,7 @@ def _datetime(v: Any) -> datetime | None:
 def _player(entry: Any, position: str | None = None) -> SchedulePlayer | None:
     if not isinstance(entry, Mapping):
         return None
-    pid = _int(entry.get("id"))
+    pid = int_or_none(entry.get("id"))
     if pid is None:
         return None
     if position is None:
@@ -180,12 +176,11 @@ def _team(side: Mapping[str, Any], line: Mapping[str, Any], lineup: Sequence[Any
         team_id=int(team.get("id") or 0),
         name=team.get("teamName") or team.get("clubName") or team.get("name"),
         abbreviation=team.get("abbreviation"),
-        wins=_int(rec.get("wins")),
-        losses=_int(rec.get("losses")),
-        score=_int(side.get("score")) if side.get("score") is not None else _int(line.get("runs")),
-        hits=_int(line.get("hits")),
-        errors=_int(line.get("errors")),
-        is_winner=side.get("isWinner") if isinstance(side.get("isWinner"), bool) else None,
+        wins=int_or_none(rec.get("wins")),
+        losses=int_or_none(rec.get("losses")),
+        score=int_or_none(side.get("score"))
+        if side.get("score") is not None
+        else int_or_none(line.get("runs")),
         probable_pitcher=_player(side.get("probablePitcher"), "P"),
         lineup=players,
     )
@@ -221,18 +216,16 @@ def parse_game(entry: Mapping[str, Any]) -> ScheduleGame:
         game_number=int(entry.get("gameNumber") or 1),
         home=_team(teams["home"], line_teams.get("home") or {}, lineups.get("homePlayers") or ()),
         away=_team(teams["away"], line_teams.get("away") or {}, lineups.get("awayPlayers") or ()),
-        venue_id=_int(venue.get("id")),
+        venue_id=int_or_none(venue.get("id")),
         venue_name=venue.get("name"),
         series_description=entry.get("seriesDescription"),
-        inning=_int(linescore.get("currentInning")) if live else None,
+        inning=int_or_none(linescore.get("currentInning")) if live else None,
         inning_half=(linescore.get("inningHalf") or linescore.get("inningState")) if live else None,
-        outs=_int(linescore.get("outs")) if live else None,
+        outs=int_or_none(linescore.get("outs")) if live else None,
         # The innings played so far ("Final/10" on an extra-inning card).
         n_innings=len(linescore.get("innings") or []) or None,
         rescheduled_to=_date(entry.get("rescheduleGameDate") or entry.get("rescheduleDate")),
         rescheduled_from=_date(entry.get("rescheduledFrom")),
-        resumed_from=_date(entry.get("resumedFrom")),
-        raw=entry,
     )
 
 
@@ -304,3 +297,34 @@ def schedule_params(start: date, end: date, hydrate: str = DEFAULT_HYDRATE) -> d
         "endDate": end.isoformat(),
         "hydrate": hydrate,
     }
+
+
+def is_postponed(entry: Mapping[str, Any]) -> bool:
+    """True when a schedule entry is a postponed game.
+
+    The entry is postponed when ``detailedState`` starts with "Postponed" or
+    ``codedGameState`` is "D". A suspended game is not postponed: MLB marks
+    both of its entries "Final".
+    """
+    status = entry.get("status") or {}
+    detailed = str(status.get("detailedState") or "")
+    return detailed.startswith("Postponed") or status.get("codedGameState") == "D"
+
+
+def schedule_entries(data: Mapping[str, Any]) -> list[tuple[Any, Mapping[str, Any]]]:
+    """Every ``(date, game)`` entry of one schedule answer, in order."""
+    return [
+        (day.get("date"), game)
+        for day in data.get("dates") or []
+        for game in day.get("games") or []
+    ]
+
+
+def played_index(entries: Sequence[tuple[Any, Mapping[str, Any]]]) -> int:
+    """The index of the PLAYED entry of one game's schedule entries.
+
+    A made-up game lists a postponed entry at the original start, then the
+    played entry. The played entry is the first that is not postponed, or the
+    first entry when every entry is postponed.
+    """
+    return next((i for i, (_d, g) in enumerate(entries) if not is_postponed(g)), 0)

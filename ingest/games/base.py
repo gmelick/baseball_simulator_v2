@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from contextlib import contextmanager
-from typing import ClassVar
+from typing import Any
 
 import psycopg2
-import psycopg2.extras
 import psycopg2.pool
+
+from db.introspect import pg_column_exists, pg_relation_exists
+
+log = logging.getLogger(__name__)
 
 # Connection pool sizing.  A historical backfill issues many short
 # DB round-trips per game (one per FK-existence check, plus inserts and the
@@ -21,16 +25,13 @@ ETL_DB_POOL_MAX = int(os.environ.get("ETL_DB_POOL_MAX", "8"))
 
 class LoaderBase:
     """The loader's state, declared once so each mixin sees it: the DSN, the
-    connection pool and its lock, the circuit-breaker count and the pitch insert.
+    connection pool and its lock, and the circuit-breaker count.
     """
 
     dsn: str
-    write_csv: bool
-    csv_output_dir: str
     _pool: psycopg2.pool.ThreadedConnectionPool | None
     _pool_lock: threading.Lock
     _consecutive_failures: int
-    INSERT_SQL: ClassVar[str]
 
     def _ensure_pool(self) -> psycopg2.pool.ThreadedConnectionPool:
         """Create the pool exactly once, on first DB access.
@@ -71,6 +72,37 @@ class LoaderBase:
             yield conn
         finally:
             pool.putconn(conn)
+
+    def _exists_once(
+        self,
+        cur: Any,
+        cache_attr: str,
+        relation: str,
+        *,
+        column: str | None = None,
+        absent_message: str | None = None,
+        level: int = logging.WARNING,
+    ) -> bool:
+        """Whether ``relation`` (``schema.table``), or its ``column``, exists.
+
+        The loader asks the catalogue once and caches the answer on the
+        attribute ``cache_attr`` (``None`` means not yet asked). A sweep of
+        thousands of games then runs one lookup, not one per game. The answer
+        cannot change mid-run: applying a migration during a sweep is not
+        supported. When the probe finds the table or column absent, the loader
+        logs ``absent_message`` (if given) at ``level``, once.
+        """
+        cached = getattr(self, cache_attr)
+        if cached is None:
+            if column is None:
+                cached = pg_relation_exists(cur, relation)
+            else:
+                schema, table = relation.split(".", 1)
+                cached = pg_column_exists(cur, schema, table, column)
+            setattr(self, cache_attr, cached)
+            if not cached and absent_message:
+                log.log(level, absent_message)
+        return bool(cached)
 
     def close(self) -> None:
         """Shut the pool down, closing every pooled connection.

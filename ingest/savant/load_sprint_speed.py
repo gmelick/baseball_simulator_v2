@@ -37,50 +37,32 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import time
 from collections.abc import Iterator
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 import psycopg2
 from psycopg2.extras import execute_batch
 
+from db.dsn import require_dsn
 from ingest.games.coercion import to_float, to_int
+from ingest.savant.load_leaderboards import fetch_csv, filter_to_known_players, upsert_sql_for
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("sprint_speed_loader")
+log = logging.getLogger(__name__)
 
 SAVANT_URL = "https://baseballsavant.mlb.com/leaderboard/sprint_speed"
+
+#: The columns of one ``raw.sprint_speed`` row, the key first.
+_COLUMNS = ("player_id", "season", "sprint_speed", "competitive_runs", "bolts", "hp_to_1b")
 
 
 class SprintSpeedLoader:
     """Fetch + upsert Sprint Speed data from Baseball Savant."""
 
-    UPSERT_SQL = """
-        INSERT INTO raw.sprint_speed (
-            player_id, season, sprint_speed, competitive_runs,
-            bolts, hp_to_1b, scraped_at
-        ) VALUES (
-            %(player_id)s, %(season)s, %(sprint_speed)s, %(competitive_runs)s,
-            %(bolts)s, %(hp_to_1b)s, NOW()
-        )
-        ON CONFLICT (player_id, season) DO UPDATE SET
-            sprint_speed     = EXCLUDED.sprint_speed,
-            competitive_runs = EXCLUDED.competitive_runs,
-            bolts            = EXCLUDED.bolts,
-            hp_to_1b         = EXCLUDED.hp_to_1b,
-            scraped_at       = EXCLUDED.scraped_at;
-    """
+    UPSERT_SQL = upsert_sql_for("raw.sprint_speed", _COLUMNS, ("player_id", "season"))
 
-    def __init__(self, dsn: str, batch_size: int = 200) -> None:
+    def __init__(self, dsn: str) -> None:
         self._dsn = dsn
-        self._batch_size = batch_size
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,7 +111,7 @@ class SprintSpeedLoader:
         # These typically appear when Savant publishes a prospect before
         # the ETL has seen them in a pitch feed.  Safer to skip and log
         # than to fail the whole batch.
-        valid_rows = self._filter_to_known_players(conn, rows)
+        valid_rows = filter_to_known_players(conn, rows)
         n_skipped = len(rows) - len(valid_rows)
         if n_skipped > 0:
             log.warning(
@@ -142,7 +124,7 @@ class SprintSpeedLoader:
             return 0
 
         with conn.cursor() as cur:
-            execute_batch(cur, self.UPSERT_SQL, valid_rows, page_size=self._batch_size)
+            execute_batch(cur, self.UPSERT_SQL, valid_rows, page_size=200)
 
         log.info("Season %d: upserted %d sprint_speed rows.", season, len(valid_rows))
         return len(valid_rows)
@@ -157,7 +139,8 @@ class SprintSpeedLoader:
 
         min=0 pulls every player who has any competitive runs; downstream
         consumers filter by competitive_runs >= 10 rather than relying on
-        Savant's variable default threshold.
+        Savant's variable default threshold. The leaderboard loader's
+        ``fetch_csv`` does the GET; an empty body raises ``ValueError``.
         """
         params = {
             "year": str(season),
@@ -166,40 +149,10 @@ class SprintSpeedLoader:
             "min": "0",
             "csv": "true",
         }
-        url = f"{SAVANT_URL}?{urlencode(params)}"
-
-        # Savant blocks the default urllib User-Agent.
-        req = Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (baseball-sim-etl)",
-                "Accept": "text/csv,application/octet-stream,*/*",
-            },
-        )
-
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                with urlopen(req, timeout=30) as resp:
-                    data = resp.read().decode("utf-8-sig")  # strip BOM if present
-                    if not data.strip():
-                        raise ValueError("Empty response from Savant")
-                    return data
-            except (HTTPError, URLError, ValueError) as e:
-                if attempt == max_retries:
-                    log.error("Savant fetch failed for season %d: %s", season, e)
-                    raise
-                wait = 2**attempt
-                log.warning(
-                    "Savant fetch attempt %d/%d failed (%s). Retrying in %ds …",
-                    attempt,
-                    max_retries,
-                    e,
-                    wait,
-                )
-                time.sleep(wait)
-
-        raise RuntimeError("unreachable")
+        data = fetch_csv(f"{SAVANT_URL}?{urlencode(params)}")
+        if not data.strip():
+            raise ValueError("Empty response from Savant")
+        return data
 
     # ------------------------------------------------------------------
     # Parse
@@ -241,35 +194,15 @@ class SprintSpeedLoader:
                 "hp_to_1b": to_float(raw.get("hp_to_1b")),
             }
 
-    # ------------------------------------------------------------------
-    # FK guard
-    # ------------------------------------------------------------------
-
-    def _filter_to_known_players(
-        self,
-        conn: psycopg2.extensions.connection,
-        rows: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Drop rows whose player_id is not in raw.players (FK protection)."""
-        ids = list({r["player_id"] for r in rows})
-        if not ids:
-            return []
-
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT player_id FROM raw.players WHERE player_id = ANY(%s)",
-                (ids,),
-            )
-            known = {r[0] for r in cur.fetchall()}
-
-        return [r for r in rows if r["player_id"] in known]
-
 
 if __name__ == "__main__":
     import argparse
-    import os
-    import sys
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     parser = argparse.ArgumentParser(
         description="Load Baseball Savant sprint speed data into raw.sprint_speed."
     )
@@ -282,16 +215,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--dsn",
-        default=os.environ.get("BASEBALL_DB_DSN"),
+        default=None,
         help="Postgres DSN. Defaults to the BASEBALL_DB_DSN environment variable.",
     )
     args = parser.parse_args()
 
-    if not args.dsn:
-        sys.stderr.write("ERROR: no Postgres DSN provided. Set BASEBALL_DB_DSN or pass --dsn.\n")
-        sys.exit(2)
-
-    loader = SprintSpeedLoader(args.dsn)
+    loader = SprintSpeedLoader(args.dsn or require_dsn())
     results = loader.refresh_seasons(args.seasons)
     for season, n in sorted(results.items()):
         log.info("  season %d → %d rows", season, n)

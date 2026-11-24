@@ -31,9 +31,6 @@ REDIS_TTL_DONE_S = 3600  # cache TTL for completed game states
 RESIM_COOLDOWN_S = 10
 
 
-GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
-
-
 #: Boxscore position codes that mark a pitcher (P; some feeds use
 #: SP / RP; TWP is a two-way player).
 _PITCHER_POSITION_CODES = frozenset({"P", "SP", "RP", "TWP"})

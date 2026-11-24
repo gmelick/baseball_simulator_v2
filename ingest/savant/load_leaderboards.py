@@ -17,7 +17,7 @@ silently write 2026 numbers into a 2023 row and nothing downstream would ever
 notice. Two guards stand against that:
 
   1. **The probe.** Once per board per run, the loader asks for
-     ``board.probe_season`` — a year with no possible Statcast data. An honoured
+     ``PROBE_SEASON`` — a year with no possible Statcast data. An honoured
      parameter returns nothing. Anything else raises ``SeasonParamError``.
   2. **The per-row check.** Where the board returns a season column, every row
      must carry the season we asked for, or the load raises.
@@ -39,32 +39,29 @@ import argparse
 import csv
 import io
 import logging
-import os
 import sys
 import time
+from collections.abc import Sequence
 from datetime import date
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 import psycopg2
 from psycopg2.extras import execute_batch
 
+from db.dsn import require_dsn
 from ingest.games.coercion import to_float, to_int, to_str
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import RetryPolicy
 from ingest.savant.boards import (
     BATTER_BOARDS,
     BOARDS,
     FIELDING_BOARDS,
+    PROBE_SEASON,
     RUNNING_BOARDS,
     SavantBoard,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("savant_loader")
+log = logging.getLogger(__name__)
 
 #: Savant blocks the default urllib user agent outright.
 HEADERS = {
@@ -72,7 +69,8 @@ HEADERS = {
     "Accept": "text/csv,application/octet-stream,*/*",
 }
 FETCH_TIMEOUT_S = 180
-MAX_RETRIES = 3
+#: Two retries of a transient failure, the first after two seconds, the second after four.
+FETCH_POLICY = RetryPolicy(retries=2, first_wait_s=2.0)
 #: A full-roster season pull takes one to three minutes. Space them out so a
 #: whole-run fetch does not read as a hammering client.
 PAUSE_BETWEEN_FETCHES_S = 1.5
@@ -124,7 +122,7 @@ class SeasonParamError(RuntimeError):
 
 
 class SavantFetchError(RuntimeError):
-    """The board could not be fetched, or returned something that is not CSV."""
+    """The board returned something that is not CSV."""
 
 
 # ---------------------------------------------------------------------------
@@ -161,21 +159,22 @@ def build_url(
 
 
 def fetch_csv(url: str) -> str:
-    """GET ``url`` and return its body, retrying on transport failure."""
-    req = Request(url, headers=HEADERS)
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            with urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
-                return resp.read().decode("utf-8-sig", errors="replace")
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            if attempt == MAX_RETRIES:
-                raise SavantFetchError(f"fetch failed for {url}: {exc}") from exc
-            wait = 2**attempt
-            log.warning(
-                "fetch attempt %d/%d failed (%s); retrying in %ds", attempt, MAX_RETRIES, exc, wait
-            )
-            time.sleep(wait)
-    raise SavantFetchError(f"fetch failed for {url}")  # pragma: no cover - loop always returns
+    """GET ``url`` and return its body without a leading byte-order mark.
+
+    The one MLB client does the GET. It retries a transient failure by
+    ``FETCH_POLICY``; any other failure, and the last retry's, raises the
+    original error. The mark must go: a kept one sticks to a quoted first
+    header, and it hides an HTML page from the guard in ``parse_rows``.
+    """
+    resp = mlb_client.get(
+        url,
+        headers=HEADERS,
+        timeout_s=FETCH_TIMEOUT_S,
+        policy=FETCH_POLICY,
+        logger=log,
+        label="Savant",
+    )
+    return resp.text.removeprefix("﻿")
 
 
 def parse_rows(body: str) -> list[dict[str, str]]:
@@ -204,11 +203,11 @@ def probe_season_param(board: SavantBoard, fetcher=fetch_csv) -> None:
     returns no rows. Anything else means the parameter was ignored and every
     later pull would silently carry the current season.
     """
-    body = fetcher(build_url(board, board.probe_season))
+    body = fetcher(build_url(board, PROBE_SEASON))
     rows = parse_rows(body)
     if rows:
         raise SeasonParamError(
-            f"{board.name}: asked for {board.probe_season} and got {len(rows)} rows. "
+            f"{board.name}: asked for {PROBE_SEASON} and got {len(rows)} rows. "
             f"The season parameter (style {board.season_style!r}) is being ignored, so "
             f"every pull would write the current season under the wrong year."
         )
@@ -279,21 +278,31 @@ def coerce_row(
 # ---------------------------------------------------------------------------
 
 
+def upsert_sql_for(table: str, columns: Sequence[str], key: Sequence[str]) -> str:
+    """The upsert of ``columns`` into ``table``, keyed on ``key``.
+
+    Each row takes ``NOW()`` as its ``scraped_at``. On a key conflict the
+    statement overwrites every column outside the key, and ``scraped_at``.
+    The Savant boards, the per-pitch tracking and the sprint speeds use it.
+    """
+    updates = [c for c in columns if c not in key]
+    placeholders = ", ".join(f"%({c})s" for c in columns)
+    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in [*updates, "scraped_at"])
+    return (
+        f"INSERT INTO {table} ({', '.join(columns)}, scraped_at) "
+        f"VALUES ({placeholders}, NOW()) "
+        f"ON CONFLICT ({', '.join(key)}) DO UPDATE SET {set_clause};"
+    )
+
+
 def upsert_sql(board: SavantBoard) -> str:
-    cols = board.target_columns
+    """The upsert of one board, keyed on the player, the season, the split and the cutoff."""
     key = ["player_id", "season"]
     if board.split_column:
         key.append(board.split_column)
     if board.asof_column:
         key.append(board.asof_column)
-    updates = [c for c in cols if c not in key]
-    placeholders = ", ".join(f"%({c})s" for c in cols)
-    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in [*updates, "scraped_at"])
-    return (
-        f"INSERT INTO {board.table} ({', '.join(cols)}, scraped_at) "
-        f"VALUES ({placeholders}, NOW()) "
-        f"ON CONFLICT ({', '.join(key)}) DO UPDATE SET {set_clause};"
-    )
+    return upsert_sql_for(board.table, board.target_columns, key)
 
 
 def filter_to_known_players(conn, rows: list[dict]) -> list[dict]:
@@ -396,6 +405,11 @@ def resolve_boards(names: list[str]) -> list[SavantBoard]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     ap = argparse.ArgumentParser(description="Load Baseball Savant leaderboards (SIM-528).")
     ap.add_argument(
         "--boards",
@@ -414,11 +428,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     boards = resolve_boards(args.boards)
-    dsn = os.environ.get("BASEBALL_DB_DSN")
-    if not dsn and not args.dry_run:
-        raise SystemExit("BASEBALL_DB_DSN is not set.")
-
-    conn = None if args.dry_run else psycopg2.connect(dsn)
+    dsn = None if args.dry_run else require_dsn()
+    conn = None if dsn is None else psycopg2.connect(dsn)
     total = 0
     try:
         for board in boards:

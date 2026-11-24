@@ -42,8 +42,6 @@ def test_normal_day_fields() -> None:
     assert ms.card_state(g) == ms.FINAL
     assert g.home.abbreviation == "NYM"
     assert (g.away.score, g.home.score) == (7, 6)
-    assert (g.away.hits, g.home.hits) == (12, 9)
-    assert g.away.is_winner is True and g.home.is_winner is False
     assert (g.home.wins, g.home.losses) == (62, 59)
     assert g.home.probable_pitcher is not None
     assert g.home.probable_pitcher.name == "Jose Quintana"

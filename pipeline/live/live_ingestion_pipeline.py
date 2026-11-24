@@ -69,10 +69,10 @@ from betting.validate_odds import RefusalTally
 from db.introspect import pg_column_exists_async
 from ingest.mlb import client as mlb_client
 from ingest.mlb.client import LeagueFeed
+from ingest.mlb.schedule import schedule_params
 from pipeline.live.ingestion.base import PipelineBase
 from pipeline.live.ingestion.constants import (
     _EASTERN,
-    GAME_TYPES,
     HTTP_TIMEOUT_S,
     REDIS_TTL_DONE_S,
     REDIS_TTL_LIVE_S,
@@ -338,13 +338,9 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         # Each entry is acted on by its own state; tomorrow's Preview games get
         # their lineups and pregame odds early.
         today = datetime.now(_EASTERN).date()
-        params = {
-            "sportId": 1,
-            "gameTypes": GAME_TYPES,
-            "startDate": (today - timedelta(days=1)).isoformat(),
-            "endDate": (today + timedelta(days=1)).isoformat(),
-            "hydrate": SCHEDULE_HYDRATE,
-        }
+        params = schedule_params(
+            today - timedelta(days=1), today + timedelta(days=1), SCHEDULE_HYDRATE
+        )
 
         data = await self._http.get_json(mlb_client.SCHEDULE_URL, params)
 

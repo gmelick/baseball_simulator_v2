@@ -54,16 +54,7 @@ import asyncpg
 from ingest.mlb import client as mlb_client
 from ingest.mlb.client import LeagueFeed
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("venue_backfill_job")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -336,6 +327,11 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def _main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     args = _parse_args()
     if not args.dsn:
         log.error("No DSN provided. Set BASEBALL_DB_DSN or pass --dsn.")

@@ -281,39 +281,31 @@ class TestDecide:
 
     def test_il_takes_precedence(self):
         il = PitcherStatus(pitcher_id=1, on_active_roster=False, on_il=True)
-        avail, reason = self.ingest.decide(
-            pitcher_id=1, status=il, days_rest=5, pitches_last_3d=0, back_to_back=False
-        )
+        avail, reason = self.ingest.decide(status=il, pitches_last_3d=0, back_to_back=False)
         assert avail is False
         assert reason == "IL"
 
     def test_off_roster_is_il_reason(self):
         off = PitcherStatus(pitcher_id=1, on_active_roster=False, on_il=False)
-        avail, reason = self.ingest.decide(
-            pitcher_id=1, status=off, days_rest=5, pitches_last_3d=0, back_to_back=False
-        )
+        avail, reason = self.ingest.decide(status=off, pitches_last_3d=0, back_to_back=False)
         assert avail is False
         assert reason == "IL"
 
     def test_none_status_unavailable(self):
-        avail, reason = self.ingest.decide(
-            pitcher_id=1, status=None, days_rest=5, pitches_last_3d=0, back_to_back=False
-        )
+        avail, reason = self.ingest.decide(status=None, pitches_last_3d=0, back_to_back=False)
         assert avail is False
         assert reason == "IL"
 
     def test_back_to_back_blocks_rest(self):
         avail, reason = self.ingest.decide(
-            pitcher_id=1, status=self.active, days_rest=1, pitches_last_3d=10, back_to_back=True
+            status=self.active, pitches_last_3d=10, back_to_back=True
         )
         assert avail is False
         assert reason == "rest"
 
     def test_heavy_recent_workload_blocks(self):
         avail, reason = self.ingest.decide(
-            pitcher_id=1,
             status=self.active,
-            days_rest=2,
             pitches_last_3d=REST_PITCHES_3D + 5,
             back_to_back=False,
         )
@@ -322,16 +314,14 @@ class TestDecide:
 
     def test_rested_arm_available(self):
         avail, reason = self.ingest.decide(
-            pitcher_id=1, status=self.active, days_rest=4, pitches_last_3d=0, back_to_back=False
+            status=self.active, pitches_last_3d=0, back_to_back=False
         )
         assert avail is True
         assert reason == "active"
 
     def test_threshold_is_inclusive(self):
         avail, reason = self.ingest.decide(
-            pitcher_id=1,
             status=self.active,
-            days_rest=2,
             pitches_last_3d=REST_PITCHES_3D,
             back_to_back=False,
         )
@@ -340,9 +330,7 @@ class TestDecide:
 
     def test_custom_threshold(self):
         ing = BullpenAvailabilityIngest(rest_pitches_3d=20)
-        avail, reason = ing.decide(
-            pitcher_id=1, status=self.active, days_rest=2, pitches_last_3d=25, back_to_back=False
-        )
+        avail, reason = ing.decide(status=self.active, pitches_last_3d=25, back_to_back=False)
         assert avail is False
         assert reason == "recent_use"
 
@@ -483,6 +471,23 @@ class TestIngestGame:
         meta = ingest._resolve_game_meta(999005)
         assert meta is not None
         assert meta.date == "2026-09-08"  # NOT "2026-09-09"
+
+    def test_a_made_up_game_reads_the_played_entry(self):
+        """A made-up game lists its postponed entry first. The roster date must
+        be the day the game was played, not the rained-out day."""
+        ingest = _FixtureIngest()
+        teams = {"home": {"team": {"id": 135}}, "away": {"team": {"id": 120}}}
+        postponed = {
+            "officialDate": "2026-05-01",
+            "teams": teams,
+            "status": {"codedGameState": "D"},
+        }
+        played = {"officialDate": "2026-05-02", "teams": teams, "status": {"codedGameState": "F"}}
+        ingest._mlb_get = lambda path, params: {  # type: ignore[assignment]
+            "dates": [{"games": [postponed]}, {"games": [played]}]
+        }
+        meta = ingest._resolve_game_meta(999006)
+        assert meta is not None and meta.date == "2026-05-02"
 
     def test_ingest_unresolvable_game_skipped(self):
         ingest = _FixtureIngest()

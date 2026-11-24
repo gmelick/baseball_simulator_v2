@@ -1,12 +1,10 @@
 """The ETL error ledger: ``raw.etl_errors`` holds one row per pitch the
-historical loader skips, the loader writes it on the pitch insert's cursor,
-and ``reprocess_errored_games`` lists the games to load again."""
+historical loader skips, and the loader writes it on the pitch insert's cursor."""
 
 from __future__ import annotations
 
 import pathlib
 import re
-from datetime import date
 from unittest.mock import MagicMock
 
 _ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -91,13 +89,6 @@ class TestEtlErrorLedger:
             "left alongside the transactional one"
         )
 
-    def test_loader_has_reprocess_errored_games_method(self) -> None:
-        from ingest.games.load_games import HistoricalDataLoader
-
-        assert callable(getattr(HistoricalDataLoader, "reprocess_errored_games", None)), (
-            "SIM-093: HistoricalDataLoader.reprocess_errored_games() missing"
-        )
-
     def test_write_error_ledger_inserts_per_skipped_pitch(self) -> None:
         """One raw.etl_errors row per skipped pitch, on the caller's cursor.
 
@@ -153,30 +144,3 @@ class TestEtlErrorLedger:
         with patch("ingest.games.load_games.psycopg2.extras.execute_batch") as eb:
             HistoricalDataLoader._write_error_ledger(cur, 745001, [])
         eb.assert_not_called()
-
-    def test_reprocess_errored_games_returns_distinct_game_pks(self) -> None:
-        """reprocess_errored_games(since=…) issues one SELECT DISTINCT and
-        returns the game_pks as ints."""
-        from ingest.games.load_games import HistoricalDataLoader
-
-        loader = HistoricalDataLoader.__new__(HistoricalDataLoader)
-        cur = MagicMock()
-        cur.fetchall.return_value = [(745001,), (745002,), (745003,)]
-        conn = MagicMock()
-        conn.cursor.return_value.__enter__.return_value = cur
-        conn.cursor.return_value.__exit__.return_value = False
-        ctx = MagicMock()
-        ctx.__enter__.return_value = conn
-        ctx.__exit__.return_value = False
-        loader._get_conn = MagicMock(return_value=ctx)
-
-        result = loader.reprocess_errored_games(since=date(2026, 5, 1))
-        assert result == [745001, 745002, 745003]
-
-        # The SQL the method issues.
-        cur.execute.assert_called_once()
-        sql_called = cur.execute.call_args.args[0]
-        assert "SELECT DISTINCT game_pk" in sql_called
-        assert "FROM   raw.etl_errors" in sql_called or "FROM raw.etl_errors" in sql_called
-        # The bind parameters: a tuple holding the date.
-        assert cur.execute.call_args.args[1] == (date(2026, 5, 1),)
