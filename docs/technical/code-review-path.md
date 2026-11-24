@@ -226,7 +226,7 @@ ones, and picks one row at random by that weight.
    extra-base decisions.
 8. [simulation/sampler/manager.py](../../simulation/sampler/manager.py):
    `pitching_change_draw` and `relief_arm_draw`.
-9. [simulation/synthetic_bundle.py](../../simulation/synthetic_bundle.py): the
+9. [bundle/synthetic_bundle.py](../../bundle/synthetic_bundle.py): the
    in-memory bundle the tests draw from. It shows the shape of every pool in a few
    hundred lines.
 
@@ -266,9 +266,9 @@ booted with and restarts itself when the link moves.
 2. [pipeline/batch/artifacts/](../../pipeline/batch/artifacts/): one module per
    artifact. Start with `common.py` and `pools.py`, then the pool you care about
    (`pitch_pool.py`, `battedball_pool.py`, `steal_pool.py`, ...).
-3. [pipeline/batch/bundle_versions.py](../../pipeline/batch/bundle_versions.py): the
+3. [bundle/versions.py](../../bundle/versions.py): the
    versioned link, the publish step and the pruning.
-4. [pipeline/batch/pool_chain.py](../../pipeline/batch/pool_chain.py): the check that
+4. [pools/check_pool_labels.py](../../pools/check_pool_labels.py): the check that
    the pool's labels agree with real plate appearances.
 
 **Check.**
@@ -332,7 +332,7 @@ bundle of stage 4 is built from these tables.
 
 **Read in this order.**
 
-1. [pipeline/batch/player_profile_computor.py](../../pipeline/batch/player_profile_computor.py):
+1. [profiles/build_profiles.py](../../profiles/build_profiles.py):
    the command line and the order of the steps.
 2. [pipeline/batch/profiles/](../../pipeline/batch/profiles/): one module per profile
    (pitcher with its arsenal model in `gmm.py`, batter, fielder, catcher, baserunner,

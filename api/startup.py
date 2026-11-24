@@ -304,7 +304,7 @@ async def build_sim_runner(app: FastAPI) -> None:
         app.state.bundle_version, app.state.bundle_in_use_marker = pin_bundle_version()
     shared_arrays_payload: dict | None = None
     try:
-        from pipeline.batch.engine_artifacts import EngineArtifacts
+        from bundle.load_bundle import EngineArtifacts
 
         art_dir = app.state.bundle_version or bundle_link()
         log.info(
@@ -379,7 +379,7 @@ async def close_resources(app: FastAPI) -> None:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
     from api.bundle_watch import PINNED_ENV as _PINNED_ENV
-    from pipeline.batch.bundle_versions import unmark_in_use
+    from bundle.versions import unmark_in_use
 
     unmark_in_use(getattr(app.state, "bundle_in_use_marker", None))
     if getattr(app.state, "bundle_version", None):

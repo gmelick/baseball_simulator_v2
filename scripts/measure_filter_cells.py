@@ -88,7 +88,7 @@ seasons} x {batter hand L, R, both}.
     last three completed seasons plus the current one), so the artifact holds 4
     of the 10 swept seasons.
   * hand L / R vs both measures what the batter-hand partition costs. The
-    pools are partitioned by batter hand (``pipeline/batch/artifacts/``
+    pools are partitioned by batter hand (``bundle/``
     filters on ``stand``), so PER-HAND row counts are what the sampler sees, not
     totals.
 
@@ -105,11 +105,11 @@ So:
     ``simulation/filter_cells.py``, the module the sampler's cell index
     imports. This script re-exports them; it never redefines them.
   * :func:`score_band` applies the loop's +/-5 clamp. The pool builder already
-    clamps ``score_diff`` to -5..+5 (``pipeline/batch/profiles/pools.py``),
+    clamps ``score_diff`` to -5..+5 (``pools/build_pitch_pool.py``),
     so the clamp is a verified no-op on pool data. The function applies it
     anyway so it is correct standalone.
   * The recent-season set comes from ``last_n_seasons()`` in
-    ``pipeline/batch/artifacts/common.py`` — the same call the artifact builder
+    ``bundle/common.py`` — the same call the artifact builder
     makes — never from a re-derivation.
   * The outcome-pool row filter copies the three NOT NULL predicates from
     ``build_battedball_pool_artifact``, so the measurement counts the rows the
@@ -148,7 +148,7 @@ all.
 ``duckdb`` really is absent from a bare import of this module, and the unit
 suite proves it in a clean subprocess. That needs TWO lazy imports, not one:
 :func:`open_connection` imports ``duckdb`` itself, and :func:`_artifact_common`
-imports ``pipeline.batch.artifacts.common``, which imports ``duckdb`` at module
+imports ``bundle.common``, which imports ``duckdb`` at module
 scope. A direct module-scope import of
 that module pulls ``duckdb`` in transitively and makes the claim false
 while every ``hasattr(module, "duckdb")`` check still passes.
@@ -205,14 +205,14 @@ EXIT_UNHEALTHY = 2
 
 
 def _artifact_common() -> Any:
-    """Import ``pipeline.batch.artifacts.common`` lazily and return the module.
+    """Import ``bundle.common`` lazily and return the module.
 
     The import stays inside this function on purpose. The module imports
     ``duckdb`` at module scope, so importing it at the top of this file
     would pull ``duckdb`` into every bare import of this script and break the
     no-database promise the pure layer makes.
     """
-    from pipeline.batch.artifacts import common
+    from bundle import common
 
     return common
 
@@ -230,7 +230,7 @@ def last_n_seasons(con: Any, n: int) -> list[int]:
     """Return the newest ``n`` seasons through the artifact builder's own call.
 
     This is a thin lazy wrapper around
-    ``pipeline.batch.artifacts.common.last_n_seasons``. The measurement must use
+    ``bundle.common.last_n_seasons``. The measurement must use
     the builder's definition of "recent", never a re-derivation.
     """
     return list(_artifact_common().last_n_seasons(con, int(n)))
@@ -634,7 +634,7 @@ DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 DEFAULT_OUTPUT = "docs/audit/2026-08-10-sim451-filter-cell-occupancy.json"
 
 #: The three NOT NULL predicates copied from
-#: ``pipeline/batch/artifacts/battedball_pool.build_battedball_pool_artifact``. The
+#: ``bundle/export_batted_ball_pool.build_battedball_pool_artifact``. The
 #: batted-ball artifact keeps only rows that carry all three geometry columns, so
 #: the measurement must apply the same filter or it counts rows the sampler never
 #: sees.
@@ -798,7 +798,7 @@ def build_half_inning_map(con: Any, source: str) -> int:
 
     ``bat_is_home`` is 1 when the home team bats. Postgres marks that with
     ``inning_topbot = 'Bot'``; the DuckDB table stores the same convention in
-    ``top_or_bottom`` (``pipeline/batch/profiles/pools.py`` builds it from the same
+    ``top_or_bottom`` (``pools/build_at_bat_situations.py`` builds it from the same
     expression), so the two sources are definitionally identical and only
     their coverage differs.
 

@@ -19,9 +19,9 @@ import inspect
 import duckdb
 import numpy as np
 
-import pipeline.batch.profiles.pool_meta as pool_meta
-import pipeline.batch.profiles.sql as profile_sql
-from pipeline.batch import player_profile_computor as ppc
+import pools.pool_metadata as pool_meta
+import profiles.sql as profile_sql
+from profiles import build_profiles as ppc
 from simulation.game_state import PITCH_OUTCOMES, Bases, GameState, PlayResult
 from simulation.loop.values import EVENT_HIT_BY_PITCH, advance_count
 from simulation.sim_loop import StateMachine

@@ -52,7 +52,7 @@ Run book: ``docs/audit/2026-09-16-sim550-outfield-arm-block-plan.md`` §8. After
 this: ``make calibrate`` (then write the win-probability curve back — the SIM-427
 trap), copy ``sigma_of_arm`` and the three reliability weights into the module
 defaults, and rebuild the three outfield matrices
-(``python -m pipeline.batch.engine_artifacts --what actors_sim --matrix fielder_LF
+(``python -m bundle.build_bundle --what actors_sim --matrix fielder_LF
 --matrix fielder_CF --matrix fielder_RF``).
 """
 
@@ -78,7 +78,7 @@ if str(_ROOT) not in sys.path:
 import duckdb  # noqa: E402
 
 from db.introspect import duck_table_exists
-from pipeline.batch.player_profile_computor import (  # noqa: E402
+from profiles.build_profiles import (  # noqa: E402
     LeagueAverageProfiles,
     PlayerProfileComputor,
 )

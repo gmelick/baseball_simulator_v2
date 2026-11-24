@@ -11,9 +11,9 @@ from typing import Any
 import duckdb
 import numpy as np
 
-from pipeline.batch.artifacts.common import _GEOM_COLS, _SIT_COLS, RECENCY_FLOOR_SEASONS, join_rows
-from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
-from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE
+from bundle.common import _GEOM_COLS, _SIT_COLS, RECENCY_FLOOR_SEASONS, join_rows
+from pools.pool_metadata import POOL_BUILDER_VERSION
+from profiles.sql import SQL_OUTCOME_TYPE
 
 from .common import (
     DRIFT_POOLS,

@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-import pipeline.batch.profiles.pool_meta as pool_meta
+import pools.pool_metadata as pool_meta
 
 #: The repository root (this file is scripts/<package>/<module>.py).
 _ROOT = Path(__file__).resolve().parents[2]

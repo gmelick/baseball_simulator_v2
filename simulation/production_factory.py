@@ -7,7 +7,7 @@ picklable :class:`~simulation.batch_runner.GameSpec`, through a *dotted-ref*
 ``machine_factory``; a live sampler never crosses the process boundary. This
 module's :func:`production_machine_factory` builds the REAL machine: a
 :class:`~simulation.full_pool_sampler.FullPoolSampler` over the on-disk
-engine-artifact bundle (:class:`~pipeline.batch.engine_artifacts.EngineArtifacts`).
+engine-artifact bundle (:class:`~bundle.load_bundle.EngineArtifacts`).
 Each worker process caches the sampler once, with the parent's shared-memory
 arrays spliced in when the parent published them. Reference the factory on a
 :class:`GameSpec` by dotted path::
@@ -24,7 +24,7 @@ A missing or corrupt bundle raises here, at machine build, so a worker that
 cannot serve the production path fails loudly instead of serving a different
 one. The no-DB seam for tests is
 :func:`simulation.batch_runner.rng_driven_machine_factory`, which builds the
-SAME machine over an in-memory :mod:`simulation.synthetic_bundle` bundle.
+SAME machine over an in-memory :mod:`bundle.synthetic_bundle` bundle.
 
 FACTORY-ONLY SIM-KWARGS (the ``_``-prefixed keys)
 -------------------------------------------------
@@ -247,7 +247,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         _CACHED_FULL_POOL_SAMPLER.rng = np.random.default_rng(seed)
         return _CACHED_FULL_POOL_SAMPLER
 
-    from pipeline.batch.engine_artifacts import EngineArtifacts
+    from bundle.load_bundle import EngineArtifacts
     from simulation.batch_runner import _WORKER_SHARED
     from simulation.full_pool_sampler import FullPoolSampler
 
@@ -263,7 +263,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         raise RuntimeError(
             f"SIM-486: cannot load the engine-artifact bundle from {art_dir!r} "
             f"({type(exc).__name__}: {exc}). There is no fallback simulator; build "
-            "the bundle (python -m pipeline.batch.engine_artifacts --what all)."
+            "the bundle (python -m bundle.build_bundle --what all)."
         ) from exc
     # The home-field draw weight. 1.0, the code default and the value of any
     # unparsable setting, turns the reweight off exactly. Production runs
@@ -341,7 +341,7 @@ def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
         return _CACHED_IBB_RATES  # type: ignore[return-value]
     out: dict[tuple[int, int, bool, bool], float] | None
     try:
-        from pipeline.batch.engine_artifacts import ibb_rates_from_rows
+        from bundle.reference_tables import ibb_rates_from_rows
         from simulation.sim_kwargs import open_sim_duckdb
 
         con = open_sim_duckdb()
@@ -382,7 +382,7 @@ def _load_venue_run_factors() -> dict[tuple[int, int], float] | None:
             ).fetchall()
         finally:
             con.close()
-        from pipeline.batch.engine_artifacts import venue_run_factors_from_rows
+        from bundle.reference_tables import venue_run_factors_from_rows
 
         return venue_run_factors_from_rows(rows)
     except Exception:

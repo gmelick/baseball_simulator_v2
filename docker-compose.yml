@@ -434,6 +434,9 @@ services:
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
       - ./ingest:/app/ingest
+      - ./profiles:/app/profiles
+      - ./pools:/app/pools
+      - ./bundle:/app/bundle
       - ./operations:/app/operations
       - ./similarity:/app/similarity
       # SIM-375: mount the real Phase-5 simulation package (not the dead
@@ -441,7 +444,7 @@ services:
       - ./simulation:/app/simulation
       - ./db:/app/db
       # Persistent /data volume so the DuckDB file produced by
-      # pipeline/batch/player_profile_computor.py survives container
+      # profiles/build_profiles.py survives container
       # restarts and is visible to both the `app` service and any
       # one-off `docker compose run --rm app ...` invocations.
       - duckdb_data:/data
@@ -524,6 +527,9 @@ services:
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
       - ./ingest:/app/ingest
+      - ./profiles:/app/profiles
+      - ./pools:/app/pools
+      - ./bundle:/app/bundle
       - ./operations:/app/operations
       - ./db:/app/db
       - ./api:/app/api
@@ -575,6 +581,9 @@ services:
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
       - ./ingest:/app/ingest
+      - ./profiles:/app/profiles
+      - ./pools:/app/pools
+      - ./bundle:/app/bundle
       - ./operations:/app/operations
       - ./similarity:/app/similarity
       - ./simulation:/app/simulation

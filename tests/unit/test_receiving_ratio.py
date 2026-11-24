@@ -35,13 +35,15 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.receiving import (
+from bundle.catcher_receiving import (
     RECV_BLOCK_PRIOR,
     RECV_FRAME_PRIOR,
+    build_receiving_profiles,
     recv_block_cell,
     recv_zone_group,
 )
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool, build_receiving_profiles
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import HandPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.production_factory import apply_result_split_env
 

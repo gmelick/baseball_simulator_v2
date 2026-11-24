@@ -211,7 +211,7 @@ def _ro_lifespan_setup(monkeypatch, role_check):
     # budget, SIM-280).
     import api.bundle_watch as bundle_watch
     import simulation.batch_runner as batch_runner
-    from pipeline.batch.engine_artifacts import EngineArtifacts
+    from bundle.load_bundle import EngineArtifacts
 
     def _no_bundle(*_args, **_kwargs):
         raise FileNotFoundError("no bundle in this test")

@@ -177,9 +177,9 @@ from steal_pool_rebuild.pickoffs import (  # noqa: E402
 )
 from steal_pool_rebuild.preflight import _steal_counts, _steal_versions, preflight  # noqa: E402
 
-import pipeline.batch.player_profile_computor as ppc  # noqa: E402
-from pipeline.batch.engine_artifacts import last_n_seasons  # noqa: E402
-from pipeline.batch.pool_chain import attach_pg  # noqa: E402
+import profiles.build_profiles as ppc  # noqa: E402
+from bundle.common import last_n_seasons
+from pools.check_pool_labels import attach_pg  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # The two modes

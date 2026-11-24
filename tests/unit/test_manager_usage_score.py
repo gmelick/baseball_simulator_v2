@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import inspect
 
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor
 
 _SRC = inspect.getsource(PlayerProfileComputor._compute_manager_profiles)
 _USAGE_COLS = (

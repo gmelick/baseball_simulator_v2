@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import HandPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.sim_loop import StateMachine

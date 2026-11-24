@@ -41,16 +41,13 @@ import duckdb
 import numpy as np
 import pytest
 
-import pipeline.batch.profiles.pool_meta as pool_meta
-import pipeline.batch.profiles.sql as profile_sql
-from pipeline.batch import player_profile_computor as ppc
-from pipeline.batch.engine_artifacts import (
-    BattedBallPool,
-    EngineArtifacts,
-    HandPool,
-    build_battedball_pool_artifact,
-    build_pitch_pool_artifact,
-)
+import pools.pool_metadata as pool_meta
+import profiles.sql as profile_sql
+from bundle.export_batted_ball_pool import build_battedball_pool_artifact
+from bundle.export_pitch_pool import build_pitch_pool_artifact
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import BattedBallPool, HandPool
+from profiles import build_profiles as ppc
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, Team
 from simulation.loop.values import times_through_order

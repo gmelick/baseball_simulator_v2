@@ -12,7 +12,7 @@ from typing import Any
 import duckdb
 import numpy as np
 
-from pipeline.batch.engine_artifacts import build_pitch_pool_artifact
+from bundle.export_pitch_pool import build_pitch_pool_artifact
 
 from .common import _ROOT, HANDS, UNCHANGED_POOLS, _log, _npy_rows, _pq, _season_list, _sha256
 from .preflight import _copy_problem, _join_bb_row, _pitch_pool_problem, _pitch_pool_strays

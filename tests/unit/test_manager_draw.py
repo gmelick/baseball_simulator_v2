@@ -37,16 +37,14 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    ChangePool,
-    EngineArtifacts,
-    build_pitching_change_pool,
-)
+from bundle.export_pitching_change_pool import build_pitching_change_pool
+from bundle.load_bundle import EngineArtifacts
+from bundle.synthetic_bundle import league_artifacts
+from bundle.worker_pools import ChangePool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.production_factory import _manager_draw_enabled, apply_manager_env
 from simulation.sim_loop import StateMachine
-from simulation.synthetic_bundle import league_artifacts
 
 _SEASON = 2024
 
@@ -459,7 +457,7 @@ class _Recorder(StateMachine):
 
 
 def _machine(manager=None, *, draw: bool = False) -> _Recorder:
-    from simulation.synthetic_bundle import synthetic_sampler
+    from bundle.synthetic_bundle import synthetic_sampler
 
     fp = synthetic_sampler(league_artifacts(), seed=3)
     m = _Recorder(fp, rng=np.random.default_rng(3), manager=manager)

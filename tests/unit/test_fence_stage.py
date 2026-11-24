@@ -34,14 +34,10 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.battedball_pool import BB_CLASS
-from pipeline.batch.artifacts.park_geometry import PARK_N_SECTORS, carry_predict, park_sector
-from pipeline.batch.engine_artifacts import (
-    BattedBallPool,
-    EngineArtifacts,
-    HandPool,
-    build_park_geometry,
-)
+from bundle.export_batted_ball_pool import BB_CLASS
+from bundle.load_bundle import EngineArtifacts
+from bundle.park_geometry import PARK_N_SECTORS, build_park_geometry, carry_predict, park_sector
+from bundle.worker_pools import BattedBallPool, HandPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.loop.values import _venue_of
@@ -553,7 +549,7 @@ class TestLoopAndContract:
         assert state2.park == "7"
 
     def test_simulate_game_carries_the_venue_onto_the_state(self):
-        from simulation.synthetic_bundle import synthetic_sampler
+        from bundle.synthetic_bundle import synthetic_sampler
 
         fp = synthetic_sampler()
         machine = StateMachine(fp, rng=np.random.default_rng(1))

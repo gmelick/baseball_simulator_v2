@@ -34,14 +34,15 @@ from ingest.statcast_events import (
     sql_play_outs,
 )
 
-_COMPUTOR = (
-    Path(__file__).resolve().parents[3] / "pipeline" / "batch" / "player_profile_computor.py"
-)
+_COMPUTOR = Path(__file__).resolve().parents[3] / "profiles" / "build_profiles.py"
 
 
 def _computor_source() -> str:
     """The computor's whole source: the main module and its ``profiles`` package."""
-    paths = [_COMPUTOR, *sorted((_COMPUTOR.parent / "profiles").glob("*.py"))]
+    paths = [
+        *sorted(_COMPUTOR.parent.glob("*.py")),
+        *sorted((_COMPUTOR.parent.parent / "pools").glob("*.py")),
+    ]
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
@@ -222,7 +223,7 @@ class TestSqlRendering:
         every count (the SIM-456 lesson, applied to the third code set).
         SIM-553: the check runs the expression, so an earlier branch that took
         an in-play code would fail it; it no longer reads the source."""
-        from tests.unit.test_profile_code_sets import _codes_by_class
+        from tests.unit.profiles.test_profile_code_sets import _codes_by_class
 
         assert _codes_by_class(strikes).get("in_play", set()) == set(IN_PLAY_TYPES)
 

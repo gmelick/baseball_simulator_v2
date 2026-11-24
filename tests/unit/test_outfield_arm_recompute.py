@@ -367,7 +367,7 @@ class TestVerifyChecks:
         """The computor's own ``_fill_outfield_arm_block`` on this fixture reads the
         hand-computed block and passes the script's checks — the two SQLs (the fill
         and ``_pool_block_sql``) share one cell key and one arithmetic."""
-        from pipeline.batch.player_profile_computor import PlayerProfileComputor
+        from profiles.build_profiles import PlayerProfileComputor
 
         con = _fixture()
         computor = PlayerProfileComputor(pg_dsn="", duckdb_path=":memory:")

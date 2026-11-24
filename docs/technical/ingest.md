@@ -132,7 +132,7 @@ name from its own module.
 
 ### `ingest/mlb/client.py`
 
-[Source](../../ingest/mlb/client.py) · 261 lines · Tests: [test_mlb_client.py](../../tests/unit/ingest/test_mlb_client.py), [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_boxscore_ingest.py](../../tests/unit/ingest/test_boxscore_ingest.py), [test_park_geometry_builder.py](../../tests/unit/test_park_geometry_builder.py)
+[Source](../../ingest/mlb/client.py) · 261 lines · Tests: [test_mlb_client.py](../../tests/unit/ingest/test_mlb_client.py), [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_boxscore_ingest.py](../../tests/unit/ingest/test_boxscore_ingest.py), [test_park_geometry_builder.py](../../tests/unit/bundle/test_park_geometry_builder.py)
 
 The one MLB Stats API client. It holds the endpoint addresses, the sync GET with its
 retry rule, and the async reader. The Savant and BettingPros reads use the same sync GET.
@@ -479,7 +479,7 @@ costs the box rows their commit.
 
 Writes `raw.game_bullpen_availability`: one row per pitcher on each team's roster, used or
 not, with whether he could pitch and why. The manager usage profile
-(`pipeline/batch/profiles/manager.py`) reads it. A reliever the manager held back differs
+(`profiles/manager.py`) reads it. A reliever the manager held back differs
 from one who could not pitch. Each arm's rest and recent workload come from `raw.pitches`,
 through the profile computor's `_compute_bullpen_workload`. The roster and the injured list (IL) come from the
 MLB roster endpoint.
@@ -506,7 +506,7 @@ western night game's UTC date is the next day, so the roster read would take the
 
 ### `ingest/venues/load_venue_dimensions.py`
 
-[Source](../../ingest/venues/load_venue_dimensions.py) · 150 lines · Tests: [test_park_geometry_builder.py](../../tests/unit/test_park_geometry_builder.py), [test_fence_stage.py](../../tests/unit/test_fence_stage.py)
+[Source](../../ingest/venues/load_venue_dimensions.py) · 150 lines · Tests: [test_park_geometry_builder.py](../../tests/unit/bundle/test_park_geometry_builder.py), [test_fence_stage.py](../../tests/unit/test_fence_stage.py)
 
 The MLB API's published fence distances. They are the prior of a park's fence line where
 the pool's own balls are too few (the fence certification, SIM-478). The bundle keeps the
@@ -515,7 +515,7 @@ last answer in `venue_dimensions.json`.
 | Function / class | What it does | Called from |
 |---|---|---|
 | `fetch_venue_dimensions` | One season's venues with their five published distances, the off-alley points, the roof and the turf. | `write_venue_dimensions` |
-| `write_venue_dimensions` | Fetches every season of the window and merges the answers over the stored copy; a venue's latest season wins. A failed season keeps the last copy. | `pipeline/batch/artifacts/park_geometry.py` (`build_park_geometry`) |
+| `write_venue_dimensions` | Fetches every season of the window and merges the answers over the stored copy; a venue's latest season wins. A failed season keeps the last copy. | `bundle/park_geometry.py` (`build_park_geometry`) |
 | `read_venue_dimensions` | The stored copy, or `{}`. | `write_venue_dimensions` |
 
 **Watch out:** a broken answer can raise `http.client.HTTPException`, which is not an
@@ -543,7 +543,7 @@ write; load the venue first.
 
 ### `ingest/savant/boards.py`
 
-[Source](../../ingest/savant/boards.py) · 517 lines · Tests: [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py), [test_point_in_time_batter.py](../../tests/unit/test_point_in_time_batter.py), [test_arm_angle_decision.py](../../tests/unit/test_arm_angle_decision.py), [test_outfield_arm_recompute.py](../../tests/unit/test_outfield_arm_recompute.py)
+[Source](../../ingest/savant/boards.py) · 517 lines · Tests: [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py), [test_point_in_time_batter.py](../../tests/unit/profiles/test_point_in_time_batter.py), [test_arm_angle_decision.py](../../tests/unit/test_arm_angle_decision.py), [test_outfield_arm_recompute.py](../../tests/unit/test_outfield_arm_recompute.py)
 
 The registry of the twelve Savant leaderboards. Each `SavantBoard` names its address, how
 its query names the season, its target table and its columns. Each board writes
@@ -573,7 +573,7 @@ its own pull. The stance board lives at `/visuals/batting-stance`, not under `/l
 
 ### `ingest/savant/load_leaderboards.py`
 
-[Source](../../ingest/savant/load_leaderboards.py) · 457 lines · Tests: [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py), [test_point_in_time_batter.py](../../tests/unit/test_point_in_time_batter.py)
+[Source](../../ingest/savant/load_leaderboards.py) · 457 lines · Tests: [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py), [test_point_in_time_batter.py](../../tests/unit/profiles/test_point_in_time_batter.py)
 
 One loader for every board. It fetches the CSV, checks the season, coerces each row,
 drops the players the database does not know, and upserts the rest. `main` writes every
@@ -603,7 +603,7 @@ HTTP 200. Parsed as CSV, that page reads as an empty season; `parse_rows` refuse
 
 ### `ingest/savant/load_pitch_tracking.py`
 
-[Source](../../ingest/savant/load_pitch_tracking.py) · 268 lines · Tests: [test_point_in_time_batter.py](../../tests/unit/test_point_in_time_batter.py)
+[Source](../../ingest/savant/load_pitch_tracking.py) · 268 lines · Tests: [test_point_in_time_batter.py](../../tests/unit/profiles/test_point_in_time_batter.py)
 
 The per-pitch tracking measurements from Savant's search export, one day per request,
 into `raw.savant_pitch_tracking`. The measurements are bat speed, swing length, attack
@@ -653,7 +653,7 @@ not JSON. The game loader's venue step reads the fence dimensions with it.
 
 ### `ingest/statcast_events.py`
 
-[Source](../../ingest/statcast_events.py) · 466 lines · Tests: [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py), [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py), [test_transition_pool.py](../../tests/unit/test_transition_pool.py)
+[Source](../../ingest/statcast_events.py) · 466 lines · Tests: [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py), [test_profile_code_sets.py](../../tests/unit/profiles/test_profile_code_sets.py), [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py), [test_transition_pool.py](../../tests/unit/test_transition_pool.py)
 
 The one place that decides what a `raw.pitches` row means. Every out label derives from
 `events`, the plate-appearance result on its last pitch, never from `outs_on_pitch`. The
@@ -662,13 +662,13 @@ so the API reads it without the profile computor's imports.
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `PLAY_OUTS_BY_EVENT` / `FIELDING_OUT_EVENTS` / `play_outs` / `sql_fielding_out` | How many outs a play recorded (question 1). `play_outs` adds the hidden runner out when the type is `X`. | `play_outs`: `pipeline/batch/profiles/fielder_plays.py`. `sql_fielding_out`: `pipeline/batch/profiles/sql.py` |
+| `PLAY_OUTS_BY_EVENT` / `FIELDING_OUT_EVENTS` / `play_outs` / `sql_fielding_out` | How many outs a play recorded (question 1). `play_outs` adds the hidden runner out when the type is `X`. | `play_outs`: `profiles/fielder_plays.py`. `sql_fielding_out`: `profiles/sql.py` |
 | `BATTER_RETIRED_EVENTS` / `batter_retired` / `sql_batter_retired` | Whether the batter was retired (question 2). The batter reaches on `force_out` and on both fielder's-choice events. | `batter_retired`: `fielder_plays.py`. `sql_batter_retired`: `profiles/sql.py` |
 | `sql_play_outs` / `sql_cs_out` / `sql_outs_recorded` | The outs on a row: the event's outs and a hidden runner out; then a caught stealing in the middle of a plate appearance. `sql_outs_recorded` is the innings-pitched building block. | `sql_play_outs`: `profiles/pools.py`. `sql_outs_recorded`: `profiles/sql.py`, `scripts/boxscore_audit.py` |
 | `sql_runner_dest` / `sql_batter_dest` | Each runner's and the batter's base after the play: 0 is out, 4 is scored. | `profiles/pools.py` |
 | `sql_steal_attempt` / `sql_steal_success` | The one steal label every site reuses. | `profiles/baserunner.py`, `catcher.py`, `manager.py`, `pools.py`; `sql_steal_success` also `scripts/boxscore_audit.py` |
 | `BALL_TYPES`, `CALLED_STRIKE_TYPES`, `WHIFF_TYPES`, `FOUL_TYPES`, `STRIKE_THREE_FOUL_TYPES`, `NON_SWING_TYPES`, `IN_PLAY_TYPES`, `FOUL_TIP_TYPES`, `SAVANT_WHIFF_TYPES` | The pitch-result code sets. `STRIKE_THREE_FOUL_TYPES` marks a two-strike foul tip or foul bunt as strike three. | `profiles/sql.py`; `STRIKE_THREE_FOUL_TYPES` also `scripts/rebuild_pitch_pool.py`, `scripts/pitch_pool_rebuild/checks.py` |
-| `sql_in_play` / `sql_swing` / `sql_savant_whiff` / `sql_called_strike` / `sql_csw` / `sql_list` | Row filters built from those sets. The model's whiff counts a foul tip as contact; Savant's whiff, which the Data Lab shows, counts it as a whiff. | `api/routes/analytics.py`, `api/routes/ai_assistant.py`; `sql_in_play` and `sql_list` also `profiles/sql.py`; `sql_list` also `pipeline/batch/pool_chain.py` |
+| `sql_in_play` / `sql_swing` / `sql_savant_whiff` / `sql_called_strike` / `sql_csw` / `sql_list` | Row filters built from those sets. The model's whiff counts a foul tip as contact; Savant's whiff, which the Data Lab shows, counts it as a whiff. | `api/routes/analytics.py`, `api/routes/ai_assistant.py`; `sql_in_play` and `sql_list` also `profiles/sql.py`; `sql_list` also `pools/check_pool_labels.py` |
 
 **Watch out:** [test_out_label.py](../../tests/unit/ingest/test_out_label.py) fails when
 any profile site reads `outs_on_pitch`. Filter on `type`, never on `description`, which is

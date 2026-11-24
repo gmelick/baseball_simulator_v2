@@ -35,7 +35,7 @@ DuckDB schema **v32** for the analytics file.
    `raw.savant_*` tables and `raw.sprint_speed`.
 3. The live service (`pipeline/live/`) writes the schedule fields on `raw.games`, the
    posted lineups, the odds rows and `sim.lineup_state`.
-4. The nightly profile computor (`pipeline/batch/player_profile_computor.py`) opens the
+4. The nightly profile computor (`profiles/build_profiles.py`) opens the
    analytics file, attaches Postgres read-only as `pg`, applies
    `db/schemas/02_duckdb_schema.sql`, and rebuilds the `derived.*` profiles and the
    `sim.*` play pools.
@@ -72,13 +72,13 @@ section below).
 | `raw.game_lineups` | Each team's batting order and the position each starter STARTED at, with substitutions (`sequence`, `pinch_role`). `source` is `box` (the final box score), `published` (posted before first pitch) or `projected`. | the historical loader (`ingest/games/reference_rows.py`); the live lineup writer; the starting-position backfill (`scripts/probes/backfill_start_positions.py`, through `boxscore_ingest.persist_starting_positions`) | the lineup resolver (`simulation/lineup_resolver.py`), the game routes, the manager profile, the scripts |
 | `raw.game_player_stats` | The official per-player box score: one row per player who APPEARED (no row means the player did not play and a book voids the bet). Batting and pitching lines, `p_started`. No foreign key on `player_id`, on purpose. | the box-score parser; `python -m ingest.load_boxscores` | the prop grading (`simulation/prop_validation.py`, `scripts/accuracy/`), the lineup resolver (each side's starter), the bullpen derivation |
 | `raw.game_bullpen` | The arms the MLB box lists for a game per side: `started`, `pitched` or `bullpen`. The simulator's pen. | the box-score parser; `python -m ingest.load_boxscores --bullpen-only` | `pipeline/bullpen_usage.py`, the lineup resolver, the game routes |
-| `raw.game_bullpen_availability` | Who was AVAILABLE per game (active roster and injured list), with rest fields. | `ingest/load_bullpen_availability.py` | the manager profile (`pipeline/batch/profiles/manager.py`) |
+| `raw.game_bullpen_availability` | Who was AVAILABLE per game (active roster and injured list), with rest fields. | `ingest/load_bullpen_availability.py` | the manager profile (`profiles/manager.py`) |
 
 ### Pitch and event data
 
 | Table | Holds | Written by | Read by |
 |---|---|---|---|
-| `raw.pitches` | One row per pitch, parsed from the MLB Stats API game feed: the count, the pitch's physics, the batted ball, the fielders, the runners, the event, the managers. A row is never changed after it is written; a corrective reload deletes and rewrites the game. An insert trigger sets `data_quality_flag` on physically implausible values. | the historical loader (`ingest/games/write_rows.py`) | the profile computor and the pool builders (through `pg.raw.pitches`), the pool label check (`pipeline/batch/pool_chain.py`), the Data Lab |
+| `raw.pitches` | One row per pitch, parsed from the MLB Stats API game feed: the count, the pitch's physics, the batted ball, the fielders, the runners, the event, the managers. A row is never changed after it is written; a corrective reload deletes and rewrites the game. An insert trigger sets `data_quality_flag` on physically implausible values. | the historical loader (`ingest/games/write_rows.py`) | the profile computor and the pool builders (through `pg.raw.pitches`), the pool label check (`pools/check_pool_labels.py`), the Data Lab |
 | `raw.play_events` | The events that are not pitches: pickoff throws (errant ones included), step-offs, balks, and intentional walks signalled without a pitch. | the historical loader | the profile computor (pickoff rates, runner events), the steal-pool rebuild, the prop ground truth |
 | `raw.sprint_speed` | Savant sprint speed per player-season. | `ingest/savant/load_sprint_speed.py` | the baserunner and fielder profiles, the pool builder |
 
@@ -152,7 +152,7 @@ A new, empty file therefore gets the current tables. An existing file gets a sch
 only from its numbered migration under `db/migrations/duckdb/`, which a run book or a
 rebuild script applies. The nightly job applies no DuckDB migration. A builder that needs a
 migrated table checks for it first and refuses before it deletes anything (for example
-`_require_steal_pool_0031` in `pipeline/batch/profiles/pool_meta.py`).
+`_require_steal_pool_0031` in `pools/pool_metadata.py`).
 
 The computor reads Postgres through DuckDB's Postgres extension:
 `ATTACH '<dsn>' AS pg (TYPE postgres, READ_ONLY)`, then `pg.raw.pitches`.
@@ -167,7 +167,7 @@ SIM-551).
 
 | Table | Holds | Built by | Read by |
 |---|---|---|---|
-| `derived.pitcher_season_metrics` | The pitcher profile, with the arsenal as a Gaussian mixture model (a sum of bell curves over eight pitch features) in `gmm_model`. | `pipeline/batch/profiles/pitcher.py`, `gmm.py` | the pitcher engine and its calibration |
+| `derived.pitcher_season_metrics` | The pitcher profile, with the arsenal as a Gaussian mixture model (a sum of bell curves over eight pitch features) in `gmm_model`. | `profiles/pitcher.py`, `gmm.py` | the pitcher engine and its calibration |
 | `derived.pitcher_gmm_components` | One row per mixture component, for SQL reads. | `gmm.py` | the computor |
 | `derived.batter_season_metrics` | The batter profile: plate discipline, batted-ball shape, platoon splits, the Savant swing measurements. | `profiles/batter.py` | the batter engine and its calibration |
 | `derived.fielder_season_metrics` | One row per player, position and season: range, arm, errors, double plays, Savant outs above average and jump, sprint speed. | `profiles/fielder.py` | the fielder engine; `scripts/probes/outfield_arm_recompute.py` writes it too |
@@ -187,11 +187,11 @@ SIM-551).
 The play pools are filtered copies of real plays that the simulator draws from. The
 tables hold every loaded season. The bundle export keeps the pool window: the last three
 completed seasons plus the current one (`RECENCY_FLOOR_SEASONS = 4` in
-`pipeline/batch/artifacts/common.py`).
+`bundle/common.py`).
 
 | Table | Holds | Built by | Read by |
 |---|---|---|---|
-| `sim.pitch_pool` | One row per clean pitch, with the pitch's features, its class (`outcome_type`), the count, the catcher, the got-away facts and the draw's conditioning columns. | `profiles/pools.py`; `scripts/rebuild_pitch_pool.py` | the bundle builder (`pipeline/batch/artifacts/pitch_pool.py`), the pool label check |
+| `sim.pitch_pool` | One row per clean pitch, with the pitch's features, its class (`outcome_type`), the count, the catcher, the got-away facts and the draw's conditioning columns. | `profiles/pools.py`; `scripts/rebuild_pitch_pool.py` | the bundle builder (`bundle/export_pitch_pool.py`), the pool label check |
 | `sim.outcome_pool` | The balls in play, with the batted ball, the venue, the batting side, the fielders on the play and the whole base-out transition the play made. | `profiles/pools.py` | the bundle's batted-ball pool, the park geometry builder, the batted-ball engine |
 | `sim.steal_opportunity_pool` | One row per pitch where a steal was possible, attempted or not, plus the pickoff outcomes and their own rows (`is_pickoff_row`); `pitch_class` is the class of the pitch the row rode. | `profiles/pools.py`; `scripts/rebuild_steal_pool.py` | the bundle's steal pool |
 | `sim.advancement_opportunity_pool` | One row per discretionary runner decision (five scenarios), attempted or not. Built from the outcome pool. | `profiles/pools.py` | the bundle's advancement pool, the fielder engine |
@@ -410,7 +410,7 @@ applied to the analytics file by hand or by a rebuild script.
 
 ### `db/schemas/02_duckdb_schema.sql`
 
-[Source](../../db/schemas/02_duckdb_schema.sql) · 1,482 lines · Tests: [test_delete_seasons_coverage.py](../../tests/unit/test_delete_seasons_coverage.py), [test_draw_conditioning.py](../../tests/unit/test_draw_conditioning.py), [test_batter_physical_features.py](../../tests/unit/test_batter_physical_features.py)
+[Source](../../db/schemas/02_duckdb_schema.sql) · 1,482 lines · Tests: [test_delete_seasons_coverage.py](../../tests/unit/profiles/test_delete_seasons_coverage.py), [test_draw_conditioning.py](../../tests/unit/test_draw_conditioning.py), [test_batter_physical_features.py](../../tests/unit/profiles/test_batter_physical_features.py)
 
 The analytics file's full schema, applied on every connect by the profile computor
 (`PlayerProfileComputor._run_schema_ddl` reads it from `db/schemas/` under the working

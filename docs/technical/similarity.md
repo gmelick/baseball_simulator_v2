@@ -38,7 +38,7 @@ disk:
    ([engine_artifacts.py](../../pipeline/batch/engine_artifacts.py); `make engine-artifacts`).
    It builds each engine fresh from DuckDB over the bundle's seasons: the four newest
    seasons of `sim.pitch_pool` (`RECENCY_FLOOR_SEASONS`).
-2. `build_pitcher_sim_matrix` ([pitcher_sim.py](../../pipeline/batch/artifacts/pitcher_sim.py))
+2. `build_pitcher_sim_matrix` ([pitcher_sim.py](../../bundle/export_pitcher_scores.py))
    queries the pitcher engine once per profile. It writes the dense float32
    `pitcher_sim_matrix` into `pitcher_sim.npz`; a pair the engine did not score holds 0.0.
 3. `build_actor_sim_matrices` (engine_artifacts.py) queries seven engines the same way and
@@ -259,7 +259,7 @@ cache logs as `pitcher_similarity`.
 
 ### `similarity/engines/batter_similarity.py`
 
-[Source](../../similarity/engines/batter_similarity.py) · 1,350 lines · Tests: [test_batter_similarity.py](../../tests/unit/test_batter_similarity.py), [test_batter_physical_features.py](../../tests/unit/test_batter_physical_features.py), [test_engine_build_smoke.py](../../tests/unit/test_engine_build_smoke.py)
+[Source](../../similarity/engines/batter_similarity.py) · 1,350 lines · Tests: [test_batter_similarity.py](../../tests/unit/test_batter_similarity.py), [test_batter_physical_features.py](../../tests/unit/profiles/test_batter_physical_features.py), [test_engine_build_smoke.py](../../tests/unit/test_engine_build_smoke.py)
 
 Compares batter-seasons on five sub-scores:
 
@@ -492,7 +492,7 @@ symmetry.
 
 ### `similarity/backtesting/`
 
-[Source](../../similarity/backtesting/) · Tests: [test_probabilistic_backtester.py](../../tests/unit/test_probabilistic_backtester.py), [test_recency_walk_forward.py](../../tests/unit/test_recency_walk_forward.py)
+[Source](../../similarity/backtesting/) · Tests: [test_probabilistic_backtester.py](../../tests/unit/test_probabilistic_backtester.py), [test_recency_walk_forward.py](../../tests/unit/pools/test_recency_walk_forward.py)
 
 An offline validation library on in-memory data; no database, no live caller. The
 production win-probability and prop calibration runs on the binary path of

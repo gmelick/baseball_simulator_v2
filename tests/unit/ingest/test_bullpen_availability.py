@@ -32,7 +32,7 @@ from ingest.load_bullpen_availability import (
     _opt_int,
     _rest_as_of,
 )
-from pipeline.batch import player_profile_computor as ppc
+from profiles import build_profiles as ppc
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _FIX = REPO_ROOT / "tests" / "fixtures" / "bullpen"

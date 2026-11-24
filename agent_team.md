@@ -105,11 +105,11 @@ weights, calibration and validation.
 
 - `similarity/`: the engines, the calibration fit and the backtester.
 - The actor score matrices in the bundle (`build_actor_sim_matrices` in
-  `pipeline/batch/engine_artifacts.py`; `pipeline/batch/artifacts/actor_embeddings.py`
+  `pipeline/batch/engine_artifacts.py`; `bundle/export_actor_embeddings.py`
   maps the pool rows onto their columns) and the powers that turn a score into a weight
   (`SIM_ACTOR_POWER_*`).
 - The weight functions in `simulation/sampler/kernels.py`.
-- The arsenal model (`pipeline/batch/profiles/gmm.py`).
+- The arsenal model (`profiles/arsenal_fit.py`).
 - Calibration: `make calibrate`, `make validate-props`, `/data/calibration.json`.
 - The designed experiment (`scripts/designed_experiment.py`): the one fit of every
   weight together.

@@ -13,8 +13,8 @@ from typing import Any
 import duckdb
 import numpy as np
 
-from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASS_CODE
-from pipeline.batch.engine_artifacts import build_steal_pool_artifact
+from bundle.export_steal_pool import build_steal_pool_artifact
+from bundle.worker_pools import STEAL_PITCH_CLASS_CODE
 
 from .bundle import bundle_hashes, compare_hashes, steal_pool_problem
 from .common import (

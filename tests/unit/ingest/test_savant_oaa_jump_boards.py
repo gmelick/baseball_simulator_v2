@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[3]
 ALEMBIC_0027 = REPO / "db" / "migrations" / "versions" / "0027_sim532_savant_oaa_and_jump.py"
 PG_SCHEMA_SQL = REPO / "db" / "schemas" / "01_postgres_schema.sql"
 FIELDER_ENGINE = REPO / "similarity" / "engines" / "fielder_similarity.py"
-COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+COMPUTOR = REPO / "profiles" / "build_profiles.py"
 
 OAA = BOARDS["outs_above_average"]
 JUMP = BOARDS["outfield_jump"]

@@ -8,7 +8,7 @@ with and without the database.
 WHAT HAPPENED (2026-09-16)
 --------------------------
 The steal-runner score-matrix build segfaulted three times out of three inside
-``pipeline/batch/engine_artifacts._key_of``. That function joined a GENERATOR
+``similarity/build_score_tables._key_of``. That function joined a GENERATOR
 EXPRESSION (the lazy ``(... for a in key_attrs)`` that a C builtin pulls one
 item at a time) with ``str.join``, once per query result — 6.7 million times
 for 2,585 profiles. A standalone run of the same loop against the live engine

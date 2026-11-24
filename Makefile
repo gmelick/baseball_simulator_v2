@@ -158,13 +158,13 @@ live-logs:
 
 ## Nightly: rebuild DuckDB player profiles + sim pools from Postgres.
 profile-computor: _require_env_file
-	docker compose run --rm app python -m pipeline.batch.player_profile_computor
+	docker compose run --rm app python -m profiles.build_profiles
 
 ## Nightly (SIM-422/486): build the engine-artifact bundle the production
 ## sampler reads (pools + pitcher similarity + actor embeddings).  Runs AFTER
 ## profile-computor.  Pass FLAGS="--what pool" to rebuild the pools only.
 engine-artifacts: _require_env_file
-	docker compose run --rm app python -m pipeline.batch.engine_artifacts --what all $(FLAGS)
+	docker compose run --rm app python -m bundle.build_bundle --what all $(FLAGS)
 
 ## Nightly (SIM-406): fit + persist the CalibrationReport over the DuckDB profiles.
 ## Runs AFTER profile-computor (it reads the derived.* season-metrics tables) and
@@ -221,7 +221,7 @@ TESTS = tests/unit/
 test: _require_env_file
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest tests/ -v --tb=short --timeout=60 \
-	       --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=operations --cov=db \
+	       --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=profiles --cov=pools --cov=bundle --cov=operations --cov=db \
 	       --cov-report=term-missing --cov-report=xml:coverage.xml
 
 ## Unit tests only — no live DB or Redis required, fast feedback loop
@@ -230,7 +230,7 @@ test: _require_env_file
 test-unit:
 	docker compose run --rm -v "$(CURDIR):/app" app \
 	  pytest $(TESTS) -v --tb=short --timeout=30 \
-	         --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=operations --cov=db \
+	         --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=profiles --cov=pools --cov=bundle --cov=operations --cov=db \
 	         --cov-report=term-missing
 
 ## Regression tests — the engine invariant gate (no snapshots; CLAUDE.md §7).
@@ -261,7 +261,7 @@ format:
 ## Mypy: static type checking (same config as CI Job 2)
 type-check:
 	docker compose run --rm -v "$(CURDIR):/app" app \
-	  mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports \
+	  mypy similarity/ ingest/ profiles/ pools/ bundle/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports \
 	       --python-version 3.13
 
 # ---------------------------------------------------------------------------

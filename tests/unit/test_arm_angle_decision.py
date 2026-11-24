@@ -95,10 +95,10 @@ BOARD_TABLE_PATTERN = re.compile(
 FORBIDDEN_BOARD_URL_FRAGMENTS = ("pitcher-arm-angles", "spin-direction", "active-spin")
 #: The readers that must not touch the per-pitch ``arm_angle`` column.
 UNREADING_MODULES = (
-    REPO / "pipeline" / "batch" / "player_profile_computor.py",
-    *sorted((REPO / "pipeline" / "batch" / "profiles").glob("*.py")),
-    REPO / "pipeline" / "batch" / "engine_artifacts.py",
-    *sorted((REPO / "pipeline" / "batch" / "artifacts").glob("*.py")),
+    *sorted((REPO / "profiles").glob("*.py")),
+    *sorted((REPO / "pools").glob("*.py")),
+    REPO / "similarity" / "build_score_tables.py",
+    *sorted((REPO / "bundle").glob("*.py")),
     *sorted((REPO / "similarity" / "engines").glob("*.py")),
 )
 ALEMBIC_VERSIONS = REPO / "db" / "migrations" / "versions"

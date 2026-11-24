@@ -61,8 +61,8 @@ from steal_pool_rebuild.export import (  # noqa: E402
 from steal_pool_rebuild.migration import migration_statements  # noqa: E402
 from steal_pool_rebuild.preflight import bundle_problems  # noqa: E402
 
-import pipeline.batch.profiles.pool_meta as pool_meta  # noqa: E402
-from pipeline.batch.engine_artifacts import build_steal_pool_artifact  # noqa: E402
+import pools.pool_metadata as pool_meta  # noqa: E402
+from bundle.export_steal_pool import build_steal_pool_artifact
 
 WINDOW = [2023, 2024, 2025, 2026]
 

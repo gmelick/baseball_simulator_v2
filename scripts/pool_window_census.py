@@ -34,7 +34,7 @@ THE LABEL CHECK
 Per window, the census also compares the pool's chain with REAL plate
 appearances counted from ``raw.pitches`` (Postgres): strikeouts, walks, hit by
 pitch and pitches per plate appearance, with the relative gap and a PASS or
-FAIL at 0.5% (``pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE``). The pool
+FAIL at 0.5% (``pools.check_pool_labels.LABEL_CHECK_TOLERANCE``). The pool
 centres come from the pool's own labels, so a coding defect in the pool build
 moves the centre with the sim, and no band sees it. Two coding defects have
 hidden this way: the hit-by-pitch rows coded as balls (SIM-509) and the
@@ -51,11 +51,11 @@ the two sides no longer read the same plate appearances (for example,
 stay on every pool row, because the simulator draws them all. A line after
 the check prints the all-rows centres' gap for the record; the groups cut
 short by a runner out put about +0.6 points on its walks
-(``pipeline/batch/pool_chain.py``, THE POPULATION RULE). On the window
+(``pools/check_pool_labels.py``, THE POPULATION RULE). On the window
 2023-2026 the pool's coding reads +0.09% / -0.25% / +0.08% / +0.07%
 (strikeouts / walks / hit by pitch / pitches).
 
-The chain solver and the label check live in ``pipeline/batch/pool_chain.py``.
+The chain solver and the label check live in ``pools/check_pool_labels.py``.
 
 USAGE
 -----
@@ -78,7 +78,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.batch.pool_chain import (  # noqa: E402
+from pools.check_pool_labels import (  # noqa: E402
     LABEL_CHECK_TOLERANCE,
     attach_pg,
     chain_rates,

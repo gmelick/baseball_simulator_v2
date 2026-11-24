@@ -29,12 +29,10 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    EngineArtifacts,
-    StealPool,
-    build_steal_pool_artifact,
-)
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from bundle.export_steal_pool import build_steal_pool_artifact
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import StealPool
+from profiles.build_profiles import PlayerProfileComputor
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, PlayResult, Team
 from simulation.sim_loop import StateMachine

@@ -62,9 +62,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.batch.player_profile_computor import PlayerProfileComputor  # noqa: E402
-from pipeline.batch.profiles import pitcher as pitcher_module  # noqa: E402
-from pipeline.batch.profiles.constants import MIN_PITCHER_PITCHES  # noqa: E402
+from profiles import pitcher as pitcher_module  # noqa: E402
+from profiles.build_profiles import PlayerProfileComputor  # noqa: E402
+from profiles.constants import MIN_PITCHER_PITCHES  # noqa: E402
 
 log = logging.getLogger("arsenal_reproducibility_check")
 

@@ -34,7 +34,7 @@
   Alembic head **0031** (§7, `db/migrations/README.md`).
 - **The simulator has one path: the full-pool similarity sampler** (SIM-486). The no-DB tests
   and the batch runner's no-DB factory build the same `StateMachine` over the in-memory bundle
-  `simulation/synthetic_bundle.py`. A missing artifact bundle fails the worker loudly; there is
+  `bundle/synthetic_bundle.py`. A missing artifact bundle fails the worker loudly; there is
   no fallback simulator.
 - **The production flags live in the `app` service `environment:` of `docker-compose.yml`.**
   `simulation/flags.py` registers every `SIM_*` flag with its code default. The loop cheat
@@ -113,15 +113,16 @@
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
 - **`scripts/` is NOT volume-mounted** into the running app container; only `api/`,
-  `ingest/`, `pipeline/`, `betting/`, `operations/`, `similarity/`, `simulation/` and `db/` are. The
+  `ingest/`, `profiles/`, `pools/`, `bundle/`, `pipeline/`, `betting/`, `operations/`,
+  `similarity/`, `simulation/` and `db/` are. The
   nightly jobs and the backups live in `operations/`, so they are mounted. `scripts/` is baked
   into the image. Edits to `scripts/` reach the
   running container only after `docker compose build app` and `docker compose up -d app`.
   Edits to the mounted folders need only `docker compose restart app`. Run a script that is
   not in the image yet with `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.
-- **`betting/` and `ingest/` are mounted into `app`, `live` and `jobs`**, like `pipeline/`. An
-  edit to either needs no image rebuild; the nightly odds pass (`python -m betting.historical_loader`)
-  runs the mounted copy too.
+- **Every program folder but `scripts/` is mounted into `app`, `live` and `jobs`.** An edit to
+  one needs no image rebuild; the nightly jobs (the profile build, the bundle build, the odds
+  pass) run the mounted copy.
 - **The container test and lint targets run the checkout (SIM-567).** The seven Makefile
   targets (`test`, `test-unit`, `test-regression`, `test-integration`, `lint`, `format`,
   `type-check`) mount the checkout over `/app`. `make test-unit TESTS="tests/unit/test_x.py"`
@@ -206,7 +207,7 @@ of the old `BACKLOG.md` is frozen at `docs/archive/BACKLOG-history.md`.
   against the play pool's own per-opportunity totals (`tests/acceptance/bands.py`
   `POOL_REFERENCES`, 16 bands); runs and the home-win share stay game-graded. The pool totals
   cannot see a labelling defect, because they read the same labels: the pool's label check
-  (`pipeline/batch/pool_chain.py`, `tests/acceptance/test_pool_label_check.py`,
+  (`pools/check_pool_labels.py`, `tests/acceptance/test_pool_label_check.py`,
   `scripts/pool_window_census.py --strict`) fails when the pool's count chain drifts more than
   0.5% from real plate appearances.
 - **The balanced certifying set (owner ruling 2026-09-09).** The lane grades on 45 games from
@@ -456,7 +457,7 @@ make test-unit           # unit tests (TESTS="tests/unit/test_x.py" names files)
 make test-regression     # engine invariant gate (no snapshots — see §7)
 make test-integration    # integration tests (testcontainers; they skip without a Docker socket)
 make lint / make format  # ruff check / ruff format
-make type-check          # mypy over the eight program folders
+make type-check          # mypy over the eleven program folders
 make profile-computor    # rebuild the DuckDB profiles + pools
 make engine-artifacts    # build + publish a new bundle version
 make calibrate           # fit /data/calibration.json (drops the reliability curve — §2b)
@@ -474,9 +475,9 @@ make restore-postgres SET=<ts>  # restore one Postgres set (refuses a populated 
 Raw equivalents (target **Python 3.13**):
 
 ```
-pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=operations --cov=db
+pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=profiles --cov=pools --cov=bundle --cov=operations --cov=db
 ruff check .   &&   ruff format --check .
-mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/   # CI scope; config in pyproject.toml
+mypy similarity/ ingest/ profiles/ pools/ bundle/ pipeline/ api/ simulation/ betting/ operations/ db/   # CI scope; config in pyproject.toml
 python scripts/docs_file_index.py                      # regenerate the file index (stdlib + git)
 ```
 

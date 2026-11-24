@@ -6,7 +6,7 @@ The loop's **fielding** step and its **baserunning + steals** step
 
 These tests run with NO DuckDB: every batted ball is drawn through the
 PRODUCTION in-play path (the transition draw) from a fixed-play
-:mod:`simulation.synthetic_bundle` bundle -- one event in every base-out cell,
+:mod:`bundle.synthetic_bundle` bundle -- one event in every base-out cell,
 so the play is deterministic. Steals are staged through
 :meth:`StateMachine.stage_steal`; the dropped third strike is the drawn pitch
 row's own got-away fact.
@@ -28,10 +28,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from bundle.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 from simulation.game_state import Bases, GameState, Half
 from simulation.loop.values import EVENT_STRIKEOUT, EVENT_WALK, STEAL_CAUGHT, STEAL_SAFE
 from simulation.sim_loop import StateMachine
-from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132

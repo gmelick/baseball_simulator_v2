@@ -15,10 +15,10 @@ module-by-module reference is [Simulation](simulation.md).
   2026-08-10 and 2026-08-29).
 - **The pool window.** The pools hold the last three completed seasons plus the current one
   (2023–2026 today; `RECENCY_FLOOR_SEASONS = 4` in
-  [`pipeline/batch/artifacts/common.py`](../../pipeline/batch/artifacts/common.py)).
+  [`bundle/common.py`](../../bundle/common.py)).
 - **Recency.** Every row carries a recency weight: 2.0 for the two newest seasons, then ×0.75
   per older season, never below 0.25
-  ([`pipeline/batch/profiles/pool_meta.py`](../../pipeline/batch/profiles/pool_meta.py)).
+  ([`pools/pool_metadata.py`](../../pools/pool_metadata.py)).
 - **A similarity score** is a number from 0 (nothing alike) to 1 (the same player), read from
   a nightly matrix (§5). The draw raises it to a **power**: a higher power prefers look-alikes
   more strongly; 0 turns the factor off. **Every power is 1** (owner ruling 2026-09-16) until

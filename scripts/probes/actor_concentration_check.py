@@ -26,7 +26,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.batch.engine_artifacts import concentration_report  # noqa: E402
+from similarity.build_score_tables import concentration_report
 
 _DEFAULT_DUCKDB = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 _DEFAULT_SIM_DIR = "/data/play_pool/engine_artifacts/actor_sim"

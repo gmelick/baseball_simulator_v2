@@ -24,9 +24,9 @@ log "0/2 wait for the finals load"
 sh /app/operations/jobs/wait_for_ingest.sh
 
 log "1/2 player_profile_computor --seasons ${YEAR}"
-python -m pipeline.batch.player_profile_computor --seasons "${YEAR}"
+python -m profiles.build_profiles --seasons "${YEAR}"
 
 log "2/2 engine_artifacts --what all"
-python -m pipeline.batch.engine_artifacts --what all
+python -m bundle.build_bundle --what all
 
 log "done"

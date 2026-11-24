@@ -7,7 +7,7 @@ Every decision is a similarity-weighted draw from a hard-filtered pool, never a
 hand-tuned formula, and the drawn row IS the play (the owner's rulings of
 2026-08-10 and 2026-08-29). All the draws read one
 :class:`~simulation.full_pool_sampler.FullPoolSampler` over an engine-artifact
-bundle: the production bundle on disk, or a :mod:`simulation.synthetic_bundle`
+bundle: the production bundle on disk, or a :mod:`bundle.synthetic_bundle`
 bundle in a test.
 
 :class:`StateMachine` keeps its core here: the pitch step, the pitch draw, the
@@ -878,7 +878,7 @@ def simulate_game(
       * **The inning grid:** each team's runs per inning, on the result.
 
     Pass a built ``state_machine`` (the production factory's, or a test's over
-    a :mod:`simulation.synthetic_bundle` bundle), or let the driver build a
+    a :mod:`bundle.synthetic_bundle` bundle), or let the driver build a
     count-machine-only machine. Pass an ``initial_state``, or let the driver
     build a fresh "top of the 1st" GameState from ``pitcher_id`` /
     ``bat_hand`` / ``season`` / the two lineups and the other keyword facts.

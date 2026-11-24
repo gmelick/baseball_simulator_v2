@@ -23,7 +23,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import BattedBallPool
 from simulation.full_pool_sampler import FullPoolSampler
 
 _SEASON = 2024

@@ -136,7 +136,7 @@ build opens the file read-only.
 
 **The bundle is a link to a version.** `engine_artifacts` is a symbolic link to one folder
 under `engine_artifacts.versions/<build id>/`
-([`pipeline/batch/bundle_versions.py`](../../pipeline/batch/bundle_versions.py)). A build
+([`bundle/versions.py`](../../bundle/versions.py)). A build
 copies the current version, builds into the copy and then moves the link in one atomic
 step. A reader sees the old version or the new one, never a mix. A failed build moves
 nothing. Pruning keeps the newest three versions plus every version a running app marks
@@ -290,7 +290,7 @@ inside `operations/jobs/with_mark.sh` and the crash wrapper `operations/jobs/wit
 | 10:30 daily | `nightly-closing-lines` | app | Loads the opening and closing lines of the finished games missing them, last season and this one; the closing lines are the fallback to the live promotion (`operations/jobs/nightly_closing_lines.sh`). |
 
 The rebuild is the step that reaches users. The profile build
-([`pipeline/batch/player_profile_computor.py`](../../pipeline/batch/player_profile_computor.py))
+([`profiles/build_profiles.py`](../../profiles/build_profiles.py))
 reads Postgres `raw.*` through DuckDB's postgres extension and writes `derived.*` and
 `sim.*`. The bundle build
 ([`pipeline/batch/engine_artifacts.py`](../../pipeline/batch/engine_artifacts.py)

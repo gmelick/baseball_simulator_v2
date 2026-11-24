@@ -7,8 +7,8 @@ import os
 import shutil
 from typing import Any
 
-import pipeline.batch.profiles.pool_meta as pool_meta
-from pipeline.batch.artifacts.common import RECENCY_FLOOR_SEASONS
+import pools.pool_metadata as pool_meta
+from bundle.common import RECENCY_FLOOR_SEASONS
 
 from .bundle import _export_replaces, _strays, backup_plan, steal_pool_problem
 from .common import (

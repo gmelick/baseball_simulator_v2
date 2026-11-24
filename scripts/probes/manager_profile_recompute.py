@@ -20,7 +20,7 @@ What it does, in order (the app must be STOPPED — a DuckDB write):
         app python scripts/probes/manager_profile_recompute.py --seasons 2017 2018 ... 2026
 
 Then: ``make calibrate`` (the manager bandwidths re-fit on shrunk profiles) and
-``python -m pipeline.batch.engine_artifacts --what actors_sim`` and ``--what
+``python -m bundle.build_bundle --what actors_sim`` and ``--what
 manager`` (both read-only) — see the plan.
 """
 
@@ -39,7 +39,7 @@ if str(_ROOT) not in sys.path:
 
 import duckdb  # noqa: E402
 
-from pipeline.batch.player_profile_computor import (  # noqa: E402
+from profiles.build_profiles import (  # noqa: E402
     LeagueAverageProfiles,
     PlayerProfileComputor,
 )

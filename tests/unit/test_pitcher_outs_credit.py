@@ -31,7 +31,9 @@ from typing import Any
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, StealPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
+from bundle.worker_pools import StealPool
 from simulation import sim_loop
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult, Team
@@ -39,7 +41,6 @@ from simulation.loop.boxscore import BoxScore
 from simulation.loop.values import STEAL_CAUGHT, StealResolution
 from simulation.prop_distributions import PITCHER_PROPS, PropDistributionSet
 from simulation.sim_loop import StateMachine
-from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132  # the home side's pitcher: he works the top half

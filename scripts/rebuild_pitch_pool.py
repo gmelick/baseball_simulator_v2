@@ -7,7 +7,7 @@ WHAT IT DOES
 The pool build codes a two-strike foul tip or foul bunt (Gameday ``T``,
 ``L``, ``O``) as strike three: class ``swinging_strike``. It also codes ``O``,
 ``Q``, ``R``, ``P`` and ``H`` explicitly and has no ELSE
-(``pipeline/batch/profiles/sql.py`` ``SQL_OUTCOME_TYPE``; builder
+(``profiles/sql.py`` ``SQL_OUTCOME_TYPE``; builder
 ``sim553.1``). This script rebuilds ``sim.pitch_pool`` on that coding. It
 proves the rebuild moved exactly the rows the coding says it moves. It exports
 the pitch pool ONLY into the engine-artifact bundle, and it proves the export
@@ -41,7 +41,7 @@ changed nothing else. The design is
        c. no moved foul tip or foul bunt (T / L / O) carries the got-away
           flag (a moved 'Q' is a real swing and miss; its flag is reported);
        d. the count chain of the window pool's plate appearances against
-          real plate appearances (``pipeline/batch/pool_chain.py``
+          real plate appearances (``pools/check_pool_labels.py``
           ``chain_rates(..., pa_only=True)`` and ``label_check``): the two
           sides count the same plate appearances (``pa_group_count`` equals
           ``real_pa_rates``' ``n_pa``) and every channel is within 0.5%. The
@@ -183,11 +183,11 @@ from pitch_pool_rebuild.export import (  # noqa: E402
 )
 from pitch_pool_rebuild.preflight import _preflight  # noqa: E402
 
+from bundle.common import last_n_seasons
 from ingest.statcast_events import STRIKE_THREE_FOUL_TYPES
-from pipeline.batch.engine_artifacts import last_n_seasons  # noqa: E402
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
-from pipeline.batch.pool_chain import attach_pg  # noqa: E402
-from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
+from pools.check_pool_labels import attach_pg  # noqa: E402
+from pools.pool_metadata import POOL_BUILDER_VERSION
+from profiles.build_profiles import PlayerProfileComputor
 
 # ---------------------------------------------------------------------------
 # The two modes

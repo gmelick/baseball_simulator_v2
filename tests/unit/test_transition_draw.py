@@ -26,11 +26,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    AdvancementPool,
-    BattedBallPool,
-    EngineArtifacts,
-)
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import AdvancementPool, BattedBallPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, PlayResult
 from simulation.loop.values import FieldingSignal

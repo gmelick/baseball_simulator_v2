@@ -46,7 +46,7 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
-import pipeline.batch.profiles.constants as profile_constants
+import profiles.constants as profile_constants
 from similarity.engines.fielder_similarity import (  # noqa: E402
     ALL_POSITIONS,
     ARM_ALPHA_PRIOR_CHANCES,

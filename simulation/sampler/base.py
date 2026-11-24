@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import HandPool
 
 
 class BaseMixin:

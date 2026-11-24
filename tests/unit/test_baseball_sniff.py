@@ -20,7 +20,7 @@ statistics**:
 These checks test the LOOP's arithmetic and aggregation -- the count machine,
 the half-inning roll, the ``resolve_runs`` RE24 wiring, baserunner advancement
 -- NOT the quality of the similarity engines (tested elsewhere).  No test needs
-a database: the model is an in-memory bundle (``simulation/synthetic_bundle.py``).
+a database: the model is an in-memory bundle (``bundle/synthetic_bundle.py``).
 
 HOW THE MODEL IS BUILT (two models, one bundle)
 -----------------------------------------------
@@ -56,12 +56,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from bundle.synthetic_bundle import league_artifacts, synthetic_sampler
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half
 from simulation.loop.boxscore import GameSimResult
 from simulation.run_resolution import OUTS_PER_INNING, RE24_MATRIX, re24_value
 from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132

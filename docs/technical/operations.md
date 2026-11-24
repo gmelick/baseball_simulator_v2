@@ -123,7 +123,7 @@ Run: the scheduler on Sunday at 08:00 UTC, through `with_mark.sh weekly-refresh`
 Rebuilds the current season's profiles and the engine-artifact bundle, in three steps:
 
 1. `wait_for_ingest.sh`.
-2. `python -m pipeline.batch.player_profile_computor --seasons <year>`.
+2. `python -m profiles.build_profiles --seasons <year>`.
 3. `python -m pipeline.batch.engine_artifacts --what all`.
 
 The profile step writes DuckDB and needs its write lock; the bundle step opens it

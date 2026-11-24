@@ -51,12 +51,15 @@ ALEMBIC_0026 = REPO / "db" / "migrations" / "versions" / "0026_sim531_savant_run
 VERSION_FILE = REPO / "db" / "schemas" / "duckdb_schema_version.txt"
 SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 PG_SCHEMA_SQL = REPO / "db" / "schemas" / "01_postgres_schema.sql"
-COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+COMPUTOR = REPO / "profiles" / "build_profiles.py"
 
 
 def _computor_source() -> str:
     """The computor's whole source: the main module and its ``profiles`` package."""
-    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    paths = [
+        *sorted(COMPUTOR.parent.glob("*.py")),
+        *sorted((COMPUTOR.parent.parent / "pools").glob("*.py")),
+    ]
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
@@ -191,7 +194,7 @@ class TestMigrations:
         """The baserunner INSERT is positional: the DDL's trailing columns must
         be exactly ``BASERUNNER_TAIL_COLUMNS``, so the schema and the SELECT
         stay in step."""
-        from pipeline.batch.profiles.constants import BASERUNNER_TAIL_COLUMNS
+        from profiles.constants import BASERUNNER_TAIL_COLUMNS
 
         con = duckdb.connect(":memory:")
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
@@ -383,7 +386,7 @@ def _seed(con: duckdb.DuckDBPyConnection, *, savant_season: int = 2024) -> None:
 
 
 def _computor(con: duckdb.DuckDBPyConnection):
-    from pipeline.batch.player_profile_computor import PlayerProfileComputor
+    from profiles.build_profiles import PlayerProfileComputor
 
     c = PlayerProfileComputor(pg_dsn="", duckdb_path=":memory:")
     c._conn = con
@@ -484,7 +487,7 @@ class TestBuildersExecuted:
             assert (xb is not None) is expect_lead, (savant_season, xb)
 
     def test_the_league_average_writer_emits_the_two_steal_rows(self, tmp_path: Path) -> None:
-        from pipeline.batch.player_profile_computor import LeagueAverageProfiles
+        from profiles.build_profiles import LeagueAverageProfiles
 
         path = str(tmp_path / "sim531.duckdb")
         con = duckdb.connect(path)
@@ -538,7 +541,7 @@ class TestBuildersExecuted:
         tables, still gets its league averages: the writer probes, never
         assumes. The fixture of ``test_league_average_profiles.py`` builds
         only a few narrow tables."""
-        from pipeline.batch.player_profile_computor import LeagueAverageProfiles
+        from profiles.build_profiles import LeagueAverageProfiles
 
         path = str(tmp_path / "old.duckdb")
         con = duckdb.connect(path)

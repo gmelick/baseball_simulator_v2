@@ -22,7 +22,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(encoding="utf-8")
@@ -177,7 +177,7 @@ class TestPitchPoolReceivingColumns:
         construct without them (None), the batted-ball realism precedent."""
         import numpy as np
 
-        from pipeline.batch.artifacts.pools import HandPool
+        from bundle.worker_pools import HandPool
 
         p = HandPool(
             geom=np.zeros((2, 10), dtype=np.float32),
@@ -191,7 +191,7 @@ class TestPitchPoolReceivingColumns:
         assert p.catcher_id is None and p.got_away is None
 
     def test_receiving_attrs_are_shareable(self):
-        from pipeline.batch.artifacts.pools import _HAND_POOL_SHAREABLE_ATTRS
+        from bundle.worker_pools import _HAND_POOL_SHAREABLE_ATTRS
 
         assert "catcher_id" in _HAND_POOL_SHAREABLE_ATTRS
         assert "got_away" in _HAND_POOL_SHAREABLE_ATTRS

@@ -19,7 +19,7 @@ expression hid that way:
 This test counts the same four rates (strikeouts, walks, hit by pitch, pitches
 per plate appearance) from REAL plate appearances in ``raw.pitches`` and fails
 when the chain drifts more than 0.5% from any of them
-(``pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE``, owner decision 5 of the
+(``pools.check_pool_labels.LABEL_CHECK_TOLERANCE``, owner decision 5 of the
 SIM-553 plan). The real count shares no label with the pool.
 
 The two sides count the same plate appearances. The chain reads only the pool
@@ -31,7 +31,7 @@ count (708,439 on 2023-2026). A difference means the two sides no longer read
 the same plate appearances, for example because ``raw.pitches`` gained games
 the pool has not been rebuilt for. The all-rows chain also plays on the groups
 cut short by a runner out, which adds about +0.6 points to its walk gap; the
-report prints that gap for the record only (``pipeline/batch/pool_chain.py``,
+report prints that gap for the record only (``pools/check_pool_labels.py``,
 THE POPULATION RULE). Measured 2026-09-25 on 2023-2026 (strikeouts / walks /
 hit by pitch / pitches): the corrected coding reads +0.09% / -0.25% / +0.08% /
 +0.07%; the SIM-553 coding reads -4.29% / +2.31% / +1.12% / +0.90% and fails.
@@ -45,7 +45,7 @@ tables (``tests/unit/test_foul_tip_strike_three.py``) guard those.
 THE WINDOW
 ==========
 The test reads its window from the live pool: the seasons the engine-artifact
-bundle exports (``pipeline.batch.engine_artifacts.last_n_seasons``, the latest
+bundle exports (``bundle.common.last_n_seasons``, the latest
 ``RECENCY_FLOOR_SEASONS`` seasons of ``sim.pitch_pool``). When a new season's
 rows arrive, the check grades the new window at once, so a coding change that
 reaches only the new season's rows is graded too.
@@ -88,7 +88,7 @@ A FAIL MEANS one of three things. Read which test failed:
   * the channels: the pool build codes a pitch into the wrong class, or the
     pool predates the fix. A strikeout shortfall with a walk and pitch surplus
     is the SIM-553 shape. The fix is in ``SQL_OUTCOME_TYPE``
-    (``pipeline/batch/player_profile_computor.py``) and a pool rebuild
+    (``profiles/build_profiles.py``) and a pool rebuild
     (``scripts/rebuild_pitch_pool.py``), never in this tolerance;
   * the plate-appearance counts: the pool and ``raw.pitches`` hold different
     games. Rebuild the pool for the window before you read the channels;
@@ -103,9 +103,8 @@ from typing import Any, NoReturn
 
 import pytest
 
-from pipeline.batch import pool_chain
-from pipeline.batch.artifacts.common import RECENCY_FLOOR_SEASONS
-from pipeline.batch.engine_artifacts import last_n_seasons
+from bundle.common import RECENCY_FLOOR_SEASONS, last_n_seasons
+from pools import check_pool_labels as pool_chain
 from tests.acceptance import bands
 from tests.acceptance.conftest import opted_in
 
@@ -187,7 +186,7 @@ def test_the_bands_window_spans_the_export_floor() -> None:
     assert len(seasons) == RECENCY_FLOOR_SEASONS, (
         f"bands.POOL_WINDOW reads {bands.POOL_WINDOW!r} ({len(seasons)} seasons), but the "
         f"bundle exports RECENCY_FLOOR_SEASONS = {RECENCY_FLOOR_SEASONS} "
-        "(pipeline/batch/engine_artifacts.py); restate one of them"
+        "(bundle/common.py); restate one of them"
     )
 
 
@@ -254,6 +253,6 @@ def test_the_pool_chain_matches_real_plate_appearances(
         f"the pitch pool's count chain drifts from real plate appearances on {failed}:\n"
         f"{report}\n"
         "The pool build codes a pitch into the wrong class (see SQL_OUTCOME_TYPE in "
-        "pipeline/batch/player_profile_computor.py), or the pool predates the fix "
+        "profiles/build_profiles.py), or the pool predates the fix "
         "(rebuild: scripts/rebuild_pitch_pool.py)."
     )

@@ -171,7 +171,7 @@ Builds the balanced certifying game set (owner ruling 2026-09-09): three full-da
 
 [Source](../../scripts/pool_window_census.py) · 306 lines · Tests: [test_pool_label_check.py](../../tests/acceptance/test_pool_label_check.py)
 
-Measures three pool windows (W1 full seasons 2023–2026, the production window; W2 2024–2026; W3 a rolling three years): the pool volumes, the per-count outcome shares run through the count chain to per-plate-appearance centres, the thinnest hard-filter cells. It also runs the label check: the pool's chain against real plate appearances counted from `raw.pitches`, PASS within 0.5% (`pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE`). The pool-totals grade cannot see a labelling defect, because it reads the same labels; this check can. `--strict` exits 1 when a window's check fails or cannot run.
+Measures three pool windows (W1 full seasons 2023–2026, the production window; W2 2024–2026; W3 a rolling three years): the pool volumes, the per-count outcome shares run through the count chain to per-plate-appearance centres, the thinnest hard-filter cells. It also runs the label check: the pool's chain against real plate appearances counted from `raw.pitches`, PASS within 0.5% (`pools.check_pool_labels.LABEL_CHECK_TOLERANCE`). The pool-totals grade cannot see a labelling defect, because it reads the same labels; this check can. `--strict` exits 1 when a window's check fails or cannot run.
 
 ### `scripts/measure_filter_cells.py`
 

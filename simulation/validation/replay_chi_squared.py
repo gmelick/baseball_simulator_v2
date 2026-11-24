@@ -20,7 +20,7 @@ WITH NO DATABASE
 ----------------
 The tests run with no Statcast database. The default machine is the production
 :class:`StateMachine` over the synthetic league bundle
-(:func:`simulation.synthetic_bundle.league_artifacts`). The tests compare its
+(:func:`bundle.synthetic_bundle.league_artifacts`). The tests compare its
 distribution with a reference drawn from the same league model (a
 self-consistency check) or with a published league distribution.
 
@@ -48,10 +48,10 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import chisquare
 
+from bundle.synthetic_bundle import league_artifacts, synthetic_sampler
 from simulation.game_state import GameState
 from simulation.loop.boxscore import GameSimResult
 from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 # ---------------------------------------------------------------------------
 # The league-average outcome model

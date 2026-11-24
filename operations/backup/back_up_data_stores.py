@@ -46,6 +46,13 @@ from typing import Any
 
 import duckdb
 
+from bundle.versions import (
+    IN_USE_PREFIX,
+    PUBLISHED_MARKER,
+    publish_bundle_version,
+    resolve_bundle_dir,
+    versions_root,
+)
 from operations.backup.backup_status import (
     MANIFEST,
     PARTIAL_SUFFIX,
@@ -73,13 +80,6 @@ from operations.backup.common import (
     root_path,
     sha256_file,
     wait_while_busy,
-)
-from pipeline.batch.bundle_versions import (
-    IN_USE_PREFIX,
-    PUBLISHED_MARKER,
-    publish_bundle_version,
-    resolve_bundle_dir,
-    versions_root,
 )
 
 TOOL = "operations.backup.back_up_data_stores"
@@ -559,7 +559,7 @@ def load_bundle(path: Path) -> None:
 
     The import sits here so the backup run never loads the loader's heavy imports.
     """
-    from pipeline.batch.engine_artifacts import EngineArtifacts
+    from bundle.load_bundle import EngineArtifacts
 
     EngineArtifacts.load(str(path))
 

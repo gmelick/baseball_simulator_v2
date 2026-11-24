@@ -248,7 +248,7 @@ route; Starlette matches routes in registration order.
 
 ### `api/startup.py`
 
-[Source](../../api/startup.py) · 457 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py)
+[Source](../../api/startup.py) · 457 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py)
 
 The lifespan's steps that no test patches, one function per step. They log under `api.main`,
 so the boot reads as one log.
@@ -282,7 +282,7 @@ the source module reaches it. Never set `LIVE_PIPELINE_ENABLED` on the compose s
 
 ### `api/state.py`
 
-[Source](../../api/state.py) · 471 lines · Tests: [test_api_state.py](../../tests/unit/test_api_state.py), [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py), [test_calibration_fit_and_apply.py](../../tests/unit/test_calibration_fit_and_apply.py), [test_similarity_endpoint.py](../../tests/unit/test_similarity_endpoint.py)
+[Source](../../api/state.py) · 471 lines · Tests: [test_api_state.py](../../tests/unit/test_api_state.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py), [test_calibration_fit_and_apply.py](../../tests/unit/test_calibration_fit_and_apply.py), [test_similarity_endpoint.py](../../tests/unit/test_similarity_endpoint.py)
 
 The builders of the resources the lifespan attaches. Each is a plain function, so a test runs
 it without the app.
@@ -309,11 +309,11 @@ names by hand; an engine added here and not there is built but never shown.
 
 ### `api/bundle_watch.py`
 
-[Source](../../api/bundle_watch.py) · 153 lines · Tests: [test_bundle_versions.py](../../tests/unit/test_bundle_versions.py), [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py), [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py)
+[Source](../../api/bundle_watch.py) · 153 lines · Tests: [test_bundle_versions.py](../../tests/unit/bundle/test_bundle_versions.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py), [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py)
 
 The app picks up a nightly rebuild by restarting itself. The bundle path
 `/data/play_pool/engine_artifacts` is a link to a version folder
-(`pipeline/batch/bundle_versions.py`).
+(`bundle/versions.py`).
 
 | Function / class | What it does | Called from |
 |---|---|---|

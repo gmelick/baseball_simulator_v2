@@ -238,7 +238,7 @@ class RunningData:
     def __init__(self, fp: Any, duck: Any, art_dir: str):
         import duckdb
 
-        from pipeline.batch.engine_artifacts import StealPool
+        from bundle.worker_pools import StealPool
 
         self.fp = fp
         t0 = time.time()

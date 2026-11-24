@@ -79,6 +79,9 @@ COPY similarity/  ./similarity/
 COPY simulation/  ./simulation/
 COPY betting/     ./betting/
 COPY ingest/      ./ingest/
+COPY profiles/    ./profiles/
+COPY pools/       ./pools/
+COPY bundle/      ./bundle/
 COPY operations/  ./operations/
 COPY db/          ./db/
 COPY scripts/     ./scripts/

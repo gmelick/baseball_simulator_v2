@@ -67,7 +67,7 @@ Before this: Alembic 0027 applied and the two boards loaded
 per position). After this: ``make calibrate`` (then write the win-probability curve
 back — the SIM-427 trap), copy ``sigma_of_range`` and the range weights into the
 module defaults, and rebuild the seven fielder matrices
-(``python -m pipeline.batch.engine_artifacts --what actors_sim --matrix fielder_LF
+(``python -m bundle.build_bundle --what actors_sim --matrix fielder_LF
 ...``). Run book: ``docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md`` §8.
 """
 
@@ -92,12 +92,12 @@ if str(_ROOT) not in sys.path:
 import duckdb  # noqa: E402
 
 from db.introspect import duck_table_exists
-from pipeline.batch.player_profile_computor import (
+from profiles.build_profiles import (
     LeagueAverageProfiles,
     PlayerProfileComputor,
     build_run_expectancy_matrix,
 )
-from pipeline.batch.profiles.constants import FIELDER_TAIL_COLUMNS
+from profiles.constants import FIELDER_TAIL_COLUMNS
 
 log = logging.getLogger("fielder_profile_recompute")
 

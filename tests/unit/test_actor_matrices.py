@@ -35,15 +35,10 @@ import duckdb
 import numpy as np
 import pytest
 
-import pipeline.batch.engine_artifacts as ea
-from pipeline.batch.engine_artifacts import (
-    BattedBallPool,
-    EngineArtifacts,
-    HandPool,
-    StealPool,
-    build_actor_sim_matrices,
-    concentration_share,
-)
+import similarity.build_score_tables as ea
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import BattedBallPool, HandPool, StealPool
+from similarity.build_score_tables import build_actor_sim_matrices, concentration_share
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.production_factory import apply_actor_matrix_env
 

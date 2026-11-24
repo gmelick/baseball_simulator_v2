@@ -9,7 +9,7 @@ Two sources feed a row:
 
 * the rest and the recent workload (``days_rest``, ``pitches_last_3d``,
   ``back_to_back``). ``ManagerProfilesMixin._compute_bullpen_workload`` in
-  ``pipeline.batch.profiles.manager`` derives them from ``raw.pitches``. An arm
+  ``profiles.manager`` derives them from ``raw.pitches``. An arm
   that did not pitch in the game takes his rest from his appearance timeline
   (:func:`_rest_as_of`), so an unused arm who threw yesterday still reads
   unavailable.
@@ -524,7 +524,7 @@ def _load_workload_records(
     The function opens a ``PlayerProfileComputor`` (its DuckDB connection
     attaches Postgres read-only) and runs only ``_compute_bullpen_workload``.
     """
-    from pipeline.batch.player_profile_computor import PlayerProfileComputor
+    from profiles.build_profiles import PlayerProfileComputor
 
     computor = PlayerProfileComputor(pg_dsn=pg_dsn, duckdb_path=duckdb_path)
     computor._connect()

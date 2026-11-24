@@ -27,7 +27,7 @@ import duckdb
 import pytest
 
 from ingest.statcast_events import sql_steal_attempt, sql_steal_success
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor
 
 # ---------------------------------------------------------------------------
 # The helpers

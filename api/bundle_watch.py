@@ -6,7 +6,7 @@ The app picks up a nightly rebuild by restarting itself.
 The app loads the player profiles (the similarity engines, from DuckDB) and the
 engine-artifact bundle once, at boot. The nightly rebuild ends by PUBLISHING a
 new bundle version: the link ``engine_artifacts`` moves to a new folder
-(``pipeline/batch/bundle_versions.py``). This module:
+(``bundle/versions.py``). This module:
 
 * PINS the version the app loaded. :func:`pin_bundle_version` resolves the link
   and sets ``BASEBALL_ENGINE_ARTIFACT_DIR`` before the worker pool starts, so a
@@ -37,7 +37,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable
 
-from pipeline.batch.bundle_versions import (
+from bundle.versions import (
     convert_legacy_bundle,
     mark_in_use,
     resolve_bundle_dir,

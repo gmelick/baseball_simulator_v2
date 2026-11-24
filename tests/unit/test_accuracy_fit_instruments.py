@@ -418,7 +418,8 @@ def test_offline_fit_reads_the_same_weights_the_result_draw_starts_from():
     """On a synthetic bundle with the split on, the weights the offline fit
     takes off the count bucket's CDF equal the sampler's own bucket weights,
     and result_weights returns a finite weight per candidate row."""
-    from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+    from bundle.load_bundle import EngineArtifacts
+    from bundle.worker_pools import HandPool
     from simulation.full_pool_sampler import FullPoolSampler
 
     n = 8

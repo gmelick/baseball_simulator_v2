@@ -22,8 +22,9 @@ from collections import Counter
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.pools import HandPool
-from pipeline.batch.engine_artifacts import EngineArtifacts, concentration_share
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import HandPool
+from similarity.build_score_tables import concentration_share
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.production_factory import apply_result_split_env
 
@@ -340,8 +341,8 @@ class TestBatterMatrixOnBothPaths:
 # batter engine's score; the runner engines score their thin profiles.
 # ---------------------------------------------------------------------------
 
-from pipeline.batch import engine_artifacts as _ea  # noqa: E402
-from pipeline.batch.artifacts.pools import BattedBallPool  # noqa: E402
+from bundle.worker_pools import BattedBallPool  # noqa: E402
+from similarity import build_score_tables as _ea  # noqa: E402
 
 
 def _bb_pool_three_batters() -> BattedBallPool:
