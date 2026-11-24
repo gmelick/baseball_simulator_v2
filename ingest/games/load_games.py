@@ -6,7 +6,7 @@ events into ``raw.play_events``. The row building, the validation, the
 venues, the schedule helpers, the reference rows and the writes live in
 the other modules of ``ingest/games/``. This module keeps the HTTP plumbing, the feed
 parser ``_fetch_game_pitches`` and the class, beside the names the tests patch
-(``_connect``, ``_http_get``, ``_fetch_once``, ``_fetch_game_pitches``).
+(``_connect``, ``_http_get``, ``_fetch_game_pitches``).
 
 The flow
 --------
@@ -72,16 +72,10 @@ one malformed feed cannot abort a 21,600-game re-ingest.
 
 from __future__ import annotations
 
-import http.client
-import json
 import logging
 import math
 import os
 import threading
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -116,6 +110,8 @@ from ingest.load_boxscores import (
     persist_bullpen_sync,
     persist_sync,
 )
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import Response, RetryPolicy
 from ingest.savant.page_json import (
     SavantScrapeError,
     _parse_savant_embedded_json,
@@ -133,45 +129,10 @@ logging.basicConfig(
 log = logging.getLogger("etl_historical_loader")
 
 
-MAX_API_RETRIES = 10  # infinite-retry inherited from original; capped here
-RETRY_BACKOFF_S = 2.0  # seconds between retries
-
+#: The loader's reads: ten attempts, the first retry after two seconds.
+_POLICY = RetryPolicy(retries=9, first_wait_s=2.0)
 HTTP_TIMEOUT_S = 30.0
 _USER_AGENT = "baseball-sim-etl/1.0 (+historical loader)"
-
-# The ETL's HTTP transport is stdlib ``urllib.request`` BY DEFAULT (the ETL
-# transport swap, SIM-446). On ``requests`` the reload sweep died at a random
-# game with a corrupted CPython inline cache (exit 139, about every 200 games);
-# on urllib the full 2017 season (2,468 games, 732,475 pitch rows) ran clean,
-# so the transport is treated as the cause. urllib keeps ``requests``, the
-# mypyc-compiled ``charset_normalizer``, ``_brotli`` and
-# ``simplejson._speedups`` out of the process.
-#
-# Two costs, both measured and accepted:
-#
-#   1. No keep-alive pool: each of the ~65,000 requests of a full backfill pays
-#      its own TCP and TLS handshake.
-#   2. No compression. ``http.client.putrequest`` sends
-#      ``Accept-Encoding: identity``, which forbids the server to compress
-#      (RFC 9110). That is WHY :func:`_decode_body` has no gunzip branch: a
-#      compressed body cannot arrive. The guard
-#      ``test_compression_is_not_requested_without_decompression_support``
-#      holds the two together. A feed/live payload is 7.4 times larger
-#      uncompressed (865,506 against 116,619 bytes, game 492011), which costs
-#      about 70 ms a game.
-#
-# Do NOT add gzip casually: it would put C-extension decompression back into
-# the loop whose corruption is unexplained. ``ETL_HTTP_TRANSPORT=requests``
-# restores the pooled Session for an A/B comparison; ``requests`` is imported
-# LAZILY, so the default path never loads it.
-_HTTP_TRANSPORT = os.environ.get("ETL_HTTP_TRANSPORT", "urllib").strip().lower()
-
-# The statuses worth retrying. A 404/400/403 is a permanent answer: ten
-# retries would turn one missing game into a 90-second stall. 429 and 5xx are
-# transient and ARE retried (429 honours Retry-After).
-_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
-_MAX_RETRY_AFTER_S = 60.0  # never sleep longer than this on a server's say-so
-
 
 # The game types loaded. 'C' ("Championship") is left out: an obsolete MLB
 # game type from before the 2015+ window, and not in the raw.games CHECK
@@ -180,195 +141,21 @@ _MAX_RETRY_AFTER_S = 60.0  # never sleep longer than this on a server's say-so
 GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 
 
-class HttpError(OSError):
-    """A non-2xx response the retry policy could not resolve.
-
-    Replaces ``requests.HTTPError`` so callers stay transport-agnostic.
-    Subclasses ``OSError`` to match ``requests.RequestException``'s own ancestry,
-    which keeps every existing ``except OSError`` handler behaving identically.
-    """
-
-    def __init__(self, message: str, *, status_code: int, url: str) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.url = url
-
-
-class _Response:
-    """The slice of an HTTP response this module actually consumes.
-
-    Deliberately tiny: ``.text``, the status, the headers, and the two methods
-    the retry policy calls. Both transports build one of these, so nothing
-    downstream of :func:`_fetch_once` knows which library made the request.
-    """
-
-    __slots__ = ("headers", "status_code", "text", "url")
-
-    def __init__(self, status_code: int, headers: dict[str, str], text: str, url: str) -> None:
-        self.status_code = status_code
-        self.headers = headers
-        self.text = text
-        self.url = url
-
-    def header(self, name: str) -> str | None:
-        """Case-insensitive lookup — HTTP header names are not case-sensitive."""
-        target = name.lower()
-        for key, value in self.headers.items():
-            if key.lower() == target:
-                return value
-        return None
-
-    def json(self) -> Any:
-        return json.loads(self.text)
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise HttpError(
-                f"HTTP {self.status_code} for {self.url}",
-                status_code=self.status_code,
-                url=self.url,
-            )
-
-
-def _decode_body(body: bytes, headers: Any) -> str:
-    """Decode a response body using the declared charset, defaulting to UTF-8."""
-    ctype = ""
-    getter = getattr(headers, "get", None)
-    if getter is not None:
-        ctype = getter("Content-Type") or getter("content-type") or ""
-    charset = "utf-8"
-    if "charset=" in ctype.lower():
-        charset = ctype.lower().split("charset=", 1)[1].split(";")[0].strip() or "utf-8"
-    try:
-        return body.decode(charset, errors="replace")
-    except LookupError:  # server named a charset Python doesn't know
-        return body.decode("utf-8", errors="replace")
-
-
-def _urllib_fetch(url: str, params: dict | None) -> _Response:
-    """One round-trip over stdlib ``urllib.request`` — the default transport."""
-    if params:
-        # doseq=True matches requests' handling of list values (e.g. gameTypes).
-        url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:  # noqa: S310
-            body = _decode_body(resp.read(), resp.headers)
-            return _Response(resp.status, dict(resp.headers), body, url)
-    except urllib.error.HTTPError as exc:
-        # urllib RAISES on 4xx/5xx. The retry policy has to inspect the status to
-        # decide permanent-vs-transient, so hand it back as a response instead.
-        try:
-            body = _decode_body(exc.read(), exc.headers)
-            return _Response(exc.code, dict(exc.headers), body, url)
-        finally:
-            exc.close()
-
-
-_requests_session_lock = threading.Lock()
-_requests_session_cache: Any = None
-
-
-def _requests_session() -> Any:
-    """Build the pooled ``requests`` Session on first use (opt-in transport).
-
-    Lazy on purpose: importing ``requests`` pulls ``charset_normalizer``,
-    ``_brotli`` and ``simplejson._speedups`` into the address space, which is
-    exactly what the default transport exists to avoid. See ``_HTTP_TRANSPORT``.
-    """
-    global _requests_session_cache
-    with _requests_session_lock:
-        if _requests_session_cache is None:
-            import requests  # noqa: PLC0415 — deliberately deferred; see the docstring
-
-            session = requests.Session()
-            session.headers.update({"User-Agent": _USER_AGENT})
-            _requests_session_cache = session
-        return _requests_session_cache
-
-
-def _requests_fetch(url: str, params: dict | None) -> _Response:
-    """One round-trip over a pooled ``requests`` Session — opt-in transport."""
-    resp = _requests_session().get(url, params=params, timeout=HTTP_TIMEOUT_S)
-    return _Response(resp.status_code, dict(resp.headers), resp.text, resp.url)
-
-
-def _fetch_once(url: str, params: dict | None = None) -> _Response:
-    """A single HTTP round-trip with NO retry — the transport seam."""
-    if _HTTP_TRANSPORT == "requests":
-        return _requests_fetch(url, params)
-    return _urllib_fetch(url, params)
-
-
-# Transient failures worth retrying. ``urllib.error.URLError``, ``TimeoutError``,
-# ``ConnectionError`` and ``requests.RequestException`` are ALL ``OSError``
-# subclasses, so one entry covers both transports; ``http.client.HTTPException``
-# (malformed response, remote disconnect) is the one that isn't.
-_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (OSError, http.client.HTTPException)
-
-
-def _retry_after_seconds(resp: _Response, attempt: int) -> float:
-    """Seconds to wait before the next attempt, honouring ``Retry-After``."""
-    raw = resp.header("Retry-After") if resp is not None else None
-    if raw:
-        try:
-            return min(float(raw), _MAX_RETRY_AFTER_S)
-        except (TypeError, ValueError):
-            pass  # Retry-After may be an HTTP-date; fall through to backoff
-    return RETRY_BACKOFF_S * attempt
-
-
-def _http_get(url: str, params: dict | None = None) -> _Response:
-    """GET with bounded retry, returning the first SUCCESSFUL response.
-
-    * A permanent error (404/400/403) is not retried: it is a final answer.
-      Only :data:`_RETRYABLE_STATUS` (429, 5xx and time-outs) is retried, and
-      429 honours ``Retry-After``.
-    * A successful response returns at once.
-    * The round trip itself is :func:`_fetch_once`, so both transports share
-      this retry policy (and ``ETL_HTTP_TRANSPORT=requests`` pools one Session).
-    """
-    last_exc: Exception | None = None
-    for attempt in range(1, MAX_API_RETRIES + 1):
-        try:
-            resp = _fetch_once(url, params)
-        except HttpError:
-            raise  # a status we already classified as permanent — do not retry
-        except _TRANSIENT_ERRORS as exc:  # connection/timeout — transient
-            last_exc = exc
-            if attempt == MAX_API_RETRIES:
-                raise
-            log.warning("HTTP GET failed (attempt %d/%d): %s", attempt, MAX_API_RETRIES, exc)
-            time.sleep(RETRY_BACKOFF_S * attempt)
-            continue
-
-        if resp.status_code < 400:
-            return resp
-
-        if resp.status_code not in _RETRYABLE_STATUS:
-            # Permanent: fail now rather than burning the retry budget.
-            resp.raise_for_status()
-
-        last_exc = HttpError(
-            f"HTTP {resp.status_code} for {url}", status_code=resp.status_code, url=url
-        )
-        if attempt == MAX_API_RETRIES:
-            resp.raise_for_status()
-        delay = _retry_after_seconds(resp, attempt)
-        log.warning(
-            "HTTP %s (attempt %d/%d), retrying in %.1fs: %s",
-            resp.status_code,
-            attempt,
-            MAX_API_RETRIES,
-            delay,
-            url,
-        )
-        time.sleep(delay)
-
-    raise last_exc or RuntimeError(f"exhausted retries for {url}")
+def _http_get(url: str, params: dict | None = None) -> Response:
+    """GET ``url`` with the loader's retry policy (the seam the tests patch)."""
+    return mlb_client.get(
+        url,
+        params,
+        headers={"User-Agent": _USER_AGENT},
+        timeout_s=HTTP_TIMEOUT_S,
+        policy=_POLICY,
+        logger=log,
+        label="The game loader",
+    )
 
 
 def _connect(url: str, params: dict | None = None) -> dict:
+    """GET ``url`` and parse its JSON body (the seam the tests patch)."""
     return _http_get(url, params).json()
 
 
@@ -390,9 +177,7 @@ def _fetch_game_pitches(
 
     batter_hand_cache is shared across games to avoid redundant API calls.
     """
-    game_dict = _connect(
-        f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live?hydrate=alignment"
-    )
+    game_dict = _connect(mlb_client.GAME_FEED_URL.format(game_pk=game_pk) + "?hydrate=alignment")
 
     game_date = game_dict["gameData"]["datetime"]["officialDate"]
     home_team_id = game_dict["gameData"]["teams"]["home"]["id"]
@@ -406,12 +191,12 @@ def _fetch_game_pitches(
     away_manager_id, away_manager_name = "", ""
 
     home_coaches = _connect(
-        f"https://statsapi.mlb.com/api/v1/teams/{home_team_id}/coaches?date={game_date}"
+        mlb_client.COACHES_URL.format(team_id=home_team_id) + f"?date={game_date}"
     ).get("roster", [])
     home_manager_id, home_manager_name = _manager_from_coaches(game_pk, "home", home_coaches)
 
     away_coaches = _connect(
-        f"https://statsapi.mlb.com/api/v1/teams/{away_team_id}/coaches?date={game_date}"
+        mlb_client.COACHES_URL.format(team_id=away_team_id) + f"?date={game_date}"
     ).get("roster", [])
     away_manager_id, away_manager_name = _manager_from_coaches(game_pk, "away", away_coaches)
 
@@ -577,7 +362,7 @@ def _fetch_game_pitches(
                 bat_hand = batter_hand_cache[batter]
             else:
                 bat_hand = _connect(
-                    f"https://statsapi.mlb.com{play_event['offense']['batter']['link']}"
+                    f"{mlb_client.MLB_BASE}{play_event['offense']['batter']['link']}"
                 )["people"][0]["batSide"]["code"]
                 batter_hand_cache[batter] = bat_hand
 
@@ -1210,7 +995,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                 "startDate": chunk_start.strftime("%Y-%m-%d"),
                 "endDate": chunk_end.strftime("%Y-%m-%d"),
             }
-            schedule = _connect("https://statsapi.mlb.com/api/v1/schedule", params)["dates"]
+            schedule = _connect(mlb_client.SCHEDULE_URL, params)["dates"]
 
             # Coverage check: a clamped or short response is otherwise
             # indistinguishable from "there were simply no games".
@@ -1287,7 +1072,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                 "gameTypes": GAME_TYPES,
                 "season": season,
             }
-            schedule = _connect("https://statsapi.mlb.com/api/v1/schedule", params)["dates"]
+            schedule = _connect(mlb_client.SCHEDULE_URL, params)["dates"]
             batter_hand_cache: dict[int, str] = {}
 
             for date_entry in schedule:
@@ -1453,8 +1238,6 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 
         log.info("  Fetching missing venue %s, season %s", venue_id, season)
 
-        # Both scrapes go through `_http_get`, which returns the first
-        # successful response and never retries a permanent 4xx.
         resp = _http_get(
             "https://baseballsavant.mlb.com/leaderboard/statcast-park-factors"
             f"?type=dimensions&year={season}&parks=All&fenceStatType=distance"
@@ -1482,7 +1265,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             dimensions = venues[0]
 
         data = _connect(
-            f"https://statsapi.mlb.com/api/v1/venues/{venue_id}",
+            mlb_client.VENUE_URL.format(venue_id=venue_id),
             params={"hydrate": "location,fieldInfo,timezone"},
         )
         v = data["venues"][0]
@@ -1618,9 +1401,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                 # NOT papered over — the player is skipped so a later reload can
                 # pick him up with real data.
                 try:
-                    people = _connect(f"https://statsapi.mlb.com/api/v1/people/{pid}").get(
-                        "people", []
-                    )
+                    people = _connect(mlb_client.PEOPLE_URL.format(player_id=pid)).get("people", [])
                     if not people:
                         raise ValueError("people[] was empty")
                     person = {**people[0], **{k: v for k, v in person.items() if v}}

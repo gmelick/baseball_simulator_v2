@@ -67,18 +67,18 @@ from betting.load_odds_to_db import odds_source
 # row is persisted; a refused row is logged, counted and never written.
 from betting.validate_odds import RefusalTally
 from db.introspect import pg_column_exists_async
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import LeagueFeed
 from pipeline.live.ingestion.base import PipelineBase
 from pipeline.live.ingestion.constants import (
     _EASTERN,
     GAME_TYPES,
     HTTP_TIMEOUT_S,
-    MLB_BASE,
     REDIS_TTL_DONE_S,
     REDIS_TTL_LIVE_S,
     RESIM_COOLDOWN_S,
     SCHEDULE_HYDRATE,
     SCHEDULE_POLL_S,
-    SCHEDULE_URL,
 )
 from pipeline.live.ingestion.game_odds import GameOddsMixin
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder
@@ -204,7 +204,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         # The browser-message publisher; None = the in-process
         # connection_manager (see _broadcast_message).
         self._broadcaster: Any = None
-        self._http: aiohttp.ClientSession | None = None
+        self._http: LeagueFeed | None = None
 
         # game_pk -> MLBGameWebSocket
         self._ws_clients: dict[int, MLBGameWebSocket] = {}
@@ -248,7 +248,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         log.info("Starting live ingestion pipeline …")
         self._db = await asyncpg.create_pool(self._dsn, min_size=2, max_size=10)
         self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
-        self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S))
+        self._http = LeagueFeed(timeout_s=HTTP_TIMEOUT_S)
         # Pre-populate _completed_games from today's already-Final
         # games so a pipeline restart mid-afternoon doesn't trigger an
         # upsert storm for every game finished earlier in the day.
@@ -293,7 +293,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         for ws in self._ws_clients.values():
             ws.stop()
         self._ws_clients.clear()
-        if self._http and not self._http.closed:
+        if self._http:
             await self._http.close()
         if self._redis:
             await self._redis.aclose()  # type: ignore[attr-defined]
@@ -346,8 +346,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
             "hydrate": SCHEDULE_HYDRATE,
         }
 
-        async with self._http.get(SCHEDULE_URL, params=params) as resp:
-            data = await resp.json()
+        data = await self._http.get_json(mlb_client.SCHEDULE_URL, params)
 
         current_live: set[int] = set()
 
@@ -610,12 +609,8 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
         Falls back to cached Redis state if the API call fails, per the
         rate-limiting mitigation in the risk register.
         """
-        url = f"{MLB_BASE}/api/v1.1/game/{game_pk}/feed/live"
         try:
-            async with self._http.get(url) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                log.warning("feed/live returned %s for game %s", resp.status, game_pk)
+            return await self._http.get_json(mlb_client.GAME_FEED_URL.format(game_pk=game_pk))
         except aiohttp.ClientError as exc:
             log.warning("feed/live fetch failed game %s: %s — trying cache", game_pk, exc)
 
@@ -909,9 +904,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
             from pipeline.live.lineup_writer import PublishedLineupWriter
 
             async def get_json(url: str) -> Any:
-                async with self._http.get(url) as resp:
-                    resp.raise_for_status()
-                    return await resp.json()
+                return await self._http.get_json(url)
 
             writer = PublishedLineupWriter(self._db, get_json)
             self._lineup_writer = writer

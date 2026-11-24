@@ -49,8 +49,10 @@ import sys
 from datetime import date
 from typing import Any
 
-import aiohttp
 import asyncpg
+
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import LeagueFeed
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -67,7 +69,6 @@ log = logging.getLogger("venue_backfill_job")
 # Config
 # ---------------------------------------------------------------------------
 
-MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 JOB_NAME = "venue_backfill_job"
 DEFAULT_INTERVAL_HOURS = 6
 
@@ -130,14 +131,15 @@ class VenueBackfillJob:
             if not rows:
                 return summary
 
-            async with aiohttp.ClientSession() as session:
+            feed = LeagueFeed(timeout_s=self._http_timeout)
+            try:
                 for r in rows:
                     summary["games_processed"] += 1
                     game_pk = r["game_pk"]
                     game_date = r["game_date"]
                     try:
                         venue_id = await self._fetch_venue_id(
-                            session, game_pk=game_pk, game_date=game_date
+                            feed, game_pk=game_pk, game_date=game_date
                         )
                     except Exception as exc:
                         summary["http_errors"] += 1
@@ -159,6 +161,9 @@ class VenueBackfillJob:
                     await self._update_venue(game_pk, venue_id)
                     summary["venues_filled"] += 1
                     log.info("game_pk=%s: backfilled venue_id=%s", game_pk, venue_id)
+
+            finally:
+                await feed.close()
 
             return summary
 
@@ -258,7 +263,7 @@ class VenueBackfillJob:
 
     async def _fetch_venue_id(
         self,
-        session: aiohttp.ClientSession,
+        feed: LeagueFeed,
         *,
         game_pk: int,
         game_date: date,
@@ -269,10 +274,7 @@ class VenueBackfillJob:
             "date": game_date.isoformat(),
             "hydrate": "venue",
         }
-        timeout = aiohttp.ClientTimeout(total=self._http_timeout)
-        async with session.get(MLB_SCHEDULE_URL, params=params, timeout=timeout) as resp:
-            resp.raise_for_status()
-            payload = await resp.json()
+        payload = await feed.get_json(mlb_client.SCHEDULE_URL, params)
 
         for date_block in payload.get("dates", []):
             for game in date_block.get("games", []):

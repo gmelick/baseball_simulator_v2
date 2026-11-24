@@ -346,6 +346,25 @@ class TestPersistSeams:
 # ===========================================================================
 
 
+def _serve(monkeypatch, handler):
+    """Answer every ``urlopen`` with ``handler(None, url)``: its dict as a JSON body,
+    or the error it raises."""
+    import io
+    import json as _json
+
+    class _Body(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake(req, timeout=None):
+        return _Body(_json.dumps(handler(None, req.full_url)).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+
+
 class TestFetch:
     def test_fetch_rows_goes_through_the_one_seam(self, teams):
         seen: list[tuple[str, dict]] = []
@@ -376,8 +395,8 @@ class TestFetch:
                 raise urllib.error.HTTPError(url, 503, "busy", hdrs=None, fp=None)
             return {"teams": {}}
 
-        monkeypatch.setattr(BoxscoreIngest, "_http_get_json", flaky)
-        monkeypatch.setattr("ingest.load_boxscores.time.sleep", lambda s: None)
+        _serve(monkeypatch, flaky)
+        monkeypatch.setattr("ingest.mlb.client.time.sleep", lambda s: None)
         ing = BoxscoreIngest(max_attempts=4, backoff=0.0)
         assert ing._mlb_get("game/1/boxscore") == {"teams": {}}
         assert len(attempts) == 3
@@ -389,7 +408,7 @@ class TestFetch:
             attempts.append(url)
             raise urllib.error.HTTPError(url, 404, "gone", hdrs=None, fp=None)
 
-        monkeypatch.setattr(BoxscoreIngest, "_http_get_json", gone)
+        _serve(monkeypatch, gone)
         with pytest.raises(urllib.error.HTTPError):
             BoxscoreIngest(max_attempts=4, backoff=0.0)._mlb_get("game/1/boxscore")
         assert len(attempts) == 1
@@ -398,8 +417,8 @@ class TestFetch:
         def timeout(self, url):
             raise TimeoutError("slow")
 
-        monkeypatch.setattr(BoxscoreIngest, "_http_get_json", timeout)
-        monkeypatch.setattr("ingest.load_boxscores.time.sleep", lambda s: None)
+        _serve(monkeypatch, timeout)
+        monkeypatch.setattr("ingest.mlb.client.time.sleep", lambda s: None)
         with pytest.raises(TimeoutError):
             BoxscoreIngest(max_attempts=2, backoff=0.0)._mlb_get("game/1/boxscore")
 
@@ -416,8 +435,8 @@ class TestFetch:
                 hdrs["Retry-After"] = retry_after
             raise urllib.error.HTTPError(url, code, "limited", hdrs=hdrs, fp=None)
 
-        monkeypatch.setattr(BoxscoreIngest, "_http_get_json", limited)
-        monkeypatch.setattr("ingest.load_boxscores.time.sleep", slept.append)
+        _serve(monkeypatch, limited)
+        monkeypatch.setattr("ingest.mlb.client.time.sleep", slept.append)
         with pytest.raises(urllib.error.HTTPError):
             BoxscoreIngest(max_attempts=3, backoff=1.0)._mlb_get("game/1/boxscore")
         return slept

@@ -812,9 +812,9 @@ class TestPregameCycle:
                 return False
 
         class _Http:
-            def get(self, url: str, params: dict | None = None) -> _Resp:
+            async def get_json(self, url: str, params: dict | None = None) -> Any:
                 seen_params.append(dict(params or {}))
-                return _Resp()
+                return await _Resp().json()
 
         p = _bare_pipeline(_http=_Http())
         p._upsert_game_record = AsyncMock()
@@ -890,8 +890,8 @@ class TestPregameCycle:
                 return False
 
         class _Http:
-            def get(self, url: str, params: dict | None = None) -> _Resp:
-                return _Resp()
+            async def get_json(self, url: str, params: dict | None = None) -> Any:
+                return await _Resp().json()
 
         provider = MagicMock(spec=BettingProsOddsProvider)
         p = _bare_pipeline(_http=_Http(), _odds=provider)

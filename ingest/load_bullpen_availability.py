@@ -56,19 +56,16 @@ existing dependencies and keep the module importable without a running app.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
-log = logging.getLogger("ingest.load_bullpen_availability")
+from ingest.mlb import client as mlb_client
 
-_MLB_BASE = "https://statsapi.mlb.com/api/v1"
+log = logging.getLogger("ingest.load_bullpen_availability")
 
 #: pitches in the last 3 calendar days at/above which a reliever is treated as
 #: rest-unavailable ('recent_use'). Conservative, and not fitted.
@@ -160,16 +157,16 @@ class BullpenAvailabilityIngest:
     _meta_cache: dict[int, _GameMeta | None] = field(default_factory=dict, repr=False)
 
     # ----------------------------------------------------------------- network
-    def _http_get_json(self, url: str) -> dict[str, Any]:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 — fixed host
-            return json.loads(resp.read().decode("utf-8"))
-
     def _mlb_get(self, path: str, params: Mapping[str, Any]) -> dict[str, Any]:
-        """GET an MLB Stats API endpoint (the ONLY network seam — stubbed in tests)."""
-        qs = urllib.parse.urlencode(dict(params))
-        url = f"{_MLB_BASE}/{path}?{qs}" if qs else f"{_MLB_BASE}/{path}"
-        return self._http_get_json(url)
+        """GET an MLB Stats API endpoint (the network seam the tests stub)."""
+        return mlb_client.get_json(
+            f"{mlb_client.API_V1}/{path}",
+            params,
+            timeout_s=self.timeout,
+            policy=mlb_client.DEFAULT_POLICY,
+            logger=log,
+            label="The bullpen load",
+        )
 
     # ----------------------------------------------------- identifier bridges
     def _resolve_game_meta(self, game_pk: int) -> _GameMeta | None:

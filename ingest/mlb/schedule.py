@@ -10,11 +10,8 @@ are in. This module is the one place that knows the schedule's shape.
 * :func:`card_state` maps a game to one of the four card states the frontend
   draws: ``scheduled``, ``live``, ``final`` or ``postponed``. It is the only
   status mapper; the API's raw-status fallback uses :func:`card_state_from_raw`.
-* The app reads the endpoint through ``ingest.mlb.client.LeagueFeed`` (async,
-  cached by the route). :func:`fetch_schedule_sync` reads it over ``urllib``,
-  but nothing in the program calls it today: the historical loader reads the
-  schedule through its own transport, ``urllib`` by default (the crash-class
-  finding, SIM-446).
+* :func:`schedule_params` builds a request's query. The reads themselves go
+  through ``ingest.mlb.client``.
 
 The schedule needs no key. A field the response does not carry reads ``None``,
 and the card hides it.
@@ -22,17 +19,13 @@ and the card hides it.
 
 from __future__ import annotations
 
-import json
 import logging
-import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
 log = logging.getLogger(__name__)
-
-SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 
 #: Every game type the live pipeline follows (regular season and postseason).
 GAME_TYPES: tuple[str, ...] = ("R", "F", "D", "L", "W", "C", "P")
@@ -311,17 +304,3 @@ def schedule_params(start: date, end: date, hydrate: str = DEFAULT_HYDRATE) -> d
         "endDate": end.isoformat(),
         "hydrate": hydrate,
     }
-
-
-def fetch_schedule_sync(
-    *,
-    start: date,
-    end: date,
-    hydrate: str = DEFAULT_HYDRATE,
-    timeout_s: float = 30.0,
-) -> list[ScheduleGame]:
-    """Read the schedule over ``urllib``. Nothing in the program calls it today."""
-    query = "&".join(f"{k}={v}" for k, v in schedule_params(start, end, hydrate).items())
-    with urllib.request.urlopen(f"{SCHEDULE_URL}?{query}", timeout=timeout_s) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    return parse_schedule(payload)

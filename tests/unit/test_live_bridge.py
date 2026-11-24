@@ -138,7 +138,7 @@ class _Http:
         self.schedule = schedule
         self.params: list[dict] = []
 
-    def get(self, url: str, params: dict | None = None) -> Any:
+    async def get_json(self, url: str, params: dict | None = None) -> Any:
         self.params.append(dict(params or {}))
         sched = self.schedule
 
@@ -152,7 +152,7 @@ class _Http:
             async def __aexit__(self, *a: Any) -> bool:
                 return False
 
-        return _R()
+        return await _R().json()
 
 
 def test_the_poll_reads_yesterday_to_tomorrow_in_eastern_time() -> None:

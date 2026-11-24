@@ -103,14 +103,19 @@ def _bare_pipeline(**attrs) -> LiveIngestionPipeline:
     return p
 
 
-def _make_async_response(status: int = 200, payload: dict | None = None) -> AsyncMock:
-    """An async-context-manager aiohttp response stand-in."""
-    resp = AsyncMock()
-    resp.status = status
-    resp.json.return_value = payload if payload is not None else {}
-    resp.__aenter__ = AsyncMock(return_value=resp)
-    resp.__aexit__ = AsyncMock(return_value=False)
-    return resp
+def _feed_http(status: int = 200, payload: dict | None = None) -> AsyncMock:
+    """A stand-in for the live service's reader: ``get_json`` answers ``payload``
+    on a 200 and raises the client's error on any other status."""
+    import aiohttp
+
+    http = AsyncMock()
+    if status == 200:
+        http.get_json.return_value = payload if payload is not None else {}
+    else:
+        http.get_json.side_effect = aiohttp.ClientResponseError(
+            request_info=MagicMock(), history=(), status=status
+        )
+    return http
 
 
 def _make_player(pid: int, name: str, *, batting_order=None, position="", stats=None):
@@ -524,9 +529,7 @@ class TestFetchFeed:
     @pytest.mark.asyncio
     async def test_fetch_feed_returns_rest_payload_on_200(self) -> None:
         payload = {"gamePk": 745000, "ok": True}
-        resp = _make_async_response(status=200, payload=payload)
-        http = MagicMock()
-        http.get.return_value = resp
+        http = _feed_http(status=200, payload=payload)
         pipeline = _bare_pipeline(_http=http)
         result = await pipeline._fetch_feed(745000)
         assert result == payload
@@ -534,9 +537,7 @@ class TestFetchFeed:
     @pytest.mark.asyncio
     async def test_fetch_feed_falls_back_to_redis_on_non_200(self) -> None:
         cached = {"gamePk": 745000, "cached": True}
-        resp = _make_async_response(status=503, payload={})
-        http = MagicMock()
-        http.get.return_value = resp
+        http = _feed_http(status=503, payload={})
         redis = AsyncMock()
         redis.get.return_value = json.dumps(cached)
         pipeline = _bare_pipeline(_http=http, _redis=redis)
@@ -546,9 +547,7 @@ class TestFetchFeed:
 
     @pytest.mark.asyncio
     async def test_fetch_feed_returns_none_when_no_cache(self) -> None:
-        resp = _make_async_response(status=503, payload={})
-        http = MagicMock()
-        http.get.return_value = resp
+        http = _feed_http(status=503, payload={})
         redis = AsyncMock()
         redis.get.return_value = None
         pipeline = _bare_pipeline(_http=http, _redis=redis)

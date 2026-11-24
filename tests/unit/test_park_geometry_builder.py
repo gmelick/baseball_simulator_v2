@@ -37,6 +37,7 @@ import urllib.error
 import numpy as np
 import pytest
 
+from ingest.mlb import client as mlb_client
 from ingest.venues import load_venue_dimensions as mvd
 from pipeline.batch.artifacts.park_geometry import (
     CARRY_OFFSET_FEATURES,
@@ -766,7 +767,7 @@ class TestVenueDimensions:
             seen["timeout"] = timeout
             return _Resp(json.dumps(_BODY).encode("utf-8"))
 
-        monkeypatch.setattr(mvd.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(mlb_client.urllib.request, "urlopen", fake_urlopen)
         out = mvd.fetch_venue_dimensions(2026, timeout=7)
         assert seen["url"] == mvd.VENUES_URL.format(season=2026) and seen["timeout"] == 7
         assert set(out) == {1, 5355, 9999}
@@ -788,7 +789,7 @@ class TestVenueDimensions:
 
     def test_fetch_rejects_a_bad_body(self, monkeypatch):
         monkeypatch.setattr(
-            mvd.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b'{"nope": 1}')
+            mlb_client.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b'{"nope": 1}')
         )
         with pytest.raises(ValueError):
             mvd.fetch_venue_dimensions(2026)
@@ -838,7 +839,7 @@ class TestVenueDimensions:
 
         with caplog.at_level("WARNING", logger="mlb_venue_dimensions"):
             monkey = pytest.MonkeyPatch()
-            monkey.setattr(mvd.urllib.request, "urlopen", lambda req, timeout=None: _Cut())
+            monkey.setattr(mlb_client.urllib.request, "urlopen", lambda req, timeout=None: _Cut())
             try:
                 again = mvd.write_venue_dimensions(out_dir, [2026])
             finally:

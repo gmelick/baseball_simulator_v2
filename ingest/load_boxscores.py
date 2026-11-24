@@ -23,8 +23,8 @@ WHAT
   ``stats.pitching`` dict, and a participant has ``gamesPlayed = 1`` in the
   slot he played.
 * :class:`BoxscoreIngest` — the fetch + persist wrapper. Network is ONE
-  stubbable seam, :meth:`BoxscoreIngest._mlb_get` (stdlib ``urllib``, a small
-  bounded retry on 429 / 5xx / timeouts). Persistence is :meth:`persist`
+  stubbable seam, :meth:`BoxscoreIngest._mlb_get`, over the one MLB client
+  (``ingest.mlb.client``) with a small bounded retry. Persistence is :meth:`persist`
   (asyncpg, ``INSERT … ON CONFLICT (game_pk, player_id) DO UPDATE`` so a
   re-run refreshes) and :func:`persist_sync` (the psycopg2 twin the historical
   loader calls with its own pooled connection).
@@ -38,20 +38,17 @@ them in.
 
 from __future__ import annotations
 
-import json
 import logging
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import date
 from typing import Any
 
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import RetryPolicy
+
 log = logging.getLogger("ingest.load_boxscores")
 
-_MLB_BASE = "https://statsapi.mlb.com/api/v1"
 
 #: The two sides of a box score, in the order the rows are emitted.
 SIDES: tuple[str, ...] = ("home", "away")
@@ -88,29 +85,6 @@ PITCHING_FIELDS: dict[str, str] = {
     "numberOfPitches": "p_pitches",
     "battersFaced": "p_batters_faced",
 }
-
-#: HTTP statuses the fetch retries (rate limit + server-side errors).
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
-
-#: Never sleep longer than this on a server's ``Retry-After`` say-so (the
-#: historical loader's cap).
-_MAX_RETRY_AFTER_S = 60.0
-
-
-def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
-    """The server's ``Retry-After`` in seconds, capped at :data:`_MAX_RETRY_AFTER_S`.
-
-    Returns ``None`` when the header is absent or is not a number (an
-    HTTP-date), so the caller falls back to its doubling wait.
-    """
-    headers = exc.headers
-    raw = headers.get("Retry-After") if headers is not None else None
-    if not raw:
-        return None
-    try:
-        return min(float(raw), _MAX_RETRY_AFTER_S)
-    except (TypeError, ValueError):
-        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,49 +579,17 @@ class BoxscoreIngest:
     backoff: float = 1.0
 
     # ----------------------------------------------------------------- network
-    def _http_get_json(self, url: str) -> dict[str, Any]:
-        req = urllib.request.Request(url, headers={"User-Agent": "baseball-sim/SIM-545"})
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 — fixed host
-            return json.loads(resp.read().decode("utf-8"))
-
     def _mlb_get(self, path: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """GET an MLB Stats API endpoint (the ONLY network seam — stubbed in tests).
-
-        Retries a 429 / 5xx / timeout up to ``max_attempts`` with a doubling
-        wait; re-raises the last error when the attempts run out. A retried
-        status that carries a numeric ``Retry-After`` header waits that long
-        instead (capped at :data:`_MAX_RETRY_AFTER_S`), so a rate-limited run
-        backs off as the server asks rather than hammering it every second.
-        """
-        qs = urllib.parse.urlencode(dict(params or {}))
-        url = f"{_MLB_BASE}/{path}?{qs}" if qs else f"{_MLB_BASE}/{path}"
-        wait = self.backoff
-        last: Exception | None = None
-        for attempt in range(1, self.max_attempts + 1):
-            delay = wait
-            try:
-                return self._http_get_json(url)
-            except urllib.error.HTTPError as exc:
-                last = exc
-                if exc.code not in _RETRY_STATUSES:
-                    raise
-                retry_after = _retry_after_seconds(exc)
-                if retry_after is not None:
-                    delay = retry_after
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                last = exc
-            if attempt < self.max_attempts:
-                log.info(
-                    "SIM-545: %s attempt %d failed (%s); retrying in %.1fs",
-                    url,
-                    attempt,
-                    last,
-                    delay,
-                )
-                time.sleep(delay)
-                wait *= 2
-        assert last is not None
-        raise last
+        """GET an MLB Stats API endpoint (the network seam the tests stub)."""
+        return mlb_client.get_json(
+            f"{mlb_client.API_V1}/{path}",
+            params,
+            headers={"User-Agent": "baseball-sim/SIM-545"},
+            timeout_s=self.timeout,
+            policy=RetryPolicy(retries=self.max_attempts - 1, first_wait_s=self.backoff),
+            logger=log,
+            label="The box-score load",
+        )
 
     def fetch_boxscore(self, game_pk: int) -> dict[str, Any]:
         """Fetch ``/game/{game_pk}/boxscore`` and return its ``teams`` dict."""

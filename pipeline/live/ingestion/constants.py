@@ -1,4 +1,4 @@
-"""The live pipeline's settings: the MLB endpoints, the poll and reconnect
+"""The live pipeline's settings: the MLB socket address, the poll and reconnect
 intervals, the cache lifetimes, the re-simulation cooldown and the odds cadences.
 """
 
@@ -10,9 +10,7 @@ from zoneinfo import ZoneInfo
 # Config
 # ---------------------------------------------------------------------------
 
-MLB_BASE = "https://statsapi.mlb.com"
 MLB_WS_TEMPLATE = "wss://ws.statsapi.mlb.com/api/v1/game/push/subscribe/gameday/{game_pk}"
-SCHEDULE_URL = f"{MLB_BASE}/api/v1/schedule"
 #: The schedule poll asks for each game's probable pitchers and posted
 #: lineups, so the pre-game odds cycle knows whose props to store before a game
 #: has a live feed (``teams.<side>.probablePitcher``, ``lineups.<side>Players``).
@@ -23,7 +21,7 @@ SCHEDULE_POLL_S = 30  # how often to check for newly-live games
 _EASTERN = ZoneInfo("America/New_York")
 WS_RECONNECT_BASE = 2.0  # base seconds for WS reconnect backoff
 WS_RECONNECT_MAX = 60.0  # cap on WS reconnect backoff
-HTTP_TIMEOUT_S = 10  # aiohttp request timeout
+HTTP_TIMEOUT_S = 10  # the per-request timeout of the MLB reads
 REDIS_TTL_LIVE_S = 60  # cache TTL for live game states
 REDIS_TTL_DONE_S = 3600  # cache TTL for completed game states
 

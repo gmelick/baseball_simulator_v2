@@ -38,10 +38,12 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from ingest.mlb import client as mlb_client
+
 log = logging.getLogger("mlb_venue_dimensions")
 
 #: The Stats API venues call the design session used (2026-09-20).
-VENUES_URL = "https://statsapi.mlb.com/api/v1/venues?sportId=1&season={season}&hydrate=fieldInfo"
+VENUES_URL = mlb_client.VENUES_URL + "?sportId=1&season={season}&hydrate=fieldInfo"
 VENUE_DIMENSIONS_FILE = "venue_dimensions.json"
 
 #: The five published distances the prior interpolates (feet), in field order.
@@ -83,10 +85,14 @@ def fetch_venue_dimensions(season: int, timeout: float = 30) -> dict[int, dict]:
     ``http.client.HTTPException`` (not an ``OSError``: ``IncompleteRead`` on
     a truncated body, ``BadStatusLine`` on a malformed status) when the
     answer breaks mid-stream."""
-    url = VENUES_URL.format(season=int(season))
-    req = urllib.request.Request(url, headers={"User-Agent": "baseball-sim/SIM-478"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed host
-        body = json.loads(resp.read().decode("utf-8"))
+    body = mlb_client.get_json(
+        VENUES_URL.format(season=int(season)),
+        headers={"User-Agent": "baseball-sim/SIM-478"},
+        timeout_s=timeout,
+        policy=mlb_client.DEFAULT_POLICY,
+        logger=log,
+        label="The venue-dimension load",
+    )
     venues = body.get("venues") if isinstance(body, dict) else None
     if not isinstance(venues, list):
         raise ValueError(f"venues call for {season}: no 'venues' list in the answer")
