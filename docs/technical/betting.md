@@ -137,7 +137,7 @@ logs as `betting.bettingpros`.
 | `TransportMixin._http_get_json` | One GET with the retry policy. It retries a time-out, an HTTP 429 or a 5xx, waits twice as long each time (at most 60 s, a `Retry-After` included), and removes the key from an error message. | `_bp_get`, `_mlb_get`; `scripts/probes/odds_row_compare.py` records and replays it |
 | `TransportMixin._bp_get` / `_mlb_get` | The two network seams the tests stub: a BettingPros v3 read (it raises at once with no key) and an MLB Stats API read. | every read |
 | `TransportMixin.set_retry_policy` | Sets the retries and the first wait. | the provider's constructor, `historical_loader.py` |
-| `_read_schedule` / `_ScheduleInfo` / `_is_postponed` | The schedule facts of one game from `schedule?gamePk=`: the official date, the teams, the start, the double-header number, the postponed start. The played entry wins over a postponed one. | `_resolve_game_meta` |
+| `_read_schedule` / `_ScheduleInfo` | The schedule facts of one game from `schedule?gamePk=`: the official date, the teams, the start, the double-header number, the postponed start. The played entry wins over a postponed one (`ingest.mlb.schedule.played_index`, shared with the bullpen load). | `_resolve_game_meta` |
 | `EventMatchMixin._resolve_game_meta` | Game → (official date, home name, away name, UTC start). The date is `officialDate`, never the UTC `gameDate`. | `_resolve_event`, the row builders |
 | `EventMatchMixin._resolve_event` / `_match_by_start` / `_match_game_two` | Game → its BettingPros event. With a known start, the nearest event of the same teams on that date wins. Game 2 of a straight double-header has a placeholder start, so it takes the later event. | `fetch_odds` row builders |
 | `forget_game` / `forget_failed_lookups` | Drop one game's cached facts; drop every stored failed lookup. | `pipeline/live/ingestion/game_odds.py`; `historical_loader.py` before each game |
@@ -361,7 +361,7 @@ comparison skip that side.
 
 | Caller | What it uses |
 |---|---|
-| [`pipeline/live/ingestion/`](../../pipeline/live/ingestion/) | `odds_source`, `game_offers`, `prop_offers`, `write_offers`, the two closing stamps, `RefusalTally`, the prop roles ([pipeline-ingest.md](pipeline-ingest.md#the-live-service)) |
+| [`pipeline/live/ingestion/`](../../pipeline/live/ingestion/) | `odds_source`, `game_offers`, `prop_offers`, `write_offers`, the two closing stamps, `RefusalTally`, the prop roles ([Live service](live.md#pipelineliveingestion)) |
 | [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | `python -m betting.historical_loader` for the games missing odds, last season and this one |
 | [`api/routes/betting.py`](../../api/routes/betting.py) | `/edges` and `/signals`; `BetSignalConfig`, `bet_signals_from_edges` |
 | [`api/routes/betting_pricing.py`](../../api/routes/betting_pricing.py) | Every report builder, the de-vigs and the margin rule |

@@ -1,3 +1,76 @@
+# COMMITTED (branch `sim647-part2-ingest`, not merged) — the code layout, part 2: the loaders move into ingest/, one MLB client, the clean-up — SIM-647, 2026-11-24
+
+**Why it matters.** Part 2 of the code-layout plan
+(`docs/audit/2026-11-23-sim647-code-layout-plan.md`). The loaders of the raw data now sit in
+one folder, `ingest/`, in run order. Eleven callers each had their own MLB Stats API request
+code and three of them had their own retry rule; one client replaces them all. The function
+review removed about 400 lines of duplicate and dead code, and the comment rewrite about 430
+more.
+
+**Step A, the move (Data Engineer, QA / DevOps).** 25 files move into `ingest/`: `mlb/` (the
+client, the schedule, the game feed), `games/` (the finished-game loader and its parts, the
+reload and sweep scripts), `savant/`, `venues/`, the box-score and bullpen loads, and the
+Statcast code sets. 22 tests move to `tests/unit/ingest/`. `ingest/` joins the compose mounts
+of `app`, `live` and `jobs`, the Dockerfile, the mypy and coverage scopes and ruff's
+first-party list. Proof: each moved file's syntax tree, with docstrings and imports removed and
+the module renames applied, is identical to master's, except the two scripts' repository depth.
+
+**Step B, one MLB client (Backend Developer, Data Engineer).**
+
+- `ingest/mlb/client.py` holds every MLB address, one sync GET (`urllib`) and the async reader
+  `LeagueFeed`. The game loader, the box-score, bullpen and venue-dimension loads, the odds
+  provider (its BettingPros reads too), the live service, the lineup writer and the venue
+  backfill use it.
+- One retry rule: the wait doubles from each caller's first wait, a numeric `Retry-After` on a
+  429 or 503 sets a floor, and 60 s caps it. 408, 425, 429, every 5xx and every connection
+  error retry; any other status raises the original error at once. Each caller keeps its count:
+  the loader 9 from 2 s, the box score 3 from 1 s, the odds its own policy, the bullpen load 3
+  from 1 s (it had none), the venue dimensions 1 from 2 s (it had none; a failed season keeps
+  the last copy).
+- Behaviour changes: the loader's wait doubles instead of growing linearly; its final 4xx is
+  urllib's `HTTPError`, not its own `HttpError` (no caller read the type). The loader's
+  optional `requests` transport and an unused schedule reader are gone.
+- One box-score load path: the backfill script moves into `ingest/load_boxscores.py`
+  (`python -m ingest.load_boxscores`).
+- The row comparison: the old and the new code each read the same 320 Final games of 2025-2026
+  from the live API. Every pitch row (93,831), box-score row (9,488), feed, schedule lookup and
+  venue dimension matched; no error on either side
+  (`docs/audit/records/2026-11-24-sim647-part2-mlb-client-row-comparison.md`).
+
+**Step C, the clean-up.** The function review (three read-only reviewers, two builders, the
+rest by hand):
+
+| Function or group | Reason | Kept, merged or deleted |
+|---|---|---|
+| The Savant CSV fetch, the sprint-speed fetch | A third and a fourth retry copy | Merged onto the client GET (the BOM strip kept; Savant declares UTF-8) |
+| Three Savant upsert builders; two box-score upsert builders | One statement shape | Merged: one builder each; the SQL is token-identical |
+| Two known-player filters; two SQL IN-list helpers | Duplicates | Merged |
+| The played entry of a schedule answer | The odds matcher had it; the bullpen load took the first entry | Merged into `ingest/mlb/schedule.py`. **Fix:** a made-up game's roster now comes from the day it was played |
+| Two starting-position readers, two int parsers, two defense-key tables | Duplicates | Merged (the game page now falls back when a first position is blank) |
+| The live service's schedule query and its copy of the game types | A copy of `schedule_params` | Merged |
+| `load_date_range` / `refresh_seasons` per-date loop; four "does this table exist" probes | Duplicates | Merged into one loop and one cached probe |
+| Four DSN checks; two `.env` readers in the sweep scripts | Duplicates | `db.dsn.require_dsn`; one reader |
+| `write_csv`, `reprocess_errored_games`, `quality_report`, `fetch_rows`, `BoxscoreIngest.persist`, `as_dict`, the schedule's unread fields, the client's `BOXSCORE_URL`, `Response.header`, unused parameters | No program caller | Deleted |
+| The starting-position repair | One caller, a closed one-off probe | Moved into `scripts/probes/backfill_start_positions.py` |
+| Import-time `logging.basicConfig` (five modules) | It configured logging for every importer | Moved into each entry point and the two job heredocs; every module logs under `__name__` |
+| `_batch_insert`'s optional arguments, the two pickoff-row builders, the venue resolved three times | Test-only branches or small gains | Kept |
+
+The comment rewrite: every docstring and comment in `ingest/` says what the code does and why,
+without ticket history; 3,976 lines become 3,549. Proof: each file's syntax tree with docstrings
+removed is identical to the function-review commit's. The docs: `docs/technical/ingest.md` is
+new, written from the code; the old ingest page becomes `docs/technical/live.md`, the live
+service alone.
+
+**QA (independent pass).** No high or medium finding. Four low ones, all handled: the venue
+fetch's retries cut to one; a stale type on the live service's `_http`; CLAUDE.md's mount and
+folder lines; one test that slept for real. Left as is: the Postgres table comment on
+`raw.etl_errors` still names the deleted `reprocess_errored_games` (changing it needs a
+migration).
+
+**Checks.** ruff, the format check and mypy (207 files) pass. The container unit lane passes
+in quarters: 1,069 + 1,275 + 1,638 + 2,449 = 6,431 tests. The SIM-445 segfault struck four runs at random
+points; each rerun passed.
+
 # DEPLOYED — one odds backfill that loads only the games missing odds — SIM-648 (filed and closed), 2026-11-24
 
 **Why it matters.** The nightly odds pass read only the games of the last two days. A game the

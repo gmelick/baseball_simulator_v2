@@ -44,13 +44,12 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
-from pipeline.etl.historical.game_values import _build_starting_lineup_rows, _parse_height
-from pipeline.mlb_schedule import LIVE, SCHEDULED, card_state, parse_game
+from ingest.games.game_values import _build_starting_lineup_rows, _parse_height
+from ingest.mlb import client as mlb_client
+from ingest.mlb.schedule import LIVE, SCHEDULED, card_state, parse_game
 
 log = logging.getLogger(__name__)
 
-FEED_URL = "https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
-PEOPLE_URL = "https://statsapi.mlb.com/api/v1/people/{player_id}"
 
 #: The tuple order of a lineup row, as ``_build_starting_lineup_rows`` returns it.
 Row = tuple[int, int, int, int, int | None, str, bool, int]
@@ -147,7 +146,7 @@ class PublishedLineupWriter:
         rows: list[Row] = []
         source: str | None = None
         if game.lineups_posted:
-            feed = await self._get_json(FEED_URL.format(game_pk=game.game_pk))
+            feed = await self._get_json(mlb_client.GAME_FEED_URL.format(game_pk=game.game_pk))
             rows = [
                 r
                 for r in _build_starting_lineup_rows(game.game_pk, game.season, feed)
@@ -191,7 +190,7 @@ class PublishedLineupWriter:
             ):
                 self._live_done.add(game.game_pk)
                 return None
-        feed = await self._get_json(FEED_URL.format(game_pk=game.game_pk))
+        feed = await self._get_json(mlb_client.GAME_FEED_URL.format(game_pk=game.game_pk))
         rows: list[Row] = list(_build_starting_lineup_rows(game.game_pk, game.season, feed))
         teams = {game.away.team_id, game.home.team_id}
         for team in teams:
@@ -298,7 +297,7 @@ class PublishedLineupWriter:
             }
         missing = sorted(player_ids - known)
         for pid in missing:
-            payload = await self._get_json(PEOPLE_URL.format(player_id=pid))
+            payload = await self._get_json(mlb_client.PEOPLE_URL.format(player_id=pid))
             people = (payload or {}).get("people") or []
             if not people:
                 raise ValueError(f"the league has no person {pid}")

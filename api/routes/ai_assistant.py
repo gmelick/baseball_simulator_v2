@@ -48,7 +48,7 @@ from api.routes.sql_safety import (
     SqlValidationError,
     run_read_only_sql,
 )
-from pipeline.statcast_events import sql_called_strike, sql_in_play, sql_savant_whiff, sql_swing
+from ingest.statcast_events import sql_called_strike, sql_in_play, sql_savant_whiff, sql_swing
 
 log = logging.getLogger("api.routes.ai_assistant")
 

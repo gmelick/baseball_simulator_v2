@@ -308,7 +308,7 @@ async def _actual_result(request: Request, game_pk: int) -> tuple[Any, dict[str,
                 return SegmentRuns.from_official_grid(dict(grid)), final
     try:
         from api.routes.games_feed import _league_game_payload
-        from pipeline.mlb_game_feed import parse_game_feed
+        from ingest.mlb.game_feed import parse_game_feed
 
         payload, _source, _err = await _league_game_payload(request, int(game_pk))
     except Exception as exc:  # noqa: BLE001

@@ -6,8 +6,8 @@ Create Date: 2026-09-17
 
 SIM-532: the raw landing tables for two Savant fielding boards — Outs Above
 Average (pulled once per position) and Outfield Jump (per player). Both are
-loaded by ``pipeline/etl/savant_loader.py`` from the registry in
-``pipeline/etl/savant_boards.py``, at ``min=0`` (every fielder with one
+loaded by ``ingest/savant/load_leaderboards.py`` from the registry in
+``ingest/savant/boards.py``, at ``min=0`` (every fielder with one
 chance; owner ruling 2026-09-16).
 
 WHAT EACH TABLE FEEDS

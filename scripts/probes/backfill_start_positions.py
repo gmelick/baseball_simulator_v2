@@ -20,7 +20,7 @@ WHAT IT WRITES
 --------------
 Per Final game with lineup rows (ordered by game_pk): one UPDATE over that
 game's starters, writing ``allPositions[0]`` onto each row whose code differs
-(``pipeline.etl.boxscore_ingest.persist_starting_positions``). A row that is
+(:func:`persist_starting_positions`). A row that is
 already right is not touched, so the table's ``updated_at`` trigger marks
 exactly the repaired rows. The box comes from ``/api/v1/game/{pk}/boxscore``,
 one MLB request per game, the same request the box-score backfill makes.
@@ -57,6 +57,7 @@ import logging
 import os
 import sys
 from collections import Counter
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -65,14 +66,131 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from db.dsn import require_dsn  # noqa: E402
-from pipeline.etl.boxscore_ingest import (  # noqa: E402
-    BoxscoreIngest,
-    StartingPosition,
-    parse_starting_positions,
-    persist_starting_positions,
-)
+from ingest.load_boxscores import SIDES, BoxscoreIngest, side_team_id  # noqa: E402
+from ingest.mlb.game_feed import starting_position  # noqa: E402
 
 log = logging.getLogger("backfill_start_positions")
+
+
+# ---------------------------------------------------------------------------
+# The starting positions of a box, and their write onto the lineup rows
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StartingPosition:
+    """One starter's starting and last positions in a game.
+
+    ``position_code`` is the starting position (``allPositions[0]``);
+    ``last_position_code`` is the box's ``position``, the value the lineup
+    rows loaded before the starting-position fix (SIM-559) carry.
+    ``batting_order`` is the slot (1-9).
+    """
+
+    game_pk: int
+    team_id: int
+    player_id: int
+    batting_order: int
+    position_code: str
+    last_position_code: str | None
+
+    @property
+    def moved(self) -> bool:
+        """True when the player ended the game at another position."""
+        return self.position_code != self.last_position_code
+
+
+def parse_starting_positions(
+    teams: Mapping[str, Any],
+    *,
+    game_pk: int,
+    home_team_id: int | None = None,
+    away_team_id: int | None = None,
+) -> list[StartingPosition]:
+    """The starting position of every batting-order STARTER in a box.
+
+    A starter is a player whose ``battingOrder`` ends in ``00``. The starting
+    pitcher of a designated-hitter game has no batting order and no row here:
+    his lineup row is coded 'P' already. The same ``teams`` dict
+    :func:`parse_boxscore` reads, so one fetch serves the backfill.
+    """
+    fallback_team = {"home": home_team_id, "away": away_team_id}
+    rows: list[StartingPosition] = []
+    for side in SIDES:
+        team_box = teams.get(side) or {}
+        team_id = side_team_id(team_box, fallback_team[side])
+        if team_id is None:
+            log.warning("SIM-559: game %s %s side has no team id — no rows.", game_pk, side)
+            continue
+        for pdata in (team_box.get("players") or {}).values():
+            pid = (pdata.get("person") or {}).get("id")
+            bo = pdata.get("battingOrder")
+            if pid is None or bo in (None, ""):
+                continue
+            try:
+                bo_int = int(bo)
+            except (TypeError, ValueError):
+                continue
+            if bo_int % 100 != 0:
+                continue  # a later occupant of the slot, not the starter
+            pos = starting_position(pdata)
+            if pos is None:
+                continue
+            last = (pdata.get("position") or {}).get("abbreviation")
+            rows.append(
+                StartingPosition(
+                    game_pk=int(game_pk),
+                    team_id=int(team_id),
+                    player_id=int(pid),
+                    batting_order=bo_int // 100,
+                    position_code=pos,
+                    last_position_code=(str(last)[:5] if last else None),
+                )
+            )
+    return rows
+
+
+#: Repair the starters' lineup rows in one statement per game. Only a
+#: row whose code differs is written, so ``updated_at`` (the table's trigger)
+#: marks exactly the repaired rows.
+STARTING_POSITION_UPDATE_SQL_ASYNCPG: str = """
+    UPDATE raw.game_lineups AS l
+    SET    position_code = v.position_code
+    FROM   unnest($1::int[], $2::int[], $3::int[], $4::text[])
+           AS v(game_pk, team_id, player_id, position_code)
+    WHERE  l.game_pk = v.game_pk
+      AND  l.team_id = v.team_id
+      AND  l.player_id = v.player_id
+      AND  l.sequence = 1
+      AND  l.is_starter
+      AND  l.position_code IS DISTINCT FROM v.position_code
+"""
+
+
+async def persist_starting_positions(conn: Any, rows: Iterable[StartingPosition]) -> int:
+    """Write the starting positions onto the lineup rows (asyncpg). Returns the
+    number of rows whose code changed (a row already right is not written)."""
+    batch = list(rows)
+    if not batch:
+        return 0
+    status = await conn.execute(
+        STARTING_POSITION_UPDATE_SQL_ASYNCPG,
+        [r.game_pk for r in batch],
+        [r.team_id for r in batch],
+        [r.player_id for r in batch],
+        [r.position_code for r in batch],
+    )
+    return _rows_from_status(status)
+
+
+def _rows_from_status(status: Any) -> int:
+    """The row count in an asyncpg command tag such as ``'UPDATE 3'``; 0 when
+    the tag is absent or not of that shape."""
+    try:
+        return int(str(status).split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
 
 #: SIM-443b: no default password. A blank value is resolved in main() through
 #: db.dsn.require_dsn, which names the missing variable.

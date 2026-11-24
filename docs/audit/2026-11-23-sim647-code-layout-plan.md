@@ -1,8 +1,8 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
-Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1's Steps A and B are
-deployed (2026-11-23, master a882395); its Step C, the clean-up, is in progress. Parts 2 to 7
-have not started.
+Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
+to C (2026-11-24, master 0f0fd61). Part 2's Steps A to C are committed on branch
+`sim647-part2-ingest` (2026-11-24), not yet merged or deployed. Parts 3 to 7 have not started.
 
 ## 1. Why
 
@@ -142,7 +142,24 @@ scheduler.
 | `pipeline/statcast_events.py` | `ingest/statcast_events.py` |
 
 Step B also moves the schedule read of `betting/bettingpros/match_games.py` onto
-`ingest/mlb/client.py`. The check: a row comparison at scale, as in SIM-645. Record every MLB
+`ingest/mlb/client.py`.
+
+The client's design (2026-11-24). Today three callers carry their own copy of a retry
+policy: the game loader (ten retries, a linear wait, `Retry-After` replaces the wait), the
+box-score load (four attempts, a doubling wait) and the odds provider (an env-set count, a
+doubling wait with a cap, `Retry-After` as a floor). The rest retry nothing.
+
+- **One sync GET** in `ingest/mlb/client.py`, built from the game loader's (`urllib`, the
+  `HttpError` type, the case-insensitive response). It takes a timeout, headers and a
+  retry policy per caller. Every sync caller uses it, the BettingPros reads included.
+- **One retry shape:** the wait doubles from the caller's first wait, a numeric
+  `Retry-After` sets a floor, and a cap ends the growth. 408, 425, 429, every 5xx and every
+  connection error retry; any other status fails at once. Each caller keeps its own count
+  and first wait.
+- **One async reader**, the app's `LeagueFeed`, serves the live service's feed and lineup
+  reads and the venue backfill.
+- `MLB_BASE` and the URL of each endpoint (schedule, feed, box score, people, venues,
+  coaches, roster) live in the client once. The check: a row comparison at scale, as in SIM-645. Record every MLB
 response of 300+ games with the old code, replay them through the new code, and compare the
 rows each loader writes.
 
@@ -241,6 +258,12 @@ regression lane, and the score tables built on a frozen DuckDB copy are byte-ide
 | `api/routes/ai_assistant.py`, `analytics.py`, `data_health.py`, `players.py`, `schema_introspect.py`, `sql_runner.py`, `sql_safety.py` | `api/routes/data_lab/` |
 | `api/routes/similarity.py`, `similarity_explorer.py` | `api/routes/similarity/` |
 | the other routes and `api/schemas/` | unchanged |
+
+Part 2's review left two twins for this part: the live service's game-status map duplicates
+`ingest/games/game_values._map_game_status` (but ignores `codedGameState`), and its lineup
+writer builds a `raw.players` row the way the game loader's `_ensure_players` does, with a
+different position source and conflict rule. A merge changes what the live service writes, so
+it needs the owner's ruling.
 
 The live service's entry point changes (`python -m live.run_live`); the compose file's `live`
 command follows. The API snapshot is regenerated in the image (CLAUDE.md section 15). The check:

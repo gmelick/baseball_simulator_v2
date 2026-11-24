@@ -8,7 +8,6 @@ from datetime import datetime
 from functools import partial
 from typing import Any
 
-import aiohttp
 import asyncpg
 import redis.asyncio as aioredis
 
@@ -16,6 +15,7 @@ from betting.bettingpros.fetch_odds import BettingProsOddsProvider
 from betting.load_odds_to_db import odds_source
 from betting.validate_odds import RefusalTally
 from db.introspect import pg_column_exists_async
+from ingest.mlb.client import LeagueFeed
 from pipeline.live.ingestion.game_state_builder import GameStateBuilder
 from pipeline.live.ingestion.mlb_websocket import MLBGameWebSocket
 
@@ -31,7 +31,7 @@ class PipelineBase:
     _db: asyncpg.Pool | None
     _redis: aioredis.Redis | None
     _broadcaster: Any
-    _http: aiohttp.ClientSession | None
+    _http: LeagueFeed | None
     _ws_clients: dict[int, MLBGameWebSocket]
     _refresh_locks: dict[int, asyncio.Lock]
     _last_resim_at_bat: dict[int, int]

@@ -26,12 +26,12 @@ DuckDB schema **v32** for the analytics file.
 
 ## How it fits together
 
-1. The historical loader (`pipeline/etl/etl_historical_loader.py`) fetches each game's
+1. The historical loader (`ingest/games/load_games.py`) fetches each game's
    MLB Stats API feed. It writes the reference rows, then `raw.pitches` and
-   `raw.play_events`. The box-score parser (`pipeline/etl/boxscore_ingest.py`) writes
+   `raw.play_events`. The box-score parser (`ingest/load_boxscores.py`) writes
    `raw.game_player_stats` and `raw.game_bullpen` for the same game.
-2. The Savant loaders (`pipeline/etl/savant_loader.py`,
-   `pipeline/etl/savant_pitch_tracking_loader.py`) and the sprint-speed loader write the
+2. The Savant loaders (`ingest/savant/load_leaderboards.py`,
+   `ingest/savant/load_pitch_tracking.py`) and the sprint-speed loader write the
    `raw.savant_*` tables and `raw.sprint_speed`.
 3. The live service (`pipeline/live/`) writes the schedule fields on `raw.games`, the
    posted lineups, the odds rows and `sim.lineup_state`.
@@ -59,8 +59,8 @@ section below).
 
 | Table | Holds | Written by | Read by |
 |---|---|---|---|
-| `raw.venues` | One row per ballpark and season: name, city, surface, roof, elevation, the fence distances and wall heights. | the historical loader; `pipeline/etl/venue_backfill_job.py` | the loader, the live service, the slate route, the Data Lab |
-| `raw.teams` | One row per team and season: league, division, home venue. | the historical loader (`pipeline/etl/historical/reference_rows.py`) | the loader, the live service, the slate route |
+| `raw.venues` | One row per ballpark and season: name, city, surface, roof, elevation, the fence distances and wall heights. | the historical loader; `ingest/venues/backfill_venues.py` | the loader, the live service, the slate route, the Data Lab |
+| `raw.teams` | One row per team and season: league, division, home venue. | the historical loader (`ingest/games/reference_rows.py`) | the loader, the live service, the slate route |
 | `raw.players` | One row per player: name, bat and throw hand, primary position. | the historical loader; the live lineup writer (`pipeline/live/lineup_writer.py`) | the lineup resolver, the API's player and prop routes, the Data Lab, the Savant and sprint-speed loaders, the bullpen derivation |
 | `raw.managers` | One row per manager and season: the team and the tenure dates (`season_end` NULL while active). | the historical loader | the loader (each pitch carries the two managers' ids) |
 
@@ -69,30 +69,30 @@ section below).
 | Table | Holds | Written by | Read by |
 |---|---|---|---|
 | `raw.games` | One row per game: date, type, status, teams, venue, final score, the inning-by-inning line (`inning_scores`), weather, and the schedule fields (start time, doubleheader, detailed state, probable pitchers, first pitch). | the historical loader; the live service (`pipeline/live/live_ingestion_pipeline.py`); the venue backfill | nearly every reader: the slate, the game page, the betting routes, the bullpen derivation, the scripts |
-| `raw.game_lineups` | Each team's batting order and the position each starter STARTED at, with substitutions (`sequence`, `pinch_role`). `source` is `box` (the final box score), `published` (posted before first pitch) or `projected`. | the historical loader (`pipeline/etl/historical/reference_rows.py`); the live lineup writer; the starting-position backfill (`scripts/probes/backfill_start_positions.py`, through `boxscore_ingest.persist_starting_positions`) | the lineup resolver (`simulation/lineup_resolver.py`), the game routes, the manager profile, the scripts |
-| `raw.game_player_stats` | The official per-player box score: one row per player who APPEARED (no row means the player did not play and a book voids the bet). Batting and pitching lines, `p_started`. No foreign key on `player_id`, on purpose. | the box-score parser; `scripts/load_official_boxscores.py` | the prop grading (`simulation/prop_validation.py`, `scripts/accuracy/`), the lineup resolver (each side's starter), the bullpen derivation |
-| `raw.game_bullpen` | The arms the MLB box lists for a game per side: `started`, `pitched` or `bullpen`. The simulator's pen. | the box-score parser; `scripts/load_official_boxscores.py --bullpen-only` | `pipeline/bullpen_usage.py`, the lineup resolver, the game routes |
-| `raw.game_bullpen_availability` | Who was AVAILABLE per game (active roster and injured list), with rest fields. | `pipeline/live/bullpen_availability_ingest.py` | the manager profile (`pipeline/batch/profiles/manager.py`) |
+| `raw.game_lineups` | Each team's batting order and the position each starter STARTED at, with substitutions (`sequence`, `pinch_role`). `source` is `box` (the final box score), `published` (posted before first pitch) or `projected`. | the historical loader (`ingest/games/reference_rows.py`); the live lineup writer; the starting-position backfill (`scripts/probes/backfill_start_positions.py`, through `boxscore_ingest.persist_starting_positions`) | the lineup resolver (`simulation/lineup_resolver.py`), the game routes, the manager profile, the scripts |
+| `raw.game_player_stats` | The official per-player box score: one row per player who APPEARED (no row means the player did not play and a book voids the bet). Batting and pitching lines, `p_started`. No foreign key on `player_id`, on purpose. | the box-score parser; `python -m ingest.load_boxscores` | the prop grading (`simulation/prop_validation.py`, `scripts/accuracy/`), the lineup resolver (each side's starter), the bullpen derivation |
+| `raw.game_bullpen` | The arms the MLB box lists for a game per side: `started`, `pitched` or `bullpen`. The simulator's pen. | the box-score parser; `python -m ingest.load_boxscores --bullpen-only` | `pipeline/bullpen_usage.py`, the lineup resolver, the game routes |
+| `raw.game_bullpen_availability` | Who was AVAILABLE per game (active roster and injured list), with rest fields. | `ingest/load_bullpen_availability.py` | the manager profile (`pipeline/batch/profiles/manager.py`) |
 
 ### Pitch and event data
 
 | Table | Holds | Written by | Read by |
 |---|---|---|---|
-| `raw.pitches` | One row per pitch, parsed from the MLB Stats API game feed: the count, the pitch's physics, the batted ball, the fielders, the runners, the event, the managers. A row is never changed after it is written; a corrective reload deletes and rewrites the game. An insert trigger sets `data_quality_flag` on physically implausible values. | the historical loader (`pipeline/etl/historical/writes.py`) | the profile computor and the pool builders (through `pg.raw.pitches`), the pool label check (`pipeline/batch/pool_chain.py`), the Data Lab |
+| `raw.pitches` | One row per pitch, parsed from the MLB Stats API game feed: the count, the pitch's physics, the batted ball, the fielders, the runners, the event, the managers. A row is never changed after it is written; a corrective reload deletes and rewrites the game. An insert trigger sets `data_quality_flag` on physically implausible values. | the historical loader (`ingest/games/write_rows.py`) | the profile computor and the pool builders (through `pg.raw.pitches`), the pool label check (`pipeline/batch/pool_chain.py`), the Data Lab |
 | `raw.play_events` | The events that are not pitches: pickoff throws (errant ones included), step-offs, balks, and intentional walks signalled without a pitch. | the historical loader | the profile computor (pickoff rates, runner events), the steal-pool rebuild, the prop ground truth |
-| `raw.sprint_speed` | Savant sprint speed per player-season. | `pipeline/etl/etl_sprint_speed_loader.py` | the baserunner and fielder profiles, the pool builder |
+| `raw.sprint_speed` | Savant sprint speed per player-season. | `ingest/savant/load_sprint_speed.py` | the baserunner and fielder profiles, the pool builder |
 
 ### Savant leaderboards
 
 Baseball Savant publishes season leaderboards that the MLB feed lacks. The landing tables
-are one-to-one copies of the boards. `pipeline/etl/savant_boards.py` (`BOARDS`) names each
-board's table and columns, and `pipeline/etl/savant_loader.py` writes them all through one
+are one-to-one copies of the boards. `ingest/savant/boards.py` (`BOARDS`) names each
+board's table and columns, and `ingest/savant/load_leaderboards.py` writes them all through one
 insert.
 
 | Table | Holds | Read by |
 |---|---|---|
 | `raw.savant_bat_tracking`, `raw.savant_swing_path`, `raw.savant_batting_stance` | Bat speed, swing length, the swing path and the stance. A switch hitter's two sides are kept apart by the pitcher's hand (`split`) or by `bat_side`. Each row carries `asof_date`, the date its data runs through. | the batter profile |
-| `raw.savant_pitch_tracking` | The same swing measurements per PITCH (keyed by game, at-bat and pitch number), plus the pitcher's arm angle, so a profile can aggregate to any cutoff date. Written by `pipeline/etl/savant_pitch_tracking_loader.py`. | the batter profile. The arm angle is stored and read by nothing (the arm-angle decision, SIM-533). |
+| `raw.savant_pitch_tracking` | The same swing measurements per PITCH (keyed by game, at-bat and pitch number), plus the pitcher's arm angle, so a profile can aggregate to any cutoff date. Written by `ingest/savant/load_pitch_tracking.py`. | the batter profile. The arm angle is stored and read by nothing (the arm-angle decision, SIM-533). |
 | `raw.savant_arm_strength` | Fielders' throwing arm strength by position. | the fielder profile |
 | `raw.savant_outs_above_average` | Outs above average, pulled once per position; the key carries the position pulled. | the fielder profile |
 | `raw.savant_outfield_jump` | The outfielder's reaction, burst, route and jump in feet. | the fielder profile |
@@ -121,8 +121,8 @@ writer computes an odds hash and skips a duplicate. The code that writes both ta
 |---|---|---|---|
 | `raw.etl_data_freshness` | The last game loaded per pitcher and batter. | the historical loader | the loader, the Data Health route |
 | `raw.etl_errors` | One row per pitch the loader skipped on a hard error; unique per natural key, so a rerun adds no duplicate. | the historical loader | the loader's reprocess path |
-| `raw.etl_game_ingest` | The terminal outcome per game (`loaded`, `empty`, `failed`), so a game with no pitches is not fetched forever. A reload ignores it on purpose. | the historical loader | the loader; `scripts/reload_games.py` |
-| `raw.pipeline_run_log` | A run log of the venue backfill. | `pipeline/etl/venue_backfill_job.py` | no reader today |
+| `raw.etl_game_ingest` | The terminal outcome per game (`loaded`, `empty`, `failed`), so a game with no pitches is not fetched forever. A reload ignores it on purpose. | the historical loader | the loader; `ingest/games/reload_games.py` |
+| `raw.pipeline_run_log` | A run log of the venue backfill. | `ingest/venues/backfill_venues.py` | no reader today |
 
 ### The `sim` schema
 
@@ -142,7 +142,7 @@ writer computes an odds hash and skips a duplicate. The code that writes both ta
   `data_quality_flag` when the release speed lies outside 50 to 110 mph, the exit
   velocity is above 125 mph, or the induced vertical break lies outside ±25 inches. The
   pool builders leave flagged rows out. The ETL validator in
-  `pipeline/etl/historical/rows.py` holds the same band; change both together.
+  `ingest/games/pitch_rows.py` holds the same band; change both together.
 
 ## DuckDB: the analytics file
 
@@ -422,7 +422,7 @@ tables.
 
 ### `db/schemas/01_postgres_schema.sql`
 
-[Source](../../db/schemas/01_postgres_schema.sql) · 1,352 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_etl_error_ledger.py](../../tests/unit/test_etl_error_ledger.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py)
+[Source](../../db/schemas/01_postgres_schema.sql) · 1,352 lines · Tests: [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_etl_error_ledger.py](../../tests/unit/ingest/test_etl_error_ledger.py), [test_odds_one_book_per_row.py](../../tests/unit/test_odds_one_book_per_row.py)
 
 A reference copy of the Postgres DDL with comments on each table. No code applies it, and
 it is incomplete: it has no `raw.savant_pitch_tracking` (0020) and no `raw.game_bullpen`

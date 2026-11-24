@@ -35,7 +35,7 @@ while the app serves):
         app python scripts/probes/runner_profile_recompute.py --seasons 2023 2024 2025 2026
 
 Before this: Alembic 0026 applied and the five boards loaded
-(``python -m pipeline.etl.savant_loader --boards running catcher_throwing
+(``python -m ingest.savant.load_leaderboards --boards running catcher_throwing
 first_base_receiving --seasons 2023 2024 2025 2026``). After this: ``make calibrate``
 (then write the win-probability curve back — the SIM-427 trap), copy the two fitted
 sigmas into the module defaults, and rebuild the three matrices

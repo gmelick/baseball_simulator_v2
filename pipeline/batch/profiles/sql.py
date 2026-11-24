@@ -5,7 +5,7 @@ fielding-credit mask and the fatigue window expressions.
 
 from __future__ import annotations
 
-from pipeline.statcast_events import (
+from ingest.statcast_events import (
     BALL_TYPES,
     CALLED_STRIKE_TYPES,
     FOUL_TYPES,
@@ -29,7 +29,7 @@ _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 # ---------------------------------------------------------------------------
 # The Statcast pitch-result codes
 #
-# One code set per pitch-pool class, defined in pipeline/statcast_events.py
+# One code set per pitch-pool class, defined in ingest/statcast_events.py
 # (the API reads them there too). The pool's class expression
 # (SQL_OUTCOME_TYPE, below) is rendered from these sets, and the profile SQL
 # reads WHIFF_TYPES and NON_SWING_TYPES, so a pitcher's whiff rate and the pool
@@ -278,7 +278,7 @@ SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
 # ---------------------------------------------------------------------------
 # The out labels. Every out label derives from `events`, never from
 # `outs_on_pitch` (zero on 92.6% of batted-ball outs in the swept data). The
-# vocabulary and its measurements live in pipeline/statcast_events.py. Each
+# vocabulary and its measurements live in ingest/statcast_events.py. Each
 # site states WHICH question it asks: "how many outs did the play record?" and
 # "was the batter retired?" are different questions, and the fielder's-choice
 # events answer them differently.

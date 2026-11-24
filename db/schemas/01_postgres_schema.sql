@@ -152,7 +152,7 @@ CREATE TABLE raw.games (
     -- SIM-086: Nullable.  The live pipeline upserts game rows from the schedule API
     -- before venue assignment is published (international/spring-training games).
     -- Pre-SIM-086 the live pipeline silently dropped these games because venue_id=0
-    -- raised an FK violation.  pipeline/etl/venue_backfill_job.py fills NULL rows
+    -- raised an FK violation.  ingest/venues/backfill_venues.py fills NULL rows
     -- once the MLB API publishes the venue.
     venue_id                INTEGER,
     home_team_id            INTEGER         NOT NULL,
@@ -247,8 +247,8 @@ CREATE INDEX idx_sprint_speed_season ON raw.sprint_speed(season);
 -- =============================================================================
 -- RAW.SAVANT_* — SIM-528
 -- The Baseball Savant leaderboard landing tables. One table per CSV endpoint,
--- loaded by pipeline/etl/savant_loader.py from the registry in
--- pipeline/etl/savant_boards.py. Season-level summaries per player: they can
+-- loaded by ingest/savant/load_leaderboards.py from the registry in
+-- ingest/savant/boards.py. Season-level summaries per player: they can
 -- only sharpen an actor's similarity score, never add a per-pitch pool column.
 --
 -- Two tables carry a third key column because one player-season has more than

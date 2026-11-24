@@ -52,7 +52,7 @@ import pytest
 from tests.script_loader import load_script
 
 import similarity.engines.pitcher_similarity as pitcher_similarity
-from pipeline.etl.savant_boards import BOARDS
+from ingest.savant.boards import BOARDS
 
 REPO = Path(__file__).resolve().parents[2]
 ENGINE = REPO / "similarity" / "engines" / "pitcher_similarity.py"

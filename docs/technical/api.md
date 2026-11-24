@@ -21,7 +21,7 @@ in order:
    attach to it. The registry marks every run a dead process left queued or running as
    `failed('restart')`.
 3. `open_redis_cache()` opens Redis and pings it. A failure stops the boot.
-4. `LeagueFeed()` ([league_feed.py](../../api/league_feed.py)) attaches unless
+4. `LeagueFeed()` ([league_feed.py](../../ingest/mlb/client.py)) attaches unless
    `SLATE_SCHEDULE_ENABLED=0`.
 5. `startup.build_engines()` ([startup.py](../../api/startup.py)) builds the pitcher engine
    (a failure stops the boot) and all eleven similarity engines (a failure skips that
@@ -326,9 +326,9 @@ The app picks up a nightly rebuild by restarting itself. The bundle path
 reaches users, SIM-563). The pin must happen before the worker pool starts: the forkserver's
 workers inherit the environment.
 
-### `api/league_feed.py`
+### `ingest/mlb/client.py`
 
-[Source](../../api/league_feed.py) · 65 lines · Tests: [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
+[Source](../../ingest/mlb/client.py) · 65 lines · Tests: [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
 
 The app's reader of the league's public endpoints, over one lazy `aiohttp` session.
 
@@ -493,7 +493,7 @@ its columns. A suspended game appears on its resume day too; the route keeps one
 
 ### `api/routes/games_feed.py`
 
-[Source](../../api/routes/games_feed.py) · 397 lines · Tests: [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py), [test_api_games.py](../../tests/unit/test_api_games.py)
+[Source](../../api/routes/games_feed.py) · 397 lines · Tests: [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py), [test_api_games.py](../../tests/unit/test_api_games.py)
 
 The real game: one cached copy of the league's per-game feed, and the live service's stored
 state.
@@ -501,10 +501,10 @@ state.
 | Function / class | What it does | Called from |
 |---|---|---|
 | `_league_game_payload(request, game_pk, use_cache)` | The raw feed, cached by the game's state (10 s live, 10 min scheduled, 24 h final). On a league error the last good copy serves (`feed_cached`); with none, the payload is None. | The feed routes; `games.start_what_if`; `games_runs.get_what_if`; `betting._actual_result` |
-| `get_game_feed` | `GET /feed`: `pipeline.mlb_game_feed.parse_game_feed` → `GameFeedCardModel`. 503 with `Retry-After: 30` when no copy exists. | The open slate card |
+| `get_game_feed` | `GET /feed`: `ingest.mlb.game_feed.parse_game_feed` → `GameFeedCardModel`. 503 with `Retry-After: 30` when no copy exists. | The open slate card |
 | `get_real_plays` | `GET /feed/plays`: `parse_plays` → `RealPlaysModel`. | The real play-by-play panel |
-| `get_pa_state` / `_start_state` / `_pa_state_model` | `GET /feed/state`: `pipeline.mlb_game_feed.state_at_pa` at a plate appearance (none = first pitch), as lineups, pitchers, defense, bench and pen. An unknown plate appearance is 404. | The what-if panel |
-| `_feed_lineup_rows(payload)` | Both starting lineups as `raw.game_lineups` rows, built by `pipeline.etl.historical.game_values._build_starting_lineup_rows`. | `games.start_what_if` |
+| `get_pa_state` / `_start_state` / `_pa_state_model` | `GET /feed/state`: `ingest.mlb.game_feed.state_at_pa` at a plate appearance (none = first pitch), as lineups, pitchers, defense, bench and pen. An unknown plate appearance is 404. | The what-if panel |
+| `_feed_lineup_rows(payload)` | Both starting lineups as `raw.game_lineups` rows, built by `ingest.games.game_values._build_starting_lineup_rows`. | `games.start_what_if` |
 | `get_live_game_state` | `GET /live`: `db.sim_store.load_live_game_state` from `sim.lineup_state`. 404 with no live row. | The game page |
 
 ### `api/routes/games_runs.py`
@@ -523,7 +523,7 @@ The reads of a game's runs. The routes that start a run live in `games.py`.
 
 ### `api/routes/games_models.py`
 
-[Source](../../api/routes/games_models.py) · 592 lines · Tests: [test_api_games.py](../../tests/unit/test_api_games.py), [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_inning_grid.py](../../tests/unit/test_inning_grid.py)
+[Source](../../api/routes/games_models.py) · 592 lines · Tests: [test_api_games.py](../../tests/unit/test_api_games.py), [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py), [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_inning_grid.py](../../tests/unit/test_inning_grid.py)
 
 The request and response models of `/api/games`: the slate (`GameCard`,
 `GamesOnDateResponse`, `GameCardAggregateResponse`), the feed (`GameFeedCardModel`,
@@ -663,7 +663,7 @@ rows unless `include_flagged` is set.
 | `_filter_game_type(where, args, game_type, prefix)` | The Data Lab game-type filter (SIM-572): `R` (the default) keeps the regular season, `all` keeps the postseason too. Every route that takes `season` takes it. | The seven season routes |
 
 **Watch out:** The swing, whiff, called-strike, CSW (called strikes plus whiffs) and in-play
-filters read the pitch-result `type` code through `pipeline/statcast_events.py` (the Data Lab
+filters read the pitch-result `type` code through `ingest/statcast_events.py` (the Data Lab
 vocabulary, SIM-571), never the `description` display text. The whiff here is Baseball
 Savant's: a foul tip counts. A new season route without `_filter_game_type` fails
 `test_game_type_filter.py`.

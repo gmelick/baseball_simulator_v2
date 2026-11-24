@@ -9,6 +9,10 @@ from datetime import date
 
 import numpy as np
 
+from ingest.statcast_events import (
+    sql_steal_attempt,
+    sql_steal_success,
+)
 from pipeline.batch.profiles.base import ComputorBase
 from pipeline.batch.profiles.constants import MIN_CATCHER_SB_ATTEMPTS
 from pipeline.batch.profiles.defense import (
@@ -18,10 +22,6 @@ from pipeline.batch.profiles.defense import (
     ZONE_HALF_WIDTH,
     _fit_logistic_model,
     _predict_proba,
-)
-from pipeline.statcast_events import (
-    sql_steal_attempt,
-    sql_steal_success,
 )
 
 log = logging.getLogger("player_profile_computor")

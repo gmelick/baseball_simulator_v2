@@ -6,10 +6,7 @@ caches), the MLB schedule read, and the match of a BettingPros event to an MLB g
 
 from __future__ import annotations
 
-import http.client
-import json
 import logging
-import math
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -17,6 +14,10 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar, NamedTuple, TypeVar
+
+from ingest.mlb import client as mlb_client
+from ingest.mlb.client import RetryPolicy
+from ingest.mlb.schedule import is_postponed, played_index, schedule_entries
 
 _K = TypeVar("_K")
 
@@ -105,18 +106,6 @@ def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
     return _ScheduleInfo((date_str,), anchors, None, None)
 
 
-def _is_postponed(game: Mapping[str, Any]) -> bool:
-    """True when an MLB schedule entry is a postponed game.
-
-    The entry is postponed when ``detailedState`` starts with "Postponed" or
-    ``codedGameState`` is "D". A suspended game is not postponed: MLB marks
-    both of its entries "Final".
-    """
-    status = game.get("status") or {}
-    detailed = str(status.get("detailedState") or "")
-    return detailed.startswith("Postponed") or status.get("codedGameState") == "D"
-
-
 def _read_schedule(
     data: Mapping[str, Any],
 ) -> tuple[tuple[str, str, str, datetime | None], _ScheduleInfo]:
@@ -132,14 +121,10 @@ def _read_schedule(
     Raises ``LookupError`` when the answer lists no entry. Raises ``KeyError``
     when the played entry lacks a field the meta needs.
     """
-    entries: list[tuple[Any, Mapping[str, Any]]] = [
-        (day.get("date"), game)
-        for day in data.get("dates") or []
-        for game in day.get("games") or []
-    ]
+    entries = schedule_entries(data)
     if not entries:
         raise LookupError("the schedule lists no entry for the game")
-    played_i = next((i for i, (_d, g) in enumerate(entries) if not _is_postponed(g)), 0)
+    played_i = played_index(entries)
     played = entries[played_i][1]
     date_str = str(played["officialDate"])
     home = str(played["teams"]["home"]["team"]["name"])
@@ -148,7 +133,7 @@ def _read_schedule(
     slate_dates = [date_str]
     anchors = [] if game_dt is None else [game_dt]
     for day_date, game in entries[played_i + 1 :]:
-        if _is_postponed(game):
+        if is_postponed(game):
             continue
         for value in (day_date, game.get("officialDate")):
             if value and str(value) not in slate_dates:
@@ -170,7 +155,7 @@ def _read_schedule(
         postponed_start=postponed_start,
         played_entry=played_i,
         n_entries=len(entries),
-        never_played=_is_postponed(played),
+        never_played=is_postponed(played),
         game_number=game_number if isinstance(game_number, int) else None,
         start_tbd=(played.get("status") or {}).get("startTimeTBD") is True,
     )
@@ -215,59 +200,6 @@ log = logging.getLogger("betting.bettingpros")
 _BP_BASE = "https://api.bettingpros.com/v3"
 
 
-_MLB_BASE = "https://statsapi.mlb.com/api/v1"
-
-
-#: The error types a read may retry. ``OSError`` covers ``URLError``,
-#: ``HTTPError``, ``TimeoutError`` and ``ConnectionError``. It also covers the
-#: bare errors urllib does not wrap while it reads the body, such as an
-#: ``ssl.SSLError`` or an unreachable network. ``HTTPException`` covers
-#: ``RemoteDisconnected`` and ``IncompleteRead``. :func:`_is_transient`
-#: checks the status of an ``HTTPError``.
-_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (OSError, http.client.HTTPException)
-
-
-#: The statuses whose numeric ``Retry-After`` sets a floor on the wait.
-_RETRY_AFTER_STATUSES = frozenset({429, 503})
-
-
-def _is_transient(exc: BaseException) -> bool:
-    """True when a failed read may succeed on a later attempt.
-
-    An HTTP 429 or 5xx and every network error are transient. Any other HTTP
-    status (a 4xx) is the server's final answer.
-    """
-    if isinstance(exc, urllib.error.HTTPError):
-        code = exc.code if isinstance(exc.code, int) else 0
-        return code == 429 or code >= 500
-    return isinstance(exc, _RETRYABLE_ERRORS)
-
-
-def _retry_after_s(exc: BaseException) -> float | None:
-    """The numeric ``Retry-After`` of a 429 or 503, in seconds, or ``None``.
-
-    The function gives ``None`` for any other status, and for a header that
-    is absent, an HTTP date, negative or not finite.
-    """
-    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in _RETRY_AFTER_STATUSES:
-        return None
-    headers = exc.headers
-    raw = headers.get("Retry-After") if headers is not None else None
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if math.isfinite(value) and value >= 0 else None
-
-
-def _log_target(url: str) -> str:
-    """The host and path of a URL, for a log line: no query string, no user part."""
-    parts = urllib.parse.urlsplit(url)
-    return f"{parts.hostname or ''}{parts.path}"
-
-
 class TransportMixin(ProviderBase):
     """The provider's reads: one GET with the retry policy, for each API."""
 
@@ -286,22 +218,9 @@ class TransportMixin(ProviderBase):
         self._max_retries = int(max_retries)
         self._retry_wait_s = float(retry_wait_s)
 
-    def _retry_wait(self, retry: int, exc: BaseException) -> float:
-        """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc``.
-
-        The wait doubles per retry. A numeric ``Retry-After`` sets a floor.
-        :attr:`RETRY_WAIT_CAP_S` caps the wait.
-        """
-        # The exponent stops at 64: a larger one adds nothing under the cap.
-        wait = self._retry_wait_s * 2.0 ** min(retry - 1, 64)
-        retry_after = _retry_after_s(exc)
-        if retry_after is not None:
-            wait = max(wait, retry_after)
-        return min(wait, self.RETRY_WAIT_CAP_S)
-
     def _describe_error(self, exc: BaseException, url: str) -> str:
         """The error for a log line, with the URL's query and the API key taken out."""
-        text = f"{type(exc).__name__}: {exc}".replace(url, _log_target(url))
+        text = f"{type(exc).__name__}: {exc}".replace(url, mlb_client.log_target(url))
         if self._api_key:
             text = text.replace(self._api_key, "<api key>")
         return text
@@ -309,33 +228,22 @@ class TransportMixin(ProviderBase):
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
         """GET ``url`` and decode its JSON body. Every vendor and MLB read uses it.
 
-        The method retries a transient failure up to ``max_retries`` times.
-        Each retry logs one INFO line without the query or the API key.
-        Any other failure raises at once. After the last retry, the original
-        error reaches the caller unchanged.
+        The read goes through the one client (``ingest.mlb.client``) with this
+        provider's policy: up to ``max_retries`` retries of a transient failure,
+        a wait that doubles from ``retry_wait_s`` and stops at
+        :attr:`RETRY_WAIT_CAP_S`. Each retry logs one INFO line without the
+        query or the API key. After the last retry the original error raises.
         """
-        retry = 0
-        while True:
-            try:
-                req = urllib.request.Request(url, headers=headers or {})
-                with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed hosts
-                    return json.loads(resp.read().decode("utf-8"))
-            except _RETRYABLE_ERRORS as exc:
-                if retry >= self._max_retries or not _is_transient(exc):
-                    raise
-                retry += 1
-                wait = self._retry_wait(retry, exc)
-                log.info(
-                    "BettingPros: %s failed on attempt %d of %d (%s); retrying in %.1f s",
-                    _log_target(url),
-                    retry,
-                    self._max_retries + 1,
-                    self._describe_error(exc, url),
-                    wait,
-                )
-                if isinstance(exc, urllib.error.HTTPError):
-                    exc.close()  # free the error response's connection before the next attempt
-                self._retry_sleep(wait)
+        return mlb_client.get_json(
+            url,
+            headers=headers,
+            timeout_s=self._timeout,
+            policy=RetryPolicy(self._max_retries, self._retry_wait_s, self.RETRY_WAIT_CAP_S),
+            sleep=self._retry_sleep,
+            logger=log,
+            label="BettingPros",
+            describe=lambda exc: self._describe_error(exc, url),
+        )
 
     def _bp_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         """GET a BettingPros v3 endpoint (the network seam stubbed in tests)."""
@@ -352,8 +260,7 @@ class TransportMixin(ProviderBase):
     def _mlb_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         """GET an MLB Stats API endpoint (the network seam stubbed in tests)."""
         qs = urllib.parse.urlencode(params)
-        url = f"{_MLB_BASE}/{path}?{qs}"
-        return self._http_get_json(url)
+        return self._http_get_json(f"{mlb_client.API_V1}/{path}?{qs}")
 
 
 class EventMatchMixin(TransportMixin):

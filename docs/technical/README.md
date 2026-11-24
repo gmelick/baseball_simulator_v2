@@ -25,7 +25,8 @@ codebase.
 | [Simulation](simulation.md) | The pitch-by-pitch state machine, the sampler that makes every draw, the runner that plays 100 games, and the outputs: win odds, prop distributions, market prices. |
 | [Similarity engines](similarity.md) | The eleven engines that score how alike two players or situations are, how a score becomes a draw weight, calibration and backtesting. |
 | [Pipeline: the nightly builds](pipeline-batch.md) | The profile computor, the pools of real plays, and the engine-artifact bundle the sampler reads. |
-| [Pipeline: getting data in](pipeline-ingest.md) | The historical loaders, the Savant loaders and the live game-day service with its odds hooks. |
+| [Data ingestion](ingest.md) | The `ingest/` folder: the MLB Stats API client, the game loader, the box score, the bullpen availability, the venues, the Savant loaders and the Statcast code sets. |
+| [Live service](live.md) | The game-day service in `pipeline/live/`: the schedule poll, the game state, the published lineups, the odds hooks and the Redis bridge. |
 | [Database](database.md) | Every Postgres and DuckDB table, the migrations, the database roles and the database address reader. |
 | [Betting](betting.md) | The `betting/` folder: the BettingPros odds, the load guard, the odds load and the nightly pass, and the pricing math (implied probability, margin removal, edge, expected value, the bet signal). |
 | [API](api.md) | The FastAPI app: its boot, the login, every route, the run jobs. |

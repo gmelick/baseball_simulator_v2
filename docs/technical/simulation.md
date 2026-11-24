@@ -521,7 +521,7 @@ every build, with None when the request has no cutoff.
 
 ### `simulation/lineup_resolver.py`
 
-[Source](../../simulation/lineup_resolver.py) · 1021 lines · Tests: [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_starting_position.py](../../tests/unit/test_starting_position.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py), [test_incomplete_lineup_api.py](../../tests/unit/test_incomplete_lineup_api.py)
+[Source](../../simulation/lineup_resolver.py) · 1021 lines · Tests: [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_starting_position.py](../../tests/unit/ingest/test_starting_position.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py), [test_incomplete_lineup_api.py](../../tests/unit/test_incomplete_lineup_api.py)
 
 Reads a game's lineups from Postgres (`raw.games`, `raw.game_lineups`, `raw.players`,
 `raw.game_player_stats`, `raw.game_bullpen`) and builds the starting `GameState`. The logic is
@@ -541,6 +541,34 @@ split from the database reads, so a unit test drives it with canned rows.
 
 **Watch out:** Catch the two error subclasses before `LineupResolutionError`, or a data gap on a
 real game reads as "game not found".
+
+### `pipeline/bullpen_usage.py`
+
+[Source](../../pipeline/bullpen_usage.py) · 303 lines · Tests: [test_bullpen_usage.py](../../tests/unit/test_bullpen_usage.py)
+
+The pen's facts for the pitching-change draw and the reliever draw. Each arm gets four facts:
+
+- his rest in days, capped at 5;
+- whether he pitched in the last two days;
+- his pitches over the last three days;
+- his role: a rotation starter leaves the pen.
+
+The file lives in `pipeline/`, but its per-game consumer is the lineup resolver above. One
+set of queries serves the pool builder (in bulk) and the resolver (per game). The pool and
+the live candidates then share one definition. Each query comes in two spellings: asyncpg
+(`$n`) and psycopg2 (`%s`).
+
+| Function / class | What it does | Called from |
+|---|---|---|
+| `usage_for_appearances_sql` | Every appearance of the seasons, with the arm's rest as of that game. | `fetch_game_context_sync` |
+| `usage_for_candidates_sql` / `fetch_usage_for_candidates` | The rest of a list of arms as of a date. | `fetch_pen_for_game` |
+| `rotation_starters_sql` | The team's rotation: the starters of its last 5 games who threw at least 45 pitches. An opener does not count. | `fetch_pen_for_game` |
+| `pen_from_listing` | PURE: the pen is the arms the box lists as `bullpen` or `pitched`, minus the rotation, minus today's starter. The arms who pitched come first. | `fetch_pen_for_game` |
+| `fetch_pen_for_game` | The pen and each arm's usage for one game and team, or None when the box lists nothing. | `lineup_resolver._attach_bullpens`, `scripts/probes/bullpen_check.py` |
+| `fetch_game_context_sync` | The pool builder's one Postgres read: each game's managers, each appearance's usage and each pitcher's hand. | `pipeline/batch/artifacts/manager_pool.py` |
+
+**Watch out:** every window ends strictly before the game DATE, so the two games of a
+doubleheader do not see each other's usage.
 
 ### `simulation/sim_kwargs.py`
 
@@ -576,7 +604,7 @@ key fails the unit lane. A new kwarg needs a matching `simulate_game` parameter,
 Starts a game at a plate appearance of the real game (the game page's what-if). A start state is
 plain data: the inning, outs, runners and score; both batting orders and their next slots; each
 side's pitcher, starter and defense; the pitch counts and batters faced; the hands; the unused
-pen; and the real runs of each completed half. `pipeline.mlb_game_feed.state_at_pa` builds it.
+pen; and the real runs of each completed half. `ingest.mlb.game_feed.state_at_pa` builds it.
 
 | Function / class | What it does | Called from |
 |---|---|---|

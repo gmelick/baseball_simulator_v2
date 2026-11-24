@@ -23,6 +23,7 @@ the table it names.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -54,7 +55,7 @@ from accuracy.records import (  # noqa: E402
 from accuracy.replay import _Counters, _process_one_game, _score_one_game, _tally  # noqa: E402
 from accuracy.report import aggregate_accuracy_comparison, format_accuracy_comparison  # noqa: E402
 
-from pipeline.etl.boxscore_ingest import parse_boxscore  # noqa: E402
+from ingest.load_boxscores import parse_boxscore  # noqa: E402
 from simulation.prop_distributions import (  # noqa: E402
     ALL_PROPS,
     PropDistribution,
@@ -93,7 +94,7 @@ def _fixture_rows() -> list[dict]:
     with open(_FIXTURE, encoding="utf-8") as fh:
         teams = json.load(fh)["teams"]
     parsed = parse_boxscore(teams, game_pk=GAME_PK, season=2024, game_date=date(2024, 8, 15))
-    return [r.as_dict() for r in parsed]
+    return [dataclasses.asdict(r) for r in parsed]
 
 
 def _dist(player_id: int, prop: str, samples) -> PropDistribution:

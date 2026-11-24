@@ -664,8 +664,8 @@ def _schedule_http(schedule: dict[str, Any]) -> Any:
             return False
 
     class _Http:
-        def get(self, url: str, params: dict | None = None) -> _Resp:
-            return _Resp()
+        async def get_json(self, url: str, params: dict | None = None) -> Any:
+            return await _Resp().json()
 
     return _Http()
 

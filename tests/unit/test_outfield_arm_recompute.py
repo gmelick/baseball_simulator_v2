@@ -708,7 +708,7 @@ def _fielder_view_csv(rows: list[tuple[int, int, int, int, int]]) -> str:
 
 class TestCrossCheck:
     def test_the_url_is_the_fielder_view_of_the_runner_entry(self) -> None:
-        from pipeline.etl.savant_boards import BOARDS
+        from ingest.savant.boards import BOARDS
 
         seen: list[str] = []
 

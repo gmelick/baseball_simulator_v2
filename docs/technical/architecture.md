@@ -3,7 +3,7 @@
 This page describes the system one level above the code: the parts, where data lives,
 how the processes run, and the three paths that move data through them. Each area page
 holds the module detail: [API](api.md), [Simulation](simulation.md),
-[Similarity](similarity.md), [Pipeline: ingest](pipeline-ingest.md),
+[Similarity](similarity.md), [Data ingestion](ingest.md), [Live service](live.md),
 [Pipeline: nightly builds](pipeline-batch.md), [Betting](betting.md),
 [Database](database.md), [Frontend](frontend.md), [Scripts](scripts.md),
 [Operations](operations.md) and [Tests](tests.md). The [loop cheat sheet](sim-loop-cheat-sheet.md) lists every draw and
@@ -269,7 +269,7 @@ The live path runs no simulation. A user starts every run.
 
 The slate reads the league itself. The app's league reader fetches the schedule of a date
 and one game's feed, and caches both
-([`api/league_feed.py`](../../api/league_feed.py),
+([`ingest/mlb/client.py`](../../ingest/mlb/client.py),
 [`api/routes/games_slate.py`](../../api/routes/games_slate.py)). The database adds the
 lineup flag and each game's newest run. On a feed error the slate serves the stored
 listing.

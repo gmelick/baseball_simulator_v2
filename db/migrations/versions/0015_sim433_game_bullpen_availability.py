@@ -25,7 +25,7 @@ active roster + transactions/IL. This table is the join target for both halves:
     ``back_to_back``) are derived from ``raw.pitches`` by
     ``PlayerProfileComputor._compute_bullpen_workload`` (code-now, no network);
   * ``available`` / ``reason`` (active / IL / rest / recent_use) come from the
-    MLB-API ingest (``pipeline/live/bullpen_availability_ingest.py``).
+    MLB-API ingest (``ingest/load_bullpen_availability.py``).
 
 Fix
 ---

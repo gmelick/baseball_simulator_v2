@@ -46,11 +46,11 @@ from betting.bettingpros.fetch_odds import BettingProsOddsProvider
 from betting.bettingpros.match_games import (
     _MAX_EVENT_TIME_DELTA,
     _MAX_SINGLE_EVENT_DELTA,
-    _is_postponed,
     _read_schedule,
 )
 from betting.markets import GAME_MARKET_TYPES
 from betting.validate_odds import RULES, RefusalTally, check_row
+from ingest.mlb.schedule import is_postponed
 
 _LOGGER = "betting.bettingpros"
 
@@ -374,13 +374,13 @@ _746755_EVENTS = {
 
 class TestThePlayedEntry:
     def test_postponed_reads_the_two_status_fields(self) -> None:
-        assert _is_postponed({"status": _POSTPONED})
-        assert _is_postponed({"status": {"detailedState": "Postponed: Rain"}})
-        assert _is_postponed({"status": {"codedGameState": "D", "detailedState": "x"}})
-        assert not _is_postponed({"status": _FINAL})
+        assert is_postponed({"status": _POSTPONED})
+        assert is_postponed({"status": {"detailedState": "Postponed: Rain"}})
+        assert is_postponed({"status": {"codedGameState": "D", "detailedState": "x"}})
+        assert not is_postponed({"status": _FINAL})
         suspended = {"codedGameState": "T", "detailedState": "Suspended: Rain"}
-        assert not _is_postponed({"status": suspended})
-        assert not _is_postponed({})  # a stub without a status
+        assert not is_postponed({"status": suspended})
+        assert not is_postponed({})  # a stub without a status
 
     def test_a_made_up_game_reads_its_played_entry(self) -> None:
         meta, info = _read_schedule(_745175)

@@ -1,0 +1,1339 @@
+"""
+Unit tests for ingest/games/load_games.py
+=====================================================
+Targets:
+  - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in ingest/games/coercion.py)
+  - _build_row_dict column rename + coercion
+  - _validate_row two-tier validation rules
+  - _parse_height, _map_game_status helpers
+  - HistoricalDataLoader constructor DSN resolution (SIM-153)
+  - HistoricalDataLoader DB methods (psycopg2 mocked end-to-end)
+  - _process_and_insert orchestration including hard-error / warning paths
+  - _write_error_ledger, _batch_insert, _log_freshness
+  - _ensure_prerequisites short-circuit (the per-table _ensure_* writers are tested in
+    tests/unit/ingest/test_etl_ensure_rows.py)
+  - _fetch_game_pitches end-to-end with a minimal feed/live payload
+
+Mocking style mirrors tests/unit/ingest/test_etl_error_ledger.py — psycopg2
+connections are MagicMock objects that simulate context-manager semantics.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from ingest.games.coercion import to_bool, to_float, to_int, to_str
+from ingest.games.game_values import _map_game_status, _parse_height
+from ingest.games.load_games import (
+    GAME_TYPES,
+    HistoricalDataLoader,
+    _fetch_game_pitches,
+)
+from ingest.games.pitch_rows import (
+    ALWAYS_REQUIRED,
+    COLUMN_RENAME,
+    HALF_INNING_MAP,
+    IN_PLAY_REQUIRED,
+    ValidationResult,
+    _build_row_dict,
+    _validate_row,
+)
+from ingest.games.write_rows import BATCH_SIZE
+
+# ===========================================================================
+# Module-level constants / sanity
+# ===========================================================================
+
+
+class TestModuleConstants:
+    def test_batch_size_positive(self):
+        assert BATCH_SIZE > 0
+
+    def test_game_types_non_empty(self):
+        assert "R" in GAME_TYPES  # regular season
+
+    def test_always_required_includes_primary_key(self):
+        assert "game_pk" in ALWAYS_REQUIRED
+        assert "at_bat_number" in ALWAYS_REQUIRED
+        assert "pitch_number" in ALWAYS_REQUIRED
+
+    def test_in_play_required_columns(self):
+        assert {"launch_speed", "launch_angle", "bb_type"} == IN_PLAY_REQUIRED
+
+    def test_column_rename_round_trip(self):
+        assert COLUMN_RENAME["pitch_code"] == "type"
+        assert COLUMN_RENAME["start_speed"] == "release_speed"
+
+    def test_half_inning_map(self):
+        assert HALF_INNING_MAP["top"] == "Top"
+        assert HALF_INNING_MAP["bottom"] == "Bot"
+
+
+# ===========================================================================
+# Pure type coercers
+# ===========================================================================
+
+
+class TestToFloat:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (3.14, 3.14),
+            ("3.14", 3.14),
+            (0, 0.0),
+            ("0", 0.0),
+            (-1.5, -1.5),
+        ],
+    )
+    def test_valid_inputs(self, value, expected):
+        assert to_float(value) == expected
+
+    @pytest.mark.parametrize("value", [None, "", "abc", "not-a-number", float("nan")])
+    def test_returns_none_for_missing_or_invalid(self, value):
+        assert to_float(value) is None
+
+
+class TestToInt:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (5, 5),
+            ("5", 5),
+            (5.7, 5),  # truncation, not rounding
+            ("5.7", 5),
+            (-3, -3),
+        ],
+    )
+    def test_valid_inputs(self, value, expected):
+        assert to_int(value) == expected
+
+    @pytest.mark.parametrize("value", [None, "", "abc", float("nan")])
+    def test_returns_none(self, value):
+        assert to_int(value) is None
+
+
+class TestToBool:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (True, True),
+            (False, False),
+            ("true", True),
+            ("True", True),
+            ("YES", True),
+            ("1", True),
+            ("false", False),
+            ("0", False),
+            ("", False),
+            (1, True),
+            (0, False),
+            (None, False),
+        ],
+    )
+    def test_various_inputs(self, value, expected):
+        assert to_bool(value) is expected
+
+
+class TestToStr:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("hello", "hello"),
+            ("  trim  ", "trim"),
+            (42, "42"),
+            (True, "True"),
+        ],
+    )
+    def test_valid_inputs(self, value, expected):
+        assert to_str(value) == expected
+
+    @pytest.mark.parametrize("value", [None, "", "   "])
+    def test_empty_returns_none(self, value):
+        assert to_str(value) is None
+
+
+# ===========================================================================
+# _parse_height
+# ===========================================================================
+
+
+class TestParseHeight:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("6' 2\"", 74),  # 6*12+2
+            ("6-2", 74),
+            ("5' 11\"", 71),
+            ("5-11", 71),
+            ("6'10\"", 82),
+        ],
+    )
+    def test_valid_formats(self, raw, expected):
+        assert _parse_height(raw) == expected
+
+    @pytest.mark.parametrize("value", [None, "", "invalid", "6 ft", "tall"])
+    def test_invalid_returns_none(self, value):
+        assert _parse_height(value) is None
+
+
+# ===========================================================================
+# _map_game_status
+# ===========================================================================
+
+
+class TestMapGameStatus:
+    def _status(self, abstract: str = "Preview", coded: str = "") -> dict:
+        return {"status": {"abstractGameState": abstract, "codedGameState": coded}}
+
+    def test_preview(self):
+        assert _map_game_status(self._status("Preview")) == "Preview"
+
+    def test_live(self):
+        assert _map_game_status(self._status("Live")) == "Live"
+
+    def test_final(self):
+        assert _map_game_status(self._status("Final")) == "Final"
+
+    def test_postponed_via_coded_d(self):
+        assert _map_game_status(self._status("Final", coded="D")) == "Postponed"
+
+    def test_suspended_via_coded_t(self):
+        assert _map_game_status(self._status("Preview", coded="T")) == "Suspended"
+
+    def test_cancelled_via_coded_c(self):
+        assert _map_game_status(self._status("Final", coded="C")) == "Cancelled"
+
+    def test_unknown_abstract_defaults_to_preview(self):
+        assert _map_game_status(self._status("Mystery")) == "Preview"
+
+    def test_missing_status_dict_safely_defaults(self):
+        assert _map_game_status({}) == "Preview"
+
+
+# ===========================================================================
+# ValidationResult
+# ===========================================================================
+
+
+class TestValidationResult:
+    def test_default_is_valid(self):
+        vr = ValidationResult()
+        assert vr.is_valid is True
+        assert vr.hard_errors == []
+        assert vr.warnings == []
+
+    def test_hard_error_marks_invalid(self):
+        vr = ValidationResult(hard_errors=["bad"])
+        assert vr.is_valid is False
+
+    def test_warnings_alone_still_valid(self):
+        vr = ValidationResult(warnings=["soft"])
+        assert vr.is_valid is True
+
+
+# ===========================================================================
+# _build_row_dict
+# ===========================================================================
+
+
+def _minimal_raw() -> dict:
+    """A bare-minimum 'write_rows-style' dict for _build_row_dict."""
+    return {
+        "game_pk": 745001,
+        "game_date": "2024-08-15",
+        "at_bat_number": 1,
+        "pitch_number": 1,
+        "venue_id": 17,
+        "venue": "Wrigley",
+        "home_id": 112,
+        "home_team": "CHC",
+        "away_id": 158,
+        "away_team": "MIL",
+        "home_manager_id": 9999,
+        "home_manager_name": "M Counsell",
+        "away_manager_id": 9998,
+        "away_manager_name": "P Murphy",
+        "inning": 3,
+        "top_bot": "top",
+        "pitcher": 100001,
+        "p_throws": "R",
+        "batter": 200001,
+        "stand": "R",
+        "bat_hand": "R",
+        "home_score": 1,
+        "away_score": 2,
+        "bat_score": 2,
+        "fld_score": 1,
+        "balls": 1,
+        "strikes": 2,
+        "outs": 2,
+        "pitch_code": "B",
+        "pitch_code_description": "ball",
+        "pitch_type": "FF",
+        "pitch_type_description": "4-Seam Fastball",
+        "event": "",
+        "strike_zone_top": 3.5,
+        "strike_zone_bottom": 1.6,
+        "start_speed": 94.0,
+        "end_speed": 88.0,
+        "launch_speed": "",
+        "launch_angle": "",
+        "total_distance": "",
+        "coord_x": "",
+        "coord_y": "",
+        "spray_angle": "",
+        "batted_ball_type": "",
+        "hit_location": "",
+    }
+
+
+class TestBuildRowDict:
+    def test_primary_key_populated_from_args(self):
+        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024)
+        assert row["game_pk"] == 745001
+        assert row["season"] == 2024
+
+    def test_game_date_is_the_rows_own(self):
+        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024)
+        assert row["game_date"] == "2024-08-15"
+
+    def test_renames_via_column_map(self):
+        raw = _minimal_raw()
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
+        # pitch_code → type, pitch_type_description → pitch_name, start_speed → release_speed
+        assert row["type"] == "B"
+        assert row["pitch_name"] == "4-Seam Fastball"
+        assert row["release_speed"] == 94.0
+
+    def test_top_bot_normalised_to_capitalised(self):
+        raw = _minimal_raw()
+        raw["top_bot"] = "top"
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
+        assert row["inning_topbot"] == "Top"
+
+    def test_bottom_normalised(self):
+        raw = _minimal_raw()
+        raw["top_bot"] = "bottom"
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
+        assert row["inning_topbot"] == "Bot"
+
+    def test_empty_strings_become_none(self):
+        raw = _minimal_raw()
+        raw["launch_speed"] = ""
+        raw["launch_angle"] = ""
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
+        assert row["launch_speed"] is None
+        assert row["launch_angle"] is None
+
+    def test_data_quality_flag_initialised_false(self):
+        row = _build_row_dict(_minimal_raw(), game_pk=745001, season=2024)
+        assert row["data_quality_flag"] is False
+
+    def test_score_count_defaults_to_zero_when_missing(self):
+        raw = {
+            "game_pk": 745001,
+            "at_bat_number": 1,
+            "pitch_number": 1,
+            "top_bot": "top",
+            "inning": 3,
+            "venue_id": 17,
+            "pitcher": 100001,
+            "p_throws": "R",
+            "batter": 200001,
+            "stand": "R",
+            "bat_hand": "R",
+            # home_score, away_score, balls, etc. omitted — should default to 0
+        }
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
+        assert row["home_score"] == 0
+        assert row["away_score"] == 0
+        assert row["balls"] == 0
+        assert row["strikes"] == 0
+        assert row["outs"] == 0
+
+    def test_runner_ids_zero_becomes_none(self):
+        raw = _minimal_raw()
+        raw["pre_play_runner_on_first"] = 0
+        raw["pre_play_runner_on_second"] = 200002
+        row = _build_row_dict(raw, game_pk=745001, season=2024)
+        # `to_int(0) or None` collapses 0 → None for runner IDs
+        assert row["on_1b"] is None
+        assert row["on_2b"] == 200002
+
+
+# ===========================================================================
+# _validate_row
+# ===========================================================================
+
+
+def _valid_row(**overrides) -> dict:
+    """Build a row that passes validation by default."""
+    base = {
+        "game_pk": 745001,
+        "at_bat_number": 1,
+        "pitch_number": 1,
+        "game_date": "2024-08-15",
+        "season": 2024,
+        "venue_id": 17,
+        "pitcher": 100001,
+        "p_throws": "R",
+        "batter": 200001,
+        "stand": "R",
+        "bat_hand": "R",
+        "inning": 3,
+        "inning_topbot": "Top",
+        "balls": 1,
+        "strikes": 2,
+        "outs": 1,
+        "home_score": 1,
+        "away_score": 2,
+        "type": "B",  # not in-play
+        "release_speed": 94.0,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestValidateRowHardErrors:
+    def test_valid_row_passes(self):
+        vr = _validate_row(_valid_row())
+        assert vr.is_valid
+        assert vr.hard_errors == []
+
+    @pytest.mark.parametrize("missing", ["game_pk", "at_bat_number", "pitch_number"])
+    def test_primary_key_null_is_hard_error(self, missing):
+        row = _valid_row()
+        row[missing] = None
+        vr = _validate_row(row)
+        assert not vr.is_valid
+        assert any(missing in e for e in vr.hard_errors)
+
+    def test_required_column_null_is_hard_error(self):
+        row = _valid_row()
+        row["venue_id"] = None
+        vr = _validate_row(row)
+        assert not vr.is_valid
+
+    def test_invalid_inning_topbot(self):
+        row = _valid_row()
+        row["inning_topbot"] = "Middle"
+        vr = _validate_row(row)
+        assert not vr.is_valid
+        assert any("inning_topbot" in e for e in vr.hard_errors)
+
+    @pytest.mark.parametrize("inning", [0, 31, -1])
+    def test_inning_out_of_range(self, inning):
+        row = _valid_row()
+        row["inning"] = inning
+        vr = _validate_row(row)
+        assert not vr.is_valid
+
+    @pytest.mark.parametrize("balls", [4, 5, -1])
+    def test_balls_out_of_range(self, balls):
+        row = _valid_row()
+        row["balls"] = balls
+        vr = _validate_row(row)
+        assert not vr.is_valid
+
+    @pytest.mark.parametrize("strikes", [3, 4, -1])
+    def test_strikes_out_of_range(self, strikes):
+        row = _valid_row()
+        row["strikes"] = strikes
+        vr = _validate_row(row)
+        assert not vr.is_valid
+
+    @pytest.mark.parametrize("outs", [3, 4, -1])
+    def test_outs_out_of_range(self, outs):
+        row = _valid_row()
+        row["outs"] = outs
+        vr = _validate_row(row)
+        assert not vr.is_valid
+
+    def test_sb_success_without_attempt_is_hard_error(self):
+        row = _valid_row()
+        row["sb_success_2b"] = True
+        row["sb_attempt_2b"] = False
+        vr = _validate_row(row)
+        assert not vr.is_valid
+
+
+class TestValidateRowWarnings:
+    def test_inplay_missing_launch_speed_warns(self):
+        row = _valid_row(type="X")
+        # type X but no launch data
+        vr = _validate_row(row)
+        assert vr.is_valid  # warnings only
+        assert any("launch_speed" in w for w in vr.warnings)
+
+    def test_inplay_complete_no_warnings_on_in_play_required(self):
+        row = _valid_row(
+            type="X",
+            launch_speed=92.0,
+            launch_angle=15.0,
+            bb_type="line_drive",
+        )
+        vr = _validate_row(row)
+        assert vr.is_valid
+        assert not any("launch_speed" in w for w in vr.warnings)
+
+    def test_release_speed_too_low_warns(self):
+        """SIM-440: floor is 50 mph; 49 should warn."""
+        row = _valid_row(release_speed=49.0)
+        vr = _validate_row(row)
+        assert vr.is_valid
+        assert any("release_speed" in w for w in vr.warnings)
+
+    def test_release_speed_at_boundary_passes(self):
+        """SIM-440: both ends of the [50, 110] band are inclusive and clean."""
+        for velo in (50.0, 110.0):
+            row = _valid_row(release_speed=velo)
+            vr = _validate_row(row)
+            assert vr.is_valid
+            assert not any("release_speed" in w for w in vr.warnings), (
+                f"{velo} mph is inside the band and must not warn"
+            )
+
+    def test_release_speed_too_high_warns(self):
+        """SIM-440: ceiling raised 102 -> 110, so 112 is the implausible case."""
+        row = _valid_row(release_speed=112.0)
+        vr = _validate_row(row)
+        assert vr.is_valid
+        assert any("release_speed" in w for w in vr.warnings)
+
+    def test_launch_speed_too_high_warns(self):
+        """128 mph is implausible but insertable -> warn."""
+        row = _valid_row(launch_speed=128.0)
+        vr = _validate_row(row)
+        assert vr.is_valid
+        assert any("launch_speed" in w for w in vr.warnings)
+
+    def test_launch_speed_above_the_db_check_is_a_hard_error(self):
+        """SIM-441: >130 violates the raw.pitches CHECK.
+
+        Letting it through meant the row raised inside _batch_insert, which rolls
+        back the ENTIRE game and reaches no etl_errors row. Skipping the single
+        pitch here keeps the rest of the game.
+        """
+        vr = _validate_row(_valid_row(launch_speed=140.0))
+        assert not vr.is_valid
+        assert any("launch_speed" in e for e in vr.hard_errors)
+
+    @pytest.mark.parametrize(
+        ("col", "bad"),
+        [
+            ("p_throws", "X"),
+            ("stand", "Q"),
+            ("bat_hand", "Z"),
+            ("launch_angle", 120.0),
+            ("spin_axis", 400),
+            ("zone", 99),
+        ],
+    )
+    def test_db_check_violations_are_hard_errors(self, col, bad):
+        """SIM-441: the validator must mirror every raw.pitches CHECK.
+
+        It was a strict subset, so a violating row aborted the whole game inside
+        _batch_insert instead of being skipped with an audit trail.
+        """
+        vr = _validate_row(_valid_row(**{col: bad}))
+        assert not vr.is_valid
+        assert any(col in e for e in vr.hard_errors)
+
+    def test_ivb_out_of_range_warns(self):
+        row = _valid_row(break_vertical_induced=30.0)
+        vr = _validate_row(row)
+        assert vr.is_valid
+        assert any("break_vertical_induced" in w for w in vr.warnings)
+
+    def test_warning_forces_data_quality_flag(self):
+        """If any warning fires, the row is mutated: data_quality_flag → True."""
+        row = _valid_row(release_speed=49.0, data_quality_flag=False)
+        _validate_row(row)
+        assert row["data_quality_flag"] is True
+
+    def test_hard_error_skips_warning_check(self):
+        """If a hard error fires, warnings are not even gathered (early return)."""
+        row = _valid_row(inning=99, release_speed=200.0)
+        vr = _validate_row(row)
+        assert not vr.is_valid
+        assert vr.warnings == []
+
+
+# ===========================================================================
+# HistoricalDataLoader — construction & DSN resolution (SIM-153)
+# ===========================================================================
+
+
+class TestLoaderInit:
+    def test_explicit_dsn_used(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        assert loader.dsn == "postgresql://test/db"
+
+    def test_falls_back_to_env_dsn(self, monkeypatch):
+        monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://env/db")
+        loader = HistoricalDataLoader()
+        assert loader.dsn == "postgresql://env/db"
+
+    def test_raises_when_no_dsn_available(self, monkeypatch):
+        monkeypatch.delenv("BASEBALL_DB_DSN", raising=False)
+        with pytest.raises(RuntimeError, match="BASEBALL_DB_DSN is not set"):
+            HistoricalDataLoader()
+
+
+# ===========================================================================
+# HistoricalDataLoader — DB methods (psycopg2 mocked)
+# ===========================================================================
+
+
+def _make_loader_with_mock_conn(rows_returned=None, fetchone_returned=None):
+    """Build a loader whose _get_conn yields a heavily mocked psycopg2 conn."""
+    loader = HistoricalDataLoader(dsn="postgresql://test/db")
+
+    mock_cur = MagicMock()
+    mock_cur.fetchall.return_value = rows_returned or []
+    mock_cur.fetchone.return_value = fetchone_returned
+    mock_cur.__enter__.return_value = mock_cur
+    mock_cur.__exit__.return_value = False
+
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cur
+    mock_conn.__enter__.return_value = mock_conn
+    mock_conn.__exit__.return_value = False
+
+    ctx = MagicMock()
+    ctx.__enter__.return_value = mock_conn
+    ctx.__exit__.return_value = False
+    loader._get_conn = MagicMock(return_value=ctx)
+
+    return loader, mock_conn, mock_cur
+
+
+class TestLoaderDBMethods:
+    def test_game_already_loaded_true(self):
+        loader, _, cur = _make_loader_with_mock_conn(fetchone_returned=(1,))
+        assert loader._game_already_loaded(745001) is True
+        cur.execute.assert_called_once()
+
+    def test_game_already_loaded_false(self):
+        loader, _, cur = _make_loader_with_mock_conn(fetchone_returned=None)
+        assert loader._game_already_loaded(745001) is False
+
+    def test_write_error_ledger_noop_on_empty(self):
+        cur = MagicMock()
+        with patch("ingest.games.load_games.psycopg2.extras.execute_batch") as eb:
+            HistoricalDataLoader._write_error_ledger(cur, 745001, [])
+        eb.assert_not_called()
+
+    def test_write_error_ledger_inserts_per_error(self):
+        cur = MagicMock()
+        errors = [
+            (1, 1, ["NULL primary key column: pitch_number"]),
+            (1, 2, ["Inning out of range: 99"]),
+        ]
+        with patch("ingest.games.load_games.psycopg2.extras.execute_batch") as eb:
+            HistoricalDataLoader._write_error_ledger(cur, 745001, errors)
+        eb.assert_called_once()
+        passed_rows = eb.call_args.args[2]
+        assert len(passed_rows) == 2
+        assert passed_rows[0][0] == 745001
+
+    def test_write_error_ledger_is_idempotent(self):
+        """SIM-441: a totally-failing game re-runs nightly; the ledger must not grow."""
+        cur = MagicMock()
+        with patch("ingest.games.load_games.psycopg2.extras.execute_batch") as eb:
+            HistoricalDataLoader._write_error_ledger(cur, 745001, [(1, 1, ["boom"])])
+        sql = eb.call_args.args[1]
+        assert "ON CONFLICT (game_pk, at_bat_number, pitch_number, error_type)" in sql
+
+    def test_batch_insert_zero_rows_returns_zero(self):
+        loader, conn, _ = _make_loader_with_mock_conn()
+        assert loader._batch_insert([]) == 0
+        assert not conn.commit.called
+
+    def test_batch_insert_chunks_at_batch_size(self):
+        """A row count just over BATCH_SIZE should produce 2 execute_batch calls."""
+        loader, conn, cur = _make_loader_with_mock_conn()
+        rows = [
+            {"game_pk": 745001, "at_bat_number": 1, "pitch_number": i}
+            for i in range(BATCH_SIZE + 5)
+        ]
+        with patch("ingest.games.load_games.psycopg2.extras.execute_batch") as eb:
+            inserted = loader._batch_insert(rows)
+        assert inserted == BATCH_SIZE + 5
+        assert eb.call_count == 2
+        conn.commit.assert_called_once()
+
+    def test_log_freshness_noop_on_empty(self):
+        loader, _, _ = _make_loader_with_mock_conn()
+        loader._log_freshness(745001, [])
+        assert not loader._get_conn.called
+
+    def test_log_freshness_upserts_per_entity(self):
+        loader, conn, cur = _make_loader_with_mock_conn()
+        rows = [
+            {"game_date": "2024-08-15", "pitcher": 100001, "batter": 200001},
+            {"game_date": "2024-08-15", "pitcher": 100002, "batter": 200001},  # dup batter dedup'd
+        ]
+        with patch("ingest.games.load_games.psycopg2.extras.execute_batch") as eb:
+            loader._log_freshness(745001, rows)
+        # 2 pitcher_ids + 1 batter_id (deduped) = 3 entries
+        entries = eb.call_args.args[2]
+        types = sorted({e[0] for e in entries})
+        assert types == ["batter", "pitcher"]
+        conn.commit.assert_called_once()
+
+
+# ===========================================================================
+# _process_and_insert
+# ===========================================================================
+
+
+class TestProcessAndInsert:
+    def test_all_rows_valid(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._batch_insert = MagicMock(return_value=2)
+        loader._log_freshness = MagicMock()
+        loader._log_etl_errors = MagicMock()
+
+        raw_rows = [
+            # Two valid rows
+            {
+                "game_pk": 745001,
+                "at_bat_number": 1,
+                "pitch_number": 1,
+                "venue_id": 17,
+                "pitcher": 100001,
+                "p_throws": "R",
+                "batter": 200001,
+                "stand": "R",
+                "bat_hand": "R",
+                "inning": 3,
+                "top_bot": "top",
+                "balls": 1,
+                "strikes": 2,
+                "outs": 1,
+                "home_score": 1,
+                "away_score": 2,
+                "game_date": "2024-08-15",
+                "pitch_code": "B",
+            },
+        ] * 2
+        result = loader._process_and_insert(745001, 2024, raw_rows)
+        assert result["inserted"] == 2
+        assert result["skipped"] == 0
+        assert result["flagged"] == 0
+        loader._log_etl_errors.assert_not_called()
+
+    def test_hard_error_row_skipped_and_logged(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._batch_insert = MagicMock(return_value=0)
+        loader._log_freshness = MagicMock()
+
+        # Missing pitch_number (hard error)
+        bad = {
+            "game_pk": 745001,
+            "at_bat_number": 1,
+            # pitch_number deliberately absent
+            "venue_id": 17,
+            "pitcher": 100001,
+            "p_throws": "R",
+            "batter": 200001,
+            "stand": "R",
+            "bat_hand": "R",
+            "inning": 3,
+            "top_bot": "top",
+            "balls": 1,
+            "strikes": 2,
+            "outs": 1,
+            "home_score": 1,
+            "away_score": 2,
+            "game_date": "2024-08-15",
+            "pitch_code": "B",
+        }
+        result = loader._process_and_insert(745001, 2024, [bad])
+        assert result["inserted"] == 0
+        assert result["skipped"] == 1
+        # SIM-441: the ledger is written INSIDE the pitch transaction, so the
+        # error rows are handed to _batch_insert rather than committed separately
+        # on their own connection (which was blind to insert-path losses).
+        assert len(loader._batch_insert.call_args.kwargs["error_rows"]) == 1
+        assert loader._batch_insert.call_args.kwargs["season"] == 2024
+
+    def test_warning_row_inserted_and_flagged(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._batch_insert = MagicMock(return_value=1)
+        loader._log_freshness = MagicMock()
+
+        warn_row = {
+            "game_pk": 745001,
+            "at_bat_number": 1,
+            "pitch_number": 1,
+            "venue_id": 17,
+            "pitcher": 100001,
+            "p_throws": "R",
+            "batter": 200001,
+            "stand": "R",
+            "bat_hand": "R",
+            "inning": 3,
+            "top_bot": "top",
+            "balls": 1,
+            "strikes": 2,
+            "outs": 1,
+            "home_score": 1,
+            "away_score": 2,
+            "game_date": "2024-08-15",
+            "pitch_code": "B",
+            "start_speed": 112.0,  # release_speed above the SIM-440 ceiling → warning
+        }
+        result = loader._process_and_insert(745001, 2024, [warn_row])
+        assert result["inserted"] == 1
+        assert result["skipped"] == 0
+        assert result["flagged"] == 1
+
+    def test_etl_errors_write_failure_is_swallowed(self):
+        """A failure in _log_etl_errors must NOT abort the rest of the ingest."""
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._batch_insert = MagicMock(return_value=0)
+        loader._log_freshness = MagicMock()
+        loader._log_etl_errors = MagicMock(side_effect=RuntimeError("DB down"))
+
+        bad = {
+            "game_pk": 745001,
+            "at_bat_number": 1,
+            # pitch_number absent → hard error
+            "venue_id": 17,
+            "pitcher": 100001,
+            "p_throws": "R",
+            "batter": 200001,
+            "stand": "R",
+            "bat_hand": "R",
+            "inning": 3,
+            "top_bot": "top",
+            "balls": 1,
+            "strikes": 2,
+            "outs": 1,
+            "home_score": 1,
+            "away_score": 2,
+            "game_date": "2024-08-15",
+            "pitch_code": "B",
+        }
+        # Must not raise
+        result = loader._process_and_insert(745001, 2024, [bad])
+        assert result["skipped"] == 1
+
+
+# ===========================================================================
+# load_game / load_date_range / refresh_seasons orchestration
+# ===========================================================================
+
+
+class TestLoaderOrchestration:
+    def test_load_game_happy_path(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._ensure_prerequisites = MagicMock()
+        loader._process_and_insert = MagicMock(
+            return_value={"inserted": 5, "skipped": 0, "flagged": 0}
+        )
+        with patch(
+            "ingest.games.load_games._fetch_game_pitches",
+            return_value=([{"game_pk": 745001}], {"_managers": {}, "gameData": {}}),
+        ):
+            result = loader.load_game(745001, 2024)
+        assert result["inserted"] == 5
+        loader._ensure_prerequisites.assert_called_once()
+        loader._process_and_insert.assert_called_once()
+
+    def test_load_date_range_skips_already_loaded_games(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._game_already_loaded = MagicMock(return_value=True)
+        loader.load_game = MagicMock()
+        schedule = {
+            "dates": [
+                {
+                    "date": "2024-08-15",
+                    "games": [
+                        # SIM-441: load_date_range now applies the same Final
+                        # gate refresh_seasons has.
+                        {"gamePk": 745001, "status": {"abstractGameState": "Final"}},
+                        {"gamePk": 745002, "status": {"abstractGameState": "Final"}},
+                    ],
+                }
+            ]
+        }
+        with patch(
+            "ingest.games.load_games._connect",
+            return_value=schedule,
+        ):
+            loader.load_date_range(date(2024, 8, 15), date(2024, 8, 15))
+        # Both games already loaded — load_game should never run
+        loader.load_game.assert_not_called()
+
+    def test_load_date_range_loads_missing_games(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._game_already_loaded = MagicMock(return_value=False)
+        loader.load_game = MagicMock()
+        schedule = {
+            "dates": [
+                {
+                    "date": "2024-08-15",
+                    # SIM-441: load_date_range now applies the same Final gate
+                    # refresh_seasons has — an in-progress game ingested here was
+                    # then skipped forever by _game_already_loaded.
+                    "games": [
+                        {"gamePk": 745001, "status": {"abstractGameState": "Final"}},
+                        {"gamePk": 745002, "status": {"abstractGameState": "Final"}},
+                    ],
+                }
+            ]
+        }
+        with patch(
+            "ingest.games.load_games._connect",
+            return_value=schedule,
+        ):
+            loader.load_date_range(date(2024, 8, 15), date(2024, 8, 15))
+        assert loader.load_game.call_count == 2
+
+    def test_load_date_range_skips_rescheduled(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._game_already_loaded = MagicMock(return_value=False)
+        loader.load_game = MagicMock()
+        schedule = {
+            "dates": [
+                {
+                    "date": "2024-08-15",
+                    "games": [
+                        {"gamePk": 745001, "rescheduleGameDate": "2024-08-16"},
+                        {"gamePk": 745002, "resumeGameDate": "2024-08-16"},
+                        {"gamePk": 745003, "status": {"abstractGameState": "Final"}},
+                    ],
+                }
+            ]
+        }
+        with patch(
+            "ingest.games.load_games._connect",
+            return_value=schedule,
+        ):
+            loader.load_date_range(date(2024, 8, 15), date(2024, 8, 15))
+        # Only the non-rescheduled game should be loaded
+        assert loader.load_game.call_count == 1
+        assert loader.load_game.call_args.args[0] == 745003
+
+    def test_refresh_seasons_defaults_end_year_to_last_year(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._game_already_loaded = MagicMock(return_value=True)
+        loader.load_game = MagicMock()
+        empty_schedule = {"dates": []}
+        with patch(
+            "ingest.games.load_games._connect",
+            return_value=empty_schedule,
+        ) as conn:
+            loader.refresh_seasons(start_year=2024, end_year=2024)
+        # _connect was called at least once (for the season-2024 schedule)
+        assert conn.called
+
+    def test_refresh_seasons_explicit_end_year(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._game_already_loaded = MagicMock(return_value=True)
+        loader.load_game = MagicMock()
+        empty_schedule = {"dates": []}
+        with patch(
+            "ingest.games.load_games._connect",
+            return_value=empty_schedule,
+        ) as conn:
+            loader.refresh_seasons(start_year=2022, end_year=2023)
+        # Two season schedule pulls expected
+        assert conn.call_count == 2
+
+    def test_refresh_seasons_skips_rescheduled(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._game_already_loaded = MagicMock(return_value=False)
+        loader.load_game = MagicMock()
+        schedule = {
+            "dates": [
+                {
+                    "date": "2024-08-15",
+                    "games": [
+                        {"gamePk": 745001, "rescheduleGameDate": "tbd"},
+                        # SIM-405fix: only Final games are loaded, so the game that
+                        # should load must carry a completed status.
+                        {"gamePk": 745002, "status": {"abstractGameState": "Final"}},
+                    ],
+                }
+            ]
+        }
+        with patch(
+            "ingest.games.load_games._connect",
+            return_value=schedule,
+        ):
+            loader.refresh_seasons(start_year=2024, end_year=2024)
+        assert loader.load_game.call_count == 1
+
+
+# ===========================================================================
+# _ensure_* methods — existence short-circuit branches only
+# ===========================================================================
+
+
+class TestEnsurePrerequisitesShortCircuit:
+    """When the FK parent already exists in the DB, the method should return
+    without firing any HTTP calls or INSERTs."""
+
+    def test_ensure_venue_already_exists(self):
+        loader, _, cur = _make_loader_with_mock_conn(fetchone_returned=(1,))
+        with patch("ingest.games.load_games._http_get") as mock_req:
+            loader._ensure_venue(17, 2024)
+        mock_req.assert_not_called()  # No API call needed when venue exists
+
+    def test_ensure_prerequisites_routes_to_all_subchecks(self):
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        loader._ensure_venue = MagicMock()
+        loader._ensure_teams = MagicMock()
+        loader._ensure_players = MagicMock()
+        loader._ensure_managers = MagicMock()
+        loader._ensure_game = MagicMock()
+
+        game_dict = {
+            "gameData": {
+                "datetime": {"officialDate": "2024-08-15"},
+                "venue": {"id": 17},
+                "teams": {"home": {"id": 112}, "away": {"id": 158}},
+            },
+            "_managers": {
+                "home_manager_id": 9999,
+                "home_manager_name": "M C",
+                "away_manager_id": 9998,
+                "away_manager_name": "P M",
+            },
+        }
+        loader._ensure_prerequisites(745001, game_dict)
+        loader._ensure_venue.assert_called_once()
+        loader._ensure_teams.assert_called_once()
+        loader._ensure_players.assert_called_once()
+        loader._ensure_managers.assert_called_once()
+        loader._ensure_game.assert_called_once()
+
+
+# ===========================================================================
+# _fetch_game_pitches — minimal feed/live payload
+# ===========================================================================
+
+
+def _minimal_feed_live() -> dict:
+    """Build the smallest feed/live response that exercises _fetch_game_pitches
+    without raising on any required nesting."""
+    return {
+        "gameData": {
+            "datetime": {"officialDate": "2024-08-15"},
+            "teams": {
+                "home": {"id": 112, "abbreviation": "CHC"},
+                "away": {"id": 158, "abbreviation": "MIL"},
+            },
+            "venue": {"id": 17, "name": "Wrigley"},
+        },
+        "liveData": {"plays": {"allPlays": []}},  # zero plays — no pitch rows
+    }
+
+
+class TestFetchGamePitches:
+    def test_zero_plays_yields_empty_rows(self):
+        """An empty allPlays list produces no pitch rows but still returns a
+        valid game_dict with manager info."""
+        feed = _minimal_feed_live()
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M Counsell"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, returned = _fetch_game_pitches(745001, batter_hand_cache={})
+        assert rows == []
+        assert "_managers" in returned
+        assert returned["_managers"]["home_manager_id"] == 9999
+
+    def test_ntrm_role_wins_over_mngr(self):
+        """A coach with jobId=NTRM should override the default MNGR pick."""
+        feed = _minimal_feed_live()
+        coaches = {
+            "roster": [
+                {"jobId": "MNGR", "person": {"id": 9999, "fullName": "Manager"}},
+                {"jobId": "NTRM", "person": {"id": 8888, "fullName": "Interim"}},
+            ]
+        }
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            _, returned = _fetch_game_pitches(745001, batter_hand_cache={})
+        assert returned["_managers"]["home_manager_id"] == 8888
+
+    def test_coab_used_when_no_mngr(self):
+        """When no MNGR / NTRM coach is present, COAB is used as fallback."""
+        feed = _minimal_feed_live()
+        coaches = {"roster": [{"jobId": "COAB", "person": {"id": 7777, "fullName": "Acting"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            _, returned = _fetch_game_pitches(745001, batter_hand_cache={})
+        assert returned["_managers"]["home_manager_id"] == 7777
+
+
+# ===========================================================================
+# _fetch_game_pitches — exercise pitch-parsing path with a realistic feed
+# ===========================================================================
+
+
+def _full_feed_with_one_play() -> dict:
+    """Build a feed/live payload containing a single complete play with one pitch."""
+    return {
+        "gameData": {
+            "datetime": {"officialDate": "2024-08-15"},
+            "teams": {
+                "home": {"id": 112, "abbreviation": "CHC"},
+                "away": {"id": 158, "abbreviation": "MIL"},
+            },
+            "venue": {"id": 17, "name": "Wrigley"},
+        },
+        "liveData": {
+            "plays": {
+                "allPlays": [
+                    {
+                        "atBatIndex": 0,
+                        "about": {"inning": 1, "halfInning": "top"},
+                        "result": {
+                            "description": "Player1 strikes out swinging.",
+                            "eventType": "strikeout",
+                        },
+                        "playEvents": [
+                            {
+                                "isPitch": True,
+                                "index": 0,
+                                "pitchNumber": 1,
+                                "details": {
+                                    "code": "S",
+                                    "description": "Swinging Strike",
+                                    "type": {"code": "FF", "description": "4-Seam Fastball"},
+                                    "eventType": "",
+                                },
+                                "offense": {
+                                    "batter": {
+                                        "id": 200001,
+                                        "batSide": {"code": "R"},
+                                        "link": "/api/v1/people/200001",
+                                    },
+                                    "first": {},
+                                    "second": {},
+                                    "third": {},
+                                },
+                                "defense": {
+                                    "pitcher": {
+                                        "id": 100001,
+                                        "pitchHand": {"code": "R"},
+                                    },
+                                    "catcher": {"id": 200002},
+                                    "first": {"id": 200003},
+                                    "second": {"id": 200004},
+                                    "third": {"id": 200005},
+                                    "shortstop": {"id": 200006},
+                                    "left": {"id": 200007},
+                                    "center": {"id": 200008},
+                                    "right": {"id": 200009},
+                                },
+                                "pitchData": {
+                                    "strikeZoneTop": 3.5,
+                                    "strikeZoneBottom": 1.6,
+                                    "startSpeed": 94.0,
+                                    "endSpeed": 86.0,
+                                    "coordinates": {
+                                        "x0": -1.5,
+                                        "y0": 50.0,
+                                        "z0": 6.0,
+                                        "vX0": 5.0,
+                                        "vY0": -135.0,
+                                        "vZ0": -3.0,
+                                        "aX": 5.0,
+                                        "aY": 28.0,
+                                        "aZ": -15.0,
+                                        "pfxX": 0.5,
+                                        "pfxZ": 1.5,
+                                        "pX": 0.2,
+                                        "pZ": 2.5,
+                                        "x": 100,
+                                        "y": 100,
+                                    },
+                                    "breaks": {
+                                        "spinRate": 2400,
+                                        "spinDirection": 200,
+                                        "breakAngle": 22.0,
+                                        "breakLength": 4.0,
+                                        "breakY": 24.0,
+                                        "breakVertical": 12.0,
+                                        "breakVerticalInduced": 15.0,
+                                        "breakHorizontal": 4.0,
+                                    },
+                                    "zone": 5,
+                                    "extension": 6.5,
+                                },
+                                "count": {"balls": 0, "strikes": 1, "outs": 0},
+                            }
+                        ],
+                        "pitchIndex": [0],
+                        "runners": [],
+                    }
+                ]
+            }
+        },
+    }
+
+
+class TestFetchGamePitchesPitchParsing:
+    def test_single_pitch_play_parses(self):
+        feed = _full_feed_with_one_play()
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        # Need 3 _connect calls: feed/live, home coaches, away coaches.
+        # The batter hand should come from cache so no extra call.
+        cache = {200001: "R"}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, returned = _fetch_game_pitches(745001, batter_hand_cache=cache)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["pitcher"] == 100001
+        assert row["batter"] == 200001
+        assert row["pitch_code"] == "S"
+
+    def test_batter_hand_cache_miss_triggers_people_lookup(self):
+        feed = _full_feed_with_one_play()
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        person = {"people": [{"batSide": {"code": "L"}}]}
+        # cache empty → 4th _connect call hits the people endpoint
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches, person],
+        ):
+            cache: dict[int, str] = {}
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache=cache)
+        assert cache[200001] == "L"
+        assert rows[0]["bat_hand"] == "L"
+
+    def test_play_with_hit_data_includes_spray_angle(self):
+        feed = _full_feed_with_one_play()
+        # Add hit data for the pitch
+        pitch = feed["liveData"]["plays"]["allPlays"][0]["playEvents"][0]
+        pitch["hitData"] = {
+            "launchSpeed": 95.0,
+            "launchAngle": 25.0,
+            "totalDistance": 350,
+            "coordinates": {"coordX": 150.0, "coordY": 100.0},
+            "trajectory": "line_drive",
+            "location": "7",
+        }
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+        # Spray angle should have been computed (non-empty)
+        assert rows[0]["spray_angle"] != ""
+
+    def test_play_with_runners_scoring(self):
+        feed = _full_feed_with_one_play()
+        play = feed["liveData"]["plays"]["allPlays"][0]
+        # Mark this as a scoring play with runner movement
+        play["runners"] = [
+            {
+                "details": {
+                    "playIndex": 0,
+                    "runner": {"id": 200001},
+                    "earned": True,
+                    "isOut": False,
+                },
+                "movement": {"end": "score"},
+                "credits": [
+                    {"credit": "f_putout", "player": {"id": 200002}},
+                    {"credit": "f_assist", "player": {"id": 200003}},
+                ],
+                "rbi": True,
+            }
+        ]
+        # Pre-runner on first
+        play["playEvents"][0]["offense"]["first"] = {"id": 200001}
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+        assert rows[0]["runs"] >= 1
+
+    def test_play_with_stolen_base_event(self):
+        feed = _full_feed_with_one_play()
+        play = feed["liveData"]["plays"]["allPlays"][0]
+        # Insert a non-pitch event AFTER the pitch indicating a stolen base
+        play["playEvents"].append(
+            {
+                "isPitch": False,
+                "details": {"eventType": "stolen_base_2b"},
+            }
+        )
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+        assert rows[0]["sb_attempt_2b"] is True
+        assert rows[0]["sb_success_2b"] is True
+
+    def test_play_with_pinch_hitter_substitution(self):
+        feed = _full_feed_with_one_play()
+        play = feed["liveData"]["plays"]["allPlays"][0]
+        # Prepend a non-pitch event indicating an offensive substitution (pinch hitter)
+        play["playEvents"].insert(
+            0,
+            {
+                "isPitch": False,
+                "details": {"eventType": "offensive_substitution"},
+                "position": {"code": "11"},
+            },
+        )
+        play["pitchIndex"] = [1]
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+        assert rows[0]["pinch_hitter"] is True
+
+    def test_play_with_wild_pitch_event(self):
+        feed = _full_feed_with_one_play()
+        play = feed["liveData"]["plays"]["allPlays"][0]
+        play["playEvents"].append({"isPitch": False, "details": {"eventType": "wild_pitch"}})
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+        assert rows[0]["wild_pitch_passed_ball"] is True
+
+    def test_play_with_caught_stealing(self):
+        feed = _full_feed_with_one_play()
+        play = feed["liveData"]["plays"]["allPlays"][0]
+        play["playEvents"].append(
+            {"isPitch": False, "details": {"eventType": "caught_stealing_3b"}}
+        )
+        coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+        with patch(
+            "ingest.games.load_games._connect",
+            side_effect=[feed, coaches, coaches],
+        ):
+            rows, _ = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+        assert rows[0]["sb_attempt_3b"] is True
+        assert rows[0]["sb_success_3b"] is False

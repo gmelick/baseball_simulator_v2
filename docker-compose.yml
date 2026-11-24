@@ -433,6 +433,7 @@ services:
       - ./api:/app/api
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
+      - ./ingest:/app/ingest
       - ./operations:/app/operations
       - ./similarity:/app/similarity
       # SIM-375: mount the real Phase-5 simulation package (not the dead
@@ -522,6 +523,7 @@ services:
     volumes:
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
+      - ./ingest:/app/ingest
       - ./operations:/app/operations
       - ./db:/app/db
       - ./api:/app/api
@@ -572,6 +574,7 @@ services:
       - ./api:/app/api
       - ./pipeline:/app/pipeline
       - ./betting:/app/betting
+      - ./ingest:/app/ingest
       - ./operations:/app/operations
       - ./similarity:/app/similarity
       - ./simulation:/app/simulation

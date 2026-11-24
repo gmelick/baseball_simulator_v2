@@ -23,6 +23,9 @@ from pathlib import Path
 
 import pytest
 
+from ingest.savant import load_leaderboards as sl
+from ingest.savant import load_pitch_tracking as ptl
+from ingest.savant.boards import BOARDS
 from pipeline.batch.player_profile_computor import PlayerProfileComputor
 from pipeline.batch.profiles.sql import (
     PHYSICAL_COLUMN_ORDER,
@@ -30,9 +33,6 @@ from pipeline.batch.profiles.sql import (
     _sql_pitch_swing_agg,
     _sql_swing_select,
 )
-from pipeline.etl import savant_loader as sl
-from pipeline.etl import savant_pitch_tracking_loader as ptl
-from pipeline.etl.savant_boards import BOARDS
 
 REPO = Path(__file__).resolve().parents[2]
 MIG_0026 = REPO / "db" / "migrations" / "duckdb" / "0026_sim534_profile_asof.sql"

@@ -145,7 +145,7 @@ async def get_what_if(
     start_score = None
     payload, _source, _error = await _league_game_payload(request, game_pk)
     if payload is not None:
-        from pipeline.mlb_game_feed import parse_game_feed
+        from ingest.mlb.game_feed import parse_game_feed
 
         card = parse_game_feed(payload)
         ls = card.get("linescore") or {}
@@ -156,7 +156,7 @@ async def get_what_if(
             }
         at_bat = base.get("start_at_bat")
         if at_bat is not None or base.get("kind") == "whatif_base":
-            from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
+            from ingest.mlb.game_feed import PlateAppearanceNotFound, state_at_pa
 
             try:
                 ss = state_at_pa(payload, at_bat)

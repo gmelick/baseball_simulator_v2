@@ -365,15 +365,15 @@ leaderboards from Baseball Savant, and write them to the Postgres `raw.*` tables
 
 1. [db/schemas/01_postgres_schema.sql](../../db/schemas/01_postgres_schema.sql): the
    raw tables.
-2. [pipeline/etl/etl_historical_loader.py](../../pipeline/etl/etl_historical_loader.py)
-   and [pipeline/etl/historical/](../../pipeline/etl/historical/): one game, from the
-   feed to the rows.
-3. [pipeline/statcast_events.py](../../pipeline/statcast_events.py): the event and
+2. [ingest/games/load_games.py](../../ingest/games/load_games.py)
+   and the loader's other parts beside it in [ingest/games/](../../ingest/games/): one
+   game, from the feed to the rows.
+3. [ingest/statcast_events.py](../../ingest/statcast_events.py): the event and
    pitch-result code sets.
-4. [pipeline/etl/play_events.py](../../pipeline/etl/play_events.py) and
-   [pipeline/etl/boxscore_ingest.py](../../pipeline/etl/boxscore_ingest.py): the
+4. [ingest/games/play_events.py](../../ingest/games/play_events.py) and
+   [ingest/load_boxscores.py](../../ingest/load_boxscores.py): the
    non-pitch events and the official box score.
-5. The Savant and sprint-speed loaders, then
+5. The Savant loaders in [ingest/savant/](../../ingest/savant/), then
    [db/migrations/versions/](../../db/migrations/versions/) (Alembic).
 
 **Check.**
@@ -387,8 +387,7 @@ leaderboards from Baseball Savant, and write them to the Postgres `raw.*` tables
 `test_boxscore_ingest.py`, `test_starting_position.py`, `test_etl_reload_game.py`,
 `test_migration_chain.py`.
 
-**Reference.** [Pipeline: getting data in](pipeline-ingest.md) and
-[Database](database.md).
+**Reference.** [Data ingestion](ingest.md) and [Database](database.md).
 
 <a id="stage-8"></a>
 
@@ -506,9 +505,9 @@ through Redis.
 
 **Read in this order.**
 
-1. [pipeline/mlb_schedule.py](../../pipeline/mlb_schedule.py),
-   [pipeline/mlb_game_feed.py](../../pipeline/mlb_game_feed.py) and
-   [api/league_feed.py](../../api/league_feed.py): the schedule and the game feed.
+1. [ingest/mlb/schedule.py](../../ingest/mlb/schedule.py),
+   [ingest/mlb/game_feed.py](../../ingest/mlb/game_feed.py) and
+   [ingest/mlb/client.py](../../ingest/mlb/client.py): the schedule and the game feed.
 2. [pipeline/live/run_live.py](../../pipeline/live/run_live.py) and
    [pipeline/live/live_ingestion_pipeline.py](../../pipeline/live/live_ingestion_pipeline.py):
    the service and its loop.
@@ -526,7 +525,8 @@ through Redis.
 **Tests.** `test_schedule_client.py`, `test_game_feed.py`, `test_live_pipeline.py`,
 `test_published_lineup_writer.py`, `test_live_bridge.py`.
 
-**Reference.** [Pipeline: getting data in](pipeline-ingest.md).
+**Reference.** [Live service](live.md). The schedule, the game feed and the client are on
+[Data ingestion](ingest.md).
 
 <a id="stage-12"></a>
 

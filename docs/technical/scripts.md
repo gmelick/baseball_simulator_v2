@@ -35,31 +35,12 @@ The loader is `betting/historical_loader.py`, run as `python -m betting.historic
 `make load-historical-odds FLAGS="--seasons 2024"`. It loads the opening and closing lines of
 finished games. Its options and exit codes are on [betting.md](betting.md#bettinghistorical_loaderpy).
 
-### `scripts/load_official_boxscores.py`
+### The game loaders and the corrective reload
 
-[Source](../../scripts/load_official_boxscores.py) · 344 lines · Tests: [test_boxscore_ingest.py](../../tests/unit/test_boxscore_ingest.py), [test_game_bullpen_listing.py](../../tests/unit/test_game_bullpen_listing.py)
-
-Backfills the official box score: one `raw.game_player_stats` row per player who appeared, from the MLB Stats API `/game/{pk}/boxscore` endpoint. The same fetch writes the per-game bullpen listing (`raw.game_bullpen`); `--bullpen-only` writes the listing alone. Props grade on this box (owner decision 2026-09-12, the official box-score ground truth, SIM-545). `--only-missing` (the default) skips a game that has rows. Five failures in a row stop the run (`--max-consecutive-failures`). The historical loader writes the box for each game it loads, so this script is for games already in `raw.games`.
-
-Run: `python scripts/load_official_boxscores.py --seasons 2024` in the app container.
-
-### `scripts/reload_games.py`
-
-[Source](../../scripts/reload_games.py) · 374 lines · Tests: none
-
-Reloads specific games, or every gap it finds. It sorts the gaps into three classes: STALE (pitch rows with no `raw.etl_game_ingest` ledger row: the game looks loaded and is not), FAILED (a ledger row that is not `loaded` for a Final game) and NOT PLAYED (an `empty` outcome for a cancelled or postponed game; nothing to fix). It reloads the first two and reports the third. `reload_game` deletes and re-inserts one game in one transaction, and the shrink guard refuses a reload that loses rows unless `--allow-shrink`. The run ends with a per-season reconciliation of the ledger against the pitch rows.
-
-Run: `python scripts/reload_games.py --dry-run`, then without `--dry-run`. `--game-pk`, `--season` and `--refresh-venues` narrow or widen it.
-
-### `scripts/resumable_sweep.py`
-
-[Source](../../scripts/resumable_sweep.py) · 287 lines · Tests: [test_sweep_streaming.py](../../tests/unit/test_sweep_streaming.py)
-
-Drives a full corrective reload of one or more seasons to completion despite the stochastic interpreter crash. It runs the loader in a child process, records every finished `game_pk` in `.sweep_progress/<season>.txt` (ignored by git), and restarts the child after a crash, skipping the finished games. A crash cannot corrupt a game, because each reload is one transaction. A full ten-season sweep takes about six hours.
-
-Run on the host: `python scripts/resumable_sweep.py --season 2017 --end-season 2026`. `--in-docker` uses the compose DSN instead of `127.0.0.1:DB_HOST_PORT`.
-
-**Watch out:** the child reads `BASEBALL_DB_DSN` from the repo's `.env` file, not from the environment. The stack's `.env` carries no DSN line by default (compose builds the DSN), so add a host DSN line before a run.
+The game loaders and the two corrective reload tools live in `ingest/`, not here.
+`ingest/games/reload_games.py` reloads named games, or every gap it finds.
+`ingest/games/resumable_sweep.py` reloads whole seasons and restarts after a crash. Both
+are on [Data ingestion](ingest.md#ingestgamesreload_gamespy).
 
 ---
 

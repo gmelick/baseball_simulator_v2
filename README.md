@@ -102,7 +102,8 @@ takes hours; the [operator's manual](WORKFLOW.md) gives the steps in order. Then
 |---|---|
 | `simulation/` | The simulator: the state machine (`sim_loop.py`, `loop/`), the sampler that makes every draw (`full_pool_sampler.py`, `sampler/`), the runner and the outputs. |
 | `similarity/` | The eleven similarity engines, their calibration and the backtester. |
-| `pipeline/` | The loaders (`etl/`), the live game-day service (`live/`), the nightly builds (`batch/`) and the odds providers. |
+| `ingest/` | The loaders of the raw data: the MLB Stats API, Baseball Savant, the box scores, the bullpens and the venues. |
+| `pipeline/` | The live game-day service (`live/`) and the nightly builds (`batch/`). |
 | `betting/` | The pricing math: implied probability, margin removal, edge, expected value, the bet signal. |
 | `api/` | The FastAPI app: its boot, the login, the routes, the run jobs. |
 | `db/` | The Postgres and DuckDB schemas, the migrations, the database roles and the database address reader (`dsn.py`). |

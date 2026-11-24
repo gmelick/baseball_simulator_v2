@@ -57,7 +57,7 @@ ignore = ["E501", "B008", "B904", "SIM102", "SIM103", "SIM105", "SIM108", "SIM11
 "scripts/**" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["api", "pipeline", "similarity", "simulation", "betting", "db", "operations"]
+known-first-party = ["api", "pipeline", "similarity", "simulation", "betting", "db", "ingest", "operations"]
 
 [tool.mypy]
 python_version         = "3.13"
@@ -82,13 +82,13 @@ exclude                = ["tests/", "db/migrations/"]
 # covered exceptions.
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
-source = ["similarity", "pipeline", "simulation", "betting", "api", "operations", "db"]
+source = ["similarity", "pipeline", "simulation", "betting", "api", "ingest", "operations", "db"]
 omit = [
     "similarity/similarity_calibration.py",
     "similarity/calibration/*",
     "similarity/similarity_diagnostics.py",
-    "pipeline/etl/venue_backfill_job.py",
-    "pipeline/etl/etl_sprint_speed_loader.py",
+    "ingest/venues/backfill_venues.py",
+    "ingest/savant/load_sprint_speed.py",
     "*/migrations/*",
     # Live-infra wiring + integration/real-DB paths: exercised by the SIM-371
     # E2E suite + integration tests, not unit tests (same rationale as above).

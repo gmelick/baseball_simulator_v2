@@ -15,7 +15,7 @@ plate appearance:
 * the real runs of every half already completed (the inning grid so far) and
   the score when the current half began.
 
-``pipeline.mlb_game_feed.state_at_pa`` builds it from the league's feed; a
+``ingest.mlb.game_feed.state_at_pa`` builds it from the league's feed; a
 ``changes`` set (``simulation.whatif.apply_changes``) edits it. It travels to
 the workers as the ``start_state`` sim-kwarg: plain data, so every iteration
 builds its own fresh :class:`GameState` (a state object mutates as it plays).

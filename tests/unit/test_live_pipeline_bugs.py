@@ -182,13 +182,12 @@ class TestRedisKeyMismatch:
         mock_redis.get.return_value = json.dumps(cached_feed)
 
         # Simulate a failed HTTP response (429 status)
-        mock_resp = AsyncMock()
-        mock_resp.status = 429
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        import aiohttp
 
-        mock_http = MagicMock()
-        mock_http.get.return_value = mock_resp
+        mock_http = AsyncMock()
+        mock_http.get_json.side_effect = aiohttp.ClientResponseError(
+            request_info=MagicMock(), history=(), status=429
+        )
 
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._redis = mock_redis

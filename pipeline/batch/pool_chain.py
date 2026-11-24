@@ -109,6 +109,7 @@ from __future__ import annotations
 from typing import Any
 
 from db.dsn import require_dsn
+from ingest.statcast_events import sql_list
 
 #: The six pitch-pool classes, in the column order of a count matrix row.
 OUTCOMES: tuple[str, ...] = (
@@ -151,15 +152,10 @@ _NON_PA_EVENT_PREFIXES: tuple[str, ...] = ("caught_stealing", "pickoff", "stolen
 _STRIKEOUT_EVENTS: tuple[str, ...] = ("strikeout", "strikeout_double_play")
 
 
-def _sql_list(values: tuple[str, ...]) -> str:
-    """Render ``values`` as a SQL ``IN`` list of string literals."""
-    return "(" + ", ".join(f"'{v}'" for v in values) + ")"
-
-
 def _sql_is_batting_event(col: str = "events") -> str:
     """The SQL test that ``col`` is a non-NULL batting event (a plate appearance's end)."""
     prefixes = " OR ".join(f"{col} LIKE '{p}%'" for p in _NON_PA_EVENT_PREFIXES)
-    return f"({col} IS NOT NULL AND {col} NOT IN {_sql_list(_NON_PA_EVENTS)} AND NOT ({prefixes}))"
+    return f"({col} IS NOT NULL AND {col} NOT IN {sql_list(_NON_PA_EVENTS)} AND NOT ({prefixes}))"
 
 
 def _sql_pa_flag(col: str = "events") -> str:
@@ -432,7 +428,7 @@ def real_pa_rates(con: Any, pred: str) -> dict[str, float]:
     docstring (THE POPULATION RULE) records the two residuals that are not
     label errors: the groups cut short, and the pitch clock's automatic balls.
     """
-    is_k = f"events IN {_sql_list(_STRIKEOUT_EVENTS)}"
+    is_k = f"events IN {sql_list(_STRIKEOUT_EVENTS)}"
     row = con.execute(
         f"""
         WITH pa AS (

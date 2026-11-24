@@ -37,8 +37,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE, SQL_SWING, SQL_WHIFF, sql_in
-from pipeline.statcast_events import (
+from ingest.statcast_events import (
     BALL_TYPES,
     CALLED_STRIKE_TYPES,
     FOUL_TYPES,
@@ -47,6 +46,7 @@ from pipeline.statcast_events import (
     STRIKE_THREE_FOUL_TYPES,
     WHIFF_TYPES,
 )
+from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE, SQL_SWING, SQL_WHIFF, sql_in
 
 _SOURCE = Path(__file__).resolve().parents[2] / "pipeline" / "batch" / "player_profile_computor.py"
 

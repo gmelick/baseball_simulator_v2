@@ -23,7 +23,7 @@ What these tests pin:
     on top of the league's law reads +20.0 and the others 0; a park under
     100 home runs gets none; the median centring; balls without the two
     factors give no offsets; the document carries the two keys;
-  * ``pipeline/etl/mlb_venue_dimensions.py``: the fetch on a canned body, the
+  * ``ingest/venues/load_venue_dimensions.py``: the fetch on a canned body, the
     write that keeps the last copy when the API fails, the read.
 """
 
@@ -37,6 +37,8 @@ import urllib.error
 import numpy as np
 import pytest
 
+from ingest.mlb import client as mlb_client
+from ingest.venues import load_venue_dimensions as mvd
 from pipeline.batch.artifacts.park_geometry import (
     CARRY_OFFSET_FEATURES,
     PARK_N_SECTORS,
@@ -57,7 +59,6 @@ from pipeline.batch.artifacts.park_geometry import (
     sector_line,
     sector_of,
 )
-from pipeline.etl import mlb_venue_dimensions as mvd
 
 _SEASONS = [2023, 2024, 2025, 2026]
 _MID = [PARK_SPRAY_MIN + (s + 0.5) * PARK_SECTOR_DEG for s in range(PARK_N_SECTORS)]
@@ -766,7 +767,7 @@ class TestVenueDimensions:
             seen["timeout"] = timeout
             return _Resp(json.dumps(_BODY).encode("utf-8"))
 
-        monkeypatch.setattr(mvd.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(mlb_client.urllib.request, "urlopen", fake_urlopen)
         out = mvd.fetch_venue_dimensions(2026, timeout=7)
         assert seen["url"] == mvd.VENUES_URL.format(season=2026) and seen["timeout"] == 7
         assert set(out) == {1, 5355, 9999}
@@ -788,7 +789,7 @@ class TestVenueDimensions:
 
     def test_fetch_rejects_a_bad_body(self, monkeypatch):
         monkeypatch.setattr(
-            mvd.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b'{"nope": 1}')
+            mlb_client.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b'{"nope": 1}')
         )
         with pytest.raises(ValueError):
             mvd.fetch_venue_dimensions(2026)
@@ -818,7 +819,8 @@ class TestVenueDimensions:
             assert json.load(fh)["fetched"] == {"2026": "failed"}
         assert mvd.read_venue_dimensions(out_dir) == venues
 
-    def test_a_truncated_answer_keeps_the_copy(self, tmp_path, caplog):
+    def test_a_truncated_answer_keeps_the_copy(self, tmp_path, caplog, monkeypatch):
+        monkeypatch.setattr("ingest.mlb.client.time.sleep", lambda s: None)
         # ``resp.read()`` raises ``http.client.IncompleteRead`` on a body cut
         # short; it is not an ``OSError``, so the fallback names it.
         out_dir = str(tmp_path)
@@ -836,9 +838,9 @@ class TestVenueDimensions:
             def read(self):
                 raise http.client.IncompleteRead(b'{"venues": [')
 
-        with caplog.at_level("WARNING", logger="mlb_venue_dimensions"):
+        with caplog.at_level("WARNING", logger="ingest.venues.load_venue_dimensions"):
             monkey = pytest.MonkeyPatch()
-            monkey.setattr(mvd.urllib.request, "urlopen", lambda req, timeout=None: _Cut())
+            monkey.setattr(mlb_client.urllib.request, "urlopen", lambda req, timeout=None: _Cut())
             try:
                 again = mvd.write_venue_dimensions(out_dir, [2026])
             finally:
@@ -852,7 +854,7 @@ class TestVenueDimensions:
         def down(season):
             raise OSError("no network")
 
-        with caplog.at_level("WARNING", logger="mlb_venue_dimensions"):
+        with caplog.at_level("WARNING", logger="ingest.venues.load_venue_dimensions"):
             assert mvd.write_venue_dimensions(str(tmp_path), [2026], fetch=down) == {}
         assert "no copy exists" in caplog.text
         assert mvd.read_venue_dimensions(str(tmp_path)) == {}

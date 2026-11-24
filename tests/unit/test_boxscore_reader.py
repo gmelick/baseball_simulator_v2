@@ -11,6 +11,7 @@ No network, no DB.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -18,7 +19,7 @@ from datetime import date
 
 from tests.script_loader import REPO, load_script
 
-from pipeline.etl.boxscore_ingest import parse_boxscore
+from ingest.load_boxscores import parse_boxscore
 from simulation.prop_distributions import PropDistribution
 from simulation.prop_validation import (
     BOXSCORE_BATTER_PROPS,
@@ -40,7 +41,7 @@ def _fixture_rows() -> list[dict]:
     with open(_FIXTURE, encoding="utf-8") as fh:
         teams = json.load(fh)["teams"]
     parsed = parse_boxscore(teams, game_pk=GAME_PK, season=2024, game_date=date(2024, 8, 15))
-    return [r.as_dict() for r in parsed]
+    return [dataclasses.asdict(r) for r in parsed]
 
 
 # ===========================================================================

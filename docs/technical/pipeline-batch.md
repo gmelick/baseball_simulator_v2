@@ -3,7 +3,7 @@
 The nightly batch turns the raw Postgres tables into what the simulator reads. It
 writes the player profiles and the play pools into the DuckDB file, then exports the
 engine-artifact bundle (the files every simulation worker loads) onto disk. The input is
-Postgres `raw.*`, which the ingest jobs load ([Data ingestion](pipeline-ingest.md)). The
+Postgres `raw.*`, which the ingest jobs load ([Data ingestion](ingest.md)). The
 scheduler's jobs, the `make` targets and the one-off rebuild scripts call this code. The
 nightly shell jobs and the backups live in `operations/` ([Operations](operations.md)).
 The run book (how to run, check and recover each step) is the operator manual,
@@ -126,7 +126,7 @@ season-keyed `derived.*` table goes on `_delete_seasons`' list, or
 | [`fielder.py`](../../pipeline/batch/profiles/fielder.py) | 621 | `derived.fielder_season_metrics`: the per-play temporary tables combined per (fielder, position, season), with Savant's arm strength, OAA and outfield jump. `_fill_outfield_arm_block` then fills the outfield arm columns from the advancement pool: each outfielder's chances, the attempts against him, the runners he threw out, and his prevention against the pool's own attempt rate at his position. | the temporary tables, `raw.savant_arm_strength`, `raw.savant_outs_above_average`, `raw.savant_outfield_jump`, `sim.advancement_opportunity_pool` | [test_outfield_arm_block.py](../../tests/unit/test_outfield_arm_block.py), [test_fielder_oaa_jump_profile.py](../../tests/unit/test_fielder_oaa_jump_profile.py), [test_fielder_placeholder_schema.py](../../tests/unit/test_fielder_placeholder_schema.py) |
 | [`defense.py`](../../pipeline/batch/profiles/defense.py) | 248 | The field-geometry helpers the fielder and catcher models share: hit-chart distance in feet, throw time, hang time, ground-ball travel time, the direction a fielder moves, and a scaled logistic fit. | — | [test_player_profile_computor.py](../../tests/unit/test_player_profile_computor.py), [test_simulation_constants.py](../../tests/unit/test_simulation_constants.py) |
 | [`league_averages.py`](../../pipeline/batch/profiles/league_averages.py) | 311 | `LeagueAverageProfiles.compute`: one `derived.league_averages` row per entity type and season (pitcher, batter, `fielder_<position>`, baserunner, baserunner_steal, pitcher_steal, catcher, manager). The engines shrink a thin profile toward it; the loop's steal weight reads the manager row's mean steal rate. | the `derived.*` profile tables | [test_league_average_profiles.py](../../tests/unit/test_league_average_profiles.py) |
-| [`sql.py`](../../pipeline/batch/profiles/sql.py) | 378 | The shared SQL: `SQL_OUTCOME_TYPE` (the pitch pool's class, rendered from the code sets in `pipeline/statcast_events.py`), the swing and stance selects, the out labels, the barrel band, the fielding-credit mask, and the fatigue columns (`SQL_PITCHER_PITCH_COUNT`, `SQL_TIMES_THROUGH_ORDER`). | — | [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_barrel_definition.py](../../tests/unit/test_barrel_definition.py) |
+| [`sql.py`](../../pipeline/batch/profiles/sql.py) | 378 | The shared SQL: `SQL_OUTCOME_TYPE` (the pitch pool's class, rendered from the code sets in `ingest/statcast_events.py`), the swing and stance selects, the out labels, the barrel band, the fielding-credit mask, and the fatigue columns (`SQL_PITCHER_PITCH_COUNT`, `SQL_TIMES_THROUGH_ORDER`). | — | [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_barrel_definition.py](../../tests/unit/test_barrel_definition.py) |
 | [`constants.py`](../../pipeline/batch/profiles/constants.py) | 61 | The sample floors (`MIN_*`), the shrinkage priors (`ARM_ALPHA_PRIOR_CHANCES` 50 and `JUMP_ALPHA_PRIOR_PLAYS` 25, which the fielder engine also reads; `PARK_PRIOR_PA` 2,000), the FIP constant, and the column orders of the two positional inserts (`BASERUNNER_TAIL_COLUMNS`, `FIELDER_TAIL_COLUMNS`). | — | [test_fielder_oaa_jump_model.py](../../tests/unit/test_fielder_oaa_jump_model.py), [test_outfield_arm_model.py](../../tests/unit/test_outfield_arm_model.py) |
 
 **Watch out:**
@@ -136,7 +136,7 @@ season-keyed `derived.*` table goes on `_delete_seasons`' list, or
   tail constants in `constants.py`; a unit test holds the live table's tail to them.
 - `SQL_OUTCOME_TYPE` has no `ELSE`: an unknown pitch code yields NULL, and the NOT NULL
   column refuses the insert. A two-strike foul tip or foul bunt is a swinging strike
-  (strike three). Change the code sets in `pipeline/statcast_events.py`, never a copy.
+  (strike three). Change the code sets in `ingest/statcast_events.py`, never a copy.
 
 ## The pool builds
 
