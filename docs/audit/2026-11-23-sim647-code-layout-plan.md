@@ -1,8 +1,8 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
 Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
-to C (2026-11-24, master 0f0fd61). Part 2's Step A is committed on branch
-`sim647-part2-ingest`; its Step B is next. Parts 3 to 7 have not started.
+to C (2026-11-24, master 0f0fd61). Part 2's Steps A to C are committed on branch
+`sim647-part2-ingest` (2026-11-24), not yet merged or deployed. Parts 3 to 7 have not started.
 
 ## 1. Why
 
@@ -258,6 +258,12 @@ regression lane, and the score tables built on a frozen DuckDB copy are byte-ide
 | `api/routes/ai_assistant.py`, `analytics.py`, `data_health.py`, `players.py`, `schema_introspect.py`, `sql_runner.py`, `sql_safety.py` | `api/routes/data_lab/` |
 | `api/routes/similarity.py`, `similarity_explorer.py` | `api/routes/similarity/` |
 | the other routes and `api/schemas/` | unchanged |
+
+Part 2's review left two twins for this part: the live service's game-status map duplicates
+`ingest/games/game_values._map_game_status` (but ignores `codedGameState`), and its lineup
+writer builds a `raw.players` row the way the game loader's `_ensure_players` does, with a
+different position source and conflict rule. A merge changes what the live service writes, so
+it needs the owner's ruling.
 
 The live service's entry point changes (`python -m live.run_live`); the compose file's `live`
 command follows. The API snapshot is regenerated in the image (CLAUDE.md section 15). The check:
