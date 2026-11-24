@@ -22,13 +22,17 @@ Retries. ``--retries`` (default 3) and ``--retry-wait`` (default 5 s, doubled pe
 retry, at most 60 s) set the provider's retry policy for each vendor read. The live
 service keeps the provider's default of one attempt.
 
-Incomplete games and the resume. A game is incomplete when a vendor read failed
-after its retries, or when the loader caught a failed fetch or write. Its rows so
-far stay written. ``--done-file`` lists each complete game, forced to disk, and a
-later run skips the games it lists, so a rerun loads only the incomplete ones.
-``--skip-loaded-since`` skips every game that already holds rows from this kind of
-run since that instant. It also skips an incomplete game with rows, so resume with
-``--done-file`` alone to fill those.
+Which games. By default the loader picks only the Final games of ``--seasons`` that
+are missing odds (:func:`_missing_odds_clause`): a game with no stored row at one of
+the run's line types, which the loader has not tried yet. A rerun therefore skips
+every loaded game, and the nightly pass needs no date window. ``--reload`` loads
+every Final game of the seasons instead (the odds hash keeps the rows single).
+
+Incomplete games. A game is incomplete when a vendor read failed after its retries,
+or when the loader caught a failed fetch or write. Its rows so far stay written.
+``--done-file`` lists each complete game, forced to disk, and a later run skips the
+games it lists, so a ``--reload`` rerun with the same file loads only the incomplete
+ones. A default rerun skips a game that holds some rows.
 
 Exit codes: 0 when every game is complete; 1 (``EXIT_INCOMPLETE``) when at least
 one game is incomplete, or on an uncaught error; 2 on a usage error.
@@ -47,9 +51,9 @@ key every vendor read fails and every game is incomplete)::
     python -m betting.historical_loader --seasons 2024 --max-games 20 --book draftkings
     python -m betting.historical_loader --seasons 2024 \
         --done-file results/odds_load/odds_load_2024.done --retries 3 --retry-wait 5
+    python -m betting.historical_loader --seasons 2024 --reload
     # The nightly pass (operations/jobs/nightly_closing_lines.sh):
-    python -m betting.historical_loader --seasons 2026 --line-types opening closing \
-        --game-dates 2026-10-08 2026-10-07
+    python -m betting.historical_loader --seasons 2025 2026
 """
 
 from __future__ import annotations
@@ -61,7 +65,6 @@ import math
 import os
 from collections import Counter
 from collections.abc import Mapping
-from datetime import date, datetime
 from typing import Any
 
 from betting.load_odds_to_db import load_odds, odds_source
@@ -128,6 +131,11 @@ DEFAULT_RETRY_WAIT_S = 5.0
 #: again a minute later on both. 0 = every game loaded;
 #: 2 = a usage error (the parser's), never run again.
 EXIT_INCOMPLETE = 1
+
+#: A game counts as tried once one of its rows was fetched or seen again this many
+#: days after the game date. The nightly pass runs each morning, so a game gets two
+#: nightly tries: a game the book posts no opener for is not read again every night.
+TRIED_AFTER_DAYS = 2
 
 #: The end-of-run summary names at most this many incomplete games.
 INCOMPLETE_LIST_MAX = 20
@@ -285,30 +293,21 @@ def _incomplete_reasons(failed_reads: int, caught: Mapping[str, int]) -> str:
     return "; ".join(parts)
 
 
-def _incomplete_summary(
-    incomplete: list[int], *, done_file: str | None, skip_loaded_since: bool = False
-) -> str:
-    """One line that counts the incomplete games and names up to 20 of them.
-
-    A run with ``--skip-loaded-since`` drops a game that holds rows before the
-    done-file is read, so its next run skips an incomplete game with rows; the
-    line says so.
-    """
+def _incomplete_summary(incomplete: list[int], *, done_file: str | None) -> str:
+    """One line that counts the incomplete games and names up to 20 of them."""
     if not incomplete:
         return "incomplete games: none (no vendor read, fetch or write failed)"
     shown = ", ".join(str(pk) for pk in incomplete[:INCOMPLETE_LIST_MAX])
     more = len(incomplete) - INCOMPLETE_LIST_MAX
     if more > 0:
         shown = f"{shown} and {more} more"
-    if skip_loaded_since:
-        then = (
-            "a run with --skip-loaded-since skips a game that holds rows, "
-            "so re-run without it (with --done-file) to fill them"
-        )
-    elif done_file:
-        then = "they stay off the done-list, so the next run loads them again"
+    if done_file:
+        then = "they stay off the done-list, so a --reload run with this done-file loads them"
     else:
-        then = "this run keeps no done-file; re-run the season to fill them"
+        then = (
+            "a game with some rows counts as loaded, so re-run with --reload "
+            "and --done-file to fill them"
+        )
     return (
         f"incomplete games: {len(incomplete)} (a vendor read failed after its retries, "
         f"or a fetch or a write failed): {shown}; {then}"
@@ -326,71 +325,77 @@ def _configure_offline_cache() -> float:
     return float(os.environ[_OFFERS_CACHE_TTL_ENV])
 
 
-def parse_game_date(value: str) -> date:
-    """Parse one ``--game-dates`` value (``YYYY-MM-DD``) into a date.
+def _missing_odds_clause(
+    *,
+    line_types: tuple[str, ...],
+    game_odds: bool,
+    props: bool,
+    book_id: int | None = None,
+    game_markets: tuple[str, ...] | None = None,
+    prop_stats: tuple[str, ...] | None = None,
+) -> tuple[str, list[object]]:
+    """The SQL that keeps only the games missing odds, and its bound values.
 
-    The parser reports a bad value as a usage error (exit 2) before any work.
+    A game is missing odds when, for one of the run's line types, it has no
+    stored row in a table the run writes: ``raw.game_odds`` for the game
+    markets, ``raw.prop_odds`` for the props of a game with lineup rows (the
+    loader loads no props without them). For the opening line a row in either
+    table counts: only the opener book writes one, so a game whose game markets
+    had no opener gains nothing from a reload. Only one-row-per-book rows count
+    (``bp:<id>``); a ``--book`` run counts that book's rows only. A market
+    subset (``--game-markets``, ``--prop-stats``) counts only its markets.
+
+    A game the loader already tried is never missing: one of its rows was
+    fetched, or seen again, ``TRIED_AFTER_DAYS`` or more after the game date
+    (the live service's rows are all from game day). Only ``--reload`` loads
+    such a game again.
+
+    Returns ``("AND (...)", params)``, bound from ``$1``; ``("", [])`` when the
+    run writes no table.
     """
-    try:
-        return date.fromisoformat(str(value).strip())
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"a game date must read YYYY-MM-DD, not {value!r}"
-        ) from exc
+    params: list[object] = []
 
+    def bind(value: object) -> str:
+        params.append(value)
+        return f"${len(params)}"
 
-def parse_skip_loaded_since(value: str | None) -> datetime | None:
-    """Parse ``--skip-loaded-since`` (the resume instant) into an aware datetime.
-
-    ISO-8601 (``2026-09-12T23:40:00`` or with an offset). A value with no offset
-    is read in the machine's local time zone — the same clock the loader logs
-    in — so an operator can copy a timestamp straight from a log line.
-    """
-    if value is None or not str(value).strip():
-        return None
-    dt = datetime.fromisoformat(str(value).strip())
-    if dt.tzinfo is None:
-        dt = dt.astimezone()  # naive == local wall-clock time
-    return dt
-
-
-#: The resume query's table, by the kind of rows the run writes last.
-_RESUME_TABLE_PROPS = "raw.prop_odds"
-_RESUME_TABLE_GAME_ODDS = "raw.game_odds"
-
-#: On an every-book run, a game counts as loaded when its rows since
-#: the resume instant name at least this many books. One book's rows alone are
-#: a ``--book`` smoke's, not a full load's (a full load stores the blend,
-#: ``bp:0``, beside every sportsbook).
-RESUME_MIN_BOOKS = 2
-
-
-def _resume_clause(*, table: str, book_id: int | None) -> str:
-    """The resume filter's SQL (an ``AND NOT EXISTS (...)`` clause).
-
-    The clause binds ``$1`` = the resume instant, ``$2`` = the run's line
-    types, and on a ``--book`` run ``$3`` = the book's label. It drops a game
-    that holds, in ``table``, rows fetched at or after ``$1`` at one of the
-    run's line types (so the live cycle's ``current`` rows never count), and
-    labelled ``bp:<id>`` (so an old ``consensus`` row never counts). On an
-    every-book run those rows must name at least ``RESUME_MIN_BOOKS`` books,
-    so a game a ``--book`` smoke touched still loads; on a ``--book`` run the
-    book's own rows are enough.
-    """
-    if table not in (_RESUME_TABLE_PROPS, _RESUME_TABLE_GAME_ODDS):
-        raise ValueError(f"resume table must be raw.prop_odds or raw.game_odds, not {table!r}")
-    where = (
-        f"SELECT 1 FROM {table} p "
-        "WHERE p.game_pk = raw.games.game_pk AND p.fetched_at >= $1 "
-        "AND p.line_type = ANY($2::varchar[]) "
-    )
     if book_id is None:
-        clause = (
-            f"AND NOT EXISTS ({where}AND p.{STORED_BOOK_FILTER_SQL} "  # p.book LIKE 'bp:%'
-            f"HAVING COUNT(DISTINCT p.book) >= {int(RESUME_MIN_BOOKS)})"
+        book_sql = f"t.{STORED_BOOK_FILTER_SQL}"
+    else:
+        book_sql = f"t.book = {bind(book_label(book_id))}"
+    market_sql = {"raw.game_odds": "", "raw.prop_odds": ""}
+    if game_markets and set(game_markets) != set(GAME_MARKET_TYPES):
+        market_sql["raw.game_odds"] = f" AND t.market_type = ANY({bind(list(game_markets))})"
+    if prop_stats and set(prop_stats) != set(PROP_STATS):
+        market_sql["raw.prop_odds"] = f" AND t.prop_stat = ANY({bind(list(prop_stats))})"
+
+    def stored(table: str, line_type: str) -> str:
+        return (
+            f"EXISTS (SELECT 1 FROM {table} t WHERE t.game_pk = raw.games.game_pk "
+            f"AND t.line_type = {bind(line_type)} AND {book_sql}{market_sql[table]})"
         )
-        return clause
-    return f"AND NOT EXISTS ({where}AND p.book = $3)"
+
+    has_lineup = "EXISTS (SELECT 1 FROM raw.game_lineups l WHERE l.game_pk = raw.games.game_pk)"
+    missing: list[str] = []
+    for line_type in line_types:
+        if line_type == "opening" and game_odds and props:
+            game_row = stored("raw.game_odds", line_type)
+            prop_row = stored("raw.prop_odds", line_type)
+            missing.append(f"NOT ({game_row} OR {prop_row})")
+            continue
+        if game_odds:
+            missing.append(f"NOT {stored('raw.game_odds', line_type)}")
+        if props:
+            missing.append(f"({has_lineup} AND NOT {stored('raw.prop_odds', line_type)})")
+    if not missing:
+        return "", []
+    tables = [t for t, on in (("raw.game_odds", game_odds), ("raw.prop_odds", props)) if on]
+    tried = " OR ".join(
+        f"EXISTS (SELECT 1 FROM {table} t WHERE t.game_pk = raw.games.game_pk AND {book_sql} "
+        f"AND COALESCE(t.last_seen_at, t.fetched_at) >= raw.games.game_date + {TRIED_AFTER_DAYS})"
+        for table in tables
+    )
+    return "AND (" + " OR ".join(missing) + f") AND NOT ({tried})", params
 
 
 def read_done_file(path: str | None) -> set[int]:
@@ -432,53 +437,19 @@ async def _fetch_final_games(
     seasons: list[int],
     max_games: int | None,
     *,
-    skip_loaded_since: datetime | None = None,
-    book_id: int | None = None,
-    line_types: tuple[str, ...] = LINE_TYPES,
-    resume_on_game_odds: bool = False,
-    game_dates: list[date] | None = None,
+    missing_sql: str = "",
+    missing_params: list[object] | None = None,
 ) -> list[dict]:
-    """Return completed-game rows ``{game_pk}`` for the requested seasons.
+    """Return ``{game_pk}`` for each Final game of the seasons, in game_pk order.
 
-    Reads ``raw.games`` (status='Final'). The loader needs only the game_pk: the
-    odds provider resolves teams/date itself from the MLB schedule. The schema
-    stores the final score in ``home_score_final`` / ``away_score_final`` (not
-    ``home_score``), so the query requires both (a real Final game).
-
-    Resume: ``skip_loaded_since`` drops every game that already holds a
-    ``raw.prop_odds`` row fetched at or after that instant — the games a run
-    that died mid-season had finished. A game the book listed no event for has
-    no rows and is retried (cheap: no event, no offers calls). The one game in
-    flight when the run died may hold a partial set of rows and is skipped too;
-    a later full pass fills it through the dedup.
-
-    The rows that count are the run's own kind (see
-    :func:`_resume_clause`): one-row-per-book rows (``p.book LIKE 'bp:%'``) at
-    the run's ``line_types``, from at least two books; with ``book_id`` (a
-    ``--book`` run) that book's rows. ``resume_on_game_odds`` reads
-    ``raw.game_odds`` instead of ``raw.prop_odds``: a ``--no-props`` run writes
-    no prop rows, so its resume has to look at the game rows.
-
-    ``game_dates`` keeps only the games of those official dates
-    (``AND game_date = ANY($n::date[])``, bound after the resume parameters).
-    The nightly closing pass loads yesterday's and the day before's games.
+    A Final game has both final scores. ``missing_sql`` (from
+    :func:`_missing_odds_clause`) keeps only the games missing odds. The
+    provider finds each game's teams and date itself.
     """
     import asyncpg
 
     sl = ", ".join(str(int(s)) for s in seasons)
     limit = f"LIMIT {int(max_games)}" if max_games else ""
-    resume_clause = ""
-    params: list[object] = []
-    if skip_loaded_since is not None:
-        table = _RESUME_TABLE_GAME_ODDS if resume_on_game_odds else _RESUME_TABLE_PROPS
-        resume_clause = _resume_clause(table=table, book_id=book_id)
-        params.extend([skip_loaded_since, list(line_types)])
-        if book_id is not None:
-            params.append(book_label(book_id))
-    date_clause = ""
-    if game_dates:
-        params.append(sorted(set(game_dates)))
-        date_clause = f"AND game_date = ANY(${len(params)}::date[])"
     conn = await asyncpg.connect(dsn)
     try:
         rows = await conn.fetch(
@@ -488,12 +459,11 @@ async def _fetch_final_games(
             WHERE status = 'Final'
               AND season IN ({sl})
               AND home_score_final IS NOT NULL AND away_score_final IS NOT NULL
-              {resume_clause}
-              {date_clause}
+              {missing_sql}
             ORDER BY game_pk
             {limit}
             """,
-            *params,
+            *(missing_params or []),
         )
     finally:
         await conn.close()
@@ -571,39 +541,29 @@ async def run(args: argparse.Namespace) -> int:
     )
     _hand_over_retry_policy(provider, retries, retry_wait_s)
 
-    skip_since = parse_skip_loaded_since(getattr(args, "skip_loaded_since", None))
-    # --game-dates narrows the run to those official dates.
-    game_dates = sorted(set(getattr(args, "game_dates", None) or []))
-    # A --no-props run writes no prop rows; its resume reads the game rows.
-    resume_on_game_odds = bool(args.no_props)
+    reload_all = bool(getattr(args, "reload", False))
+    missing_sql: str = ""
+    missing_params: list[object] = []
+    if not reload_all:
+        missing_sql, missing_params = _missing_odds_clause(
+            line_types=line_types,
+            game_odds=not no_game_odds,
+            props=not args.no_props,
+            book_id=book_id,
+            game_markets=game_markets,
+            prop_stats=prop_stats,
+        )
     games = await _fetch_final_games(
         args.dsn,
         seasons,
         args.max_games,
-        skip_loaded_since=skip_since,
-        book_id=book_id,
-        line_types=line_types,
-        resume_on_game_odds=resume_on_game_odds,
-        game_dates=game_dates,
+        missing_sql=missing_sql,
+        missing_params=missing_params,
     )
-    if game_dates:
-        log.info(
-            "game dates: only the games of %s",
-            ", ".join(d.isoformat() for d in game_dates),
-        )
-    if skip_since is not None:
-        log.info(
-            "resume: skipping games with %s rows (%s) fetched since %s",
-            "game-odds" if resume_on_game_odds else "prop",
-            ", ".join(line_types),
-            skip_since.isoformat(),
-        )
-        # The SQL drops a game with rows before the done-file is read,
-        # so a game an earlier run left incomplete is skipped when it holds rows.
-        log.warning(
-            "resume: --skip-loaded-since also skips a game an earlier run left "
-            "incomplete if it holds rows; resume with --done-file alone to load it again"
-        )
+    log.info(
+        "games: %s",
+        "every Final game (--reload)" if reload_all else "only the Final games missing odds",
+    )
     # A crash-safe run skips the games its done-file lists.
     done_file = getattr(args, "done_file", None)
     if done_file:
@@ -696,7 +656,7 @@ async def run(args: argparse.Namespace) -> int:
                 if done_file:
                     log.warning(
                         "game %s is incomplete (%s); "
-                        "it stays off the done-list, so the next run loads it again",
+                        "it stays off the done-list, so a --reload run with this done-file loads it",
                         game_pk,
                         reasons,
                     )
@@ -734,9 +694,7 @@ async def run(args: argparse.Namespace) -> int:
     log.info("%s", _written_by_book_summary(written_by_book))
     tally.warn_if_share_above(REFUSAL_WARN_SHARE, log)
     # The incomplete games, and the exit code the wrapper reads.
-    summary = _incomplete_summary(
-        incomplete, done_file=done_file, skip_loaded_since=skip_since is not None
-    )
+    summary = _incomplete_summary(incomplete, done_file=done_file)
     if incomplete:
         log.warning("%s", summary)
         return EXIT_INCOMPLETE
@@ -787,22 +745,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         f"Default: {' '.join(LINE_TYPES)}.",
     )
     p.add_argument(
-        "--game-dates",
-        nargs="+",
-        type=parse_game_date,
-        default=None,
-        metavar="YYYY-MM-DD",
-        help="SIM-546: load only the games of these official dates (one or more). "
-        "The nightly closing pass (operations/jobs/nightly_closing_lines.sh) loads yesterday "
-        "and the day before.",
-    )
-    p.add_argument(
-        "--skip-loaded-since",
-        default=None,
-        metavar="ISO_TIMESTAMP",
-        help="Resume a run that died: skip every game that already has this run's rows "
-        "(prop rows; game rows with --no-props) at its line types, fetched at or after "
-        "this instant (ISO-8601; no offset = local time).",
+        "--reload",
+        action="store_true",
+        help="Load every Final game of the seasons. Default: only the games missing odds.",
     )
     p.add_argument(
         "--done-file",

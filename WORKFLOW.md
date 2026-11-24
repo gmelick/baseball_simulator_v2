@@ -190,7 +190,7 @@ times are UTC; Eastern time is four hours earlier in summer and five in winter.
 | 10:00 daily | `nightly-backup-postgres` | `db`, `postgres` | `operations/backup/postgres/pg_backup.sh`: dumps the statistics database. | its own lock |
 | 10:00 daily | `nightly-backup-data` | `jobs`, `appuser` | `python -m operations.backup.back_up_data_stores`: copies the analytics file, the bundle and the small `/data` files. | the rebuild, finals and sweep marks |
 | 10:30 daily | `nightly-backup-offsite` | `jobs`, `appuser` | `python -m operations.backup.copy_offsite`: copies the newest backup sets into the OneDrive folder. Takes about 10 to 25 minutes. | the data backup's mark and the Postgres backup's lock |
-| 10:30 daily | `nightly-closing-lines` | `app`, root | `operations/jobs/nightly_closing_lines.sh`: runs `python -m betting.historical_loader` for the opening and closing odds of yesterday's and the day before's games. The closing rows are the fallback to the live service; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
+| 10:30 daily | `nightly-closing-lines` | `app`, root | `operations/jobs/nightly_closing_lines.sh`: runs `python -m betting.historical_loader` over last season and this one; the loader loads only the finished games missing an opening or a closing row. It fills the games the live service missed; the opening rows come only from this job. Exits 1 without `ODDS_API_KEY` in `.env`. | nothing |
 
 Each data job runs inside two wrappers:
 

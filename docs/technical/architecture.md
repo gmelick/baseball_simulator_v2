@@ -287,7 +287,7 @@ inside `operations/jobs/with_mark.sh` and the crash wrapper `operations/jobs/wit
 | 10:00 daily | `nightly-backup-postgres` | db | Dumps Postgres into `/backups` (`operations/backup/postgres/pg_backup.sh`). |
 | 10:00 daily | `nightly-backup-data` | jobs | Copies the DuckDB file, the small `/data` files and the bundle version into `/backups` (`operations.backup.back_up_data_stores`). It waits while a writer's mark is present. |
 | 10:30 daily | `nightly-backup-offsite` | jobs | Copies the newest complete sets into the OneDrive folder (`operations.backup.copy_offsite`). |
-| 10:30 daily | `nightly-closing-lines` | app | Loads the opening and closing lines of the last two days' games; the closing lines are the fallback to the live promotion (`operations/jobs/nightly_closing_lines.sh`). |
+| 10:30 daily | `nightly-closing-lines` | app | Loads the opening and closing lines of the finished games missing them, last season and this one; the closing lines are the fallback to the live promotion (`operations/jobs/nightly_closing_lines.sh`). |
 
 The rebuild is the step that reaches users. The profile build
 ([`pipeline/batch/player_profile_computor.py`](../../pipeline/batch/player_profile_computor.py))

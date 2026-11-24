@@ -180,7 +180,7 @@ def _patch_run(monkeypatch, games: list[int], roles: Any, provider: Any) -> _Rec
 # ===========================================================================
 
 
-class TestLoaderBookFlagAndResume:
+class TestLoaderBookFlag:
     def test_select_book(self) -> None:
         assert loader._select_book(None) is None
         assert loader._select_book("  ") is None
@@ -202,66 +202,13 @@ class TestLoaderBookFlagAndResume:
         assert exc.value.code == 2
         assert "Unknown book" in capsys.readouterr().err
 
-    @pytest.mark.asyncio
-    async def test_the_resume_clause_counts_only_one_row_per_book_rows(self, monkeypatch) -> None:
-        seen: list[tuple[str, tuple]] = []
 
-        class _Conn:
-            async def fetch(self, sql, *params):
-                seen.append((sql, params))
-                return []
+class TestMissingOddsQueryRuns:
+    """The missing-odds query run on an in-memory DuckDB.
 
-            async def close(self):
-                return None
-
-        async def _connect(dsn):
-            return _Conn()
-
-        import sys
-        import types
-
-        monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=_connect))
-        since = loader.parse_skip_loaded_since("2026-09-28T10:00:00+00:00")
-        await loader._fetch_final_games("dsn", [2024], None)
-        assert "NOT EXISTS" not in seen[-1][0] and seen[-1][1] == ()
-        await loader._fetch_final_games("dsn", [2024], None, skip_loaded_since=since)
-        sql = seen[-1][0]
-        assert "FROM raw.prop_odds p" in sql
-        assert "AND p.book LIKE 'bp:%'" in sql
-        # Review finding 2: only the run's own line types count (never the live
-        # cycle's 'current' rows), and only a load of two or more books.
-        assert "AND p.line_type = ANY($2::varchar[])" in sql
-        assert "HAVING COUNT(DISTINCT p.book) >= 2" in sql
-        assert seen[-1][1] == (since, ["opening", "closing"])
-        # A --book run counts only that book's rows, at the run's line types.
-        await loader._fetch_final_games(
-            "dsn", [2024], None, skip_loaded_since=since, book_id=12, line_types=("closing",)
-        )
-        sql = seen[-1][0]
-        assert "AND p.book = $3" in sql and "LIKE" not in sql and "HAVING" not in sql
-        assert seen[-1][1] == (since, ["closing"], "bp:12")
-        # Review finding 3: a --no-props run's resume reads the game rows.
-        await loader._fetch_final_games(
-            "dsn", [2024], None, skip_loaded_since=since, resume_on_game_odds=True
-        )
-        assert "FROM raw.game_odds p" in seen[-1][0] and "raw.prop_odds" not in seen[-1][0]
-
-    def test_the_resume_clause_refuses_an_unknown_table(self) -> None:
-        with pytest.raises(ValueError, match="resume table"):
-            loader._resume_clause(table="raw.games; DROP TABLE x", book_id=None)
-
-
-class TestLoaderResumeRunsTheQuery:
-    """The resume query run on an in-memory DuckDB (review findings 2 and 3).
-
-    The loader's SQL is plain enough for both Postgres and DuckDB (the same
-    text ran on the live Postgres as a read-only PREPARE / EXECUTE when the
-    fix landed). Each game below is one way a game can look after a run died.
+    The loader's SQL is plain enough for both Postgres and DuckDB. Each game
+    below is one way a game's stored odds can look.
     """
-
-    _SINCE = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
-    _AFTER = datetime(2026, 9, 28, 11, 0, tzinfo=UTC)
-    _BEFORE = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
 
     @pytest.fixture
     def duck(self, monkeypatch):
@@ -274,40 +221,55 @@ class TestLoaderResumeRunsTheQuery:
         con.execute("CREATE SCHEMA raw")
         con.execute(
             "CREATE TABLE raw.games (game_pk INTEGER, status VARCHAR, season INTEGER, "
-            "home_score_final INTEGER, away_score_final INTEGER)"
+            "home_score_final INTEGER, away_score_final INTEGER, game_date DATE)"
         )
+        con.execute("CREATE TABLE raw.game_lineups (game_pk INTEGER)")
         for table in ("prop_odds", "game_odds"):
             con.execute(
-                f"CREATE TABLE raw.{table} (game_pk INTEGER, fetched_at TIMESTAMPTZ, "
-                "line_type VARCHAR, book VARCHAR)"
+                f"CREATE TABLE raw.{table} (game_pk INTEGER, line_type VARCHAR, book VARCHAR, "
+                "fetched_at TIMESTAMP, last_seen_at TIMESTAMP)"
             )
-        for pk in range(1, 7):
-            con.execute("INSERT INTO raw.games VALUES (?, 'Final', 2026, 3, 2)", [pk])
-        after, before = self._AFTER, self._BEFORE
-        props = [
-            # 1: a finished every-book load.
-            (1, after, "closing", "bp:12"),
-            (1, after, "closing", "bp:0"),
-            (1, after, "opening", "bp:10"),
-            # 2: the live cycle's rows only (two books, 'current').
-            (2, after, "current", "bp:12"),
-            (2, after, "current", "bp:10"),
-            # 3: a --book draftkings smoke's rows only.
-            (3, after, "opening", "bp:12"),
-            (3, after, "closing", "bp:12"),
-            # 4: the old consensus rows only.
-            (4, after, "closing", "consensus"),
-            (4, after, "opening", "consensus"),
-            # 5: a finished load from before the resume instant.
-            (5, before, "closing", "bp:12"),
-            (5, before, "closing", "bp:0"),
-        ]
-        con.executemany("INSERT INTO raw.prop_odds VALUES (?, ?, ?, ?)", props)
-        # 6: the game rows of a finished --no-props run, and no prop rows.
+        # Every game is played on 2026-08-01; game 10 is the tried one.
+        for pk in range(1, 11):
+            con.execute("INSERT INTO raw.games VALUES (?, 'Final', 2026, 3, 2, '2026-08-01')", [pk])
+        # Every game but 7 has lineup rows.
         con.executemany(
-            "INSERT INTO raw.game_odds VALUES (?, ?, ?, ?)",
-            [(6, after, "closing", "bp:12"), (6, after, "closing", "bp:0")],
+            "INSERT INTO raw.game_lineups VALUES (?)", [[pk] for pk in range(1, 10) if pk != 7]
         )
+        full = [("closing", "bp:12"), ("closing", "bp:0"), ("opening", "bp:12")]
+        game_rows = {
+            1: full,  # a full load
+            # 2: nothing stored
+            3: [("closing", "bp:12")],  # the live service's closing row, no opening
+            4: [("current", "bp:12")],  # the live service's current rows only
+            5: [("closing", "consensus"), ("opening", "consensus")],  # old consensus rows
+            6: full,
+            7: full,
+            8: full,
+            9: [("closing", "bp:10"), ("opening", "bp:10")],  # FanDuel only
+            10: [("closing", "bp:12")],  # no opener; the loader tried it (below)
+        }
+        prop_rows = {
+            1: full,
+            3: [("closing", "bp:12")],
+            4: [("current", "bp:12")],
+            5: [("closing", "consensus"), ("opening", "consensus")],
+            6: [("closing", "bp:12")],  # the opener sat in the game markets only
+            # 7: no lineup, so no props; 8: lineup but no prop rows
+            9: [("closing", "bp:10"), ("opening", "bp:10")],
+        }
+        # Every row is from game day, the live service's day, so no game counts as
+        # tried; game 10's closing row was seen again three days later.
+        game_day, later = "2026-08-01 23:00:00", "2026-08-04 10:30:00"
+        for table, rows in (("game_odds", game_rows), ("prop_odds", prop_rows)):
+            con.executemany(
+                f"INSERT INTO raw.{table} VALUES (?, ?, ?, ?, ?)",
+                [
+                    [pk, lt, book, game_day, later if pk == 10 else None]
+                    for pk, lst in rows.items()
+                    for lt, book in lst
+                ],
+            )
 
         class _Conn:
             async def fetch(self, sql, *params):
@@ -325,32 +287,33 @@ class TestLoaderResumeRunsTheQuery:
         return con
 
     async def _pks(self, **kw: Any) -> list[int]:
+        opts = {"line_types": ("opening", "closing"), "game_odds": True, "props": True, **kw}
+        sql, params = loader._missing_odds_clause(**opts)
         games = await loader._fetch_final_games(
-            "dsn", [2026], None, skip_loaded_since=self._SINCE, **kw
+            "dsn", [2026], None, missing_sql=sql, missing_params=params
         )
         return [g["game_pk"] for g in games]
 
     @pytest.mark.asyncio
-    async def test_an_every_book_resume_skips_only_a_finished_load(self, duck) -> None:
-        # Finding 2: the live 'current' rows (2) and a one-book smoke (3) no
-        # longer mark a game as loaded; the old consensus rows (4), rows older
-        # than the instant (5) and game rows only (6) never did.
-        assert await self._pks() == [2, 3, 4, 5, 6]
+    async def test_an_every_book_run_picks_the_games_missing_a_row(self, duck) -> None:
+        # 1 is loaded; 6's opening sits in one table, which counts; 7 has no
+        # lineup, so it needs no prop rows. 8 lacks its prop rows. 10 lacks its
+        # opening and its props, but the loader already tried it.
+        assert await self._pks() == [2, 3, 4, 5, 8]
 
     @pytest.mark.asyncio
-    async def test_a_book_resume_skips_the_games_with_that_books_rows(self, duck) -> None:
-        # Game 2's DraftKings row is a live 'current' row: it does not count.
-        assert await self._pks(book_id=12) == [2, 4, 5, 6]
-        # Game 1's FanDuel row is an opening row: it counts only when the run
-        # loads opening lines.
-        assert await self._pks(book_id=10) == [2, 3, 4, 5, 6]
-        assert await self._pks(book_id=10, line_types=("closing",)) == [1, 2, 3, 4, 5, 6]
+    async def test_a_closing_only_run_skips_the_games_missing_only_an_opening(self, duck) -> None:
+        assert await self._pks(line_types=("closing",)) == [2, 4, 5, 8]
 
     @pytest.mark.asyncio
-    async def test_a_no_props_resume_reads_the_game_rows(self, duck) -> None:
-        # Finding 3: a --no-props run writes no prop rows, so the prop table
-        # could never mark one of its games as loaded.
-        assert await self._pks(resume_on_game_odds=True) == [1, 2, 3, 4, 5]
+    async def test_a_book_run_counts_that_books_rows(self, duck) -> None:
+        # Game 10 was tried for book 12 only, so a book 10 run picks it.
+        assert await self._pks(book_id=10) == [1, 2, 3, 4, 5, 6, 7, 8, 10]
+        assert await self._pks(book_id=12) == [2, 3, 4, 5, 8, 9]
+
+    @pytest.mark.asyncio
+    async def test_a_no_props_run_reads_the_game_rows_only(self, duck) -> None:
+        assert await self._pks(props=False) == [2, 3, 4, 5]
 
     @pytest.mark.asyncio
     async def test_run_passes_its_line_types_and_the_no_props_switch(self, monkeypatch) -> None:
@@ -363,19 +326,13 @@ class TestLoaderResumeRunsTheQuery:
         monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "0")
         monkeypatch.setattr(loader, "_fetch_final_games", _games)
         monkeypatch.setattr(loader, "odds_source", Recorded92857)
-        base = [
-            "--seasons",
-            "2019",
-            "--skip-loaded-since",
-            "2026-09-28T10:00:00+00:00",
-        ]
+        base = ["--seasons", "2019"]
         assert await loader.run(loader.parse_args([*base, "--no-props"])) == 0
-        assert seen[-1]["resume_on_game_odds"] is True
-        assert seen[-1]["line_types"] == ("opening", "closing")
-        assert seen[-1]["skip_loaded_since"] == self._SINCE
+        assert "raw.prop_odds" not in seen[-1]["missing_sql"]
+        assert seen[-1]["missing_params"] == ["opening", "closing"]
         assert await loader.run(loader.parse_args([*base, "--line-types", "closing"])) == 0
-        assert seen[-1]["resume_on_game_odds"] is False
-        assert seen[-1]["line_types"] == ("closing",)
+        assert "raw.prop_odds" in seen[-1]["missing_sql"]
+        assert seen[-1]["missing_params"] == ["closing", "closing"]
 
 
 class TestLoaderRunSummary:

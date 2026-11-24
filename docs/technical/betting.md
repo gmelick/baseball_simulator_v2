@@ -65,8 +65,8 @@ closing price). The model is not judged by it (owner ruling 2026-09-28).
    * The historical loader (`python -m betting.historical_loader`) calls `load_odds` for each Final
      game. The scheduler's `nightly-closing-lines` job
      ([`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh)) runs it
-     at 10:30 UTC over the games of the last two days, for the opening and the closing
-     lines. Nothing else stores an opening line.
+     at 10:30 UTC over last season and this one; it loads only the games missing an
+     opening or a closing line. Nothing else stores an opening line.
 
 **Pricing.**
 
@@ -225,25 +225,31 @@ that first posts in play) can take an in-play row on a later promotion.
 
 [Source](../../betting/historical_loader.py) · 871 lines · Tests: [test_historical_odds_load.py](../../tests/unit/test_historical_odds_load.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py)
 
-Loads the odds of finished games. It walks the Final games in `raw.games` and calls
-`load_odds` for each: the game markets, then the props of every player in
+Loads the odds of finished games. By default it picks only the Final games of the seasons
+that are missing odds: a game with no stored row at one of the run's line types. An
+opening row in either odds table counts, because only the opener book writes one. Props
+count only for a game with lineup rows. A game the loader already tried is skipped: one
+of its rows was fetched or seen again two or more days after the game date. So each game
+gets two nightly tries. `--reload` picks every Final game. For each game
+it calls `load_odds`: the game markets, then the props of every player in
 `raw.game_lineups` (a pitcher gets the pitcher markets, every other player the batter
 markets).
 
 | Option | What it does |
 |---|---|
-| `--seasons`, `--game-dates`, `--max-games` | Select the games. |
+| `--seasons`, `--max-games` | Select the games. |
+| `--reload` | Load every Final game of the seasons, not only the games missing odds. |
 | `--line-types` | Any of `opening`, `current`, `closing`; default `opening closing`. |
 | `--prop-stats`, `--game-markets`, `--no-props`, `--no-game-odds` | Narrow the markets. An unknown value stops the run before any fetch. |
 | `--book NAME` | Load one book's rows (a smoke run or a top-up). |
 | `--done-file PATH` | Skip the games the file lists; add each complete game to it. |
-| `--skip-loaded-since TS` | Skip every game that already holds this kind of run's rows since that instant. |
 | `--retries N`, `--retry-wait S` | The vendor-read retry policy (default 3 retries, the first after 5 s). |
 
 | Name | What it does | Called from |
 |---|---|---|
 | `run(args)` | The load: build the source, select the games, load each, then log the guard's summary, the rows per book and the incomplete games. Returns the exit code. | `main` |
-| `_fetch_final_games` | The Final games of the seasons, with the resume and date filters. | `run` |
+| `_missing_odds_clause` | The SQL that keeps only the games missing odds, for the run's line types, tables, book and markets. | `run` |
+| `_fetch_final_games` | The Final games of the seasons, with the missing-odds filter. | `run` |
 | `_fetch_lineup_roles` | Each lineup player's role from `raw.game_lineups`. | `run` |
 | `_incomplete_reasons` / `_incomplete_summary` | A game is incomplete when the provider's `read_failures` grew or the loader caught a fetch or write failure; one line names up to 20 such games. | `run` |
 | `read_done_file` / `append_done` | Read and append the done-file, forced to disk. | `run`; `scripts/probes/backfill_start_positions.py` |
@@ -356,7 +362,7 @@ comparison skip that side.
 | Caller | What it uses |
 |---|---|
 | [`pipeline/live/ingestion/`](../../pipeline/live/ingestion/) | `odds_source`, `game_offers`, `prop_offers`, `write_offers`, the two closing stamps, `RefusalTally`, the prop roles ([pipeline-ingest.md](pipeline-ingest.md#the-live-service)) |
-| [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | `python -m betting.historical_loader` for the last two days' games |
+| [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | `python -m betting.historical_loader` for the games missing odds, last season and this one |
 | [`api/routes/betting.py`](../../api/routes/betting.py) | `/edges` and `/signals`; `BetSignalConfig`, `bet_signals_from_edges` |
 | [`api/routes/betting_pricing.py`](../../api/routes/betting_pricing.py) | Every report builder, the de-vigs and the margin rule |
 | [`api/routes/betting_stored_odds.py`](../../api/routes/betting_stored_odds.py) | `check_row`, the book helpers, `reference_margin_from_prices`, `american_to_decimal` |

@@ -135,15 +135,15 @@ Run: the scheduler at 08:00 UTC, through `with_mark.sh nightly-rebuild` and `wit
 
 ### `operations/jobs/nightly_closing_lines.sh`
 
-[Source](../../operations/jobs/nightly_closing_lines.sh) · 64 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_closing_lines.sh) · 38 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
 
-The nightly odds pass. It runs the historical odds loader,
-`python -m betting.historical_loader --line-types opening closing`, over the games of
-yesterday and the day before. The dates are UTC dates, so the pass does not miss a late
-West Coast game. A closing row is the last price a book posted before first pitch. The
-live service stamps each game's closing rows at first pitch; this pass is the fallback
-and the reconciliation. The live service stores no opening row, so this pass is the only
-source of an opening line: BettingPros returns each market's opener with every offer.
+The nightly odds pass. It runs the historical odds loader over last season and this one:
+`python -m betting.historical_loader --seasons <last year> <this year>`. The loader picks
+only the Final games missing an opening or a closing row, and tries each game on two
+nights at most, so a loaded game costs nothing.
+The live service stores each game's closing line at first pitch, but no opening line, and
+it misses every game while it is down. This pass fills both gaps. BettingPros returns
+each market's opener with every offer, so an opening line can be loaded at any time.
 Without `ODDS_API_KEY`, the script exits 1 before it loads anything.
 
 Run: the scheduler at 10:30 UTC, inside the running `app` container (`sh /app/operations/jobs/nightly_closing_lines.sh`). The `app` container reads `ODDS_API_KEY` from `.env`. The loader is on [the betting page](betting.md#bettinghistorical_loaderpy).

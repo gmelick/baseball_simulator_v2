@@ -19,8 +19,6 @@ These tests pin the loader half of the fix:
   * a fetch or a write the loader itself caught leaves the game incomplete too;
   * the loader drops the provider's stored failed lookups before each game, so
     a player whose read failed in one game is read again in the next;
-  * a ``--skip-loaded-since`` run says that it skips an incomplete game with
-    rows;
   * a clean game is listed and a clean run exits 0.
 
 No network and no database: the real BettingPros provider reads game 746437's
@@ -301,11 +299,14 @@ class TestIncompleteGames:
         ]
         assert len(per_game) == 1
         assert "(failed vendor reads: 2)" in per_game[0]
-        assert "stays off the done-list, so the next run loads it again" in per_game[0]
+        assert (
+            "stays off the done-list, so a --reload run with this done-file loads it"
+            in (per_game[0])
+        )
         summary = warnings[-1].getMessage()
         assert summary.startswith("incomplete games: 1 ")
         assert "746002;" in summary
-        assert "the next run loads them again" in summary
+        assert "a --reload run with this done-file loads them" in summary
         assert "(1 incomplete)" in caplog.text
 
     @pytest.mark.asyncio
@@ -361,7 +362,7 @@ class TestIncompleteGames:
         assert "the run lists it at the end" in text
         assert "incomplete games: 2 (a vendor read failed after its retries, or a fetch" in text
         assert "): 746001, 746003;" in text
-        assert "this run keeps no done-file" in text
+        assert "re-run with --reload and --done-file to fill them" in text
 
     @pytest.mark.asyncio
     async def test_a_fetch_error_the_loader_caught_leaves_the_game_incomplete(
@@ -406,27 +407,6 @@ class TestIncompleteGames:
         _wire(monkeypatch, provider, [746001, 746002])
         assert await loader.run(loader.parse_args(_args())) == 0
         assert provider.calls == ["forget", "odds 746001", "forget", "odds 746002"]
-
-    @pytest.mark.asyncio
-    async def test_a_skip_loaded_since_run_says_it_skips_incomplete_games_with_rows(
-        self, monkeypatch, tmp_path, caplog
-    ) -> None:
-        """The resume SQL drops a game that holds rows before the done-file is read,
-        so the next --skip-loaded-since run would skip an incomplete game with rows.
-        The run warns at the start and the summary says how to fill the games."""
-        provider = _CountingProvider(fail_game_odds={746002: 1})
-        _wire(monkeypatch, provider, [746001, 746002])
-        done = tmp_path / "load.done"
-        caplog.set_level(logging.INFO, logger="betting.historical_loader")
-        argv = _args("--done-file", str(done), "--skip-loaded-since", "2026-09-28T10:00:00+00:00")
-        assert await loader.run(loader.parse_args(argv)) == loader.EXIT_INCOMPLETE
-        assert "--skip-loaded-since also skips a game an earlier run left incomplete" in (
-            caplog.text
-        )
-        summary = [r for r in caplog.records if r.levelno == logging.WARNING][-1].getMessage()
-        assert summary.startswith("incomplete games: 1 ")
-        assert "re-run without it (with --done-file) to fill them" in summary
-        assert "so the next run loads them again" not in summary
 
 
 # ===========================================================================
