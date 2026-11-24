@@ -1,41 +1,25 @@
-"""
-venue_backfill_job.py
-=====================
-Backfill NULL venue_id rows on raw.games.
+"""Fill the NULL ``venue_id`` of ``raw.games`` rows from the MLB schedule.
 
-Why this job exists
--------------------
 The live ingestion pipeline (``LiveIngestionPipeline._upsert_game_record``)
-inserts ``raw.games`` rows from the schedule API as soon as a game appears on
-the slate.  For some games the schedule response does not yet include a venue
-(early international/spring training schedule entries), so the column is
-written as NULL (the column is nullable, so the row is kept rather than
-dropped on a foreign-key violation against raw.venues).
+inserts a ``raw.games`` row as soon as a game appears on the schedule. Some
+early entries (international and spring-training games) have no venue yet. The
+pipeline writes NULL, so the foreign key on ``raw.venues`` does not drop the
+row. This job fills the venue once the MLB Stats API publishes it.
 
-Once the MLB API publishes the venue assignment, this job picks the row up
-and fills it.
+THE FLOW
+--------
+1. Read the games with a NULL ``venue_id`` from ``raw.games``.
+2. Ask the schedule (``hydrate=venue``) for each game's venue.
+3. Write the venue when the answer has one and ``raw.venues`` holds it.
+4. Record the run and its counts in ``raw.pipeline_run_log``.
 
-What it does
-------------
-1. SELECT game_pk, game_date FROM raw.games WHERE venue_id IS NULL.
-2. For each game, GET ``/api/v1/schedule?gamePk=<id>&hydrate=venue``.
-3. If a venue id is present in the response, UPDATE the row.
-4. Logs a raw.pipeline_run_log entry with games_processed and a per-game
-   summary in metadata.
+A second run changes nothing for a game already filled.
 
-Idempotent: running it twice in a row is a no-op for any game already filled.
-
-Usage
+USAGE
 -----
-    # Standalone:
     python -m ingest.venues.backfill_venues [--dsn DSN] [--dry-run]
 
-    # APScheduler (default cadence: every 6 hours):
-    from ingest.venues.backfill_venues import schedule_venue_backfill_job
-    schedule_venue_backfill_job(dsn=dsn, scheduler=scheduler)
-
-    # Cron (system-level, every 6 hours):
-    0 */6 * * * cd /path/to/project && python -m ingest.venues.backfill_venues
+``schedule_venue_backfill_job`` registers the job with an APScheduler instance.
 """
 
 from __future__ import annotations
@@ -70,9 +54,7 @@ DEFAULT_INTERVAL_HOURS = 6
 
 
 class VenueBackfillJob:
-    """
-    Idempotent backfill of NULL venue_id rows on raw.games.
-    """
+    """Fill the NULL ``venue_id`` of ``raw.games`` rows. A second run changes nothing."""
 
     def __init__(
         self,
@@ -101,10 +83,10 @@ class VenueBackfillJob:
     # ------------------------------------------------------------------
 
     async def run(self) -> dict[str, int]:
-        """
-        Execute the backfill pass.
+        """Run one backfill pass. Return its counts, which also go to ``raw.pipeline_run_log``.
 
-        Returns a summary dict logged to raw.pipeline_run_log.
+        The counts are the games processed, the venues filled, the venues still
+        unknown and the HTTP errors. A dry run writes no log row.
         """
         await self._connect()
         summary = {
@@ -168,6 +150,7 @@ class VenueBackfillJob:
     # ------------------------------------------------------------------
 
     async def _fetch_null_venue_games(self) -> list[asyncpg.Record]:
+        """Return the games with no venue, newest first."""
         assert self._db is not None
         return await self._db.fetch(
             """
@@ -179,13 +162,13 @@ class VenueBackfillJob:
         )
 
     async def _update_venue(self, game_pk: int, venue_id: int) -> None:
-        """
-        Backfill the venue.  No-op if the venue row doesn't exist in raw.venues
-        (the FK would fail) — caller should ensure raw.venues is loaded first.
+        """Write the venue onto the game.
+
+        A venue absent from ``raw.venues`` gets a warning and no write: the
+        warning tells the operator more than a ``ForeignKeyViolationError``.
+        Load ``raw.venues`` first.
         """
         assert self._db is not None
-        # Pre-check FK target so we surface a useful warning instead of
-        # raising the asyncpg ForeignKeyViolationError up the stack.
         venue_exists = await self._db.fetchval(
             """
             SELECT EXISTS (
@@ -217,6 +200,7 @@ class VenueBackfillJob:
         )
 
     async def _start_log_row(self) -> int | None:
+        """Insert the run's ``running`` log row. Return its id, or None on a dry run."""
         if self._dry_run or self._db is None:
             return None
         row = await self._db.fetchrow(
@@ -230,6 +214,7 @@ class VenueBackfillJob:
         return row["id"] if row else None
 
     async def _finish_log_row(self, run_id: int, summary: dict[str, int]) -> None:
+        """Close the run's log row: ``success``, or ``partial`` after an HTTP error."""
         if self._dry_run or self._db is None:
             return
         status = "success" if summary["http_errors"] == 0 else "partial"
@@ -259,6 +244,7 @@ class VenueBackfillJob:
         game_pk: int,
         game_date: date,
     ) -> int | None:
+        """Return the venue id the schedule gives ``game_pk``, or None when it has none yet."""
         params = {
             "gamePk": str(game_pk),
             "sportId": "1",
@@ -289,11 +275,10 @@ def schedule_venue_backfill_job(
     scheduler: Any,
     interval_hours: int = DEFAULT_INTERVAL_HOURS,
 ) -> None:
-    """
-    Register the backfill job with an APScheduler instance.
+    """Register the backfill job with an APScheduler instance, every ``interval_hours``.
 
-    Cadence default of every 6 hours catches venue assignments within a
-    quarter of a day of the MLB API publishing them, with negligible API load.
+    The default of six hours fills a venue within a quarter of a day of its
+    publication, at a negligible load on the API.
     """
 
     async def _runner() -> None:

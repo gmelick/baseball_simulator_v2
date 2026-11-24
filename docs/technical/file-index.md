@@ -1,4 +1,4 @@
-<!-- file-index-key: 9f1250c580df15c4 -->
+<!-- file-index-key: d1cf5e4f86764b86 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -17,7 +17,7 @@ Every source and config file in the repository, in the order of the [code review
 | [4. The sampler's data: the bundle](#stage-4) | 15 | 4,768 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
-| [7. Getting data in: the raw tables](#stage-7) | 64 | 15,276 |
+| [7. Getting data in: the raw tables](#stage-7) | 64 | 14,849 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 8 | 4,858 |
 | [10. The API](#stage-10) | 41 | 13,766 |
@@ -26,7 +26,7 @@ Every source and config file in the repository, in the order of the [code review
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,028 |
 | [14. Measurement and maintenance tools](#stage-14) | 75 | 37,478 |
 | [15. Tests and CI](#stage-15) | 317 | 124,673 |
-| **All** | **783** | **282,589** |
+| **All** | **783** | **282,162** |
 
 <a id="stage-1"></a>
 
@@ -217,31 +217,31 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`db/schemas/01_postgres_schema.sql`](../../db/schemas/01_postgres_schema.sql) | 1,352 | BASEBALL SIMULATION SYSTEM — PostgreSQL Schema | — |
-| [`ingest/statcast_events.py`](../../ingest/statcast_events.py) | 493 | The Statcast `events` out-label vocabulary. | 6: `test_out_label.py`, `test_steal_labels.py`, `test_transition_pool.py` +3 |
-| [`ingest/mlb/client.py`](../../ingest/mlb/client.py) | 259 | The one MLB Stats API client: the endpoint addresses, one GET with a retry, one async reader. | 4: `test_mlb_client.py`, `test_etl_hardening.py`, `test_savant_loader.py` +1 |
-| [`ingest/mlb/schedule.py`](../../ingest/mlb/schedule.py) | 330 | The league schedule client (the live slate, SIM-519). | 2: `test_schedule_client.py`, `test_odds_matcher.py` |
-| [`ingest/mlb/game_feed.py`](../../ingest/mlb/game_feed.py) | 680 | The league's per-game live feed → the slate card's detail (the live slate, SIM-519). | 3: `test_game_feed.py`, `test_game_page_whatif.py`, `test_starting_position.py` |
-| [`ingest/games/load_games.py`](../../ingest/games/load_games.py) | 1,504 | The historical loader: MLB Stats API games into Postgres `raw.*`. | 12: `test_etl_flow.py`, `test_mlb_client.py`, `test_play_events.py` +9 |
-| [`ingest/games/base.py`](../../ingest/games/base.py) | 116 | The state every part of the historical loader shares. | 1: `test_etl_connection_pool.py` |
-| [`ingest/games/date_windows.py`](../../ingest/games/date_windows.py) | 51 | The schedule helpers: the date windows of a range load, the final-game filter and the circuit-breaker limit. | 3: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_etl_schedule_final_filter.py` |
-| [`ingest/games/game_values.py`](../../ingest/games/game_values.py) | 168 | The game, lineup and player values the loader reads from the feed: the manager, the height, the wind, the game status and the starting lineup rows. | 4: `test_etl_hardening.py`, `test_starting_position.py`, `test_etl_starting_lineups.py` +1 |
-| [`ingest/games/pitch_rows.py`](../../ingest/games/pitch_rows.py) | 427 | The pitch row: the required fields, the feed-to-column map, the row builder and the two-tier validation. | 4: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_release_speed_bounds.py` +1 |
-| [`ingest/games/reference_rows.py`](../../ingest/games/reference_rows.py) | 413 | The reference rows a game needs before its pitches: the teams, the managers, the game row and the starting lineups. | — |
-| [`ingest/games/venues.py`](../../ingest/games/venues.py) | 95 | The venue of a game, read from the feed, with the overrides for the neutral-site games that ship without one. | 1: `test_venue_resolution.py` |
-| [`ingest/savant/page_json.py`](../../ingest/savant/page_json.py) | 46 | The parser for the JSON that Baseball Savant embeds in its HTML pages. | 1: `test_etl_hardening.py` |
-| [`ingest/games/write_rows.py`](../../ingest/games/write_rows.py) | 572 | The loader's writes: the pitch rows, the play events, the error ledger, the ingest outcome and the freshness report. | 2: `test_etl_reload_game.py`, `test_etl_historical_loader.py` |
-| [`ingest/games/play_events.py`](../../ingest/games/play_events.py) | 403 | Extract the non-pitch play events `raw.pitches` cannot represent. | 1: `test_play_events.py` |
-| [`ingest/games/reload_games.py`](../../ingest/games/reload_games.py) | 368 | reload_games.py — corrective reload for SPECIFIC games, or for every gap it can find. | — |
-| [`ingest/games/resumable_sweep.py`](../../ingest/games/resumable_sweep.py) | 289 | resumable_sweep.py — drive the corrective reload sweep to completion despite a stochastic interpreter crash. | 1: `test_sweep_streaming.py` |
-| [`ingest/load_boxscores.py`](../../ingest/load_boxscores.py) | 751 | The official per-player box score as the prop ground truth (SIM-545, part of the unpriced prop markets, SIM-421). | 5: `test_mlb_client.py`, `test_boxscore_ingest.py`, `test_boxscore_reader.py` +2 |
-| [`ingest/games/coercion.py`](../../ingest/games/coercion.py) | 62 | MLB Baseball Simulation Platform | 1: `test_etl_historical_loader.py` |
-| [`ingest/savant/load_leaderboards.py`](../../ingest/savant/load_leaderboards.py) | 459 | One loader for every Baseball Savant leaderboard in `savant_boards.BOARDS`. | 4: `test_savant_loader.py`, `test_lead_distance.py`, `test_point_in_time_batter.py` +1 |
-| [`ingest/savant/boards.py`](../../ingest/savant/boards.py) | 554 | The declarative registry of Baseball Savant leaderboards this platform ingests. | 6: `test_savant_oaa_jump_boards.py`, `test_savant_loader.py`, `test_lead_distance.py` +3 |
-| [`ingest/savant/load_pitch_tracking.py`](../../ingest/savant/load_pitch_tracking.py) | 276 | The per-PITCH tracking measurements, loaded one day at a time. | 1: `test_point_in_time_batter.py` |
-| [`ingest/savant/load_sprint_speed.py`](../../ingest/savant/load_sprint_speed.py) | 226 | MLB Baseball Simulation Platform | 1: `test_savant_loader.py` |
-| [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 154 | The MLB Stats API's PUBLISHED fence distances, the floor under a new park's fence line (the fence certification plan, SIM-478, `docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`, §4 and §5.1). | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
-| [`ingest/venues/backfill_venues.py`](../../ingest/venues/backfill_venues.py) | 347 | Backfill NULL venue_id rows on raw.games. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
-| [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 608 | Per-game bullpen availability ingestion. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
+| [`ingest/statcast_events.py`](../../ingest/statcast_events.py) | 466 | The Statcast code sets and their SQL: the outs, the pitch results, the runners and the steals. | 6: `test_out_label.py`, `test_steal_labels.py`, `test_transition_pool.py` +3 |
+| [`ingest/mlb/client.py`](../../ingest/mlb/client.py) | 261 | The one MLB Stats API client: the endpoint addresses, one GET with a retry, one async reader. | 4: `test_mlb_client.py`, `test_etl_hardening.py`, `test_savant_loader.py` +1 |
+| [`ingest/mlb/schedule.py`](../../ingest/mlb/schedule.py) | 335 | Parse the MLB schedule: which games exist on a date, when they start and their card state. | 2: `test_schedule_client.py`, `test_odds_matcher.py` |
+| [`ingest/mlb/game_feed.py`](../../ingest/mlb/game_feed.py) | 688 | Parse the MLB per-game live feed into the slate card's detail and the what-if's start state. | 3: `test_game_feed.py`, `test_game_page_whatif.py`, `test_starting_position.py` |
+| [`ingest/games/load_games.py`](../../ingest/games/load_games.py) | 1,415 | The historical loader: it loads MLB Stats API games into the Postgres `raw.*` tables. | 12: `test_etl_flow.py`, `test_mlb_client.py`, `test_play_events.py` +9 |
+| [`ingest/games/base.py`](../../ingest/games/base.py) | 110 | The state every part of the historical loader shares: the DSN, the connection pool and the table probes. | 1: `test_etl_connection_pool.py` |
+| [`ingest/games/date_windows.py`](../../ingest/games/date_windows.py) | 43 | The schedule helpers: the date windows of a range load, the Final-game filter and the limit on games that fail in a row. | 3: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_etl_schedule_final_filter.py` |
+| [`ingest/games/game_values.py`](../../ingest/games/game_values.py) | 165 | The game, lineup and player values the loader reads from the feed: the manager, the height, the wind, the game status and the starting lineup rows. | 4: `test_etl_hardening.py`, `test_starting_position.py`, `test_etl_starting_lineups.py` +1 |
+| [`ingest/games/pitch_rows.py`](../../ingest/games/pitch_rows.py) | 409 | Build and validate a `raw.pitches` row: the required columns, the name map, the row builder and the two-tier check. | 4: `test_etl_hardening.py`, `test_etl_reload_game.py`, `test_release_speed_bounds.py` +1 |
+| [`ingest/games/reference_rows.py`](../../ingest/games/reference_rows.py) | 405 | Write the reference rows a game needs before its pitches: the teams, the managers, the game row and the starting lineups. | — |
+| [`ingest/games/venues.py`](../../ingest/games/venues.py) | 84 | Resolve the venue of a game: from the feed, or from the overrides for the neutral-site games whose feed has none. | 1: `test_venue_resolution.py` |
+| [`ingest/savant/page_json.py`](../../ingest/savant/page_json.py) | 46 | Parse the JSON literal that Baseball Savant embeds in an HTML page. | 1: `test_etl_hardening.py` |
+| [`ingest/games/write_rows.py`](../../ingest/games/write_rows.py) | 528 | Write a game's rows: the pitch rows, the play events, the error ledger, the ingest outcome and the freshness record. | 2: `test_etl_reload_game.py`, `test_etl_historical_loader.py` |
+| [`ingest/games/play_events.py`](../../ingest/games/play_events.py) | 365 | Extract the non-pitch play events that `raw.pitches` cannot hold. | 1: `test_play_events.py` |
+| [`ingest/games/reload_games.py`](../../ingest/games/reload_games.py) | 366 | Reload specific games, or every gap the script finds in the loaded games. | — |
+| [`ingest/games/resumable_sweep.py`](../../ingest/games/resumable_sweep.py) | 257 | Run the corrective reload sweep to its end, and restart it after an interpreter crash. | 1: `test_sweep_streaming.py` |
+| [`ingest/load_boxscores.py`](../../ingest/load_boxscores.py) | 747 | Load each game's official box score into `raw.game_player_stats` and `raw.game_bullpen`. | 5: `test_mlb_client.py`, `test_boxscore_ingest.py`, `test_boxscore_reader.py` +2 |
+| [`ingest/games/coercion.py`](../../ingest/games/coercion.py) | 52 | Convert feed values to typed values, with an empty or missing value as `None`. | 1: `test_etl_historical_loader.py` |
+| [`ingest/savant/load_leaderboards.py`](../../ingest/savant/load_leaderboards.py) | 457 | Load the Baseball Savant leaderboards of `ingest.savant.boards` into their raw tables. | 4: `test_savant_loader.py`, `test_lead_distance.py`, `test_point_in_time_batter.py` +1 |
+| [`ingest/savant/boards.py`](../../ingest/savant/boards.py) | 517 | The registry of the Baseball Savant leaderboards the platform loads, with each board's traps. | 6: `test_savant_oaa_jump_boards.py`, `test_savant_loader.py`, `test_lead_distance.py` +3 |
+| [`ingest/savant/load_pitch_tracking.py`](../../ingest/savant/load_pitch_tracking.py) | 268 | Load Savant's per-pitch tracking measurements, one day per request. | 1: `test_point_in_time_batter.py` |
+| [`ingest/savant/load_sprint_speed.py`](../../ingest/savant/load_sprint_speed.py) | 194 | Load Savant's sprint speed leaderboard into `raw.sprint_speed`, one row per player-season. | 1: `test_savant_loader.py` |
+| [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 150 | Fetch each park's published fence distances from the MLB Stats API for the fence prior. | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
+| [`ingest/venues/backfill_venues.py`](../../ingest/venues/backfill_venues.py) | 332 | Fill the NULL `venue_id` of `raw.games` rows from the MLB schedule. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
+| [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 564 | Record which pitchers each team can use in each game, in `raw.game_bullpen_availability`. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
 | [`ingest/__init__.py`](../../ingest/__init__.py) | 13 | Get the real data into the Postgres `raw.*` tables: the first step of the program. | 3: `test_boxscore_ingest.py`, `test_game_bullpen_listing.py`, `test_pitch_result_vocabulary.py` |
 | [`pipeline/bullpen_usage.py`](../../pipeline/bullpen_usage.py) | 303 | The pen's facts from the official box score and the MLB API's per-game bullpen listing, for the pitching-change draw and the reliever draw. | 1: `test_bullpen_usage.py` |
 | [`db/dsn.py`](../../db/dsn.py) | 57 | db/dsn.py — the one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |

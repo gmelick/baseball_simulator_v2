@@ -1,30 +1,19 @@
-"""
-ingest/venues/load_venue_dimensions.py
-====================================
-The MLB Stats API's PUBLISHED fence distances, the floor under a new park's
-fence line (the fence certification plan, SIM-478,
-``docs/audit/2026-09-20-sim478-480-fence-certification-plan.md``, §4 and §5.1).
+"""Fetch each park's published fence distances from the MLB Stats API for the fence prior.
 
-The venues call (``VENUES_URL``, ``hydrate=fieldInfo``) answers with every
-venue of the season and its ``fieldInfo``: the five published distances
-(``leftLine``, ``leftCenter``, ``center``, ``rightCenter``, ``rightLine``),
-the two off-alley points (``left``, ``right``) some parks publish, the roof
-and the turf. The geometry builder (``pipeline/batch/artifacts/park_geometry.py``,
-``build_park_geometry``) interpolates the five distances at a sector's
-midpoint angle and adds the league's offset to build the PRIOR line of a
-sector the pool's own balls cannot support.
+The venues call (``VENUES_URL``, ``hydrate=fieldInfo``) returns every venue of a
+season with its ``fieldInfo``: the five published distances (``leftLine``,
+``leftCenter``, ``center``, ``rightCenter``, ``rightLine``), the two off-alley
+points (``left``, ``right``) some parks publish, the roof and the turf.
+
+The geometry builder (``build_park_geometry`` in
+``pipeline/batch/artifacts/park_geometry.py``) interpolates the five distances
+at a sector's middle angle and adds the league's offset. The result is the
+prior: the fence line of a sector that the pool's own balls cannot support.
 
 The bundle keeps the last answer in ``<out_dir>/venue_dimensions.json``
-(``{"fetched": {season: "ok" | "failed"}, "venues": {venue_id: {...}}}``).
-When the API is down the builder keeps that copy and logs a warning; with no
-copy and no answer the prior is simply absent and the league line stands.
-
-The functions:
-
-* :func:`fetch_venue_dimensions` — one season's answer, over ``urllib``;
-* :func:`write_venue_dimensions` — every season of the window, merged over the
-  existing copy, written to the bundle;
-* :func:`read_venue_dimensions` — the copy, ``{}`` when there is none.
+(``{"fetched": {season: "ok" | "failed"}, "venues": {venue_id: {...}}}``). When
+the API is down, the builder keeps that copy and logs a warning. With no copy
+and no answer, the prior is absent and the league line stands.
 """
 
 from __future__ import annotations
@@ -40,8 +29,9 @@ from ingest.mlb import client as mlb_client
 
 log = logging.getLogger(__name__)
 
-#: The Stats API venues call the design session used (2026-09-20).
+#: The Stats API venues call, with each venue's field dimensions.
 VENUES_URL = mlb_client.VENUES_URL + "?sportId=1&season={season}&hydrate=fieldInfo"
+#: The bundle file that keeps the last answer.
 VENUE_DIMENSIONS_FILE = "venue_dimensions.json"
 
 #: The five published distances the prior interpolates (feet), in field order.
@@ -49,7 +39,7 @@ PUBLISHED_DISTANCES = ("leftLine", "leftCenter", "center", "rightCenter", "right
 
 
 def _as_feet(value: Any) -> float | None:
-    """A published distance as a float, ``None`` when absent or not a number."""
+    """Return a published distance in feet; ``None`` when absent, not a number or not positive."""
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -60,8 +50,11 @@ def _as_feet(value: Any) -> float | None:
 
 
 def _venue_record(raw: dict) -> dict:
-    """One venue's record: the five distances (``None`` when missing), plus
-    the name, the off-alley points and the roof / turf when present."""
+    """Return one venue's record.
+
+    The record holds the name and the five distances (``None`` when missing),
+    plus the off-alley points, the roof and the turf when present.
+    """
     info = raw.get("fieldInfo") or {}
     rec: dict[str, Any] = {"name": raw.get("name")}
     for key in PUBLISHED_DISTANCES:
@@ -77,12 +70,14 @@ def _venue_record(raw: dict) -> dict:
 
 
 def fetch_venue_dimensions(season: int, timeout: float = 30) -> dict[int, dict]:
-    """The published dimensions of every venue of ``season``, keyed by venue
-    id. Raises ``urllib.error.URLError`` (or ``OSError`` / ``ValueError``)
-    when the call fails or the body is not the venues shape, and
-    ``http.client.HTTPException`` (not an ``OSError``: ``IncompleteRead`` on
-    a truncated body, ``BadStatusLine`` on a malformed status) when the
-    answer breaks mid-stream."""
+    """Return the published dimensions of every venue of ``season``, keyed by venue id.
+
+    Raises ``urllib.error.URLError``, ``OSError`` or ``ValueError`` when the
+    call fails or the body is not the venues shape. Raises
+    ``http.client.HTTPException`` when the answer breaks mid-stream: a
+    truncated body or a malformed status line. That exception is not an
+    ``OSError``, so a caller must catch it by name.
+    """
     body = mlb_client.get_json(
         VENUES_URL.format(season=int(season)),
         headers={"User-Agent": "baseball-sim/SIM-478"},
@@ -103,8 +98,7 @@ def fetch_venue_dimensions(season: int, timeout: float = 30) -> dict[int, dict]:
 
 
 def read_venue_dimensions(out_dir: str) -> dict[int, dict]:
-    """The bundle's copy of the published dimensions, keyed by venue id;
-    ``{}`` when the file is absent or unreadable."""
+    """Return the bundle's copy, keyed by venue id; ``{}`` when the file is absent or unreadable."""
     path = os.path.join(out_dir, VENUE_DIMENSIONS_FILE)
     if not os.path.exists(path):
         return {}
@@ -125,10 +119,12 @@ def write_venue_dimensions(
     seasons: list[int],
     fetch: Callable[[int], dict[int, dict]] | None = None,
 ) -> dict[int, dict]:
-    """Fetch every season of the window (a venue's latest season wins), merge
-    the answers over the bundle's existing copy, write the copy and return
-    the venues dict. A failed season keeps the last copy for its venues and
-    logs a warning; no copy and no answer gives ``{}`` and a warning."""
+    """Fetch every season of the window into the bundle's copy. Return the venues.
+
+    The answers merge over the existing copy, and a venue's latest season wins.
+    A failed season keeps the last copy of its venues and logs a warning. With
+    no copy and no answer, the result is ``{}`` and a warning.
+    """
     fetch_fn = fetch if fetch is not None else fetch_venue_dimensions
     venues: dict[int, dict] = read_venue_dimensions(out_dir)
     had_copy = bool(venues)

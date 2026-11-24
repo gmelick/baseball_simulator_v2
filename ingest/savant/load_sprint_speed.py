@@ -1,35 +1,19 @@
-"""
-etl_sprint_speed_loader.py
-==========================
-MLB Baseball Simulation Platform
+"""Load Savant's sprint speed leaderboard into ``raw.sprint_speed``, one row per player-season.
 
-Fetches Baseball Savant's Sprint Speed leaderboard CSV for a given season
-and upserts it into raw.sprint_speed.  One row per player per season.
+The loader keeps these CSV columns and ignores the name, team, age and rank:
 
-Savant CSV columns (as of 2024 leaderboard format):
-    "last_name, first_name"      — combined, comma-separated (quoted field)
-    player_id                    — MLBAM ID, matches raw.players.player_id
-    team_id                      — MLB team ID
-    team                         — team abbreviation
-    age                          — player age
-    competitive_runs             — Savant's sample count (confidence signal)
-    bolts                        — runs with sprint_speed >= 30 ft/s
-    sprint_speed                 — ft/s, Savant's top-2-run average
-    hp_to_1b                     — home-to-first avg (seconds)
-    percent_rank_sprint_speed    — percentile rank (ignored)
+    player_id          the MLBAM id, as in raw.players.player_id
+    sprint_speed       feet per second, Savant's average of the runner's top runs
+    competitive_runs   the number of runs in Savant's sample
+    bolts              the runs at 30 feet per second or faster
+    hp_to_1b           the average time from home to first, in seconds
 
-Usage
+Savant updates the board daily in season. A pull after the last regular-season
+day gives the final numbers.
+
+USAGE
 -----
-    loader = SprintSpeedLoader(dsn="postgresql://user:pass@localhost/baseball")
-    loader.refresh_seasons([2023, 2024, 2025])
-
-    # Or via CLI
-    python etl_sprint_speed_loader.py --seasons 2023 2024 2025
-
-Run cadence
------------
-    - Nightly during the season (Savant updates daily)
-    - Once after the final regular-season day for frozen year-end numbers
+    python -m ingest.savant.load_sprint_speed --seasons 2023 2024 2025
 """
 
 from __future__ import annotations
@@ -57,7 +41,7 @@ _COLUMNS = ("player_id", "season", "sprint_speed", "competitive_runs", "bolts", 
 
 
 class SprintSpeedLoader:
-    """Fetch + upsert Sprint Speed data from Baseball Savant."""
+    """Fetch Savant's sprint speeds and upsert them into ``raw.sprint_speed``."""
 
     UPSERT_SQL = upsert_sql_for("raw.sprint_speed", _COLUMNS, ("player_id", "season"))
 
@@ -69,13 +53,7 @@ class SprintSpeedLoader:
     # ------------------------------------------------------------------
 
     def refresh_seasons(self, seasons: list[int]) -> dict[int, int]:
-        """
-        Fetch each season's CSV and upsert into raw.sprint_speed.
-
-        Returns
-        -------
-        dict mapping season → rows upserted.
-        """
+        """Load each season in one transaction. Return the rows upserted per season."""
         results: dict[int, int] = {}
         conn = psycopg2.connect(self._dsn)
         try:
@@ -99,6 +77,7 @@ class SprintSpeedLoader:
         conn: psycopg2.extensions.connection,
         season: int,
     ) -> int:
+        """Fetch and upsert one season. Return the number of rows upserted."""
         log.info("Fetching Savant sprint_speed CSV for season %d …", season)
         csv_text = self._fetch_csv(season)
         rows = list(self._parse_csv(csv_text, season))
@@ -107,10 +86,6 @@ class SprintSpeedLoader:
             log.warning("Season %d returned zero rows — skipping.", season)
             return 0
 
-        # FK guard — drop rows whose player_id is not yet in raw.players.
-        # These typically appear when Savant publishes a prospect before
-        # the ETL has seen them in a pitch feed.  Safer to skip and log
-        # than to fail the whole batch.
         valid_rows = filter_to_known_players(conn, rows)
         n_skipped = len(rows) - len(valid_rows)
         if n_skipped > 0:
@@ -134,13 +109,11 @@ class SprintSpeedLoader:
     # ------------------------------------------------------------------
 
     def _fetch_csv(self, season: int) -> str:
-        """
-        Hit Savant's sprint_speed endpoint with CSV output.
+        """Return one season's CSV. Raise ``ValueError`` on an empty body.
 
-        min=0 pulls every player who has any competitive runs; downstream
-        consumers filter by competitive_runs >= 10 rather than relying on
-        Savant's variable default threshold. The leaderboard loader's
-        ``fetch_csv`` does the GET; an empty body raises ``ValueError``.
+        ``min=0`` asks for every runner; Savant still applies its own floor of
+        5 runs. The table keeps ``competitive_runs``, so a reader can set its
+        own minimum.
         """
         params = {
             "year": str(season),
@@ -159,13 +132,9 @@ class SprintSpeedLoader:
     # ------------------------------------------------------------------
 
     def _parse_csv(self, csv_text: str, season: int) -> Iterator[dict[str, Any]]:
-        """
-        Yield one upsert-ready dict per row.
+        """Yield one upsert payload per row with a player id, a speed and a run count.
 
-        Savant's CSV puts "last_name, first_name" in a single quoted field.
-        Python's csv module handles that correctly out of the box. We don't
-        actually need the name columns here (player_id is the key) so we
-        ignore them.
+        Raise ``ValueError`` when the CSV lacks one of those columns.
         """
         reader = csv.DictReader(io.StringIO(csv_text))
         required = {"player_id", "sprint_speed", "competitive_runs"}
@@ -181,7 +150,6 @@ class SprintSpeedLoader:
             sprint_speed = to_float(raw.get("sprint_speed"))
             comp_runs = to_int(raw.get("competitive_runs"))
 
-            # Hard skip: no player_id or no measurement at all.
             if player_id is None or sprint_speed is None or comp_runs is None:
                 continue
 

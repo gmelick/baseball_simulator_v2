@@ -1,52 +1,45 @@
-"""
-reload_games.py — corrective reload for SPECIFIC games, or for every gap it can find.
+"""Reload specific games, or every gap the script finds in the loaded games.
 
-WHY THIS EXISTS
----------------
-After a full sweep, "a few games failed" is not a self-describing state. Three very
-different things look similar in the logs, and only one of them needs a reload:
+After a full sweep, "a few games failed" can mean three different things, and
+only two of them need a reload:
 
-  A. STALE      — rows exist in ``raw.pitches`` but there is NO ``raw.etl_game_ingest``
-                  row. The sweep never actually loaded this game, so its rows are
-                  left over from an older ingest and still carry the pre-SIM-440
-                  parser bugs (``isOut`` read from the wrong dict → baserunner-out
-                  flags all FALSE; ``rbi`` from the wrong level → zero RBIs;
-                  4x-inflated substitution flags; switch-hitter spray angles NULL).
-                  **This is the dangerous case: it looks loaded and is not.**
-  B. FAILED     — a ledger row whose outcome is not ``loaded`` for a game whose
-                  status IS ``Final``. A real failure. Needs a reload.
-  C. NOT PLAYED — a ledger row with outcome ``empty`` for a game whose status is
-                  ``Cancelled``/``Postponed``. Zero pitches is the CORRECT answer;
-                  the ``empty`` outcome is the SIM-441 terminal marker that stops it
-                  being retried nightly forever. **Reloading these fixes nothing.**
+  A. STALE       rows in ``raw.pitches`` but NO ``raw.etl_game_ingest`` row. The
+                 sweep never loaded the game, so its rows come from an older
+                 parser. **This case looks loaded and is not.**
+  B. FAILED      a ledger row whose outcome is not ``loaded``, for a game whose
+                 status IS ``Final``. A real failure; it needs a reload.
+  C. NOT PLAYED  a ledger row with outcome ``empty`` for a ``Cancelled`` or
+                 ``Postponed`` game. Zero pitches is the CORRECT answer, and the
+                 ``empty`` outcome stops the nightly run from retrying the game.
+                 **A reload fixes nothing here.**
 
-This script separates them, reloads A and B, and reports C so you can see it was
-considered rather than missed.
+The script also finds a Final game with neither pitch rows nor a ledger row
+(NEVER LOADED). It reloads A, B and those games, and it lists C, so you can see
+that it considered them.
 
-Class A is what a resumable sweep can silently leave behind: ``_dispatch_game``
-swallows per-game errors by design, so a wrapper that records progress on "the
-dispatcher returned" marks failures as done. That is fixed in
-``resumable_sweep.py``, but any game already lost that way needs this script.
+Class A is what a sweep leaves behind when it records a game as done because
+the dispatcher returned: ``_dispatch_game`` contains each game's failure.
 
 SAFETY
 ------
-``reload_game`` is DELETE + re-INSERT inside ONE transaction, and the shrink guard
-refuses to replace a game with fewer rows than it removed (``ReloadShrinkError``)
-rather than silently dropping data. So this is safe to interrupt and safe to re-run.
-If a game legitimately should shrink, pass ``--allow-shrink`` — deliberately not the
-default, because "the new parse produced fewer rows" is usually a bug, not an intent.
+``reload_game`` deletes and re-inserts a game in ONE transaction. The shrink guard
+refuses to replace a game with fewer rows than it removed (``ReloadShrinkError``).
+So the script is safe to interrupt and to rerun. Pass ``--allow-shrink`` when a
+game truly should shrink; it is not the default, because a smaller parse is
+usually a bug.
 
 USAGE
 -----
-    python ingest/games/reload_games.py --dry-run          # what needs reloading, and why
-    python ingest/games/reload_games.py                    # reload every discovered gap
+    python ingest/games/reload_games.py --dry-run          # what needs a reload, and why
+    python ingest/games/reload_games.py                    # reload every gap found
     python ingest/games/reload_games.py --game-pk 529440 632924
-    python ingest/games/reload_games.py --season 2021      # restrict discovery to one season
-    python ingest/games/reload_games.py --allow-shrink     # permit a smaller re-parse
+    python ingest/games/reload_games.py --season 2021      # look in one season only
+    python ingest/games/reload_games.py --allow-shrink     # allow a smaller parse
+    python ingest/games/reload_games.py --refresh-venues   # re-fetch the blank venue names
 
-Verification is built in: each game reports rows-before → rows-after, and the run
-ends with a per-season ledger-vs-pitches reconciliation, which is the check that
-surfaced the stale games in the first place.
+The script reads the DSN from ``.env`` and points it at the host's published
+port. Each game reports its rows before and after the reload. The run ends with
+a per-season check of the ledger against ``raw.pitches``, which exposes class A.
 """
 
 from __future__ import annotations
@@ -61,7 +54,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-# Rows exist but no ledger row -> never actually loaded by the sweep (class A).
+# Rows but no ledger row -> the sweep never loaded the game (class A).
 _Q_STALE = """
     SELECT p.season, p.game_pk, count(*) AS rows
     FROM raw.pitches p
@@ -89,7 +82,7 @@ _Q_NOT_PLAYED = """
     ORDER BY 1, 2
 """
 
-# A Final game with neither pitch rows nor a ledger row -> never touched at all.
+# A Final game with neither pitch rows nor a ledger row -> never loaded.
 _Q_NEVER_LOADED = """
     SELECT g.season, g.game_pk
     FROM raw.games g
@@ -99,6 +92,7 @@ _Q_NEVER_LOADED = """
     ORDER BY 1, 2
 """
 
+# Per season: the ledger's loaded games against the distinct games in raw.pitches.
 _Q_RECONCILE = """
     SELECT coalesce(l.season, p.season) AS season,
            coalesce(l.n_loaded, 0)      AS ledger_loaded,
@@ -113,6 +107,7 @@ _Q_RECONCILE = """
 
 
 def _load_env() -> dict[str, str]:
+    """Read the ``.env`` file at the repository root into a dict."""
     env: dict[str, str] = {}
     envfile = REPO / ".env"
     if not envfile.exists():
@@ -126,7 +121,7 @@ def _load_env() -> dict[str, str]:
 
 
 def _host_dsn(env: dict[str, str]) -> str:
-    """Rewrite the in-container DSN so the host reaches the published port."""
+    """Point the container's DSN at the database port the host publishes."""
     dsn = env.get("BASEBALL_DB_DSN")
     if not dsn:
         raise SystemExit("BASEBALL_DB_DSN not found in .env")
@@ -153,7 +148,7 @@ def _row_count(dsn: str, game_pk: int) -> int:
 
 
 def _discover(dsn: str, season: int | None) -> tuple[list[tuple[int, int, str]], list[tuple]]:
-    """Return (targets, not_played). Each target is (season, game_pk, reason)."""
+    """Return ``(targets, not_played)``; each target is ``(season, game_pk, reason)``."""
     targets: list[tuple[int, int, str]] = []
 
     for s, pk, rows in _fetch(dsn, _Q_STALE):
@@ -179,6 +174,7 @@ def _discover(dsn: str, season: int | None) -> tuple[list[tuple[int, int, str]],
 
 
 def main() -> int:
+    """Run the command line; return the exit code (1 when a game still fails)."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -251,8 +247,8 @@ def main() -> int:
         return 0
 
     os.environ["BASEBALL_DB_DSN"] = dsn
-    # Imported here, after the DSN is in the environment: the loader resolves it
-    # at construction, and this keeps --dry-run from touching the loader at all.
+    # Imported here, after the DSN is in the environment: the loader reads it when
+    # it is built, and --dry-run never touches the loader.
     from ingest.games.load_games import HistoricalDataLoader  # noqa: PLC0415
 
     loader = HistoricalDataLoader()
@@ -284,13 +280,12 @@ def main() -> int:
 
 
 def _refresh_venues(dsn: str, *, dry_run: bool) -> int:
-    """Re-fetch every raw.venues row whose venue_name is blank (SIM-447).
+    """Re-fetch every ``raw.venues`` row whose ``venue_name`` is blank.
 
-    The name was written by ``dimensions.get("venu_name_short", " ")`` — a typo, so
-    the key never matched and every row stored a single space. ``venue_name`` is
-    served to the front end (``api/routes/games.py``), so this is user-visible, not
-    cosmetic. The row cannot be deleted and reloaded (raw.pitches holds an FK), so
-    it is re-fetched in place via ``_ensure_venue(..., force=True)``.
+    The front end shows ``venue_name`` (``api/routes/games.py``), so a blank name
+    is visible to users. A venue row cannot be deleted and reloaded, because
+    ``raw.pitches`` references it, so ``_ensure_venue(..., force=True)`` re-fetches
+    it in place. Returns 1 while any name stays blank.
     """
     blank = _fetch(
         dsn,
@@ -345,14 +340,17 @@ def _refresh_venues(dsn: str, *, dry_run: bool) -> int:
 
 
 def _reconcile(dsn: str) -> None:
-    """Ledger vs raw.pitches, per season. A mismatch is the tell for class A."""
+    """Print the ledger against ``raw.pitches``, per season.
+
+    A season with more games in ``raw.pitches`` than in the ledger holds class A
+    (stale) games.
+    """
     print("\n=== reconciliation: ledger 'loaded' vs distinct games in raw.pitches ===")
     print(f"   {'season':<8}{'ledger':>9}{'in pitches':>13}{'rows':>12}   status")
     clean = True
     for season, ledger, in_pitches, rows in _fetch(dsn, _Q_RECONCILE):
-        # A game may legitimately be in the ledger but not in pitches (a cancelled
-        # game loads zero rows). The reverse -- in pitches but not the ledger --
-        # is the unswept/stale case and is never expected.
+        # A game can be in the ledger but not in raw.pitches (a cancelled game
+        # loads zero rows). The reverse is the stale case and is never expected.
         flag = "OK" if in_pitches <= ledger else f"** {in_pitches - ledger} unswept game(s)"
         if in_pitches > ledger:
             clean = False

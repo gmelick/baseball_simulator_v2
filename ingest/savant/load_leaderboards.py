@@ -1,28 +1,19 @@
-"""
-savant_loader.py
-================
-One loader for every Baseball Savant leaderboard in
-``savant_boards.BOARDS``.
+"""Load the Baseball Savant leaderboards of ``ingest.savant.boards`` into their raw tables.
 
-WHAT IT DOES
-------------
-For each requested board and season: fetch the CSV, coerce it, drop rows whose
-player the database has never seen, and upsert into the board's raw table.
+For each board and season, the loader fetches the CSV and coerces it. It drops
+the rows of players the database has never seen, and upserts the rest.
 
-WHAT IT REFUSES TO DO
----------------------
-Write a season it cannot prove it asked for. Savant answers an unrecognised
-season parameter with HTTP 200 and the CURRENT season's rows, so a typo would
-silently write 2026 numbers into a 2023 row and nothing downstream would ever
-notice. Two guards stand against that:
+THE SEASON GUARDS
+-----------------
+Savant answers an unknown season parameter with HTTP 200 and the CURRENT
+season's rows. With no guard, a typo writes the current season's numbers into a
+2023 row, and nothing downstream notices. Two guards stop that:
 
   1. **The probe.** Once per board per run, the loader asks for
-     ``PROBE_SEASON`` — a year with no possible Statcast data. An honoured
-     parameter returns nothing. Anything else raises ``SeasonParamError``.
-  2. **The per-row check.** Where the board returns a season column, every row
-     must carry the season we asked for, or the load raises.
-
-Both are cheap. Neither is optional.
+     ``PROBE_SEASON``, a year with no Statcast data. An honoured parameter
+     returns no rows. Any row raises ``SeasonParamError``.
+  2. **The per-row check.** On a board with a season column, every row must
+     carry the season the loader asked for, or the load raises.
 
 USAGE
 -----
@@ -30,7 +21,8 @@ USAGE
     python -m ingest.savant.load_leaderboards --boards batter --seasons 2024
     python -m ingest.savant.load_leaderboards --boards bat_tracking swing_path --seasons 2024
 
-``--dry-run`` fetches and reports row counts without writing.
+``--boards`` takes board names or the groups ``batter``, ``fielding`` and
+``running``. ``--dry-run`` fetches and reports row counts without writing.
 """
 
 from __future__ import annotations
@@ -63,22 +55,21 @@ from ingest.savant.boards import (
 
 log = logging.getLogger(__name__)
 
-#: Savant blocks the default urllib user agent outright.
+#: Savant blocks the default urllib user agent.
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (baseball-sim-etl)",
     "Accept": "text/csv,application/octet-stream,*/*",
 }
+#: A full-roster season pull takes one to three minutes.
 FETCH_TIMEOUT_S = 180
 #: Two retries of a transient failure, the first after two seconds, the second after four.
 FETCH_POLICY = RetryPolicy(retries=2, first_wait_s=2.0)
-#: A full-roster season pull takes one to three minutes. Space them out so a
-#: whole-run fetch does not read as a hammering client.
+#: The pause between two fetches, so a whole run does not look like a hammering client.
 PAUSE_BETWEEN_FETCHES_S = 1.5
 
-#: Columns whose target name says they hold a label, not a number (the
-#: outs-above-average board carries the two position labels).
+#: The target columns that hold a label, not a number.
 _TEXT_TARGETS = frozenset({"bat_side", "split", "position", "primary_position"})
-#: Target columns that are whole numbers.
+#: The target columns that hold whole numbers.
 _INT_TARGETS = frozenset(
     {
         "competitive_swings",
@@ -100,11 +91,9 @@ _INT_TARGETS = frozenset(
         "n_sb",
         "n_pk",
         "n_bk",
-        # The outs-above-average board's counts (all whole outs) and the
-        # outfield jump's outs above average on its plays (also whole). The name
-        # ``outs_above_average`` is a target on these two boards only: first base
-        # receiving stores ``total_oaa`` (a float), so no other board's column
-        # changes type here.
+        # The outs-above-average board's counts are whole outs, and so is the
+        # outfield jump's ``outs_above_average``. Only these two boards use that
+        # target: first base receiving stores ``total_oaa``, a float.
         "outs_above_average",
         "fielding_runs_prevented",
         "oaa_in_front",
@@ -133,13 +122,13 @@ class SavantFetchError(RuntimeError):
 def build_url(
     board: SavantBoard, season: int, split_value: str = "", asof: date | None = None
 ) -> str:
-    """The query for one pull of ``board`` for ``season``.
+    """Return the URL of one pull of ``board`` for ``season``.
 
     ``split_value`` is one value of the board's split pull: the pitcher's hand
     on the swing boards, Savant's position code on the outs-above-average board.
-    The board names the parameter (``board.split_param``); an empty value sends
-    nothing. It stays the third positional argument because the recompute
-    scripts call ``build_url(board, season)``.
+    The board names the parameter (``board.split_param``). An empty value sends
+    nothing. ``asof`` pulls the season up to that date. It raises ``ValueError``
+    on a board with no date control.
     """
     params: dict[str, str] = {}
     params.update(board.extra)
@@ -147,9 +136,8 @@ def build_url(
     if split_value:
         params[board.split_param] = split_value
     if asof is not None:
-        # A point-in-time pull. dateStart is 1 January so the window is
-        # "this season up to and including the cutoff" — the same span a
-        # simulator standing on that date would have seen.
+        # The window starts on 1 January, so it holds the season up to and
+        # including the cutoff: what a simulator on that date would have seen.
         if not board.supports_date_range:
             raise ValueError(f"{board.name} has no date control; it cannot be pulled as of a date")
         params["dateStart"] = f"{season}-01-01"
@@ -161,9 +149,9 @@ def build_url(
 def fetch_csv(url: str) -> str:
     """GET ``url`` and return its body without a leading byte-order mark.
 
-    The one MLB client does the GET. It retries a transient failure by
-    ``FETCH_POLICY``; any other failure, and the last retry's, raises the
-    original error. The mark must go: a kept one sticks to a quoted first
+    The MLB client does the GET and retries a transient failure by
+    ``FETCH_POLICY``. Any other failure, and the last retry's, raises the
+    original error. The mark must go: a kept mark sticks to a quoted first
     header, and it hides an HTML page from the guard in ``parse_rows``.
     """
     resp = mlb_client.get(
@@ -178,13 +166,12 @@ def fetch_csv(url: str) -> str:
 
 
 def parse_rows(body: str) -> list[dict[str, str]]:
-    """CSV body -> rows.
+    """Parse a CSV body into rows. Raise ``SavantFetchError`` on an HTML page.
 
-    The HTML guard lives here, not in ``fetch_csv``, because it is a fact about
-    the payload rather than the transport. Several Savant boards answer a
-    parameter they dislike with the rendered page and HTTP 200 — Park Factors
-    and the Custom builder always do. Parsing that as CSV yields no rows and no
-    error, which would read as "this season is empty".
+    The guard checks the payload, not the transport, so it lives here and not in
+    ``fetch_csv``. Several Savant boards answer a parameter they reject with the
+    rendered page and HTTP 200. Parsed as CSV, that page gives no rows and no
+    error, which reads as an empty season.
     """
     if body.lstrip()[:1] == "<":
         raise SavantFetchError("HTML, not CSV — the board rejected a parameter")
@@ -197,11 +184,11 @@ def parse_rows(body: str) -> list[dict[str, str]]:
 
 
 def probe_season_param(board: SavantBoard, fetcher=fetch_csv) -> None:
-    """Prove the board honours its season parameter.
+    """Raise ``SeasonParamError`` unless the board honours its season parameter.
 
-    Asks for a season with no possible Statcast data. An honoured parameter
-    returns no rows. Anything else means the parameter was ignored and every
-    later pull would silently carry the current season.
+    The probe asks for a season with no Statcast data. An honoured parameter
+    returns no rows. Any row means the board ignores the parameter, and every
+    pull would carry the current season.
     """
     body = fetcher(build_url(board, PROBE_SEASON))
     rows = parse_rows(body)
@@ -215,7 +202,10 @@ def probe_season_param(board: SavantBoard, fetcher=fetch_csv) -> None:
 
 
 def check_row_seasons(board: SavantBoard, rows: list[dict[str, str]], season: int) -> None:
-    """Where the board returns a season column, every row must match."""
+    """Raise ``SeasonParamError`` when a row's season is not ``season``.
+
+    A board with no season column passes, and so does a row with a blank season.
+    """
     if not board.season_column:
         return
     bad = {
@@ -239,26 +229,25 @@ def coerce_row(
     split: str | None,
     asof: date | None = None,
 ) -> dict[str, object] | None:
-    """One CSV row -> one upsert payload, or None when it has no player id."""
+    """Turn one CSV row into one upsert payload. Return None when it has no player id."""
     player_id = to_int(row.get(board.player_column))
     if player_id is None:
         return None
     out: dict[str, object] = {"player_id": player_id, "season": season}
     if board.asof_column:
-        # A full-season pull of a COMPLETED season is data as of the last day of
-        # that season: nothing more will ever be added. A full-season pull of the
-        # season in progress is data as of TODAY — stamping it 31 December would
-        # date it in the future, and the profile builder admits only rows dated
-        # at or before its cutoff, so the current season would be silently
-        # excluded from every live build.
+        # A full pull of a completed season is data as of its last day. A full
+        # pull of the season in progress is data as of TODAY. A 31 December
+        # stamp would date it in the future. The profile builder admits only
+        # rows dated at or before its cutoff, so every live build would drop
+        # the current season silently.
         out[board.asof_column] = (
             asof if asof is not None else min(date(season, 12, 31), date.today())
         )
     if board.split_column:
-        # A split board carries its label from the query (the pitcher's hand on
-        # the swing boards; the position PULLED on the outs-above-average board,
-        # whose CSV names only the player's primary position). The stance board
-        # carries its label in the CSV itself.
+        # A split board takes its label from the query: the pitcher's hand on
+        # the swing boards, the PULLED position on the outs-above-average board
+        # (its CSV names only the primary position). The stance board carries
+        # its label in the CSV.
         out[board.split_column] = (
             split if split is not None else to_str(row.get(board.split_column))
         )
@@ -279,7 +268,7 @@ def coerce_row(
 
 
 def upsert_sql_for(table: str, columns: Sequence[str], key: Sequence[str]) -> str:
-    """The upsert of ``columns`` into ``table``, keyed on ``key``.
+    """Return the upsert of ``columns`` into ``table``, keyed on ``key``.
 
     Each row takes ``NOW()`` as its ``scraped_at``. On a key conflict the
     statement overwrites every column outside the key, and ``scraped_at``.
@@ -296,7 +285,7 @@ def upsert_sql_for(table: str, columns: Sequence[str], key: Sequence[str]) -> st
 
 
 def upsert_sql(board: SavantBoard) -> str:
-    """The upsert of one board, keyed on the player, the season, the split and the cutoff."""
+    """Return one board's upsert, keyed on the player, the season, the split and the cutoff."""
     key = ["player_id", "season"]
     if board.split_column:
         key.append(board.split_column)
@@ -306,10 +295,11 @@ def upsert_sql(board: SavantBoard) -> str:
 
 
 def filter_to_known_players(conn, rows: list[dict]) -> list[dict]:
-    """Drop rows whose player is not in ``raw.players``.
+    """Return the rows whose player is in ``raw.players``.
 
-    Savant publishes a player before our pitch feed has seen him, and the raw
-    tables carry a foreign key. Dropping and logging beats failing the batch.
+    Savant can publish a player before our pitch feed has seen him, and the raw
+    tables carry a foreign key to ``raw.players``. A dropped row beats a failed
+    batch; the caller logs the count.
     """
     if not rows:
         return []
@@ -334,9 +324,11 @@ def load_board_season(
     fetcher=fetch_csv,
     asof: date | None = None,
 ) -> int:
-    """Fetch and upsert one board for one season. Returns rows written."""
-    # A split board is pulled once per (label, value) pair: three pulls for the
-    # pitcher-hand split, seven for the per-position outs-above-average pull.
+    """Fetch and upsert one board for one season. Return the number of rows written.
+
+    A split board takes one pull per (label, value) pair. A dry run writes
+    nothing and returns the number of rows fetched.
+    """
     pulls: list[tuple[str | None, str]] = (
         [(label, value) for label, value in board.splits] if board.splits else [(None, "")]
     )
@@ -384,6 +376,11 @@ def load_board_season(
 
 
 def resolve_boards(names: list[str]) -> list[SavantBoard]:
+    """Return the named boards in order, each once.
+
+    ``all`` (or no name) is every board. ``batter``, ``fielding`` and
+    ``running`` are the groups. An unknown name exits the program.
+    """
     if not names or names == ["all"]:
         return list(BOARDS.values())
     picked: list[str] = []
@@ -405,6 +402,7 @@ def resolve_boards(names: list[str]) -> list[SavantBoard]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Load the boards and seasons the command line names, in one transaction."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(message)s",

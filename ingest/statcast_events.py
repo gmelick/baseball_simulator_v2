@@ -1,17 +1,12 @@
-"""The Statcast ``events`` out-label vocabulary.
+"""The Statcast code sets and their SQL: the outs, the pitch results, the runners and the steals.
 
 ``raw.pitches.events`` holds the plate-appearance result. It is set on the
-final pitch of the plate appearance and NULL on every other row. The
-out-label audit (SIM-501) measured it clean over the full sweep (32 distinct
-values, all interpretable),
-while ``outs_on_pitch`` is zero on 92.6% of batted-ball outs and 100% of
-strikeouts in the swept data. Every out label therefore derives from
-``events``. Do not read ``outs_on_pitch`` in the profile computor —
-``tests/unit/ingest/test_out_label.py`` fails if any site does. Since the
-Data Lab vocabulary fix, this module also holds the pitch ``type``
-code sets.
+final pitch of the plate appearance and NULL on every other row. Every out
+label derives from ``events``: ``outs_on_pitch`` is zero on most batted-ball
+outs and on every strikeout. Do not read ``outs_on_pitch`` in the profile
+computor; ``tests/unit/ingest/test_out_label.py`` fails if any site does.
 
-Two DIFFERENT questions, and the sets that answer them. Do not conflate them:
+Two DIFFERENT questions, and the sets that answer them. Do not mix them up:
 
 1. **"How many outs did the play record?"** — :data:`PLAY_OUTS_BY_EVENT` and
    :data:`FIELDING_OUT_EVENTS`. ``fielders_choice_out`` records one out (a
@@ -19,25 +14,21 @@ Two DIFFERENT questions, and the sets that answer them. Do not conflate them:
 2. **"Was the batter retired?"** — :data:`BATTER_RETIRED_EVENTS`. The batter
    reaches base on BOTH fielders-choice events, and on ``force_out``.
 
-Measured on the live DB, 2024 season (do not re-derive these):
+The facts behind the sets, read from the stored data (do not re-derive them):
 
-* ``fielders_choice`` rows carry type D/E only — never X. No out is recorded.
-* ``fielders_choice_out``: the batter stands on 1B after the play on 90.5%
-  of rows. ``force_out``: 98.8%. Both events mean the batter REACHED.
-* ``field_out``: the batter is on no base after the play on 100.0% of rows.
-* Completed-half-inning identity: SUM(play outs + caught-stealing outs) over
-  a completed half equals exactly 3 on 40,780 of 41,542 halves (98.2%).
-  The undercount tail (1.6% of halves, ~0.5% of outs) is pickoff outs and
-  runner outs the feed anchors off the pitch record (``raw.play_events``).
-  The overcount tail (0.2%) is the uncaught third strike, which Statcast
-  scores ``strikeout`` with no out recorded.
-* The steal columns (``sb_attempt_*`` / ``sb_success_*``) are FALSE on every
-  ``caught_stealing_*`` / ``pickoff_caught_stealing_*`` /
-  ``strikeout_double_play`` row — all 3,211 of them, every season 2017-2026.
-  :func:`sql_cs_out` also excludes those rows structurally, so the
-  no-double-count property does not rest on the feed keeping that promise.
-* No in-play row (type X/D/E) carries a steal attempt, so a per-play out
-  count over batted balls needs no caught-stealing term.
+* A ``fielders_choice`` row has type D or E, never X: no out is recorded.
+* After ``fielders_choice_out`` and ``force_out``, the batter stands on first
+  on nearly every row: the batter reached.
+* After ``field_out``, the batter is on no base.
+* The steal columns (``sb_attempt_*``, ``sb_success_*``) are FALSE on every
+  ``caught_stealing_*``, ``pickoff_caught_stealing_*`` and
+  ``strikeout_double_play`` row. :func:`sql_cs_out` also excludes those rows,
+  so the no-double-count property does not rest on the feed keeping that promise.
+* No in-play row (type X, D or E) carries a steal attempt, so an out count over
+  batted balls needs no caught-stealing term.
+* :func:`sql_outs_recorded` reads exactly 3 outs on about 98% of completed
+  half-innings; its docstring names the outs it misses. It over-counts the
+  uncaught third strike, which Statcast scores ``strikeout`` with no out.
 """
 
 from __future__ import annotations
@@ -46,11 +37,12 @@ from __future__ import annotations
 # Question 1 — how many outs did the play record?
 # ---------------------------------------------------------------------------
 
-#: Outs recorded on the play, by plate-appearance result. The keys are the
-#: full vocabulary measured over the 2017-2026 sweep, plus ``intent_walk``
-#: and ``truncated_pa`` (present in the MLB feed vocabulary, absent from the
-#: swept rows). ``strikeout_double_play`` carries BOTH outs (the strikeout
-#: and the runner), because the steal columns are false on those rows.
+#: Outs recorded on the play, by plate-appearance result. The keys are every
+#: value ``raw.pitches.events`` holds, plus ``intent_walk`` and ``truncated_pa``
+#: from the MLB feed's vocabulary. A new event needs an entry here AND in
+#: ``MEASURED_VOCABULARY`` of ``tests/unit/ingest/test_out_label.py``.
+#: ``strikeout_double_play`` carries BOTH outs (the strikeout and the runner):
+#: the steal columns are false on those rows, so no other term counts the runner.
 PLAY_OUTS_BY_EVENT: dict[str, int] = {
     # one out
     "strikeout": 1,
@@ -83,7 +75,7 @@ PLAY_OUTS_BY_EVENT: dict[str, int] = {
     "intent_walk": 0,
     "hit_by_pitch": 0,
     "field_error": 0,
-    "fielders_choice": 0,  # measured: type D/E only, never X — no out
+    "fielders_choice": 0,  # type D or E only, never X: no out
     "catcher_interf": 0,
     "wild_pitch": 0,
     "passed_ball": 0,
@@ -103,10 +95,10 @@ FIELDING_OUT_EVENTS: frozenset[str] = frozenset(e for e, n in PLAY_OUTS_BY_EVENT
 # ---------------------------------------------------------------------------
 
 #: Events where the batter did NOT reach base. ``force_out``,
-#: ``fielders_choice`` and ``fielders_choice_out`` are absent on purpose:
-#: on all three the batter reaches while (at most) a runner is retired.
-#: ``other_out`` is absent because it is a runner out that truncates the
-#: plate appearance.
+#: ``fielders_choice`` and ``fielders_choice_out`` are absent on purpose: on
+#: all three the batter reaches, and at most a runner is retired.
+#: ``other_out`` is absent because it is a runner out that cuts the plate
+#: appearance short.
 BATTER_RETIRED_EVENTS: frozenset[str] = frozenset(
     {
         "strikeout",
@@ -128,18 +120,16 @@ BATTER_RETIRED_EVENTS: frozenset[str] = frozenset(
 # `raw.pitches.type` holds the feed's pitch-result code, `details.code`.
 # `raw.pitches.description` holds the display text of the same code ("Called
 # Strike", "In play, out(s)"). It never holds Statcast's snake_case names
-# (lower case, with underscores: "called_strike"). So a filter on
-# `description` matches no row. Filter on `type`.
+# ("called_strike"), so a filter on `description` matches no row. Filter on
+# `type`.
 #
 # The pool build (SQL_OUTCOME_TYPE) and the Data Lab routes render their
-# filters from these sets. The pitcher profile reads SQL_WHIFF and SQL_SWING.
-# Its csw_rate still spells a code list of its own inline. The batter profile
-# SQL still spells the swing list inline. A test pins that text. The sets
-# moved here from the profile computor in the Data Lab vocabulary fix
-# . The API reads them here, without the computor's duckdb and
-# sklearn imports.
-# `tests/unit/test_pitch_result_vocabulary.py` holds the 17
-# (description, code) pairs that the loader stores.
+# filters from these sets; the pitcher profile reads SQL_WHIFF and SQL_SWING.
+# Two profile sites still spell a code list inline: the pitcher's csw_rate and
+# the batter profile's swing list. A test pins that text. The sets live here,
+# not in the profile computor, so the API reads them without the computor's
+# duckdb and sklearn imports. `tests/unit/test_pitch_result_vocabulary.py`
+# holds the 17 (description, code) pairs that the loader stores.
 
 #: A ball: 'B', '*B' a ball in the dirt, 'P' a pitchout the batter took.
 BALL_TYPES: tuple[str, ...] = ("B", "*B", "P")
@@ -148,47 +138,39 @@ BALL_TYPES: tuple[str, ...] = ("B", "*B", "P")
 CALLED_STRIKE_TYPES: tuple[str, ...] = ("C",)
 
 #: A swing and a miss: 'S' swinging strike, 'W' swinging strike the catcher did
-#: not hold, 'M' missed bunt, 'Q' a swing and a miss at a pitchout.  Foul tips
-#: ('T', 'O') are CONTACT — the bat touches the ball — so they are excluded: the
-#: pool build classifies them as fouls below two strikes and as strike three
-#: at two (STRIKE_THREE_FOUL_TYPES).
-#: Measured on 2024: 23.22% of swings, against an MLB whiff rate near 24%.
+#: not hold, 'M' missed bunt, 'Q' a swing and a miss at a pitchout. A foul tip
+#: ('T', 'O') is CONTACT, because the bat touches the ball, so the set excludes
+#: it: the pool build codes it a foul below two strikes and strike three at two
+#: (STRIKE_THREE_FOUL_TYPES).
 WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M", "Q")
 
 #: The bat touched the ball and the ball was not put in play: 'F' foul, 'T' foul
-#: tip, 'L' foul bunt, 'O' a foul tip (the feed's own description; Retrosheet
-#: reads it as a foul tip on a bunt), 'R' foul pitchout. Each adds a strike
-#: below two strikes.
+#: tip, 'L' foul bunt, 'O' a foul tip on a bunt, 'R' foul pitchout. Each adds a
+#: strike below two strikes.
 FOUL_TYPES: tuple[str, ...] = ("F", "T", "L", "O", "R")
 
-#: The fouls that are STRIKE THREE with two strikes. A foul tip is a
-#: strike at any count (the rulebook's definition of a strike; it must be caught
-#: to be a foul tip), and so is a bunt fouled off (Rule 5.09(a)(4): the batter
-#: is out when he bunts foul on the third strike). A plain foul ('F', 'R') with
-#: two strikes is not. A pool that codes them 'foul' or 'ball' pitches on
-#: after a real strikeout: 7.1% of 2025's strikeouts end this way, and the
-#: count chain measured the simulator's loss at 4.4% of its strikeouts (the
-#: foul-tip coding, SIM-553;
-#: docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
+#: The fouls that are STRIKE THREE with two strikes. The rulebook makes a foul
+#: tip (a foul the catcher holds) a strike at any count. A bunt fouled off on
+#: the third strike is a strikeout (Rule 5.09(a)(4)). A plain foul ('F', 'R')
+#: with two strikes is not. A pool that codes these as a foul or a ball pitches
+#: on after a real strikeout, and the simulator loses strikeouts.
 STRIKE_THREE_FOUL_TYPES: tuple[str, ...] = ("T", "O", "L")
 
-#: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
-#: pitchout, blocked ball.  A swing is the complement of this set, which makes it
-#: the denominator of every swing-conditioned rate.
+#: The codes where the bat never left the shoulder: ball, called strike, hit by
+#: pitch, pitchout, blocked ball. A swing is the complement of this set, so the
+#: set gives the denominator of every swing-conditioned rate.
 NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
 
 #: The three in-play `type` codes. X = in play with out(s) and no run;
-#: D = in play, no out, no run; E = in play with run(s). X alone is 65% of
-#: balls in play, and the missing 35% ARE the hits, so a filter on X alone
-#: loses every hit (SIM-457).
+#: D = in play, no out, no run; E = in play with run(s). Nearly every hit is
+#: typed D or E, so a filter on X alone loses the hits.
 IN_PLAY_TYPES: tuple[str, ...] = ("X", "D", "E")
 
 #: The foul tips: the bat touches the ball and the catcher holds it. 'T' is
 #: the foul tip; 'O' is the feed's foul tip on a bunt. The model counts a foul
-#: tip as contact (the profile code sets, SIM-501), so WHIFF_TYPES excludes
-#: them. Baseball Savant (the public Statcast site) counts a foul tip as a
-#: whiff. The Data Lab shows Savant's whiff (owner ruling 2026-10-19, the Data
-#: Lab vocabulary fix, SIM-571).
+#: tip as contact, so WHIFF_TYPES excludes them. Baseball Savant (the public
+#: Statcast site) counts a foul tip as a whiff, and the Data Lab shows Savant's
+#: whiff.
 FOUL_TIP_TYPES: tuple[str, ...] = ("T", "O")
 
 #: Savant's whiff: the model's whiff plus the foul tips. The Data Lab reads
@@ -197,11 +179,9 @@ FOUL_TIP_TYPES: tuple[str, ...] = ("T", "O")
 SAVANT_WHIFF_TYPES: tuple[str, ...] = WHIFF_TYPES + FOUL_TIP_TYPES
 
 
-#: Events whose out-count on the row already includes an out that the steal
-#: columns could in principle also describe. :func:`sql_cs_out` excludes
-#: these rows STRUCTURALLY, so the disjointness does not rest on the feed's
-#: behavior. (Measured anyway: zero overlap on all 3,211 such rows across
-#: every swept season 2017-2026.)
+#: The events whose out count already holds an out the steal columns could
+#: also describe. :func:`sql_cs_out` excludes these rows, so the two never
+#: count one out twice, whatever the feed does.
 _STEAL_OUT_EVENTS: tuple[str, ...] = (
     "caught_stealing_2b",
     "caught_stealing_3b",
@@ -250,7 +230,7 @@ def sql_csw(q: str = "") -> str:
 
 
 def _outs_groups() -> list[tuple[int, list[str]]]:
-    """The out-recording events grouped by out count, descending."""
+    """The events that record an out, grouped by out count, in ascending order."""
     groups: dict[int, list[str]] = {}
     for e, n in sorted(PLAY_OUTS_BY_EVENT.items()):
         if n > 0:
@@ -259,11 +239,11 @@ def _outs_groups() -> list[tuple[int, list[str]]]:
 
 
 def sql_event_outs(q: str = "") -> str:
-    """CASE expression: outs recorded by ``events`` alone (0 on NULL).
+    """CASE expression: the outs recorded by ``events`` alone (0 on NULL).
 
-    One ``IN``-list branch per out count (1, 2, 3), so the common case
-    resolves on the first branch instead of walking a 19-way compare chain
-    on every row of a full-table scan.
+    One ``IN`` list per out count (1, 2, 3), so the common one-out case
+    resolves on the first branch, not after one compare per event, on every
+    row of a full-table scan.
     """
     whens = " ".join(
         f"WHEN {q}events IN {sql_list(members)} THEN {n}" for n, members in _outs_groups()
@@ -274,13 +254,11 @@ def sql_event_outs(q: str = "") -> str:
 def sql_hidden_runner_out(q: str = "") -> str:
     """The hidden runner out (0 or 1).
 
-    ``type = 'X'`` MEANS "in play, out(s) recorded" — every X-typed row
-    carries at least one out. When ``events`` accounts for none (a runner
-    was thrown out advancing on a hit, an error, or an all-safe fielders
-    choice), the out lives only in the type code. Measured 2024: 290
-    singles, 66 doubles, 3 field errors and 2 catcher interferences typed
-    X. This complement form is closed under new vocabulary: an unmapped
-    future reach event typed X still scores its out.
+    ``type = 'X'`` MEANS "in play, out(s) recorded": every X row carries at
+    least one out. When ``events`` counts none (a runner thrown out advancing
+    on a hit, an error, or a fielders choice with every runner safe), the out
+    lives only in the type code. The test is "not an out event", so a new
+    reach event typed X still scores its out.
     """
     return (
         f"CASE WHEN {q}type = 'X' AND ({q}events IS NULL "
@@ -293,8 +271,8 @@ def sql_play_outs(q: str = "") -> str:
     """Outs recorded on the play: the events term + the hidden runner out.
 
     This is the per-play answer to question 1. It has no caught-stealing
-    term, so use it where the row set is in-play only (steal attempts never
-    occur on in-play pitches — measured, 2024: zero rows).
+    term, so use it on in-play rows only: no in-play pitch carries a steal
+    attempt.
     """
     return f"(({sql_event_outs(q)}) + ({sql_hidden_runner_out(q)}))"
 
@@ -302,12 +280,11 @@ def sql_play_outs(q: str = "") -> str:
 def sql_cs_out(q: str = "") -> str:
     """A mid-plate-appearance caught stealing on this pitch (0 or 1).
 
-    The row guard makes the no-double-count property STRUCTURAL: rows whose
-    ``events`` already counts a steal or pickoff out (see
-    ``_STEAL_OUT_EVENTS``) contribute nothing here, whatever the steal
-    columns say. On the swept data the guard never fires — the steal
-    columns are FALSE on all 3,211 such rows across 2017-2026 — but the
-    formula does not depend on the feed keeping that promise.
+    The row guard keeps an out from counting twice: a row whose ``events``
+    already counts a steal or pickoff out (``_STEAL_OUT_EVENTS``) adds
+    nothing here, whatever the steal columns say. On the stored data the
+    guard never fires, but the formula does not depend on the feed keeping
+    that promise.
     """
     return (
         f"CASE WHEN (COALESCE({q}sb_attempt_2b, FALSE) "
@@ -322,45 +299,43 @@ def sql_cs_out(q: str = "") -> str:
 
 
 def sql_outs_recorded(q: str = "") -> str:
-    """Total outs recorded on this row: play outs + caught-stealing outs.
+    """The total outs recorded on this row: the play outs + the caught-stealing outs.
 
-    This is the innings-pitched building block: SUM it per
-    pitcher. Known residual, measured on 2024: ~0.5% of real outs are
-    invisible here — pickoff outs and feed-displaced runner outs live in
-    no ``raw.pitches`` row — and the uncaught third strike
-    over-counts by ~0.06%. The column this replaces missed ~36%.
+    This is the innings-pitched building block: SUM it per pitcher. About
+    0.5% of real outs are not here: the pickoff outs and the runner outs the
+    feed anchors off a pitch live in no ``raw.pitches`` row. The uncaught
+    third strike over-counts by about 0.06%.
     """
     return f"({sql_play_outs(q)} + ({sql_cs_out(q)}))"
 
 
-#: The measured residual of the IP formula, so nobody re-derives it.
-#: Over 357 games / 19,072 outs, 131 out-movements were keyed to a non-pitch
-#: index. 53 pickoffs live in `raw.play_events`, and the two profile
-#: `outs_recorded` consumers ADD them from that table (the computor's
-#: `_play_events_outs_cte`), which closes most of a ~0.5% residual; 63 mid-PA
-#: caught stealings live in the `sb_*` columns (the
-#: CS term above counts them); 7 displaced batter strikeouts live in `events`
-#: (the terms above count them). The ~8 runner outs anchored to
-#: `other_out`/`wild_pitch` actions that do not end the PA reach no table:
-#: ~0.04% of all outs, accepted. With the ~0.06% uncaught-third-strike
-#: over-count, the formula reads 3 outs on 98.2% of completed half-innings.
+# Where the outs live that a pitch row does not show:
+# - A pickoff out lives in `raw.play_events`. The two profile `outs_recorded`
+#   readers add it from there (the computor's `_play_events_outs_cte`).
+# - A caught stealing in mid plate appearance lives in the `sb_*` columns;
+#   the caught-stealing term above counts it.
+# - A batter strikeout the feed displaces lives in `events`; the terms above
+#   count it.
+# - A runner out anchored to an `other_out` or `wild_pitch` action that does
+#   not end the plate appearance reaches no table. These are about 0.04% of
+#   all outs, accepted.
 
 
 # ---------------------------------------------------------------------------
 # Transition destinations
 # ---------------------------------------------------------------------------
-# The fielding-transition draw applies a drawn pool row's whole
-# base-state transition, so the pool must encode where each body ended.
-# `raw.pitches` carries the truth: the ETL parser initializes the post-play
-# seats from the pre-play seats, re-seats every runner ``movement.end``,
-# and clears a scored or retired runner. A stranded runner therefore keeps
-# his base — an inning-ending third out never mislabels the survivors.
+# The fielding draw applies a drawn pool row's whole change of base state, so
+# the pool must encode where each runner and the batter ended. `raw.pitches`
+# carries the truth: the loader starts the post-play bases from the pre-play
+# bases, moves every runner to his ``movement.end``, and clears a runner who
+# scored or was retired. A stranded runner therefore keeps his base, and an
+# inning-ending third out never mislabels the survivors.
 #
-# Destination encoding (one SMALLINT per body):
-#   NULL = no runner on that base pre-pitch (runner columns only)
-#   4    = scored
-#   3/2/1 = the post-play base the body ended on
-#   0    = retired on the play
+# The destination code (one SMALLINT per runner or batter):
+#   NULL  = no runner on that base before the pitch (runner columns only)
+#   4     = scored
+#   3/2/1 = the base he ended on after the play
+#   0     = retired on the play
 
 TRANSITION_BASES = ("1b", "2b", "3b")
 
@@ -368,9 +343,10 @@ TRANSITION_BASES = ("1b", "2b", "3b")
 def sql_runner_dest(base: str, q: str = "") -> str:
     """CASE expression: the destination of the pre-pitch runner on ``base``.
 
-    The scored flag is checked FIRST — it is the official scoring, so run
-    timing (Rule 5.08) rides along for free. A runner found on no post-play
-    base who did not score was retired (the parser clears exactly those).
+    The scored flag comes FIRST: it is the official scoring, so it already
+    applies the rule on when a run counts (Rule 5.08). A runner on no base
+    after the play who did not score was retired: the loader clears exactly
+    those.
     """
     if base not in TRANSITION_BASES:
         raise ValueError(f"base must be one of {TRANSITION_BASES}, got {base!r}")
@@ -389,9 +365,9 @@ def sql_batter_dest(q: str = "", batter_expr: str | None = None) -> str:
     """CASE expression: the batter-runner's destination (0 = out).
 
     ``batter_expr`` overrides the batter-id column (e.g. ``"pp.batter_id"``
-    when the batter id lives on a joined table). The non-HR scoring branch
-    is runs accounting: when the play's runs exceed the named runner-scored
-    flags, the extra run is the batter's own trip around the bases.
+    when the batter id lives on a joined table). The scoring branch for a
+    play that is not a home run counts runs: when the play's runs exceed the
+    runners' scored flags, the extra run is the batter's.
     """
     b = batter_expr if batter_expr is not None else f"{q}batter"
     return (
@@ -420,25 +396,21 @@ def sql_batter_retired(q: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Steal-attempt labels
 # ---------------------------------------------------------------------------
-# A steal outcome lives in TWO disjoint places in raw.pitches:
+# A steal outcome lives in one of TWO places in raw.pitches, never both:
 #
-#   * the ``sb_attempt_*`` / ``sb_success_*`` columns — a MID-plate-appearance
-#     steal (the PA continues after the play);
-#   * the ``events`` column — a steal that ENDS the plate appearance
-#     (``caught_stealing_2b`` etc.; the columns stay FALSE on those rows).
+#   * the ``sb_attempt_*`` / ``sb_success_*`` columns: a steal in mid plate
+#     appearance (the plate appearance goes on after the play);
+#   * the ``events`` column: a steal that ENDS the plate appearance
+#     (``caught_stealing_2b`` and the like; the columns stay FALSE there).
 #
-# Measured on the full swept data (2026-08-17): the overlap is exactly ZERO.
-# The asymmetry is total: a caught stealing ends a PA routinely (2024, 2B:
-# 330 column CS + 249 event-only CS — 43% of caught stealings live only in
-# ``events``), but a successful steal almost never does (2024: 3 event SB
-# against 2,773 column SB). A consumer that reads the columns alone therefore
-# inflates every steal SUCCESS rate by ~5-7 points.
-# Use these two helpers at EVERY site that labels a steal attempt or outcome;
-# do not write a third definition.
+# A caught stealing often ends the plate appearance, so a large share of the
+# caught stealings live only in ``events``. A successful steal almost never
+# does. A reader of the columns alone therefore inflates every steal SUCCESS
+# rate. Use these two helpers at EVERY site that labels a steal attempt or
+# outcome; do not write a third definition.
 #
-# Known, accepted residual: a caught stealing folded into a
-# ``strikeout_double_play`` names no base, so it is not attributable to a
-# target and stays outside these labels (≤ ~98 events/season, ~2.5% of DPs).
+# An accepted gap: a caught stealing inside a ``strikeout_double_play`` names
+# no base, so these labels leave it out (up to about 100 a season).
 
 STEAL_BASES = ("2b", "3b", "home")
 
@@ -446,8 +418,9 @@ STEAL_BASES = ("2b", "3b", "home")
 def sql_steal_attempt(base: str, q: str = "") -> str:
     """Boolean: a steal of ``base`` was attempted on this pitch row.
 
-    NULL-safe: a NULL ``events`` (any mid-PA pitch) must read FALSE, not
-    NULL — ``FALSE OR NULL`` is NULL and poisons NOT NULL label columns.
+    NULL-safe: a NULL ``events`` (any pitch in mid plate appearance) must read
+    FALSE, not NULL. ``FALSE OR NULL`` is NULL, and it breaks a NOT NULL label
+    column.
     """
     if base not in STEAL_BASES:
         raise ValueError(f"base must be one of {STEAL_BASES}, got {base!r}")
@@ -478,8 +451,8 @@ def sql_steal_success(base: str, q: str = "") -> str:
 def play_outs(event: object, type_code: object = None) -> int:
     """Outs recorded on the play (question 1). NULL-safe.
 
-    Pass the row's ``type`` code as well to count the hidden runner out
-    (``type='X'`` guarantees at least one out); omit it where `type` is not
+    Pass the row's ``type`` code too, to count the hidden runner out
+    (``type='X'`` means at least one out). Omit it where ``type`` is not
     selected.
     """
     outs = PLAY_OUTS_BY_EVENT.get(event, 0) if isinstance(event, str) else 0

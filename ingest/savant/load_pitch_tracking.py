@@ -1,53 +1,44 @@
-"""
-savant_pitch_tracking_loader.py
-===============================
-The per-PITCH tracking measurements, loaded one day at a time.
+"""Load Savant's per-pitch tracking measurements, one day per request.
+
+The loader writes ``raw.savant_pitch_tracking``, one row per pitch.
 
 WHY PER PITCH AND NOT PER SEASON
 --------------------------------
-The bat-tracking and swing-path leaderboards publish season aggregates. A season
-aggregate cannot be used to simulate a game inside that season: a bat speed
-averaged over all of 2025 encodes how the batter swung in September. Savant's
-pitch-level search export carries the same measurements on each individual
-pitch, so aggregating them ourselves up to a cutoff date removes the problem at
-the source rather than working around it.
+The bat-tracking and swing-path leaderboards publish season averages. A season
+average cannot feed a game inside that season: a bat speed averaged over 2025
+holds how the batter swung in September. Savant's pitch-level search export
+carries the same measurements on each pitch. The batter profile averages them
+from our own tables, up to its cutoff date.
 
-It also removes a dependency. Once these columns are in the database, the batter
-profile computes its physical features from our own tables, the same way it
-already computes every other feature.
+ONE DAY PER REQUEST: CORRECTNESS, NOT TUNING
+--------------------------------------------
+The export stops at exactly 25,000 rows and says nothing. One day of a full
+schedule is far below the cap; one week is over it. So the loader asks for one
+day. It **fails** when a day comes back at the cap, because that day is
+incomplete and nothing tells which rows are missing.
 
-ONE DAY PER REQUEST — THIS IS NOT TUNING, IT IS CORRECTNESS
------------------------------------------------------------
-The export truncates at exactly 25,000 rows and says nothing about it. One day
-of a full 2024 schedule is roughly 4,200 rows; one week is over the cap. A
-week-at-a-time loader would silently drop most of the week. This loader requests
-a single day and **fails** when a day comes back at the cap, because at that
-point the data is incomplete and there is no way to tell which rows are missing.
+The loader also checks every row's date against the day it asked for. Some
+leaderboards ignore their parameters silently, so no date parameter is trusted.
 
-Every returned row's date is checked against the day requested. The search
-export honours its date parameters, but the leaderboards taught us not to
-assume that (the Savant loader, SIM-528).
+WHAT EXISTS WHEN
+----------------
+The bat-tracking columns (bat speed, swing length, attack angle and direction,
+swing path tilt, both intercepts) start in **2024**. A 2023 day returns none of
+them, although the bat-tracking leaderboard publishes 2023 season values. For
+2023 the leaderboard is the only source. On 2023 this loader is worth running
+only for ``arm_angle`` and ``hyper_speed``.
 
-WHAT EXISTS WHEN (measured 2026-09-10)
---------------------------------------
-The bat-tracking columns — bat speed, swing length, attack angle and direction,
-swing path tilt, both intercepts — start in **2024**. A 2023 regular-season day
-returns 3,120 pitches with ZERO of them, even though the bat-tracking
-leaderboard publishes 2023 season values. So for 2023 the leaderboard is the
-only source, and this loader is worth running on that season only for
-``arm_angle`` and ``hyper_speed``, which do go back.
-
-That is less of a problem than it sounds. Look-ahead is about the simulation
-date, not the season: a 2023 full-season aggregate contains nothing that
-postdates a 2025 cutoff, so it is legitimate for any cutoff after 2023 ended.
-Only the season CONTAINING the cutoff has to be truncated, and every season from
-2024 on can be.
+A full 2023 season average is still safe for any cutoff after 2023: it holds
+nothing from after the cutoff. Only the season that contains the cutoff needs
+per-pitch data, and every season from 2024 on has it.
 
 USAGE
 -----
     python -m ingest.savant.load_pitch_tracking --seasons 2024
     python -m ingest.savant.load_pitch_tracking --start 2024-04-01 --end 2024-04-30
     python -m ingest.savant.load_pitch_tracking --seasons 2023 2024 --resume
+
+``--resume`` skips the days that already have rows.
 """
 
 from __future__ import annotations
@@ -76,11 +67,10 @@ log = logging.getLogger(__name__)
 SEARCH_URL = "https://baseballsavant.mlb.com/statcast_search/csv"
 
 #: The export's hard row cap. A day that hits it is incomplete, and the export
-#: gives no indication of which rows were dropped.
+#: does not say which rows it dropped.
 ROW_CAP = 25_000
 
-#: (source column in the export, target column). The join key is handled
-#: separately.
+#: (export column, target column). The key columns are separate.
 TRACKING_COLUMNS: tuple[tuple[str, str], ...] = (
     ("bat_speed", "bat_speed"),
     ("swing_length", "swing_length"),
@@ -96,8 +86,8 @@ TRACKING_COLUMNS: tuple[tuple[str, str], ...] = (
 _KEY_COLUMNS = ("game_pk", "at_bat_number", "pitch_number")
 _META_COLUMNS = ("game_date", "season", "batter", "pitcher")
 
-#: The fallback day window, used only when the database has no games for the
-#: season yet. Regular-season play never falls outside it.
+#: The fallback window of days, for a season with no games in the database yet.
+#: Regular-season play never falls outside it.
 SEASON_FIRST_MONTH_DAY = (3, 15)
 SEASON_LAST_MONTH_DAY = (11, 15)
 
@@ -107,15 +97,15 @@ class TruncatedDayError(RuntimeError):
 
 
 def build_url(day: dt.date) -> str:
+    """Return the search-export URL for the regular-season pitches of ``day``."""
     params = {
         "all": "true",
         "hfSea": f"{day.year}|",
         "player_type": "batter",
         "game_date_gt": day.isoformat(),
         "game_date_lt": day.isoformat(),
-        # Regular season only, matching the leaderboards' gameType=Regular. Left
-        # off, a March request returns spring-training pitches that no pool row
-        # will ever join to.
+        # Regular season only, as the leaderboards' ``gameType=Regular``. Without
+        # it, a March request returns spring-training pitches no pool row joins to.
         "hfGT": "R|",
         "type": "details",
     }
@@ -123,7 +113,7 @@ def build_url(day: dt.date) -> str:
 
 
 def coerce_row(row: dict[str, str], day: dt.date) -> dict[str, object] | None:
-    """One export row -> one payload, or None when it has no usable key."""
+    """Turn one export row into one payload. Return None when its key is incomplete."""
     game_pk = to_int(row.get("game_pk"))
     ab = to_int(row.get("at_bat_number"))
     pitch = to_int(row.get("pitch_number"))
@@ -144,7 +134,7 @@ def coerce_row(row: dict[str, str], day: dt.date) -> dict[str, object] | None:
 
 
 def check_day(rows: list[dict[str, str]], day: dt.date) -> None:
-    """Refuse a truncated day, and refuse rows from another date."""
+    """Raise ``TruncatedDayError`` on a day at the cap, and ``RuntimeError`` on another date."""
     if len(rows) >= ROW_CAP:
         raise TruncatedDayError(
             f"{day}: {len(rows)} rows, at or over the {ROW_CAP} cap. The export "
@@ -164,6 +154,7 @@ UPSERT_SQL = upsert_sql_for(
 
 
 def load_day(conn, day: dt.date, *, dry_run: bool = False) -> int:
+    """Fetch and upsert one day's pitches. Return the number of rows (a dry run writes none)."""
     rows = parse_rows(fetch_csv(build_url(day)))
     if not rows:
         return 0
@@ -179,12 +170,11 @@ def load_day(conn, day: dt.date, *, dry_run: bool = False) -> int:
 
 
 def season_days(season: int, conn=None) -> list[dt.date]:
-    """The days to request for ``season``.
+    """Return the days to request for ``season``.
 
-    Prefers the dates our own database says had games — roughly 185 a season
-    against 245 calendar days, and every skipped day is a request that would
-    have returned nothing. Falls back to the calendar window when the database
-    has no games for the season.
+    The function prefers the days with games in ``raw.pitches``: any other day
+    is a request that returns nothing. With no games for the season in the
+    database, it falls back to the calendar window.
     """
     if conn is not None:
         with conn.cursor() as cur:
@@ -204,6 +194,7 @@ def season_days(season: int, conn=None) -> list[dt.date]:
 
 
 def loaded_days(conn, season: int) -> set[dt.date]:
+    """Return the days of ``season`` that already have tracking rows."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT DISTINCT game_date FROM raw.savant_pitch_tracking WHERE season = %s",
@@ -213,6 +204,7 @@ def loaded_days(conn, season: int) -> set[dt.date]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Load the days the command line names, with a commit every ten days."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(message)s",

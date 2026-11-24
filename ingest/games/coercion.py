@@ -1,26 +1,16 @@
-"""
-coercion.py
-===========
-MLB Baseball Simulation Platform
+"""Convert feed values to typed values, with an empty or missing value as ``None``.
 
-Shared "empty/missing -> None" type-coercion helpers for the ETL loaders.
+The MLB Stats API and the Baseball Savant files send a missing number as an
+empty string, ``None`` or (through pandas) a ``NaN`` float. These helpers map
+each one to ``None``, so the row builders need no special case:
 
-Both the historical Statcast loader (`etl_historical_loader.py`) and the Savant
-sprint-speed loader (`etl_sprint_speed_loader.py`) ingest external feeds (MLB
-Stats API JSON, Baseball Savant CSV) whose numeric fields arrive as empty
-strings, ``None``, or — from pandas-backed sources — ``NaN`` floats.  These
-helpers coerce such values to a typed result or ``None`` so the row builders
-never have to special-case missing data.
+  - ``""`` / ``None``  -> ``None``
+  - ``NaN`` float      -> ``None``
+  - any other value    -> the converted value, or ``None`` when the conversion fails
 
-Semantics (the one source for both loaders):
-  - ``""`` / ``None``   -> ``None``
-  - ``NaN`` float       -> ``None``
-  - otherwise           -> the coerced value, or ``None`` if coercion fails
-
-NOTE: the ``_opt_int`` (`ingest/load_bullpen_availability.py`) and
-``_opt_float`` (`betting/bettingpros/fetch_odds.py`) helpers are a *different*
-family — they do NOT treat ``""`` as missing — and are intentionally left
-separate.  Folding them in here would be a behavior change, not a refactor.
+The ``_opt_int`` helper (``ingest/load_bullpen_availability.py``) and the
+``_opt_float`` helper (``betting/bettingpros/fetch_odds.py``) do NOT treat ``""``
+as missing. Do not fold them in here: that changes their behaviour.
 """
 
 from __future__ import annotations
@@ -40,13 +30,13 @@ def to_float(v: Any) -> float | None:
 
 
 def to_int(v: Any) -> int | None:
-    """Convert a feed value to int via to_float; return None if conversion fails."""
+    """Convert a feed value to an int through :func:`to_float`; return None when that fails."""
     f = to_float(v)
     return None if f is None else int(f)
 
 
 def to_bool(v: Any) -> bool:
-    """Convert various feed types to bool (str 'true'/'1'/'yes' -> True)."""
+    """Convert a feed value to a bool: 'true', '1' and 'yes' are True, and None is False."""
     if isinstance(v, bool):
         return v
     if isinstance(v, str):
@@ -55,7 +45,7 @@ def to_bool(v: Any) -> bool:
 
 
 def to_str(v: Any) -> str | None:
-    """Convert a feed value to a stripped string; return None if empty."""
+    """Convert a feed value to a stripped string; return None when it is empty."""
     if v is None or v == "":
         return None
     s = str(v).strip()

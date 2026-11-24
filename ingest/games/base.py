@@ -1,4 +1,6 @@
-"""The state every part of the historical loader shares."""
+"""The state every part of the historical loader shares: the DSN, the connection pool and
+the table probes.
+"""
 
 from __future__ import annotations
 
@@ -15,17 +17,17 @@ from db.introspect import pg_column_exists, pg_relation_exists
 
 log = logging.getLogger(__name__)
 
-# Connection pool sizing.  A historical backfill issues many short
-# DB round-trips per game (one per FK-existence check, plus inserts and the
-# freshness upsert).  Re-connecting for every one of those is wasteful, so we
-# borrow from a pool instead.  Sized via env so ops can tune for the box.
+# A backfill makes many short database round trips per game, so the loader
+# borrows its connections from a pool. The environment sets the pool's bounds.
 ETL_DB_POOL_MIN = int(os.environ.get("ETL_DB_POOL_MIN", "1"))
 ETL_DB_POOL_MAX = int(os.environ.get("ETL_DB_POOL_MAX", "8"))
 
 
 class LoaderBase:
-    """The loader's state, declared once so each mixin sees it: the DSN, the
-    connection pool and its lock, and the circuit-breaker count.
+    """The loader's state, declared once so each mixin sees it.
+
+    The state is the DSN, the connection pool, the pool's lock and the count of
+    games that failed in a row.
     """
 
     dsn: str
@@ -34,19 +36,15 @@ class LoaderBase:
     _consecutive_failures: int
 
     def _ensure_pool(self) -> psycopg2.pool.ThreadedConnectionPool:
-        """Create the pool exactly once, on first DB access.
+        """Create the pool once, on the first database access, and return it.
 
-        ThreadedConnectionPool is used (over SimpleConnectionPool) so the loader
-        stays safe if a caller ever fans games out across threads; for the
-        single-threaded backfill it behaves identically.  Pool bounds come from
-        ETL_DB_POOL_MIN / ETL_DB_POOL_MAX (resolved at import time).
+        The pool is a ``ThreadedConnectionPool``, so a caller may load games on
+        several threads. ``ETL_DB_POOL_MIN`` and ``ETL_DB_POOL_MAX`` set its bounds
+        when the module loads.
         """
-        # Double-checked locking. The bare ``if self._pool is None``
-        # was a check-then-set race — two threads could each build a pool, and
-        # the loser's connections would leak (never returned, never closed)
-        # because ``close()`` only ever shuts down the pool it can see. Harmless
-        # while the loader is driven single-threaded, but the class advertises
-        # ThreadedConnectionPool precisely so a caller MAY fan out.
+        # Double-checked locking. Without the lock, two threads can each build a
+        # pool, and the connections of the pool that loses leak: close() sees
+        # only the pool it holds.
         if self._pool is None:
             with self._pool_lock:
                 if self._pool is None:
@@ -59,12 +57,10 @@ class LoaderBase:
 
     @contextmanager
     def _get_conn(self):
-        """Borrow a pooled connection for the duration of the ``with`` block.
+        """Yield a pooled connection, and return it to the pool when the block ends.
 
-        The connection is returned to the pool (``putconn``) on exit rather than
-        closed, so the underlying socket is reused by the next round-trip.
-        Existing transaction semantics are unchanged: callers still own
-        commit/rollback exactly as before.
+        The connection goes back to the pool open, so the next round trip reuses
+        its socket. The caller owns the commit and the rollback.
         """
         pool = self._ensure_pool()
         conn = pool.getconn()
@@ -83,14 +79,13 @@ class LoaderBase:
         absent_message: str | None = None,
         level: int = logging.WARNING,
     ) -> bool:
-        """Whether ``relation`` (``schema.table``), or its ``column``, exists.
+        """Return whether ``relation`` (``schema.table``), or its ``column``, exists.
 
-        The loader asks the catalogue once and caches the answer on the
-        attribute ``cache_attr`` (``None`` means not yet asked). A sweep of
-        thousands of games then runs one lookup, not one per game. The answer
-        cannot change mid-run: applying a migration during a sweep is not
-        supported. When the probe finds the table or column absent, the loader
-        logs ``absent_message`` (if given) at ``level``, once.
+        The loader asks the catalogue once and caches the answer on the attribute
+        ``cache_attr`` (``None`` means not yet asked). A sweep of thousands of games
+        then runs one lookup, not one per game. The cache assumes that no migration
+        runs during a sweep. When the table or column is absent, the loader logs
+        ``absent_message`` (if given) at ``level``, once.
         """
         cached = getattr(self, cache_attr)
         if cached is None:
@@ -105,11 +100,10 @@ class LoaderBase:
         return bool(cached)
 
     def close(self) -> None:
-        """Shut the pool down, closing every pooled connection.
+        """Close every pooled connection and drop the pool.
 
-        Safe to call multiple times and on a loader that never touched the DB.
-        Call this once a backfill / load run is complete so file descriptors
-        aren't held open.
+        Call it when a load run ends, so the loader holds no open sockets. A second
+        call, or a call on a loader that never used the database, does nothing.
         """
         if self._pool is not None:
             self._pool.closeall()

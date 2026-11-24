@@ -1,79 +1,65 @@
-"""Extract the non-pitch play events ``raw.pitches`` cannot represent.
+"""Extract the non-pitch play events that ``raw.pitches`` cannot hold.
 
-WHY THIS MODULE EXISTS
-======================
-``raw.pitches`` holds one row per PITCH. Some plays contain no pitch at all, so
-they produce no row and are invisible. Measured over 150 real 2024 games
-(11,247 plays): 24 plays had zero pitch events — 21 intentional walks and 3
-pickoff caught-stealings.
+``raw.pitches`` holds one row per pitch, so a play with no pitch leaves no row
+there. An intentional walk is signalled, not thrown, so its play has no pitch
+events; a pickoff out can end a play with no pitch too. These events, with the
+pickoff throws, the stepoffs and the balks, go to ``raw.play_events``.
 
-The intentional walk is the worse half. It is signalled, not thrown, so it
-generates no pitch events. Confirmed against the live database: **zero** rows
-carry ``events = 'intent_walk'`` against 14,683 ordinary walks, in a season that
-really contained roughly 340-450 of them. ``walk_rate`` in the profile SQL
-filters ``events IN ('walk','intent_walk')`` and that second branch has never
-matched anything.
+Where each signal lives in the feed (three of the five are not where you would
+guess):
 
-WHERE EACH SIGNAL LIVES — verified against real payloads, and NOT where you would
-guess for three of the five:
-
-  pickoff throw   playEvent ``type == "pickoff"``.  Its ``details.eventType`` is
+  pickoff throw   playEvent ``type == "pickoff"``. Its ``details.eventType`` is
                   EMPTY, so an eventType filter never sees it.
-  stepoff         playEvent ``type == "stepoff"``, eventType also empty.
+  stepoff         playEvent ``type == "stepoff"``; its eventType is empty too.
   balk            playEvent ``type == "action"`` with ``details.eventType`` of
                   ``balk`` or ``forced_balk``.
-  intent walk     the PLAY's ``result.event == "Intent Walk"``, no pitches.
-  pickoff OUT     NOT on the playEvent — on the RUNNER entry, where
+  intent walk     the PLAY's ``result.eventType == "intent_walk"``; no pitches.
+  pickoff OUT     NOT on the playEvent but on the RUNNER entry, where
                   ``details.eventType`` reads ``pickoff_1b`` /
                   ``pickoff_caught_stealing_2b`` and ``movementReason`` reads
                   ``r_pickoff_*``.
 
-This module is PURE: it takes an already-fetched play dict and returns row
-dicts. No network, no database. That is what lets the tests pin the payload
-shapes above without a live stack.
+The module is pure: it takes a fetched play dict and returns row dicts, with no
+network and no database, so the tests can pin the payload shapes above.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-#: playEvent ``type`` values that are themselves the event we want to record.
-#: Their ``details.eventType`` is empty, so they can only be found by ``type``.
+#: The playEvent ``type`` values that are the event itself. Their
+#: ``details.eventType`` is empty, so only the ``type`` finds them.
 _TYPE_EVENTS: dict[str, str] = {
     "pickoff": "pickoff",
     "stepoff": "stepoff",
 }
 
-#: ``details.eventType`` values on a ``type == "action"`` playEvent.  A forced
-#: balk is still a balk — the runner still takes the base — so both map to one
-#: ``event_type`` and the distinction is not modelled.
-#:
-#: ⚠ MLB WRITES A PICKOFF TWICE, AND THE TWO EVENTS SAY DIFFERENT THINGS.
-#: A throw over is ``type == "pickoff"``.  When that throw RESOLVES — the runner
-#: is retired, or the ball gets away — the feed emits a SECOND playEvent, a
-#: ``type == "action"`` carrying ``pickoff_1b`` / ``pickoff_caught_stealing_2b`` /
-#: ``pickoff_error_3b``, and the runner movement is keyed to THAT index, not to
-#: the throw.  Game 744843 atBatIndex 56, verbatim::
-#:
-#:     idx 2  type=pickoff  eventType=None                        <- the throw
-#:     idx 3  type=action   eventType=pickoff_caught_stealing_2b  <- the OUT
-#:     runner r_pickoff_caught_stealing_2b playIndex=3 isOut=True
-#:
-#: Matching only ``type == "pickoff"`` therefore records every harmless throw and
-#: loses every outcome.  Measured over 1,066 real 2024 games: **0 of 72 pickoff
-#: errors and only 70 of 159 pickoff outs** survived that version.
-#:
-#: These are matched by PREFIX rather than by an exhaustive list, because the base
-#: suffix varies (``_1b`` / ``_2b`` / ``_3b`` / ``_home``) and a list would silently
-#: drop whichever suffix nobody thought of.
+#: The ``details.eventType`` values of a balk, on a ``type == "action"`` playEvent.
+#: A forced balk still moves the runners up, so both map to one ``event_type``.
 _ACTION_EVENTS: dict[str, str] = {
     "balk": "balk",
     "forced_balk": "balk",
 }
 
-#: ``details.eventType`` PREFIXES on a ``type == "action"`` playEvent that carry a
-#: pickoff outcome.  Order matters: ``pickoff_error`` must be tested before the
-#: bare ``pickoff`` prefix, or an errant throw is misread as a clean one.
+#: The ``details.eventType`` PREFIXES of a pickoff outcome, on a
+#: ``type == "action"`` playEvent.
+#:
+#: MLB WRITES A PICKOFF TWICE, AND THE TWO EVENTS SAY DIFFERENT THINGS. The throw
+#: is a ``type == "pickoff"`` event. When the throw resolves (the runner is out,
+#: or the ball gets away), the feed adds a ``type == "action"`` event carrying
+#: ``pickoff_1b`` / ``pickoff_caught_stealing_2b`` / ``pickoff_error_3b``. The
+#: runner's movement is keyed to THAT index, not to the throw's. Game 744843,
+#: atBatIndex 56::
+#:
+#:     idx 2  type=pickoff  eventType=None                        <- the throw
+#:     idx 3  type=action   eventType=pickoff_caught_stealing_2b  <- the OUT
+#:     runner r_pickoff_caught_stealing_2b playIndex=3 isOut=True
+#:
+#: A match on the throw alone records every harmless throw and loses every
+#: outcome. A prefix match covers every base suffix (``_1b`` / ``_2b`` / ``_3b`` /
+#: ``_home``), where a list would drop a suffix nobody thought of. Order matters:
+#: ``pickoff_error`` comes before the bare ``pickoff``, or an errant throw reads as
+#: a clean one.
 _ACTION_PICKOFF_PREFIXES: tuple[tuple[str, str], ...] = (
     ("pickoff_error", "pickoff_error"),
     ("pickoff", "pickoff"),
@@ -81,32 +67,30 @@ _ACTION_PICKOFF_PREFIXES: tuple[tuple[str, str], ...] = (
 
 
 def _action_pickoff_kind(etype: str) -> str | None:
-    """The ``event_type`` for an action-carried pickoff outcome, else ``None``."""
+    """Return the ``event_type`` of a pickoff outcome on an action event, else ``None``."""
     for prefix, kind in _ACTION_PICKOFF_PREFIXES:
         if etype.startswith(prefix):
             return kind
     return None
 
 
-#: The play-level result that marks an intentional walk.  Matched on the play,
-#: not on any event, because the play carries no events to match.
+#: The play-level ``result.eventType`` of an intentional walk. The match is on
+#: the play, because the play has no events to match.
 _INTENT_WALK_RESULT = "intent_walk"
 
-#: A runner ``movementReason`` naming a pickoff.  ``r_pickoff_error_*`` is the
-#: errant throw — the runner ADVANCES rather than being retired — so it is a
-#: separate ``event_type`` and never an out.
+#: The runner ``movementReason`` prefixes of a pickoff. ``r_pickoff_error_*`` is
+#: an errant throw: the runner ADVANCES, so it is its own ``event_type`` and never
+#: an out.
 _PICKOFF_ERROR_PREFIX = "r_pickoff_error"
 _PICKOFF_PREFIX = "r_pickoff"
 
-#: ``outBase`` tokens. HOME IS ``"4B"``, not ``"home"`` — a runner picked off at
-#: the plate reads ``outBase: "4B"``, so a map of 1B/2B/3B silently returns None
-#: and the row loses which base the out happened at. Verified on game 744812
-#: atBatIndex 42: ``r_pickoff_caught_stealing_home ... outBase '4B'``.
+#: The ``outBase`` tokens. HOME IS ``"4B"``, not ``"home"``: a runner picked off
+#: at the plate reads ``outBase: "4B"`` (game 744812, atBatIndex 42).
 _BASE_FROM_TEXT: dict[str, int] = {"1B": 1, "2B": 2, "3B": 3, "4B": 4}
 
 
 def _base_of(text: str | None) -> int | None:
-    """Map ``'1B'`` / ``'2b'`` / ``'pickoff_2b'`` to ``2``. ``None`` when absent."""
+    """Return the base a text names (``'2B'``, ``'pickoff_2b'`` → 2), else ``None``."""
     if not text:
         return None
     upper = str(text).upper()
@@ -117,10 +101,10 @@ def _base_of(text: str | None) -> int | None:
 
 
 def _runners_state(offense: dict[str, Any] | None) -> int:
-    """Three-bit occupancy mask: bit0=1B, bit1=2B, bit2=3B.
+    """Return the base occupancy as three bits: bit 0 first, bit 1 second, bit 2 third.
 
-    Matches the encoding ``sim.pitch_pool.runners_state`` uses, so a pool built
-    from this table filters on the same number the simulator does.
+    ``sim.pitch_pool.runners_state`` uses the same encoding, so a pool built from
+    this table filters on the simulator's number.
     """
     o = offense or {}
     return (
@@ -129,7 +113,7 @@ def _runners_state(offense: dict[str, Any] | None) -> int:
 
 
 def _credits(runner: dict[str, Any]) -> tuple[int | None, int | None]:
-    """``(putout_player_id, assist_player_id)`` from a runner's credits."""
+    """Return ``(putout_player_id, assist_player_id)``, the first of each in a runner's credits."""
     putout = assist = None
     for c in runner.get("credits") or []:
         kind = c.get("credit")
@@ -142,10 +126,10 @@ def _credits(runner: dict[str, Any]) -> tuple[int | None, int | None]:
 
 
 def _pickoff_runners(play: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    """Index every pickoff-related runner movement by its ``playIndex``.
+    """Return each pickoff runner movement, keyed by its ``playIndex``.
 
-    A pickoff OUT is recorded on the runner, not on the playEvent, so the throw
-    and its outcome have to be joined back together by index.
+    A pickoff OUT is on the runner, not on the playEvent, so the index joins the
+    event to its outcome.
     """
     out: dict[int, dict[str, Any]] = {}
     for runner in play.get("runners") or []:
@@ -173,25 +157,18 @@ def extract_play_events(
 ) -> list[dict[str, Any]]:
     """Return one row dict per non-pitch event in ``play``.
 
-    ``outs_before_play`` and ``runners_state_before`` describe the state ENTERING
-    the plate appearance. The caller tracks both; this module does not, because a
-    pure function that also owned running state would be two things.
+    ``outs_before_play`` and ``runners_state_before`` are the state ENTERING the
+    plate appearance. The caller tracks both, so this function stays pure.
 
-    ``runners_state_before`` is not optional and cannot be derived here. An
-    INTENT WALK play carries no ``playEvents`` at all, so there is no per-event
-    ``offense`` block to read the base state from — the first version of this
-    function fell back to an empty dict and recorded every intentional walk with
-    the bases empty. A tenth-inning intentional walk under the ghost-runner rule
-    proved it: real state was a runner on second, recorded state was 0.
+    ``runners_state_before`` cannot come from the play. An intentional walk has
+    no ``playEvents``, so it has no ``offense`` block to read the bases from, and
+    a default of empty bases is wrong for an extra-inning walk with the automatic
+    runner on second.
 
-    ``home_score_before`` / ``away_score_before`` are the score ENTERING the
-    play, exactly as the pitch rows record it. They cannot be read from the
-    play itself: ``result.homeScore`` / ``result.awayScore`` are the score
-    AFTER the play: read from there, a pickoff at playEvent 4 carries the
-    runs from a home run four pitches LATER, a look-ahead leak on 12.3% of
-    rows (676 of 5,479, measured; SIM-502). The loader already proves the
-    pre-play semantics: it uses
-    ``result.homeScore`` to seed the NEXT play, never the current one.
+    ``home_score_before`` / ``away_score_before`` are the score ENTERING the play,
+    as the pitch rows record it. The play's ``result.homeScore`` /
+    ``result.awayScore`` are the score AFTER the play: read from there, a pickoff
+    carries the runs of a home run hit later in the same plate appearance.
     """
     rows: list[dict[str, Any]] = []
     consumed_indices: set[int] = set()
@@ -206,17 +183,14 @@ def extract_play_events(
     pitcher_id = (matchup.get("pitcher") or {}).get("id")
     batter_id = (matchup.get("batter") or {}).get("id")
 
-    # The thrower of a non-pitch event (third adversarial review, 2026-08-13).
-    # `matchup.pitcher` is the FINAL pitcher of the plate appearance, which
-    # misattributes a throw made BEFORE a mid-PA (injury) pitching change —
-    # measured: 4 such throws in 387 games. Walk the events once, forward,
-    # tracking who is on the mound: a pitch names its pitcher outright
-    # (`defense.pitcher`, present under the loader's `hydrate=alignment`),
-    # and a `pitching_substitution` action names the INCOMING pitcher in its
-    # `player.id` (verified, game 747154 ab 40). An event before any signal
-    # takes the nearest FOLLOWING pitch; the last resort is `matchup.pitcher`
-    # — correct whenever no mid-PA change happened, which is every
-    # plate appearance except the injury case.
+    # The thrower of each non-pitch event. `matchup.pitcher` is the LAST pitcher
+    # of the plate appearance, so it is wrong for a throw made before a pitching
+    # change in the middle of the plate appearance (an injury). The forward walk
+    # tracks who is on the mound: a pitch names its pitcher (`defense.pitcher`,
+    # present under the loader's `hydrate=alignment`), and a
+    # `pitching_substitution` action names the INCOMING pitcher in `player.id`.
+    # An event before any signal takes the pitcher of the nearest FOLLOWING
+    # pitch. `matchup.pitcher` is the last resort.
     thrower_at: dict[int, int] = {}
     current: int | None = None
     for event in events:
@@ -247,8 +221,8 @@ def extract_play_events(
     def _thrower(play_index: int) -> int | None:
         return thrower_at.get(play_index) or following_pitcher.get(play_index) or pitcher_id
 
-    # Score entering the play, from the batting side's perspective. Supplied by
-    # the caller — the play's own `result` scores are POST-play.
+    # The score entering the play, seen from the batting side. The play's own
+    # `result` scores are post-play.
     if topbot == "Top":
         bat_score, fld_score = int(away_score_before), int(home_score_before)
     else:
@@ -295,31 +269,25 @@ def extract_play_events(
 
         kind = _TYPE_EVENTS.get(raw_type)
         if kind is None and raw_type == "action":
-            # A balk first, then the pickoff OUTCOME events. See the note on
-            # _ACTION_EVENTS: the outcome rides on an action, not on the throw.
+            # A balk, or a pickoff OUTCOME (see _ACTION_PICKOFF_PREFIXES).
             kind = _ACTION_EVENTS.get(etype) or _action_pickoff_kind(etype)
         if kind is None:
             continue
 
-        # Both pickoff kinds carry a runner movement worth joining. A bare throw
-        # (type == "pickoff") usually has none; an action-carried outcome always
-        # does, and that movement is what says whether the runner was retired.
+        # A balk or a stepoff has no runner movement to join; a pickoff may.
         if not kind.startswith("pickoff"):
             rows.append(_row(kind, index, runners_state=state))
             continue
 
-        # The base the throw targeted. A bare throw carries it ONLY
-        # in the description text ("Pickoff Attempt 1B" — no structured field
-        # exists on the event, verified); an action-carried outcome names it in
-        # the eventType itself (`pickoff_1b` / `pickoff_error_3b`). Without
-        # this, 96.3% of pickoff rows had no base.
+        # The base the throw targeted. A bare throw names it ONLY in its
+        # description text ("Pickoff Attempt 1B"); an outcome names it in its
+        # eventType (`pickoff_1b` / `pickoff_error_3b`).
         event_base = _base_of(etype) or _base_of(event_details.get("description"))
 
-        # Join the runner movement recorded against this same index to learn
-        # whether anyone was retired, and at which base. A bare throw normally has
-        # no movement; an action-carried outcome always does. When there is none,
-        # fall back to the kind the event itself declared — that keeps an
-        # action-carried `pickoff_error` an error even if its movement is absent.
+        # The runner movement at the same index says whether a runner was out,
+        # and at which base. A bare throw normally has none; an outcome always
+        # has one. Without a movement, the event's own kind stands, so an
+        # action-carried `pickoff_error` stays an error.
         runner = pickoff_by_index.get(index)
         consumed_indices.add(index)
         if runner is None:
@@ -337,11 +305,10 @@ def extract_play_events(
                 index,
                 runners_state=state,
                 runner_id=(details.get("runner") or {}).get("id"),
-                # The runner movement names where the OUT happened; the throw's
-                # own text is the fallback when the movement is silent.
+                # The movement names the base of the out; the event's text is
+                # the fallback.
                 base=_base_of(movement.get("outBase") or reason) or event_base,
-                # An errant throw ADVANCES the runner. It is never an out, even
-                # though it is reported on the same pickoff play.
+                # An errant throw advances the runner: it is never an out.
                 is_out=bool(movement.get("isOut")) and not is_error,
                 out_number=movement.get("outNumber") if not is_error else None,
                 fielder_putout=putout,
@@ -349,17 +316,12 @@ def extract_play_events(
             )
         )
 
-    # A pickoff movement whose index matched NO event we recorded.
-    #
-    # A runner picked off at HOME has the movement keyed to a PITCH index, not to
-    # the throw and not to an action. Game 744812 atBatIndex 42: the throw is at
-    # index 0, the movement reads `playIndex: 2`, and index 2 is a pitch. Nothing
-    # above emits a row for a pitch, so that out was dropped — the last one
-    # missing after the action-event fix, 26 of 27.
-    #
-    # The out is real, so record it at the index the feed named. This table is
-    # separate from `raw.pitches`, so sharing an index with a pitch collides with
-    # nothing.
+    # A pickoff movement whose index matched no recorded event. A runner picked
+    # off at HOME has his movement keyed to a PITCH index (game 744812,
+    # atBatIndex 42: the throw at index 0, the movement at playIndex 2, a pitch).
+    # The loop above emits no row for a pitch, so the out is recorded here, at
+    # the index the feed names. This table is apart from `raw.pitches`, so the
+    # shared index collides with nothing.
     for index, runner in sorted(pickoff_by_index.items()):
         if index in consumed_indices:
             continue
@@ -382,14 +344,14 @@ def extract_play_events(
             )
         )
 
-    # The intentional walk carries no event of its own — the PLAY is the record.
-    # Emitted last so a play that somehow held both keeps a stable order.
+    # An intentional walk has no event of its own: the PLAY is the record. It
+    # goes last, so the row order stays stable.
     if str(result.get("eventType") or "").lower() == _INTENT_WALK_RESULT:
         rows.append(
             _row(
                 "intent_walk",
-                # No playEvent to key on. -1 is a deliberate sentinel: it cannot
-                # collide with a real index and it sorts before every event.
+                # No playEvent to key on. The sentinel -1 collides with no real
+                # index and sorts before every event.
                 -1,
                 runners_state=runners_state_before,
                 runner_id=batter_id,

@@ -1,14 +1,16 @@
-"""The league's per-game live feed → the slate card's detail (the live slate, SIM-519).
+"""Parse the MLB per-game live feed into the slate card's detail and the what-if's start state.
 
-The Daily Diamond card, expanded, shows the real game: the linescore, both
-teams' box scores, the posted lineups before first pitch, and for a live game
-the count, the runners, the fielders, the pitcher's pitch count and the last
-play. One league endpoint carries all of it
-(``/api/v1.1/game/{pk}/feed/live``). :func:`parse_game_feed` turns that
-response into a plain, JSON-ready dict; the API validates it against
-``GameFeedCardModel``.
+One endpoint (``/api/v1.1/game/{pk}/feed/live``) carries the whole real game.
 
-The parser is pure and is tested on trimmed recorded feeds in
+- :func:`parse_game_feed` builds the expanded slate card: the linescore, both
+  box scores, the posted lineups before first pitch, and for a live game the
+  count, the runners, the fielders, the pitcher's pitch count and the last play.
+  It returns a JSON-ready dict; the API validates it against ``GameFeedCardModel``.
+- :func:`parse_plays` lists the real game's plate appearances.
+- :func:`state_at_pa` rebuilds the game state at the start of one plate
+  appearance, for the what-if.
+
+The parsers are pure. The tests run them on trimmed recorded feeds in
 ``tests/fixtures/mlb_game_feed/``. A field the feed does not carry reads
 ``None`` (or an empty list), and the card hides that section.
 """
@@ -20,7 +22,7 @@ from typing import Any
 
 from ingest.mlb.schedule import FINAL, LIVE, card_state_of, int_or_none
 
-#: The defense keys of the feed's linescore → the design's position labels.
+#: The feed's defense keys, each with the position label the page shows.
 _FIELD_POSITIONS = (
     ("pitcher", "P"),
     ("catcher", "C"),
@@ -35,7 +37,7 @@ _FIELD_POSITIONS = (
 
 
 def feed_state(status: Mapping[str, Any]) -> str:
-    """The card state of a feed's ``gameData.status`` (the schedule's mapper)."""
+    """The card state of a feed's ``gameData.status``, by the schedule's mapper."""
     return card_state_of(
         str(status.get("abstractGameState") or ""),
         str(status.get("codedGameState") or ""),
@@ -54,9 +56,9 @@ def starting_position(pdata: Mapping[str, Any]) -> str | None:
 
     The box's ``position`` is the LAST position the player held in the game.
     ``allPositions`` lists every position he held, in order, so its first entry
-    is where he started. A two-way starter who pitches and bats as the
-    designated hitter lists P then DH and reads 'P'. A payload without
-    ``allPositions``, or with a blank first entry, falls back to ``position``.
+    is where he started. A two-way starter who pitches and also bats as the
+    designated hitter lists P then DH, and reads 'P'. Without ``allPositions``,
+    or with a blank first entry, the function reads ``position``. It returns
     None when neither names a position.
     """
     all_positions = pdata.get("allPositions") or []
@@ -151,7 +153,7 @@ def _box_side(t: Mapping[str, Any]) -> dict[str, Any]:
         return players.get(f"ID{pid}")
 
     batters = [_batter_row(p) for p in (get(x) for x in t.get("batters") or []) if p is not None]
-    # Only the players who bat (a pitcher in a DH game is listed with no order).
+    # Keep only the players who bat: a pitcher in a DH game has no batting order.
     batters = [b for b in batters if b["batting_order"] is not None]
     batters.sort(key=lambda b: b["batting_order"])
     pitchers = [_pitcher_row(p) for p in (get(x) for x in t.get("pitchers") or []) if p is not None]
@@ -191,7 +193,7 @@ def _live(
     ls: Mapping[str, Any], box: Mapping[str, Any], plays: Mapping[str, Any]
 ) -> dict[str, Any]:
     offense, defense = ls.get("offense") or {}, ls.get("defense") or {}
-    # The batting side: the offense team's id against the two box teams.
+    # The batting side: match the offense team's id to a box team, else read the inning half.
     off_id = int_or_none((offense.get("team") or {}).get("id"))
     side = None
     for s in ("away", "home"):
@@ -225,7 +227,7 @@ def _live(
 
 
 def parse_game_feed(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """One league feed → the card detail, a JSON-ready dict."""
+    """The slate card's detail of one feed, as a JSON-ready dict."""
     gd = payload.get("gameData") or {}
     ld = payload.get("liveData") or {}
     status = gd.get("status") or {}
@@ -257,11 +259,11 @@ def parse_game_feed(payload: Mapping[str, Any]) -> dict[str, Any]:
 # The real game's plays and the state at each plate appearance (the "what if")
 # ---------------------------------------------------------------------------
 #
-# The feed must be read with ``hydrate=alignment``: every pitch then carries
-# the fielding side's nine (``defense``) and the batter and runners
-# (``offense``). Substitutions are ``action`` events with the player, his
-# position and (for a lineup change) his batting-order code ("701" = the 7th
-# slot's first substitute).
+# Read the feed with ``hydrate=alignment``: every pitch then carries the
+# fielding side's nine (``defense``) and the batter and runners (``offense``).
+# A substitution is an ``action`` event with the player, his position and, for
+# a lineup change, his batting-order code ("701" = the 7th slot's first
+# substitute).
 
 SUB_EVENTS = frozenset(
     {
@@ -279,8 +281,11 @@ _RUNNER_OUT_PREFIXES = ("caught_stealing", "pickoff")
 
 
 def batter_finished(play: Mapping[str, Any]) -> bool:
-    """Whether the batter's plate appearance ended on this play, by its event
-    (the fallback of :func:`finished_flags` for a side's latest play)."""
+    """True when the batter's plate appearance ended on this play, by its event alone.
+
+    :func:`finished_flags` uses it for a side's latest play, which has no next
+    play to compare.
+    """
     event = str((play.get("result") or {}).get("eventType") or "")
     return not event.startswith(_RUNNER_OUT_PREFIXES)
 
@@ -474,12 +479,15 @@ class PlateAppearanceNotFound(LookupError):
 
 
 def state_at_pa(payload: Mapping[str, Any], at_bat: int | None) -> dict[str, Any]:
-    """The start state at the start of plate appearance ``at_bat`` (the feed's
-    ``atBatIndex``); ``None`` is first pitch.
+    """The game state at the start of plate appearance ``at_bat``; ``None`` means first pitch.
 
-    Plain data for ``simulation.start_state`` plus what the page shows: the
-    eligible bench and bullpen of each side and the players already used, who
-    cannot re-enter. See ``simulation/start_state.py`` for the keys.
+    ``at_bat`` is the feed's ``atBatIndex``. The dict is plain data for
+    ``simulation.start_state``, plus what the page shows: each side's eligible
+    bench and bullpen, and the players already used, who cannot re-enter.
+    ``simulation/start_state.py`` names the keys.
+
+    Raises :class:`PlateAppearanceNotFound` when a lineup or a starting pitcher
+    is not posted, or when the game has no such plate appearance.
     """
     plays = ((payload.get("liveData") or {}).get("plays") or {}).get("allPlays") or []
     rosters = {s: _roster(payload, s) for s in ("away", "home")}
@@ -555,7 +563,7 @@ def state_at_pa(payload: Mapping[str, Any], at_bat: int | None) -> dict[str, Any
         idx = int(play.get("atBatIndex", -1))
         key = (int(about.get("inning") or 0), "top" if about.get("isTopInning") else "bottom")
         if key != cur_key:
-            # The previous half is complete: its runs into the grid.
+            # A new half starts: the finished half's runs go into the grid.
             prev_side = "away" if cur_key[1] == "top" else "home"
             runs = (score[0] - half_start[0]) if prev_side == "away" else (score[1] - half_start[1])
             grid[prev_side].append(runs)

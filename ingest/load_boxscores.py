@@ -1,39 +1,37 @@
-"""
-ingest/load_boxscores.py
-===============================
-The official per-player box score as the prop ground truth (SIM-545, part
-of the unpriced prop markets, SIM-421).
+"""Load each game's official box score into ``raw.game_player_stats`` and ``raw.game_bullpen``.
 
-WHY
----
-A sportsbook grades a player prop against the OFFICIAL box score. The platform
-derives its prop "actuals" from ``raw.pitches`` event labels today, which
-covers only H / HR / TB and K / BB and misses what lives in no pitch row (an
-intentional walk, a pickoff out). This module copies the box score verbatim
-into ``raw.game_player_stats`` (Alembic 0023) so every prop the market offers
-has the same actual the book uses.
+A sportsbook grades a player prop against the official box score, so the
+platform grades props on these rows. The box also holds what no pitch row
+records, such as an intentional walk or a pickoff out.
 
-WHAT
-----
-* :func:`parse_boxscore` — a PURE function over the box score's ``teams`` dict.
-  It works for both the ``/api/v1/game/{game_pk}/boxscore`` response and the
-  live feed's ``liveData.boxscore`` (the two carry the identical ``teams``
-  shape). It emits one :class:`PlayerGameStats` per player who APPEARED: the
-  box marks a non-participant with an EMPTY ``stats.batting`` and
-  ``stats.pitching`` dict, and a participant has ``gamesPlayed = 1`` in the
-  slot he played.
-* :class:`BoxscoreIngest` — the fetch + persist wrapper. Network is ONE
-  stubbable seam, :meth:`BoxscoreIngest._mlb_get`, over the one MLB client
-  (``ingest.mlb.client``) with a small bounded retry. Persistence is :meth:`persist`
-  (asyncpg, ``INSERT … ON CONFLICT (game_pk, player_id) DO UPDATE`` so a
-  re-run refreshes) and :func:`persist_sync` (the psycopg2 twin the historical
-  loader calls with its own pooled connection).
+* :func:`parse_boxscore` turns a box score's ``teams`` dict into one
+  :class:`PlayerGameStats` per player who appeared. The boxscore endpoint and
+  the live feed's ``liveData.boxscore`` carry the same ``teams`` shape.
+* :func:`parse_bullpen_listing` turns the same dict into one
+  :class:`BullpenListing` per arm the box lists, so one fetch fills both tables.
+* :func:`persist` and :func:`persist_bullpen` upsert through asyncpg;
+  :func:`persist_sync` and :func:`persist_bullpen_sync` upsert on the historical
+  loader's psycopg2 cursor. A re-run refreshes a row.
+* :class:`BoxscoreIngest` fetches one box score through ``ingest.mlb.client``.
+  Its :meth:`~BoxscoreIngest._mlb_get` is the one network seam the tests stub.
 
-The module imports stdlib only at load time, so it is importable without a
-running app and the parser is unit-tested against a captured payload
-(``tests/fixtures/mlb/boxscore_746437.json``) with no live call and no DB.
-Season, game date and the team ids come from ``raw.games``; the caller passes
-them in.
+The caller passes the season, the game date and the team ids from ``raw.games``.
+The database drivers load only inside the functions that use them, so the
+parsers run in a test with no database.
+
+The backfill loads the games already in ``raw.games``; the historical loader
+writes both tables for each game it loads::
+
+    python -m ingest.load_boxscores --seasons 2024 --max-games 200
+    python -m ingest.load_boxscores --game-pks 746437 746438
+    python -m ingest.load_boxscores --seasons 2024 --no-only-missing   # refresh
+    python -m ingest.load_boxscores --seasons 2024 --bullpen-only
+
+The backfill sends one MLB request per game, ``--sleep`` seconds apart.
+``--only-missing`` (the default) skips a game that has rows. The run logs and
+counts a failed game; five failures in a row stop it
+(``--max-consecutive-failures``, 0 = never). The exit code is 1 when the run
+stops early, or when it writes nothing and a game fails.
 """
 
 from __future__ import annotations
@@ -76,8 +74,8 @@ BATTING_FIELDS: dict[str, str] = {
     "totalBases": "tb",
 }
 
-#: MLB box-score pitching field → ``raw.game_player_stats`` column
-#: (``gamesStarted`` is handled apart: it becomes the ``p_started`` boolean).
+#: MLB box-score pitching field → ``raw.game_player_stats`` column.
+#: ``gamesStarted`` is not here: the parser turns it into the ``p_started`` boolean.
 PITCHING_FIELDS: dict[str, str] = {
     "outs": "p_outs",
     "hits": "p_h",
@@ -93,10 +91,10 @@ PITCHING_FIELDS: dict[str, str] = {
 
 @dataclass(frozen=True, slots=True)
 class PlayerGameStats:
-    """One player's official line for one game — mirrors ``raw.game_player_stats``.
+    """One player's official line for one game: one ``raw.game_player_stats`` row.
 
-    The field order IS the INSERT column order (see :data:`COLUMNS`); keep the
-    two in step. ``fetched_at`` is the table's default and is not carried here.
+    The field order is the INSERT column order (:data:`COLUMNS`). The table's
+    default fills ``fetched_at``.
     """
 
     game_pk: int
@@ -138,7 +136,7 @@ class PlayerGameStats:
     p_started: bool = False
 
     def as_tuple(self) -> tuple[Any, ...]:
-        """Positional tuple in :data:`COLUMNS` order (the INSERT value list)."""
+        """The row's values in :data:`COLUMNS` order, for the INSERT."""
         return tuple(getattr(self, name) for name in COLUMNS)
 
 
@@ -149,7 +147,10 @@ COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(PlayerGameStats))
 def _upsert_sql(
     table: str, columns: Sequence[str], key: Sequence[str], placeholders: Sequence[str]
 ) -> str:
-    """The upsert of ``columns`` into ``table``: a conflict on ``key`` refreshes every other column."""
+    """The upsert of ``columns`` into ``table``.
+
+    A conflict on ``key`` refreshes every other column and ``fetched_at``.
+    """
     sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns if c not in key)
     return (
         f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) "
@@ -187,7 +188,10 @@ def _int(value: Any) -> int:
 
 
 def _batting_order(value: Any) -> int | None:
-    """``battingOrder`` '100' → slot 1; '701' (a sub in slot 7) → 7; absent → None."""
+    """The lineup slot of a ``battingOrder`` code: '100' is 1, '701' (a sub in slot 7) is 7.
+
+    None when the code is absent or not a number.
+    """
     if value in (None, ""):
         return None
     try:
@@ -214,19 +218,19 @@ def parse_boxscore(
     """Parse a box score's ``teams`` dict into one row per player who appeared.
 
     ``teams`` is ``response["teams"]`` from the boxscore endpoint, or
-    ``liveData["boxscore"]["teams"]`` from the live feed — the same shape:
+    ``liveData["boxscore"]["teams"]`` from the live feed. Both have this shape:
     ``{"home"|"away": {"team": {"id"}, "players": {"ID<pid>": {"person":
     {"id"}, "position": {"abbreviation"}, "battingOrder", "stats": {"batting":
     {...}, "pitching": {...}}}}}}``.
 
-    A player appears when his ``stats.batting`` OR ``stats.pitching`` dict is
-    non-empty; ``played_bat`` / ``played_pitch`` read ``gamesPlayed >= 1`` in
-    the respective block, so a two-way player keeps both slots. A player with
-    both dicts empty (a bench bat, an unused reliever) produces NO row.
+    A player appeared when his ``stats.batting`` or ``stats.pitching`` dict is
+    not empty. ``played_bat`` and ``played_pitch`` read ``gamesPlayed >= 1`` in
+    each block, so a two-way player keeps both. A player with both dicts empty
+    (a bench bat, an unused reliever) gets no row.
 
-    ``team_id`` comes from ``teams[side]["team"]["id"]``; the caller's
-    ``home_team_id`` / ``away_team_id`` (from ``raw.games``) are the fallback
-    when the payload omits it. ``season`` and ``game_date`` are the caller's.
+    ``team_id`` comes from the box. The caller's ``home_team_id`` and
+    ``away_team_id`` (from ``raw.games``) fill a missing one; a side with
+    neither logs a warning and gets no rows.
     """
     fallback_team = {"home": home_team_id, "away": away_team_id}
     rows: list[PlayerGameStats] = []
@@ -241,7 +245,7 @@ def parse_boxscore(
             batting = stats.get("batting") or {}
             pitching = stats.get("pitching") or {}
             if not batting and not pitching:
-                continue  # did not appear — no row, the book voids his bet
+                continue  # he did not appear: no row, and the book voids his bet
             if team_id is None:
                 log.warning(
                     "SIM-545: game %s %s side has no team id — player %s skipped.",
@@ -279,7 +283,7 @@ def parse_boxscore(
 
 
 async def _write_async(conn: Any, sql: str, rows: Iterable[Any]) -> int:
-    """Run ``sql`` once per row through asyncpg. Returns the rows written; no rows writes nothing."""
+    """Run ``sql`` once per row through asyncpg. Returns the row count."""
     batch = [r.as_tuple() for r in rows]
     if batch:
         await conn.executemany(sql, batch)
@@ -287,7 +291,10 @@ async def _write_async(conn: Any, sql: str, rows: Iterable[Any]) -> int:
 
 
 def _write_sync(cur: Any, sql: str, rows: Iterable[Any]) -> int:
-    """Run ``sql`` once per row on a psycopg2 cursor, inside the caller's transaction."""
+    """Run ``sql`` once per row on a psycopg2 cursor, in the caller's transaction.
+
+    Returns the row count.
+    """
     batch = [r.as_tuple() for r in rows]
     if batch:
         from psycopg2.extras import execute_batch
@@ -318,12 +325,13 @@ LISTED_STARTED = "started"
 
 @dataclass(frozen=True, slots=True)
 class BullpenListing:
-    """One arm the MLB box lists for a game (the real pen, SIM-427; Alembic 0025).
+    """One arm the MLB box lists for a game: one ``raw.game_bullpen`` row.
 
-    ``listed``: ``'bullpen'`` — on the roster, did not pitch; ``'pitched'`` — a
-    reliever who appeared; ``'started'`` — the side's starting pitcher (the
-    first entry of the box's ``pitchers`` list). The field order IS the INSERT
-    column order (:data:`BULLPEN_COLUMNS`).
+    The simulator's pitching-change draw takes its pen from these rows.
+    ``listed`` is ``'bullpen'`` (on the roster, did not pitch), ``'pitched'``
+    (a reliever who appeared) or ``'started'`` (the side's starting pitcher:
+    the first entry of the box's ``pitchers`` list). The field order is the
+    INSERT column order (:data:`BULLPEN_COLUMNS`).
     """
 
     game_pk: int
@@ -333,9 +341,11 @@ class BullpenListing:
     listed: str
 
     def as_tuple(self) -> tuple[Any, ...]:
+        """The row's values in :data:`BULLPEN_COLUMNS` order, for the INSERT."""
         return tuple(getattr(self, name) for name in BULLPEN_COLUMNS)
 
 
+#: The INSERT column list of ``raw.game_bullpen``, from the dataclass fields.
 BULLPEN_COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(BullpenListing))
 
 
@@ -355,11 +365,13 @@ def parse_bullpen_listing(
     home_team_id: int | None = None,
     away_team_id: int | None = None,
 ) -> list[BullpenListing]:
-    """The arms the box lists per side: every id in ``bullpen`` as
-    ``'bullpen'``, the first id in ``pitchers`` as ``'started'``, the rest of
-    ``pitchers`` as ``'pitched'``. An id in both lists (it happens on a
-    corrected box) keeps its ``pitchers`` reading. The same ``teams`` dict
-    :func:`parse_boxscore` reads, so one fetch serves both tables."""
+    """The arms the box lists for each side, from the ``teams`` dict :func:`parse_boxscore` reads.
+
+    The first id in ``pitchers`` reads ``'started'``, the rest of ``pitchers``
+    ``'pitched'``, and every id in ``bullpen`` ``'bullpen'``. An id in both
+    lists (a corrected box does this) keeps its ``pitchers`` reading. A side
+    with no team id logs a warning and gets no rows.
+    """
     fallback_team = {"home": home_team_id, "away": away_team_id}
     rows: list[BullpenListing] = []
     for side in SIDES:
@@ -407,19 +419,13 @@ def persist_bullpen_sync(cur: Any, rows: Iterable[BullpenListing]) -> int:
 
 @dataclass
 class BoxscoreIngest:
-    """Fetch the official box score for a game and persist its rows.
+    """Fetch the official box score of one game.
 
-    Parameters
-    ----------
-    timeout:
-        HTTP timeout (seconds) per MLB Stats API call.
-    max_attempts:
-        Bounded retry on 429 / 5xx / a timeout; a 4xx other than 429 is not
-        retried (it is a permanent answer for that game).
-    backoff:
-        Seconds before the second attempt; doubles per attempt. A numeric
-        ``Retry-After`` header on a retried status replaces the wait for that
-        attempt (capped at 60 s).
+    ``timeout`` is the HTTP time-out in seconds per call. ``max_attempts``
+    counts every attempt, the first included. A transient failure (a time-out,
+    a 429 or a 5xx) retries by :class:`~ingest.mlb.client.RetryPolicy`; any
+    other 4xx is the final answer for that game. ``backoff`` is the wait in
+    seconds before the second attempt, and it doubles on each later attempt.
     """
 
     timeout: float = 15.0
@@ -440,7 +446,10 @@ class BoxscoreIngest:
         )
 
     def fetch_boxscore(self, game_pk: int) -> dict[str, Any]:
-        """Fetch ``/game/{game_pk}/boxscore`` and return its ``teams`` dict."""
+        """Fetch ``/game/{game_pk}/boxscore`` and return its ``teams`` dict.
+
+        Raises ``ValueError`` when the response has no ``teams`` dict.
+        """
         payload = self._mlb_get(f"game/{int(game_pk)}/boxscore")
         teams = payload.get("teams")
         if not isinstance(teams, dict):
@@ -471,33 +480,19 @@ __all__ = [
 
 
 # ===========================================================================
-# The backfill: python -m ingest.load_boxscores
+# The backfill (python -m ingest.load_boxscores; the module docstring has the usage)
 # ===========================================================================
-#
-# Fetch the box score of every completed game in raw.games and store one
-# raw.game_player_stats row per player who appeared, plus the bullpen listing
-# (raw.game_bullpen). The historical loader writes both for each game it
-# loads; the backfill covers the games already stored.
-#
-#     python -m ingest.load_boxscores --seasons 2024 --max-games 200
-#     python -m ingest.load_boxscores --game-pks 746437 746438
-#     python -m ingest.load_boxscores --seasons 2024 --no-only-missing   # refresh
-#
-# One MLB request per game, --sleep seconds apart. --only-missing (the default)
-# skips a game with rows. One game's failure is logged and counted; five in a
-# row stop the run (--max-consecutive-failures, 0 = never). The exit code is 1
-# when the run stops early, or when it wrote nothing and a game failed.
 
-#: No default password. main() resolves a blank value through
-#: db.dsn.require_dsn, which names the missing variable.
+#: Blank when ``BASEBALL_DB_DSN`` is unset; :func:`main` then fails through
+#: ``db.dsn.require_dsn``, which names the missing variable.
 DEFAULT_DSN = os.environ.get("BASEBALL_DB_DSN", "")
 
 #: Games between progress log lines.
 PROGRESS_EVERY = 100
 
-#: Failures in a row that stop the run (the historical loader's rule):
-#: one bad game is survivable; an API outage or a schema mismatch is not,
-#: because the run would otherwise "succeed" having loaded nothing.
+#: Failures in a row that stop the run. One bad game is survivable. A run of
+#: failures means an API outage or a schema mismatch, and the run would
+#: otherwise "succeed" with nothing loaded.
 DEFAULT_MAX_CONSECUTIVE_FAILURES = 5
 
 
@@ -537,12 +532,11 @@ def final_games_sql(
     *,
     missing_table: str = "raw.game_player_stats",
 ) -> str:
-    """The completed-game query: Final, scored, ordered by game_pk.
+    """The query of the completed games: Final, scored, ordered by game_pk.
 
-    ``only_missing`` adds a NOT EXISTS against ``missing_table`` (the box rows
-    by default; ``raw.game_bullpen`` for the bullpen pass) so a re-run
-    skips games that already have rows. ``game_pks`` narrows to an explicit
-    list; otherwise ``seasons`` selects.
+    ``game_pks`` names the games when given; else ``seasons`` selects them.
+    ``only_missing`` skips a game that already has rows in ``missing_table``:
+    the box rows by default, ``raw.game_bullpen`` for the bullpen pass.
     """
     where = ["status = 'Final'", "home_score_final IS NOT NULL", "away_score_final IS NOT NULL"]
     if game_pks:
@@ -564,6 +558,7 @@ def final_games_sql(
 
 
 async def _fetch_final_games(conn: Any, args: argparse.Namespace) -> list[GameRef]:
+    """The games the run loads, from ``raw.games``."""
     rows = await conn.fetch(
         final_games_sql(
             sorted({int(s) for s in args.seasons}),
@@ -588,11 +583,11 @@ async def _fetch_final_games(conn: Any, args: argparse.Namespace) -> list[GameRe
 async def load_game(
     ingest: BoxscoreIngest, conn: Any, ref: GameRef, *, bullpen_only: bool = False
 ) -> int:
-    """Fetch + parse + persist one game. Returns rows written (0 = an empty box).
+    """Fetch one game's box score and upsert its rows. Returns the player rows written.
 
-    The same fetch also writes the per-game bullpen listing
-    (``raw.game_bullpen``); ``bullpen_only`` skips the player-stats upsert —
-    the backfill pass over games whose box rows are already loaded.
+    The same fetch writes the bullpen listing (``raw.game_bullpen``).
+    ``bullpen_only`` skips the player rows, for the games whose box rows are
+    already loaded, and returns the listing rows written instead.
     """
     teams = await asyncio.to_thread(ingest.fetch_boxscore, ref.game_pk)
     pen_rows = parse_bullpen_listing(
@@ -611,14 +606,14 @@ async def load_game(
         home_team_id=ref.home_team_id,
         away_team_id=ref.away_team_id,
     )
-    # The box rows first and the count returned is theirs (the run summary's
-    # "rows written"; an empty box = 0 = skipped); the listing rides along.
+    # Return the player-row count: the run counts a game with 0 as an empty box.
     written = await persist(conn, rows)
     await persist_bullpen(conn, pen_rows)
     return written
 
 
 async def run(args: argparse.Namespace) -> int:
+    """Run the backfill. Returns the exit code: 0, 1 when the run fails, 2 with no games named."""
     if not args.game_pks and not args.seasons:
         log.error("pass --seasons or --game-pks")
         return 2
@@ -737,13 +732,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """The backfill's command-line entry point. Returns the exit code."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = parse_args(argv)
-    args.dsn = args.dsn or require_dsn()  # Fail loudly with no DSN
+    args.dsn = args.dsn or require_dsn()  # raises with no DSN
     return asyncio.run(run(args))
 
 

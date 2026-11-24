@@ -4,15 +4,15 @@ Every program read of the MLB Stats API goes through this module.
 
 - :func:`get` and :func:`get_json` are the sync GET, over stdlib ``urllib``. A
   transient failure retries by :class:`RetryPolicy`; any other failure raises at
-  once. After the last retry the original error reaches the caller unchanged.
+  once. After the last retry, the original error reaches the caller unchanged.
   The BettingPros reads use the same GET.
 - :class:`LeagueFeed` is the async reader over one ``aiohttp`` session. The app
   reads the slate's schedule and a game's feed with it; the live service reads
   its feeds and lineups with it.
 
-The loader stays on ``urllib`` on purpose: on ``requests`` the long reload
-sweeps died with a memory fault, and on ``urllib`` they ran clean. ``urllib``
-sends ``Accept-Encoding: identity``, so a body never arrives compressed and
+Keep the sync GET on ``urllib``: the long reload sweeps crashed with a memory
+fault on ``requests`` and ran clean on ``urllib``. ``urllib`` sends
+``Accept-Encoding: identity``, so a body never arrives compressed, and
 :func:`_decode_body` needs no gunzip branch.
 """
 
@@ -75,7 +75,7 @@ class RetryPolicy:
 
     def wait_s(self, retry: int, exc: BaseException) -> float:
         """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc``."""
-        # The exponent stops at 64: a larger one adds nothing under the cap.
+        # Cap the exponent: 2.0 ** n overflows for a large n, and 2 ** 64 passes any cap.
         wait = self.first_wait_s * 2.0 ** min(retry - 1, 64)
         retry_after = retry_after_s(exc)
         if retry_after is not None:
@@ -83,7 +83,7 @@ class RetryPolicy:
         return min(wait, self.cap_s)
 
 
-#: The policy of a caller with no reason for its own: three retries, the first after one second.
+#: The policy for a caller with no need of its own: three retries, the first after one second.
 DEFAULT_POLICY = RetryPolicy(retries=3, first_wait_s=1.0)
 
 
@@ -162,9 +162,9 @@ def get(
 ) -> Response:
     """GET ``url`` and return the response. Retry a transient failure by ``policy``.
 
-    Each retry logs one INFO line on ``logger`` without the query string;
-    ``describe`` may clean the error text (the odds reads take their key out).
-    ``sleep`` defaults to ``time.sleep``, looked up at each wait.
+    Each retry logs one INFO line on ``logger``, without the query string.
+    ``describe`` may clean the error text: the odds reads take their key out.
+    ``sleep`` defaults to ``time.sleep``, looked up at each wait, so a test can patch it.
     After the last retry, or on any other failure, the original error raises.
     """
     # A list value repeats its key (``gameTypes=R&gameTypes=F``).
@@ -245,9 +245,11 @@ class LeagueFeed:
         return await self.get_json(SCHEDULE_URL, schedule_params(start, end, hydrate))
 
     async def game_feed_payload(self, game_pk: int) -> Any:
-        """The raw live feed of one game, with each pitch's defensive alignment
-        (``hydrate=alignment``: the what-if reads the fielders at every plate
-        appearance). Raises on any failure."""
+        """The raw live feed of one game. Raises on any failure.
+
+        ``hydrate=alignment`` adds each pitch's fielders: the what-if reads them
+        at every plate appearance.
+        """
         return await self.get_json(
             GAME_FEED_URL.format(game_pk=int(game_pk)), {"hydrate": "alignment"}
         )

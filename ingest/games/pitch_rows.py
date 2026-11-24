@@ -1,5 +1,5 @@
-"""The pitch row: the required fields, the feed-to-column map, the row builder
-and the two-tier validation.
+"""Build and validate a ``raw.pitches`` row: the required columns, the name map, the row
+builder and the two-tier check.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from ingest.games.coercion import (
     to_str,
 )
 
-# Columns that must be non-null on every pitch row regardless of pitch type.
+# The columns every pitch row must fill, whatever the pitch.
 ALWAYS_REQUIRED: set[str] = {
     "game_pk",
     "at_bat_number",
@@ -38,21 +38,20 @@ ALWAYS_REQUIRED: set[str] = {
     "away_score",
 }
 
-# How many fielding-credit slots raw.pitches actually has. A credit past
-# the last slot sets `field_assist_6_plus` instead of being silently dropped.
+# The fielding-credit slots of raw.pitches. A credit past the last slot sets
+# `field_assist_6_plus`, so the overflow stays visible.
 _MAX_ASSIST_SLOTS = 5
 _MAX_PUTOUT_SLOTS = 3
 _MAX_THROWING_ERROR_SLOTS = 2
 
-# Columns that must be present on an in-play pitch. In-play is THREE Gameday
-# codes, not one: 'X' (out), 'D' (no out), 'E' (run). Gating on 'X' alone made
-# the quality flag asymmetric — untracked outs were excluded downstream while
-# identical untracked hits were kept.
+# The columns an in-play pitch must fill. In play is three Gameday codes: 'X'
+# (out), 'D' (no out) and 'E' (run). The check covers all three; a check on 'X'
+# alone flags the untracked outs and passes the untracked hits.
 IN_PLAY_REQUIRED: set[str] = {"launch_speed", "launch_angle", "bb_type"}
 
 
 # ---------------------------------------------------------------------------
-# Column rename map  (CSV / API variable name → PostgreSQL column name)
+# The feed parser's names → the raw.pitches column names
 # ---------------------------------------------------------------------------
 
 COLUMN_RENAME: dict[str, str] = {
@@ -111,10 +110,10 @@ COLUMN_RENAME: dict[str, str] = {
     # misc
     "wild_pitch_passed_ball": "passed_ball_wild_pitch",
     "extension": "release_extension",
-    "top_bot": "_inning_topbot_raw",  # transformed separately below
+    "top_bot": "_inning_topbot_raw",  # mapped through HALF_INNING_MAP
 }
 
-# inning_topbot value normalisation  (API → schema)
+# The feed's half-inning name → the raw.pitches inning_topbot value.
 HALF_INNING_MAP = {
     "top": "Top",
     "bottom": "Bot",
@@ -122,28 +121,25 @@ HALF_INNING_MAP = {
 
 
 # ---------------------------------------------------------------------------
-# Row builder — rename + coerce every field
+# The row builder: rename and convert every field
 # ---------------------------------------------------------------------------
 def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int) -> dict[str, Any]:
-    """
-    Takes the flat dict produced by _fetch_game_pitches() for a single pitch and
-    returns a dict whose keys match raw.pitches column names exactly. The row's
-    own ``game_date`` is kept.
+    """Convert one parsed pitch to a dict keyed by the ``raw.pitches`` columns.
 
-    All empty-string values are converted to None (→ SQL NULL).
-    Types are coerced to match the PostgreSQL column types.
+    ``raw`` is one pitch dict from ``_fetch_game_pitches``. Each empty string
+    becomes None (SQL NULL), and each value takes its column's type. The row
+    keeps its own ``game_date``.
     """
-    # Apply rename map first so downstream code uses schema names only.
+    # Rename first, so the code below uses only the column names.
     renamed: dict[str, Any] = {}
     for src_key, value in raw.items():
         dest_key = COLUMN_RENAME.get(src_key, src_key)
         renamed[dest_key] = value
 
-    # inning_topbot normalisation
     raw_half = renamed.pop("_inning_topbot_raw", None)
     renamed["inning_topbot"] = HALF_INNING_MAP.get(str(raw_half).lower() if raw_half else "")
 
-    # Ensure primary key fields are present
+    # The caller's game_pk wins over the row's.
     renamed["game_pk"] = game_pk
 
     row: dict[str, Any] = {
@@ -288,7 +284,7 @@ def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int) -> dict[str,
         "throwing_error_1": to_float(renamed.get("throwing_error_1")),
         "throwing_error_2": to_float(renamed.get("throwing_error_2")),
         "field_assist_6_plus": to_bool(renamed.get("field_assist_6_plus")),
-        # DB trigger sets data_quality_flag on insert; initialised to FALSE here.
+        # _validate_row and the insert trigger may set it TRUE.
         "data_quality_flag": False,
     }
     return row
@@ -299,47 +295,45 @@ def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int) -> dict[str,
 # ---------------------------------------------------------------------------
 @dataclass
 class ValidationResult:
+    """The result of :func:`_validate_row`: a hard error skips the row, a warning flags it."""
+
     hard_errors: list[str] = field(default_factory=list)  # skip the row
     warnings: list[str] = field(default_factory=list)  # insert flagged
 
     @property
     def is_valid(self) -> bool:
+        """True when the row has no hard error."""
         return len(self.hard_errors) == 0
 
 
 def _validate_row(row: dict[str, Any]) -> ValidationResult:
-    """
-    Two-tier validation:
-      HARD ERROR — row is skipped entirely (primary key missing, inning out of range, etc.)
-      WARNING    — row is inserted but data_quality_flag is forced TRUE
+    """Check a built pitch row in two tiers, and return the result.
 
-    The DB trigger raw.flag_pitch_quality() also fires on insert for physics
-    range checks; this layer catches structural/logical issues beforehand.
+      HARD ERROR  the row is skipped (a key column missing, an inning out of range, ...).
+      WARNING     the row is inserted with ``data_quality_flag`` set TRUE.
+
+    The insert trigger ``raw.flag_pitch_quality()`` checks the physics ranges as
+    well; this function catches the structural and logical faults first.
     """
     result = ValidationResult()
 
     # ---- HARD ERRORS -------------------------------------------------------
 
-    # Primary key must be fully populated
     for col in ("game_pk", "at_bat_number", "pitch_number"):
         if row.get(col) is None:
             result.hard_errors.append(f"NULL primary key column: {col}")
 
-    # Required context columns
     for col in ALWAYS_REQUIRED:
         if row.get(col) is None:
             result.hard_errors.append(f"Unexpected NULL in required column: {col}")
 
-    # inning_topbot must be one of the two valid values
     if row.get("inning_topbot") not in ("Top", "Bot"):
         result.hard_errors.append(f"Invalid inning_topbot: {row.get('inning_topbot')!r}")
 
-    # Inning range check
     inning = row.get("inning")
     if inning is not None and not (1 <= inning <= 30):
         result.hard_errors.append(f"Inning out of range: {inning}")
 
-    # Count / outs bounds
     if row.get("balls") is not None and row["balls"] not in range(4):
         result.hard_errors.append(f"balls out of range: {row['balls']}")
     if row.get("strikes") is not None and row["strikes"] not in range(3):
@@ -347,19 +341,14 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
     if row.get("outs") is not None and row["outs"] not in range(3):
         result.hard_errors.append(f"outs out of range: {row['outs']}")
 
-    # Stolen base logic: success requires attempt
     for base in ("2b", "3b", "home"):
         if row.get(f"sb_success_{base}") and not row.get(f"sb_attempt_{base}"):
             result.hard_errors.append(f"sb_success_{base}=TRUE but sb_attempt_{base}=FALSE")
 
-    # Mirror the remaining raw.pitches CHECK constraints.
-    #
-    # This validator was a strict SUBSET of the DB constraints, so a row that
-    # violated one of the checks below sailed through here and raised inside
-    # _batch_insert instead — which rolls back the ENTIRE game (one connection,
-    # all chunks, one commit), reaches no raw.etl_errors row, and aborts the run.
-    # Catching them here turns "lose the whole game and stop" into "skip one
-    # pitch, record why, keep going".
+    # Mirror the other raw.pitches CHECK constraints. A row that breaks one would
+    # fail inside _batch_insert, which rolls back the whole game, writes no
+    # raw.etl_errors row and stops the run. Caught here, it skips one pitch and
+    # records why.
     for col, allowed in (
         ("p_throws", ("L", "R")),
         ("stand", ("L", "R", "S")),
@@ -380,34 +369,27 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
             result.hard_errors.append(f"{col}={val} outside the DB CHECK range [{lo}, {hi}]")
 
     if result.hard_errors:
-        return result  # don't bother with warnings if we're skipping the row
+        return result  # a skipped row needs no warnings
 
     # ---- WARNINGS (insert with data_quality_flag=TRUE) ---------------------
 
-    # Ball in play must have batted ball stats
     if row.get("type") in ("D", "E", "X"):
         for col in IN_PLAY_REQUIRED:
             if row.get(col) is None:
                 result.warnings.append(f"type={row.get('type')!r} (ball in play) but {col} is NULL")
 
-    # Physics plausibility.  These thresholds MUST stay in lock-step with the
-    # raw.flag_pitch_quality() DB trigger: the trigger only ever SETS
-    # data_quality_flag TRUE and never clears it, so whichever layer is stricter
-    # wins. A Python band narrower than the trigger's is therefore silently
-    # authoritative.
+    # The physics bands MUST match the raw.flag_pitch_quality() trigger. The
+    # trigger only sets data_quality_flag TRUE and never clears it, so the
+    # stricter layer silently wins.
     #
-    # Current band: release_speed 50–110 mph, launch_speed ≤ 125 mph.
-    # NOTE the launch_speed bound must stay strictly BELOW the column CHECK
-    # (raw.pitches.launch_speed BETWEEN 0 AND 130): a warning at >130 can never
-    # fire, because the CHECK rejects the row outright. MLB's record exit
-    # velocity is ~122.4 mph, so (125, 130] is sensor artifact and must keep
-    # earning data_quality_flag rather than flowing into max_exit_velo and the
-    # hard-hit / barrel rates as clean data.
-    # The release-speed ceiling is 110, not 102: Statcast records four-figure
-    # counts of 102–105 mph pitches every season, the high-velocity tail of
-    # sim.pitch_pool and the arsenal mixtures. If you change any bound here,
-    # ship a matching Alembic migration for raw.flag_pitch_quality() AND update
-    # db/schemas/01_postgres_schema.sql (migration 0016 holds the current band).
+    # The launch-speed bound must stay below the column CHECK (0 to 130 mph):
+    # the CHECK rejects a row above 130 before any warning. The record exit
+    # velocity is about 122.4 mph, so a reading from 125 to 130 is a sensor
+    # artefact and must earn the flag. The release-speed ceiling is 110, not 102:
+    # Statcast records thousands of pitches at 102 to 105 mph every season.
+    #
+    # A change to a bound needs a matching Alembic migration for the trigger and
+    # an edit of db/schemas/01_postgres_schema.sql.
     rs = row.get("release_speed")
     if rs is not None and not (50 <= rs <= 110):
         result.warnings.append(f"release_speed={rs} outside 50–110 mph range")
@@ -420,7 +402,7 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
     if ivb is not None and not (-25 <= ivb <= 25):
         result.warnings.append(f"break_vertical_induced={ivb} outside ±25 inch range")
 
-    # If warnings exist, force the flag so the DB trigger agrees with ETL intent
+    # A warning sets the flag; the trigger never clears it.
     if result.warnings:
         row["data_quality_flag"] = True
 

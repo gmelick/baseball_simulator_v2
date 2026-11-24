@@ -1,51 +1,23 @@
-"""
-resumable_sweep.py — drive the corrective reload sweep to completion despite a
-stochastic interpreter crash.
+"""Run the corrective reload sweep to its end, and restart it after an interpreter crash.
 
-THE PROBLEM
------------
-The sweep used to die with::
+The sweep's process dies now and then at a random point with a CPython memory
+fault: ``Fatal Python error`` on Windows, exit 139 in a Linux container. The root
+cause is unknown. The loader reads through stdlib ``urllib``, not ``requests``,
+which made the fault rare; nothing proves it gone.
 
-    Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
+WHY A WRAPPER IS SAFE
+---------------------
+The sweep resumes by design. ``reload_game`` deletes and re-inserts one game in
+a single transaction, and the shrink guard refuses to replace a game with fewer
+rows than it removed. So a crash cannot corrupt a game; it can only stop the run.
+This script records every game that loads and skips it on the next attempt, so a
+crash costs no progress. It does NOT fix the fault.
 
-CPython's evaluation loop dispatched into an inline-cache entry instead of a real
-instruction — i.e. the bytecode / inline cache of ``_build_row_dict`` was being
-corrupted. It presented as SIGSEGV (exit 139) in Linux containers and as this
-fatal error natively on Windows.
-
-**It is STOCHASTIC.** Observed failure points across runs: 3, 5, 66, 191, 193,
-318 and 405 games. Any single short A/B of this is worthless; only season-scale
-runs or repeated trials can distinguish configurations.
-
-Ruled out by direct measurement (not inference):
-
-  * memory exhaustion .......... flat 67 MiB, OOMKilled=false
-  * Docker / WSL2 .............. reproduces natively on Windows, no container
-  * Riot Vanguard (host BSODs) . vgk stopped, zero bugchecks, still crashes
-  * psycopg2-binary dual SSL ... source-built psycopg2, 1 OpenSSL, still crashes
-  * numpy / OpenBLAS ........... import removed entirely, still crashes
-  * charset_normalizer calls ... measured ZERO (the API sends charset=UTF-8)
-  * simplejson C speedups ...... forced stdlib json, crashed at 193
-  * psycopg2 connection churn .. 20,000 borrow/return cycles clean
-  * TLS handshake churn ........ pg_stat_ssl shows ssl=False
-
-**SIM-446 addressed it** by moving the HTTP transport to stdlib
-``urllib.request`` (the loader's default since), which completed a full 2,468-game
-season cleanly. This wrapper is therefore no longer the primary defence — but it
-is kept, because that evidence is statistical rather than a proven root cause, and
-one transient in-flight corruption still surfaced during the clean run.
-
-WHY A WRAPPER IS A LEGITIMATE ANSWER HERE
------------------------------------------
-The sweep is *idempotent and resumable by construction*: ``reload_game`` deletes
-and re-inserts one game inside a single transaction, and the shrink guard refuses
-to replace a game with fewer rows than it removed. A crash therefore cannot
-corrupt a game — it can only stop the run. So retrying is safe, and the only cost
-of a crash is lost progress, which this script eliminates by recording every
-completed ``game_pk`` and skipping it on the next attempt.
-
-It does NOT fix the underlying fault and should not be mistaken for one — it is
-the belt to SIM-446's braces. See docs/audit for the investigation record.
+The child process records a game only when the game loads: ``_dispatch_game``
+contains each game's failure, so "the dispatcher returned" does not mean "the
+game loaded". A season that ends with failed games runs again, and the new
+attempt retries just those games. An attempt with zero progress stops the run,
+because a game that fails every time would make it spin forever.
 
 USAGE
 -----
@@ -53,8 +25,8 @@ USAGE
     python ingest/games/resumable_sweep.py --season 2017 --end-season 2025
     python ingest/games/resumable_sweep.py --season 2017 --max-attempts 200
 
-Progress lives in ``.sweep_progress/<season>.txt`` (one game_pk per line) so a
-run can be interrupted and resumed at any time, including across reboots.
+The progress lives in ``.sweep_progress/<season>.txt`` (one game_pk per line), so
+a run can stop and resume at any time, across reboots too.
 """
 
 from __future__ import annotations
@@ -71,8 +43,8 @@ PROGRESS_DIR = REPO / ".sweep_progress"
 # How often --quiet emits a "still alive" line, in games.
 _HEARTBEAT_EVERY = 25
 
-# The child does the real work. It is run as a SUBPROCESS on purpose: the fault
-# kills the interpreter outright, so it cannot be caught in-process.
+# The child does the work. It runs as a SUBPROCESS because the fault kills the
+# interpreter, which no in-process handler can catch.
 _CHILD = r"""
 import logging, os, sys, pathlib
 sys.path.insert(0, r"{repo}")
@@ -143,18 +115,15 @@ def _done_count(progress: Path) -> int:
 
 
 def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tuple[int, bool, int]:
-    """Run one child attempt. Returns (exit_code, saw_complete_marker, failed_count).
+    """Run one child attempt; return ``(exit_code, saw_complete_marker, failed_count)``.
 
-    The child's output is STREAMED through to our stdout as it arrives. It has to
-    be captured (we read it to detect the completion marker and the fatal-error
-    signature), but capturing is not a licence to swallow it: an earlier version
-    printed only ``CHILD_SUMMARY``/``Fatal Python error`` lines, which meant a
-    multi-hour season looked completely dead from the outside. The per-game log
-    lines ARE the progress indicator — the sweep is long enough that silence is
-    indistinguishable from a hang.
+    The child's output streams to stdout as it arrives. The driver captures it to
+    find the completion marker and the crash text, but never swallows it: the
+    per-game log lines are the progress, and a multi-hour season with no output
+    looks the same as a hang.
 
-    ``--quiet`` keeps the filtered behaviour, but even then emits a heartbeat
-    every :data:`_HEARTBEAT_EVERY` games so the run is never fully silent.
+    ``--quiet`` prints only the summaries and the crash text, plus a heartbeat
+    every :data:`_HEARTBEAT_EVERY` games, so the run is never silent.
     """
     code = _CHILD.format(repo=str(REPO), native=str(native))
     proc = subprocess.Popen(
@@ -164,14 +133,14 @@ def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tupl
         stderr=subprocess.STDOUT,
         text=True,
         errors="replace",
-        bufsize=1,  # line-buffered: emit each line as it arrives, not in blocks
+        bufsize=1,  # line-buffered: each line arrives at once, not in blocks
     )
     complete = False
     games = 0
     failed = 0
     assert proc.stdout is not None
-    # readline() rather than `for line in proc.stdout` so streaming is explicit
-    # and cannot be defeated by iterator read-ahead.
+    # readline(), not `for line in proc.stdout`: the iterator's read-ahead can
+    # hold lines back.
     for line in iter(proc.stdout.readline, ""):
         if "CHILD_COMPLETE" in line:
             complete = True
@@ -196,6 +165,7 @@ def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tupl
 
 
 def main() -> int:
+    """Sweep each season until every game loads; return the exit code."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -241,14 +211,12 @@ def main() -> int:
                 break
 
             if complete:
-                # A season can reach the end of its schedule while
-                # individual games failed -- _dispatch_game contains those by
-                # design. Those games are deliberately absent from the progress
-                # file, so ANOTHER attempt retries exactly them and nothing else.
-                # A break here would report the season COMPLETE and leave each
-                # failed game on its old rows. Transient faults are the common case
-                # and succeed on retry; a deterministic one gains nothing and trips
-                # the zero-progress guard below.
+                # The season reached its end, but some games failed:
+                # _dispatch_game contains them, and the progress file leaves them
+                # out, so ANOTHER attempt retries exactly those games. A break
+                # here reports the season COMPLETE and leaves each failed game on
+                # its old rows. A transient fault succeeds on a retry; a fault that
+                # repeats gains nothing and trips the zero-progress check below.
                 print(
                     f"  attempt {attempt}: reached the end of the season but "
                     f"{failed} game(s) FAILED (+{gained} loaded, {mins:.1f} min) — "
@@ -263,8 +231,8 @@ def main() -> int:
                 )
 
             if gained == 0:
-                # No forward progress: a genuine per-game defect, not the
-                # stochastic fault. Retrying forever would spin.
+                # No progress: a game fails every time, which is not the random
+                # crash. A retry would spin forever.
                 print(
                     "  STOPPING: an attempt made zero progress, so a game is failing "
                     "deterministically rather than transiently — retrying would spin "

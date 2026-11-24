@@ -1,5 +1,5 @@
-"""The schedule helpers: the date windows of a range load, the final-game
-filter and the circuit-breaker limit.
+"""The schedule helpers: the date windows of a range load, the Final-game filter and the
+limit on games that fail in a row.
 """
 
 from __future__ import annotations
@@ -10,20 +10,19 @@ from datetime import (
     timedelta,
 )
 
-# The MLB schedule endpoint silently clamps any window wider than a year
-# to startDate + 365 and still answers HTTP 200. Slice below that so nothing is
-# lost, and leave headroom so a leap year cannot tip a slice over the limit.
+# The MLB schedule endpoint cuts any window wider than a year to startDate + 365
+# and still answers HTTP 200. The slices stay below that, with a day of headroom
+# for a leap year.
 _MAX_SCHEDULE_WINDOW_DAYS = 364
 
-# How many games may fail back-to-back before a run aborts. One bad feed
-# must be survivable across a 21,600-game sweep; an API outage or a schema
-# mismatch must not be, because it would otherwise "succeed" having loaded almost
-# nothing.
+# How many games may fail in a row before a run stops. A run must survive one bad
+# feed. It must not survive an API outage or a schema mismatch: such a run would
+# otherwise "succeed" with almost nothing loaded.
 _CONSECUTIVE_FAILURE_LIMIT = int(os.environ.get("ETL_CONSECUTIVE_FAILURE_LIMIT", "5"))
 
 
 def _date_chunks(start: date, end: date) -> list[tuple[date, date]]:
-    """Split an inclusive date range into <=_MAX_SCHEDULE_WINDOW_DAYS slices."""
+    """Split an inclusive date range into slices that the schedule endpoint answers in full."""
     chunks: list[tuple[date, date]] = []
     cursor = start
     while cursor <= end:
@@ -33,19 +32,12 @@ def _date_chunks(start: date, end: date) -> list[tuple[date, date]]:
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# Schedule filtering
-# ---------------------------------------------------------------------------
-
-
 def _schedule_game_is_final(game: dict) -> bool:
-    """True iff a schedule game entry is a completed ('Final') game.
+    """Return True when a schedule entry is a completed ('Final') game.
 
-    The historical loader pulls pitch-by-pitch Statcast data, which only exists
-    for games that have actually been played.  A season schedule for the CURRENT
-    year includes future / in-progress games (``abstractGameState`` 'Preview' /
-    'Live'); loading those wastes one fetch each (0 pitches) and inserts an empty
-    ``raw.games`` stub.  Gating on Final also makes ``refresh_seasons`` a correct
-    nightly incremental updater (it picks up games as they finish).
+    Only a played game has pitch-by-pitch data. The current season's schedule
+    also lists games not yet played or in progress ('Preview' / 'Live'). Loading
+    one wastes a fetch and writes an empty ``raw.games`` row. The filter also lets
+    a nightly ``refresh_seasons`` pick up each game as it finishes.
     """
     return game.get("status", {}).get("abstractGameState") == "Final"

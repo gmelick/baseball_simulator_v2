@@ -1,19 +1,18 @@
-"""The historical loader: MLB Stats API games into Postgres ``raw.*``.
+"""The historical loader: it loads MLB Stats API games into the Postgres ``raw.*`` tables.
 
-``HistoricalDataLoader`` fetches each game's live feed, writes the reference
-rows the game needs, then its pitch rows into ``raw.pitches`` and its non-pitch
-events into ``raw.play_events``. The row building, the validation, the
-venues, the schedule helpers, the reference rows and the writes live in
-the other modules of ``ingest/games/``. This module keeps the HTTP plumbing, the feed
-parser ``_fetch_game_pitches`` and the class, beside the names the tests patch
-(``_connect``, ``_http_get``, ``_fetch_game_pitches``).
+``HistoricalDataLoader`` fetches each game's live feed and writes the reference
+rows the game needs. Then it writes the pitch rows into ``raw.pitches`` and the
+non-pitch events into ``raw.play_events``. The other modules of ``ingest/games/``
+build, check and write the rows. This module keeps the HTTP calls, the feed
+parser ``_fetch_game_pitches`` and the class, beside the three names the tests
+patch: ``_connect``, ``_http_get`` and ``_fetch_game_pitches``.
 
 The flow
 --------
   MLB Stats API
        │
        ▼
-  _fetch_game_pitches()  ← fetches feed/live + coaches; returns (pitch_rows, game_dict)
+  _fetch_game_pitches()    ← fetches feed/live + coaches; returns (pitch_rows, game_dict)
        │
        ▼
   _ensure_prerequisites()  ← every foreign-key parent exists before raw.pitches
@@ -21,53 +20,49 @@ The flow
        │   The order follows the foreign keys:
        │     1. raw.venues    (no parents)
        │     2. raw.teams     (→ venues)
-       │     3. raw.players   (no parents; all pitcher/batter/fielder IDs in this game)
+       │     3. raw.players   (no parents; every player in the game's box score)
        │     4. raw.managers  (→ teams)
        │     5. raw.games     (→ venues, teams)
+       │   Then the starting lineups and the box score.
        │
        ▼
-  _build_row_dict()     ← renames fields, coerces types, converts '' → None
+  _build_row_dict()        ← renames the fields, converts the types, '' → None
        │
        ▼
-  _validate_row()       ← pre-insert validation (unexpected nulls, range checks)
+  _validate_row()          ← checks each row before the insert
        │
-       ├─ WARN only → row inserted with data_quality_flag=TRUE
-       └─ HARD ERROR  → row skipped, logged to etl_errors table
-       │
-       ▼
-  _batch_insert()       ← psycopg2 execute_batch, 500-row batches
+       ├─ WARNING    → the row is inserted with data_quality_flag = TRUE
+       └─ HARD ERROR → the row is skipped and logged to raw.etl_errors
        │
        ▼
-  raw.pitches           ← DB trigger raw.flag_pitch_quality() fires on insert
+  _batch_insert()          ← one transaction per game, 500-row batches
        │
        ▼
-  _log_freshness()      ← upserts raw.etl_data_freshness after each game
+  raw.pitches              ← the trigger raw.flag_pitch_quality() fires on insert
+       │
+       ▼
+  _log_freshness()         ← upserts raw.etl_data_freshness after each game
 
 Usage
 -----
-  # A historical backfill (the DSN defaults to BASEBALL_DB_DSN)
-  loader = HistoricalDataLoader()
-  loader.refresh_seasons(start_year=2022, end_year=2024)
+  loader = HistoricalDataLoader()   # the DSN comes from BASEBALL_DB_DSN
+  loader.refresh_seasons(start_year=2022, end_year=2024)                      # a backfill
+  loader.load_date_range(start_date=date(2025, 3, 18), end_date=date.today())  # a window
+  loader.load_game(game_pk=745528, season=2024)                               # one game
 
-  # Current-season incremental update
-  loader.load_date_range(start_date=date(2025, 3, 18), end_date=date.today())
-
-  # One game
-  loader.load_game(game_pk=745528, season=2024)
-
-Corrective re-ingest
---------------------
-``load_game`` CANNOT repair already-loaded data: the pitch INSERT carries
-``ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING``, so re-running
-it after a parser fix discards every row and reports success.  Use the reload
-path instead — it DELETEs the game's rows and re-inserts in one transaction:
+A corrective re-ingest
+----------------------
+``load_game`` CANNOT repair loaded data: the pitch insert carries
+``ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING``, so a rerun
+after a parser fix discards every row and reports success. Use the reload path:
+it deletes the game's rows and inserts the new ones in one transaction.
 
   loader.reload_game(game_pk=745528, season=2024)   # one game
   loader.refresh_seasons(2017, 2025, reload=True)   # every Final game
   loader.load_date_range(d1, d2, reload=True)       # a date window
 
-A reload sweep contains per-game failures (counted in the returned summary) so
-one malformed feed cannot abort a 21,600-game re-ingest.
+A range load counts each game's failure in its summary and carries on, so one
+malformed feed cannot stop a reload of every season.
 """
 
 from __future__ import annotations
@@ -124,9 +119,8 @@ _POLICY = RetryPolicy(retries=9, first_wait_s=2.0)
 HTTP_TIMEOUT_S = 30.0
 _USER_AGENT = "baseball-sim-etl/1.0 (+historical loader)"
 
-# The game types loaded. 'C' ("Championship") is left out: an obsolete MLB
-# game type from before the 2015+ window, and not in the raw.games CHECK
-# constraint (('R','P','S','A','D','F','L','W')), so such a game would raise a
+# The game types loaded. 'C' (an obsolete "Championship" type) is left out: the
+# raw.games CHECK constraint does not allow it, so such a game raises a
 # CheckViolation.
 GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 
@@ -168,8 +162,7 @@ def _log_summary(label: str, summary: dict[str, int]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Core per-game fetch — adapted from your write_rows()
-# Returns a list of raw dicts (one per pitch) instead of writing to a file.
+# The feed parser
 # ---------------------------------------------------------------------------
 
 
@@ -177,13 +170,16 @@ def _fetch_game_pitches(
     game_pk: int,
     batter_hand_cache: dict[int, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """
-    Replaces write_rows().  All the same parsing logic; returns a tuple of:
-      - pitch_rows: one dict per pitch, ready for _build_row_dict()
-      - game_dict:  the raw feed/live response, with manager info attached
-                    under game_dict['_managers'] for use by _ensure_prerequisites()
+    """Fetch one game's live feed and parse it into pitch rows.
 
-    batter_hand_cache is shared across games to avoid redundant API calls.
+    Returns ``(pitch_rows, game_dict)``:
+      - ``pitch_rows``: one dict per pitch, ready for ``_build_row_dict``.
+      - ``game_dict``: the feed/live response. It also carries the managers under
+        ``_managers`` (for ``_ensure_prerequisites``) and the non-pitch events
+        under ``_play_events``.
+
+    ``batter_hand_cache`` is shared across games, so each batter's hand is
+    fetched once.
     """
     game_dict = _connect(mlb_client.GAME_FEED_URL.format(game_pk=game_pk) + "?hydrate=alignment")
 
@@ -192,7 +188,7 @@ def _fetch_game_pitches(
     home_team = game_dict["gameData"]["teams"]["home"]["abbreviation"]
     away_team_id = game_dict["gameData"]["teams"]["away"]["id"]
     away_team = game_dict["gameData"]["teams"]["away"]["abbreviation"]
-    # Neutral-site games can ship with NO gameData.venue at all.
+    # A neutral-site game can ship with no gameData.venue at all.
     venue_id, venue_name = _resolve_venue(game_pk, game_dict["gameData"])
 
     home_coaches = _connect(
@@ -209,14 +205,14 @@ def _fetch_game_pitches(
     outs = 0
     prev_half = "bottom"
     pitch_rows: list[dict[str, Any]] = []
-    # Non-pitch events (pickoff, stepoff, balk, intentional walk) go to
-    # raw.play_events. They cannot live on a pitch row: an intentional walk is
-    # signalled rather than thrown, so its play has NO pitch events at all.
+    # The non-pitch events (pickoff, stepoff, balk, intentional walk) go to
+    # raw.play_events. A pitch row cannot hold them: an intentional walk is
+    # signalled, not thrown, so its play has NO pitch events.
     play_event_rows: list[dict[str, Any]] = []
-    # Base state ENTERING the current play, tracked at PLAY scope. The per-pitch
-    # `offense` block cannot supply it for a pitch-less play, which is exactly
-    # the case raw.play_events exists to capture, so it is carried forward from
-    # the previous play's POST state and cleared at each half-inning.
+    # The base state ENTERING the current play, tracked per play. The per-pitch
+    # `offense` block cannot supply it for a play with no pitch, the case
+    # raw.play_events exists for. It carries the previous play's post-play state
+    # and resets at each half-inning.
     runners_state_before = 0
 
     for play in game_dict["liveData"]["plays"]["allPlays"]:
@@ -226,30 +222,24 @@ def _fetch_game_pitches(
         if top_bot != prev_half:
             outs = 0
             runners_state_before = 0
-        # Advance the half-inning marker HERE, at the play level, so a play
-        # with NO pitches (an intentional walk) reaches it too. Advanced only
-        # inside the pitch branch, the next play would reset the base state a
-        # second time and erase the state carried from the pitch-less play.
+        # Move the half-inning marker per play, not per pitch. Per pitch, a play
+        # with no pitch (an intentional walk) skips it, and the next play resets
+        # the base state a second time.
         prev_half = top_bot
-        # An extra-innings half does NOT start with the bases empty —
-        # the automatic runner is on second, and the reset above just erased
-        # him. THE FIX IS IN THE FEED: the placement is announced by an
-        # `action` playEvent with eventType `runner_placed` that carries the
-        # base directly (`base: 2`, verified on game 744882). The event can sit
-        # at any index inside the half's first play (0, 1 and 3 all measured),
-        # so every playEvent is scanned; the runner is aboard from the first
-        # pitch regardless of where the feed logged the announcement.
+        # An extra-inning half starts with the automatic runner on second, and
+        # the reset above just erased him. The feed announces him with an
+        # `action` playEvent of eventType `runner_placed` that carries the base
+        # (`base: 2`). The event can sit at any index of the half's first play,
+        # so every playEvent is scanned; the runner is aboard from the first pitch.
         for _ev in play.get("playEvents") or []:
             if str(((_ev.get("details") or {}).get("eventType")) or "") == "runner_placed":
                 _placed_base = _ev.get("base")
                 if _placed_base in (1, 2, 3):
                     runners_state_before |= 1 << (int(_placed_base) - 1)
-        # The PRE-play out count, read from the payload rather than
-        # accumulated. `playEvents[0].count.outs` is the state ENTERING the play;
-        # `play.count.outs` is the state after it. Verified on real games —
-        # ab=13 Flyout reads playEvents[0].outs=0 and play.count.outs=1.
-        # A pitch-less play (an intentional walk) has no events to read, so it
-        # falls back to the value carried from the previous play.
+        # The out count ENTERING the play, read from the payload, not accumulated.
+        # `playEvents[0].count.outs` is the state entering the play;
+        # `play.count.outs` is the state after it. A play with no events (an
+        # intentional walk) keeps the value carried from the previous play.
         _first_events = play.get("playEvents") or []
         if _first_events:
             outs = int((_first_events[0].get("count") or {}).get("outs") or 0)
@@ -258,22 +248,20 @@ def _fetch_game_pitches(
                 play,
                 game_pk=game_pk,
                 game_date=game_date,
-                # `_fetch_game_pitches` never receives the season — the caller
-                # (`load_game`) holds it and stamps the pitch rows later. An MLB
-                # season never spans a calendar year, so the official date's year
-                # is the season.
+                # The caller holds the season and stamps the pitch rows later. An
+                # MLB season never spans two calendar years, so the official
+                # date's year is the season.
                 season=int(str(game_date)[:4]),
                 outs_before_play=outs,
                 runners_state_before=runners_state_before,
-                # The PRE-play score, the same numbers the pitch rows
-                # get. The extractor must not read the play's own `result`
-                # scores — those are post-play.
+                # The PRE-play score, as the pitch rows record it. The play's own
+                # `result` scores are post-play.
                 home_score_before=home_score_before,
                 away_score_before=away_score_before,
             )
         )
-        # Carry the POST state forward for the next play. Assigned here, right
-        # after the extract call above has consumed the pre-play value.
+        # Carry the post-play base state to the next play. This runs after the
+        # extract call has used the pre-play value.
         _matchup = play.get("matchup") or {}
         runners_state_before = (
             (1 if _matchup.get("postOnFirst") else 0)
@@ -281,29 +269,21 @@ def _fetch_game_pitches(
             + (4 if _matchup.get("postOnThird") else 0)
         )
         balls, strikes = 0, 0
-        # Bind the post-play score at PLAY scope. These are assigned
-        # inside the pitch branch but read at play scope by the score re-sync
-        # below — and Python evaluates a `.get(key, default)` default EAGERLY, so
-        # the read happens even when the key is present. A pitch-less FIRST play
-        # (every event taken by the non-pitch `continue`) would otherwise raise
-        # NameError before the re-sync could run.
+        # Bind the post-play score per play. The pitch loop assigns it, but the
+        # score sync after the loop reads it: Python evaluates a `.get(key,
+        # default)` default eagerly. Without this line, a first play with no
+        # pitch raises NameError.
         home_score_after, away_score_after = home_score_before, away_score_before
-        # The `.replace(",", "")` here and on the pitch description was a
-        # leftover from the CSV-writing ancestor of this loader. Both values are
-        # bound psycopg2 parameters now, so stripping commas was pure lossy
-        # mutation — it stored "In play out(s)" for "In play, out(s)" on every
-        # one of ~6.55M rows.
         play_description = play["result"].get("description", "")
         event = ""
         pinch_hitter = pinch_runner = pitcher_sub = defensive_sub = False
 
         for i in range(len(play["playEvents"])):
-            # --- Substitution detection ---
-            # Walk the play's events in order.  A substitution is recorded on the
-            # non-pitch event where it actually occurs and stays latched until the
-            # next pitch row is written (the flags are reset after the append
-            # below), so the flag lands on the first pitch thrown AFTER the
-            # substitution rather than on every pitch of the plate appearance.
+            # --- Substitutions ---
+            # A flag latches on the non-pitch event where the substitution
+            # happens, and the reset after the append below clears it. So the
+            # flag lands on the first pitch AFTER the substitution, not on every
+            # pitch of the plate appearance.
             sub_event = play["playEvents"][i]
             if not sub_event["isPitch"]:
                 evt_type = sub_event.get("details", {}).get("eventType", "")
@@ -325,7 +305,7 @@ def _fetch_game_pitches(
             pre_runner_2b = offense.get("second", {}).get("id", "")
             pre_runner_3b = offense.get("third", {}).get("id", "")
 
-            # --- Mid-pitch events (SB, WP/PB) ---
+            # --- The non-pitch events after this pitch (steals, wild pitches) ---
             sb_attempt_2b = sb_attempt_3b = sb_attempt_home = False
             sb_success_2b = sb_success_3b = sb_success_home = False
             wild_pitch_passed_ball = False
@@ -433,33 +413,28 @@ def _fetch_game_pitches(
                 coord_x = hd["coordinates"].get("coordX", "")
                 coord_y = hd["coordinates"].get("coordY", "")
                 if coord_x != "" and coord_y != "":
-                    # A coord_y above 198.27 is BEHIND home plate (a foul pop
-                    # into the screen/backstop). `arctan` of a negative
-                    # denominator mirrors those into the fair-field quadrant, so
-                    # a ball struck behind the plate reported a plausible pull or
-                    # oppo angle. `arctan2` is not the fix either: the true angle
-                    # lies outside +/-90 deg and the pull/oppo thresholds cannot
-                    # represent it. Leave spray_angle NULL for those ~1-2% of
-                    # batted balls rather than record a fabricated direction.
+                    # A coord_y above 198.27 is BEHIND home plate (a foul pop into
+                    # the backstop). `atan` mirrors it into fair ground, and its
+                    # true angle lies outside +/-90 degrees, which the pull and
+                    # opposite-field thresholds cannot represent. So spray_angle
+                    # stays NULL rather than record a false direction.
                     if coord_y > 198.27:
                         spray_angle = ""
                     elif coord_y == 198.27:
                         spray_angle = 90 if coord_x > 125.42 else -90
                     else:
-                        # `math.atan`, not `np.arctan`: importing numpy for one
-                        # scalar would load OpenBLAS, libgfortran and libquadmath
-                        # into every ETL process.
+                        # `math.atan`, not `np.arctan`: numpy would load OpenBLAS
+                        # and its libraries into every ETL process.
                         spray_angle = math.atan((coord_x - 125.42) / (198.27 - coord_y)) * (
                             180 / math.pi
                         )
                 batted_ball_type = hd["trajectory"]
                 hit_location = hd.get("location", "")
 
-            # COUNT the outs this pitch caused; do not derive them.
-            # `count.outs` is the out total entering the play and is CONSTANT
-            # across every pitch of it, so no subtraction of running totals can
-            # give the outs of one pitch. The runner loop below counts them,
-            # baserunning outs included.
+            # COUNT the outs this pitch caused; do not derive them. `count.outs`
+            # is the play's entering total, the same on every pitch of the play,
+            # so no subtraction gives one pitch's outs. The runner loop below
+            # counts them, baserunning outs included.
             outs_on_pitch = 0
             runner_on_first_score = runner_on_second_score = runner_on_third_score = False
             home_score_after = home_score_before
@@ -471,10 +446,9 @@ def _fetch_game_pitches(
             throwing_error_dict: dict[str, Any] = {}
             assist_tracker = putout_tracker = throwing_error_tracker = 1
             # raw.pitches has field_assist_1..5, field_putout_1..3 and
-            # throwing_error_1..2. Multi-runner rundowns are rare enough that a
-            # 6th assist is not worth its own column, but the OVERFLOW must be
-            # visible, so a reader can exclude or measure those plays instead of
-            # silently under-counting assists.
+            # throwing_error_1..2. A credit past the last slot (a rundown with
+            # many runners) sets this flag, so a reader can exclude or measure
+            # those plays instead of under-counting the credits.
             field_assist_6_plus = False
             post_runner_1b = pre_runner_1b
             post_runner_2b = pre_runner_2b
@@ -516,9 +490,9 @@ def _fetch_game_pitches(
                             fielding_error = pid
                         elif c == "f_error_dropped_ball":
                             dropped_ball = pid
-                    # Detect runner thrown out advancing on a batted ball
-                    # (not stolen base, not the batter-runner).  The API sets
-                    # isOut=True and movement.end="" for these plays.
+                    # A runner thrown out advancing on a batted ball (not on a
+                    # steal, and not the batter). The feed sets isOut=True and an
+                    # empty movement.end on these plays.
                     if runner["movement"].get("isOut", False):
                         rid = runner["details"]["runner"]["id"]
                         is_sb_play = sb_attempt_2b or sb_attempt_3b or sb_attempt_home
@@ -536,32 +510,27 @@ def _fetch_game_pitches(
                             post_runner_2b = ""
                         if rid == post_runner_3b:
                             post_runner_3b = ""
-                        # The pitch that CAUSED the out owns it. This sits inside
-                        # the `[i .. max_play_index]` window, so an index OTHER than
-                        # `i` means a non-pitch event that followed this pitch.
-                        #
-                        # Where every displaced out actually lands,
-                        # MEASURED over 357 games / 19,072 outs (131 displaced):
-                        #   * 53 pickoff-family outs -> `raw.play_events`
-                        #   * 63 mid-plate-appearance caught stealings -> the
-                        #     `sb_attempt_*`/`sb_success_*` columns on this pitch
-                        #     row (the scan above), which the IP formula counts
-                        #   * 7 batter strikeouts the feed anchors to a trailing
-                        #     `no_pitch` event -> the PA's `events` column, the
-                        #     canonical out label
-                        #   * ~8 runner outs on `other_out`/`wild_pitch` actions
-                        #     reach NO table when they do not end the PA —
-                        #     ~0.04% of all outs, accepted and documented in
+                        # The pitch that CAUSED the out owns it. The runner sits in
+                        # the `[i .. max_play_index]` window, so an index other
+                        # than `i` is a non-pitch event after this pitch. Such an
+                        # out lands elsewhere:
+                        #   * a pickoff-family out -> `raw.play_events`
+                        #   * a caught stealing during the plate appearance -> the
+                        #     `sb_attempt_*` / `sb_success_*` columns of this row,
+                        #     which the innings-pitched formula counts
+                        #   * a strikeout the feed anchors to a trailing `no_pitch`
+                        #     event -> the plate appearance's `events` column
+                        #   * a runner out on an `other_out` / `wild_pitch` action
+                        #     that does not end the plate appearance reaches NO
+                        #     table: a small loss, accepted and documented in
                         #     ingest/statcast_events.py.
                         if runner["details"].get("playIndex") == i:
                             outs_on_pitch += 1
-                        # A retired runner is done: he cannot also score or reach
-                        # a base. Without this the `movement.end` branches below
-                        # run anyway, and a feed that populates BOTH `isOut` and
-                        # `end` for the same runner (gumbo normally carries the
-                        # base in `outBase` and leaves `end` null, but it is not
-                        # guaranteed for every event type) would re-seat the
-                        # runner on the base we just cleared him from.
+                        # A retired runner cannot also score or reach a base. The
+                        # feed normally leaves `end` null on an out (the base is
+                        # in `outBase`), but not for every event type. Without
+                        # this `continue`, an `end` would re-seat the runner on the
+                        # base just cleared.
                         continue
                     if runner["movement"]["end"] == "score":
                         rid = runner["details"]["runner"]["id"]
@@ -599,8 +568,8 @@ def _fetch_game_pitches(
                     if runner["movement"]["end"] == "1B":
                         post_runner_1b = runner["details"]["runner"]["id"]
 
-            # Assemble raw dict using YOUR variable names — COLUMN_RENAME handles
-            # the mapping to schema names in _build_row_dict().
+            # The parser's names; COLUMN_RENAME maps them to the column names in
+            # _build_row_dict().
             raw_row = {
                 "game_pk": game_pk,
                 "game_date": game_date,
@@ -629,11 +598,7 @@ def _fetch_game_pitches(
                 "fld_score": field_score,
                 "balls": balls,
                 "strikes": strikes,
-                # This read a running variable that was updated AFTER the
-                # row was built, so every row carried the PREVIOUS play's entry
-                # value. Measured against the payload: raw.pitches.outs was wrong
-                # on 46% of plate appearances, almost always one too low. The
-                # pitch knows its own out count; ask it.
+                # The out count entering the play, read from the pitch itself.
                 "outs": int((play_event.get("count") or {}).get("outs") or 0),
                 "pitch_code": pitch_code,  # → type
                 "pitch_code_description": pitch_code_description,  # → description
@@ -725,70 +690,56 @@ def _fetch_game_pitches(
 
             pitch_rows.append(raw_row)
 
-            # Reset the substitution flags now that this pitch has consumed them.
-            # This is load-bearing: the scan above latches a flag on the event
-            # where the substitution occurs, and this reset is what stops it
-            # broadcasting to the rest of the plate appearance.
+            # Clear the substitution flags: this pitch used them. Without the
+            # reset, a flag spreads to the rest of the plate appearance.
             pinch_hitter = pinch_runner = pitcher_sub = defensive_sub = False
             balls = play_event["count"]["balls"]
             strikes = play_event["count"]["strikes"]
             home_score_before = home_score_after
             away_score_before = away_score_after
-        # Carry the POST-play out count so a pitch-less play that follows
-        # still knows the state it began in. Reset to 0 on a half-inning change
-        # above, because the last play of a half-inning posts 3.
+        # Carry the post-play out count, so a following play with no pitch knows
+        # its entering state. The half-inning check above resets it, because a
+        # half-inning's last play posts 3.
         outs = int((play.get("count") or {}).get("outs") or outs)
         home_score_before = play["result"].get("homeScore", home_score_after)
         away_score_before = play["result"].get("awayScore", away_score_after)
 
-    # Attach manager info so _ensure_prerequisites() can use it without
-    # re-fetching.  Stored under a private key to avoid colliding with any
-    # real MLB API fields.
+    # Attach the managers, so _ensure_prerequisites() need not fetch them again.
+    # The key is private, so it cannot collide with a real feed field.
     game_dict["_managers"] = {
         "home_manager_id": home_manager_id,
         "home_manager_name": home_manager_name,
         "away_manager_id": away_manager_id,
         "away_manager_name": away_manager_name,
     }
-    # Ride on game_dict rather than widening the return. This function
-    # already hands back side-channel data that way (`_managers`), and 38 tests
-    # mock it as a 2-tuple — a third element breaks every one of them for no
-    # gain.
+    # The play events ride on game_dict too, not in a wider return: the tests
+    # mock this function as a 2-tuple.
     game_dict["_play_events"] = play_event_rows
     return pitch_rows, game_dict
 
 
 # ---------------------------------------------------------------------------
-# Main ETL class
+# The loader
 # ---------------------------------------------------------------------------
 
 
 class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
-    """
-    Fetches pitch-by-pitch data from the MLB Stats API and loads it into
-    raw.pitches in PostgreSQL.
+    """Load MLB Stats API games, pitch by pitch, into the Postgres ``raw.*`` tables.
 
-    Parameters
-    ----------
-    dsn : str
-        psycopg2 connection string, e.g.
-        "postgresql://user:password@localhost:5432/baseball"
+    ``dsn`` is a psycopg2 connection string; it defaults to ``BASEBALL_DB_DSN``.
     """
 
     def __init__(self, dsn: str | None = None) -> None:
-        # The DSN defaults to the BASEBALL_DB_DSN environment variable.
-        # Pass an explicit DSN to override (test fixtures, ad-hoc backfills).
-        # require_dsn raises a clear error if neither is set, rather than
-        # letting psycopg2 surface a confusing "could not connect" error mid-run.
+        # An explicit DSN overrides BASEBALL_DB_DSN (test fixtures, ad-hoc
+        # backfills). require_dsn raises a clear error when neither is set,
+        # instead of a confusing "could not connect" in the middle of a run.
         self.dsn = dsn or require_dsn()
 
-        # Lazily-initialised connection pool.  Created on first DB use
-        # (see _ensure_pool) and shared across every game in a backfill run,
-        # rather than opening/closing a fresh psycopg2 connection per round-trip.
+        # Created on the first database use (_ensure_pool) and shared by every
+        # game of a run.
         self._pool: psycopg2.pool.ThreadedConnectionPool | None = None
-        # Guards the lazy construction above (see _ensure_pool).
         self._pool_lock = threading.Lock()
-        # Circuit breaker for _dispatch_game — see its docstring.
+        # The games that failed in a row (see _dispatch_game).
         self._consecutive_failures = 0
 
     # ------------------------------------------------------------------
@@ -796,10 +747,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     # ------------------------------------------------------------------
 
     def load_game(self, game_pk: int, season: int, batter_hand_cache: dict | None = None) -> dict:
-        """
-        Fetch and load a single game.  Returns a summary dict with counts
-        of inserted, skipped (hard errors), and flagged (warnings) rows.
-        """
+        """Fetch and load one game; return the counts of rows inserted, skipped and flagged."""
         return self._load_game(game_pk, season, batter_hand_cache, replace=False)
 
     def reload_game(
@@ -810,27 +758,22 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         *,
         allow_shrink: bool = False,
     ) -> dict:
-        """Re-fetch a game and OVERWRITE its existing ``raw.pitches`` rows.
+        """Re-fetch a game and REPLACE its stored ``raw.pitches`` rows; return the counts.
 
-        This is the corrective-ingest entry point.  ``load_game`` cannot repair
-        already-loaded data: ``INSERT … ON CONFLICT (game_pk, at_bat_number,
-        pitch_number) DO NOTHING`` discards every colliding row, so re-running it
-        after a parser fix writes nothing at all.  ``reload_game`` deletes the
-        game's rows and re-inserts the freshly-parsed ones inside a single
-        transaction, so the game is never left half-deleted if the insert fails.
+        This is the corrective path. ``load_game`` cannot repair loaded data: its
+        insert carries ``ON CONFLICT … DO NOTHING``, so a rerun after a parser fix
+        writes nothing. ``reload_game`` deletes the game's rows and inserts the new
+        ones in one transaction, so a failed insert never leaves the game
+        half-deleted. Use it after any parser change that alters a column's value.
+        The returned ``inserted`` count is measured from the table, so a no-op shows.
 
-        Use this after any change to ``_fetch_game_pitches`` / ``_build_row_dict``
-        / ``_validate_row`` that changes a column's VALUE.  The returned
-        ``inserted`` count is measured against the table, so a no-op is visible.
+        It also re-runs ``_ensure_prerequisites``. That writes the players, the
+        ``raw.games`` row, the starting lineups and the box score again; it adds a
+        venue, a team or a manager only when one is missing.
 
-        Also re-runs ``_ensure_prerequisites``, which re-upserts the venues,
-        teams, players, managers, the ``raw.games`` row and the starting
-        lineups.
-
-        Refuses to shrink a game: if the re-parse yields fewer rows than are
-        stored, the transaction is rolled back and :class:`ReloadShrinkError` is
-        raised rather than committing the deletion.  Pass ``allow_shrink=True``
-        only when the game genuinely has fewer pitches than the stored copy.
+        It refuses to shrink a game: when the new parse has fewer rows than are
+        stored, it rolls back and raises :class:`ReloadShrinkError`. Pass
+        ``allow_shrink=True`` only when the game truly has fewer pitches.
         """
         return self._load_game(
             game_pk, season, batter_hand_cache, replace=True, allow_shrink=allow_shrink
@@ -845,7 +788,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         replace: bool,
         allow_shrink: bool = False,
     ) -> dict:
-        """Shared body of :meth:`load_game` / :meth:`reload_game`."""
+        """The shared body of :meth:`load_game` and :meth:`reload_game`."""
         if batter_hand_cache is None:
             batter_hand_cache = {}
         log.info("%s game %s …", "Reloading" if replace else "Loading", game_pk)
@@ -872,19 +815,17 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     def load_date_range(
         self, start_date: date, end_date: date, *, reload: bool = False
     ) -> dict[str, int]:
-        """Incremental loader — fetches all games between two dates.
+        """Load every Final game between two dates, inclusive; return the summary counts.
 
-        ``reload=True`` bypasses the ``_game_already_loaded`` skip and routes
-        every game through :meth:`reload_game`, overwriting existing pitch rows.
-        Use it to re-ingest a window after a parser fix; the default (False)
-        keeps the cheap incremental behaviour.
+        The default skips a game already loaded. ``reload=True`` sends every game
+        through :meth:`reload_game`, which replaces its stored rows: the way to
+        re-ingest a window after a parser fix.
 
-        * The MLB schedule endpoint clamps any window wider than 365 days to
-          ``startDate + 365`` and still answers HTTP 200, so the window is cut
-          into slices of at most 365 days, and each slice's returned coverage
-          is checked against what was asked for.
-        * Only Final games load (as in :meth:`refresh_seasons`): a game loaded
-          in progress would read as loaded and never be completed.
+        The MLB schedule endpoint cuts a window wider than a year and still answers
+        HTTP 200. So the range goes out in slices (:func:`_date_chunks`), and the
+        loader warns when a slice's answer stops short of the slice's end.
+
+        Raises ValueError when ``end_date`` precedes ``start_date``.
         """
         if end_date < start_date:
             raise ValueError(f"end_date {end_date} precedes start_date {start_date}")
@@ -901,8 +842,8 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             }
             schedule = _connect(mlb_client.SCHEDULE_URL, params)["dates"]
 
-            # Coverage check: a clamped or short response is otherwise
-            # indistinguishable from "there were simply no games".
+            # A cut-short answer looks the same as a stretch with no games, so
+            # check how far the answer reaches.
             returned = [d["date"] for d in schedule if d.get("date")]
             if returned:
                 last = date.fromisoformat(max(returned))
@@ -934,18 +875,15 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         *,
         reload: bool = False,
     ) -> dict[str, int]:
-        """
-        Full historical backfill.  Mirrors refresh_plays() from the original
-        script.  Skips games that are already fully loaded.
+        """Load every Final game of the seasons from ``start_year`` to ``end_year``.
 
-        ``reload=True`` bypasses the ``_game_already_loaded`` skip and routes
-        every Final game through :meth:`reload_game`, overwriting its existing
-        pitch rows.  This is the supported way to re-ingest a season (or all
-        seasons) after a parser fix — the default path cannot repair loaded data
-        because the INSERT carries ``ON CONFLICT … DO NOTHING``.
+        Returns the summary counts. ``end_year`` defaults to last season. The
+        default skips a game already loaded. ``reload=True`` sends every Final
+        game through :meth:`reload_game`, which replaces its stored rows: the way
+        to re-ingest seasons after a parser fix.
         """
         if end_year is None:
-            end_year = datetime.today().year - 1  # don't include current season here
+            end_year = datetime.today().year - 1  # the current season is left out
 
         summary = _empty_summary()
 
@@ -982,13 +920,11 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     ) -> None:
         """Send every Final game of the schedule's dates to :meth:`_dispatch_game`.
 
-        The loop skips the entry of a rescheduled or resumed game. It loads
-        Final games only: only a completed game carries full pitch-by-pitch
-        data, and a game loaded in progress reads as loaded and is never
-        completed. The gate also keeps the current season from pulling
-        thousands of unplayed games (0 pitches, one wasted fetch and an empty
-        ``raw.games`` stub each), so each nightly run picks up the games that
-        have newly become Final.
+        The loop skips the entry of a rescheduled or resumed game. It loads Final
+        games only: only a completed game has full pitch-by-pitch data, and a game
+        loaded in progress reads as loaded and is never completed. The filter also
+        keeps the current season from fetching its unplayed games, so each nightly
+        run picks up the games newly Final.
 
         ``date_log`` is the caller's log line for each date. ``season`` is the
         season of every game; without it, each game takes its date's year.
@@ -1017,19 +953,17 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         reload: bool,
         summary: dict[str, int],
     ) -> None:
-        """Route one scheduled game to load/reload and tally the outcome.
+        """Load or reload one scheduled game, and add its outcome to ``summary``.
 
-        Both paths contain per-game failures. The parser is full of hard
-        subscripts on third-party JSON (``pd_data["strikeZoneTop"]``,
-        ``hd["trajectory"]``, ``defense["catcher"]["id"]``), so one malformed
-        feed would otherwise unwind the whole run, and the nightly chain (which
-        runs under ``set -eu``) would stop on the same game every night.
+        A game's failure is counted, logged and contained. The parser subscripts
+        third-party JSON directly (``pd_data["strikeZoneTop"]``,
+        ``hd["trajectory"]``), so one malformed feed would otherwise stop the run,
+        and the nightly chain (``set -eu``) would stop on the same game every night.
 
-        Containment is bounded, not blanket: ``_CONSECUTIVE_FAILURE_LIMIT``
-        successive failures re-raise. That is the distinction that matters — "one
-        bad game" must be survivable, but "the MLB API is down" or "the DB is
-        rejecting every row" must still fail loudly rather than quietly producing
-        a run that loaded almost nothing.
+        The containment has a limit: ``_CONSECUTIVE_FAILURE_LIMIT`` failures in a
+        row raise RuntimeError. One bad game must be survivable. An API outage, or
+        a database that rejects every row, must fail loudly, not finish a run that
+        loaded almost nothing.
         """
         summary["attempted"] += 1
         try:
@@ -1063,30 +997,26 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
 
         self._consecutive_failures = 0
         summary["loaded"] += 1
-        # Carry the measured row count up: {attempted, loaded, failed} alone
-        # cannot distinguish "re-wrote 300 pitches" from "wrote nothing", and a
-        # sweep that reports 21,600 loaded / 0 rows is the failure mode the whole
-        # reload path exists to make visible.
+        # Carry the measured row count up: the game counts alone cannot tell a
+        # full rewrite from a write of nothing.
         summary["rows_written"] += int(result.get("inserted", 0))
 
     # ------------------------------------------------------------------
-    # FK prerequisite checks — run before every raw.pitches insert
+    # The foreign-key parents, written before every raw.pitches insert
     # ------------------------------------------------------------------
 
     def _ensure_prerequisites(self, game_pk: int, game_dict: dict) -> None:
-        """
-        Guarantees that every FK parent of raw.pitches exists in the database
-        before any pitch rows are inserted.  Runs in FK dependency order:
+        """Make sure every foreign-key parent of ``raw.pitches`` exists before the insert.
+
+        The order follows the foreign keys:
 
             raw.venues  →  raw.teams  →  raw.players
                                       →  raw.managers
                                       →  raw.games
 
-        Each sub-method does a single batch existence check against the DB
-        and only hits the MLB Stats API for IDs that are actually missing.
-        A historical backfill across 3 seasons will find most records already
-        present after the first few games; subsequent games trigger zero API
-        calls for the entities they share.
+        Then it writes the starting lineups and the box score. A step checks the
+        database first and calls the MLB Stats API only for a missing id, so after
+        the first games of a backfill most games make no extra call.
         """
         gd = game_dict["gameData"]
         managers = game_dict["_managers"]
@@ -1101,30 +1031,28 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         self._ensure_teams(home_team_id, away_team_id, season, gd)
         self._ensure_players(game_dict)
         self._ensure_managers(managers, home_team_id, away_team_id, season, game_date)
-        # Pass the FULL game_dict so _ensure_game can read the linescore
-        # + decisions (under liveData, not gameData), then ingest the lineups.
+        # The FULL game_dict: the linescore and the decisions are under liveData.
         self._ensure_game(game_pk, season, game_dict, managers)
         self._ensure_game_lineups(game_pk, season, game_dict)
-        # The official per-player box score (the prop ground truth) from
-        # the same in-hand payload. Non-fatal: a failure logs a warning and never
-        # fails the game load.
+        # The official box score, the truth the props are graded on, from the
+        # same payload. A failure here logs a warning and never fails the game.
         self._ensure_game_player_stats(
             game_pk, season, game_date, game_dict, home_team_id, away_team_id
         )
 
-    # --- 1. Venues ----------------------------------------------------------
+    # --- Venues -------------------------------------------------------------
 
     def _ensure_venue(self, venue_id: int, season: int, *, force: bool = False) -> None:
-        """
-        Upserts raw.venues if the venue_id is not already present.
-        Fetches full venue details (dimensions, surface, roof) from the
-        MLB venues endpoint when the record is missing.
+        """Upsert the ``raw.venues`` row of a venue and season when it is missing.
 
-        ``force=True`` skips the existence check and re-fetches, so a row
-        already present can be CORRECTED (the INSERT carries ``ON CONFLICT … DO
-        UPDATE``). ``ingest/games/reload_games.py --refresh-venues`` uses it; a venue
-        row cannot simply be deleted and reloaded, because raw.pitches
-        references it.
+        The dimensions come from Baseball Savant's park-factor page, with the
+        venue page as the fallback. The surface, the roof and the location come
+        from the MLB venues endpoint.
+
+        ``force=True`` skips the existence check and re-fetches, so a stored row
+        can be CORRECTED (the insert updates on a conflict). ``reload_games.py
+        --refresh-venues`` uses it: a venue row cannot be deleted and reloaded,
+        because ``raw.pitches`` references it.
         """
         if not force:
             with self._get_conn() as conn, conn.cursor() as cur:
@@ -1172,7 +1100,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         field = v.get("fieldInfo", {})
         location = v.get("location", {})
 
-        # Surface: API returns "Artificial Turf" or "Grass" variants
+        # The feed's turf type reads "Artificial Turf" or a kind of "Grass".
         surface_raw = field.get("turfType", "Grass")
         surface = (
             "Turf"
@@ -1180,7 +1108,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             else "Grass"
         )
 
-        # Roof type mapping
+        # The feed's roof type → the raw.venues value.
         roof_raw = field.get("roofType", "Open")
         roof_map = {"Open": "Open", "Retractable": "Retractable", "Indoor": "Dome", "Dome": "Dome"}
         roof_type = roof_map.get(roof_raw, "Open")
@@ -1215,13 +1143,9 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                     (
                         venue_id,
                         season,
-                        # Was `dimensions.get("venu_name_short", " ")` — a
-                        # typo (missing the 'e'), so the key NEVER matched and every
-                        # row fell through to the " " default. All 331 rows in
-                        # raw.venues had a blank name. The two payload shapes use
-                        # different keys: the park-factors scrape has
-                        # `venue_name_short`, the statcast-venue fallback has `name`;
-                        # statsapi's own record is the last resort.
+                        # The two Savant payloads name the venue under different
+                        # keys: `venue_name_short` (park factors) and `name` (the
+                        # venue page). The MLB record is the last resort.
                         _first_nonblank(
                             dimensions.get("venue_name_short"),
                             dimensions.get("name"),
@@ -1249,25 +1173,21 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                 )
             conn.commit()
 
-    # --- 2. Teams -----------------------------------------------------------
-
-    # --- 3. Players ---------------------------------------------------------
+    # --- Players ------------------------------------------------------------
 
     def _ensure_players(self, game_dict: dict) -> None:
-        """
-        Upserts raw.players for every player appearing in this game's boxscore.
+        """Upsert ``raw.players`` for every player in the game's box score.
 
-        The person record comes from the feed's own ``gameData.players.ID<pid>``
-        (no extra HTTP call), then the boxscore stub, then ``/people/{pid}``. A
-        player whose handedness cannot be established is skipped, never
-        invented: ``simulation/lineup_resolver`` reads ``bats`` and ``throws``
-        straight into the full-pool sampler's only hard pre-filter, and there is
-        no other ``UPDATE raw.players`` to repair a wrong hand. Every player in
-        the boxscore is upserted, so a wrong row is corrected on the next
-        reload (``raw.players`` has no season column).
+        The person record comes from the feed's ``gameData.players.ID<pid>`` (no
+        extra HTTP call), then the box-score entry, then ``/people/{pid}``. A
+        player whose batting or throwing hand stays unknown is skipped, never
+        guessed: ``simulation/lineup_resolver`` feeds ``bats`` and ``throws`` into
+        the sampler's hard filter, and nothing else corrects a wrong hand.
+        ``raw.players`` has no season column, so the next reload corrects a wrong
+        row.
         """
         boxscore = game_dict.get("liveData", {}).get("boxscore", {}).get("teams", {})
-        # The feed's own person dictionary: full records, already fetched.
+        # The feed's own person records, already fetched.
         game_people = game_dict.get("gameData", {}).get("players", {}) or {}
 
         players_raw: dict[int, dict] = {}
@@ -1282,7 +1202,7 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
         rows: list[tuple] = []
         skipped: list[int] = []
         for pid, pdata in players_raw.items():
-            # Merge, most-complete first: gameData.players > boxscore stub.
+            # Merge, the fullest record first: gameData.players, then the box score.
             person: dict[str, Any] = {}
             person.update(game_people.get(f"ID{pid}", {}) or {})
             for k, v in (pdata.get("person") or {}).items():
@@ -1292,9 +1212,8 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             throws = (person.get("pitchHand") or {}).get("code")
 
             if not bats or not throws:
-                # Last resort: the dedicated person endpoint. A failure here is
-                # NOT papered over — the player is skipped so a later reload can
-                # pick him up with real data.
+                # The last resort: the person endpoint. On a failure the player is
+                # skipped, so a later reload can add him with real data.
                 try:
                     people = _connect(mlb_client.PEOPLE_URL.format(player_id=pid)).get("people", [])
                     if not people:
@@ -1312,11 +1231,9 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
             name = person.get("fullName") or ""
             first = person.get("firstName") or ""
             last = person.get("lastName") or ""
-            # `position` in the boxscore is the player's PRIMARY position,
-            # not the slot he happened to fill this game, so it is safe to store.
-            # The default is 'UT' (utility), not 'P' — defaulting to pitcher
-            # silently asserted a fact about anyone whose position was absent, and
-            # the sibling helper at _build_starting_lineup_rows already uses 'UT'.
+            # The box score's `position` is the player's PRIMARY position, not his
+            # slot in this game. The default is 'UT' (utility): a default of 'P'
+            # asserts a fact about anyone whose position is absent.
             position = (pdata.get("position") or {}).get("abbreviation") or "UT"
 
             rows.append(
@@ -1376,15 +1293,12 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                 conn.rollback()
                 raise
 
-        # --- 4. Managers --------------------------------------------------------
+    # --- The box score ------------------------------------------------------
 
-        # --- 5. Game record -----------------------------------------------------
-
-    #: Tri-state cache of "does ``raw.game_player_stats`` exist" (Alembic
-    #: 0023). ``None`` means not yet probed. Same reasoning as
-    #: ``_play_events_table_exists``: one catalogue lookup per run, not per game.
+    #: Whether ``raw.game_player_stats`` exists: ``None`` until the first probe
+    #: (see ``LoaderBase._exists_once``).
     _game_player_stats_table_exists: bool | None = None
-    #: The same tri-state cache for ``raw.game_bullpen`` (Alembic 0025).
+    #: The same cache for ``raw.game_bullpen``.
     _game_bullpen_table_exists: bool | None = None
 
     def _ensure_game_player_stats(
@@ -1398,16 +1312,16 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
     ) -> None:
         """Upsert the official per-player box score into ``raw.game_player_stats``.
 
-        The official box-score ground truth: the live feed already
-        carries the box under ``liveData.boxscore.teams``, so the loader writes
-        it from the payload it holds — no extra HTTP call. The parser
-        (:func:`ingest.load_boxscores.parse_boxscore`) emits one row per
-        player who appeared; the upsert refreshes a game's rows on a reload.
+        The live feed carries the box score under ``liveData.boxscore.teams``, so
+        the loader writes it from the payload it holds, with no extra HTTP call.
+        :func:`ingest.load_boxscores.parse_boxscore` emits one row per player who
+        appeared; the upsert refreshes the game's rows on a reload. The same
+        transaction writes the bullpen listing into ``raw.game_bullpen``.
 
-        Non-fatal by design: the pitch rows are the load's product, and a
-        box-score failure (the table absent before Alembic 0023, a malformed
-        block, a transient DB error) logs a warning and returns. A game with no
-        box block writes nothing.
+        A failure here is never fatal: the pitch rows are the load's product. A
+        box-score failure (an absent table, a malformed block, a transient
+        database error) logs a warning and returns. A game with no box score
+        writes nothing.
         """
         try:
             teams = game_dict.get("liveData", {}).get("boxscore", {}).get("teams", {})
@@ -1436,9 +1350,8 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                             conn.rollback()
                             return
                         written = persist_sync(cur, rows)
-                        # The arms the box lists per side (Alembic
-                        # 0025) — the simulator's pen for the game. The same
-                        # payload, no extra call; absent table = not stored.
+                        # The pitchers the box score lists for each side: the
+                        # simulator's bullpen for the game.
                         pen_written = 0
                         if self._exists_once(
                             cur,
@@ -1449,8 +1362,8 @@ class HistoricalDataLoader(ReferenceRowsMixin, WritesMixin, LoaderBase):
                                 "— the per-game bullpen listing is not stored."
                             ),
                         ):
-                            # Best-effort inside the same transaction: a bad
-                            # listing must never cost the box rows their commit.
+                            # A savepoint: a bad listing must never cost the box
+                            # rows their commit.
                             try:
                                 cur.execute("SAVEPOINT sim427_bullpen")
                                 pen_written = persist_bullpen_sync(
@@ -1494,11 +1407,9 @@ if __name__ == "__main__":
         format="%(asctime)s  %(levelname)-8s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    # No default password. The loader reads BASEBALL_DB_DSN and raises
-    # a clear error when it is not set.
+    # The loader reads BASEBALL_DB_DSN and raises a clear error when it is unset.
     loader = HistoricalDataLoader()
     try:
         loader.refresh_seasons()
     finally:
-        # Tear the pool down so all pooled sockets are released.
         loader.close()

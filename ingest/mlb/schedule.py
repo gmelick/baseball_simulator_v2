@@ -1,17 +1,18 @@
-"""The league schedule client (the live slate, SIM-519).
+"""Parse the MLB schedule: which games exist on a date, when they start and their card state.
 
-The day slate is schedule-driven (owner ruling 2026-08-29): the league's public
-schedule says which games exist on a date, when they start and what state they
-are in. This module is the one place that knows the schedule's shape.
+The day slate takes its games from this schedule, not from the database. This
+module is the one place that knows the schedule's shape.
 
 * :func:`parse_schedule` turns one schedule response into :class:`ScheduleGame`
-  records. It is pure, and the tests run it over recorded responses in
+  records. It is pure; the tests run it over the recorded responses in
   ``tests/fixtures/mlb_schedule/``.
 * :func:`card_state` maps a game to one of the four card states the frontend
-  draws: ``scheduled``, ``live``, ``final`` or ``postponed``. It is the only
-  status mapper; the API's raw-status fallback uses :func:`card_state_from_raw`.
-* :func:`schedule_params` builds a request's query. The reads themselves go
-  through ``ingest.mlb.client``.
+  draws: ``scheduled``, ``live``, ``final`` or ``postponed``. When the schedule
+  read fails, the API maps the stored status with :func:`card_state_from_raw`.
+* :func:`schedule_params` builds the query of one request. The reads go through
+  ``ingest.mlb.client``.
+* :func:`played_index` picks the played entry of a game that the schedule lists
+  twice (a postponed game made up later).
 
 The schedule needs no key. A field the response does not carry reads ``None``,
 and the card hides it.
@@ -40,14 +41,16 @@ LIVE = "live"
 FINAL = "final"
 POSTPONED = "postponed"
 
+#: The ``codedGameState`` values and the ``detailedState`` prefixes the card
+#: shows as postponed.
 _POSTPONED_CODES = frozenset({"D", "C", "U", "T"})
 _POSTPONED_PREFIXES = ("Postponed", "Cancelled", "Suspended")
 
 #: The league's coarse states; anything else maps to scheduled and is logged once.
 _ABSTRACT_TO_CARD = {"Preview": SCHEDULED, "Live": LIVE, "Final": FINAL}
 
-#: The ``raw.games.status`` vocabulary the pipeline and the loader write. The
-#: API maps a stored row through this table when the schedule feed is down.
+#: The ``raw.games.status`` values the pipeline and the loader write. The API
+#: maps a stored row through this table when the schedule read fails.
 _RAW_STATUS_TO_CARD = {
     "Preview": SCHEDULED,
     "Warmup": SCHEDULED,
@@ -187,8 +190,10 @@ def _team(side: Mapping[str, Any], line: Mapping[str, Any], lineup: Sequence[Any
 
 
 def parse_game(entry: Mapping[str, Any]) -> ScheduleGame:
-    """One schedule entry → :class:`ScheduleGame`. Raises ``KeyError`` on a
-    malformed entry (no ``gamePk`` or no ``teams``)."""
+    """Parse one schedule entry into a :class:`ScheduleGame`.
+
+    Raises ``KeyError`` when the entry has no ``gamePk``, no ``teams`` or no date.
+    """
     status = entry.get("status") or {}
     teams = entry["teams"]
     linescore = entry.get("linescore") or {}
@@ -232,8 +237,8 @@ def parse_game(entry: Mapping[str, Any]) -> ScheduleGame:
 def parse_schedule(payload: Mapping[str, Any]) -> list[ScheduleGame]:
     """Every game of a schedule response, in the response's order.
 
-    A malformed entry is skipped and logged at warning; it never fails the
-    whole day.
+    The parser logs a malformed entry at warning and skips it, so one bad
+    entry never fails the whole day.
     """
     games: list[ScheduleGame] = []
     for day in payload.get("dates") or ():
@@ -275,7 +280,7 @@ def card_state(game: ScheduleGame) -> str:
 
 
 def card_state_from_raw(raw_status: str | None) -> str:
-    """The card state of a stored ``raw.games.status`` value (the fallback path)."""
+    """The card state of a stored ``raw.games.status`` value, for a failed schedule read."""
     if not raw_status:
         return SCHEDULED
     if raw_status.startswith(_POSTPONED_PREFIXES):
@@ -284,7 +289,7 @@ def card_state_from_raw(raw_status: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fetching
+# The request and the played entry
 # ---------------------------------------------------------------------------
 
 

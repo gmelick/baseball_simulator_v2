@@ -1,56 +1,34 @@
-"""
-ingest/load_bullpen_availability.py
-============================================
-Per-game bullpen availability ingestion.
+"""Record which pitchers each team can use in each game, in ``raw.game_bullpen_availability``.
 
-``raw.game_lineups`` records who *played*, not who was *available*. The manager
-USAGE profile needs the available-but-unused signal: was a
-reliever NOT used because the manager chose to hold him, or because he *couldn't*
-pitch (on the IL, or rest-unavailable after a heavy / back-to-back outing)?
+``raw.game_lineups`` records who played, not who could play. The manager usage
+profile needs both: a reliever the manager held back differs from one who
+could not pitch.
 
-A row is emitted for every pitcher on each team's FULL active roster
-(both home + away), not just the arms that pitched — so the available-but-UNUSED
-relievers (the "chose-not-to-use" signal) are captured. The rest of an arm that
-did not pitch in a given game is derived from its appearance timeline (see
-:func:`_rest_as_of`), so an unused arm that threw yesterday is still correctly
-'rest'-unavailable rather than falsely 'active'.
+The module writes one row for every pitcher on each team's roster, used or not.
+Two sources feed a row:
 
-This module produces ``raw.game_bullpen_availability`` rows (migration 0015) by
-combining two sources:
+* the rest and the recent workload (``days_rest``, ``pitches_last_3d``,
+  ``back_to_back``). ``ManagerProfilesMixin._compute_bullpen_workload`` in
+  ``pipeline.batch.profiles.manager`` derives them from ``raw.pitches``. An arm
+  that did not pitch in the game takes his rest from his appearance timeline
+  (:func:`_rest_as_of`), so an unused arm who threw yesterday still reads
+  unavailable.
+* the active roster and the injured list (IL) of each team on the game date,
+  from the MLB Stats API roster endpoint.
 
-  * **rest / recent workload** (days_rest, pitches_last_3d, back_to_back) —
-    derived from ``raw.pitches`` by
-    :meth:`pipeline.batch.profiles.manager.ManagerProfilesMixin._compute_bullpen_workload`
-    and passed in here as a DataFrame (no network);
-  * **active roster + IL** — fetched per (team, game-date) from the public MLB
-    Stats API (statsapi.mlb.com) active-roster endpoint, whose entries carry a
-    ``status.code`` (``'A'`` = active; ``'D10'``/``'D15'``/``'D60'``/``'IL*'`` =
-    injured list; ``'RM'``/``'DES'`` etc. = otherwise off the active roster).
+:meth:`BullpenAvailabilityIngest.decide` takes the first rule that holds:
 
-The availability decision per pitcher:
+* off the active roster, or on the IL: unavailable, reason ``IL``;
+* pitched the day before: unavailable, reason ``rest``;
+* threw :data:`REST_PITCHES_3D` or more pitches in the last 3 days: unavailable,
+  reason ``recent_use``;
+* else: available, reason ``active``.
 
-  * not on the active roster (or status indicates IL)  → available=False, IL
-  * threw on the immediately preceding calendar day    → available=False, rest
-    (a closer/setup arm that pitched back-to-back is conventionally down)
-  * threw a heavy workload in the last 3 days
-    (``pitches_last_3d`` ≥ :data:`REST_PITCHES_3D`)     → available=False,
-    recent_use
-  * otherwise                                           → available=True, active
+``_mlb_get`` is the one network seam and ``_persist`` the one database seam;
+the tests stub both. Run it (``--dsn`` defaults to ``BASEBALL_DB_DSN``; a
+season reads the network for every game, so it is slow)::
 
-Network surface is a SINGLE stubbable seam, ``_mlb_get`` (mirrors
-:mod:`betting.bettingpros.fetch_odds`); ``game_pk`` → date + (home,away)
-team ids is resolved via the MLB schedule endpoint, also through ``_mlb_get``.
-Persistence is a single stubbable seam, :meth:`_persist`, so the parse + decision
-logic is unit-tested against a captured roster JSON fixture with NO live call and
-NO live DB.
-
-Run (data-gated — network + ~21k games, slow):
-
-    python -m ingest.load_bullpen_availability --seasons 2024 \\
-        --dsn "$BASEBALL_DB_DSN" --duckdb /data/baseball_sim.duckdb
-
-HTTP is stdlib ``urllib`` (sync); persistence is ``psycopg2`` (sync) — both are
-existing dependencies and keep the module importable without a running app.
+    python -m ingest.load_bullpen_availability --seasons 2024 --duckdb /data/baseball_sim.duckdb
 """
 
 from __future__ import annotations
@@ -68,26 +46,26 @@ from ingest.mlb.schedule import played_index, schedule_entries
 
 log = logging.getLogger("ingest.load_bullpen_availability")
 
-#: pitches in the last 3 calendar days at/above which a reliever is treated as
-#: rest-unavailable ('recent_use'). Conservative, and not fitted.
+#: The pitches in the last 3 calendar days that make a reliever unavailable
+#: ('recent_use'). A conservative guess, not a fit.
 REST_PITCHES_3D = 45
 
-#: MLB roster ``status.code`` values that mean "on the active roster / available
-#: to play". Everything else (IL codes 'D10'/'D15'/'D60'/'IL*', 'RM' removed,
-#: 'DES' designated, 'SU' suspended, ...) is treated as not-available.
+#: The roster ``status.code`` values of an arm on the active roster. Every other
+#: code (the IL codes, 'RM' removed, 'DES' designated, 'SU' suspended) reads
+#: unavailable.
 _ACTIVE_STATUS_CODES = frozenset({"A"})
 
-#: roster ``status.code`` literal prefix for IL codes that are NOT digit-suffixed.
-_IL_STATUS_PREFIXES = ("IL",)  # e.g. 'IL10' / 'IL60'
+#: The IL code prefix of the newer feeds ('IL10', 'IL60'); :meth:`_is_il_status`
+#: reads the older 'D' codes apart.
+_IL_STATUS_PREFIXES = ("IL",)
 
-#: pitcher position codes (MLB ``position.code``: '1' = pitcher). Only pitchers
-#: are written to the bullpen-availability table.
+#: The MLB ``position.code`` of a pitcher. The table holds pitchers only.
 _PITCHER_POSITION_CODES = frozenset({"1"})
 
 
 @dataclass
 class PitcherStatus:
-    """One pitcher's MLB-roster status for a (team, date)."""
+    """One pitcher's MLB roster status for a team on a date."""
 
     pitcher_id: int
     on_active_roster: bool
@@ -96,7 +74,7 @@ class PitcherStatus:
 
 @dataclass
 class AvailabilityRow:
-    """A resolved per-game availability decision for one pitcher."""
+    """One pitcher's availability for one game: one ``raw.game_bullpen_availability`` row."""
 
     game_pk: int
     team_id: int
@@ -106,15 +84,13 @@ class AvailabilityRow:
     days_rest: int | None
     pitches_last_3d: int
     back_to_back: bool
-    # RESERVED — always False for now. The starting-pitcher discriminator (flag
-    # the game's starter / arm_rank==1) is a follow-on; no code path sets this
-    # True yet, so every persisted row carries False. A downstream consumer must
-    # NOT treat is_starter as a populated signal until that follow-on lands.
+    # Reserved: no code sets it, so every stored row reads False. Do not read it
+    # as a signal.
     is_starter: bool = False
-    source: str = "mlb_api"
+    source: str = "mlb_api"  # 'mlb_api' | 'workload' (a pitched arm the roster read missed)
 
     def as_tuple(self) -> tuple[Any, ...]:
-        """Positional tuple matching the INSERT column order in :meth:`_persist`."""
+        """The row's values in the INSERT column order of ``_persist``."""
         return (
             self.game_pk,
             self.team_id,
@@ -131,6 +107,8 @@ class AvailabilityRow:
 
 @dataclass
 class _GameMeta:
+    """The date and the two team ids of one game."""
+
     date: str  # 'YYYY-MM-DD'
     home_team_id: int
     away_team_id: int
@@ -138,17 +116,12 @@ class _GameMeta:
 
 @dataclass
 class BullpenAvailabilityIngest:
-    """Fetch + parse + persist per-game bullpen availability.
+    """Read the rosters, decide each pitcher's availability and store the rows.
 
-    Parameters
-    ----------
-    pg_dsn:
-        PostgreSQL DSN (``BASEBALL_DB_DSN``) used by the default :meth:`_persist`.
-        May be omitted in tests that override ``_persist``.
-    rest_pitches_3d:
-        ``pitches_last_3d`` threshold for the 'recent_use' rest block.
-    timeout:
-        HTTP timeout (seconds) for the MLB Stats API calls.
+    ``pg_dsn`` is the Postgres DSN the default :meth:`_persist` writes with; a
+    test that overrides ``_persist`` omits it. ``rest_pitches_3d`` is the
+    ``recent_use`` threshold. ``timeout`` is the HTTP time-out in seconds per
+    MLB call.
     """
 
     pg_dsn: str | None = None
@@ -168,21 +141,14 @@ class BullpenAvailabilityIngest:
             label="The bullpen load",
         )
 
-    # ----------------------------------------------------- identifier bridges
+    # ----------------------------------------------------- the game's date and teams
     def _resolve_game_meta(self, game_pk: int) -> _GameMeta | None:
-        """``game_pk`` → (date, home_team_id, away_team_id) via the MLB schedule.
+        """The date and the two team ids of ``game_pk``, from the MLB schedule; None on failure.
 
-        ``date`` MUST come from the schedule's ``officialDate`` field
-        (the local calendar date the game is actually played on), never from
-        truncating ``gameDate`` (a UTC timestamp). For a West-/Mountain-time
-        night game the UTC clock has already rolled into the next calendar
-        day while the game is still being played on ``officialDate`` — this
-        `date` is used below to fetch each team's active roster AS OF this
-        game, so a day off by one silently pulls the wrong day's roster
-        snapshot and mis-stamps the persisted availability record's
-        ``game_date``. The odds provider's event match (``betting/bettingpros/``)
-        has the same rule; unlike that match, a roster date never matches against
-        a second, third-party schedule, so there is no double-header risk here.
+        The date is the schedule's ``officialDate``: the local date of play.
+        Never cut it from ``gameDate``, a UTC time. A western night game's UTC
+        date is the next day, and the roster read would then take the wrong
+        day's roster. A made-up game takes its played entry (``played_index``).
         """
         if game_pk in self._meta_cache:
             return self._meta_cache[game_pk]
@@ -204,13 +170,12 @@ class BullpenAvailabilityIngest:
     # ----------------------------------------------------------------- parsing
     @staticmethod
     def _is_il_status(code: str) -> bool:
-        """True if a roster ``status.code`` denotes the injured list.
+        """True when a roster ``status.code`` means the injured list.
 
-        The legacy disabled-list / injured-list codes are a 'D' followed by the
-        number of days ('D10' / 'D15' / 'D60'); newer feeds also use an 'IL'
-        prefix ('IL10' / 'IL60'). Crucially, 'DES' (designated for assignment),
-        'DEC', etc. are NOT the IL despite the leading 'D', so the 'D' match
-        requires a trailing digit.
+        The older codes are 'D' and the days ('D10', 'D15', 'D60'); the newer
+        feeds use an 'IL' prefix ('IL10'). 'DES' (designated for assignment)
+        also starts with 'D' and is not the IL, so the 'D' match needs a digit
+        after the 'D'.
         """
         c = (code or "").upper()
         if c.startswith("D") and c[1:2].isdigit():
@@ -219,13 +184,12 @@ class BullpenAvailabilityIngest:
 
     @classmethod
     def parse_roster(cls, payload: Mapping[str, Any]) -> dict[int, PitcherStatus]:
-        """Parse an MLB active-roster payload → {pitcher_id: PitcherStatus}.
+        """The pitchers of a roster payload, as ``{pitcher_id: PitcherStatus}``.
 
-        Reads the ``roster`` list; keeps only pitchers (``position.code`` '1').
-        ``status.code`` == 'A' → on the active roster; an IL-prefixed code → on
-        the IL. Robust to missing ``position`` / ``status`` blocks (defaults to
-        not-a-pitcher / not-active so an oddly-shaped entry can't masquerade as
-        an available arm).
+        A pitcher has ``position.code`` '1' or ``position.type`` 'Pitcher'.
+        Status 'A' is the active roster; an IL code is the injured list. An
+        entry with no position or no status block reads as not a pitcher or not
+        active, so an odd entry never passes as an available arm.
         """
         out: dict[int, PitcherStatus] = {}
         for entry in payload.get("roster", []) or []:
@@ -251,11 +215,11 @@ class BullpenAvailabilityIngest:
         return out
 
     def _fetch_team_pitchers(self, team_id: int, date_str: str) -> dict[int, PitcherStatus]:
-        """Fetch + parse a team's pitching staff status for a date (network seam).
+        """A team's pitching staff on a date, with each arm's roster status.
 
-        Uses ``rosterType=active`` for the active 26-man and merges
-        ``rosterType=fullSeason`` IL entries so injured arms (which drop off the
-        ACTIVE roster) are still recorded as ``on_il=True`` rather than vanishing.
+        The ``active`` roster gives the active staff. An injured arm drops off
+        that roster, so the ``fullSeason`` roster adds the IL arms. A failed
+        read logs and the method returns what it has.
         """
         statuses: dict[int, PitcherStatus] = {}
         try:
@@ -277,8 +241,8 @@ class BullpenAvailabilityIngest:
                 {"rosterType": "fullSeason", "date": date_str},
             )
             for pid, st in self.parse_roster(full).items():
-                # Only ADD info the active fetch lacked: an IL arm not on the
-                # active roster. Never downgrade an arm the active fetch marked up.
+                # Add only an IL arm the active read lacks. Never override an
+                # arm the active read already holds.
                 if st.on_il and pid not in statuses:
                     statuses[pid] = st
         except Exception as exc:  # noqa: BLE001
@@ -293,10 +257,11 @@ class BullpenAvailabilityIngest:
         pitches_last_3d: int,
         back_to_back: bool,
     ) -> tuple[bool, str]:
-        """Resolve (available, reason) from roster status + workload.
+        """Return ``(available, reason)`` for one pitcher.
 
-        Precedence: IL/off-roster → rest (back-to-back) → recent_use (heavy 3-day
-        workload) → active.
+        The first rule that holds wins: off the active roster or on the IL
+        (``IL``), pitched the day before (``rest``), a heavy 3-day workload
+        (``recent_use``), else ``active``.
         """
         if status is None or not status.on_active_roster or status.on_il:
             return False, "IL"
@@ -314,25 +279,18 @@ class BullpenAvailabilityIngest:
         timeline: Mapping[int, Iterable[tuple[date, int]]] | None = None,
         game_date: date | None = None,
     ) -> list[AvailabilityRow]:
-        """Build one availability row per pitcher on each team's FULL
-        active roster — not just the arms that pitched — so the available-but-UNUSED
-        relievers (the manager USAGE "chose-not-to-use" signal) are captured.
+        """One availability row per pitcher on each team's roster, used or not.
 
-        ``workload`` is the per-game slice of the ``_compute_bullpen_workload``
-        DataFrame (``team_id``/``pitcher_id``/``days_rest``/``pitches_last_3d``/
-        ``back_to_back`` for arms that APPEARED). ``roster_by_team`` maps team_id →
-        the {pitcher_id: PitcherStatus} from :meth:`_fetch_team_pitchers` (the full
-        26-man pitching staff + IL). ``timeline`` maps pitcher_id → that arm's
-        ``(date, pitches)`` appearance history (built once from the whole workload),
-        used by :func:`_rest_as_of` to compute rest for a roster arm that did NOT
-        pitch in this game (so an unused arm that threw yesterday is still correctly
-        'rest'-unavailable, not falsely 'active').
+        ``workload`` holds the ``_compute_bullpen_workload`` rows of the arms that
+        pitched in this game. ``roster_by_team`` maps a team id to its staff from
+        :meth:`_fetch_team_pitchers`. ``timeline`` maps a pitcher id to his
+        ``(date, pitches)`` appearances.
 
-        Rest precedence per (team, pitcher): the per-game workload record if the arm
-        appeared (authoritative), else the timeline rest as of ``game_date``, else
-        defaults (no prior appearance → fully rested). An arm that appeared but is
-        absent from the roster fetch is still emitted available (a roster-API gap
-        can't erase a real arm; ``source='workload'``).
+        An arm's rest comes from his workload row when he pitched in the game;
+        else from ``timeline`` as of ``game_date`` (:func:`_rest_as_of`); else
+        he reads fully rested. An arm who pitched but is missing from the roster
+        read still gets a row (``source='workload'``): a gap in the roster read
+        must not erase a real arm.
         """
         wl: dict[tuple[int, int], Mapping[str, Any]] = {
             (int(r["team_id"]), int(r["pitcher_id"])): r for r in workload
@@ -342,17 +300,17 @@ class BullpenAvailabilityIngest:
 
         def _rest_for(team_id: int, pid: int) -> tuple[int | None, int, bool]:
             rec = wl.get((team_id, pid))
-            if rec is not None:  # appeared → authoritative per-game workload
+            if rec is not None:  # he pitched: his workload row is the truth
                 return (
                     _opt_int(rec.get("days_rest")),
                     int(rec.get("pitches_last_3d") or 0),
                     bool(rec.get("back_to_back")),
                 )
-            if timeline is not None:  # did not appear → derive from the timeline
+            if timeline is not None:
                 return _rest_as_of(timeline.get(pid, ()), game_date)
             return None, 0, False
 
-        # 1) The full roster of every team in this game (the v2 superset).
+        # 1) Every arm on each team's roster.
         for team_id, roster in roster_by_team.items():
             tid = int(team_id)
             for pid, status in roster.items():
@@ -378,8 +336,8 @@ class BullpenAvailabilityIngest:
                     )
                 )
 
-        # 2) Arms that APPEARED but are missing from the roster fetch — emit them
-        #    available (they demonstrably pitched); a roster gap can't erase them.
+        # 2) The arms who pitched but are missing from the roster read. They did
+        #    pitch, so they count as on the active roster; their rest still applies.
         for (tid, pid), rec in wl.items():
             if (tid, pid) in emitted:
                 continue
@@ -413,13 +371,12 @@ class BullpenAvailabilityIngest:
         workload: Iterable[Mapping[str, Any]],
         timeline: Mapping[int, Iterable[tuple[date, int]]] | None = None,
     ) -> list[AvailabilityRow]:
-        """Resolve + persist availability for one game; returns the rows written.
+        """Build and store the availability rows of one game. Returns the rows.
 
-        Fetches the active-roster/IL status for BOTH teams (the
-        schedule's home + away — not just the teams that pitched), so the full
-        bullpen of each side is captured, then builds one row per roster arm
-        (:meth:`build_rows`) using ``timeline`` for the rest of arms that did not
-        pitch. ``timeline`` maps pitcher_id → ``(date, pitches)`` appearances.
+        The method reads the rosters of both teams of the schedule, not only of
+        the teams that pitched. ``timeline`` maps a pitcher id to his
+        ``(date, pitches)`` appearances. A game with no workload rows, or whose
+        schedule entry does not resolve, writes nothing.
         """
         records = list(workload)
         if not records:
@@ -428,7 +385,7 @@ class BullpenAvailabilityIngest:
         if meta is None:
             log.warning("SIM-433: skipping game_pk %s — unresolved meta.", game_pk)
             return []
-        # v2: both teams' FULL rosters (union with the workload's teams as a guard).
+        # Both teams of the schedule, plus any workload team as a guard.
         team_ids = {meta.home_team_id, meta.away_team_id} | {int(r["team_id"]) for r in records}
         roster_by_team: dict[int, dict[int, PitcherStatus]] = {}
         for team_id in team_ids:
@@ -440,15 +397,13 @@ class BullpenAvailabilityIngest:
         return rows
 
     def ingest(self, workload_records: Iterable[Mapping[str, Any]]) -> int:
-        """Ingest availability for every game present in ``workload_records``.
+        """Build and store the availability of every game in ``workload_records``.
 
-        ``workload_records`` is the full ``_compute_bullpen_workload`` output
-        (``df.to_dict('records')``). Returns the total rows persisted. Per-game
-        failures are logged and skipped (never abort the whole run).
-
-        Builds the per-pitcher appearance ``timeline`` ONCE from the
-        whole workload so :meth:`ingest_game` can derive rest for roster arms that
-        did not pitch in a given game (the available-but-unused signal).
+        ``workload_records`` is the whole ``_compute_bullpen_workload`` output,
+        as records. The method builds each pitcher's appearance timeline once
+        from them, so each game can derive the rest of the arms that did not
+        pitch. A failed game logs a warning, and the run goes on. Returns the
+        rows stored.
         """
         records = list(workload_records)
         timeline: dict[int, list[tuple[date, int]]] = {}
@@ -470,11 +425,10 @@ class BullpenAvailabilityIngest:
 
     # -------------------------------------------------------------- persistence
     def _persist(self, rows: list[AvailabilityRow]) -> None:
-        """UPSERT availability rows into raw.game_bullpen_availability (DB seam).
+        """Upsert the rows into ``raw.game_bullpen_availability``.
 
-        Overridden in unit tests to capture rows without a live DB. The live
-        implementation uses psycopg2 + ``execute_values`` with an ON CONFLICT
-        (game_pk, team_id, pitcher_id) DO UPDATE so re-runs are idempotent.
+        The tests override this database seam. A re-run refreshes a row.
+        Raises ``RuntimeError`` when ``pg_dsn`` is unset.
         """
         if not rows:
             return
@@ -510,10 +464,10 @@ class BullpenAvailabilityIngest:
 
 
 def _opt_int(value: Any) -> int | None:
+    """``value`` as an int; None when it is None, a pandas NaN or not a number."""
     if value is None:
         return None
     try:
-        # NaN (pandas) → None; everything else → int.
         if isinstance(value, float) and value != value:  # noqa: PLR0124 — NaN check
             return None
         return int(value)
@@ -522,11 +476,14 @@ def _opt_int(value: Any) -> int | None:
 
 
 def _as_date(value: Any) -> date | None:
-    """Coerce a workload/schedule date (str 'YYYY-MM-DD' / datetime / pandas
-    Timestamp / date) to a plain :class:`datetime.date`, or None."""
+    """A workload or schedule date as a plain :class:`datetime.date`, or None.
+
+    It takes a 'YYYY-MM-DD' string, a datetime, a pandas Timestamp or a date.
+    """
     if value is None:
         return None
-    if isinstance(value, datetime):  # also catches pandas.Timestamp (a datetime subclass)
+    # Before the date check: a datetime (and a pandas Timestamp) is also a date.
+    if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
@@ -539,13 +496,14 @@ def _as_date(value: Any) -> date | None:
 def _rest_as_of(
     appearances: Iterable[tuple[date, int]], game_date: date | None
 ) -> tuple[int | None, int, bool]:
-    """The rest state of an arm AS OF ``game_date`` from its appearance
-    timeline — so a roster pitcher who did NOT appear in this game still gets the
-    same (days_rest, pitches_last_3d, back_to_back) the appeared-pitcher workload
-    carries. Mirrors ``_compute_bullpen_workload``: pitches in the 3 calendar days
-    BEFORE the game (the current game excluded), days since the previous appearance.
-    Returns ``(None, 0, False)`` when the arm has no prior appearance (e.g. a fresh
-    call-up) — i.e. fully rested / available."""
+    """An arm's ``(days_rest, pitches_last_3d, back_to_back)`` as of ``game_date``.
+
+    The values come from his appearance timeline and match what
+    ``_compute_bullpen_workload`` gives an arm who pitched: the days since the
+    last appearance, and the pitches in the 3 calendar days before the game
+    (the game excluded). An arm with no earlier appearance (a call-up, say)
+    returns ``(None, 0, False)``: fully rested.
+    """
     if game_date is None:
         return None, 0, False
     prior = sorted((d, int(p)) for (d, p) in appearances if d is not None and d < game_date)
@@ -561,12 +519,10 @@ def _rest_as_of(
 def _load_workload_records(
     duckdb_path: str, pg_dsn: str, seasons: list[int]
 ) -> list[dict[str, Any]]:
-    """Run the raw.pitches-derived workload query and return its records.
+    """The bullpen workload rows of ``seasons``, as records.
 
-    Constructs a :class:`PlayerProfileComputor`, opens its DuckDB connection
-    (which attaches Postgres READ_ONLY), runs ``_compute_bullpen_workload`` only,
-    and returns ``df.to_dict('records')``. Kept here (not in the computor) so the
-    CLI run path is self-contained.
+    The function opens a ``PlayerProfileComputor`` (its DuckDB connection
+    attaches Postgres read-only) and runs only ``_compute_bullpen_workload``.
     """
     from pipeline.batch.player_profile_computor import PlayerProfileComputor
 
@@ -580,7 +536,7 @@ def _load_workload_records(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint (data-gated — network + a full season of games)."""
+    """The command-line entry point. Returns the exit code."""
     logging.basicConfig(level=logging.INFO)
     ap = argparse.ArgumentParser(description="SIM-433 bullpen availability ingest")
     ap.add_argument("--seasons", nargs="+", type=int, required=True)

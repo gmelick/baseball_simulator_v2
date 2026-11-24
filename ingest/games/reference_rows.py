@@ -1,5 +1,5 @@
-"""The reference rows a game needs before its pitches: the teams, the managers,
-the game row and the starting lineups.
+"""Write the reference rows a game needs before its pitches: the teams, the managers, the
+game row and the starting lineups.
 """
 
 from __future__ import annotations
@@ -30,9 +30,10 @@ class ReferenceRowsMixin(LoaderBase):
         def _ensure_venue(self, venue_id: int, season: int, *, force: bool = False) -> None: ...
 
     def _ensure_teams(self, home_team_id: int, away_team_id: int, season: int, gd: dict) -> None:
-        """
-        Upserts raw.teams for any team not already in the DB.
-        All required data is present in the game_dict — no extra API call needed.
+        """Upsert ``raw.teams`` for each of the game's two teams that is missing.
+
+        The feed carries every team value. ``_ensure_venue`` first makes sure the
+        team's home park exists.
         """
         needed = {home_team_id, away_team_id}
         with self._get_conn() as conn, conn.cursor() as cur:
@@ -49,7 +50,7 @@ class ReferenceRowsMixin(LoaderBase):
         if not missing:
             return
 
-        # Division name → schema enum mapping
+        # The feed's division name → the raw.teams value.
         div_map = {
             "American League East": "AL East",
             "American League Central": "AL Central",
@@ -69,10 +70,9 @@ class ReferenceRowsMixin(LoaderBase):
             league_name = t.get("league", {}).get("name", "")
             league_code = "AL" if "American" in league_name else "NL"
             division = div_map.get(t.get("division", {}).get("name", ""), "AL East")
-            # A team's OWN venue is the right value for raw.teams (its home park),
-            # so the game's venue is only a fallback — and on a neutral-site game
-            # it may be absent entirely, hence the guarded lookup rather
-            # than gd["venue"]["id"].
+            # The team's OWN venue is its home park, the right value for
+            # raw.teams. The game's venue is only a fallback, and a neutral-site
+            # game may have none, so the lookup is guarded.
             venue_id = t.get("venue", {}).get("id") or (gd.get("venue") or {}).get("id")
             if venue_id is None:
                 raise MissingVenueError(
@@ -110,22 +110,21 @@ class ReferenceRowsMixin(LoaderBase):
     def _ensure_managers(
         self, managers: dict, home_team_id: int, away_team_id: int, season: int, game_date: str
     ) -> None:
-        """
-        Upserts raw.managers for the home and away managers of this game.
+        """Upsert ``raw.managers`` for the game's home and away managers.
 
-        The PK is ``(manager_id, season)``, the target of the ``ON CONFLICT``.
+        The key is ``(manager_id, season)``. A NULL ``season_end`` means "manages
+        the team now" (``idx_managers_active`` indexes it). A conflict resets
+        ``season_end`` to NULL: a manager seen in the dugout again is active, which
+        records a return from a suspension or other missed time.
 
-        ``season_end`` semantics: NULL means "currently the manager for this
-        team" (that is what ``idx_managers_active`` indexes). So on conflict we
-        deliberately reset ``season_end = NULL`` — seeing a manager in the dugout
-        again is exactly the evidence that he is active, which is how a return
-        from suspension or other missed time is recorded.
+        A new manager closes the active stint of the team's incumbent on the
+        game's date.
         """
         candidates = [
             (managers["home_manager_id"], managers["home_manager_name"], home_team_id),
             (managers["away_manager_id"], managers["away_manager_name"], away_team_id),
         ]
-        # Filter out games where manager data was unavailable (empty string)
+        # The feed may name no manager (an empty id).
         candidates = [(mid, name, tid) for mid, name, tid in candidates if mid]
 
         if not candidates:
@@ -152,13 +151,10 @@ class ReferenceRowsMixin(LoaderBase):
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 for mid, name, tid in missing:
-                    # Find the CURRENTLY-ACTIVE incumbent to hand off from.
-                    #
-                    # `season_end IS NULL` is the documented meaning of
-                    # "currently active" (idx_managers_active), so only such a
-                    # row may be closed, and the most recent stint is the one
-                    # being replaced; with three managers in one season, any
-                    # other choice closes the wrong stint.
+                    # The ACTIVE incumbent to hand over from. Only a row with a
+                    # NULL season_end is active, and the newest stint is the one
+                    # replaced: with three managers in a season, any other
+                    # choice closes the wrong stint.
                     cur.execute(
                         """
                         SELECT manager_id
@@ -217,15 +213,12 @@ class ReferenceRowsMixin(LoaderBase):
             conn.commit()
 
     def _ensure_game(self, game_pk: int, season: int, game_dict: dict, managers: dict) -> None:
-        """
-        Upserts raw.games.  Called after venues/teams/managers are guaranteed
-        to exist so all FKs resolve cleanly.
+        """Upsert the ``raw.games`` row, after its venue, teams and managers exist.
 
-        For completed games, also populates the final score, the inning
-        scores and the pitcher W/L/S, from ``liveData`` (the linescore and the
-        decisions live there, not in ``gameData``). The INSERT ... ON CONFLICT
-        DO UPDATE always runs, so a re-fetch of a loaded game backfills its
-        final score.
+        A completed game also gets its final score, its inning scores and the
+        winning, losing and save pitchers. They come from ``liveData``: the
+        linescore and the decisions live there, not in ``gameData``. The upsert
+        always runs, so a re-fetch of a loaded game fills in its final score.
         """
         gd = game_dict["gameData"]
         live = game_dict.get("liveData", {})
@@ -237,7 +230,7 @@ class ReferenceRowsMixin(LoaderBase):
         game_type = gd.get("game", {}).get("type", "R")
         status = _map_game_status(gd)
 
-        # Final score — present for completed games (under liveData.linescore).
+        # The final score, present once the game is complete.
         linescore = live.get("linescore", {})
         home_score = linescore.get("teams", {}).get("home", {}).get("runs")
         away_score = linescore.get("teams", {}).get("away", {}).get("runs")
@@ -247,7 +240,7 @@ class ReferenceRowsMixin(LoaderBase):
         away_errors = linescore.get("teams", {}).get("away", {}).get("errors")
         innings = linescore.get("currentInning")
 
-        # Inning-by-inning scores as JSONB
+        # The inning-by-inning scores, stored as JSONB.
         innings_data = linescore.get("innings", [])
         inning_scores = (
             {
@@ -264,7 +257,7 @@ class ReferenceRowsMixin(LoaderBase):
         losing_pid = decisions.get("loser", {}).get("id")
         save_pid = decisions.get("save", {}).get("id")
 
-        # Weather (this one IS under gameData).
+        # The weather (this one IS under gameData).
         weather = gd.get("weather", {})
         wind_speed, wind_direction = _parse_wind(weather.get("wind"))
 
@@ -372,22 +365,21 @@ class ReferenceRowsMixin(LoaderBase):
             conn.commit()
 
     def _ensure_game_lineups(self, game_pk: int, season: int, game_dict: dict) -> None:
-        """Insert the starting-lineup rows into raw.game_lineups.
+        """Insert the starting-lineup rows into ``raw.game_lineups``.
 
-        Idempotent (``ON CONFLICT DO NOTHING`` on the natural key) so a re-fetch
-        of an already-loaded game does not duplicate rows. The starting lineups
-        are what :mod:`simulation.lineup_resolver` reads to build the opening
-        ``GameState`` for ``/simulate``.
+        ``ON CONFLICT DO NOTHING`` on the natural key keeps a re-fetch from
+        duplicating rows. :mod:`simulation.lineup_resolver` reads these rows to
+        build the opening ``GameState`` of ``/simulate``.
         """
         rows = _build_starting_lineup_rows(game_pk, season, game_dict)
         if not rows:
             return
         with self._get_conn() as conn, conn.cursor() as cur:
-            # The live service writes a game's published (or
-            # projected) lineup before first pitch. The final box is the
-            # authority: those rows go first, in this transaction, or a
-            # pre-game row would win the unique slot below and a player
-            # scratched after the last pre-game poll would stay in the lineup.
+            # The live service writes a game's published (or projected) lineup
+            # before the first pitch. The final box score is the authority, so
+            # this transaction deletes those rows first. Otherwise a pre-game row
+            # keeps the unique slot, and a player scratched after the last
+            # pre-game poll stays in the lineup.
             if self._exists_once(
                 cur, "_lineup_source_column_exists", "raw.game_lineups", column="source"
             ):
@@ -408,6 +400,6 @@ class ReferenceRowsMixin(LoaderBase):
             conn.commit()
         log.info("  Inserted %d starting-lineup rows for game %s", len(rows), game_pk)
 
-    #: Tri-state cache of "does ``raw.game_lineups.source`` exist"
-    #: (Alembic 0029). ``None`` means not yet probed.
+    #: Whether ``raw.game_lineups.source`` exists: ``None`` until the first probe
+    #: (see ``LoaderBase._exists_once``).
     _lineup_source_column_exists: bool | None = None

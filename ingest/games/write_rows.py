@@ -1,5 +1,5 @@
-"""The loader's writes: the pitch rows, the play events, the error ledger, the
-ingest outcome and the freshness report.
+"""Write a game's rows: the pitch rows, the play events, the error ledger, the ingest
+outcome and the freshness record.
 """
 
 from __future__ import annotations
@@ -19,22 +19,17 @@ from ingest.games.pitch_rows import (
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-BATCH_SIZE = 500  # rows per executemany call
+BATCH_SIZE = 500  # rows per execute_batch call
 
 
 class ReloadShrinkError(RuntimeError):
-    """A reload would have replaced a game's pitch rows with strictly fewer rows.
+    """A reload would replace a game's pitch rows with fewer rows.
 
-    Raised inside :meth:`HistoricalDataLoader._batch_insert` BEFORE the commit, so
-    the DELETE is rolled back and the existing rows survive.  The usual cause is a
-    transient feed returning HTTP 200 with an empty or pitch-less ``allPlays``;
-    re-running the reload once the feed is healthy is the fix.  Pass
-    ``allow_shrink=True`` when a game genuinely has fewer pitches than the stored
-    copy (e.g. correcting a previously double-ingested game).
+    ``_batch_insert`` raises it BEFORE the commit, so the DELETE rolls back and the
+    stored rows survive. The usual cause is a transient feed that answers HTTP 200
+    with an empty or pitch-less ``allPlays``; rerun the reload once the feed is
+    healthy. Pass ``allow_shrink=True`` when the game truly has fewer pitches than
+    the stored copy (for example, a stored copy that holds the game twice).
     """
 
 
@@ -42,15 +37,13 @@ class WritesMixin(LoaderBase):
     """Writes a game's rows and the run's records."""
 
     def _game_already_loaded(self, game_pk: int) -> bool:
-        """True if this game has been ingested and should be skipped.
+        """Return True when the game is loaded, so a range load skips it.
 
-        A pitch row OR a terminal ``raw.etl_game_ingest`` record counts as
-        loaded. The ingest record covers a game that legitimately produced no
-        pitch rows (every row hard-errors, or the feed has no pitches); without
-        it such a game would be re-fetched every night, forever.
-
-        Deliberately NOT consulted by the reload path: `reload=True` bypasses
-        this method entirely, which is the escape hatch after a parser fix.
+        A pitch row, or a terminal ``raw.etl_game_ingest`` record, counts as
+        loaded. The record covers a game that produced no pitch rows (every row
+        failed validation, or the feed has no pitches); without it, the nightly
+        run re-fetches that game every night. The reload path never calls this
+        method, so a reload still reaches a game after a parser fix.
         """
         with self._get_conn() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1 FROM raw.pitches WHERE game_pk = %s LIMIT 1", (game_pk,))
@@ -76,18 +69,15 @@ class WritesMixin(LoaderBase):
         allow_shrink: bool = False,
         play_event_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, int]:
-        """
-        Validates, builds, and batch-inserts all pitch rows for a game.
-        Returns count summary.
+        """Build, validate and insert a game's pitch rows; return the counts.
 
-        ``replace=True`` (used by :meth:`reload_game`) deletes the game's
-        existing ``raw.pitches`` rows in the same transaction as the insert, so
-        corrected parser output actually overwrites the old values instead of
-        being discarded by ``ON CONFLICT … DO NOTHING``.
+        Returns ``{"inserted", "skipped", "flagged"}``. ``replace=True`` (the reload)
+        deletes the game's stored ``raw.pitches`` rows in the insert's transaction,
+        so the new rows replace them; ``ON CONFLICT … DO NOTHING`` would otherwise
+        discard the new rows.
 
-        Hard-error rows are written to raw.etl_errors as well as logged, so
-        a skipped row has an audit trail and a re-ingest knows which pitches
-        to recover.
+        A row with a hard error goes to ``raw.etl_errors`` as well as to the log,
+        so a re-ingest knows which pitches to recover.
         """
         to_insert: list[dict[str, Any]] = []
         hard_errors: list[tuple[int, int, list[str]]] = []  # (at_bat, pitch, errors)
@@ -125,9 +115,9 @@ class WritesMixin(LoaderBase):
             for ab, pitch_num, errs in hard_errors:
                 log.error("    ab=%s pitch_number=%s: %s", ab, pitch_num, "; ".join(errs))
 
-        # The ledger is written INSIDE the pitch transaction (see
-        # _batch_insert), so a pitch insert that rolls back takes its error rows
-        # with it: no ledger row describes a game that was not written.
+        # The ledger is written INSIDE the pitch transaction (see _batch_insert):
+        # a pitch insert that rolls back takes its error rows with it, so no
+        # ledger row describes a game that was not written.
         inserted = self._batch_insert(
             to_insert,
             replace_game_pk=game_pk if replace else None,
@@ -151,17 +141,11 @@ class WritesMixin(LoaderBase):
         game_pk: int,
         errors: list[tuple[int | None, int | None, list[str]]],
     ) -> None:
-        """One raw.etl_errors row per skipped pitch, idempotently.
+        """Write one ``raw.etl_errors`` row per skipped pitch, idempotently.
 
-        Runs on the CALLER's cursor so it shares the pitch-insert transaction.
-
-        The insert is now ``ON CONFLICT DO UPDATE`` against the natural key
-        (migration 0017). Without it, a game whose rows ALL hard-error writes no
-        pitch rows, so ``_game_already_loaded`` stayed False, so the nightly job
-        re-fetched and re-processed that game every night and appended a full
-        duplicate error set each time — roughly 54,000 identical rows per season
-        for one broken game, and any consumer sizing a recovery from
-        ``COUNT(*)`` was wrong by the number of nights elapsed.
+        It runs on the CALLER's cursor, inside the pitch-insert transaction. The
+        upsert on the natural key keeps a second load of the same game from adding
+        a duplicate error set, so a count of the ledger's rows stays true.
         """
         if not errors:
             return
@@ -188,17 +172,13 @@ class WritesMixin(LoaderBase):
         pitch_rows: int,
         skipped_rows: int,
     ) -> None:
-        """Record the terminal per-game ETL outcome.
+        """Record the game's terminal outcome in ``raw.etl_game_ingest``.
 
-        ``_game_already_loaded`` keys on pitch rows existing, which cannot
-        distinguish "never loaded" from "loaded and legitimately produced zero
-        pitch rows" (every row hard-errored, or the feed genuinely has no
-        pitches). Without this record such a game is re-fetched and re-processed
-        every single night, forever, with nothing ever changing.
-
-        ``outcome='empty'`` is what stops that. ``reload_game`` /
-        ``reload=True`` ignore this table by design — that is the escape hatch
-        once a parser fix makes the game loadable.
+        ``outcome='empty'`` marks a game that loaded with zero pitch rows (every
+        row failed validation, or the feed has no pitches). Pitch rows alone cannot
+        tell that game from one never loaded, so without the record the nightly
+        run re-fetches it forever. The reload path ignores this table, so a reload
+        still reaches the game after a parser fix.
         """
         outcome = "loaded" if pitch_rows > 0 else "empty"
         cur.execute(
@@ -218,12 +198,12 @@ class WritesMixin(LoaderBase):
             (game_pk, season, outcome, pitch_rows, skipped_rows),
         )
 
-    #: Tri-state cache of "does `raw.play_events` exist" (``None`` means not
-    #: yet probed; see ``LoaderBase._exists_once``).
+    #: Whether ``raw.play_events`` exists: ``None`` until the first probe (see
+    #: ``LoaderBase._exists_once``).
     _play_events_table_exists: bool | None = None
 
-    #: One pitch row.  ON CONFLICT DO NOTHING keeps an ordinary load
-    #: idempotent; the reload path DELETEs the game first.
+    #: One pitch row. ON CONFLICT DO NOTHING keeps an ordinary load idempotent;
+    #: the reload path deletes the game's rows first.
     INSERT_SQL = """
         INSERT INTO raw.pitches (
             game_pk, at_bat_number, pitch_number, game_date, season, venue_id, venue,
@@ -303,9 +283,9 @@ class WritesMixin(LoaderBase):
         ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING;
     """
 
-    #: Non-pitch play events.  ON CONFLICT DO NOTHING makes a partial
-    #: re-run idempotent; the reload path DELETEs first so a genuine replace still
-    #: replaces rather than silently keeping the old rows.
+    #: One non-pitch play event. ON CONFLICT DO NOTHING keeps a partial rerun
+    #: idempotent; the reload path deletes first, so a reload still replaces the
+    #: rows.
     PLAY_EVENTS_INSERT_SQL = """
         INSERT INTO raw.play_events (
             game_pk, at_bat_number, play_index, game_date, season, event_type,
@@ -330,24 +310,18 @@ class WritesMixin(LoaderBase):
         *,
         replace: bool,
     ) -> int:
-        """Write this game's non-pitch play events.  Returns rows written.
+        """Write the game's non-pitch play events; return the rows written.
 
-        Takes the CALLER's cursor so it joins the game's single write
-        transaction: if the pitch insert rolls back, these roll back with it.
-        Writing them separately would let a game keep play events whose pitches
-        were never committed.
+        It takes the CALLER's cursor, so it joins the game's one write transaction:
+        when the pitch insert rolls back, these rows roll back with it. A game
+        never keeps play events whose pitches were not committed.
 
-        DELETEs only when ``replace``, matching the pitch rows exactly. The
-        incremental path must never delete — a reload REPLACES (so stale rows
-        must go, in case a parser fix produces fewer of them), while an ordinary
-        load relies on the natural-key ``ON CONFLICT DO NOTHING`` to stay
-        idempotent.
+        It deletes only when ``replace`` is set, as the pitch rows do. A reload
+        replaces, so stale rows must go; an ordinary load relies on the
+        natural-key ``ON CONFLICT DO NOTHING`` to stay idempotent.
         """
-        # SKIP ENTIRELY when the table is absent.
-        #
-        # Alembic 0018 creates `raw.play_events`. On a database without it the
-        # statements below would raise `UndefinedTable` and abort the whole game
-        # transaction, so the probe skips them (it answers once per run).
+        # Skip the write when the table is absent: the statements below would
+        # raise UndefinedTable and abort the game's whole transaction.
         if not self._exists_once(
             cur,
             "_play_events_table_exists",
@@ -381,40 +355,33 @@ class WritesMixin(LoaderBase):
         game_pk: int | None = None,
         play_event_rows: list[dict[str, Any]] | None = None,
     ) -> int:
-        """Insert rows in BATCH_SIZE chunks.  Returns rows ACTUALLY written.
+        """Write one game in one transaction; return the pitch rows ACTUALLY written.
 
-        This is now the SINGLE transaction for one game's write — the
-        optional DELETE, the pitch rows, the ``raw.etl_errors`` ledger and the
-        ``raw.etl_game_ingest`` outcome all commit or roll back together."
+        The transaction holds the optional DELETE, the play events, the pitch rows
+        (in ``BATCH_SIZE`` chunks), the ``raw.etl_errors`` ledger and the
+        ``raw.etl_game_ingest`` outcome. They commit or roll back together, so a
+        failed reload never leaves a game half-deleted.
 
         ``replace_game_pk``
-            When supplied, every existing ``raw.pitches`` row for that game is
-            DELETEd first, in the SAME transaction as the inserts.  This is the
-            only supported way to correct already-ingested pitch data: the
-            INSERT carries ``ON CONFLICT … DO NOTHING``, so without the delete a
-            re-ingest silently writes nothing.  Delete + insert commit together
-            or roll back together — a failed reload never leaves a game
-            half-deleted.
+            Delete every stored ``raw.pitches`` row of this game first. This is the
+            only way to correct loaded pitch data: the insert carries
+            ``ON CONFLICT … DO NOTHING``, so without the delete a re-ingest writes
+            nothing.
 
-        The return value is measured, not assumed.  ``execute_batch`` cannot
-        report an accurate rowcount (``cur.rowcount`` reflects only the final
-        page), and the previous implementation returned ``len(rows)`` — the
-        number of rows *attempted*.  With ``DO NOTHING`` that number was
-        indistinguishable from a completely discarded re-ingest, which is what
-        made a corrective re-run look like a success while writing nothing.  We
-        therefore bracket the insert with an exact COUNT on the affected game.
+        The return value is measured: an exact COUNT of the game's rows brackets
+        the insert. ``execute_batch`` reports no accurate row count, and the count
+        of rows attempted cannot tell a full write from a discarded one.
+
+        Raises :class:`ReloadShrinkError` when a reload writes back fewer rows than
+        it deleted, unless ``allow_shrink`` is set.
         """
         if not rows and replace_game_pk is None and not error_rows and season is None:
             return 0
 
-        # Which game this batch belongs to. Prefer the pk the caller states
-        # outright; inferring it from the rows is only a fallback for a caller
-        # that does not pass one.
-        #
-        # When every row of a game hard-errors, ``rows`` is empty, so the
-        # inference alone would give None and skip both the error ledger and
-        # the ingest-outcome write below — for exactly the games that most need
-        # an audit trail.
+        # The game this batch belongs to. The caller's pk wins; the rows are only
+        # a fallback. When every row of a game fails validation, ``rows`` is
+        # empty, and without the caller's pk the ledger and the outcome below are
+        # not written: for exactly the games that most need a record.
         game_pks = {r.get("game_pk") for r in rows}
         count_pk: int | None = replace_game_pk or game_pk
         if count_pk is None and len(game_pks) == 1:
@@ -438,12 +405,8 @@ class WritesMixin(LoaderBase):
                             deleted,
                         )
 
-                    # Non-pitch play events, INSIDE this same
-                    # transaction. `_write_play_events` deletes the game's rows
-                    # first, so a load and a reload behave identically and a
-                    # re-run cannot double-count a pickoff. If the pitch insert
-                    # below rolls back, these roll back with it — a game must
-                    # never keep play events whose pitches were never committed.
+                    # The non-pitch play events, INSIDE this transaction: if the
+                    # pitch insert below rolls back, they roll back with it.
                     if count_pk is not None:
                         written = self._write_play_events(
                             cur,
@@ -459,7 +422,7 @@ class WritesMixin(LoaderBase):
                             )
 
                     def _count() -> int | None:
-                        """COUNT(*) for the game, or None if it can't be read."""
+                        """Return the game's row count, or None when there is no single game."""
                         if count_pk is None:
                             return None
                         cur.execute(count_sql, (count_pk,))
@@ -474,21 +437,17 @@ class WritesMixin(LoaderBase):
 
                     after = _count()
                     if before is None or after is None:
-                        # No single game to bracket (or the count was unreadable):
-                        # fall back to the attempted count rather than reporting 0.
+                        # No single game to count: report the rows attempted, not 0.
                         inserted = len(rows)
                     else:
                         inserted = after - before
 
-                    # Shrink guard.  A reload that writes back FEWER rows than it
-                    # deleted is data loss, not a reload — and it is reachable
-                    # without any exception: _fetch_game_pitches returns
-                    # ([], game_dict) for an HTTP-200 feed whose allPlays is empty
-                    # or pitch-less (a postponed/suspended game, a feed blip, or a
-                    # not-yet-played game reached through load_date_range, which
-                    # has no Final gate).  Left unguarded, a sweep would delete a
-                    # complete game and commit nothing in its place.  Raising here
-                    # lands in the except below, which rolls the DELETE back.
+                    # The shrink guard. A reload that writes back fewer rows than
+                    # it deleted loses data, with no exception on the way:
+                    # _fetch_game_pitches returns no rows for an HTTP-200 feed whose
+                    # allPlays is empty or pitch-less (a postponed game, a feed
+                    # blip). The raise lands in the except below, which rolls the
+                    # DELETE back.
                     if replace_game_pk is not None and not allow_shrink and inserted < deleted:
                         raise ReloadShrinkError(
                             f"reload of game {replace_game_pk} would delete {deleted} pitch "
@@ -497,7 +456,7 @@ class WritesMixin(LoaderBase):
                             f"genuinely has fewer pitches now."
                         )
 
-                    # Ledger + outcome, in this same transaction.
+                    # The ledger and the outcome, in this same transaction.
                     if error_rows and count_pk is not None:
                         self._write_error_ledger(cur, count_pk, error_rows)
                     if count_pk is not None and season is not None:
@@ -516,9 +475,8 @@ class WritesMixin(LoaderBase):
 
         if rows and inserted < len(rows):
             if replace_game_pk is not None:
-                # The DELETE ran first, so "already present" is impossible here:
-                # a shortfall means the batch itself carried duplicate
-                # (game_pk, at_bat_number, pitch_number) keys, i.e. a parser bug.
+                # The DELETE ran first, so no row was already present: a shortfall
+                # means duplicate keys inside the batch, which is a parser bug.
                 log.warning(
                     "  game %s: %d of %d parsed rows collided WITHIN the batch and were "
                     "dropped by ON CONFLICT — duplicate (at_bat_number, pitch_number) keys "
@@ -539,12 +497,10 @@ class WritesMixin(LoaderBase):
         return inserted
 
     def _log_freshness(self, game_pk: int, rows: list[dict[str, Any]]) -> None:
-        """
-        Upserts raw.etl_data_freshness so the system knows the last loaded
-        game_date per pitcher and per batter.
+        """Record each pitcher's and batter's last loaded game in ``raw.etl_data_freshness``.
 
-        The table's DDL lives in db/schemas/01_postgres_schema.sql (Alembic
-        migration 0003).
+        An older game never overwrites a newer one. The table's DDL lives in
+        ``db/schemas/01_postgres_schema.sql``.
         """
         if not rows:
             return
