@@ -146,11 +146,12 @@ expand `${YEAR}` inside it. The year crosses into Python through the environment
 
 ### `operations/jobs/nightly_closing_lines.sh`
 
-[Source](../../operations/jobs/nightly_closing_lines.sh) · 64 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_closing_lines.sh) · 38 lines · Tests: [test_odds_closing_rows.py](../../tests/unit/test_odds_closing_rows.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
 
 The nightly odds pass. It runs the historical odds loader over last season and this one:
 `python -m betting.historical_loader --seasons <last year> <this year>`. The loader picks
-only the Final games missing an opening or a closing row, so a loaded game costs nothing.
+only the Final games missing an opening or a closing row, and tries each game on two
+nights at most, so a loaded game costs nothing.
 The live service stores each game's closing line at first pitch, but no opening line, and
 it misses every game while it is down. This pass fills both gaps. BettingPros returns
 each market's opener with every offer, so an opening line can be loaded at any time.

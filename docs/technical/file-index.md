@@ -19,14 +19,14 @@ Every source and config file in the repository, in the order of the [code review
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
 | [7. Getting data in: the raw tables](#stage-7) | 57 | 13,053 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
-| [9. Odds and betting](#stage-9) | 8 | 4,934 |
+| [9. Odds and betting](#stage-9) | 8 | 4,951 |
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,096 |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,097 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 38,368 |
-| [15. Tests and CI](#stage-15) | 315 | 124,407 |
-| **All** | **782** | **282,845** |
+| [15. Tests and CI](#stage-15) | 315 | 124,425 |
+| **All** | **782** | **282,881** |
 
 <a id="stage-1"></a>
 
@@ -314,7 +314,7 @@ Where the bookmakers' prices come from, and how the model's numbers become edges
 | [`betting/bettingpros/fetch_odds.py`](../../betting/bettingpros/fetch_odds.py) | 1,091 | Get BettingPros' odds for an MLB game and build one row per book. | 13: `test_betting_load.py`, `test_odds_matcher.py`, `test_odds_writers.py` +10 |
 | [`betting/validate_odds.py`](../../betting/validate_odds.py) | 426 | The load guard: it refuses an odds row that cannot be one bet. | 12: `test_betting_load.py`, `test_odds_matcher.py`, `test_odds_writers.py` +9 |
 | [`betting/load_odds_to_db.py`](../../betting/load_odds_to_db.py) | 796 | Load the odds into the database. | 15: `test_betting_load.py`, `test_odds_writers.py`, `test_live_pipeline.py` +12 |
-| [`betting/historical_loader.py`](../../betting/historical_loader.py) | 793 | Load the odds of finished games: the nightly pass and the backfills. | 7: `test_betting_load.py`, `test_odds_writers.py`, `test_odds_vocabulary.py` +4 |
+| [`betting/historical_loader.py`](../../betting/historical_loader.py) | 810 | Load the odds of finished games: the nightly pass and the backfills. | 7: `test_betting_load.py`, `test_odds_writers.py`, `test_odds_vocabulary.py` +4 |
 | [`betting/pricing.py`](../../betting/pricing.py) | 611 | The betting layer: compare the simulator's probabilities with the market's prices. | 14: `test_bet_signal_pricing.py`, `test_bet_signal.py`, `test_api_schemas.py` +11 |
 | [`betting/__init__.py`](../../betting/__init__.py) | 10 | The betting layer: the odds from BettingPros, their checks and load, and the pricing. | 2: `test_odds_vocabulary.py`, `test_odds_book_vocabulary.py` |
 
@@ -498,7 +498,7 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`.env.staging.example`](../../.env.staging.example) | 132 | MLB Baseball Simulation Platform — STAGING environment template | — |
 | [`.env.production.example`](../../.env.production.example) | 126 | MLB Baseball Simulation Platform — PRODUCTION environment template | — |
 | [`deploy/nginx/nginx.conf`](../../deploy/nginx/nginx.conf) | 293 | MLB Baseball Simulation Platform — nginx reverse proxy | — |
-| [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini) | 167 | Ofelia scheduler config — the nightly and weekly data jobs (docker-native cron). | — |
+| [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini) | 168 | Ofelia scheduler config — the nightly and weekly data jobs (docker-native cron). | — |
 | [`operations/__init__.py`](../../operations/__init__.py) | 1 | operations — keep the stack running: the nightly jobs, the backups and the secrets. | — |
 | [`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh) | 45 | operations/jobs/with_mark.sh — mark an ingest job as running, run it, record its exit. | — |
 | [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 57 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
@@ -794,12 +794,12 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_odds_book_census.py`](../../tests/unit/test_odds_book_census.py) | 1,148 | `scripts/probes/odds_book_census.py`: the sample, the gate math on synthetic rows, one game read through the provider with a stubbed vendor, and the re-grade of a saved census. | — |
 | [`tests/unit/test_odds_book_vocabulary.py`](../../tests/unit/test_odds_book_vocabulary.py) | 184 | The odds book vocabulary: the stored book labels, the kinds, the bettable books and the graded-book order. | — |
 | [`tests/unit/test_odds_census_sql.py`](../../tests/unit/test_odds_census_sql.py) | 190 | `scripts/probes/odds_census.sql`: read-only, and its literals in step with the book vocabulary, the first-five exclusion and the load guard's limits. | — |
-| [`tests/unit/test_odds_closing_rows.py`](../../tests/unit/test_odds_closing_rows.py) | 976 | Every live game's closing rows (the segment-market work, SIM-546). | — |
+| [`tests/unit/test_odds_closing_rows.py`](../../tests/unit/test_odds_closing_rows.py) | 979 | Every live game's closing rows (the segment-market work, SIM-546). | — |
 | [`tests/unit/test_odds_game_markets.py`](../../tests/unit/test_odds_game_markets.py) | 457 | Every game market the book posts (the prop-market work, SIM-421, owner ruling 2026-09-12). | — |
 | [`tests/unit/test_odds_hash_dedup.py`](../../tests/unit/test_odds_hash_dedup.py) | 200 | The live pipeline stores a game-odds quote once: `raw.game_odds` carries an `odds_hash` (SHA-256 of the quote) and a partial unique index on (game_pk, source, odds_hash), and `betting.load_odds_to_db.insert_game_odds_... | — |
 | [`tests/unit/test_odds_last_seen.py`](../../tests/unit/test_odds_last_seen.py) | 122 | SIM-519 Part G — odds currency: the last-seen stamp. | — |
 | [`tests/unit/test_odds_live_pages.py`](../../tests/unit/test_odds_live_pages.py) | 742 | The live betting pages read one book per odds row and name the book. | — |
-| [`tests/unit/test_odds_loader_retry.py`](../../tests/unit/test_odds_loader_retry.py) | 602 | SIM-555 (2026-10-01) — the loader's retry option and its incomplete games. | — |
+| [`tests/unit/test_odds_loader_retry.py`](../../tests/unit/test_odds_loader_retry.py) | 605 | SIM-555 (2026-10-01) — the loader's retry option and its incomplete games. | — |
 | [`tests/unit/test_odds_matcher.py`](../../tests/unit/test_odds_matcher.py) | 1,236 | SIM-555 (2026-10-01) — the matcher reads the PLAYED schedule entry of a game. | — |
 | [`tests/unit/test_odds_one_book_per_row.py`](../../tests/unit/test_odds_one_book_per_row.py) | 1,869 | SIM-555 (2026-09-28) — every book's prices stored, one book per row, and a load guard. | — |
 | [`tests/unit/test_odds_provider_ingestion.py`](../../tests/unit/test_odds_provider_ingestion.py) | 411 | SIM-340 — Real odds provider + prop ingestion (multi-book, sharp flag, cadence) | — |
@@ -807,7 +807,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_odds_provider_retry.py`](../../tests/unit/test_odds_provider_retry.py) | 696 | SIM-555 (2026-10-01) — the BettingPros provider retries a transient read failure and counts every failed read it catches. | — |
 | [`tests/unit/test_odds_readers.py`](../../tests/unit/test_odds_readers.py) | 1,176 | The odds readers (tests 15 and 16 of the one-book-per-row plan, SIM-555: `docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md` §5.5, §7). | — |
 | [`tests/unit/test_odds_vocabulary.py`](../../tests/unit/test_odds_vocabulary.py) | 801 | SIM-421 — the prop-bet types the market already offers but the platform did not price: the odds vocabulary, the BettingPros provider cache, the loaders and the CHECK-constraint migration. | — |
-| [`tests/unit/test_odds_writers.py`](../../tests/unit/test_odds_writers.py) | 1,020 | SIM-555 (2026-09-28), SIM-645 — the writers store every book's row, guarded and batched. | — |
+| [`tests/unit/test_odds_writers.py`](../../tests/unit/test_odds_writers.py) | 1,032 | SIM-555 (2026-09-28), SIM-645 — the writers store every book's row, guarded and batched. | — |
 | [`tests/unit/test_one_cutoff_per_table.py`](../../tests/unit/test_one_cutoff_per_table.py) | 276 | SIM-551 — one cutoff per profile table. | — |
 | [`tests/unit/test_openapi_snapshot.py`](../../tests/unit/test_openapi_snapshot.py) | 188 | The frontend's API snapshot matches the API (the API snapshot rule, SIM-573). | — |
 | [`tests/unit/test_out_label.py`](../../tests/unit/test_out_label.py) | 277 | SIM-501a/c — the events-based out label, and the guard on `outs_on_pitch`. | — |

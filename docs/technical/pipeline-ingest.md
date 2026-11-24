@@ -53,7 +53,7 @@ Four paths bring data in.
 ([betting.md](betting.md)). The live service loads every watched game's current lines
 once a minute and stamps the closing rows at first pitch. The historical loader
 (`python -m betting.historical_loader`), run each night by `operations/jobs/nightly_closing_lines.sh`,
-loads the opening and closing lines of the last two days' games.
+loads the opening and closing lines of the finished games missing them.
 
 **4. The reference loaders.** The Savant leaderboards, the per-pitch tracking export, the
 sprint speeds, the venue backfill and the bullpen availability each have a command-line

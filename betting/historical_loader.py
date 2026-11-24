@@ -24,14 +24,15 @@ service keeps the provider's default of one attempt.
 
 Which games. By default the loader picks only the Final games of ``--seasons`` that
 are missing odds (:func:`_missing_odds_clause`): a game with no stored row at one of
-the run's line types. A rerun therefore skips every loaded game, and the nightly
-pass needs no date window. ``--reload`` loads every Final game of the seasons
-instead (the odds hash keeps the rows single).
+the run's line types, which the loader has not tried yet. A rerun therefore skips
+every loaded game, and the nightly pass needs no date window. ``--reload`` loads
+every Final game of the seasons instead (the odds hash keeps the rows single).
 
 Incomplete games. A game is incomplete when a vendor read failed after its retries,
 or when the loader caught a failed fetch or write. Its rows so far stay written.
 ``--done-file`` lists each complete game, forced to disk, and a later run skips the
-games it lists, so a ``--reload`` rerun loads only the incomplete ones.
+games it lists, so a ``--reload`` rerun with the same file loads only the incomplete
+ones. A default rerun skips a game that holds some rows.
 
 Exit codes: 0 when every game is complete; 1 (``EXIT_INCOMPLETE``) when at least
 one game is incomplete, or on an uncaught error; 2 on a usage error.
@@ -130,6 +131,11 @@ DEFAULT_RETRY_WAIT_S = 5.0
 #: again a minute later on both. 0 = every game loaded;
 #: 2 = a usage error (the parser's), never run again.
 EXIT_INCOMPLETE = 1
+
+#: A game counts as tried once one of its rows was fetched or seen again this many
+#: days after the game date. The nightly pass runs each morning, so a game gets two
+#: nightly tries: a game the book posts no opener for is not read again every night.
+TRIED_AFTER_DAYS = 2
 
 #: The end-of-run summary names at most this many incomplete games.
 INCOMPLETE_LIST_MAX = 20
@@ -296,7 +302,7 @@ def _incomplete_summary(incomplete: list[int], *, done_file: str | None) -> str:
     if more > 0:
         shown = f"{shown} and {more} more"
     if done_file:
-        then = "they stay off the done-list, so the next run loads them again"
+        then = "they stay off the done-list, so a --reload run with this done-file loads them"
     else:
         then = (
             "a game with some rows counts as loaded, so re-run with --reload "
@@ -339,6 +345,11 @@ def _missing_odds_clause(
     (``bp:<id>``); a ``--book`` run counts that book's rows only. A market
     subset (``--game-markets``, ``--prop-stats``) counts only its markets.
 
+    A game the loader already tried is never missing: one of its rows was
+    fetched, or seen again, ``TRIED_AFTER_DAYS`` or more after the game date
+    (the live service's rows are all from game day). Only ``--reload`` loads
+    such a game again.
+
     Returns ``("AND (...)", params)``, bound from ``$1``; ``("", [])`` when the
     run writes no table.
     """
@@ -378,7 +389,13 @@ def _missing_odds_clause(
             missing.append(f"({has_lineup} AND NOT {stored('raw.prop_odds', line_type)})")
     if not missing:
         return "", []
-    return "AND (" + " OR ".join(missing) + ")", params
+    tables = [t for t, on in (("raw.game_odds", game_odds), ("raw.prop_odds", props)) if on]
+    tried = " OR ".join(
+        f"EXISTS (SELECT 1 FROM {table} t WHERE t.game_pk = raw.games.game_pk AND {book_sql} "
+        f"AND COALESCE(t.last_seen_at, t.fetched_at) >= raw.games.game_date + {TRIED_AFTER_DAYS})"
+        for table in tables
+    )
+    return "AND (" + " OR ".join(missing) + f") AND NOT ({tried})", params
 
 
 def read_done_file(path: str | None) -> set[int]:
@@ -639,7 +656,7 @@ async def run(args: argparse.Namespace) -> int:
                 if done_file:
                     log.warning(
                         "game %s is incomplete (%s); "
-                        "it stays off the done-list, so the next run loads it again",
+                        "it stays off the done-list, so a --reload run with this done-file loads it",
                         game_pk,
                         reasons,
                     )

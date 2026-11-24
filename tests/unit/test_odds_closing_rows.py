@@ -841,12 +841,14 @@ class TestLoaderMissingOdds:
         sql, params = loader._missing_odds_clause(
             line_types=("opening",), game_odds=True, props=True
         )
-        assert sql == (
+        assert sql.startswith(
             "AND (NOT (EXISTS (SELECT 1 FROM raw.game_odds t WHERE t.game_pk = "
             "raw.games.game_pk AND t.line_type = $1 AND t.book LIKE 'bp:%') OR "
             "EXISTS (SELECT 1 FROM raw.prop_odds t WHERE t.game_pk = raw.games.game_pk "
-            "AND t.line_type = $2 AND t.book LIKE 'bp:%')))"
+            "AND t.line_type = $2 AND t.book LIKE 'bp:%'))) AND NOT ("
         )
+        # A game the loader tried two or more days after the game date is skipped.
+        assert "COALESCE(t.last_seen_at, t.fetched_at) >= raw.games.game_date + 2" in sql
         assert params == ["opening", "opening"]
 
     def test_a_book_and_a_market_subset_narrow_the_check(self) -> None:
@@ -946,7 +948,8 @@ class TestNightlyScript:
         proc, record = _run_script(tmp_path, ODDS_API_KEY="k")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         args = record.read_text(encoding="utf-8").split()
-        year = datetime.now(UTC).year
+        year = int(args[-1])
+        assert year in (datetime.now(UTC).year, datetime.now(UTC).year - 1)
         # The loader's defaults: the games missing odds, opening and closing.
         assert args == ["-m", "betting.historical_loader", "--seasons", str(year - 1), str(year)]
 

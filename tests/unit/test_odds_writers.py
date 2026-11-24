@@ -180,7 +180,7 @@ def _patch_run(monkeypatch, games: list[int], roles: Any, provider: Any) -> _Rec
 # ===========================================================================
 
 
-class TestLoaderBookFlagAndResume:
+class TestLoaderBookFlag:
     def test_select_book(self) -> None:
         assert loader._select_book(None) is None
         assert loader._select_book("  ") is None
@@ -221,15 +221,17 @@ class TestMissingOddsQueryRuns:
         con.execute("CREATE SCHEMA raw")
         con.execute(
             "CREATE TABLE raw.games (game_pk INTEGER, status VARCHAR, season INTEGER, "
-            "home_score_final INTEGER, away_score_final INTEGER)"
+            "home_score_final INTEGER, away_score_final INTEGER, game_date DATE)"
         )
         con.execute("CREATE TABLE raw.game_lineups (game_pk INTEGER)")
         for table in ("prop_odds", "game_odds"):
             con.execute(
-                f"CREATE TABLE raw.{table} (game_pk INTEGER, line_type VARCHAR, book VARCHAR)"
+                f"CREATE TABLE raw.{table} (game_pk INTEGER, line_type VARCHAR, book VARCHAR, "
+                "fetched_at TIMESTAMP, last_seen_at TIMESTAMP)"
             )
-        for pk in range(1, 10):
-            con.execute("INSERT INTO raw.games VALUES (?, 'Final', 2026, 3, 2)", [pk])
+        # Every game is played on 2026-08-01; game 10 is the tried one.
+        for pk in range(1, 11):
+            con.execute("INSERT INTO raw.games VALUES (?, 'Final', 2026, 3, 2, '2026-08-01')", [pk])
         # Every game but 7 has lineup rows.
         con.executemany(
             "INSERT INTO raw.game_lineups VALUES (?)", [[pk] for pk in range(1, 10) if pk != 7]
@@ -245,6 +247,7 @@ class TestMissingOddsQueryRuns:
             7: full,
             8: full,
             9: [("closing", "bp:10"), ("opening", "bp:10")],  # FanDuel only
+            10: [("closing", "bp:12")],  # no opener; the loader tried it (below)
         }
         prop_rows = {
             1: full,
@@ -255,10 +258,17 @@ class TestMissingOddsQueryRuns:
             # 7: no lineup, so no props; 8: lineup but no prop rows
             9: [("closing", "bp:10"), ("opening", "bp:10")],
         }
+        # Every row is from game day, the live service's day, so no game counts as
+        # tried; game 10's closing row was seen again three days later.
+        game_day, later = "2026-08-01 23:00:00", "2026-08-04 10:30:00"
         for table, rows in (("game_odds", game_rows), ("prop_odds", prop_rows)):
             con.executemany(
-                f"INSERT INTO raw.{table} VALUES (?, ?, ?)",
-                [[pk, lt, book] for pk, lst in rows.items() for lt, book in lst],
+                f"INSERT INTO raw.{table} VALUES (?, ?, ?, ?, ?)",
+                [
+                    [pk, lt, book, game_day, later if pk == 10 else None]
+                    for pk, lst in rows.items()
+                    for lt, book in lst
+                ],
             )
 
         class _Conn:
@@ -287,7 +297,8 @@ class TestMissingOddsQueryRuns:
     @pytest.mark.asyncio
     async def test_an_every_book_run_picks_the_games_missing_a_row(self, duck) -> None:
         # 1 is loaded; 6's opening sits in one table, which counts; 7 has no
-        # lineup, so it needs no prop rows. 8 lacks its prop rows.
+        # lineup, so it needs no prop rows. 8 lacks its prop rows. 10 lacks its
+        # opening and its props, but the loader already tried it.
         assert await self._pks() == [2, 3, 4, 5, 8]
 
     @pytest.mark.asyncio
@@ -296,7 +307,8 @@ class TestMissingOddsQueryRuns:
 
     @pytest.mark.asyncio
     async def test_a_book_run_counts_that_books_rows(self, duck) -> None:
-        assert await self._pks(book_id=10) == [1, 2, 3, 4, 5, 6, 7, 8]
+        # Game 10 was tried for book 12 only, so a book 10 run picks it.
+        assert await self._pks(book_id=10) == [1, 2, 3, 4, 5, 6, 7, 8, 10]
         assert await self._pks(book_id=12) == [2, 3, 4, 5, 8, 9]
 
     @pytest.mark.asyncio

@@ -299,11 +299,14 @@ class TestIncompleteGames:
         ]
         assert len(per_game) == 1
         assert "(failed vendor reads: 2)" in per_game[0]
-        assert "stays off the done-list, so the next run loads it again" in per_game[0]
+        assert (
+            "stays off the done-list, so a --reload run with this done-file loads it"
+            in (per_game[0])
+        )
         summary = warnings[-1].getMessage()
         assert summary.startswith("incomplete games: 1 ")
         assert "746002;" in summary
-        assert "the next run loads them again" in summary
+        assert "a --reload run with this done-file loads them" in summary
         assert "(1 incomplete)" in caplog.text
 
     @pytest.mark.asyncio
