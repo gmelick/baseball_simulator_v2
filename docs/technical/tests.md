@@ -61,7 +61,7 @@ The Makefile wraps each Python lane in `docker compose run --rm -v "$(CURDIR):/a
 
 | Target | Command inside the app container |
 |---|---|
-| `make test` | `pytest tests/ -v --tb=short --timeout=60` with coverage of the seven program folders |
+| `make test` | `pytest tests/ -v --tb=short --timeout=60` with coverage of the eight program folders |
 | `make test-unit` | `pytest $(TESTS) -v --tb=short --timeout=30` with coverage; `TESTS` defaults to `tests/unit/` |
 | `make test-regression` | `pytest tests/regression/ -v --tb=short --timeout=60 -m regression` |
 | `make test-integration` | `pytest tests/integration/ -v --tb=short --timeout=120 -m integration` |
@@ -387,10 +387,11 @@ in the same commit as the change.
 | [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py) | Every reader of a per-pitch result skips a no-pitch result |
 | [test_bundle_no_pickle.py](../../tests/unit/test_bundle_no_pickle.py) | Every `np.load` in the bundle loader passes `allow_pickle=False` |
 | [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py) | Every non-exempt route of the real app requires a login |
+| [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py) (`TestHttpHygiene`) | `ingest/games/load_games.py` and every module of `ingest/savant/` open no URL of their own; `ingest/mlb/client.py` calls `urlopen` once; neither `load_games.py` nor the client imports `requests` |
 
 ## Unit tests by code area
 
-The tables group the 284 modules by the code they cover. "slow" marks a module with
+The tables group the 285 modules by the code they cover. "slow" marks a module with
 `@pytest.mark.slow` tests.
 
 ### The simulation loop (`simulation/sim_loop.py`, `simulation/loop/`)
@@ -442,7 +443,7 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py) | Workers read only the bundle; the app restarts on a new version and waits for a DuckDB writer at boot |
 | [test_cache_codec.py](../../tests/unit/test_cache_codec.py) | The Redis cache stores typed JSON, never a pickle |
 | [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_manager_profile_snapshot.py](../../tests/unit/test_manager_profile_snapshot.py) | The one `simulate_game` kwargs builder; the defense and park inputs; the app holds no DuckDB handle; the API's runs read each manager's profile from the boot snapshot (SIM-575) |
-| [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py) | The lineup resolver; the starter from the official box (SIM-558); the per-position fielder map |
+| [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py), [test_bullpen_usage.py](../../tests/unit/test_bullpen_usage.py) | The lineup resolver; the starter from the official box (SIM-558); the per-position fielder map; the pen from the box (`pipeline/bullpen_usage.py`) |
 | [test_game_sim_summary.py](../../tests/unit/test_game_sim_summary.py), [test_win_probability.py](../../tests/unit/test_win_probability.py) | The multi-game summary; the calibrated win probability |
 | [test_prop_distributions.py](../../tests/unit/test_prop_distributions.py), [test_prop_wrappers.py](../../tests/unit/test_prop_wrappers.py) | The fifteen prop distributions |
 | [test_segment_markets.py](../../tests/unit/test_segment_markets.py), [test_inning_grid.py](../../tests/unit/test_inning_grid.py), [test_linescore.py](../../tests/unit/test_linescore.py) | Every game market from the inning grid; the grid; the linescore |
@@ -502,13 +503,14 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 
 | File | What it pins |
 |---|---|
+| [test_mlb_client.py](../../tests/unit/ingest/test_mlb_client.py) | The one MLB Stats API client: the sync GET, its retry policy, no compressed body, the async reader, and the policy of the game, box-score and bullpen loads |
 | [test_etl_historical_loader.py](../../tests/unit/ingest/test_etl_historical_loader.py), [test_etl_connection_pool.py](../../tests/unit/ingest/test_etl_connection_pool.py), [test_etl_ensure_rows.py](../../tests/unit/ingest/test_etl_ensure_rows.py) | The historical loader's row builders, its connection pool, its prerequisite writers |
-| [test_etl_error_ledger.py](../../tests/unit/ingest/test_etl_error_ledger.py), [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_etl_reload_game.py](../../tests/unit/ingest/test_etl_reload_game.py) | The error ledger; per-game isolation and the circuit breaker; the corrective reload |
+| [test_etl_error_ledger.py](../../tests/unit/ingest/test_etl_error_ledger.py), [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_etl_reload_game.py](../../tests/unit/ingest/test_etl_reload_game.py), [test_sweep_streaming.py](../../tests/unit/ingest/test_sweep_streaming.py) | The error ledger; per-game isolation and the circuit breaker; the corrective reload; the sweep wrapper streams its child's output |
 | [test_etl_schedule_final_filter.py](../../tests/unit/ingest/test_etl_schedule_final_filter.py), [test_etl_starting_lineups.py](../../tests/unit/ingest/test_etl_starting_lineups.py), [test_starting_position.py](../../tests/unit/ingest/test_starting_position.py) | Only final games load; the starting lineup rows; each starter's starting position (SIM-559) |
 | [test_release_speed_bounds.py](../../tests/unit/ingest/test_release_speed_bounds.py), [test_play_events.py](../../tests/unit/ingest/test_play_events.py) | The 50–110 mph bounds; the non-pitch play events |
 | [test_venue_resolution.py](../../tests/unit/ingest/test_venue_resolution.py), [test_venue_id_fallback.py](../../tests/unit/ingest/test_venue_id_fallback.py) | Venue resolution and the NULL venue |
 | [test_boxscore_ingest.py](../../tests/unit/ingest/test_boxscore_ingest.py), [test_boxscore_reader.py](../../tests/unit/test_boxscore_reader.py), [test_game_bullpen_listing.py](../../tests/unit/ingest/test_game_bullpen_listing.py) | The official box score: parser, reader, the per-game bullpen listing |
-| [test_bullpen_usage.py](../../tests/unit/test_bullpen_usage.py), [test_bullpen_availability.py](../../tests/unit/ingest/test_bullpen_availability.py) | The pen from the box; roster and injured-list availability |
+| [test_bullpen_availability.py](../../tests/unit/ingest/test_bullpen_availability.py) | Roster and injured-list availability |
 | [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py) | The Savant loader's season guards; the outs-above-average and jump boards |
 | [test_db_dsn.py](../../tests/unit/test_db_dsn.py) | The connection string has no default password |
 
@@ -565,7 +567,7 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_pg_backup_script.py](../../tests/unit/operations/test_pg_backup_script.py) | The restore drill; the scheduler wiring; the Postgres dump and restore scripts |
 | [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_retry_wrapper.py](../../tests/unit/operations/test_retry_wrapper.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py) | The rebuild waits for the finals; the crash-retry wrapper; the shell scripts need `BASEBALL_DB_DSN` |
 | [test_no_default_password.py](../../tests/unit/test_no_default_password.py), [test_secrets_baseline.py](../../tests/unit/test_secrets_baseline.py), [test_gen_secrets.py](../../tests/unit/operations/test_gen_secrets.py) | No default password; the secrets baseline; the secrets generator |
-| [test_nginx_resolve.py](../../tests/unit/test_nginx_resolve.py), [test_check_file_integrity.py](../../tests/unit/test_check_file_integrity.py), [test_sweep_streaming.py](../../tests/unit/ingest/test_sweep_streaming.py) | nginx re-resolves the app; the file-integrity guard; the sweep wrapper streams its child's output |
+| [test_nginx_resolve.py](../../tests/unit/test_nginx_resolve.py), [test_check_file_integrity.py](../../tests/unit/test_check_file_integrity.py) | nginx re-resolves the app; the file-integrity guard |
 
 **Watch out:** the five shell-script tests (`test_ingest_wait.py`, `test_retry_wrapper.py`,
 `test_shell_dsn_guards.py`, `test_pg_backup_script.py`, part of

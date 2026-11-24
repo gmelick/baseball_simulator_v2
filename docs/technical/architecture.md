@@ -3,7 +3,7 @@
 This page describes the system one level above the code: the parts, where data lives,
 how the processes run, and the three paths that move data through them. Each area page
 holds the module detail: [API](api.md), [Simulation](simulation.md),
-[Similarity](similarity.md), [Pipeline: ingest](pipeline-ingest.md),
+[Similarity](similarity.md), [Data ingestion](ingest.md), [Live service](live.md),
 [Pipeline: nightly builds](pipeline-batch.md), [Betting](betting.md),
 [Database](database.md), [Frontend](frontend.md), [Scripts](scripts.md),
 [Operations](operations.md) and [Tests](tests.md). The [loop cheat sheet](sim-loop-cheat-sheet.md) lists every draw and

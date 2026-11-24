@@ -15,7 +15,7 @@ targets and the operator run the rest.
 
 The run book (how to run, check and recover each job) is the operator's manual,
 [WORKFLOW.md](../../WORKFLOW.md). The code the jobs call is on
-[Nightly builds](pipeline-batch.md) and [Data ingestion](pipeline-ingest.md).
+[Nightly builds](pipeline-batch.md) and [Data ingestion](ingest.md).
 
 ## How it fits together
 

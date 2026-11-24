@@ -3,7 +3,7 @@
 The nightly batch turns the raw Postgres tables into what the simulator reads. It
 writes the player profiles and the play pools into the DuckDB file, then exports the
 engine-artifact bundle (the files every simulation worker loads) onto disk. The input is
-Postgres `raw.*`, which the ingest jobs load ([Data ingestion](pipeline-ingest.md)). The
+Postgres `raw.*`, which the ingest jobs load ([Data ingestion](ingest.md)). The
 scheduler's jobs, the `make` targets and the one-off rebuild scripts call this code. The
 nightly shell jobs and the backups live in `operations/` ([Operations](operations.md)).
 The run book (how to run, check and recover each step) is the operator manual,

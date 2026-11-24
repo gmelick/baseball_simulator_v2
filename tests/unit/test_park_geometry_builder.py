@@ -819,7 +819,8 @@ class TestVenueDimensions:
             assert json.load(fh)["fetched"] == {"2026": "failed"}
         assert mvd.read_venue_dimensions(out_dir) == venues
 
-    def test_a_truncated_answer_keeps_the_copy(self, tmp_path, caplog):
+    def test_a_truncated_answer_keeps_the_copy(self, tmp_path, caplog, monkeypatch):
+        monkeypatch.setattr("ingest.mlb.client.time.sleep", lambda s: None)
         # ``resp.read()`` raises ``http.client.IncompleteRead`` on a body cut
         # short; it is not an ``OSError``, so the fallback names it.
         out_dir = str(tmp_path)

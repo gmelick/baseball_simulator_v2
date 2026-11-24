@@ -113,14 +113,14 @@
   `API_KEYS` value from `.env` and is gitignored. Without it the `baseball-sim-app` target shows
   DOWN. See `deploy/monitoring/secrets/README.md`.
 - **`scripts/` is NOT volume-mounted** into the running app container; only `api/`,
-  `pipeline/`, `betting/`, `operations/`, `similarity/`, `simulation/` and `db/` are. The
+  `ingest/`, `pipeline/`, `betting/`, `operations/`, `similarity/`, `simulation/` and `db/` are. The
   nightly jobs and the backups live in `operations/`, so they are mounted. `scripts/` is baked
   into the image. Edits to `scripts/` reach the
   running container only after `docker compose build app` and `docker compose up -d app`.
   Edits to the mounted folders need only `docker compose restart app`. Run a script that is
   not in the image yet with `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.
-- **`betting/` is mounted into `app`, `live` and `jobs`**, like `pipeline/`. An edit to
-  `betting/` needs no image rebuild; the nightly odds pass (`python -m betting.historical_loader`)
+- **`betting/` and `ingest/` are mounted into `app`, `live` and `jobs`**, like `pipeline/`. An
+  edit to either needs no image rebuild; the nightly odds pass (`python -m betting.historical_loader`)
   runs the mounted copy too.
 - **The container test and lint targets run the checkout (SIM-567).** The seven Makefile
   targets (`test`, `test-unit`, `test-regression`, `test-integration`, `lint`, `format`,
@@ -456,7 +456,7 @@ make test-unit           # unit tests (TESTS="tests/unit/test_x.py" names files)
 make test-regression     # engine invariant gate (no snapshots — see §7)
 make test-integration    # integration tests (testcontainers; they skip without a Docker socket)
 make lint / make format  # ruff check / ruff format
-make type-check          # mypy over the seven program folders
+make type-check          # mypy over the eight program folders
 make profile-computor    # rebuild the DuckDB profiles + pools
 make engine-artifacts    # build + publish a new bundle version
 make calibrate           # fit /data/calibration.json (drops the reliability curve — §2b)

@@ -17,16 +17,16 @@ Every source and config file in the repository, in the order of the [code review
 | [4. The sampler's data: the bundle](#stage-4) | 15 | 4,768 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
-| [7. Getting data in: the raw tables](#stage-7) | 64 | 14,849 |
+| [7. Getting data in: the raw tables](#stage-7) | 64 | 14,851 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 8 | 4,858 |
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 11 | 2,946 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,028 |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,029 |
 | [14. Measurement and maintenance tools](#stage-14) | 75 | 37,478 |
-| [15. Tests and CI](#stage-15) | 317 | 124,673 |
-| **All** | **783** | **282,162** |
+| [15. Tests and CI](#stage-15) | 317 | 124,674 |
+| **All** | **783** | **282,166** |
 
 <a id="stage-1"></a>
 
@@ -239,7 +239,7 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | [`ingest/savant/boards.py`](../../ingest/savant/boards.py) | 517 | The registry of the Baseball Savant leaderboards the platform loads, with each board's traps. | 6: `test_savant_oaa_jump_boards.py`, `test_savant_loader.py`, `test_lead_distance.py` +3 |
 | [`ingest/savant/load_pitch_tracking.py`](../../ingest/savant/load_pitch_tracking.py) | 268 | Load Savant's per-pitch tracking measurements, one day per request. | 1: `test_point_in_time_batter.py` |
 | [`ingest/savant/load_sprint_speed.py`](../../ingest/savant/load_sprint_speed.py) | 194 | Load Savant's sprint speed leaderboard into `raw.sprint_speed`, one row per player-season. | 1: `test_savant_loader.py` |
-| [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 150 | Fetch each park's published fence distances from the MLB Stats API for the fence prior. | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
+| [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 152 | Fetch each park's published fence distances from the MLB Stats API for the fence prior. | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
 | [`ingest/venues/backfill_venues.py`](../../ingest/venues/backfill_venues.py) | 332 | Fill the NULL `venue_id` of `raw.games` rows from the MLB schedule. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
 | [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 564 | Record which pitchers each team can use in each game, in `raw.game_bullpen_availability`. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
 | [`ingest/__init__.py`](../../ingest/__init__.py) | 13 | Get the real data into the Postgres `raw.*` tables: the first step of the program. | 3: `test_boxscore_ingest.py`, `test_game_bullpen_listing.py`, `test_pitch_result_vocabulary.py` |
@@ -385,12 +385,12 @@ The service that follows today's games, writes the posted lineups and pushes upd
 |---|--:|---|---|
 | [`pipeline/live/run_live.py`](../../pipeline/live/run_live.py) | 71 | The live service's entry point (the live slate, SIM-519; decision D2). | — |
 | [`pipeline/live/live_ingestion_pipeline.py`](../../pipeline/live/live_ingestion_pipeline.py) | 1,116 | The live ingestion pipeline: the day's games, their live state and their odds. | 20: `test_live_bridge.py`, `test_odds_writers.py`, `test_live_pipeline.py` +17 |
-| [`pipeline/live/ingestion/base.py`](../../pipeline/live/ingestion/base.py) | 100 | The state every part of the live pipeline shares. | — |
+| [`pipeline/live/ingestion/base.py`](../../pipeline/live/ingestion/base.py) | 101 | The state every part of the live pipeline shares. | — |
 | [`pipeline/live/ingestion/constants.py`](../../pipeline/live/ingestion/constants.py) | 61 | The live pipeline's settings: the MLB socket address, the poll and reconnect intervals, the cache lifetimes, the re-simulation cooldown and the odds cadences. | 4: `test_odds_writers.py`, `test_live_pipeline.py`, `test_odds_vocabulary.py` +1 |
 | [`pipeline/live/ingestion/mlb_websocket.py`](../../pipeline/live/ingestion/mlb_websocket.py) | 166 | The WebSocket parts: the client of MLB's live game socket and the manager of the app's own subscribers. | 2: `test_odds_writers.py`, `test_live_pipeline.py` |
 | [`pipeline/live/ingestion/game_state_builder.py`](../../pipeline/live/ingestion/game_state_builder.py) | 499 | The game-state builder: one live game's feed turned into the state the simulator starts from. | 2: `test_live_pipeline.py`, `test_live_pipeline_bugs.py` |
 | [`pipeline/live/ingestion/game_odds.py`](../../pipeline/live/ingestion/game_odds.py) | 100 | The live cycle's game odds: the broadcast row, the cadence of the load, and the closing-line stamp at first pitch. | — |
-| [`pipeline/live/ingestion/odds_cycle.py`](../../pipeline/live/ingestion/odds_cycle.py) | 105 | The live odds cycle's timing and broadcast form: the cadence, the staleness test and the JSON form of an offer. | 1: `test_odds_writers.py` |
+| [`pipeline/live/ingestion/odds_cycle.py`](../../pipeline/live/ingestion/odds_cycle.py) | 104 | The live odds cycle's timing and broadcast form: the cadence, the staleness test and the JSON form of an offer. | 1: `test_odds_writers.py` |
 | [`pipeline/live/ingestion/prop_odds.py`](../../pipeline/live/ingestion/prop_odds.py) | 206 | The live cycle's player props: the players each game needs, the cadence of the load, and the closing-line stamp at first pitch. | — |
 | [`pipeline/live/lineup_writer.py`](../../pipeline/live/lineup_writer.py) | 362 | The published-lineup writer (the live slate, SIM-519). | 1: `test_published_lineup_writer.py` |
 | [`pipeline/live/broadcast.py`](../../pipeline/live/broadcast.py) | 160 | The bridge between the live service and the browsers (the live slate, SIM-519). | 1: `test_live_bridge.py` |
@@ -530,7 +530,7 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`requirements.txt`](../../requirements.txt) | 111 | The Python packages the app image installs. | — |
 | [`requirements-dev.txt`](../../requirements-dev.txt) | 48 | The extra Python packages for tests, lint and type checks. | — |
 | [`requirements-docs.txt`](../../requirements-docs.txt) | 5 | The packages that build the technical reference website (MkDocs). | — |
-| [`mkdocs.yml`](../../mkdocs.yml) | 68 | The MkDocs settings that build the technical reference website from docs/technical/. | — |
+| [`mkdocs.yml`](../../mkdocs.yml) | 69 | The MkDocs settings that build the technical reference website from docs/technical/. | — |
 | [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) | 24 | pre-commit configuration | — |
 | [`.gitignore`](../../.gitignore) | 179 | MLB Baseball Simulation Platform — .gitignore | — |
 | [`.gitattributes`](../../.gitattributes) | 24 | Normalize all text files to LF in the git object store. | — |
@@ -828,7 +828,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_pair_accuracy.py`](../../tests/unit/test_pair_accuracy.py) | 174 | Pairing two accuracy-comparison reports (scripts/pair_accuracy.py). | — |
 | [`tests/unit/test_park_factor_snapshot.py`](../../tests/unit/test_park_factor_snapshot.py) | 220 | Tests that the app holds no handle on the statistics DuckDB file. | — |
 | [`tests/unit/test_park_factors.py`](../../tests/unit/test_park_factors.py) | 482 | Unit tests for SIM-336 (park-factor UNPIVOT/factor_overall fix + real L/R splits + pool-neutralization policy) and SIM-345 (data-layer fixes: incremental watermark `>=` + row-count guard, canonical cross-pool recency_... | — |
-| [`tests/unit/test_park_geometry_builder.py`](../../tests/unit/test_park_geometry_builder.py) | 871 | The fence certification (SIM-478/479/480; the plan at docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §4 and §5.1): the version-2 park-geometry builder's pure pieces on toy numpy balls (no DuckDB), and t... | — |
+| [`tests/unit/test_park_geometry_builder.py`](../../tests/unit/test_park_geometry_builder.py) | 872 | The fence certification (SIM-478/479/480; the plan at docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §4 and §5.1): the version-2 park-geometry builder's pure pieces on toy numpy balls (no DuckDB), and t... | — |
 | [`tests/unit/test_persistent_process_pool.py`](../../tests/unit/test_persistent_process_pool.py) | 286 | The **persistent (warm) ProcessPool + shared-memory lifecycle** of :class:`simulation.batch_runner.BatchRunner` for the long-lived API. | — |
 | [`tests/unit/test_pitch_cell_index.py`](../../tests/unit/test_pitch_cell_index.py) | 432 | The pitch-draw CELL INDEX (plan: docs/audit/2026-09-04-sim467-518-plan.md §5). | — |
 | [`tests/unit/test_pitch_pitch_engine.py`](../../tests/unit/test_pitch_pitch_engine.py) | 274 | The pitch-to-pitch similarity engine (a FAISS nearest-neighbour index). | — |

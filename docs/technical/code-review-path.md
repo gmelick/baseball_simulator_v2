@@ -373,7 +373,7 @@ leaderboards from Baseball Savant, and write them to the Postgres `raw.*` tables
 4. [ingest/games/play_events.py](../../ingest/games/play_events.py) and
    [ingest/load_boxscores.py](../../ingest/load_boxscores.py): the
    non-pitch events and the official box score.
-5. The Savant and sprint-speed loaders, then
+5. The Savant loaders in [ingest/savant/](../../ingest/savant/), then
    [db/migrations/versions/](../../db/migrations/versions/) (Alembic).
 
 **Check.**
@@ -387,8 +387,7 @@ leaderboards from Baseball Savant, and write them to the Postgres `raw.*` tables
 `test_boxscore_ingest.py`, `test_starting_position.py`, `test_etl_reload_game.py`,
 `test_migration_chain.py`.
 
-**Reference.** [Pipeline: getting data in](pipeline-ingest.md) and
-[Database](database.md).
+**Reference.** [Data ingestion](ingest.md) and [Database](database.md).
 
 <a id="stage-8"></a>
 
@@ -526,7 +525,8 @@ through Redis.
 **Tests.** `test_schedule_client.py`, `test_game_feed.py`, `test_live_pipeline.py`,
 `test_published_lineup_writer.py`, `test_live_bridge.py`.
 
-**Reference.** [Pipeline: getting data in](pipeline-ingest.md).
+**Reference.** [Live service](live.md). The schedule, the game feed and the client are on
+[Data ingestion](ingest.md).
 
 <a id="stage-12"></a>
 

@@ -56,7 +56,8 @@ nav:
       - Simulation: simulation.md
       - Similarity engines: similarity.md
       - "Pipeline: the nightly builds": pipeline-batch.md
-      - "Pipeline: getting data in": pipeline-ingest.md
+      - "Getting data in": ingest.md
+      - "Game day: the live service": live.md
       - Database: database.md
       - Betting: betting.md
       - API: api.md

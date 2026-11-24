@@ -61,10 +61,9 @@ def _odds_facts_may_be_stale(game: Mapping[str, Any]) -> bool:
       * a postponed entry not yet rescheduled (``detailedState`` starting
         "Postponed", or ``codedGameState`` "D", as the provider reads it);
       * a made-up or resumed game before its first pitch (``rescheduledFrom`` /
-        ``resumedFrom`` while ``Preview``). The poll reads one calendar date's
-        schedule (``date.today()``, UTC in the container), so it misses the
-        original date's entry of a game postponed after midnight UTC; this
-        entry catches that game on its new date.
+        ``resumedFrom`` while ``Preview``). The poll reads yesterday to tomorrow
+        in Eastern time, so it can miss the original date's entry of a game
+        postponed to a later date; this entry catches that game on its new date.
 
     The poll drops the cached facts on each such entry. A live game keeps
     them, so the per-pitch refresh reads nothing again.

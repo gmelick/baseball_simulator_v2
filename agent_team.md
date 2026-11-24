@@ -35,7 +35,7 @@ parts fit together.
 | 1 | Product Manager | The ticket list, priorities, acceptance criteria, the plans | `BACKLOG.xlsx`, `CHANGES.md` |
 | 2 | Baseball Analyst | Baseball realism: the draws' filters, the acceptance bands, the domain checks | [Loop cheat sheet](docs/technical/sim-loop-cheat-sheet.md) |
 | 3 | ML / Modeling Engineer | The similarity engines, the weights, calibration, the designed experiment | [Similarity](docs/technical/similarity.md) |
-| 4 | Data Engineer | The schemas, migrations, loaders, nightly builds and backups | [Database](docs/technical/database.md), [Pipeline: ingest](docs/technical/pipeline-ingest.md), [Pipeline: nightly builds](docs/technical/pipeline-batch.md), [Operations](docs/technical/operations.md) |
+| 4 | Data Engineer | The schemas, migrations, loaders, nightly builds and backups | [Database](docs/technical/database.md), [Data ingestion](docs/technical/ingest.md), [Live service](docs/technical/live.md), [Pipeline: nightly builds](docs/technical/pipeline-batch.md), [Operations](docs/technical/operations.md) |
 | 5 | Backend Developer | The simulation loop, the runner, the API | [Simulation](docs/technical/simulation.md), [API](docs/technical/api.md) |
 | 6 | Performance Engineer | Throughput: the worker pool, the sampler's hot paths, memory | [Architecture](docs/technical/architecture.md) |
 | 7 | UX Designer | The frontend and its design system | [Frontend](docs/technical/frontend.md) |

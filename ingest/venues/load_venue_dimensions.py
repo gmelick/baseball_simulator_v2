@@ -82,7 +82,9 @@ def fetch_venue_dimensions(season: int, timeout: float = 30) -> dict[int, dict]:
         VENUES_URL.format(season=int(season)),
         headers={"User-Agent": "baseball-sim/SIM-478"},
         timeout_s=timeout,
-        policy=mlb_client.DEFAULT_POLICY,
+        # One retry: a failed season keeps the bundle's last copy, so a long
+        # wait would only stall the nightly bundle build.
+        policy=mlb_client.RetryPolicy(retries=1, first_wait_s=2.0),
         logger=log,
         label="The venue-dimension load",
     )
