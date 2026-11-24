@@ -1,8 +1,8 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
-Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1's Steps A and B are
-deployed (2026-11-23, master a882395); its Step C, the clean-up, is in progress. Parts 2 to 7
-have not started.
+Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
+to C (2026-11-24, master 0f0fd61). Part 2's Step A is committed on branch
+`sim647-part2-ingest`; its Step B is next. Parts 3 to 7 have not started.
 
 ## 1. Why
 
@@ -142,7 +142,24 @@ scheduler.
 | `pipeline/statcast_events.py` | `ingest/statcast_events.py` |
 
 Step B also moves the schedule read of `betting/bettingpros/match_games.py` onto
-`ingest/mlb/client.py`. The check: a row comparison at scale, as in SIM-645. Record every MLB
+`ingest/mlb/client.py`.
+
+The client's design (2026-11-24). Today three callers carry their own copy of a retry
+policy: the game loader (ten retries, a linear wait, `Retry-After` replaces the wait), the
+box-score load (four attempts, a doubling wait) and the odds provider (an env-set count, a
+doubling wait with a cap, `Retry-After` as a floor). The rest retry nothing.
+
+- **One sync GET** in `ingest/mlb/client.py`, built from the game loader's (`urllib`, the
+  `HttpError` type, the case-insensitive response). It takes a timeout, headers and a
+  retry policy per caller. Every sync caller uses it, the BettingPros reads included.
+- **One retry shape:** the wait doubles from the caller's first wait, a numeric
+  `Retry-After` sets a floor, and a cap ends the growth. 408, 425, 429, every 5xx and every
+  connection error retry; any other status fails at once. Each caller keeps its own count
+  and first wait.
+- **One async reader**, the app's `LeagueFeed`, serves the live service's feed and lineup
+  reads and the venue backfill.
+- `MLB_BASE` and the URL of each endpoint (schedule, feed, box score, people, venues,
+  coaches, roster) live in the client once. The check: a row comparison at scale, as in SIM-645. Record every MLB
 response of 300+ games with the old code, replay them through the new code, and compare the
 rows each loader writes.
 
