@@ -4,17 +4,16 @@
 #
 #   sh operations/jobs/with_retry.sh <max_attempts> <command...>
 #
-# The app image's Python dies now and then with a segmentation fault (the
-# SIM-445 crash class, CLAUDE.md §2a). The loaders are idempotent per game, so a
-# rerun resumes where the crash stopped. The wrapper reruns the command after a
-# crash, up to <max_attempts> attempts, 30 seconds apart:
+# The app image's Python dies now and then with a segmentation fault
+# (CLAUDE.md section 2a). The loaders skip what they already loaded, so a rerun
+# resumes. The wrapper reruns the command up to <max_attempts> times, 30 s apart:
 #
-#   - exit 139 (SIGSEGV), or any non-zero exit whose output carries
-#     "Fatal Python error"  -> a crash: wait and run again;
-#   - any other non-zero exit -> a real failure: stop at once with that code;
-#   - exit 0                  -> done.
+#   - exit 139, or a non-zero exit with "Fatal Python error" in the output:
+#     a crash; wait and run again;
+#   - any other non-zero exit: a real failure; stop at once with that code;
+#   - exit 0: done.
 #
-# RETRY_SLEEP_S overrides the 30-second wait (the unit test sets 0).
+# RETRY_SLEEP_S overrides the 30-second wait.
 # =============================================================================
 set -u
 
@@ -31,8 +30,8 @@ trap 'rm -f "$LOG"' EXIT
 attempt=1
 while :; do
   echo "[with-retry] attempt ${attempt}/${MAX}: $*"
-  # Keep the command's output on screen and in a file the crash check reads.
-  # The exit code of the command, not of tee, is the one that counts.
+  # tee keeps the output on screen and in the file the crash check reads.
+  # The file .code keeps the command's exit code, not tee's.
   { "$@" 2>&1; echo $? > "$LOG.code"; } | tee "$LOG"
   code="$(cat "$LOG.code")"
   rm -f "$LOG.code"

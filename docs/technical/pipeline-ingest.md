@@ -86,7 +86,7 @@ those names stay in this file.
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `HistoricalDataLoader.load_date_range` | Loads every Final game in a date range. It cuts the range into schedule windows and warns when a window comes back short. `reload=True` sends every game through `reload_game`. | `operations/jobs/nightly_finals.sh`, `operations/jobs/nightly_ingest.sh` |
+| `HistoricalDataLoader.load_date_range` | Loads every Final game in a date range. It cuts the range into schedule windows and warns when a window comes back short. `reload=True` sends every game through `reload_game`. | `operations/jobs/nightly_finals.sh` |
 | `HistoricalDataLoader.refresh_seasons` | Loads every Final game of a range of seasons. The default end is last season. `reload=True` re-ingests. | `operations/jobs/weekly_refresh.sh`, `scripts/resumable_sweep.py` |
 | `HistoricalDataLoader.load_game` | Loads one game. The pitch insert skips a row that exists (`ON CONFLICT ... DO NOTHING`). | `_dispatch_game` |
 | `HistoricalDataLoader.reload_game` | Deletes and re-inserts one game's pitch rows in one transaction. It refuses to store fewer rows than before (`ReloadShrinkError`) unless `allow_shrink=True`. | `_dispatch_game`, `scripts/reload_games.py` |

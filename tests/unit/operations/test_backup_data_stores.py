@@ -364,7 +364,7 @@ def test_a_stale_mark_does_not_hold_the_backup(tmp_path):
     clock = FakeClock()
     _mark(tmp_path, "weekly-refresh", clock.now - 21600 - 1)
     assert ds.wait_for_marks(tmp_path, grace_s=0, stale_s=21600, clock=clock, sleep=clock.sleep)
-    assert clock.sleeps == [0]
+    assert clock.sleeps == []
 
 
 def test_the_wait_gives_up_after_wait_s(tmp_path):
@@ -605,3 +605,41 @@ def test_the_next_night_and_new_set_make_a_new_set(backups, data_root):
     assert _run([], backups, data_root, clock) == 0
     assert len(complete_sets(backups, "duckdb")) == 3
     assert len(complete_sets(backups, "bundle")) == 3
+
+
+def test_a_broken_set_is_neither_counted_nor_pruned(backups, capsys):
+    for day in range(1, 5):
+        _fake_set(backups, "duckdb", f"2026100{day}T100000Z")
+    broken = _fake_set(backups, "duckdb", "20261005T100000Z")
+    (broken / "manifest.json").write_text("{not json", encoding="utf-8")
+    removed = ds.prune_sets(backups, "duckdb", 3, current=None)
+    # Three good sets stay; the broken newest set does not take a good one's place.
+    assert removed == ["20261001T100000Z"]
+    assert broken.is_dir()
+    assert "20261005T100000Z has a manifest that does not read; prune leaves it" in (
+        capsys.readouterr().out
+    )
+
+
+def test_verify_of_a_broken_set_fails_cleanly(backups, capsys):
+    broken = _fake_set(backups, "duckdb", "20261005T100000Z")
+    (broken / "manifest.json").write_text("{not json", encoding="utf-8")
+    assert ds.main(["--backups-root", str(backups), "--verify-set", "20261005T100000Z"]) == 1
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"files": "x"},
+        {"files": [{"bytes": 3}]},
+        {"files": [{"path": ""}]},
+        {"files": [], "counts": [1]},
+    ],
+)
+def test_a_bad_file_list_or_count_is_a_backup_error(tmp_path, manifest):
+    path = tmp_path / "duckdb" / "20261005T100000Z"
+    path.mkdir(parents=True)
+    (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    info = complete_sets(tmp_path, "duckdb")[0]
+    with pytest.raises(ds.BackupError, match="the manifest of duckdb/20261005T100000Z"):
+        ds.read_manifest(info)

@@ -1,38 +1,35 @@
 #!/usr/bin/env sh
 # =============================================================================
-# SIM-525: the nightly Postgres backup (the scheduled backups of the data stores).
+# operations/backup/postgres/pg_backup.sh — the nightly Postgres backup.
 #
 # The script dumps the database in directory format, the only pg_dump format
-# that restores in parallel. It runs inside the db container as the postgres
-# OS user and connects over the unix socket as POSTGRES_USER, so it needs no
-# password. It never echoes a command (no shell trace).
+# that restores in parallel. It runs in the db container as the postgres OS
+# user over the unix socket, so it needs no password. It never echoes a command.
 #
 # One run writes one set:
 #
 #   $BACKUP_ROOT/postgres/<TS>/
-#       dump/              pg_dump -Fd (toc.dat + one .dat.gz per table)
-#       counts_before.tsv  'schema.table<TAB>count', taken just before the dump
-#       counts_after.tsv   the same, taken just after the dump
-#       manifest.json      written LAST; a set without it is not complete
+#       dump/              pg_dump -Fd (toc.dat and one .dat.gz per table)
+#       counts_before.tsv  'schema.table<TAB>count', just before the dump
+#       counts_after.tsv   the same, just after the dump
+#       manifest.json      written last; a set without it is incomplete
 #
 # TS is the UTC start time, %Y%m%dT%H%M%SZ. The set is built as <TS>.partial
-# and renamed only after every file and the manifest are synced. The next run
-# deletes every '*.partial' it finds. The live service may write during the
-# dump, so the restore checks each table's count against the two counts.
+# and renamed after every file is synced. The next run deletes any partial set.
+# The live service may write during the dump, so the restore checks each
+# table's count against the two counts.
 #
 # Callers:
 #   Ofelia, nightly at 10:00 UTC:  sh /opt/baseball/backup/pg_backup.sh
 #   By hand:                       make backup
 #
 # Exit codes: 0 the set is complete; 1 the backup failed (nothing is pruned);
-# 2 a refusal before any write (the root is missing or not writable, a bad
-# setting, not enough free space, or another backup run holds the lock).
+# 2 a refusal before any write (a bad root or setting, too little free space,
+# or another run holds the lock).
 #
-# The lock: one run at a time. The run creates the folder
-# $BACKUP_ROOT/postgres/.lock (mkdir is atomic) and writes its pid and start
-# epoch into .lock/owner. A second run (say `make backup` during the 10:00
-# job) refuses with exit 2 and deletes nothing. A lock is stale when its pid
-# is gone or it is older than BACKUP_LOCK_STALE_S; the next run removes it.
+# The lock folder $BACKUP_ROOT/postgres/.lock allows one run at a time; its
+# owner file holds the pid and the start epoch. A lock is stale when its pid
+# is gone or it is older than BACKUP_LOCK_STALE_S.
 #
 # Settings (environment, with defaults):
 #   BACKUP_ROOT=/backups  BACKUP_KEEP=3  PG_DUMP_JOBS=4  PG_DUMP_COMPRESS=3
@@ -80,10 +77,10 @@ psql_q() {
     psql -q -X --no-password -v ON_ERROR_STOP=1 -At -U "$pg_user" -d "$pg_db" "$@"
 }
 
-# JSON string body: escape the backslash and the double quote.
+# Escape a JSON string body: the backslash and the double quote.
 json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-# The complete sets of the store, oldest first (the TS names sort by time).
+# The complete sets of the store, oldest first (the names sort by time).
 complete_sets() {
     for d in "$store"/*; do
         [ -d "$d" ] || continue
@@ -93,7 +90,7 @@ complete_sets() {
     done | LC_ALL=C sort
 }
 
-# The bytes a set's manifest records; the folder's size when it records none.
+# The bytes a set's manifest records, else the folder's size.
 set_bytes() {
     b=$(sed -n 's/^[[:space:]]*"bytes":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1/manifest.json" | head -n 1)
     if [ -z "$b" ]; then
@@ -102,9 +99,8 @@ set_bytes() {
     echo "$b"
 }
 
-# Flush every file and folder of one tree to disk. A bare `sync` flushes every
-# filesystem the container sees and can stall for minutes on a bind mount, so
-# the script names the files (`sync FILE...` fsyncs each one).
+# Flush one tree to disk, file by file. A bare `sync` flushes every file
+# system the container sees and can stall for minutes on a bind mount.
 sync_tree() { find "$1" -exec sync {} +; }
 
 # The free KiB on the backup root (the bind mount reports the host disk).
@@ -227,11 +223,9 @@ take_counts "$partial/counts_after.tsv"
 alembic_head=$(psql_q -c "select version_num from public.alembic_version") \
     || fail "cannot read the alembic head"
 
-# --- 4b. The set must be readable by the off-site copy (SIM-568). --------------
-# pg_dump creates the dump folder 0700. The off-site copy reads the set from
-# the jobs container as appuser, another uid, so a 0700 folder fails it with
-# "Permission denied" (seen 2026-10-17 on the first copy). The host folder's
-# own permissions guard the files; on the bind mount these bits are metadata.
+# --- 4b. The off-site copy must be able to read the set. ----------------------
+# pg_dump creates the dump folder 0700, and the off-site copy reads it as
+# another user. The host folder's own permissions guard the files.
 chmod -R u=rwX,go=rX "$partial" || fail "cannot make the set readable"
 
 # --- 5. The manifest, written last. -------------------------------------------
@@ -245,9 +239,8 @@ total=0
 n_files=0
 while IFS= read -r p; do
     [ -n "$p" ] || continue
-    # stat, never wc: busybox wc reads the whole file in small chunks, and over
-    # the Docker Desktop bind mount a gigabyte then takes minutes (measured
-    # 2026-10-15: 53 s for 94 MB; sha256sum reads the same file in 2.7 s).
+    # stat, never wc: busybox wc reads in small chunks, which takes minutes
+    # per gigabyte over the Docker Desktop bind mount.
     size=$(stat -c %s "$partial/$p") || fail "cannot size $p"
     sum=$(sha256sum "$partial/$p" | awk '{print $1}') || fail "cannot hash $p"
     total=$(( total + size ))

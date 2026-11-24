@@ -6,44 +6,36 @@ Run it in the jobs container as ``appuser``:
     python -m operations.backup.copy_offsite --status     # the newest local and off-site sets
     python -m operations.backup.copy_offsite --dry-run    # what a run would copy and prune
 
-The off-site root (``/offsite``) is the owner's OneDrive folder, bind-mounted.
-The OneDrive client uploads whatever lands there, so the cloud copy is the
-off-machine copy. This module copies the sets; it cannot see the upload.
+The off-site root (``/offsite``) is the owner's OneDrive folder. The OneDrive
+client uploads what lands there; this module cannot see the upload.
 
-What a run does:
+A run:
 
-1. It refuses (exit 2) when either root is missing, when the off-site root
-   cannot be written, or when the two roots are one folder.
-2. It takes the copy lock (``offsite-copy.lock`` in the mark folder): one
-   copy run at a time. A second run refuses (exit 2) while a live run holds
-   the lock, so a ``make backup-offsite`` never writes the set folders that
-   the scheduled run writes.
-3. It waits while the data job of the scheduled backups runs (its
-   ``nightly-backup.running`` mark) or while the Postgres job holds its lock
-   (``postgres/.lock/owner``). After ``--wait-s`` it logs and copies anyway:
-   a complete set is always safe to copy.
-4. For each store it takes the newest ``keep`` complete local sets (the
-   wanted sets). The free-space guard checks the disk once, before any
-   write, for the bytes of every set that needs a copy. Then, per store, the
-   run deletes the dead off-site folders that no wanted set needs and copies
-   every wanted set that is not mirrored, the oldest first.
-5. A set is copied file by file into ``<store>/<set id>/``, with no
-   ``.partial`` folder and no rename: OneDrive holds new files open while it
-   uploads them, and a Windows folder rename fails then. The manifest goes
-   last, so a folder with no ``manifest.json`` reads as incomplete to every
-   reader. A rerun after a crash keeps each file that already matches and
-   copies the rest.
-6. After a store copied cleanly, the store keeps its newest ``keep`` complete
-   off-site sets, and never prunes a set that the local side still wants. A
-   pruned set loses its manifest first, then its folder.
+1. Refuses when a root is missing, the off-site root is read-only, or the two
+   roots are one folder.
+2. Takes the copy lock (``offsite-copy.lock`` in the mark folder), so only
+   one copy run writes the off-site sets at a time.
+3. Waits while the data backup (its ``nightly-backup.running`` mark) or the
+   Postgres backup (its ``postgres/.lock/owner``) runs. After ``--wait-s`` it
+   copies anyway: a complete set is always safe to copy.
+4. Takes each store's newest ``keep`` complete local sets (the wanted sets)
+   and checks the free space once for all the copies. Per store, it deletes
+   the dead off-site folders and copies each wanted set that is not
+   mirrored, the oldest first.
+5. Copies a set file by file, with no ``.partial`` folder and no rename,
+   because OneDrive holds new files open and a Windows rename then fails.
+   The manifest goes last, so a folder without one reads as incomplete. A
+   rerun keeps each file that already matches.
+6. After a clean store copy, keeps the newest ``keep`` off-site sets and never
+   prunes a wanted set. A pruned set loses its manifest first.
 
-A set is MIRRORED when its off-site manifest equals the local one byte for
-byte and every file the manifest lists has its size off-site.
+A set is mirrored when its off-site manifest equals the local one byte for
+byte and every listed file has its size.
 
-This module is pure standard library: it must never import duckdb.
+The module is pure standard library and never imports duckdb.
 
 Exit codes: 0 every store copied or already in sync; 1 a store failed (the
-others were still attempted); 2 a refusal before any write.
+job still tried the others); 2 a refusal before any write.
 """
 
 from __future__ import annotations
@@ -70,6 +62,7 @@ from operations.backup.backup_status import (
     age_hours,
     complete_sets,
     newest_complete_set,
+    read_manifest_file,
 )
 from operations.backup.common import (
     CHUNK,
@@ -78,26 +71,30 @@ from operations.backup.common import (
     Sleep,
     env_float,
     fresh_marks,
+    fsync_fd,
     fsync_path,
     human_bytes,
+    iso_utc,
+    prune_victims,
+    root_path,
     sha256_file,
+    wait_while_busy,
 )
 
-#: The mark of the data job of the scheduled backups. The copy waits while it runs.
+#: The mark of the data backup job. The copy waits while it runs.
 DATA_JOB_MARK = "nightly-backup"
 
-#: The Postgres job's lock file under the backup root. It holds "<pid> <start epoch>".
+#: The Postgres backup's lock file under the backup root: "<pid> <start epoch>".
 POSTGRES_LOCK_OWNER = Path("postgres") / ".lock" / "owner"
 
-#: The copy lock in the mark folder: one copy run at a time.
-#: It holds "<pid> <start epoch> <host>".
+#: The copy lock in the mark folder: "<pid> <start epoch> <host>".
 COPY_LOCK = "offsite-copy.lock"
 
 #: The probe file that tells whether the two roots are one folder.
-#: No leading dot: OneDrive refuses some dot names.
+#: It has no leading dot, because OneDrive refuses some dot names.
 PROBE_PREFIX = "offsite-probe-"
 
-#: The manifest is written here first, then moved over ``manifest.json``.
+#: The manifest goes here first, then moves over ``manifest.json``.
 MANIFEST_TMP = MANIFEST + ".tmp"
 
 #: The manifest move retries while OneDrive holds the folder.
@@ -108,8 +105,7 @@ REPLACE_DELAY_S = 3.0
 DEFAULT_KEEP = 3
 
 #: The default waits, in seconds. Each one has a command-line flag.
-#: ``lock_stale_s`` is the age at which the Postgres job's lock and the copy
-#: lock read as stale.
+#: ``lock_stale_s`` is the age at which a lock reads as stale.
 DEFAULTS: dict[str, float] = {
     "grace_s": 0.0,
     "wait_s": 7200.0,
@@ -134,7 +130,7 @@ class FileEntry:
 
 @dataclass(frozen=True)
 class CopyResult:
-    """What one set copy did."""
+    """What one set copy did: files copied, files kept, bytes and seconds."""
 
     copied: int
     kept: int
@@ -156,35 +152,23 @@ class StorePlan:
 # ---------------------------------------------------------------------------
 
 
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def log(message: str) -> None:
     """Print one log line with a UTC stamp."""
-    print(f"[backup-offsite {_iso(datetime.now(UTC))}] {message}", flush=True)
+    print(f"[backup-offsite {iso_utc(datetime.now(UTC))}] {message}", flush=True)
 
 
 def _unlink_quiet(path: Path) -> None:
+    """Delete a file; ignore an error."""
     try:
         path.unlink(missing_ok=True)
     except OSError:
         pass
 
 
-def _fsync_fd(fd: int) -> None:
-    # The read-back hash is the check of the copy; a file system that cannot
-    # fsync must not stop the run (the same rule as common.fsync_path).
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-
-
 def resolve_keep(flag: int | None) -> int:
-    """The off-site sets kept per store: ``--keep``, else OFFSITE_KEEP, else BACKUP_KEEP, else 3.
+    """Return the off-site sets kept per store: ``--keep``, else OFFSITE_KEEP, else BACKUP_KEEP, else 3.
 
-    A value of 0 or less reads as 1: the copy always keeps the newest set.
+    A value under 1 reads as 1, so the copy always keeps the newest set.
     """
     value = flag
     if value is None:
@@ -209,9 +193,9 @@ def resolve_keep(flag: int | None) -> int:
 
 
 def read_manifest_bytes(set_dir: Path) -> tuple[bytes, list[FileEntry]]:
-    """The manifest of a set folder: its bytes and its file list.
+    """Return a set's manifest as its bytes and its file list.
 
-    Raises OSError when the manifest cannot be read, and OffsiteError when it
+    Raise OSError when the manifest cannot be read, and OffsiteError when it
     does not parse or lists a path outside the set.
     """
     raw = (set_dir / MANIFEST).read_bytes()
@@ -241,11 +225,10 @@ def read_manifest_bytes(set_dir: Path) -> tuple[bytes, list[FileEntry]]:
 
 
 def is_mirrored(info: SetInfo, dest: Path) -> bool:
-    """True when ``dest`` holds a complete copy of the local set ``info``.
+    """Return True when ``dest`` holds a complete copy of the local set ``info``.
 
-    The off-site manifest must equal the local one byte for byte, and every
-    listed file must have its size. A stat never downloads an online-only
-    OneDrive file, so the check stays cheap on a later night.
+    The check uses the manifest bytes and each file's size, never a hash: a
+    stat does not download an online-only OneDrive file.
     """
     try:
         want, entries = read_manifest_bytes(info.path)
@@ -270,11 +253,12 @@ def is_mirrored(info: SetInfo, dest: Path) -> bool:
 
 
 def _same_by_realpath(a: Path, b: Path) -> bool:
+    """Return True when two paths resolve to one folder."""
     return os.path.realpath(a) == os.path.realpath(b)
 
 
 def check_roots(backups_root: Path, offsite_root: Path, *, dry_run: bool = False) -> str | None:
-    """None when the run may go on; otherwise the reason for the refusal.
+    """Return None when the run may go on, else the reason it refuses.
 
     Two mounts of one folder have different paths, so the check writes a probe
     file off-site and looks for it under the backup root. A dry run writes
@@ -306,7 +290,7 @@ def check_roots(backups_root: Path, offsite_root: Path, *, dry_run: bool = False
 
 
 def postgres_lock_epoch(backups_root: Path) -> float | None:
-    """The start epoch in the Postgres job's lock, or None when there is no readable lock."""
+    """Return the start epoch in the Postgres backup's lock, or None when none is readable."""
     try:
         fields = (backups_root / POSTGRES_LOCK_OWNER).read_text(encoding="utf-8").split()
     except OSError:
@@ -327,10 +311,10 @@ def busy_reasons(
     lock_stale_s: float,
     now: float,
 ) -> list[str]:
-    """The backup jobs that run now. An empty list means the copy may start.
+    """Return the backup jobs that run now. An empty list means the copy may start.
 
-    A ``postgres/*.partial`` folder with no lock is a dead run (the job's exit
-    trap removes the lock and leaves the partial), so the copy never waits on one.
+    A ``postgres/*.partial`` folder with no lock is a dead run, so the copy
+    never waits on one.
     """
     reasons = [f"the {name} job" for name in fresh_marks(mark_dir, (DATA_JOB_MARK,), stale_s, now)]
     epoch = postgres_lock_epoch(backups_root)
@@ -351,34 +335,28 @@ def wait_until_quiet(
     clock: Clock = time.time,
     sleep: Sleep = time.sleep,
 ) -> bool:
-    """Wait while a backup job runs. False on a timeout.
-
-    ``clock`` returns epoch seconds, the unit of the mark and of the lock.
-    """
-    if grace_s > 0:
-        sleep(grace_s)
-    deadline = clock() + wait_s
-    while True:
-        busy = busy_reasons(
-            backups_root, mark_dir, stale_s=stale_s, lock_stale_s=lock_stale_s, now=clock()
-        )
-        if not busy:
-            return True
-        if clock() >= deadline:
-            log(f"{', '.join(busy)} still runs after {wait_s:.0f} s; the wait gives up")
-            return False
-        log(f"{', '.join(busy)} runs; waiting {poll_s:.0f} s")
-        sleep(poll_s)
+    """Wait while a backup job runs. Return False on a timeout."""
+    return wait_while_busy(
+        lambda now: busy_reasons(
+            backups_root, mark_dir, stale_s=stale_s, lock_stale_s=lock_stale_s, now=now
+        ),
+        grace_s=grace_s,
+        wait_s=wait_s,
+        poll_s=poll_s,
+        clock=clock,
+        sleep=sleep,
+        log=log,
+    )
 
 
 def free_space_ok(
     offsite_root: Path, needed_bytes: int, *, min_free_gb: float, factor: float
 ) -> bool:
-    """True when the off-site disk has room for ``needed_bytes``.
+    """Return True when the off-site disk has room for ``needed_bytes``.
 
     The room needed is the larger of ``min_free_gb`` GiB and ``factor`` times
-    the bytes to copy. The check reads the local disk under the mount, not the
-    OneDrive quota: the container cannot see the quota.
+    the bytes. The check reads the local disk, because the container cannot
+    see the OneDrive quota.
     """
     needed = max(min_free_gb * GIB, factor * needed_bytes)
     free = shutil.disk_usage(offsite_root).free
@@ -395,9 +373,9 @@ def free_space_ok(
 
 
 def _pid_alive(pid: int) -> bool:
-    """True when a process with this pid runs here. Only POSIX can probe a pid."""
+    """Return True when a process with this pid runs here. Only POSIX can probe a pid."""
     if os.name != "posix":
-        return True  # on Windows os.kill(pid, 0) sends a signal; the age decides there
+        return True  # on Windows os.kill(pid, 0) sends a signal; the lock's age decides
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -408,12 +386,11 @@ def _pid_alive(pid: int) -> bool:
 
 
 def lock_holder(lock: Path, *, lock_stale_s: float, now: float) -> str | None:
-    """Who holds the copy lock, or None when no live run holds it.
+    """Return who holds the copy lock, or None when no live run holds it.
 
     A lock is stale when it is older than ``lock_stale_s``, or when this host
-    took it and its pid is gone. The second rule lets the crash rerun of
-    ``with_retry.sh`` take the lock that the crashed run left. A pid of
-    another host (another container) cannot be probed, so its age decides.
+    took it and its pid is gone, so a crash rerun can take it. Another host's
+    pid cannot be probed, so there only the age decides.
     """
     try:
         text = lock.read_text(encoding="utf-8")
@@ -444,11 +421,11 @@ def lock_holder(lock: Path, *, lock_stale_s: float, now: float) -> str | None:
 
 
 def take_lock(mark_dir: Path, *, lock_stale_s: float, now: float) -> tuple[Path | None, str | None]:
-    """Take the copy lock. Returns (the lock, None), or (None, the refusal reason).
+    """Take the copy lock. Return (the lock, None), or (None, the reason for a refusal).
 
-    The lock is created with O_EXCL, so two runs cannot both create it. A
-    stale lock is removed and taken once more. When the mark folder cannot be
-    written, the run goes on unlocked and says so, as ``with_mark.sh`` does.
+    O_EXCL stops two runs from both creating the lock. A stale lock is removed
+    and taken once more. When the mark folder cannot be written, the run goes
+    on unlocked and says so, as ``with_mark.sh`` does.
     """
     lock = mark_dir / COPY_LOCK
     try:
@@ -493,12 +470,11 @@ def release_lock(lock: Path) -> None:
 
 
 def copy_and_hash(src: Path, dest: Path) -> str:
-    """Copy ``src`` to ``dest`` in CHUNK reads. Returns the source's sha256.
+    """Copy ``src`` to ``dest`` and flush it. Return the sha256 of the bytes read.
 
-    The digest comes from the bytes as they are read, so the source is read
-    once. The copy is flushed through its own handle. Plain reads and writes,
-    not ``shutil.copyfile``: its ``sendfile`` path over the Docker Desktop
-    bind mount is unpredictable.
+    The source is read once. The copy uses plain reads and writes, because
+    ``shutil.copyfile`` uses ``sendfile``, which is unpredictable over the
+    Docker Desktop bind mount.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
@@ -507,11 +483,12 @@ def copy_and_hash(src: Path, dest: Path) -> str:
             digest.update(chunk)
             fout.write(chunk)
         fout.flush()
-        _fsync_fd(fout.fileno())
+        fsync_fd(fout.fileno())
     return digest.hexdigest()
 
 
 def _file_matches(path: Path, entry: FileEntry, use_hash: bool) -> bool:
+    """Return True when ``path`` has the entry's size and, with ``use_hash``, its sha256."""
     try:
         st = path.stat()
     except OSError:
@@ -548,13 +525,13 @@ def write_manifest(
     delay_s: float = REPLACE_DELAY_S,
     sleep: Sleep = time.sleep,
 ) -> None:
-    """Write the source manifest's bytes verbatim as ``dest/manifest.json``.
+    """Write the source manifest's bytes unchanged as ``dest/manifest.json``.
 
-    The bytes go to ``manifest.json.tmp`` first, then ``os.replace`` moves them
-    into place. The move retries on PermissionError, which OneDrive raises while
-    it holds the folder. On give-up the ``.tmp`` is deleted and the set stays
-    incomplete. Verbatim matters: a half-written manifest would read as
-    complete, and the byte compare of the mirrored check needs the same bytes.
+    The bytes go to ``manifest.json.tmp`` first, so a half-written manifest
+    never reads as complete. The move retries on PermissionError, which
+    OneDrive raises while it holds the folder. On give-up the ``.tmp`` is
+    deleted and the set stays incomplete. The mirrored check compares the
+    bytes, so they must not change.
     """
     tmp = dest / MANIFEST_TMP
     final = dest / MANIFEST
@@ -562,7 +539,7 @@ def write_manifest(
         with open(tmp, "wb") as fh:
             fh.write(manifest_bytes)
             fh.flush()
-            _fsync_fd(fh.fileno())
+            fsync_fd(fh.fileno())
         for attempt in range(1, tries + 1):
             try:
                 os.replace(tmp, final)
@@ -588,18 +565,17 @@ def copy_set(
     use_hash: bool = True,
     sleep: Sleep = time.sleep,
 ) -> CopyResult:
-    """Copy one local set into ``offsite_root/<store>/<set id>``. The manifest goes last.
+    """Copy one local set into ``offsite_root/<store>/<set id>``, the manifest last.
 
-    The source manifest's file list is the set: a file it does not list is not
-    copied. A destination file that already matches (its size, and its sha256
-    unless ``use_hash`` is off) is kept, so a rerun resumes a crashed copy.
+    Only the files the manifest lists are copied. A destination file that
+    already matches is kept, so a rerun resumes a crashed copy.
     """
     started = time.monotonic()
     manifest_bytes, entries = read_manifest_bytes(info.path)
     check_source(info, entries)
     dest = offsite_root / info.store / info.set_id
     dest.mkdir(parents=True, exist_ok=True)
-    # An older manifest goes first, so the folder reads as incomplete during the copy.
+    # Delete an older manifest, so the folder reads as incomplete during the copy.
     (dest / MANIFEST).unlink(missing_ok=True)
     copied = kept = 0
     for entry in entries:
@@ -630,10 +606,11 @@ def copy_set(
 
 
 def dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list[Path]:
-    """The dead off-site folders of ``store`` that no wanted set needs.
+    """Return the dead off-site folders of ``store`` that no wanted set needs.
 
-    A folder is dead when its name ends in ``.partial`` or it has no manifest.
-    A dead folder of a wanted set is not listed: the copy resumes it.
+    A folder is dead when it ends in ``.partial`` or has no manifest that reads.
+    The local set is the truth, so a broken off-site copy is safe to delete. A
+    wanted set's dead folder is left for the copy to resume.
     """
     try:
         entries = sorted((offsite_root / store).iterdir())
@@ -643,13 +620,13 @@ def dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list[Path]
     for entry in entries:
         if not entry.is_dir() or entry.name in wanted:
             continue
-        if entry.name.endswith(PARTIAL_SUFFIX) or not (entry / MANIFEST).is_file():
+        if entry.name.endswith(PARTIAL_SUFFIX) or read_manifest_file(entry) is None:
             dead.append(entry)
     return dead
 
 
 def clean_dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list[str]:
-    """Delete the dead off-site folders of ``store`` that no wanted set needs."""
+    """Delete the dead off-site folders of ``store``. Return their names."""
     removed: list[str] = []
     for entry in dead_folders(offsite_root, store, wanted):
         shutil.rmtree(entry, ignore_errors=True)
@@ -661,21 +638,12 @@ def clean_dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list
     return removed
 
 
-def prune_victims(sets: list[tuple[datetime, str]], keep: int, protect: set[str]) -> list[str]:
-    """The set ids to prune: all but the newest ``keep``, never one in ``protect``."""
-    ordered = sorted(sets)
-    keep_ids = {set_id for _, set_id in ordered[-keep:]} if keep > 0 else set()
-    return [set_id for _, set_id in ordered if set_id not in keep_ids and set_id not in protect]
-
-
 def prune_offsite(offsite_root: Path, store: str, keep: int, protect: set[str]) -> list[str]:
-    """Keep the newest ``keep`` complete off-site sets of ``store``. Returns the pruned ids.
+    """Keep the newest ``keep`` off-site sets of ``store``. Return the pruned ids.
 
-    A set in ``protect`` (a set the local side still wants) is never pruned:
-    a pruned wanted set would be copied again the next night and pruned again
-    the night after. The manifest goes first, so a set that is half deleted
-    never reads as complete; a file OneDrive still holds then stays until the
-    next run's dead-folder clean.
+    A set in ``protect`` is never pruned; otherwise the next night copies it
+    back. The manifest goes first, so a half-deleted set never reads as
+    complete. A file OneDrive still holds stays until the next dead-folder clean.
     """
     sets = complete_sets(offsite_root, store)
     by_id = {s.set_id: s for s in sets}
@@ -707,7 +675,7 @@ def prune_offsite(offsite_root: Path, store: str, keep: int, protect: set[str]) 
 
 
 def plan_store(backups_root: Path, offsite_root: Path, store: str, keep: int) -> StorePlan:
-    """The newest ``keep`` complete local sets of ``store`` and the ones not yet mirrored."""
+    """Return the newest ``keep`` local sets of ``store`` and the ones not yet mirrored."""
     wanted = complete_sets(backups_root, store)[-keep:]
     work = [i for i in wanted if not is_mirrored(i, offsite_root / store / i.set_id)]
     return StorePlan(store=store, wanted=wanted, work=work)
@@ -716,7 +684,7 @@ def plan_store(backups_root: Path, offsite_root: Path, store: str, keep: int) ->
 def mirror_store(
     plan: StorePlan, offsite_root: Path, keep: int, *, use_hash: bool, sleep: Sleep
 ) -> list[str]:
-    """Copy the store's work list, the oldest first, then prune. Returns the copied ids."""
+    """Copy the store's work list, the oldest first, then prune. Return the copied ids."""
     wanted_ids = {i.set_id for i in plan.wanted}
     work_ids = {i.set_id for i in plan.work}
     clean_dead_folders(offsite_root, plan.store, wanted_ids)
@@ -733,15 +701,14 @@ def mirror_store(
             flush=True,
         )
         copied.append(info.set_id)
-    # Protect every wanted set, not only the ones copied now. An
-    # off-site set newer than any local one would otherwise push a wanted set
-    # out, and the next run would copy it back.
+    # Protect every wanted set, not only the ones copied now: an off-site set
+    # newer than any local one would otherwise push a wanted set out.
     prune_offsite(offsite_root, plan.store, keep, protect=wanted_ids)
     return copied
 
 
 def print_dry_run(offsite_root: Path, plans: list[StorePlan], keep: int) -> None:
-    """Print the folders a run would delete, the sets it would copy and prune."""
+    """Print the folders a run would delete and the sets it would copy and prune."""
     for plan in plans:
         wanted_ids = {i.set_id for i in plan.wanted}
         work_ids = {i.set_id for i in plan.work}
@@ -765,7 +732,7 @@ def print_dry_run(offsite_root: Path, plans: list[StorePlan], keep: int) -> None
 def _plans_with_room(
     backups_root: Path, offsite_root: Path, stores: list[str], keep: int
 ) -> list[StorePlan] | None:
-    """The store plans, or None when the free-space guard refuses them."""
+    """Return the store plans, or None when the free-space guard refuses them."""
     plans = [plan_store(backups_root, offsite_root, store, keep) for store in stores]
     needed = sum(info.bytes for plan in plans for info in plan.work)
     if needed > 0 and not free_space_ok(
@@ -790,7 +757,7 @@ def run_copy(
     clock: Clock = time.time,
     sleep: Sleep = time.sleep,
 ) -> int:
-    """Copy the stores off-site. Returns the exit code (0, 1 or 2)."""
+    """Copy the stores off-site. Return the exit code (0, 1 or 2)."""
     reason = check_roots(backups_root, offsite_root, dry_run=args.dry_run)
     if reason is not None:
         log(f"refused: {reason}")
@@ -816,7 +783,7 @@ def run_copy(
             return 2
         print_dry_run(offsite_root, plans, keep)
         return 0
-    # One copy run at a time. The lock spans the wait and the copy.
+    # The lock spans the wait and the copy.
     lock, refusal = take_lock(mark_dir, lock_stale_s=waits["lock_stale_s"], now=clock())
     if refusal is not None:
         log(f"refused: {refusal}")
@@ -841,7 +808,7 @@ def _copy_locked(
     clock: Clock,
     sleep: Sleep,
 ) -> int:
-    """The wait and the copy of a run that holds the copy lock."""
+    """Wait, then copy, while this run holds the copy lock. Return the exit code."""
     if not wait_until_quiet(
         backups_root,
         mark_dir,
@@ -879,7 +846,7 @@ def _copy_locked(
 def status_rows(
     backups_root: Path, offsite_root: Path, now: datetime | None = None
 ) -> dict[str, dict[str, Any]]:
-    """Per store: the newest local set, the newest off-site set, and whether it is mirrored."""
+    """Return, per store, the newest local set, the newest off-site set, and whether it is mirrored."""
     now = now or datetime.now(UTC)
     rows: dict[str, dict[str, Any]] = {}
     for store in STORES:
@@ -890,12 +857,12 @@ def status_rows(
         rows[store] = {
             "local": None
             if local is None
-            else {"set": local.set_id, "created_at": _iso(local.created_at)},
+            else {"set": local.set_id, "created_at": iso_utc(local.created_at)},
             "offsite": None
             if newest is None
             else {
                 "set": newest.set_id,
-                "created_at": _iso(newest.created_at),
+                "created_at": iso_utc(newest.created_at),
                 "age_hours": round(age_hours(newest, now), 2),
                 "bytes": newest.bytes,
                 "sets": len(off_sets),
@@ -931,6 +898,7 @@ def print_status(backups_root: Path, offsite_root: Path, as_json: bool) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
+    """Return the command-line parser."""
     p = argparse.ArgumentParser(
         prog="python -m operations.backup.copy_offsite",
         description="Copy the newest complete backup sets to the off-site folder (OneDrive).",
@@ -959,24 +927,20 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _root(flag: Path | None, env: str, default: str) -> Path:
-    return flag or Path(os.environ.get(env) or default)
-
-
 def main(
     argv: list[str] | None = None,
     *,
     clock: Clock = time.time,
     sleep: Sleep = time.sleep,
 ) -> int:
-    """Run the command line. Returns the exit code.
+    """Run the command line. Return the exit code.
 
-    ``clock`` and ``sleep`` let the tests run the waits instantly.
+    The tests pass ``clock`` and ``sleep`` to run the waits instantly.
     """
     args = _parser().parse_args(argv)
-    backups_root = _root(args.backups_root, "BACKUP_ROOT", "/backups")
-    offsite_root = _root(args.offsite_root, "OFFSITE_ROOT", "/offsite")
-    mark_dir = _root(args.mark_dir, "INGEST_MARK_DIR", "/data/ingest_marks")
+    backups_root = root_path(args.backups_root, "BACKUP_ROOT", "/backups")
+    offsite_root = root_path(args.offsite_root, "OFFSITE_ROOT", "/offsite")
+    mark_dir = root_path(args.mark_dir, "INGEST_MARK_DIR", "/data/ingest_marks")
     if args.status:
         print_status(backups_root, offsite_root, args.json)
         return 0

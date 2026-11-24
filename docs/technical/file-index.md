@@ -1,4 +1,4 @@
-<!-- file-index-key: 76e0ac303e623753 -->
+<!-- file-index-key: 6472df729b0ed0c2 -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -17,16 +17,16 @@ Every source and config file in the repository, in the order of the [code review
 | [4. The sampler's data: the bundle](#stage-4) | 15 | 4,772 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
 | [6. Profiles and pools: the DuckDB layer](#stage-6) | 52 | 11,558 |
-| [7. Getting data in: the raw tables](#stage-7) | 57 | 13,053 |
+| [7. Getting data in: the raw tables](#stage-7) | 57 | 13,045 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 8 | 5,006 |
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,124 |
-| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,368 |
-| [15. Tests and CI](#stage-15) | 315 | 124,522 |
-| **All** | **782** | **283,060** |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,037 |
+| [14. Measurement and maintenance tools](#stage-14) | 78 | 38,367 |
+| [15. Tests and CI](#stage-15) | 316 | 124,738 |
+| **All** | **782** | **283,180** |
 
 <a id="stage-1"></a>
 
@@ -237,7 +237,7 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | [`pipeline/etl/mlb_venue_dimensions.py`](../../pipeline/etl/mlb_venue_dimensions.py) | 156 | The MLB Stats API's PUBLISHED fence distances, the floor under a new park's fence line (the fence certification plan, SIM-478, `docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`, §4 and §5.1). | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
 | [`pipeline/etl/venue_backfill_job.py`](../../pipeline/etl/venue_backfill_job.py) | 349 | Backfill NULL venue_id rows on raw.games. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
 | [`pipeline/bullpen_usage.py`](../../pipeline/bullpen_usage.py) | 303 | The pen's facts from the official box score and the MLB API's per-game bullpen listing, for the pitching-change draw and the reliever draw. | 1: `test_bullpen_usage.py` |
-| [`db/dsn.py`](../../db/dsn.py) | 65 | The one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |
+| [`db/dsn.py`](../../db/dsn.py) | 57 | db/dsn.py — the one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |
 | [`db/introspect.py`](../../db/introspect.py) | 119 | Ask a database whether a table or a column exists. | 2: `test_db_introspect.py`, `test_outfield_arm_block.py` |
 | [`alembic.ini`](../../alembic.ini) | 150 | A generic, single database configuration. | — |
 | [`db/migrations/env.py`](../../db/migrations/env.py) | 114 | Alembic environment configuration. | — |
@@ -499,26 +499,25 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`.env.production.example`](../../.env.production.example) | 126 | MLB Baseball Simulation Platform — PRODUCTION environment template | — |
 | [`deploy/nginx/nginx.conf`](../../deploy/nginx/nginx.conf) | 293 | MLB Baseball Simulation Platform — nginx reverse proxy | — |
 | [`deploy/ofelia/config.ini`](../../deploy/ofelia/config.ini) | 169 | Ofelia scheduler config — the nightly and weekly data jobs (docker-native cron). | — |
-| [`operations/__init__.py`](../../operations/__init__.py) | 1 | operations — keep the stack running: the nightly jobs, the backups and the secrets. | — |
-| [`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh) | 45 | operations/jobs/with_mark.sh — mark an ingest job as running, run it, record its exit. | — |
-| [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 57 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
-| [`operations/jobs/wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh) | 62 | operations/jobs/wait_for_ingest.sh — the nightly rebuild's first step: make sure the finals load has run today before the rebuild reads Postgres. | — |
-| [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh) | 51 | operations/jobs/nightly_finals.sh — load the last few days' final games. | — |
-| [`operations/jobs/nightly_ingest.sh`](../../operations/jobs/nightly_ingest.sh) | 75 | operations/jobs/nightly_ingest.sh — nightly data ingestion chain. | — |
+| [`operations/__init__.py`](../../operations/__init__.py) | 1 | operations — the nightly jobs, the backups and the secrets generator. | — |
+| [`operations/jobs/with_mark.sh`](../../operations/jobs/with_mark.sh) | 42 | operations/jobs/with_mark.sh — mark a job as running, run it, record its exit. | — |
+| [`operations/jobs/with_retry.sh`](../../operations/jobs/with_retry.sh) | 56 | operations/jobs/with_retry.sh — run a command again after a crash. | — |
+| [`operations/jobs/wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh) | 61 | operations/jobs/wait_for_ingest.sh — make sure the finals load ran today before the rebuild. | — |
+| [`operations/jobs/nightly_finals.sh`](../../operations/jobs/nightly_finals.sh) | 48 | operations/jobs/nightly_finals.sh — load the last few days' final games. | — |
 | [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | 64 | operations/jobs/nightly_closing_lines.sh — the nightly closing pass. | — |
-| [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 35 | operations/jobs/nightly_rebuild.sh — rebuild the profiles and the engine bundle for the current season (steps 2 and 3 of operations/jobs/nightly_ingest.sh). | — |
-| [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 29 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
-| [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 16 | operations/backup — the backups of the data stores and their off-site copy. | 3: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
-| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 915 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB analytics file and the engine-artifact bundle. | 2: `test_backup_offsite.py`, `test_backup_data_stores.py` |
-| [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 121 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
-| [`operations/backup/common.py`](../../operations/backup/common.py) | 92 | operations/backup/common.py — the helpers the backup modules share. | 1: `test_backup_offsite.py` |
-| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 991 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 1: `test_backup_offsite.py` |
-| [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) | 305 | SIM-525: the nightly Postgres backup (the scheduled backups of the data stores). | — |
-| [`operations/backup/postgres/pg_restore.sh`](../../operations/backup/postgres/pg_restore.sh) | 147 | SIM-525: restore one Postgres backup set into an EMPTY database. | — |
-| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 535 | The restore drill for the scheduled backups. | 1: `test_backup_drill.py` |
+| [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 32 | operations/jobs/nightly_rebuild.sh — rebuild the current season's profiles and the engine bundle. | — |
+| [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 30 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
+| [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 14 | operations/backup — the backups of the data stores and their off-site copy. | 4: `test_backup_common.py`, `test_backup_status.py`, `test_backup_offsite.py` +1 |
+| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 921 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
+| [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 145 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
+| [`operations/backup/common.py`](../../operations/backup/common.py) | 146 | operations/backup/common.py — the helpers the two backup jobs share. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
+| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 955 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
+| [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) | 298 | operations/backup/postgres/pg_backup.sh — the nightly Postgres backup. | — |
+| [`operations/backup/postgres/pg_restore.sh`](../../operations/backup/postgres/pg_restore.sh) | 144 | operations/backup/postgres/pg_restore.sh — restore one Postgres backup set into an empty database. | — |
+| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 503 | operations/backup/backup_drill.py — prove that a backup set restores. | 1: `test_backup_drill.py` |
 | [`db/roles/setup_roles.sh`](../../db/roles/setup_roles.sh) | 79 | SIM-443b: create the two least-privilege Postgres roles and grant them. | — |
 | [`db/roles/setup_roles.sql`](../../db/roles/setup_roles.sql) | 72 | SIM-443b: the two least-privilege roles and their grants (idempotent). | — |
-| [`operations/gen_secrets.py`](../../operations/gen_secrets.py) | 208 | Generate the stack's secrets. | 1: `test_gen_secrets.py` |
+| [`operations/gen_secrets.py`](../../operations/gen_secrets.py) | 202 | operations/gen_secrets.py — generate the stack's secrets into `.env`. | 1: `test_gen_secrets.py` |
 | [`deploy/monitoring/grafana/baseball_sim_dashboard.json`](../../deploy/monitoring/grafana/baseball_sim_dashboard.json) | 162 | The Grafana dashboard of the app's metrics. | — |
 | [`deploy/monitoring/grafana/dashboards.yml`](../../deploy/monitoring/grafana/dashboards.yml) | 24 | Grafana dashboard provider — MLB Baseball Simulation Platform (SIM-374) | — |
 | [`deploy/monitoring/grafana/datasource.yml`](../../deploy/monitoring/grafana/datasource.yml) | 22 | Grafana datasource provisioning — MLB Baseball Simulation Platform (SIM-374) | — |
@@ -587,7 +586,7 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/accuracy_split_arm.sh`](../../scripts/accuracy_split_arm.sh) | 24 | The pitch / pitch-result split as one paired accuracy arm (the accuracy fit, SIM-548). | — |
 | [`scripts/boxscore_audit.py`](../../scripts/boxscore_audit.py) | 475 | The validation study for the official box-score ground truth: how far each per-player total the platform derives from `raw.pitches` sits from the official box score. | 1: `test_boxscore_reader.py` |
 | [`scripts/check_file_integrity.py`](../../scripts/check_file_integrity.py) | 176 | The file-integrity guard: it catches a `.py` file that a file bridge truncated or filled with NUL bytes. | 1: `test_check_file_integrity.py` |
-| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 838 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
+| [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 837 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
 | [`scripts/export_openapi.py`](../../scripts/export_openapi.py) | 45 | Export the FastAPI OpenAPI schema to `frontend/openapi.json`. | — |
 | [`scripts/genexpr_crash_probe.py`](../../scripts/genexpr_crash_probe.py) | 434 | The SIM-445 crash class — a probe that re-runs the workload that segfaulted, with and without the database. | — |
 | [`scripts/measure_filter_cells.py`](../../scripts/measure_filter_cells.py) | 1,378 | Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy measurement, SIM-451). | 2: `test_filter_cells.py`, `test_pitch_cell_index.py` |
@@ -643,16 +642,17 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/acceptance/test_pool_label_check.py`](../../tests/acceptance/test_pool_label_check.py) | 259 | SIM-553 — the standing label check: the pitch pool's count chain against real play. | — |
 | [`tests/acceptance/test_production_bands.py`](../../tests/acceptance/test_production_bands.py) | 720 | The acceptance lane (SIM-450): the PRODUCTION simulator against reference rates. | — |
 | [`tests/unit/operations/test_backup_age_gauge.py`](../../tests/unit/operations/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
-| [`tests/unit/operations/test_backup_data_stores.py`](../../tests/unit/operations/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
-| [`tests/unit/operations/test_backup_drill.py`](../../tests/unit/operations/test_backup_drill.py) | 771 | The restore drill for the scheduled backups. | — |
-| [`tests/unit/operations/test_backup_offsite.py`](../../tests/unit/operations/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
+| [`tests/unit/operations/test_backup_common.py`](../../tests/unit/operations/test_backup_common.py) | 149 | The helpers that the data-store backup and the off-site copy share. | — |
+| [`tests/unit/operations/test_backup_data_stores.py`](../../tests/unit/operations/test_backup_data_stores.py) | 645 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
+| [`tests/unit/operations/test_backup_drill.py`](../../tests/unit/operations/test_backup_drill.py) | 779 | The restore drill for the scheduled backups. | — |
+| [`tests/unit/operations/test_backup_offsite.py`](../../tests/unit/operations/test_backup_offsite.py) | 808 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |
 | [`tests/unit/operations/test_backup_schedule.py`](../../tests/unit/operations/test_backup_schedule.py) | 384 | The scheduled backups of the three data stores: the wiring. | — |
-| [`tests/unit/operations/test_backup_status.py`](../../tests/unit/operations/test_backup_status.py) | 76 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
+| [`tests/unit/operations/test_backup_status.py`](../../tests/unit/operations/test_backup_status.py) | 92 | SIM-525 — the reader of the backup sets (operations/backup/backup_status.py). | — |
 | [`tests/unit/operations/test_gen_secrets.py`](../../tests/unit/operations/test_gen_secrets.py) | 147 | The secrets generator writes the eight secrets; `--append` and `--check` never print one. | — |
 | [`tests/unit/operations/test_ingest_wait.py`](../../tests/unit/operations/test_ingest_wait.py) | 163 | The nightly rebuild waits for the finals load. | — |
 | [`tests/unit/operations/test_pg_backup_script.py`](../../tests/unit/operations/test_pg_backup_script.py) | 500 | The scheduled Postgres backup and its restore (operations/backup/postgres). | — |
 | [`tests/unit/operations/test_retry_wrapper.py`](../../tests/unit/operations/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`operations/jobs/with_retry.sh`). | — |
-| [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 67 | The nightly shell scripts carry no default DSN. | — |
+| [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 66 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/test_accuracy_comparison.py`](../../tests/unit/test_accuracy_comparison.py) | 1,160 | Unit tests for the sim-vs-closing-line accuracy comparison (`scripts/accuracy_comparison.py`). | — |
 | [`tests/unit/test_accuracy_comparison_markets.py`](../../tests/unit/test_accuracy_comparison_markets.py) | 111 | Unit tests for the plain data in `scripts/accuracy/records.py`: the 15-market prop vocabulary map (the original seven plus the eight of the prop-market work, SIM-421) and the market trust labels. | — |
 | [`tests/unit/test_accuracy_comparison_props.py`](../../tests/unit/test_accuracy_comparison_props.py) | 713 | The backtest wiring for the fifteen prop markets (the prop-market work, SIM-421) and the official box-score ground truth (the owner's ruling to grade props on the box, SIM-545), in `scripts/accuracy_comparison.py` and... | — |
@@ -728,7 +728,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_etl_connection_pool.py`](../../tests/unit/test_etl_connection_pool.py) | 212 | Before SIM-090, `HistoricalDataLoader._get_conn()` opened a fresh `psycopg2.connect(self.dsn)` and `conn.close()`-d it on every single DB round-trip. | — |
 | [`tests/unit/test_etl_ensure_rows.py`](../../tests/unit/test_etl_ensure_rows.py) | 369 | The historical loader's per-table prerequisite writers: _ensure_teams, _ensure_players, _ensure_managers and _ensure_game. | — |
 | [`tests/unit/test_etl_error_ledger.py`](../../tests/unit/test_etl_error_ledger.py) | 182 | The ETL error ledger: `raw.etl_errors` holds one row per pitch the historical loader skips, the loader writes it on the pitch insert's cursor, and `reprocess_errored_games` lists the games to load again. | — |
-| [`tests/unit/test_etl_hardening.py`](../../tests/unit/test_etl_hardening.py) | 759 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
+| [`tests/unit/test_etl_hardening.py`](../../tests/unit/test_etl_hardening.py) | 758 | Covers the fixes that are NOT about the reload path (those live in `test_etl_reload_game.py`): | — |
 | [`tests/unit/test_etl_historical_loader.py`](../../tests/unit/test_etl_historical_loader.py) | 1,677 | Targets: - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in pipeline/etl/coercion.py) - _build_row_dict column rename + coercion - _validate_row two-tier validation rules - _parse_height... | 1: `test_play_events.py` |
 | [`tests/unit/test_etl_reload_game.py`](../../tests/unit/test_etl_reload_game.py) | 1,232 | Covers: * `HistoricalDataLoader.reload_game` — DELETE + re-INSERT in ONE transaction, the only way to repair already-loaded `raw.pitches` rows (the INSERT carries `ON CONFLICT … DO NOTHING`, so plain `load_game` write... | — |
 | [`tests/unit/test_etl_schedule_final_filter.py`](../../tests/unit/test_etl_schedule_final_filter.py) | 33 | Unit tests for the historical loader's future/non-Final game guard (_schedule_game_is_final). | — |
@@ -789,7 +789,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_metrics_endpoint.py`](../../tests/unit/test_metrics_endpoint.py) | 216 | The Prometheus metrics route (`api/routes/metrics.py`) and the monitoring config. | — |
 | [`tests/unit/test_migration_chain.py`](../../tests/unit/test_migration_chain.py) | 40 | The first eleven Alembic migrations form one unbroken chain: each names the one before it as its `down_revision`. | — |
 | [`tests/unit/test_nginx_resolve.py`](../../tests/unit/test_nginx_resolve.py) | 79 | nginx re-resolves the app's name while it runs. | — |
-| [`tests/unit/test_no_default_password.py`](../../tests/unit/test_no_default_password.py) | 272 | Text guards on the deployment configuration. | — |
+| [`tests/unit/test_no_default_password.py`](../../tests/unit/test_no_default_password.py) | 271 | Text guards on the deployment configuration. | — |
 | [`tests/unit/test_no_pitch_readers.py`](../../tests/unit/test_no_pitch_readers.py) | 574 | Every reader of a per-pitch result handles the no-pitch result. | — |
 | [`tests/unit/test_odds_book_census.py`](../../tests/unit/test_odds_book_census.py) | 1,148 | `scripts/probes/odds_book_census.py`: the sample, the gate math on synthetic rows, one game read through the provider with a stubbed vendor, and the re-grade of a saved census. | — |
 | [`tests/unit/test_odds_book_vocabulary.py`](../../tests/unit/test_odds_book_vocabulary.py) | 184 | The odds book vocabulary: the stored book labels, the kinds, the bettable books and the graded-book order. | — |

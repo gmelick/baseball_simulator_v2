@@ -1,21 +1,20 @@
 #!/usr/bin/env sh
 # =============================================================================
-# operations/jobs/wait_for_ingest.sh — the nightly rebuild's first step: make sure the
-# finals load has run today before the rebuild reads Postgres.
+# operations/jobs/wait_for_ingest.sh — make sure the finals load ran today before the rebuild.
 #
-# Why: the finals load (07:00 UTC) and the rebuild (08:00 UTC) rely on the hour
-# between them. A host that sleeps through both times fires both jobs in the
-# same second on wake (seen on 2026-10-11), and nothing else orders them.
+# The finals load (07:00 UTC) and the rebuild (08:00 UTC) rely on the hour
+# between them. A host that sleeps through both fires both in the same second
+# on wake, and nothing else orders them.
 #
-# What it does, reading the marks operations/jobs/with_mark.sh writes:
-#   1. waits INGEST_GRACE_S (default 60 s), so a job fired in the same second
-#      has time to write its mark;
-#   2. while the finals load or the Sunday season sweep runs, waits (at most
-#      INGEST_WAIT_S, default 2 hours; a mark older than 6 hours is stale);
-#   3. when the finals load has finished today (UTC), the rebuild goes on,
-#      whatever its exit code (it loaded what it could);
-#   4. when it has not run today, runs it here, first.
-# It never fails the rebuild: on a timeout it logs and lets the rebuild go on.
+# Reading the marks that with_mark.sh writes, the script:
+#   1. waits INGEST_GRACE_S (60 s), so a job fired in the same second can
+#      write its mark;
+#   2. waits while the finals load or the Sunday sweep runs (at most
+#      INGEST_WAIT_S, 2 hours; a mark older than 6 hours is stale);
+#   3. lets the rebuild go on when the finals load finished today (UTC),
+#      whatever its exit code;
+#   4. otherwise runs the finals load first.
+# It never fails the rebuild: on a timeout it logs and exits 0.
 # =============================================================================
 set -u
 

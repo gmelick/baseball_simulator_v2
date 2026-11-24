@@ -74,3 +74,19 @@ def test_status_does_not_import_duckdb():
     root = Path(__file__).resolve().parents[3]
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_a_set_whose_manifest_does_not_read_is_broken_not_complete(tmp_path):
+    _make_set(tmp_path, "duckdb", "20261013T100000Z")
+    bad = _make_set(tmp_path, "duckdb", "20261014T100000Z")
+    (bad / "manifest.json").write_text("{not json", encoding="utf-8")
+    listed = _make_set(tmp_path, "duckdb", "20261015T100000Z")
+    (listed / "manifest.json").write_text("[1, 2]", encoding="utf-8")  # not an object
+    assert [s.set_id for s in status.complete_sets(tmp_path, "duckdb")] == ["20261013T100000Z"]
+    assert [p.name for p in status.broken_sets(tmp_path, "duckdb")] == [
+        "20261014T100000Z",
+        "20261015T100000Z",
+    ]
+    # The age gauge reads the newest set that reads, never a broken one.
+    newest = status.newest_complete_set(tmp_path, "duckdb")
+    assert newest is not None and newest.set_id == "20261013T100000Z"

@@ -45,7 +45,6 @@ SECRETS = (
 GUARDED_SCRIPTS = (
     "nightly_finals.sh",
     "nightly_rebuild.sh",
-    "nightly_ingest.sh",
     "weekly_refresh.sh",
     "nightly_closing_lines.sh",
 )

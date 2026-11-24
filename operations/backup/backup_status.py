@@ -1,13 +1,14 @@
 """operations/backup/backup_status.py — which backup sets exist, and how old they are.
 
 The backup root holds one folder per store (``postgres``, ``duckdb``,
-``bundle``). Each store folder holds one folder per SET, named by the UTC time
-the run started (``%Y%m%dT%H%M%SZ``). A set is COMPLETE only when its
-``manifest.json`` exists: the backup writes the manifest last. A folder that
-ends in ``.partial`` is a set in progress, or one whose run died.
+``bundle``). Each store holds one folder per set, named by the run's UTC start
+time (``%Y%m%dT%H%M%SZ``). A set is complete only when its ``manifest.json``
+exists and reads as a JSON object; the writer writes it last. A ``.partial``
+folder is a set in progress or one a dead run left. A set whose manifest does
+not read is broken: no reader counts it, and no prune deletes it.
 
-This module is pure standard library. The API imports it for the backup-age
-gauge, so it must never import duckdb.
+The API imports this module for its backup-age gauges, so it is pure standard
+library and never imports duckdb.
 """
 
 from __future__ import annotations
@@ -20,13 +21,13 @@ from pathlib import Path
 #: The three stores, in the order the reports list them.
 STORES = ("postgres", "duckdb", "bundle")
 
-#: The name of the file that marks a set as complete.
+#: The file that marks a set as complete.
 MANIFEST = "manifest.json"
 
 #: The suffix of a set in progress.
 PARTIAL_SUFFIX = ".partial"
 
-#: The format of a set id (the UTC start time of the run).
+#: The format of a set id: the run's UTC start time.
 SET_ID_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
@@ -42,7 +43,7 @@ class SetInfo:
 
 
 def parse_set_id(set_id: str) -> datetime | None:
-    """The UTC time a set id names, or None when the name is not a set id."""
+    """Return the UTC time a set id names, or None when the name is not a set id."""
     try:
         return datetime.strptime(set_id, SET_ID_FORMAT).replace(tzinfo=UTC)
     except ValueError:
@@ -50,6 +51,7 @@ def parse_set_id(set_id: str) -> datetime | None:
 
 
 def _parse_created_at(value: object) -> datetime | None:
+    """Return a manifest's ``created_at`` as a UTC time, or None when it does not parse."""
     if not isinstance(value, str):
         return None
     try:
@@ -61,17 +63,23 @@ def _parse_created_at(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _read_set(store: str, path: Path) -> SetInfo | None:
-    manifest_path = path / MANIFEST
-    if not manifest_path.is_file():
-        return None
-    manifest: dict[str, object] = {}
+def read_manifest_file(path: Path) -> dict[str, object] | None:
+    """Return the manifest in the set folder ``path``, or None when it is missing or does not read.
+
+    A manifest reads when it parses as a JSON object.
+    """
     try:
-        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            manifest = loaded
+        loaded = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        manifest = {}
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _read_set(store: str, path: Path) -> SetInfo | None:
+    """Return the set in ``path``, or None when it is not a complete set."""
+    manifest = read_manifest_file(path)
+    if manifest is None:
+        return None
     created_at = _parse_created_at(manifest.get("created_at")) or parse_set_id(path.name)
     if created_at is None:
         return None
@@ -85,8 +93,24 @@ def _read_set(store: str, path: Path) -> SetInfo | None:
     )
 
 
+def broken_sets(root: Path, store: str) -> list[Path]:
+    """Return the set folders of ``store`` whose manifest exists but does not read."""
+    try:
+        entries = sorted((Path(root) / store).iterdir())
+    except OSError:
+        return []
+    return [
+        entry
+        for entry in entries
+        if entry.is_dir()
+        and not entry.name.endswith(PARTIAL_SUFFIX)
+        and (entry / MANIFEST).is_file()
+        and read_manifest_file(entry) is None
+    ]
+
+
 def complete_sets(root: Path, store: str) -> list[SetInfo]:
-    """Every complete set of ``store`` under ``root``, the oldest first."""
+    """Return every complete set of ``store`` under ``root``, the oldest first."""
     store_dir = Path(root) / store
     try:
         entries = list(store_dir.iterdir())
@@ -104,18 +128,18 @@ def complete_sets(root: Path, store: str) -> list[SetInfo]:
 
 
 def newest_complete_set(root: Path, store: str) -> SetInfo | None:
-    """The newest complete set of ``store``, or None when there is none."""
+    """Return the newest complete set of ``store``, or None when there is none."""
     sets = complete_sets(root, store)
     return sets[-1] if sets else None
 
 
 def newest_complete_sets(root: Path) -> dict[str, SetInfo | None]:
-    """The newest complete set of every store (None for a store with none)."""
+    """Return the newest complete set of each store (None for a store with none)."""
     return {store: newest_complete_set(root, store) for store in STORES}
 
 
 def age_hours(info: SetInfo | None, now: datetime) -> float:
-    """Hours from the set's creation to ``now``; -1.0 when there is no set."""
+    """Return the hours from the set's creation to ``now``, or -1.0 when there is no set."""
     if info is None:
         return -1.0
     return (now - info.created_at).total_seconds() / 3600.0

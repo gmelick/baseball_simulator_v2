@@ -118,10 +118,10 @@ def test_a_missing_env_file_reads_empty(tmp_path: Path) -> None:
 def test_the_backup_dir_comes_from_the_flag_then_env_then_default(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("BACKUP_DIR=elsewhere/sets\n", encoding="utf-8")
     flag = tmp_path / "flagged"
-    assert drill.resolve_backup_dir(str(flag), tmp_path) == flag.resolve()
-    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "elsewhere/sets").resolve()
+    assert drill.resolve_dir(str(flag), tmp_path) == flag.resolve()
+    assert drill.resolve_dir(None, tmp_path) == (tmp_path / "elsewhere/sets").resolve()
     (tmp_path / ".env").write_text("# nothing\n", encoding="utf-8")
-    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "backups").resolve()
+    assert drill.resolve_dir(None, tmp_path) == (tmp_path / "backups").resolve()
 
 
 # ---------------------------------------------------------------- set picker
@@ -186,12 +186,6 @@ def test_the_docker_run_argv_carries_every_flag_in_order(tmp_path: Path) -> None
     assert all(not a.startswith("/c/") for a in argv)
 
 
-def test_a_windows_path_reads_as_a_drive_letter_path() -> None:
-    from pathlib import PureWindowsPath
-
-    assert drill.docker_path(PureWindowsPath("C:\\Users\\grego\\b")) == "C:/Users/grego/b"
-
-
 # ---------------------------------------------------------------- success criteria
 
 
@@ -215,7 +209,7 @@ def test_the_restore_fails_on_each_violation(code: int, output: str) -> None:
 
 def test_the_tail_keeps_the_last_40_lines() -> None:
     text = "\n".join(f"line {i}" for i in range(100))
-    tail = drill.tail_lines(text)
+    tail = drill._step("s", 0.0, 0, True, text)["output_tail"]
     assert len(tail) == 40
     assert tail[-1] == "line 99"
 
@@ -541,12 +535,16 @@ def _setup_offsite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeDo
 def test_the_offsite_dir_comes_from_the_flag_then_env_then_default(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("OFFSITE_BACKUP_DIR=elsewhere/copy\n", encoding="utf-8")
     flag = tmp_path / "flagged"
-    assert drill.resolve_offsite_dir(str(flag), tmp_path) == flag.resolve()
-    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "elsewhere/copy").resolve()
+    assert drill.resolve_dir(str(flag), tmp_path, offsite=True) == flag.resolve()
+    assert (
+        drill.resolve_dir(None, tmp_path, offsite=True) == (tmp_path / "elsewhere/copy").resolve()
+    )
     (tmp_path / ".env").write_text('OFFSITE_BACKUP_DIR="quoted/copy"\n', encoding="utf-8")
-    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "quoted/copy").resolve()
+    assert drill.resolve_dir(None, tmp_path, offsite=True) == (tmp_path / "quoted/copy").resolve()
     (tmp_path / ".env").write_text("BACKUP_DIR=b\n", encoding="utf-8")
-    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "backups_offsite").resolve()
+    assert (
+        drill.resolve_dir(None, tmp_path, offsite=True) == (tmp_path / "backups_offsite").resolve()
+    )
 
 
 def test_the_shell_environment_wins_over_the_env_file(
@@ -558,21 +556,23 @@ def test_the_shell_environment_wins_over_the_env_file(
     )
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "shell" / "local"))
     monkeypatch.setenv("OFFSITE_BACKUP_DIR", str(tmp_path / "shell" / "copy"))
-    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "shell/local").resolve()
-    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "shell/copy").resolve()
+    assert drill.resolve_dir(None, tmp_path) == (tmp_path / "shell/local").resolve()
+    assert drill.resolve_dir(None, tmp_path, offsite=True) == (tmp_path / "shell/copy").resolve()
     # A flag still wins over both.
     flag = tmp_path / "flagged"
-    assert drill.resolve_offsite_dir(str(flag), tmp_path) == flag.resolve()
+    assert drill.resolve_dir(str(flag), tmp_path, offsite=True) == flag.resolve()
     # An empty shell value is set: compose's ${VAR:-default} then takes the default.
     monkeypatch.setenv("BACKUP_DIR", "")
     monkeypatch.setenv("OFFSITE_BACKUP_DIR", "")
-    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "backups").resolve()
-    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "backups_offsite").resolve()
+    assert drill.resolve_dir(None, tmp_path) == (tmp_path / "backups").resolve()
+    assert (
+        drill.resolve_dir(None, tmp_path, offsite=True) == (tmp_path / "backups_offsite").resolve()
+    )
     # With no shell value, .env answers.
     monkeypatch.delenv("BACKUP_DIR")
     monkeypatch.delenv("OFFSITE_BACKUP_DIR")
-    assert drill.resolve_backup_dir(None, tmp_path) == (tmp_path / "env/local").resolve()
-    assert drill.resolve_offsite_dir(None, tmp_path) == (tmp_path / "env/copy").resolve()
+    assert drill.resolve_dir(None, tmp_path) == (tmp_path / "env/local").resolve()
+    assert drill.resolve_dir(None, tmp_path, offsite=True) == (tmp_path / "env/copy").resolve()
 
 
 def test_offsite_reads_the_folder_the_shell_names_over_the_env_file(
@@ -769,3 +769,11 @@ def test_the_streaming_runner_returns_the_output_and_exit_code() -> None:
     )
     assert result.returncode == 3
     assert result.stdout.splitlines() == ["one", "two"]
+
+
+def test_the_drill_skips_a_set_whose_manifest_does_not_read(tmp_path):
+    for name, body in (("20261013T100000Z", "{}"), ("20261014T100000Z", "{not json")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "manifest.json").write_text(body, encoding="utf-8")
+    assert drill.complete_sets(tmp_path) == ["20261013T100000Z"]
+    assert drill.pick_set(tmp_path, "latest") == "20261013T100000Z"

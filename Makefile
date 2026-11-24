@@ -142,8 +142,8 @@ restore-postgres: _require_env_file
 # These run in order each night: the profile computor rebuilds the DuckDB
 # pools (sim.pitch_pool / sim.outcome_pool), then the engine-artifact builder
 # (SIM-422) materializes the bundle the full-pool sampler reads.  The bundle
-# build MUST run AFTER the profile computor (operations/jobs/nightly_ingest.sh runs
-# the chain).
+# build MUST run AFTER the profile computor (operations/jobs/nightly_rebuild.sh runs
+# both in order).
 
 ## SIM-519 Part D: load the final games of the last DAYS days (default 3) by
 ## hand, through the crash wrapper. Postgres only; safe while the app runs.

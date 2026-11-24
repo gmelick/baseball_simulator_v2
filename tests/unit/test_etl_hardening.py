@@ -667,8 +667,8 @@ class TestManagerIdsAreNullable:
         assert "away_manager_id" not in ALWAYS_REQUIRED
 
 
-class TestNightlyIngestScript:
-    """The nightly chain must fail on an incomplete season, and must actually run.
+class TestWeeklyRefreshScript:
+    """The weekly sweep must fail on an incomplete season, and must actually run.
 
     The gate was first written with `${YEAR}` interpolated INSIDE a quoted
     heredoc (`<<'PY'`). A quoted delimiter suppresses shell parameter expansion,
@@ -679,7 +679,7 @@ class TestNightlyIngestScript:
 
     @staticmethod
     def _script() -> str:
-        return (_REPO_ROOT / "operations" / "jobs" / "nightly_ingest.sh").read_text(
+        return (_REPO_ROOT / "operations" / "jobs" / "weekly_refresh.sh").read_text(
             encoding="utf-8"
         )
 
@@ -697,12 +697,11 @@ class TestNightlyIngestScript:
         assert "export YEAR" in script
         assert 'os.environ["YEAR"]' in script
 
-    def test_chain_aborts_when_any_game_failed(self):
-        """Rebuilding profiles and FAISS tiles on a knowingly incomplete season
-        would bake the gap into every downstream artifact."""
+    def test_the_job_fails_when_any_game_failed(self):
+        """A failed game must reach the crash wrapper and the scheduler log."""
         script = self._script()
         assert 'summary["failed"]' in script
-        assert "sys.exit(1)" in script
+        assert 'sys.exit(1 if summary["failed"]' in script
 
     def test_still_runs_under_set_eu(self):
         assert "set -eu" in self._script()
