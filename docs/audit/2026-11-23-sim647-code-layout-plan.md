@@ -1,7 +1,8 @@
 # The code laid out by the steps the program runs (SIM-647) — plan
 
-Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed
-(2026-11-23, master a882395); parts 2 to 7 have not started.
+Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1's Steps A and B are
+deployed (2026-11-23, master a882395); its Step C, the clean-up, is in progress. Parts 2 to 7
+have not started.
 
 ## 1. Why
 
@@ -37,13 +38,25 @@ The folders today follow how the code grew:
    `build_pools.py`, `run_batch.py`). A file may be any size.
 3. **No shim.** Every import names the new home (CLAUDE.md section 5).
 4. **One copy of each step.** A step written twice is merged in the part's Step B.
-5. **Two steps per part.** Step A moves code and changes no behaviour. Step B changes
-   behaviour. A reviewer reads them apart.
+5. **Three steps per part.** Step A moves code and changes no behaviour. Step B changes
+   behaviour. Step C cleans up the code (rule 8). A reviewer reads each step apart.
 6. **One branch per part, merged and deployed before the next part starts** (CLAUDE.md
    section 7). A part's tests move with it, into `tests/unit/<folder>/`.
 7. **A mixin split stays as it is in Step A.** The loop, the sampler, the profile build and the
    historical loader split one class across files by step. They already follow rule 2. Turning
    a mixin into plain functions is a behaviour risk and is not in this plan.
+8. **Step C, the clean-up (owner directive 2026-11-24).** The same pass the betting code had
+   (SIM-642, SIM-643):
+   - **The function review.** Each function and class in the part gets a one-line reason
+     to exist on its own. Two functions that do one job become one. A helper with one caller
+     moves into its caller when that reads more simply. A dead function is deleted.
+   - **The comment rewrite.** Every module docstring, docstring and comment is rewritten in
+     plain, short language (CLAUDE.md section 14). A docstring says what the function does
+     and what it returns. A comment says why, never what the next line already says. Ticket
+     history goes to `CHANGES.md`, not into the code.
+   - The comment rewrite changes no behaviour, and the AST comparison of rule 5 proves it.
+     A merge in the function review is a behaviour change: it has its own commit and its
+     own tests.
 
 ## 3. The target layout
 
@@ -268,6 +281,10 @@ the unit lane, the API snapshot, and a live check on the next game day.
   removed) against the old one.
 - The part's own output check (sections 4 and 7): the row comparison, the byte comparison or
   the behaviour fingerprint.
+- Step C: the AST comparison (docstrings removed) for the comment-rewrite commit; for the
+  function-review commit, the part's tests plus a test for each merged function. The function
+  review's table (each function, its reason, and kept, merged or deleted) goes in the
+  `CHANGES.md` entry.
 - An independent QA pass over the diff.
 
 ## 7. Order and sequencing
