@@ -2,7 +2,8 @@
 
 Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
 to C (2026-11-24, master 0f0fd61). Part 2 is deployed, Steps A to C
-(2026-11-24, master 8775d1e). Parts 3 to 7 have not started.
+(2026-11-24, master 8775d1e). Part 3's Step A is committed on branch `sim647-part3-profiles`;
+its byte check runs. Parts 4 to 7 have not started.
 
 ## 1. Why
 
@@ -187,6 +188,15 @@ rows each loader writes.
 | `pipeline/batch/artifacts/receiving.py` | `bundle/catcher_receiving.py` |
 | `pipeline/batch/artifacts/reference.py` | `bundle/reference_tables.py` |
 | `simulation/synthetic_bundle.py` | `bundle/synthetic_bundle.py` |
+
+As built (2026-11-24), the pools split follows the code, not the names above: six mixins,
+one per pool method group — `build_pitch_pool.py`, `build_batted_ball_pool.py`,
+`build_steal_pool.py` (the stolen-base and the steal-opportunity pools),
+`build_advancement_pool.py`, `build_ibb_rates.py` and `build_at_bat_situations.py`. There is
+no `build_pitching_change_pool.py`: the change pool is built at export time, in
+`bundle/export_pitching_change_pool.py`. There is no `build_pools.py`: the build order lives in
+`profiles/build_profiles.py`, interleaved with the outfield arm step that reads the
+advancement pool.
 
 The nightly shell jobs call `python -m pipeline.batch.player_profile_computor` and
 `python -m pipeline.batch.engine_artifacts`; both change. The check: one profile build and one
