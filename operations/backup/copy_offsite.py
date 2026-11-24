@@ -78,9 +78,14 @@ from operations.backup.common import (
     Sleep,
     env_float,
     fresh_marks,
+    fsync_fd,
     fsync_path,
     human_bytes,
+    iso_utc,
+    prune_victims,
+    root_path,
     sha256_file,
+    wait_while_busy,
 )
 
 #: The mark of the data job of the scheduled backups. The copy waits while it runs.
@@ -156,27 +161,14 @@ class StorePlan:
 # ---------------------------------------------------------------------------
 
 
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def log(message: str) -> None:
     """Print one log line with a UTC stamp."""
-    print(f"[backup-offsite {_iso(datetime.now(UTC))}] {message}", flush=True)
+    print(f"[backup-offsite {iso_utc(datetime.now(UTC))}] {message}", flush=True)
 
 
 def _unlink_quiet(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def _fsync_fd(fd: int) -> None:
-    # The read-back hash is the check of the copy; a file system that cannot
-    # fsync must not stop the run (the same rule as common.fsync_path).
-    try:
-        os.fsync(fd)
     except OSError:
         pass
 
@@ -355,20 +347,17 @@ def wait_until_quiet(
 
     ``clock`` returns epoch seconds, the unit of the mark and of the lock.
     """
-    if grace_s > 0:
-        sleep(grace_s)
-    deadline = clock() + wait_s
-    while True:
-        busy = busy_reasons(
-            backups_root, mark_dir, stale_s=stale_s, lock_stale_s=lock_stale_s, now=clock()
-        )
-        if not busy:
-            return True
-        if clock() >= deadline:
-            log(f"{', '.join(busy)} still runs after {wait_s:.0f} s; the wait gives up")
-            return False
-        log(f"{', '.join(busy)} runs; waiting {poll_s:.0f} s")
-        sleep(poll_s)
+    return wait_while_busy(
+        lambda now: busy_reasons(
+            backups_root, mark_dir, stale_s=stale_s, lock_stale_s=lock_stale_s, now=now
+        ),
+        grace_s=grace_s,
+        wait_s=wait_s,
+        poll_s=poll_s,
+        clock=clock,
+        sleep=sleep,
+        log=log,
+    )
 
 
 def free_space_ok(
@@ -507,7 +496,7 @@ def copy_and_hash(src: Path, dest: Path) -> str:
             digest.update(chunk)
             fout.write(chunk)
         fout.flush()
-        _fsync_fd(fout.fileno())
+        fsync_fd(fout.fileno())
     return digest.hexdigest()
 
 
@@ -562,7 +551,7 @@ def write_manifest(
         with open(tmp, "wb") as fh:
             fh.write(manifest_bytes)
             fh.flush()
-            _fsync_fd(fh.fileno())
+            fsync_fd(fh.fileno())
         for attempt in range(1, tries + 1):
             try:
                 os.replace(tmp, final)
@@ -659,13 +648,6 @@ def clean_dead_folders(offsite_root: Path, store: str, wanted: set[str]) -> list
         else:
             log(f"deleted the dead off-site folder {store}/{entry.name}")
     return removed
-
-
-def prune_victims(sets: list[tuple[datetime, str]], keep: int, protect: set[str]) -> list[str]:
-    """The set ids to prune: all but the newest ``keep``, never one in ``protect``."""
-    ordered = sorted(sets)
-    keep_ids = {set_id for _, set_id in ordered[-keep:]} if keep > 0 else set()
-    return [set_id for _, set_id in ordered if set_id not in keep_ids and set_id not in protect]
 
 
 def prune_offsite(offsite_root: Path, store: str, keep: int, protect: set[str]) -> list[str]:
@@ -890,12 +872,12 @@ def status_rows(
         rows[store] = {
             "local": None
             if local is None
-            else {"set": local.set_id, "created_at": _iso(local.created_at)},
+            else {"set": local.set_id, "created_at": iso_utc(local.created_at)},
             "offsite": None
             if newest is None
             else {
                 "set": newest.set_id,
-                "created_at": _iso(newest.created_at),
+                "created_at": iso_utc(newest.created_at),
                 "age_hours": round(age_hours(newest, now), 2),
                 "bytes": newest.bytes,
                 "sets": len(off_sets),
@@ -959,10 +941,6 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _root(flag: Path | None, env: str, default: str) -> Path:
-    return flag or Path(os.environ.get(env) or default)
-
-
 def main(
     argv: list[str] | None = None,
     *,
@@ -974,9 +952,9 @@ def main(
     ``clock`` and ``sleep`` let the tests run the waits instantly.
     """
     args = _parser().parse_args(argv)
-    backups_root = _root(args.backups_root, "BACKUP_ROOT", "/backups")
-    offsite_root = _root(args.offsite_root, "OFFSITE_ROOT", "/offsite")
-    mark_dir = _root(args.mark_dir, "INGEST_MARK_DIR", "/data/ingest_marks")
+    backups_root = root_path(args.backups_root, "BACKUP_ROOT", "/backups")
+    offsite_root = root_path(args.offsite_root, "OFFSITE_ROOT", "/offsite")
+    mark_dir = root_path(args.mark_dir, "INGEST_MARK_DIR", "/data/ingest_marks")
     if args.status:
         print_status(backups_root, offsite_root, args.json)
         return 0

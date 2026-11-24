@@ -216,11 +216,13 @@ imports it.
 
 ### `operations/backup/common.py`
 
-[Source](../../operations/backup/common.py) · 91 lines · Tests: [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py)
+[Source](../../operations/backup/common.py) · 91 lines · Tests: [test_backup_common.py](../../tests/unit/operations/test_backup_common.py), [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py)
 
-The helpers both backup jobs share, pure standard library: `env_float`, `human_bytes`,
-`sha256_file` (in 8 MiB reads), `fsync_path`, `copy_file_synced`, and `fresh_marks` (the
-jobs whose `.running` mark exists and is younger than the stale limit).
+The helpers both backup jobs share, pure standard library: `iso_utc`, `root_path`,
+`env_float`, `human_bytes`, `sha256_file` (in 8 MiB reads), `fsync_fd`, `fsync_path`,
+`copy_file_synced`, `fresh_marks` (the jobs whose `.running` mark exists and is younger
+than the stale limit), `wait_while_busy` (the poll loop behind `wait_for_marks` and
+`wait_until_quiet`) and `prune_victims` (the set ids to prune, for both jobs).
 
 ### `operations/backup/back_up_data_stores.py`
 

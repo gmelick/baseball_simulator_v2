@@ -797,4 +797,4 @@ def test_data_stores_reuses_the_common_helpers(tmp_path):
     assert ds.GIB == common.GIB
     (tmp_path / "nightly-rebuild.running").write_text("100\n")
     (tmp_path / "nightly-backup.running").write_text("100\n")  # not a writer mark
-    assert ds._fresh_marks(tmp_path, 21600, 200.0) == ["nightly-rebuild"]
+    assert common.fresh_marks(tmp_path, ds.WRITER_MARKS, 21600, 200.0) == ["nightly-rebuild"]

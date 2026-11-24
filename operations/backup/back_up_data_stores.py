@@ -62,8 +62,7 @@ from operations.backup.backup_status import (
     newest_complete_set,
     parse_set_id,
 )
-from operations.backup.common import (  # the shared helpers moved there
-    CHUNK,  # noqa: F401  (re-exported under its old name)
+from operations.backup.common import (
     GIB,
     Clock,
     Sleep,
@@ -72,7 +71,11 @@ from operations.backup.common import (  # the shared helpers moved there
     fresh_marks,
     fsync_path,
     human_bytes,
+    iso_utc,
+    prune_victims,
+    root_path,
     sha256_file,
+    wait_while_busy,
 )
 from pipeline.batch.bundle_versions import (
     IN_USE_PREFIX,
@@ -124,13 +127,9 @@ class BackupError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def log(message: str) -> None:
     """Print one log line with a UTC stamp."""
-    print(f"[backup-data {_iso(datetime.now(UTC))}] {message}", flush=True)
+    print(f"[backup-data {iso_utc(datetime.now(UTC))}] {message}", flush=True)
 
 
 def _files_under(base: Path) -> list[Path]:
@@ -198,25 +197,18 @@ def prune_sets(root: Path, store: str, keep: int, current: str | None) -> list[s
     The set ``current`` (the one this run made) is never deleted.
     """
     sets = complete_sets(root, store)
-    keep_ids = {s.set_id for s in sets[-keep:]} if keep > 0 else set()
-    removed: list[str] = []
-    for info in sets:
-        if info.set_id in keep_ids or info.set_id == current:
-            continue
-        shutil.rmtree(info.path, ignore_errors=True)
-        removed.append(info.set_id)
-        log(f"pruned the {store} set {info.set_id}")
+    by_id = {s.set_id: s for s in sets}
+    protect = {current} if current is not None else set()
+    removed = prune_victims([(s.created_at, s.set_id) for s in sets], keep, protect)
+    for set_id in removed:
+        shutil.rmtree(by_id[set_id].path, ignore_errors=True)
+        log(f"pruned the {store} set {set_id}")
     return removed
 
 
 # ---------------------------------------------------------------------------
 # The writer wait and the read-only open
 # ---------------------------------------------------------------------------
-
-
-def _fresh_marks(mark_dir: Path, stale_s: float, now: float) -> list[str]:
-    """The writer jobs that run now (the body is ``common.fresh_marks``, SIM-568)."""
-    return fresh_marks(mark_dir, WRITER_MARKS, stale_s, now)
 
 
 def wait_for_marks(
@@ -236,17 +228,15 @@ def wait_for_marks(
     ``grace_s``, so a job the scheduler fired in the same second has time to
     write its mark. ``clock`` returns epoch seconds, the unit of the marks.
     """
-    sleep(grace_s)
-    deadline = clock() + wait_s
-    while True:
-        running = _fresh_marks(mark_dir, stale_s, clock())
-        if not running:
-            return True
-        if clock() >= deadline:
-            log(f"{', '.join(running)} still runs after {wait_s:.0f} s; the wait gives up")
-            return False
-        log(f"{', '.join(running)} runs; waiting {poll_s:.0f} s")
-        sleep(poll_s)
+    return wait_while_busy(
+        lambda now: fresh_marks(mark_dir, WRITER_MARKS, stale_s, now),
+        grace_s=grace_s,
+        wait_s=wait_s,
+        poll_s=poll_s,
+        clock=clock,
+        sleep=sleep,
+        log=log,
+    )
 
 
 def is_lock_error(exc: BaseException) -> bool:
@@ -359,7 +349,7 @@ def _finish_set(
     manifest: dict[str, Any] = {
         "store": store,
         "set": set_id,
-        "created_at": _iso(datetime.now(UTC)),
+        "created_at": iso_utc(datetime.now(UTC)),
         "seconds": seconds,
         "bytes": total,
         "host": socket.gethostname(),
@@ -692,7 +682,7 @@ def status_rows(root: Path, now: datetime | None = None) -> dict[str, dict[str, 
         info = sets[-1]
         rows[store] = {
             "set": info.set_id,
-            "created_at": _iso(info.created_at),
+            "created_at": iso_utc(info.created_at),
             "age_hours": round(age_hours(info, now), 2),
             "bytes": info.bytes,
             "sets": len(sets),
@@ -885,7 +875,7 @@ def main(
     ``clock``, ``sleep`` and ``opener`` let the tests run the waits instantly.
     """
     args = _parser().parse_args(argv)
-    root = args.backups_root or Path(os.environ.get("BACKUP_ROOT") or "/backups")
+    root = root_path(args.backups_root, "BACKUP_ROOT", "/backups")
     paths = _paths(args.data_root)
     if args.status:
         print_status(root, args.json)

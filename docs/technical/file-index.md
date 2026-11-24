@@ -1,4 +1,4 @@
-<!-- file-index-key: 76e0ac303e623753 -->
+<!-- file-index-key: 1238c10cf7456baf -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -23,10 +23,10 @@ Every source and config file in the repository, in the order of the [code review
 | [10. The API](#stage-10) | 41 | 13,766 |
 | [11. Game day: the live service](#stage-11) | 15 | 4,653 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,124 |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 42 | 7,114 |
 | [14. Measurement and maintenance tools](#stage-14) | 78 | 38,368 |
-| [15. Tests and CI](#stage-15) | 315 | 124,522 |
-| **All** | **782** | **283,060** |
+| [15. Tests and CI](#stage-15) | 316 | 124,671 |
+| **All** | **783** | **283,199** |
 
 <a id="stage-1"></a>
 
@@ -508,14 +508,14 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`operations/jobs/nightly_closing_lines.sh`](../../operations/jobs/nightly_closing_lines.sh) | 64 | operations/jobs/nightly_closing_lines.sh — the nightly closing pass. | — |
 | [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 35 | operations/jobs/nightly_rebuild.sh — rebuild the profiles and the engine bundle for the current season (steps 2 and 3 of operations/jobs/nightly_ingest.sh). | — |
 | [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 29 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
-| [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 16 | operations/backup — the backups of the data stores and their off-site copy. | 3: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
-| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 915 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB analytics file and the engine-artifact bundle. | 2: `test_backup_offsite.py`, `test_backup_data_stores.py` |
+| [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 16 | operations/backup — the backups of the data stores and their off-site copy. | 4: `test_backup_common.py`, `test_backup_status.py`, `test_backup_offsite.py` +1 |
+| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 905 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB analytics file and the engine-artifact bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
 | [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 121 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
-| [`operations/backup/common.py`](../../operations/backup/common.py) | 92 | operations/backup/common.py — the helpers the backup modules share. | 1: `test_backup_offsite.py` |
-| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 991 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 1: `test_backup_offsite.py` |
+| [`operations/backup/common.py`](../../operations/backup/common.py) | 145 | operations/backup/common.py — the helpers the backup modules share. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
+| [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 969 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
 | [`operations/backup/postgres/pg_backup.sh`](../../operations/backup/postgres/pg_backup.sh) | 305 | SIM-525: the nightly Postgres backup (the scheduled backups of the data stores). | — |
 | [`operations/backup/postgres/pg_restore.sh`](../../operations/backup/postgres/pg_restore.sh) | 147 | SIM-525: restore one Postgres backup set into an EMPTY database. | — |
-| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 535 | The restore drill for the scheduled backups. | 1: `test_backup_drill.py` |
+| [`operations/backup/backup_drill.py`](../../operations/backup/backup_drill.py) | 504 | The restore drill for the scheduled backups. | 1: `test_backup_drill.py` |
 | [`db/roles/setup_roles.sh`](../../db/roles/setup_roles.sh) | 79 | SIM-443b: create the two least-privilege Postgres roles and grant them. | — |
 | [`db/roles/setup_roles.sql`](../../db/roles/setup_roles.sql) | 72 | SIM-443b: the two least-privilege roles and their grants (idempotent). | — |
 | [`operations/gen_secrets.py`](../../operations/gen_secrets.py) | 208 | Generate the stack's secrets. | 1: `test_gen_secrets.py` |
@@ -643,6 +643,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/acceptance/test_pool_label_check.py`](../../tests/acceptance/test_pool_label_check.py) | 259 | SIM-553 — the standing label check: the pitch pool's count chain against real play. | — |
 | [`tests/acceptance/test_production_bands.py`](../../tests/acceptance/test_production_bands.py) | 720 | The acceptance lane (SIM-450): the PRODUCTION simulator against reference rates. | — |
 | [`tests/unit/operations/test_backup_age_gauge.py`](../../tests/unit/operations/test_backup_age_gauge.py) | 570 | The backup-age gauge on /metrics (the scheduled backups, SIM-525). | — |
+| [`tests/unit/operations/test_backup_common.py`](../../tests/unit/operations/test_backup_common.py) | 149 | The helpers that the data-store backup and the off-site copy share. | — |
 | [`tests/unit/operations/test_backup_data_stores.py`](../../tests/unit/operations/test_backup_data_stores.py) | 607 | SIM-525 — the backups of the DuckDB file and the engine bundle (operations/backup/back_up_data_stores.py). | — |
 | [`tests/unit/operations/test_backup_drill.py`](../../tests/unit/operations/test_backup_drill.py) | 771 | The restore drill for the scheduled backups. | — |
 | [`tests/unit/operations/test_backup_offsite.py`](../../tests/unit/operations/test_backup_offsite.py) | 800 | SIM-568 — the off-site copy of the backup sets (operations/backup/copy_offsite.py). | — |

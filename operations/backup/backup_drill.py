@@ -55,7 +55,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
@@ -170,45 +170,24 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def compose_value(key: str, repo: Path) -> str:
-    """Return the value docker compose reads for one variable.
+def resolve_dir(flag: str | None, repo: Path, *, offsite: bool = False) -> Path:
+    """Pick the backup folder, or with ``offsite`` the off-site folder.
 
-    Compose takes a variable from the shell environment first, and from the
-    repo's .env only when the shell does not set it. The drill reads the same
-    order, so its folders match the jobs container's mounts. An empty string
-    means the variable is unset or empty: the caller then takes the compose
-    file's default, as ``${VAR:-default}`` does.
+    The flag wins. Else the variable (BACKUP_DIR or OFFSITE_BACKUP_DIR) as
+    docker compose reads it: the shell environment first, then the repo's
+    .env. An empty value takes the compose file's default (./backups or
+    ./backups_offsite), as ``${VAR:-default}`` does.
     """
+    if flag:
+        return Path(flag).resolve()
+    key, default = (
+        ("OFFSITE_BACKUP_DIR", "backups_offsite") if offsite else ("BACKUP_DIR", "backups")
+    )
     if key in os.environ:
-        return os.environ[key]
-    return read_env_file(repo / ".env").get(key, "")
-
-
-def resolve_backup_dir(flag: str | None, repo: Path) -> Path:
-    """Pick the backup folder: the flag, else BACKUP_DIR, else ./backups.
-
-    BACKUP_DIR comes from the shell environment, then .env (``compose_value``).
-    """
-    if flag:
-        return Path(flag).resolve()
-    configured = compose_value("BACKUP_DIR", repo)
-    path = Path(configured) if configured else Path("backups")
-    if not path.is_absolute():
-        path = repo / path
-    return path.resolve()
-
-
-def resolve_offsite_dir(flag: str | None, repo: Path) -> Path:
-    """Pick the off-site folder.
-
-    The flag wins; else OFFSITE_BACKUP_DIR from the shell environment, then
-    .env (``compose_value``); else ./backups_offsite, the same default that the
-    compose file mounts at /offsite.
-    """
-    if flag:
-        return Path(flag).resolve()
-    configured = compose_value("OFFSITE_BACKUP_DIR", repo)
-    path = Path(configured) if configured else Path("backups_offsite")
+        configured = os.environ[key]
+    else:
+        configured = read_env_file(repo / ".env").get(key, "")
+    path = Path(configured) if configured else Path(default)
     if not path.is_absolute():
         path = repo / path
     return path.resolve()
@@ -263,11 +242,6 @@ def pick_data_set(backup_dir: Path, which: str) -> str:
     return which
 
 
-def docker_path(path: PurePath) -> str:
-    """Write a host path the way docker on Windows reads it: 'C:/...'."""
-    return path.as_posix()
-
-
 def docker_run_argv(set_dir: Path, backup_scripts: Path) -> list[str]:
     """Build the argv that starts the scratch cluster."""
     return [
@@ -287,16 +261,11 @@ def docker_run_argv(set_dir: Path, backup_scripts: Path) -> list[str]:
         "-v",
         f"{NAME}:/var/lib/postgresql/data",
         "-v",
-        f"{docker_path(set_dir.resolve())}:/restore:ro",
+        f"{set_dir.resolve().as_posix()}:/restore:ro",
         "-v",
-        f"{docker_path(backup_scripts.resolve())}:/opt/baseball/backup:ro",
+        f"{backup_scripts.resolve().as_posix()}:/opt/baseball/backup:ro",
         IMAGE,
     ]
-
-
-def tail_lines(text: str, count: int = TAIL_LINES) -> list[str]:
-    """Return the last lines of an output, for the report."""
-    return text.splitlines()[-count:]
 
 
 def restore_ok(exit_code: int, output: str) -> bool:
@@ -356,7 +325,7 @@ def _step(set_id: str, started: float, code: int, ok: bool, output: str) -> dict
         "seconds": round(time.monotonic() - started, 1),
         "ok": ok,
         "exit_code": code,
-        "output_tail": tail_lines(output),
+        "output_tail": output.splitlines()[-TAIL_LINES:],
     }
 
 
@@ -444,9 +413,9 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the drill and return its exit code."""
     args = _parse(argv)
-    compose_dir = resolve_backup_dir(None, REPO)
-    offsite_dir = resolve_offsite_dir(None, REPO)
-    backup_dir = offsite_dir if args.offsite else resolve_backup_dir(args.backup_dir, REPO)
+    compose_dir = resolve_dir(None, REPO)
+    offsite_dir = resolve_dir(None, REPO, offsite=True)
+    backup_dir = offsite_dir if args.offsite else resolve_dir(args.backup_dir, REPO)
     # The drill reads the off-site copy on --offsite, or on a --backup-dir that
     # is the off-site folder. The local folder wins when the two are one folder.
     offsite = args.offsite or (backup_dir == offsite_dir and backup_dir != compose_dir)
@@ -454,7 +423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     container_root = OFFSITE_ROOT if offsite else LOCAL_ROOT
     try:
         if args.offsite and args.backup_dir:
-            flagged = resolve_backup_dir(args.backup_dir, REPO)
+            flagged = resolve_dir(args.backup_dir, REPO)
             if flagged != offsite_dir:
                 raise DrillError(
                     f"--offsite reads {offsite_dir} (OFFSITE_BACKUP_DIR), "

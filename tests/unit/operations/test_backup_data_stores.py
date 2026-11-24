@@ -364,7 +364,7 @@ def test_a_stale_mark_does_not_hold_the_backup(tmp_path):
     clock = FakeClock()
     _mark(tmp_path, "weekly-refresh", clock.now - 21600 - 1)
     assert ds.wait_for_marks(tmp_path, grace_s=0, stale_s=21600, clock=clock, sleep=clock.sleep)
-    assert clock.sleeps == [0]
+    assert clock.sleeps == []
 
 
 def test_the_wait_gives_up_after_wait_s(tmp_path):
