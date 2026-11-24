@@ -521,7 +521,7 @@ every build, with None when the request has no cutoff.
 
 ### `simulation/lineup_resolver.py`
 
-[Source](../../simulation/lineup_resolver.py) · 1021 lines · Tests: [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_starting_position.py](../../tests/unit/test_starting_position.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py), [test_incomplete_lineup_api.py](../../tests/unit/test_incomplete_lineup_api.py)
+[Source](../../simulation/lineup_resolver.py) · 1021 lines · Tests: [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_starting_position.py](../../tests/unit/ingest/test_starting_position.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py), [test_incomplete_lineup_api.py](../../tests/unit/test_incomplete_lineup_api.py)
 
 Reads a game's lineups from Postgres (`raw.games`, `raw.game_lineups`, `raw.players`,
 `raw.game_player_stats`, `raw.game_bullpen`) and builds the starting `GameState`. The logic is
@@ -576,7 +576,7 @@ key fails the unit lane. A new kwarg needs a matching `simulate_game` parameter,
 Starts a game at a plate appearance of the real game (the game page's what-if). A start state is
 plain data: the inning, outs, runners and score; both batting orders and their next slots; each
 side's pitcher, starter and defense; the pitch counts and batters faced; the hands; the unused
-pen; and the real runs of each completed half. `pipeline.mlb_game_feed.state_at_pa` builds it.
+pen; and the real runs of each completed half. `ingest.mlb.game_feed.state_at_pa` builds it.
 
 | Function / class | What it does | Called from |
 |---|---|---|

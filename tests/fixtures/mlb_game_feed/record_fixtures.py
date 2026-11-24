@@ -3,7 +3,7 @@
 Run by hand from the repo root: ``python tests/fixtures/mlb_game_feed/record_fixtures.py NAME PK ...``
 (add ``--plays`` to keep every play, read with ``hydrate=alignment``, for the what-if tests).
 Each feed is about 700 KB; the trim keeps only the subtrees
-``pipeline.mlb_game_feed.parse_game_feed`` reads, with their real field names.
+``ingest.mlb.game_feed.parse_game_feed`` reads, with their real field names.
 """
 
 from __future__ import annotations

@@ -26,10 +26,10 @@ Per batter, from the runner flags: R (``runner_{1b,2b,3b}_scored`` credits the
 runner on ``on_{1b,2b,3b}``; ``runs_on_pitch`` minus those flags is the
 batter's own run), SB (``sb_success_2b`` → the runner on 1B, ``_3b`` → 2B,
 ``_home`` → 3B, folded with the PA-ending ``stolen_base_*`` event per
-``pipeline.statcast_events.sql_steal_success``), RBI (``rbis_on_pitch``).
+``ingest.statcast_events.sql_steal_success``), RBI (``rbis_on_pitch``).
 Per pitcher: K and BB from the event label, H_ALLOWED from the hit events,
 ER from ``earned_runs_on_pitch``, OUTS from
-``pipeline.statcast_events.sql_outs_recorded`` plus the pickoff outs in
+``ingest.statcast_events.sql_outs_recorded`` plus the pickoff outs in
 ``raw.play_events`` (they live in no pitch row), and the intentional walks in
 ``raw.play_events`` added to BB (the box counts them; no pitch row carries one).
 
@@ -58,7 +58,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from db.dsn import require_dsn  # noqa: E402
-from pipeline.statcast_events import sql_outs_recorded, sql_steal_success  # noqa: E402
+from ingest.statcast_events import sql_outs_recorded, sql_steal_success  # noqa: E402
 from simulation.prop_validation import real_props_from_boxscore_rows  # noqa: E402
 
 log = logging.getLogger("boxscore_audit")
@@ -91,7 +91,7 @@ def pitch_rows_sql() -> str:
     """The per-pitch SELECT the derivation reads. ``$1`` is an INTEGER[] of game_pks.
 
     ``outs_recorded`` and the three ``sb_ok_*`` columns are computed in SQL by
-    the shared ``pipeline.statcast_events`` helpers, so the audit measures the
+    the shared ``ingest.statcast_events`` helpers, so the audit measures the
     platform's OWN out and steal labels, not a re-derivation.
     """
     return f"""

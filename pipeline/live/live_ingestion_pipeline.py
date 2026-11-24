@@ -851,7 +851,7 @@ class LiveIngestionPipeline(GameOddsMixin, PropOddsMixin, PipelineBase):
                 self._schedule_columns_exist = exists
             if not exists:
                 return
-            from pipeline.mlb_schedule import parse_game
+            from ingest.mlb.schedule import parse_game
 
             g = parse_game(entry)
             await self._db.execute(

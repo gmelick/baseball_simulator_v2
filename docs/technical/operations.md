@@ -104,7 +104,7 @@ Run: the scheduler at 07:00 UTC, as `with_mark.sh nightly-finals with_retry.sh 6
 
 ### `operations/jobs/weekly_refresh.sh`
 
-[Source](../../operations/jobs/weekly_refresh.sh) · 30 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/weekly_refresh.sh) · 30 lines · Tests: [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Calls `HistoricalDataLoader.refresh_seasons(year, year)` on the current season. It catches
 a Final game that the three-day window missed. It writes Postgres only. It exits 1 when

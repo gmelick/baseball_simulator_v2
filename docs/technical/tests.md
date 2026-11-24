@@ -66,7 +66,7 @@ The Makefile wraps each Python lane in `docker compose run --rm -v "$(CURDIR):/a
 | `make test-regression` | `pytest tests/regression/ -v --tb=short --timeout=60 -m regression` |
 | `make test-integration` | `pytest tests/integration/ -v --tb=short --timeout=120 -m integration` |
 | `make lint` / `make format` | `ruff check . --output-format=full` / `ruff format .` |
-| `make type-check` | `mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports --python-version 3.13` |
+| `make type-check` | `mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports --python-version 3.13` |
 
 - **The mount.** The `-v "$(CURDIR):/app"` mount puts the whole checkout over the
   image's copy, so a run tests the checkout's `tests/`, `scripts/` and
@@ -478,7 +478,7 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_one_cutoff_per_table.py](../../tests/unit/test_one_cutoff_per_table.py), [test_delete_seasons_coverage.py](../../tests/unit/test_delete_seasons_coverage.py), [test_profile_index_recreate.py](../../tests/unit/test_profile_index_recreate.py) | One `asof_date` per profile table (SIM-551); a full rebuild deletes every season-keyed table; the index recreate |
 | [test_point_in_time_batter.py](../../tests/unit/test_point_in_time_batter.py), [test_point_in_time_pitcher_manager.py](../../tests/unit/test_point_in_time_pitcher_manager.py), [test_point_in_time_runner_catcher_fielder.py](../../tests/unit/test_point_in_time_runner_catcher_fielder.py) | No profile reads data dated after its cutoff |
 | [test_gmm_batch_pipeline.py](../../tests/unit/test_gmm_batch_pipeline.py), [test_arsenal_fit_reproducible.py](../../tests/unit/test_arsenal_fit_reproducible.py) (slow), [test_barrel_definition.py](../../tests/unit/test_barrel_definition.py) | The pitch-mix model (GMM) batch; the same pitches in any stored order give the same arsenal (SIM-580); the barrel definition |
-| [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_out_label.py](../../tests/unit/test_out_label.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py) | The pitch-code sets, the out label and the steal labels agree across the profile SQL and the pool build |
+| [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py) | The pitch-code sets, the out label and the steal labels agree across the profile SQL and the pool build |
 | [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_hit_by_pitch.py](../../tests/unit/test_hit_by_pitch.py) | A two-strike foul tip is strike three (SIM-553); a hit by pitch is its own outcome |
 | [test_fielder_oaa_jump_profile.py](../../tests/unit/test_fielder_oaa_jump_profile.py), [test_fielder_placeholder_schema.py](../../tests/unit/test_fielder_placeholder_schema.py), [test_outfield_arm_block.py](../../tests/unit/test_outfield_arm_block.py) | The fielder profile's Savant columns, its temp-table placeholders, the outfield arm block |
 | [test_lead_distance.py](../../tests/unit/test_lead_distance.py) | Savant's lead and hold measures in the steal and baserunning models (SIM-531) |
@@ -498,28 +498,28 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_bundle_no_pickle.py](../../tests/unit/test_bundle_no_pickle.py) | The bundle loads with `allow_pickle=False` (SIM-565) |
 | [test_bundle_versions.py](../../tests/unit/test_bundle_versions.py) | A build publishes a new version behind a link and moves the link in one step (SIM-563) |
 
-### Data ingestion (`pipeline/etl/`, `pipeline/statcast_events.py`)
+### Data ingestion (`ingest/`)
 
 | File | What it pins |
 |---|---|
-| [test_etl_historical_loader.py](../../tests/unit/test_etl_historical_loader.py), [test_etl_connection_pool.py](../../tests/unit/test_etl_connection_pool.py), [test_etl_ensure_rows.py](../../tests/unit/test_etl_ensure_rows.py) | The historical loader's row builders, its connection pool, its prerequisite writers |
-| [test_etl_error_ledger.py](../../tests/unit/test_etl_error_ledger.py), [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_etl_reload_game.py](../../tests/unit/test_etl_reload_game.py) | The error ledger; per-game isolation and the circuit breaker; the corrective reload |
-| [test_etl_schedule_final_filter.py](../../tests/unit/test_etl_schedule_final_filter.py), [test_etl_starting_lineups.py](../../tests/unit/test_etl_starting_lineups.py), [test_starting_position.py](../../tests/unit/test_starting_position.py) | Only final games load; the starting lineup rows; each starter's starting position (SIM-559) |
-| [test_release_speed_bounds.py](../../tests/unit/test_release_speed_bounds.py), [test_play_events.py](../../tests/unit/test_play_events.py) | The 50–110 mph bounds; the non-pitch play events |
-| [test_venue_resolution.py](../../tests/unit/test_venue_resolution.py), [test_venue_id_fallback.py](../../tests/unit/test_venue_id_fallback.py) | Venue resolution and the NULL venue |
-| [test_boxscore_ingest.py](../../tests/unit/test_boxscore_ingest.py), [test_boxscore_reader.py](../../tests/unit/test_boxscore_reader.py), [test_game_bullpen_listing.py](../../tests/unit/test_game_bullpen_listing.py) | The official box score: parser, reader, the per-game bullpen listing |
-| [test_bullpen_usage.py](../../tests/unit/test_bullpen_usage.py), [test_bullpen_availability.py](../../tests/unit/test_bullpen_availability.py) | The pen from the box; roster and injured-list availability |
-| [test_savant_loader.py](../../tests/unit/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/test_savant_oaa_jump_boards.py) | The Savant loader's season guards; the outs-above-average and jump boards |
+| [test_etl_historical_loader.py](../../tests/unit/ingest/test_etl_historical_loader.py), [test_etl_connection_pool.py](../../tests/unit/ingest/test_etl_connection_pool.py), [test_etl_ensure_rows.py](../../tests/unit/ingest/test_etl_ensure_rows.py) | The historical loader's row builders, its connection pool, its prerequisite writers |
+| [test_etl_error_ledger.py](../../tests/unit/ingest/test_etl_error_ledger.py), [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_etl_reload_game.py](../../tests/unit/ingest/test_etl_reload_game.py) | The error ledger; per-game isolation and the circuit breaker; the corrective reload |
+| [test_etl_schedule_final_filter.py](../../tests/unit/ingest/test_etl_schedule_final_filter.py), [test_etl_starting_lineups.py](../../tests/unit/ingest/test_etl_starting_lineups.py), [test_starting_position.py](../../tests/unit/ingest/test_starting_position.py) | Only final games load; the starting lineup rows; each starter's starting position (SIM-559) |
+| [test_release_speed_bounds.py](../../tests/unit/ingest/test_release_speed_bounds.py), [test_play_events.py](../../tests/unit/ingest/test_play_events.py) | The 50–110 mph bounds; the non-pitch play events |
+| [test_venue_resolution.py](../../tests/unit/ingest/test_venue_resolution.py), [test_venue_id_fallback.py](../../tests/unit/ingest/test_venue_id_fallback.py) | Venue resolution and the NULL venue |
+| [test_boxscore_ingest.py](../../tests/unit/ingest/test_boxscore_ingest.py), [test_boxscore_reader.py](../../tests/unit/test_boxscore_reader.py), [test_game_bullpen_listing.py](../../tests/unit/ingest/test_game_bullpen_listing.py) | The official box score: parser, reader, the per-game bullpen listing |
+| [test_bullpen_usage.py](../../tests/unit/test_bullpen_usage.py), [test_bullpen_availability.py](../../tests/unit/ingest/test_bullpen_availability.py) | The pen from the box; roster and injured-list availability |
+| [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py) | The Savant loader's season guards; the outs-above-average and jump boards |
 | [test_db_dsn.py](../../tests/unit/test_db_dsn.py) | The connection string has no default password |
 
-### The live service and the slate (`pipeline/live/`, `pipeline/mlb_schedule.py`, `pipeline/mlb_game_feed.py`)
+### The live service and the slate (`pipeline/live/`, `ingest/mlb/schedule.py`, `ingest/mlb/game_feed.py`)
 
 | File | What it pins |
 |---|---|
 | [test_live_pipeline.py](../../tests/unit/test_live_pipeline.py), [test_live_pipeline_bugs.py](../../tests/unit/test_live_pipeline_bugs.py), [test_live_pipeline_setup.py](../../tests/unit/test_live_pipeline_setup.py) | The live ingestion pipeline |
 | [test_live_bridge.py](../../tests/unit/test_live_bridge.py), [test_live_connection_manager.py](../../tests/unit/test_live_connection_manager.py), [test_live_game_state_builder.py](../../tests/unit/test_live_game_state_builder.py), [test_live_resimulate_cooldown.py](../../tests/unit/test_live_resimulate_cooldown.py) | The Redis bridge and heartbeat, the WebSocket fan-out, the game-state builder, the resimulate cooldown |
 | [test_published_lineup_writer.py](../../tests/unit/test_published_lineup_writer.py) | The published-lineup writer |
-| [test_schedule_client.py](../../tests/unit/test_schedule_client.py), [test_game_feed.py](../../tests/unit/test_game_feed.py) | The schedule client; the game feed parser and route |
+| [test_schedule_client.py](../../tests/unit/ingest/test_schedule_client.py), [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py) | The schedule client; the game feed parser and route |
 
 ### Odds and betting (`betting/`)
 
@@ -565,7 +565,7 @@ The tables group the 284 modules by the code they cover. "slow" marks a module w
 | [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_pg_backup_script.py](../../tests/unit/operations/test_pg_backup_script.py) | The restore drill; the scheduler wiring; the Postgres dump and restore scripts |
 | [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_retry_wrapper.py](../../tests/unit/operations/test_retry_wrapper.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py) | The rebuild waits for the finals; the crash-retry wrapper; the shell scripts need `BASEBALL_DB_DSN` |
 | [test_no_default_password.py](../../tests/unit/test_no_default_password.py), [test_secrets_baseline.py](../../tests/unit/test_secrets_baseline.py), [test_gen_secrets.py](../../tests/unit/operations/test_gen_secrets.py) | No default password; the secrets baseline; the secrets generator |
-| [test_nginx_resolve.py](../../tests/unit/test_nginx_resolve.py), [test_check_file_integrity.py](../../tests/unit/test_check_file_integrity.py), [test_sweep_streaming.py](../../tests/unit/test_sweep_streaming.py) | nginx re-resolves the app; the file-integrity guard; the sweep wrapper streams its child's output |
+| [test_nginx_resolve.py](../../tests/unit/test_nginx_resolve.py), [test_check_file_integrity.py](../../tests/unit/test_check_file_integrity.py), [test_sweep_streaming.py](../../tests/unit/ingest/test_sweep_streaming.py) | nginx re-resolves the app; the file-integrity guard; the sweep wrapper streams its child's output |
 
 **Watch out:** the five shell-script tests (`test_ingest_wait.py`, `test_retry_wrapper.py`,
 `test_shell_dsn_guards.py`, `test_pg_backup_script.py`, part of
@@ -601,7 +601,7 @@ Node 20 and `npm ci`. A newer run on the same ref cancels an older one.
 | Job | What it runs | Needs |
 |---|---|---|
 | `lint` | `ruff check .` and `ruff format --check .` with ruff 0.16.7 | — |
-| `type-check` | `mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/` | — |
+| `type-check` | `mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/` | — |
 | `unit-tests` | the fast unit lane at `--timeout=30` with `--tb=native`, then the 80% coverage gate | — |
 | `slow-tests` | `tests/unit/ -m slow` at `--timeout=120` | — |
 | `regression` | `tests/regression/` at `--timeout=60` | `unit-tests` |

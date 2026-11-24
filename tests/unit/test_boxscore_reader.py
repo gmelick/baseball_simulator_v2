@@ -18,7 +18,7 @@ from datetime import date
 
 from tests.script_loader import REPO, load_script
 
-from pipeline.etl.boxscore_ingest import parse_boxscore
+from ingest.load_boxscores import parse_boxscore
 from simulation.prop_distributions import PropDistribution
 from simulation.prop_validation import (
     BOXSCORE_BATTER_PROPS,

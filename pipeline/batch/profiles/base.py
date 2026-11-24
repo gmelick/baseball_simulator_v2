@@ -31,7 +31,7 @@ class ComputorBase:
         """The pickoff outs per (pitcher, season), from ``raw.play_events``.
 
         A pickoff out lives in no ``raw.pitches`` row (the innings-pitched
-        residual documented in ``pipeline/statcast_events.py``), so the two
+        residual documented in ``ingest/statcast_events.py``), so the two
         ``outs_recorded`` readers add these counts. ``pitcher_id`` there is
         the pitcher who threw, so the out lands on the right arm. The relation
         is empty when the table is absent (a database before Alembic 0018, or

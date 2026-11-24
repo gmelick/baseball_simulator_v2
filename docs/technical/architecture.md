@@ -269,7 +269,7 @@ The live path runs no simulation. A user starts every run.
 
 The slate reads the league itself. The app's league reader fetches the schedule of a date
 and one game's feed, and caches both
-([`api/league_feed.py`](../../api/league_feed.py),
+([`ingest/mlb/client.py`](../../ingest/mlb/client.py),
 [`api/routes/games_slate.py`](../../api/routes/games_slate.py)). The database adds the
 lineup flag and each game's newest run. On a feed error the slate serves the stored
 listing.

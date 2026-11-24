@@ -140,7 +140,7 @@ builds that turn it into what the simulator reads.
 - `db/`: the Postgres schema and its Alembic migrations, the DuckDB schema and its
   numbered migrations with the version file, the database roles, the database address
   reader (`db/dsn.py`).
-- `pipeline/etl/` and `pipeline/live/`: the historical loaders and the live service.
+- `ingest/` and `pipeline/live/`: the loaders of the raw data and the live service.
 - `pipeline/batch/`: the profile computor, the pools and the engine-artifact bundle.
 - `operations/jobs/` and `operations/backup/`: the nightly shell jobs, the backups of the
   three stores (the two Postgres scripts included) and the off-site copy.

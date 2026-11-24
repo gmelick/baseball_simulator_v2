@@ -62,7 +62,7 @@ together in one designed experiment later).
         --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026
 
 Before this: Alembic 0027 applied and the two boards loaded
-(``python -m pipeline.etl.savant_loader --boards outs_above_average outfield_jump
+(``python -m ingest.savant.load_leaderboards --boards outs_above_average outfield_jump
 --seasons 2016 ... 2026``; the outs-above-average board is seven pulls a season, one
 per position). After this: ``make calibrate`` (then write the win-probability curve
 back — the SIM-427 trap), copy ``sigma_of_range`` and the range weights into the

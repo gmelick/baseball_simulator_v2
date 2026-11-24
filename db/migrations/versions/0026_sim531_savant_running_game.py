@@ -6,8 +6,8 @@ Create Date: 2026-09-16
 
 SIM-531: the raw landing tables for the two Savant running-game boards —
 Basestealing Run Value (the runner's side) and Pitcher Running Game (the
-pitcher's side). Both are loaded by ``pipeline/etl/savant_loader.py`` from the
-registry in ``pipeline/etl/savant_boards.py``, at ``n=1`` (every player with
+pitcher's side). Both are loaded by ``ingest/savant/load_leaderboards.py`` from the
+registry in ``ingest/savant/boards.py``, at ``n=1`` (every player with
 one chance; owner ruling 2026-09-16).
 
 WHAT EACH TABLE FEEDS

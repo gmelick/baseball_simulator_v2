@@ -146,7 +146,7 @@ class TestTheBuilder:
     def _no_network(self, monkeypatch):
         import urllib.error
 
-        import pipeline.etl.mlb_venue_dimensions as mvd
+        import ingest.venues.load_venue_dimensions as mvd
 
         def _down(season, timeout=30):
             raise urllib.error.URLError("no network in the unit lane")
@@ -254,7 +254,7 @@ class TestTheLoader:
     def _no_network(self, monkeypatch):
         import urllib.error
 
-        import pipeline.etl.mlb_venue_dimensions as mvd
+        import ingest.venues.load_venue_dimensions as mvd
 
         def _down(season, timeout=30):
             raise urllib.error.URLError("no network in the unit lane")

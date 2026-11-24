@@ -7,9 +7,9 @@ from datetime import date
 
 import pandas as pd
 
+from ingest.statcast_events import sql_steal_attempt
 from pipeline.batch.profiles.base import ComputorBase
 from pipeline.batch.profiles.constants import MIN_MANAGER_GAMES
-from pipeline.statcast_events import sql_steal_attempt
 
 log = logging.getLogger("player_profile_computor")
 
@@ -47,7 +47,7 @@ class ManagerProfilesMixin(ComputorBase):
         persist: the computor attaches PostgreSQL READ_ONLY, so it returns the
         workload
         rows as a DataFrame for
-        :class:`pipeline.live.bullpen_availability_ingest.BullpenAvailabilityIngest`
+        :class:`ingest.load_bullpen_availability.BullpenAvailabilityIngest`
         to merge with the MLB-API active-roster / IL fetch and persist to
         ``raw.game_bullpen_availability``. Returns an EMPTY DataFrame (with the
         documented columns) when there are no qualifying rows.

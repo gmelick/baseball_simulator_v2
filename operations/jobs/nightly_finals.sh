@@ -28,7 +28,7 @@ import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+from ingest.games.load_games import HistoricalDataLoader
 
 days = int(os.environ["DAYS"])
 end = datetime.now(ZoneInfo("America/New_York")).date()

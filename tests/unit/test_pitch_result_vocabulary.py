@@ -12,7 +12,7 @@ The loader stores the MLB feed's display text ("Swinging Strike") in
 between the words. A filter on such a name matches no stored row: the swing rate
 reads 0 and the whiff rate reads null. The column ``raw.pitches.type`` holds the
 feed's pitch-result code. So the routes filter on that code with the named code
-sets in ``pipeline/statcast_events.py``. The pool build and the pitcher profile
+sets in ``ingest/statcast_events.py``. The pool build and the pitcher profile
 read the same sets.
 
 The Data Lab shows Savant's whiff, by owner ruling. Savant (Baseball Savant) is
@@ -53,8 +53,8 @@ import pipeline.batch.profiles.sql as profile_sql
 from api.auth import require_auth
 from api.routes import analytics
 from api.routes.ai_assistant import _SYSTEM_PROMPT
-from pipeline import statcast_events
-from pipeline.statcast_events import (
+from ingest import statcast_events
+from ingest.statcast_events import (
     BALL_TYPES,
     CALLED_STRIKE_TYPES,
     FOUL_TIP_TYPES,
@@ -384,7 +384,7 @@ def test_the_api_loads_the_vocabulary_without_the_computor() -> None:
     probe = (
         "import json, sys\n"
         "import api.routes.analytics\n"
-        "names = ('pipeline.statcast_events', 'pipeline.batch.player_profile_computor',"
+        "names = ('ingest.statcast_events', 'pipeline.batch.player_profile_computor',"
         " 'duckdb', 'sklearn')\n"
         "print(json.dumps({name: name in sys.modules for name in names}))\n"
     )
@@ -399,7 +399,7 @@ def test_the_api_loads_the_vocabulary_without_the_computor() -> None:
     assert done.returncode == 0, done.stderr
     loaded = json.loads(done.stdout.strip().splitlines()[-1])
     assert loaded == {
-        "pipeline.statcast_events": True,
+        "ingest.statcast_events": True,
         "pipeline.batch.player_profile_computor": False,
         "duckdb": False,
         "sklearn": False,

@@ -54,7 +54,7 @@ from accuracy.records import (  # noqa: E402
 from accuracy.replay import _Counters, _process_one_game, _score_one_game, _tally  # noqa: E402
 from accuracy.report import aggregate_accuracy_comparison, format_accuracy_comparison  # noqa: E402
 
-from pipeline.etl.boxscore_ingest import parse_boxscore  # noqa: E402
+from ingest.load_boxscores import parse_boxscore  # noqa: E402
 from simulation.prop_distributions import (  # noqa: E402
     ALL_PROPS,
     PropDistribution,

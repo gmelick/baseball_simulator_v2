@@ -11,6 +11,10 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from ingest.statcast_events import (
+    batter_retired,
+    play_outs,
+)
 from pipeline.batch.profiles.base import ComputorBase
 from pipeline.batch.profiles.defense import (
     AVG_FIELDER_POS,
@@ -36,10 +40,6 @@ from pipeline.batch.profiles.sql import (
     SQL_BATTER_RETIRED,
     SQL_FIELDING_OUT,
     SQL_IN_PLAY,
-)
-from pipeline.statcast_events import (
-    batter_retired,
-    play_outs,
 )
 
 log = logging.getLogger("player_profile_computor")
@@ -628,7 +628,7 @@ class FielderPlayMetricsMixin(ComputorBase):
             dp_turned = r["events"] in ("grounded_into_double_play", "double_play")
 
             # Question: how many outs did the play record, and which body was
-            # retired? Both derive from `events` — see pipeline/statcast_events.
+            # retired? Both derive from `events` — see ingest/statcast_events.
             outs_recorded = play_outs(r["events"], r["type"])
 
             # Identify pivot man

@@ -62,7 +62,7 @@ async def _league_game_payload(
     error the last good copy is served (``source = feed_cached``); with none the
     payload is None.
     """
-    from pipeline.mlb_game_feed import feed_state
+    from ingest.mlb.game_feed import feed_state
 
     feed = getattr(request.app.state, "league_feed", None)
     cache = _get_sim_cache(request)
@@ -131,7 +131,7 @@ def _feed_unavailable(game_pk: int, error: str | None) -> Any:
     ),
 )
 async def get_game_feed(game_pk: int, request: Request, use_cache: bool = Query(True)) -> Any:
-    from pipeline.mlb_game_feed import parse_game_feed
+    from ingest.mlb.game_feed import parse_game_feed
 
     payload, source, error = await _league_game_payload(request, game_pk, use_cache=use_cache)
     if payload is None:
@@ -159,7 +159,7 @@ async def get_game_feed(game_pk: int, request: Request, use_cache: bool = Query(
     ),
 )
 async def get_real_plays(game_pk: int, request: Request) -> Any:
-    from pipeline.mlb_game_feed import feed_state, parse_plays
+    from ingest.mlb.game_feed import feed_state, parse_plays
 
     payload, source, error = await _league_game_payload(request, game_pk)
     if payload is None:
@@ -186,7 +186,7 @@ def _option(ss: Mapping[str, Any], pid: int, position: str | None = None) -> Pla
 
 
 def _pa_state_model(game_pk: int, ss: Mapping[str, Any]) -> PaStateModel:
-    """A start state (``pipeline.mlb_game_feed.state_at_pa``) as the /feed/state model.
+    """A start state (``ingest.mlb.game_feed.state_at_pa``) as the /feed/state model.
 
     ``live`` has the shape of the slate card's field, at a 0-0 count with the
     batter due up.
@@ -258,7 +258,7 @@ def _feed_lineup_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     position and the starting pitcher. A game whose box lists no starter yet (a
     preview game without posted lineups) gives no rows.
     """
-    from pipeline.etl.historical.game_values import _build_starting_lineup_rows
+    from ingest.games.game_values import _build_starting_lineup_rows
 
     game_pk = int(((payload.get("gameData") or {}).get("game") or {}).get("pk") or 0)
     season = int(((payload.get("gameData") or {}).get("game") or {}).get("season") or 0)
@@ -280,7 +280,7 @@ def _feed_lineup_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 async def _start_state(request: Request, game_pk: int, at_bat: int | None) -> dict[str, Any]:
     """The start state at a plate appearance, or an HTTP error."""
-    from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
+    from ingest.mlb.game_feed import PlateAppearanceNotFound, state_at_pa
 
     payload, _source, error = await _league_game_payload(request, game_pk)
     if payload is None:

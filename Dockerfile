@@ -78,6 +78,7 @@ COPY pipeline/    ./pipeline/
 COPY similarity/  ./similarity/
 COPY simulation/  ./simulation/
 COPY betting/     ./betting/
+COPY ingest/      ./ingest/
 COPY operations/  ./operations/
 COPY db/          ./db/
 COPY scripts/     ./scripts/

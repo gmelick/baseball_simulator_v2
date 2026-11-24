@@ -40,7 +40,7 @@ log = logging.getLogger("engine_artifacts")
 #      more (Camden Yards moved its left-field wall in for 2025). The document
 #      keys a group "FIRST-LAST" and records every split under "moves".
 #   3. A thin sector rests on a PUBLISHED-DISTANCE PRIOR, not the league line:
-#      the Stats API's five fence distances (``pipeline/etl/mlb_venue_dimensions.py``)
+#      the Stats API's five fence distances (``ingest/venues/load_venue_dimensions.py``)
 #      interpolated at the sector's midpoint angle, plus the league's typical
 #      offset between the effective and the published fence at that sector,
 #      blended toward the park's own balls at ``PARK_PRIOR_N`` home runs.
@@ -703,7 +703,7 @@ def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: l
     carry offset per park, the carry model and its home-run validation. Also refreshes
     ``<out_dir>/venue_dimensions.json`` from the Stats API (the last copy
     stands when the API is down). Returns the document."""
-    from pipeline.etl.mlb_venue_dimensions import write_venue_dimensions
+    from ingest.venues.load_venue_dimensions import write_venue_dimensions
 
     balls = load_air_balls(con, seasons)
     published = write_venue_dimensions(out_dir, seasons)

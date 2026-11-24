@@ -604,8 +604,8 @@ def savant_fielder_view(
     """Pull the baserunning board's FIELDER view (``type=Fld``, ``n=1``) for
     ``season`` and return (headers, rows). The registry's ``baserunning`` entry
     stays the runner view; the script builds a modified copy of it here."""
-    from pipeline.etl.savant_boards import BOARDS
-    from pipeline.etl.savant_loader import build_url, check_row_seasons, fetch_csv, parse_rows
+    from ingest.savant.boards import BOARDS
+    from ingest.savant.load_leaderboards import build_url, check_row_seasons, fetch_csv, parse_rows
 
     runner_board = BOARDS["baserunning"]
     board = dataclasses.replace(

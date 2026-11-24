@@ -19,7 +19,7 @@ Four paths bring data in.
    Eastern time. The Sunday `weekly-refresh` job calls `refresh_seasons` for the current
    season.
 2. `load_date_range` reads the MLB schedule in windows of at most 364 days and keeps only
-   Final games (`historical/schedule.py`).
+   Final games (`ingest/games/date_windows.py`).
 3. `_dispatch_game` skips a game that is already loaded (`_game_already_loaded`) and loads
    the rest. Five failures in a row stop the run.
 4. `_fetch_game_pitches` reads the game's live feed and both teams' coaches. It returns one
@@ -28,9 +28,9 @@ Four paths bring data in.
    `raw.venues`, `raw.teams`, `raw.players`, `raw.managers`, `raw.games`, then
    `raw.game_lineups`. It also writes the official box score (`raw.game_player_stats`) and
    the box's bullpen listing (`raw.game_bullpen`) from the same payload.
-6. `_process_and_insert` builds and validates each pitch row (`historical/rows.py`). It
+6. `_process_and_insert` builds and validates each pitch row (`ingest/games/pitch_rows.py`). It
    writes `raw.pitches`, `raw.play_events`, `raw.etl_errors`, `raw.etl_game_ingest` and
-   `raw.etl_data_freshness` (`historical/writes.py`).
+   `raw.etl_data_freshness` (`ingest/games/write_rows.py`).
 
 **2. The live service (game day).**
 
@@ -63,7 +63,7 @@ entry point. No scheduler job runs them; an operator runs them by hand.
 
 | Loader | Runs by | Writes |
 |---|---|---|
-| `HistoricalDataLoader` | the `nightly-finals` and `weekly-refresh` jobs; `scripts/reload_games.py`; `scripts/resumable_sweep.py` | `raw.venues`, `raw.teams`, `raw.players`, `raw.managers`, `raw.games`, `raw.game_lineups`, `raw.game_player_stats`, `raw.game_bullpen`, `raw.pitches`, `raw.play_events`, `raw.etl_errors`, `raw.etl_game_ingest`, `raw.etl_data_freshness` |
+| `HistoricalDataLoader` | the `nightly-finals` and `weekly-refresh` jobs; `ingest/games/reload_games.py`; `ingest/games/resumable_sweep.py` | `raw.venues`, `raw.teams`, `raw.players`, `raw.managers`, `raw.games`, `raw.game_lineups`, `raw.game_player_stats`, `raw.game_bullpen`, `raw.pitches`, `raw.play_events`, `raw.etl_errors`, `raw.etl_game_ingest`, `raw.etl_data_freshness` |
 | `BoxscoreIngest` | `scripts/load_official_boxscores.py` (backfill) | `raw.game_player_stats`, `raw.game_bullpen` |
 | `savant_loader` | by hand | the twelve `raw.savant_*` board tables |
 | `savant_pitch_tracking_loader` | by hand | `raw.savant_pitch_tracking` |
@@ -75,25 +75,25 @@ entry point. No scheduler job runs them; an operator runs them by hand.
 
 ## The historical loader
 
-### `pipeline/etl/etl_historical_loader.py`
+### `ingest/games/load_games.py`
 
-[Source](../../pipeline/etl/etl_historical_loader.py) · 1825 lines · Tests: [test_etl_historical_loader.py](../../tests/unit/test_etl_historical_loader.py), [test_etl_reload_game.py](../../tests/unit/test_etl_reload_game.py), [test_etl_ensure_rows.py](../../tests/unit/test_etl_ensure_rows.py), [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_etl_connection_pool.py](../../tests/unit/test_etl_connection_pool.py)
+[Source](../../ingest/games/load_games.py) · 1825 lines · Tests: [test_etl_historical_loader.py](../../tests/unit/ingest/test_etl_historical_loader.py), [test_etl_reload_game.py](../../tests/unit/ingest/test_etl_reload_game.py), [test_etl_ensure_rows.py](../../tests/unit/ingest/test_etl_ensure_rows.py), [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_etl_connection_pool.py](../../tests/unit/ingest/test_etl_connection_pool.py)
 
 The loader of finished games. The file holds the HTTP plumbing, the feed parser and the
-`HistoricalDataLoader` class. The class's other parts live in `pipeline/etl/historical/`.
+`HistoricalDataLoader` class. The class's other parts live beside it in `ingest/games/`.
 The tests patch `_connect`, `_http_get`, `_fetch_once` and `_fetch_game_pitches` here, so
 those names stay in this file.
 
 | Function / class | What it does | Called from |
 |---|---|---|
 | `HistoricalDataLoader.load_date_range` | Loads every Final game in a date range. It cuts the range into schedule windows and warns when a window comes back short. `reload=True` sends every game through `reload_game`. | `operations/jobs/nightly_finals.sh` |
-| `HistoricalDataLoader.refresh_seasons` | Loads every Final game of a range of seasons. The default end is last season. `reload=True` re-ingests. | `operations/jobs/weekly_refresh.sh`, `scripts/resumable_sweep.py` |
+| `HistoricalDataLoader.refresh_seasons` | Loads every Final game of a range of seasons. The default end is last season. `reload=True` re-ingests. | `operations/jobs/weekly_refresh.sh`, `ingest/games/resumable_sweep.py` |
 | `HistoricalDataLoader.load_game` | Loads one game. The pitch insert skips a row that exists (`ON CONFLICT ... DO NOTHING`). | `_dispatch_game` |
-| `HistoricalDataLoader.reload_game` | Deletes and re-inserts one game's pitch rows in one transaction. It refuses to store fewer rows than before (`ReloadShrinkError`) unless `allow_shrink=True`. | `_dispatch_game`, `scripts/reload_games.py` |
+| `HistoricalDataLoader.reload_game` | Deletes and re-inserts one game's pitch rows in one transaction. It refuses to store fewer rows than before (`ReloadShrinkError`) unless `allow_shrink=True`. | `_dispatch_game`, `ingest/games/reload_games.py` |
 | `HistoricalDataLoader._dispatch_game` | Routes one game to a load or a reload and counts the outcome. It contains a single game's failure; `ETL_CONSECUTIVE_FAILURE_LIMIT` (default 5) failures in a row raise. | `load_date_range`, `refresh_seasons` |
 | `_fetch_game_pitches` | Reads `feed/live?hydrate=alignment` and both teams' coaches. It tracks the pre-play outs and base state per play (the extra-innings runner included) and builds one dict per pitch. It caches each batter's hand across games. | `_load_game` |
 | `HistoricalDataLoader._ensure_prerequisites` | Writes every parent row of `raw.pitches` in foreign-key order. Each step checks which ids are missing and fetches only those. | `_load_game` |
-| `HistoricalDataLoader._ensure_venue` | Upserts a missing venue: its fence dimensions from a Savant page (the park-factors board, else the venue page), its location, surface and roof from the MLB venues endpoint. `force=True` corrects a stored row (`scripts/reload_games.py --refresh-venues`). | `_ensure_prerequisites` |
+| `HistoricalDataLoader._ensure_venue` | Upserts a missing venue: its fence dimensions from a Savant page (the park-factors board, else the venue page), its location, surface and roof from the MLB venues endpoint. `force=True` corrects a stored row (`ingest/games/reload_games.py --refresh-venues`). | `_ensure_prerequisites` |
 | `HistoricalDataLoader._ensure_players` | Upserts every player of the game's box, from the people endpoint for any missing one. | `_ensure_prerequisites` |
 | `HistoricalDataLoader._ensure_game_player_stats` | Writes the official box score and the bullpen listing from the feed in hand. A failure logs a warning and never fails the game load. | `_ensure_prerequisites` |
 | `_http_get` / `_fetch_once` | One GET with a bounded retry: 408, 425, 429, 500, 502, 503 and 504 retry (429 honours `Retry-After`); any other status raises at once. | every fetch |
@@ -108,30 +108,29 @@ transport crashed the long sweeps with a memory fault, so the loader sends no
 `Accept-Encoding` and has no gunzip branch (a test holds the two together). The loader
 skips a game with a pitch row or an `'empty'` outcome in `raw.etl_game_ingest`.
 
-### `pipeline/etl/historical/`
+### The loader's parts in `ingest/games/`
 
-[Source](../../pipeline/etl/historical/) · 8 modules, 1852 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_etl_starting_lineups.py](../../tests/unit/test_etl_starting_lineups.py), [test_starting_position.py](../../tests/unit/test_starting_position.py), [test_venue_resolution.py](../../tests/unit/test_venue_resolution.py), [test_etl_schedule_final_filter.py](../../tests/unit/test_etl_schedule_final_filter.py)
+[Source](../../ingest/games/) · 7 modules, 1802 lines · Tests: [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_etl_starting_lineups.py](../../tests/unit/ingest/test_etl_starting_lineups.py), [test_starting_position.py](../../tests/unit/ingest/test_starting_position.py), [test_venue_resolution.py](../../tests/unit/ingest/test_venue_resolution.py), [test_etl_schedule_final_filter.py](../../tests/unit/ingest/test_etl_schedule_final_filter.py)
 
 The parts of `HistoricalDataLoader`, one job per module. The class mixes in
 `ReferenceRowsMixin`, `WritesMixin` and `LoaderBase`.
 
 | Module | Lines | What it holds |
 |---|---|---|
-| [`base.py`](../../pipeline/etl/historical/base.py) | 84 | `LoaderBase`: the DSN, the lazy psycopg2 connection pool (`_ensure_pool`, `_get_conn`) and `close`. |
-| [`game_values.py`](../../pipeline/etl/historical/game_values.py) | 168 | The feed values: the manager among the coaches (acting manager, then manager, then bench coach), the height, the wind, the game status, and `_build_starting_lineup_rows`, which puts each starter at the position he STARTED at (`allPositions[0]`; the starting-position repair, SIM-559). The live lineup writer reuses this builder. |
-| [`reference_rows.py`](../../pipeline/etl/historical/reference_rows.py) | 420 | `ReferenceRowsMixin`: `_ensure_teams`, `_ensure_managers`, `_ensure_game` (the game row with its linescore and decisions) and `_ensure_game_lineups`. The lineup step first deletes the game's non-box rows (`source <> 'box'`), so the final box replaces a published or projected lineup. |
-| [`rows.py`](../../pipeline/etl/historical/rows.py) | 429 | The pitch row: `_build_row_dict` maps the feed fields to `raw.pitches` columns; `_validate_row` sorts problems into hard errors (the row is skipped and logged to `raw.etl_errors`) and warnings (the row is kept with `data_quality_flag = TRUE`). |
-| [`savant.py`](../../pipeline/etl/historical/savant.py) | 50 | `_parse_savant_embedded_json`: reads the JSON a Savant page embeds in its HTML; raises `SavantScrapeError` when the page has none. |
-| [`schedule.py`](../../pipeline/etl/historical/schedule.py) | 51 | `_date_chunks` (windows of at most 364 days), `_schedule_game_is_final` and the failure limit. |
-| [`venues.py`](../../pipeline/etl/historical/venues.py) | 95 | `_resolve_venue`: the venue a game was PLAYED at, with overrides for neutral-site games whose feed has none; `MissingVenueError` otherwise. |
-| [`writes.py`](../../pipeline/etl/historical/writes.py) | 555 | `WritesMixin`: `_game_already_loaded`, `_process_and_insert` (500-row batches), the error ledger, the per-game outcome (`raw.etl_game_ingest`: `loaded` or `empty`), `_write_play_events`, `_log_freshness`, `reprocess_errored_games` and `quality_report`. |
+| [`base.py`](../../ingest/games/base.py) | 84 | `LoaderBase`: the DSN, the lazy psycopg2 connection pool (`_ensure_pool`, `_get_conn`) and `close`. |
+| [`game_values.py`](../../ingest/games/game_values.py) | 168 | The feed values: the manager among the coaches (acting manager, then manager, then bench coach), the height, the wind, the game status, and `_build_starting_lineup_rows`, which puts each starter at the position he STARTED at (`allPositions[0]`; the starting-position repair, SIM-559). The live lineup writer reuses this builder. |
+| [`reference_rows.py`](../../ingest/games/reference_rows.py) | 420 | `ReferenceRowsMixin`: `_ensure_teams`, `_ensure_managers`, `_ensure_game` (the game row with its linescore and decisions) and `_ensure_game_lineups`. The lineup step first deletes the game's non-box rows (`source <> 'box'`), so the final box replaces a published or projected lineup. |
+| [`pitch_rows.py`](../../ingest/games/pitch_rows.py) | 429 | The pitch row: `_build_row_dict` maps the feed fields to `raw.pitches` columns; `_validate_row` sorts problems into hard errors (the row is skipped and logged to `raw.etl_errors`) and warnings (the row is kept with `data_quality_flag = TRUE`). |
+| [`date_windows.py`](../../ingest/games/date_windows.py) | 51 | `_date_chunks` (windows of at most 364 days), `_schedule_game_is_final` and the failure limit. |
+| [`venues.py`](../../ingest/games/venues.py) | 95 | `_resolve_venue`: the venue a game was PLAYED at, with overrides for neutral-site games whose feed has none; `MissingVenueError` otherwise. |
+| [`write_rows.py`](../../ingest/games/write_rows.py) | 555 | `WritesMixin`: `_game_already_loaded`, `_process_and_insert` (500-row batches), the error ledger, the per-game outcome (`raw.etl_game_ingest`: `loaded` or `empty`), `_write_play_events`, `_log_freshness`, `reprocess_errored_games` and `quality_report`. |
 
 **Watch out:** `_validate_row` mirrors the database's CHECK ranges. A value outside a CHECK
 is a hard error, never a warning, because the insert would fail.
 
-### `pipeline/etl/play_events.py`
+### `ingest/games/play_events.py`
 
-[Source](../../pipeline/etl/play_events.py) · 403 lines · Tests: [test_play_events.py](../../tests/unit/test_play_events.py)
+[Source](../../ingest/games/play_events.py) · 403 lines · Tests: [test_play_events.py](../../tests/unit/ingest/test_play_events.py)
 
 The non-pitch events a pitch row cannot hold: pickoff throws and their outcomes, step-offs,
 balks and intentional walks. An intentional walk has no pitch at all, so without this module
@@ -145,9 +144,9 @@ the database would hold none. The module is pure: no network, no database.
 `type == "pickoff"` with an empty event type; a pickoff OUT lives on the runner entry. The
 caller must pass the pre-play base state and score: the module cannot derive them.
 
-### `pipeline/etl/boxscore_ingest.py`
+### `ingest/load_boxscores.py`
 
-[Source](../../pipeline/etl/boxscore_ingest.py) · 710 lines · Tests: [test_boxscore_ingest.py](../../tests/unit/test_boxscore_ingest.py), [test_game_bullpen_listing.py](../../tests/unit/test_game_bullpen_listing.py), [test_starting_position.py](../../tests/unit/test_starting_position.py), [test_boxscore_reader.py](../../tests/unit/test_boxscore_reader.py)
+[Source](../../ingest/load_boxscores.py) · 710 lines · Tests: [test_boxscore_ingest.py](../../tests/unit/ingest/test_boxscore_ingest.py), [test_game_bullpen_listing.py](../../tests/unit/ingest/test_game_bullpen_listing.py), [test_starting_position.py](../../tests/unit/ingest/test_starting_position.py), [test_boxscore_reader.py](../../tests/unit/test_boxscore_reader.py)
 
 The official box score, the ground truth a sportsbook grades a player prop on (the official
 box-score ground truth, SIM-545). One row per player who appeared; a player who did not play
@@ -161,9 +160,9 @@ has no row, so the book voids his bet.
 | `starting_position` / `parse_starting_positions` / `persist_starting_positions` | Each starter's position at the start of the game, and the repair of stored lineup rows. | `game_values._build_starting_lineup_rows`; `scripts/probes/backfill_start_positions.py` |
 | `BoxscoreIngest` | Fetches `/game/{game_pk}/boxscore` (`_mlb_get`, the one network seam, with a short retry) and persists the rows. | `scripts/load_official_boxscores.py` |
 
-### `pipeline/etl/coercion.py`
+### `ingest/games/coercion.py`
 
-[Source](../../pipeline/etl/coercion.py) · 62 lines · Tests: [test_etl_historical_loader.py](../../tests/unit/test_etl_historical_loader.py)
+[Source](../../ingest/games/coercion.py) · 62 lines · Tests: [test_etl_historical_loader.py](../../tests/unit/ingest/test_etl_historical_loader.py)
 
 `to_float`, `to_int`, `to_bool` and `to_str`: the shared "empty or missing becomes `None`"
 rules. An empty string, `None` and a NaN float all read as `None`. The historical row
@@ -174,9 +173,9 @@ builder, the venue resolver and the Savant and sprint-speed loaders use them.
 
 ## Baseball Savant and the other reference loaders
 
-### `pipeline/etl/savant_boards.py`
+### `ingest/savant/boards.py`
 
-[Source](../../pipeline/etl/savant_boards.py) · 555 lines · Tests: [test_savant_loader.py](../../tests/unit/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/test_savant_oaa_jump_boards.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py)
+[Source](../../ingest/savant/boards.py) · 555 lines · Tests: [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_savant_oaa_jump_boards.py](../../tests/unit/ingest/test_savant_oaa_jump_boards.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py)
 
 The registry of the twelve Savant leaderboards. Each `SavantBoard` names its address, how
 the board spells the season, its target table and its columns. The boards and their tables:
@@ -197,12 +196,19 @@ the qualified default (owner ruling 2026-09-16); the run-value boards ignore `n=
 use `n=1`. `outs_above_average` is pulled once per position and takes the position from
 the query, not from the board's column.
 
-### `pipeline/etl/savant_loader.py`
+### `ingest/savant/page_json.py`
 
-[Source](../../pipeline/etl/savant_loader.py) · 448 lines · Tests: [test_savant_loader.py](../../tests/unit/test_savant_loader.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py)
+[Source](../../ingest/savant/page_json.py) · 50 lines
+
+`_parse_savant_embedded_json` reads the JSON a Savant page embeds in its HTML. It raises
+`SavantScrapeError` when the page has none. The game loader's venue step uses it.
+
+### `ingest/savant/load_leaderboards.py`
+
+[Source](../../ingest/savant/load_leaderboards.py) · 448 lines · Tests: [test_savant_loader.py](../../tests/unit/ingest/test_savant_loader.py), [test_lead_distance.py](../../tests/unit/test_lead_distance.py)
 
 One loader for every board: fetch the CSV, coerce it, drop players the database does not
-know, upsert. Run it as `python -m pipeline.etl.savant_loader --boards all --seasons ...`.
+know, upsert. Run it as `python -m ingest.savant.load_leaderboards --boards all --seasons ...`.
 
 | Function / class | What it does | Called from |
 |---|---|---|
@@ -213,9 +219,9 @@ know, upsert. Run it as `python -m pipeline.etl.savant_loader --boards all --sea
 
 **Flags:** `BASEBALL_DB_DSN` (required unless `--dry-run`).
 
-### `pipeline/etl/savant_pitch_tracking_loader.py`
+### `ingest/savant/load_pitch_tracking.py`
 
-[Source](../../pipeline/etl/savant_pitch_tracking_loader.py) · 283 lines · Tests: none
+[Source](../../ingest/savant/load_pitch_tracking.py) · 283 lines · Tests: none
 
 The per-pitch tracking measurements (bat speed, swing length, arm angle and others) from
 Savant's search export, one day per request, into `raw.savant_pitch_tracking`. Per-pitch
@@ -227,18 +233,18 @@ season average that contains the future.
 | `load_day` / `check_day` | Loads one day. The export truncates silently at 25,000 rows, so a day at the cap raises `TruncatedDayError`; a row from another date also raises. | `main` |
 | `season_days` / `loaded_days` | The days of a season, and the days already loaded (for `--resume`). | `main` |
 
-### `pipeline/etl/etl_sprint_speed_loader.py`
+### `ingest/savant/load_sprint_speed.py`
 
-[Source](../../pipeline/etl/etl_sprint_speed_loader.py) · 297 lines · Tests: none
+[Source](../../ingest/savant/load_sprint_speed.py) · 297 lines · Tests: none
 
 `SprintSpeedLoader` fetches Savant's sprint-speed leaderboard per season and upserts
 `raw.sprint_speed`, one row per player and season. `refresh_seasons` is the entry point;
 `_filter_to_known_players` drops a player missing from `raw.players`. Run it as
-`python -m pipeline.etl.etl_sprint_speed_loader --seasons ...`.
+`python -m ingest.savant.load_sprint_speed --seasons ...`.
 
-### `pipeline/etl/mlb_venue_dimensions.py`
+### `ingest/venues/load_venue_dimensions.py`
 
-[Source](../../pipeline/etl/mlb_venue_dimensions.py) · 156 lines · Tests: [test_park_geometry_builder.py](../../tests/unit/test_park_geometry_builder.py), [test_fence_stage.py](../../tests/unit/test_fence_stage.py)
+[Source](../../ingest/venues/load_venue_dimensions.py) · 156 lines · Tests: [test_park_geometry_builder.py](../../tests/unit/test_park_geometry_builder.py), [test_fence_stage.py](../../tests/unit/test_fence_stage.py)
 
 The MLB API's published fence distances, the prior of a park's fence line where the pool's
 own balls are too few (the fence certification, SIM-478). The bundle keeps the last answer
@@ -250,21 +256,21 @@ in `venue_dimensions.json`.
 | `write_venue_dimensions` | Fetches every season of the window, merges the answers over the stored copy and writes it. A failed season keeps the last copy. | `pipeline/batch/artifacts/park_geometry.py` |
 | `read_venue_dimensions` | The stored copy, or `{}`. | `pipeline/batch/artifacts/park_geometry.py` |
 
-### `pipeline/etl/venue_backfill_job.py`
+### `ingest/venues/backfill_venues.py`
 
-[Source](../../pipeline/etl/venue_backfill_job.py) · 349 lines · Tests: [test_venue_id_fallback.py](../../tests/unit/test_venue_id_fallback.py)
+[Source](../../ingest/venues/backfill_venues.py) · 349 lines · Tests: [test_venue_id_fallback.py](../../tests/unit/ingest/test_venue_id_fallback.py)
 
 `VenueBackfillJob.run` fills a `raw.games.venue_id` the schedule left empty. It reads each
 such game's schedule entry with `hydrate=venue`, updates the row when `raw.venues` holds the
 venue, and logs a `raw.pipeline_run_log` row. It is idempotent. Run it as
-`python -m pipeline.etl.venue_backfill_job`; `schedule_venue_backfill_job` registers it on
+`python -m ingest.venues.backfill_venues`; `schedule_venue_backfill_job` registers it on
 an APScheduler instance, but nothing in the stack calls that hook.
 
 ## Shared vocabularies and helpers
 
-### `pipeline/statcast_events.py`
+### `ingest/statcast_events.py`
 
-[Source](../../pipeline/statcast_events.py) · 493 lines · Tests: [test_out_label.py](../../tests/unit/test_out_label.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py), [test_transition_pool.py](../../tests/unit/test_transition_pool.py), [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py)
+[Source](../../ingest/statcast_events.py) · 493 lines · Tests: [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py), [test_transition_pool.py](../../tests/unit/test_transition_pool.py), [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py)
 
 The one place that decides what a `raw.pitches` row means. Every out label derives from the
 `events` column (the plate-appearance result on its last pitch), never from
@@ -280,7 +286,7 @@ The one place that decides what a `raw.pitches` row means. Every out label deriv
 | `BALL_TYPES`, `CALLED_STRIKE_TYPES`, `WHIFF_TYPES`, `FOUL_TYPES`, `STRIKE_THREE_FOUL_TYPES`, `NON_SWING_TYPES`, `IN_PLAY_TYPES`, `FOUL_TIP_TYPES`, `SAVANT_WHIFF_TYPES` | The pitch-result code sets. `STRIKE_THREE_FOUL_TYPES` marks a two-strike foul tip or foul bunt as strike three (the foul-tip strike three, SIM-553). | the profiles, the pool build, the Data Lab routes |
 | `sql_in_play` / `sql_swing` / `sql_savant_whiff` / `sql_called_strike` / `sql_csw` | Row filters built from those sets. The model's whiff counts a foul tip as contact; Savant's whiff (the Data Lab's) counts it as a whiff. | `api/routes/analytics.py`, `api/routes/ai_assistant.py`, the profiles |
 
-**Watch out:** `tests/unit/test_out_label.py` fails if any profile site reads
+**Watch out:** `tests/unit/ingest/test_out_label.py` fails if any profile site reads
 `outs_on_pitch`. Filter on `type`, never on `description` (display text).
 
 ### `pipeline/bullpen_usage.py`
@@ -306,22 +312,22 @@ double-header do not see each other's usage.
 
 ## The league schedule and game feed
 
-### `pipeline/mlb_schedule.py`
+### `ingest/mlb/schedule.py`
 
-[Source](../../pipeline/mlb_schedule.py) · 327 lines · Tests: [test_schedule_client.py](../../tests/unit/test_schedule_client.py), [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py)
+[Source](../../ingest/mlb/schedule.py) · 327 lines · Tests: [test_schedule_client.py](../../tests/unit/ingest/test_schedule_client.py), [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py)
 
 The one parser of the league schedule and the one status mapper. The day slate reads the
 schedule for which games exist (owner ruling 2026-08-29).
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `parse_schedule` / `parse_game` | One schedule response to `ScheduleGame` records (teams, probable pitchers, posted lineups, start time). PURE. | `api/league_feed.py`, `api/routes/games_slate.py`, `lineup_writer` |
+| `parse_schedule` / `parse_game` | One schedule response to `ScheduleGame` records (teams, probable pitchers, posted lineups, start time). PURE. | `ingest/mlb/client.py`, `api/routes/games_slate.py`, `lineup_writer` |
 | `card_state` / `card_state_of` / `card_state_from_raw` | The four card states the slate draws: `scheduled`, `live`, `final`, `postponed`. `card_state_from_raw` maps a stored `raw.games.status`. | the slate route, `mlb_game_feed.feed_state`, `lineup_writer` |
 | `fetch_schedule_sync` | Reads the schedule over `urllib`. The historical loader reads the schedule through its own transport instead. | none today |
 
-### `pipeline/mlb_game_feed.py`
+### `ingest/mlb/game_feed.py`
 
-[Source](../../pipeline/mlb_game_feed.py) · 681 lines · Tests: [test_game_feed.py](../../tests/unit/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
+[Source](../../ingest/mlb/game_feed.py) · 681 lines · Tests: [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
 
 The league's per-game live feed turned into plain dicts for the game page. The parsers are
 pure; the tests run them on recorded feeds in `tests/fixtures/mlb_game_feed/`.
@@ -432,15 +438,15 @@ channel: a browser that connects late gets the next message.
 | `RedisBridge` | The app side: one subscription per watched game, counted by reference; the last browser to leave ends it. | `api/startup.py` |
 | `write_heartbeat` / `heartbeat_age_s` / `heartbeat_status` | `live:heartbeat` (the poll time) and `live:watching` (the live games), each with a 90-second lifetime. `/ready` reads `ok`, `stale` or `absent`. | `_sync_live_games`, `api/main.py` (`/ready`), `api/routes/metrics.py` |
 
-### `pipeline/live/bullpen_availability_ingest.py`
+### `ingest/load_bullpen_availability.py`
 
-[Source](../../pipeline/live/bullpen_availability_ingest.py) · 617 lines · Tests: [test_bullpen_availability.py](../../tests/unit/test_bullpen_availability.py)
+[Source](../../ingest/load_bullpen_availability.py) · 617 lines · Tests: [test_bullpen_availability.py](../../tests/unit/ingest/test_bullpen_availability.py)
 
 `BullpenAvailabilityIngest` writes `raw.game_bullpen_availability`: one row per pitcher on
 each team's full active roster, with whether he could pitch and the reason (`active`,
 `IL`, `rest`, `recent_use`). It combines the MLB active-roster endpoint with the rest derived from
 `raw.pitches`. The manager-usage profile reads it for the "chose not to use" signal. Run it
-as `python -m pipeline.live.bullpen_availability_ingest --seasons ... --duckdb <file>`.
+as `python -m ingest.load_bullpen_availability --seasons ... --duckdb <file>`.
 
 | Function / class | What it does | Called from |
 |---|---|---|

@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI):
     # per-game feed) share. SLATE_SCHEDULE_ENABLED=0 leaves it off, and the
     # slate then serves the stored listing (source "db").
     if os.environ.get("SLATE_SCHEDULE_ENABLED", "1") != "0":
-        from api.league_feed import LeagueFeed
+        from ingest.mlb.client import LeagueFeed
 
         app.state.league_feed = LeagueFeed()
 

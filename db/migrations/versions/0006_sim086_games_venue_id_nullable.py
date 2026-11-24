@@ -17,7 +17,7 @@ Bug:
 Fix:
     Make raw.games.venue_id nullable so the live pipeline can insert
     a game record without a known venue.  A scheduled backfill job
-    (pipeline/etl/venue_backfill_job.py) finds NULL venue_id rows and
+    (ingest/venues/backfill_venues.py) finds NULL venue_id rows and
     re-fetches from the MLB API once venue assignment is published.
 
     Pre-existing rows with venue_id=0 (if any) are not touched here —

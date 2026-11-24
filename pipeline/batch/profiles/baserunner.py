@@ -6,16 +6,16 @@ import logging
 from datetime import date
 
 from db.introspect import duck_relation_readable
+from ingest.statcast_events import (
+    sql_steal_attempt,
+    sql_steal_success,
+)
 from pipeline.batch.profiles.base import ComputorBase
 from pipeline.batch.profiles.constants import (
     MIN_RUNNER_ADV_OPPS,
     MIN_RUNNER_SB_ATTEMPTS,
 )
 from pipeline.batch.profiles.sql import SQL_OUTS_RECORDED
-from pipeline.statcast_events import (
-    sql_steal_attempt,
-    sql_steal_success,
-)
 
 log = logging.getLogger("player_profile_computor")
 
@@ -506,7 +506,7 @@ class BaserunnerProfilesMixin(ComputorBase):
             rate is a true 0 before then — a coverage zero, not a behaviour.
 
         The attempt labels use the shared expressions of
-        pipeline/statcast_events.py (the columns OR the events: a caught
+        ingest/statcast_events.py (the columns OR the events: a caught
         stealing that ends the plate appearance lives only in `events`). The
         delivery (biomechanical timings) is NOT computed. The lead the pitcher
         ALLOWS, in feet, comes from Savant's Pitcher Running Game board

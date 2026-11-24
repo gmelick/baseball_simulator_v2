@@ -20,7 +20,7 @@ WHAT IT WRITES
 --------------
 Per Final game with lineup rows (ordered by game_pk): one UPDATE over that
 game's starters, writing ``allPositions[0]`` onto each row whose code differs
-(``pipeline.etl.boxscore_ingest.persist_starting_positions``). A row that is
+(``ingest.load_boxscores.persist_starting_positions``). A row that is
 already right is not touched, so the table's ``updated_at`` trigger marks
 exactly the repaired rows. The box comes from ``/api/v1/game/{pk}/boxscore``,
 one MLB request per game, the same request the box-score backfill makes.
@@ -65,7 +65,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from db.dsn import require_dsn  # noqa: E402
-from pipeline.etl.boxscore_ingest import (  # noqa: E402
+from ingest.load_boxscores import (  # noqa: E402
     BoxscoreIngest,
     StartingPosition,
     parse_starting_positions,

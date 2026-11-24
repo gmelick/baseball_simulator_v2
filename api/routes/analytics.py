@@ -27,7 +27,7 @@ coverage routes (kpis, by-season) describe the whole store and take no game type
 
 The swing, whiff, called-strike and CSW (called strikes plus whiffs) rates filter
 on the ``type`` code (the Data Lab vocabulary, SIM-571). The code sets live in
-``pipeline/statcast_events.py``. ``description`` holds the
+``ingest/statcast_events.py``. ``description`` holds the
 feed's display text, and no query reads it. The whiff is Baseball Savant's (the
 public Statcast site): a foul tip counts.
 
@@ -47,7 +47,7 @@ from pydantic import BaseModel
 
 from api.auth import require_auth
 from api.routes._common import _get_ro_pool
-from pipeline.statcast_events import (
+from ingest.statcast_events import (
     sql_called_strike,
     sql_csw,
     sql_in_play,
@@ -63,7 +63,7 @@ router = APIRouter(prefix="/api/analytics", tags=["data-lab"], dependencies=[Dep
 # filters on the `type` code, never on `description`. The loader stores the
 # feed's display text in `description`. So a match on a snake_case name (lower
 # case, with underscores: "called_strike") finds no row. The fragments render
-# from the code sets in pipeline/statcast_events.py. The pool build reads the
+# from the code sets in ingest/statcast_events.py. The pool build reads the
 # same sets. The rendered predicates:
 #   swing          type NOT IN ('B', 'C', 'H', 'P', '*B')
 #                  The bat left the shoulder.

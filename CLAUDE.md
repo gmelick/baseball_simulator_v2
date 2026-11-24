@@ -283,7 +283,7 @@ The loop cheat sheet holds the detail; these are the facts a change most often t
 - **DuckDB migration 0031 applies only through `scripts/rebuild_steal_pool.py --apply-migration`**,
   which writes the pickoff rows in the same transaction. Never apply it as a separate step; the
   new code refuses an un-migrated table before it deletes anything.
-- **A full re-sweep of `raw.pitches` takes about 6 hours** (`scripts/resumable_sweep.py`).
+- **A full re-sweep of `raw.pitches` takes about 6 hours** (`ingest/games/resumable_sweep.py`).
 
 ## 3. Tech stack
 
@@ -322,10 +322,12 @@ and the three paths (a simulation request, game day, the nightly builds).
   if" (`start_state.py`, `whatif.py`). `flags.py` registers every `SIM_*` flag.
 - `similarity/` — `engines/` (the 11 engines), `calibration/` and `similarity_calibration.py`
   (`make calibrate`'s fit), `backtesting/`. `api/state.py`'s `ENGINE_REGISTRY` builds the engines.
-- `pipeline/` — `etl/` (the historical and Savant loaders), `live/` (the game-day service),
-  `batch/` (the profile computor in `profiles/`, the bundle builder in `artifacts/`, the
-  versioned link), and the schedule and feed parsers. `live/ingestion/` keeps the
-  live odds hooks; they call `betting/load_odds_to_db.py`.
+- `ingest/` — the loaders of the raw data: `mlb/` (the MLB Stats API client, the schedule
+  and the game feed), `games/` (the finished-game loader), `savant/`, `venues/`, the box
+  scores and the bullpens.
+- `pipeline/` — `live/` (the game-day service) and `batch/` (the profile computor in
+  `profiles/`, the bundle builder in `artifacts/`, the versioned link). `live/ingestion/`
+  keeps the live odds hooks; they call `betting/load_odds_to_db.py`.
 - `betting/` — the odds and the pricing, one file per step: `markets.py` (our market names
   and book labels), `bettingpros/match_games.py` (the HTTP client and the game match),
   `bettingpros/fetch_odds.py` (one row per book), `validate_odds.py` (the load guard), `load_odds_to_db.py`
@@ -472,9 +474,9 @@ make restore-postgres SET=<ts>  # restore one Postgres set (refuses a populated 
 Raw equivalents (target **Python 3.13**):
 
 ```
-pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=operations --cov=db
+pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api --cov=ingest --cov=operations --cov=db
 ruff check .   &&   ruff format --check .
-mypy similarity/ pipeline/ api/ simulation/ betting/ operations/ db/   # CI scope; config in pyproject.toml
+mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/   # CI scope; config in pyproject.toml
 python scripts/docs_file_index.py                      # regenerate the file index (stdlib + git)
 ```
 

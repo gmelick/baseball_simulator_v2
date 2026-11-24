@@ -23,7 +23,7 @@ What these tests pin:
     on top of the league's law reads +20.0 and the others 0; a park under
     100 home runs gets none; the median centring; balls without the two
     factors give no offsets; the document carries the two keys;
-  * ``pipeline/etl/mlb_venue_dimensions.py``: the fetch on a canned body, the
+  * ``ingest/venues/load_venue_dimensions.py``: the fetch on a canned body, the
     write that keeps the last copy when the API fails, the read.
 """
 
@@ -37,6 +37,7 @@ import urllib.error
 import numpy as np
 import pytest
 
+from ingest.venues import load_venue_dimensions as mvd
 from pipeline.batch.artifacts.park_geometry import (
     CARRY_OFFSET_FEATURES,
     PARK_N_SECTORS,
@@ -57,7 +58,6 @@ from pipeline.batch.artifacts.park_geometry import (
     sector_line,
     sector_of,
 )
-from pipeline.etl import mlb_venue_dimensions as mvd
 
 _SEASONS = [2023, 2024, 2025, 2026]
 _MID = [PARK_SPRAY_MIN + (s + 0.5) * PARK_SECTOR_DEG for s in range(PARK_N_SECTORS)]

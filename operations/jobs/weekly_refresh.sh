@@ -17,7 +17,7 @@ python - <<'PY'
 import os
 import sys
 
-from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+from ingest.games.load_games import HistoricalDataLoader
 
 year = int(os.environ["YEAR"])
 loader = HistoricalDataLoader()

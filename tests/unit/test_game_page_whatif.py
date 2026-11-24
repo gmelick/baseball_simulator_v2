@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.mlb_game_feed import PlateAppearanceNotFound, parse_plays, state_at_pa
+from ingest.mlb.game_feed import PlateAppearanceNotFound, parse_plays, state_at_pa
 from simulation.batch_runner import GameSpec, rng_driven_machine_factory
 from simulation.game_state import GameState
 from simulation.sim_kwargs import sim_kwargs_from_state

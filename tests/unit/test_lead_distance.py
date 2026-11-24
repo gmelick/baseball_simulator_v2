@@ -88,8 +88,8 @@ XB_COLUMNS = (
 
 class TestLoaderRegistry:
     def test_both_boards_resolve_and_sit_in_running_boards(self) -> None:
-        from pipeline.etl.savant_boards import BOARDS, RUNNING_BOARDS
-        from pipeline.etl.savant_loader import resolve_boards
+        from ingest.savant.boards import BOARDS, RUNNING_BOARDS
+        from ingest.savant.load_leaderboards import resolve_boards
 
         assert RUNNING_BOARDS == ("basestealing", "pitcher_running_game", "baserunning")
         assert [b.name for b in resolve_boards(["running"])] == list(RUNNING_BOARDS)
@@ -101,8 +101,8 @@ class TestLoaderRegistry:
             assert board.extra == {"n": "1"}, "n=1 is the smallest honoured minimum"
 
     def test_the_boards_send_n_one_and_the_snake_season_pair(self) -> None:
-        from pipeline.etl.savant_boards import BOARDS
-        from pipeline.etl.savant_loader import build_url
+        from ingest.savant.boards import BOARDS
+        from ingest.savant.load_leaderboards import build_url
 
         url = build_url(BOARDS["basestealing"], 2024)
         assert url.startswith("https://baseballsavant.mlb.com/leaderboard/basestealing-run-value?")
@@ -113,7 +113,7 @@ class TestLoaderRegistry:
         assert "n=1" in url
 
     def test_the_boards_target_the_0026_tables_with_the_csv_columns(self) -> None:
-        from pipeline.etl.savant_boards import BOARDS
+        from ingest.savant.boards import BOARDS
 
         runner = BOARDS["basestealing"]
         assert runner.table == "raw.savant_basestealing"
@@ -131,15 +131,15 @@ class TestLoaderRegistry:
         assert not {"n_fb", "n_plus", "n_minus", "net_act_plus"} & srcs
 
     def test_a_row_whose_start_year_differs_raises(self) -> None:
-        from pipeline.etl.savant_boards import BOARDS
-        from pipeline.etl.savant_loader import SeasonParamError, check_row_seasons
+        from ingest.savant.boards import BOARDS
+        from ingest.savant.load_leaderboards import SeasonParamError, check_row_seasons
 
         with pytest.raises(SeasonParamError):
             check_row_seasons(BOARDS["basestealing"], [{"start_year": "2025"}], 2024)
 
     def test_counts_coerce_to_int_and_leads_to_float(self) -> None:
-        from pipeline.etl.savant_boards import BOARDS
-        from pipeline.etl.savant_loader import coerce_row, parse_rows
+        from ingest.savant.boards import BOARDS
+        from ingest.savant.load_leaderboards import coerce_row, parse_rows
 
         header = (
             "player_id,player_name,start_year,n_init,n_sb,n_cs,n_pk,n_bk,rate_sbx,"

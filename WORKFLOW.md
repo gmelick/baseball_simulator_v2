@@ -146,10 +146,10 @@ already loaded, so a rerun resumes.
 
 | Step | Command | What it fills |
 |---|---|---|
-| 1a. The completed seasons | `docker compose run -d --rm --name first-load app sh /app/operations/jobs/with_retry.sh 6 python -m pipeline.etl.etl_historical_loader` | Every Final game from 2017 through last season: `raw.games`, `raw.pitches`, `raw.play_events`, the lineups, the official box score (`raw.game_player_stats`) and the bullpen listing (`raw.game_bullpen`). Follow it with `docker logs -f first-load`. |
+| 1a. The completed seasons | `docker compose run -d --rm --name first-load app sh /app/operations/jobs/with_retry.sh 6 python -m ingest.games.load_games` | Every Final game from 2017 through last season: `raw.games`, `raw.pitches`, `raw.play_events`, the lineups, the official box score (`raw.game_player_stats`) and the bullpen listing (`raw.game_bullpen`). Follow it with `docker logs -f first-load`. |
 | 1b. The current season | `docker compose run --rm app sh /app/operations/jobs/with_retry.sh 6 sh /app/operations/jobs/weekly_refresh.sh` | The same tables for this season's Final games. The bare loader of step 1a stops at last season. |
-| 2. Sprint speed | `docker compose run --rm app python -m pipeline.etl.etl_sprint_speed_loader --seasons 2023 2024 2025 2026` | `raw.sprint_speed` |
-| 3. The Savant leaderboards | `docker compose run --rm app python -m pipeline.etl.savant_loader --seasons 2023 2024 2025 2026` | the `raw.savant_*` tables |
+| 2. Sprint speed | `docker compose run --rm app python -m ingest.savant.load_sprint_speed --seasons 2023 2024 2025 2026` | `raw.sprint_speed` |
+| 3. The Savant leaderboards | `docker compose run --rm app python -m ingest.savant.load_leaderboards --seasons 2023 2024 2025 2026` | the `raw.savant_*` tables |
 | 4. The profiles and pools | `docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild` | the `derived.*` profiles and the `sim.*` play pools in the analytics file |
 | 5. The bundle | `make engine-artifacts` | a new bundle version; the app restarts itself on it |
 | 6. The calibration | section 6 | `/data/calibration.json` |

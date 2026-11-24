@@ -32,10 +32,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
-from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
-from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE
-from pipeline.statcast_events import (
+from ingest.statcast_events import (
     BALL_TYPES,
     CALLED_STRIKE_TYPES,
     FOUL_TYPES,
@@ -43,6 +40,9 @@ from pipeline.statcast_events import (
     STRIKE_THREE_FOUL_TYPES,
     WHIFF_TYPES,
 )
+from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
+from pipeline.batch.profiles.sql import SQL_OUTCOME_TYPE
 from simulation.game_state import PITCH_OUTCOMES
 from simulation.loop.values import EVENT_IN_PROGRESS, EVENT_STRIKEOUT, advance_count
 

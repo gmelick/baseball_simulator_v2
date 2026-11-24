@@ -320,7 +320,7 @@ def _schedule_card(g: Any, enrich: Any | None, run: Any | None) -> GameCard:
 
     The records come from the schedule, not from ``raw.games``.
     """
-    from pipeline.mlb_schedule import card_state
+    from ingest.mlb.schedule import card_state
 
     state = card_state(g)
     played = state in ("live", "final")
@@ -445,7 +445,7 @@ async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], 
 
 async def _slate_from_db(pool: Any, parsed: _date) -> list[GameCard]:
     """The stored listing, each row mapped through the one status mapper."""
-    from pipeline.mlb_schedule import card_state_from_raw
+    from ingest.mlb.schedule import card_state_from_raw
 
     rows = await pool.fetch(_GAMES_ON_DATE_SQL, parsed)
     games = []
@@ -476,7 +476,7 @@ async def get_games_on_date(
     request: Request,
     use_cache: bool = Query(True, description="Consult/populate the schedule cache"),
 ) -> GamesOnDateResponse:
-    from pipeline.mlb_schedule import parse_schedule
+    from ingest.mlb.schedule import parse_schedule
 
     parsed = _parse_date(date)
     payload, source, feed_error = await _slate_schedule_payload(
@@ -530,7 +530,7 @@ async def get_games_on_date(
 
 async def _schedule_game_for(request: Request, game_date: Any, game_pk: int) -> Any:
     """The schedule entry of one game (the slate's cached read), or None."""
-    from pipeline.mlb_schedule import parse_schedule
+    from ingest.mlb.schedule import parse_schedule
 
     try:
         day = game_date if isinstance(game_date, _date) else _parse_date(str(game_date)[:10])
@@ -603,7 +603,7 @@ async def get_game_status_card(
     sched = await _schedule_game_for(request, gd, int(game_pk))
     extra: dict[str, Any] = {}
     if sched is not None:
-        from pipeline.mlb_schedule import card_state
+        from ingest.mlb.schedule import card_state
 
         game_status = card_state(sched)
         played = game_status in ("live", "final")

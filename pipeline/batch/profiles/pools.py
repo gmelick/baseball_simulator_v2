@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import logging
 
+from ingest.statcast_events import (
+    sql_batter_dest,
+    sql_play_outs,
+    sql_runner_dest,
+    sql_steal_attempt,
+    sql_steal_success,
+)
 from pipeline.batch.profiles.base import ComputorBase
 from pipeline.batch.profiles.pool_meta import (
     _canonical_ref_season,
@@ -19,13 +26,6 @@ from pipeline.batch.profiles.sql import (
     SQL_PITCHER_PITCH_COUNT,
     SQL_TIMES_THROUGH_ORDER,
     sql_credit_mask,
-)
-from pipeline.statcast_events import (
-    sql_batter_dest,
-    sql_play_outs,
-    sql_runner_dest,
-    sql_steal_attempt,
-    sql_steal_success,
 )
 
 log = logging.getLogger("player_profile_computor")

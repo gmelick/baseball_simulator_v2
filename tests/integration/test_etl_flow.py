@@ -25,10 +25,10 @@ Coverage:
 Rather than re-implementing the ETL's SQL, the write-path tests drive the real
 production code:
 
-  * ``HistoricalDataLoader._log_freshness()`` (pipeline/etl/etl_historical_loader.py)
+  * ``HistoricalDataLoader._log_freshness()`` (ingest/games/load_games.py)
     — the sole writer of raw.etl_data_freshness.
   * ``VenueBackfillJob._start_log_row()`` / ``._finish_log_row()``
-    (pipeline/etl/venue_backfill_job.py) — a real writer of raw.pipeline_run_log.
+    (ingest/venues/backfill_venues.py) — a real writer of raw.pipeline_run_log.
 
 That keeps the DDL and the production upserts provably in sync: if either drifts,
 these tests fail.
@@ -55,8 +55,8 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from pipeline.etl.etl_historical_loader import HistoricalDataLoader
-from pipeline.etl.venue_backfill_job import VenueBackfillJob
+from ingest.games.load_games import HistoricalDataLoader
+from ingest.venues.backfill_venues import VenueBackfillJob
 from tests.integration.conftest import assert_table_exists
 
 pytestmark = pytest.mark.integration

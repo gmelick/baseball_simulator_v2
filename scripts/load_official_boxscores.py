@@ -59,7 +59,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from db.dsn import require_dsn  # noqa: E402
-from pipeline.etl.boxscore_ingest import (  # noqa: E402
+from ingest.load_boxscores import (  # noqa: E402
     BoxscoreIngest,
     parse_boxscore,
     parse_bullpen_listing,

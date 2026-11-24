@@ -62,7 +62,7 @@ class TestSecretsBaseline:
     def test_loader_falls_back_to_env_dsn(self) -> None:
         """HistoricalDataLoader reads BASEBALL_DB_DSN from the environment when
         no explicit dsn parameter is passed."""
-        from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+        from ingest.games.load_games import HistoricalDataLoader
 
         saved = os.environ.pop("BASEBALL_DB_DSN", None)
         try:
