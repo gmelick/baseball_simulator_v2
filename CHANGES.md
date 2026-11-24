@@ -1,3 +1,81 @@
+# DEPLOYED — one odds backfill that loads only the games missing odds — SIM-648 (filed and closed), 2026-11-24
+
+**Why it matters.** The nightly odds pass read only the games of the last two days. A game the
+live service missed while it was down, or a game whose opener the book posted late, stayed
+without odds for good: on 2026-11-23, 411 Final games of 2026 had no odds at all and 21 more
+had no opening line. One loader now finds those games by itself, so the nightly pass and a
+by-hand backfill are the same command.
+
+**What changed (Betting / Markets Analyst, Data Engineer).**
+
+- `betting/historical_loader.py` picks, by default, only the Final games of `--seasons` that
+  are missing odds: no stored row at one of the run's line types. An opening row in either
+  odds table counts, because only the opener book writes one. Props count only for a game
+  with lineup rows. A `--book` run counts that book's rows only.
+- A game the loader already tried is skipped: one of its rows was fetched or seen again two or
+  more days after the game date. So a game the book posts no opener for gets two nightly
+  tries, not one every night.
+- `--reload` loads every Final game of the seasons. `--game-dates` and `--skip-loaded-since`
+  are gone: the missing-odds selection does both jobs.
+- `operations/jobs/nightly_closing_lines.sh` runs the loader over last season and this one,
+  with no date window. The scheduler job sets `no-overlap`.
+- The docs (`betting.md`, `operations.md`, `architecture.md`, `pipeline-ingest.md`,
+  `WORKFLOW.md`) describe the new selection.
+
+**The backfill (2026-11-24).** One run over 2025 and 2026 loaded 413 games. Two runs died of
+the SIM-445 segfault class (exit 139); each restart picked up the games still missing. The two
+crashes left three games with partial rows. A `--reload` run with a done-file
+that listed every other game loaded those three. After the run, every Final game of 2025
+(2,477) and 2026 (2,469) has a closing line. 20 games of 2026 have no opening line: the book
+posted none.
+
+**Checks.** A DuckDB test runs the selection's SQL over ten shapes of stored odds. ruff, the
+format check and mypy pass. The unit lane passes in two halves: 3,037 + 3,377 tests, no failures.
+
+# DEPLOYED — the code layout, part 1, Step C: the operations/ clean-up — SIM-647, 2026-11-24
+
+**Why it matters.** The owner asked for a third step in every part of the code-layout plan:
+review every function for redundant code, then rewrite every docstring and comment short and
+plain (owner directive 2026-11-24; the plan's rule 8). Part 1's folder, `operations/`, is done.
+The same pass removed a job that never ran and fixed two weak spots in how the backups treat a
+broken record.
+
+**The function review (Data Engineer, QA / DevOps).**
+
+| Before | After |
+|---|---|
+| Two poll loops (`wait_for_marks`, `wait_until_quiet`) | One, `common.wait_while_busy` |
+| Two prune rules (`copy_offsite`, `prune_sets`) | One, `common.prune_victims` |
+| Two `_iso` UTC stamps | One, `common.iso_utc` |
+| Two root readers (`copy_offsite._root`, an inline read) | One, `common.root_path` |
+| Two fsync helpers | One, `common.fsync_fd` (`fsync_path` uses it) |
+| The drill's `resolve_backup_dir` and `resolve_offsite_dir` | One, `resolve_dir(offsite=...)` |
+| `_fresh_marks`, `compose_value`, `docker_path`, `tail_lines` (one caller each) | Inlined |
+| An unused `CHUNK` re-export | Removed |
+
+One behaviour difference: `wait_for_marks` no longer sleeps for zero seconds when the grace is
+0. New tests: `tests/unit/operations/test_backup_common.py`.
+
+**The comment rewrite.** Every docstring and comment in `operations/` and `db/dsn.py` now says
+what a function does and why, with no ticket history. Proof: each `.py` file's AST with
+docstrings removed is identical to its parent's, and every changed `.sh` line is a comment.
+
+**The nightly ingest is deleted.** `operations/jobs/nightly_ingest.sh` was never scheduled;
+`nightly_finals`, `weekly_refresh` and `nightly_rebuild` do its three steps.
+
+**A broken backup record (owner: "fix both").** A set whose `manifest.json` exists but does not
+parse as a JSON object is now broken, and every reader agrees:
+
+- The status, the age gauge, the set finder and the drill skip it. Before, a broken newest set
+  took the place of a good one among the kept sets.
+- Pruning never deletes it and logs it for a person to check.
+- The restore check turns a manifest that does not read, a bad file list or bad table counts
+  into a FAIL line, not a traceback.
+- The off-site copy treats a broken off-site copy as dead and copies it again: the local set
+  is the truth.
+
+The real backup folders held 18 sets, none broken.
+
 # DEPLOYED — the code layout, part 1: the nightly jobs, the backups and the secrets move into operations/ — SIM-647, 2026-11-23
 
 **Why it matters.** This is the first of the seven parts of the code-layout plan
