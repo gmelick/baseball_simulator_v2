@@ -1,12 +1,7 @@
-"""
-db/dsn.py
-==================
-The one reader of the Postgres connection string for scripts and jobs.
+"""db/dsn.py — the one reader of the Postgres connection string for scripts and jobs.
 
-The code carries no default database password. A script that needs Postgres
-calls :func:`require_dsn`. The function returns the variable's value, or it
-raises a clear error that names the variable and the template to copy from.
-The deployment composes the value from the secrets in ``.env``.
+The code holds no default database password. The deployment builds the
+connection string from the secrets in ``.env``.
 """
 
 from __future__ import annotations
@@ -22,11 +17,10 @@ _KEYWORD_PAIR = re.compile(r"(\w+)\s*=\s*('(?:[^'\\]|\\.)*'|\S+)")
 
 
 def require_dsn(var: str = "BASEBALL_DB_DSN") -> str:
-    """Return the connection string held in the environment variable ``var``.
+    """Return the connection string in the variable ``var``, stripped.
 
-    The value is stripped of surrounding whitespace. An unset or blank variable
-    raises :class:`RuntimeError`; the message names the variable and
-    ``.env.example``. No fallback DSN exists.
+    Raise RuntimeError, naming the variable and ``.env.example``, when the
+    variable is unset or blank. No fallback exists.
     """
     value = os.environ.get(var, "").strip()
     if not value:
@@ -39,12 +33,10 @@ def require_dsn(var: str = "BASEBALL_DB_DSN") -> str:
 
 
 def dsn_label(dsn: str) -> str:
-    """Return ``host[:port]/dbname`` for a DSN, for a log line or a report.
+    """Return ``host[:port]/dbname`` for a log line, never the user or the password.
 
-    The label never holds the user, the password or a query string. A URL DSN
-    is read with :func:`urllib.parse.urlsplit`; a libpq keyword DSN
-    (``host=db password=...``) gives only its ``host``, ``port`` and
-    ``dbname``. A DSN that does not parse gives ``<redacted>``.
+    The function reads a URL or a libpq keyword string (``host=db ...``).
+    A string that does not parse gives ``<redacted>``.
     """
     text = str(dsn).strip()
     if "://" in text:

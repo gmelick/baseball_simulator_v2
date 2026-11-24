@@ -93,7 +93,7 @@ and [test_no_default_password.py](../../tests/unit/test_no_default_password.py) 
 
 ### `operations/jobs/nightly_finals.sh`
 
-[Source](../../operations/jobs/nightly_finals.sh) · 51 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/nightly_finals.sh) · 48 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Loads every game that became Final from today minus `DAYS` (default 3) to today, with
 "today" in Eastern time, the league's day. It calls `HistoricalDataLoader.load_date_range`,
@@ -104,7 +104,7 @@ Run: the scheduler at 07:00 UTC, as `with_mark.sh nightly-finals with_retry.sh 6
 
 ### `operations/jobs/weekly_refresh.sh`
 
-[Source](../../operations/jobs/weekly_refresh.sh) · 29 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/weekly_refresh.sh) · 30 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Calls `HistoricalDataLoader.refresh_seasons(year, year)` on the current season. It catches
 a Final game that the three-day window missed. It writes Postgres only. It exits 1 when
@@ -114,7 +114,7 @@ Run: the scheduler on Sunday at 08:00 UTC, through `with_mark.sh weekly-refresh`
 
 ### `operations/jobs/nightly_rebuild.sh`
 
-[Source](../../operations/jobs/nightly_rebuild.sh) · 35 lines · Tests: [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_rebuild.sh) · 32 lines · Tests: [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
 
 Rebuilds the current season's profiles and the engine-artifact bundle, in three steps:
 
@@ -131,7 +131,7 @@ Run: the scheduler at 08:00 UTC, through `with_mark.sh nightly-rebuild` and `wit
 
 ### `operations/jobs/nightly_ingest.sh`
 
-[Source](../../operations/jobs/nightly_ingest.sh) · 75 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
+[Source](../../operations/jobs/nightly_ingest.sh) · 63 lines · Tests: [test_etl_hardening.py](../../tests/unit/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py)
 
 The whole chain in one run by hand: `refresh_seasons` for the current season, then the
 profile computor, then the bundle build. It stops before the rebuild when any game
@@ -161,7 +161,7 @@ Run: the scheduler at 10:30 UTC, inside the running `app` container (`sh /app/op
 
 ### `operations/jobs/with_retry.sh`
 
-[Source](../../operations/jobs/with_retry.sh) · 57 lines · Tests: [test_retry_wrapper.py](../../tests/unit/operations/test_retry_wrapper.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[Source](../../operations/jobs/with_retry.sh) · 56 lines · Tests: [test_retry_wrapper.py](../../tests/unit/operations/test_retry_wrapper.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 `with_retry.sh <max_attempts> <command...>` runs the command again after a crash, up to
 `max_attempts` times, 30 seconds apart (`RETRY_SLEEP_S`). A crash is exit 139 (a
@@ -172,7 +172,7 @@ game, so a rerun resumes where the crash stopped.
 
 ### `operations/jobs/with_mark.sh`
 
-[Source](../../operations/jobs/with_mark.sh) · 45 lines · Tests: [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[Source](../../operations/jobs/with_mark.sh) · 42 lines · Tests: [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 `with_mark.sh <name> <command...>` writes `$INGEST_MARK_DIR/<name>.running` (default
 `/data/ingest_marks`) with the start time. It runs the command, then removes the mark and
@@ -182,7 +182,7 @@ written, the command still runs, unmarked.
 
 ### `operations/jobs/wait_for_ingest.sh`
 
-[Source](../../operations/jobs/wait_for_ingest.sh) · 62 lines · Tests: [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py)
+[Source](../../operations/jobs/wait_for_ingest.sh) · 61 lines · Tests: [test_ingest_wait.py](../../tests/unit/operations/test_ingest_wait.py)
 
 The rebuild's first step. It makes sure the finals load ran today before the rebuild
 reads Postgres. It waits `INGEST_GRACE_S` (60 s), so a job fired in the same second can
@@ -197,13 +197,13 @@ the finals load first. It never fails the rebuild.
 
 ### `operations/backup/__init__.py`
 
-[Source](../../operations/backup/__init__.py) · 16 lines · Tests: none
+[Source](../../operations/backup/__init__.py) · 14 lines · Tests: none
 
 The package docstring: which module does what.
 
 ### `operations/backup/backup_status.py`
 
-[Source](../../operations/backup/backup_status.py) · 121 lines · Tests: [test_backup_status.py](../../tests/unit/operations/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/operations/test_backup_age_gauge.py)
+[Source](../../operations/backup/backup_status.py) · 127 lines · Tests: [test_backup_status.py](../../tests/unit/operations/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/operations/test_backup_age_gauge.py)
 
 Which sets exist and how old they are. It is pure standard library, because the API
 imports it.
@@ -216,7 +216,7 @@ imports it.
 
 ### `operations/backup/common.py`
 
-[Source](../../operations/backup/common.py) · 91 lines · Tests: [test_backup_common.py](../../tests/unit/operations/test_backup_common.py), [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py)
+[Source](../../operations/backup/common.py) · 146 lines · Tests: [test_backup_common.py](../../tests/unit/operations/test_backup_common.py), [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py)
 
 The helpers both backup jobs share, pure standard library: `iso_utc`, `root_path`,
 `env_float`, `human_bytes`, `sha256_file` (in 8 MiB reads), `fsync_fd`, `fsync_path`,
@@ -226,7 +226,7 @@ than the stale limit), `wait_while_busy` (the poll loop behind `wait_for_marks` 
 
 ### `operations/backup/back_up_data_stores.py`
 
-[Source](../../operations/backup/back_up_data_stores.py) · 915 lines · Tests: [test_backup_data_stores.py](../../tests/unit/operations/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py)
+[Source](../../operations/backup/back_up_data_stores.py) · 900 lines · Tests: [test_backup_data_stores.py](../../tests/unit/operations/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py)
 
 Backs up, verifies and restores the DuckDB file and the bundle. The module docstring is
 the design. Exit codes: 0 every store succeeded; 1 a store failed (the job still tried
@@ -245,7 +245,7 @@ the other); 2 a refusal before any write.
 
 ### `operations/backup/copy_offsite.py`
 
-[Source](../../operations/backup/copy_offsite.py) · 991 lines · Tests: [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[Source](../../operations/backup/copy_offsite.py) · 953 lines · Tests: [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 The off-site copy (SIM-568). It copies the newest complete sets of each store from
 `/backups` to `/offsite`. The OneDrive client uploads them, and this module cannot see
@@ -267,7 +267,7 @@ root from `BACKUPS_ROOT`; the backup jobs read `BACKUP_ROOT`. Both default to `/
 
 ### `operations/backup/backup_drill.py`
 
-[Source](../../operations/backup/backup_drill.py) · 535 lines · Tests: [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[Source](../../operations/backup/backup_drill.py) · 494 lines · Tests: [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 The restore drill. It proves a backup set restores, without touching the live database:
 
@@ -285,7 +285,7 @@ Run on the host: `make backup-drill` or `make backup-drill OFFSITE=1`.
 
 ### `operations/backup/postgres/`
 
-[pg_backup.sh](../../operations/backup/postgres/pg_backup.sh) · 305 lines · [pg_restore.sh](../../operations/backup/postgres/pg_restore.sh) · 147 lines · Tests: [test_pg_backup_script.py](../../tests/unit/operations/test_pg_backup_script.py), [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[pg_backup.sh](../../operations/backup/postgres/pg_backup.sh) · 298 lines · [pg_restore.sh](../../operations/backup/postgres/pg_restore.sh) · 144 lines · Tests: [test_pg_backup_script.py](../../tests/unit/operations/test_pg_backup_script.py), [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 The two scripts run inside the `db` container as the `postgres` OS user over the unix
 socket, so they need no password. Compose mounts this folder read-only at
@@ -305,7 +305,7 @@ socket, so they need no password. Compose mounts this folder read-only at
 
 ### `operations/gen_secrets.py`
 
-[Source](../../operations/gen_secrets.py) · 208 lines · Tests: [test_gen_secrets.py](../../tests/unit/operations/test_gen_secrets.py)
+[Source](../../operations/gen_secrets.py) · 202 lines · Tests: [test_gen_secrets.py](../../tests/unit/operations/test_gen_secrets.py)
 
 Generates the stack's eight secrets: the three Postgres role passwords, the Redis
 password, the Grafana admin password, the session-signing key, the login password and one

@@ -1,40 +1,26 @@
-"""The restore drill for the scheduled backups.
+"""operations/backup/backup_drill.py — prove that a backup set restores.
 
-The drill proves that a backup set restores. It runs on the host with the
-Windows ``py`` launcher and uses only the standard library. It never touches
-the live stack's database:
+The drill runs on the host with the Windows ``py`` launcher and uses only the
+standard library. It never touches the live database:
 
 1. It refuses to start while any ``sim525_*`` container or volume exists.
-2. It starts a scratch Postgres cluster (``sim525_drill_pg``) with no network,
-   on a named volume, with the backup set mounted read-only at ``/restore``.
-3. It runs the real ``operations/backup/postgres/pg_restore.sh`` against the scratch cluster.
-4. It asks the jobs container to verify the DuckDB and bundle copies
-   (``python -m operations.backup.back_up_data_stores --verify-set``).
+2. It starts a scratch Postgres cluster with no network, with the backup set
+   mounted read-only at ``/restore``.
+3. It runs the real ``pg_restore.sh`` against the scratch cluster.
+4. It asks the jobs container to verify the DuckDB and bundle copies.
 5. It removes the scratch container and its volume, whatever happened.
 6. It writes ``<backup dir>/drills/<start time>.json`` and prints a report.
 
-The drill also restores from the off-site copy. The off-site copy is the
-OneDrive folder that ``OFFSITE_BACKUP_DIR`` names (default
-``./backups_offsite``); the jobs container reads it at ``/offsite``. Pass
-``--offsite``, or pass that folder as ``--backup-dir``. The data verify then
-runs with ``--backups-root /offsite``. The report names its source
-(``"source": "offsite"``) and lands in the off-site folder's ``drills/``.
-OneDrive can turn synced files into online-only placeholders. A drill from
-such a dehydrated copy downloads the whole set first, so it takes longer and
-needs the OneDrive client online.
+``--offsite`` (or a ``--backup-dir`` that is the off-site folder) restores from
+the OneDrive copy; the jobs container reads it at ``/offsite``. A copy that
+OneDrive made online-only downloads in full first, so that drill takes longer.
 
-The drill reads ``BACKUP_DIR`` and ``OFFSITE_BACKUP_DIR`` in the order docker
-compose reads them: the shell environment first, then the repo's ``.env``.
-So the drill and the jobs container's mounts name the same folders.
+The drill reads ``BACKUP_DIR`` and ``OFFSITE_BACKUP_DIR`` as docker compose
+does, so it names the same folders as the jobs container's mounts.
 
 Exit 0 when every step passes, 1 when a step fails, 2 when the drill refuses
-to start: a leftover scratch container or volume, no complete set,
-``--offsite`` with a ``--backup-dir`` that is not the off-site folder, a
-backup folder that is neither the local folder nor the off-site folder the
-jobs container reads, or no ``operations/backup/postgres`` folder in the repo.
-
-The design and the restore run book: ``docs/audit/2026-10-14-sim525-backups-plan.md``;
-the off-site copy: ``docs/audit/2026-10-17-sim568-offsite-copy.md``.
+to start (a leftover scratch container, no complete set, or a backup folder
+the jobs container does not read).
 
 Usage::
 
@@ -70,7 +56,7 @@ RESTORE_SCRIPT = "/opt/baseball/backup/pg_restore.sh"
 TAIL_LINES = 40
 READY_TIMEOUT_S = 120.0
 READY_POLL_S = 2.0
-# The roots where the jobs container mounts the two backup folders.
+# Where the jobs container mounts the two backup folders.
 LOCAL_ROOT = "/backups"
 OFFSITE_ROOT = "/offsite"
 
@@ -80,6 +66,7 @@ class DrillError(Exception):
 
 
 def _sleep(seconds: float) -> None:
+    """Sleep; the tests replace this function."""
     time.sleep(seconds)
 
 
@@ -89,10 +76,10 @@ def _run(
     capture: bool = True,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command with a list argv and no shell.
+    """Run one command with no shell. Return its result.
 
     With ``capture`` the output comes back quietly. Without it the output also
-    streams to the console line by line, and comes back in ``stdout``.
+    streams to the console, line by line.
     """
     args = list(argv)
     if capture:
@@ -150,7 +137,7 @@ def log(message: str) -> None:
 
 
 def read_env_file(path: Path) -> dict[str, str]:
-    """Read KEY=VALUE lines; skip blanks and comments; strip one pair of quotes."""
+    """Return the KEY=VALUE lines of a dotenv file, each value without one pair of quotes."""
     values: dict[str, str] = {}
     try:
         text = path.read_text(encoding="utf-8")
@@ -194,7 +181,11 @@ def resolve_dir(flag: str | None, repo: Path, *, offsite: bool = False) -> Path:
 
 
 def complete_sets(store_dir: Path) -> list[str]:
-    """Return the names of the complete sets in a store folder, oldest first."""
+    """Return the complete set names in a store folder, oldest first.
+
+    This copy of ``backup_status.complete_sets`` exists because the drill runs
+    as a host script and cannot import the package.
+    """
     if not store_dir.is_dir():
         return []
     return sorted(
@@ -217,11 +208,10 @@ def pick_set(store_dir: Path, which: str) -> str:
 
 
 def pick_data_set(backup_dir: Path, which: str) -> str:
-    """Return one set id that is complete in BOTH the duckdb and the bundle store.
+    """Return one set id that is complete in both the duckdb and the bundle store.
 
-    One data run writes its duckdb and bundle sets under one id. For 'latest'
-    the drill takes the newest id complete in both stores; a named id must be
-    complete in both.
+    One data run writes both stores under one id. 'latest' picks the newest
+    such id.
     """
     duckdb_sets = complete_sets(backup_dir / "duckdb")
     bundle_sets = complete_sets(backup_dir / "bundle")
@@ -243,7 +233,7 @@ def pick_data_set(backup_dir: Path, which: str) -> str:
 
 
 def docker_run_argv(set_dir: Path, backup_scripts: Path) -> list[str]:
-    """Build the argv that starts the scratch cluster."""
+    """Return the argv that starts the scratch cluster."""
     return [
         "docker",
         "run",
@@ -269,7 +259,7 @@ def docker_run_argv(set_dir: Path, backup_scripts: Path) -> list[str]:
 
 
 def restore_ok(exit_code: int, output: str) -> bool:
-    """Pass the restore on exit 0, no ignored errors and a final 'RESTORE OK' line."""
+    """Return True on exit 0, no ignored errors and a last line that starts 'RESTORE OK'."""
     if exit_code != 0 or "errors ignored" in output:
         return False
     lines = [line for line in output.splitlines() if line.strip()]
@@ -277,7 +267,7 @@ def restore_ok(exit_code: int, output: str) -> bool:
 
 
 def leftovers() -> list[str]:
-    """List every sim525_* container and volume that already exists."""
+    """Return every sim525_* container and volume that exists."""
     found: list[str] = []
     for argv in (
         ["docker", "ps", "-a", "--filter", "name=sim525_", "--format", "{{.Names}}"],
@@ -291,12 +281,11 @@ def leftovers() -> list[str]:
 
 
 def ready_argv() -> list[str]:
-    """Build the pg_isready probe of the FINAL server.
+    """Return the pg_isready probe of the final server.
 
     The image's entrypoint first runs a temporary server on the unix socket
-    only (listen_addresses=''), and pg_isready over the socket answers 0 in
-    that phase. The final server listens on loopback, even with no network, so
-    a probe over 127.0.0.1 answers only once the real server is up.
+    only, and a socket probe answers then. Only the final server listens on
+    127.0.0.1, so a probe there answers once the real server is up.
     """
     return ["docker", "exec", NAME, "pg_isready", "-h", "127.0.0.1", "-U", PG_USER, "-d", PG_DB]
 
@@ -307,7 +296,7 @@ def wait_ready(
     sleep: Callable[[float], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> bool:
-    """Poll pg_isready in the scratch cluster until it answers or the time runs out."""
+    """Poll pg_isready until the scratch cluster answers. Return False on a timeout."""
     pause = sleep if sleep is not None else _sleep
     deadline = clock() + timeout_s
     while True:
@@ -320,6 +309,7 @@ def wait_ready(
 
 
 def _step(set_id: str, started: float, code: int, ok: bool, output: str) -> dict[str, Any]:
+    """Return one step's part of the report, with the output's last lines."""
     return {
         "set": set_id,
         "seconds": round(time.monotonic() - started, 1),
@@ -330,6 +320,7 @@ def _step(set_id: str, started: float, code: int, ok: bool, output: str) -> dict
 
 
 def _restore_postgres(set_id: str, set_dir: Path, timeout_s: float) -> dict[str, Any]:
+    """Start the scratch cluster and restore the Postgres set into it. Return the step."""
     started = time.monotonic()
     log(f"starting the scratch cluster {NAME} for postgres set {set_id}")
     run = _run(docker_run_argv(set_dir, REPO / "operations" / "backup" / "postgres"))
@@ -351,11 +342,9 @@ def _restore_postgres(set_id: str, set_dir: Path, timeout_s: float) -> dict[str,
 
 
 def verify_argv(data_set: str, container_root: str = LOCAL_ROOT) -> list[str]:
-    """Build the argv of the data verify in the jobs container.
+    """Return the argv of the data verify in the jobs container.
 
-    The local root adds no root flag: the data job reads ``/backups`` by
-    default. Any other root, such as the off-site root, adds
-    ``--backups-root <root>``.
+    A root other than the default ``/backups`` adds ``--backups-root <root>``.
     """
     argv = ["docker", "compose", "run", "--rm", "-T", "jobs", "python", "-m"]
     argv += ["operations.backup.back_up_data_stores", "--verify-set", data_set]
@@ -367,6 +356,7 @@ def verify_argv(data_set: str, container_root: str = LOCAL_ROOT) -> list[str]:
 def _verify_data(
     data_set: str, timeout_s: float, container_root: str = LOCAL_ROOT
 ) -> dict[str, Any]:
+    """Verify the DuckDB and bundle copies in the jobs container. Return the step."""
     started = time.monotonic()
     log(
         f"verifying the duckdb and bundle copies (set {data_set}) "
@@ -379,6 +369,7 @@ def _verify_data(
 
 
 def _cleanup() -> None:
+    """Remove the scratch container and its volume."""
     log(f"removing the scratch container and volume {NAME}")
     for argv in (["docker", "rm", "-f", NAME], ["docker", "volume", "rm", NAME]):
         result = _run(argv)
@@ -387,6 +378,7 @@ def _cleanup() -> None:
 
 
 def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
+    """Return the parsed command line."""
     parser = argparse.ArgumentParser(
         description="Restore a backup set into a scratch cluster and verify the data copies."
     )
@@ -411,13 +403,13 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the drill and return its exit code."""
+    """Run the drill. Return its exit code."""
     args = _parse(argv)
     compose_dir = resolve_dir(None, REPO)
     offsite_dir = resolve_dir(None, REPO, offsite=True)
     backup_dir = offsite_dir if args.offsite else resolve_dir(args.backup_dir, REPO)
-    # The drill reads the off-site copy on --offsite, or on a --backup-dir that
-    # is the off-site folder. The local folder wins when the two are one folder.
+    # A --backup-dir that is the off-site folder also reads the off-site copy.
+    # The local folder wins when the two are one folder.
     offsite = args.offsite or (backup_dir == offsite_dir and backup_dir != compose_dir)
     source = "offsite" if offsite else "local"
     container_root = OFFSITE_ROOT if offsite else LOCAL_ROOT
@@ -439,9 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         set_id = pick_set(backup_dir / "postgres", args.set)
         data_set_id: str | None = None
         if not args.skip_data:
-            # The jobs container reads /backups through compose's BACKUP_DIR
-            # and /offsite through OFFSITE_BACKUP_DIR, so the verify means
-            # something only when this folder is one of the two.
+            # The jobs container can verify only a folder it mounts.
             if not offsite and compose_dir != backup_dir:
                 raise DrillError(
                     f"--backup-dir {backup_dir} is not a folder the jobs container "

@@ -1,21 +1,18 @@
 #!/usr/bin/env sh
 # =============================================================================
-# operations/jobs/with_mark.sh — mark an ingest job as running, run it, record its exit.
+# operations/jobs/with_mark.sh — mark a job as running, run it, record its exit.
 #
 #   sh /app/operations/jobs/with_mark.sh <name> <command...>
 #
-# While the command runs, $INGEST_MARK_DIR/<name>.running holds its start time.
-# When it ends, the mark is removed and <name>.last holds one line:
+# While the command runs, $INGEST_MARK_DIR/<name>.running holds its start
+# epoch. When it ends, the mark goes and <name>.last holds one line:
 #   <UTC date> <exit code> <UTC timestamp>
-# The mark spans the whole command, so it covers every attempt of a
-# with_retry.sh wrapper inside it. operations/jobs/wait_for_ingest.sh reads the marks:
-# the nightly rebuild waits for the finals load before it reads Postgres.
-# The scheduler marks the profile + bundle rebuild (nightly-rebuild) and the
-# data backup (nightly-backup) too. The data backup waits for the
-# rebuild's mark, so it never opens the DuckDB file while the rebuild writes it.
+# The mark spans every attempt of a with_retry.sh inside it. The other jobs
+# read the marks to order themselves: the rebuild waits for the finals load,
+# and the data backup waits for the rebuild.
 #
-# The marks live on the /data volume (default /data/ingest_marks). When that
-# folder cannot be written, the command still runs, unmarked.
+# The marks live in /data/ingest_marks by default. When that folder cannot be
+# written, the command still runs, unmarked.
 # =============================================================================
 set -u
 

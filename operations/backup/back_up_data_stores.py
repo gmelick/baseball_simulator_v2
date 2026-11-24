@@ -1,5 +1,4 @@
-"""operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB
-analytics file and the engine-artifact bundle.
+"""operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle.
 
 Run it in the jobs container as ``appuser``:
 
@@ -9,30 +8,26 @@ Run it in the jobs container as ``appuser``:
     python -m operations.backup.back_up_data_stores --restore-duckdb <set> --yes
     python -m operations.backup.back_up_data_stores --restore-bundle <set> --yes
 
-What a backup run does:
+A backup run:
 
-1. It refuses (exit 2) when the backup root is missing or cannot be written,
-   or when the disk is short of space after pruning (the free-space guard).
-2. It waits while the nightly rebuild, the finals load or the weekly refresh
-   runs (the marks ``operations/jobs/with_mark.sh`` writes). A rebuild WRITES the
-   DuckDB file, and a read-only handle we hold makes its connect fail.
-3. The DuckDB store: it opens the file read-only, counts every table, and
-   copies the file (and its ``.wal`` sidecar) while it holds the handle. Then
-   it opens the copy and requires the same counts. The small files
-   (calibration, prop validation, the last run of each ingest job) go into
-   the same set.
-4. The bundle store: it copies the published bundle version, without the
-   app's in-use markers.
-5. Each set is written as ``<set>.partial``. The manifest is written last, and
-   then the folder is renamed. After a run where every store succeeded, each
-   store keeps its newest ``BACKUP_KEEP`` sets.
-6. A rerun after a crash (the scheduler's retry) skips a store that already
-   has a complete set younger than ``--rerun-window-s`` (1 hour), and it
-   reuses that set's id for the other store. So one night makes one set per
-   store, and the two stores share one set id. ``--new-set`` turns this off.
+1. Refuses when the backup root is missing or read-only, or when the disk is
+   short of space after pruning.
+2. Waits while the rebuild, the finals load or the weekly refresh runs. A
+   rebuild writes the DuckDB file, and our read-only handle would make its
+   connect fail.
+3. Copies the DuckDB file and its ``.wal`` while it holds a read-only handle,
+   then requires the copy's table counts to equal the source's. The small
+   data files go into the same set.
+4. Copies the published bundle version, without the app's in-use markers.
+5. Writes each set as ``<set>.partial``, writes the manifest last, then
+   renames the folder. When every store succeeded, each store keeps its
+   newest ``BACKUP_KEEP`` sets.
+6. On a crash rerun, skips a store whose newest set is under an hour old and
+   reuses its set id, so the two stores share one id per night.
+   ``--new-set`` turns this off.
 
-Exit codes: 0 every store succeeded; 1 a store failed (the other was still
-attempted); 2 a refusal before any write.
+Exit codes: 0 every store succeeded; 1 a store failed (the job still tried
+the other); 2 a refusal before any write.
 """
 
 from __future__ import annotations
@@ -87,20 +82,20 @@ from pipeline.batch.bundle_versions import (
 
 TOOL = "operations.backup.back_up_data_stores"
 
-#: The stores this module backs up (the db container backs up Postgres).
+#: The stores this module backs up. The db container backs up Postgres.
 DATA_STORES = ("duckdb", "bundle")
 
-#: The name of the DuckDB copy inside a set. DuckDB finds its WAL as ``<file>.wal``.
+#: The DuckDB copy inside a set. DuckDB finds its WAL at ``<file>.wal``.
 DUCKDB_COPY = "baseball_sim.duckdb"
 WAL_SUFFIX = ".wal"
 
 #: The folder of the small files inside a DuckDB set.
 DATA_FILES_DIR = "data_files"
 
-#: The marks of the jobs that write the data stores. A backup waits while one runs.
+#: The jobs that write the data stores. A backup waits while one runs.
 WRITER_MARKS = ("nightly-rebuild", "nightly-finals", "weekly-refresh")
 
-#: The link to the published bundle version, inside the play-pool folder.
+#: The link to the published bundle version, in the play-pool folder.
 BUNDLE_LINK = "engine_artifacts"
 
 
@@ -133,14 +128,15 @@ def log(message: str) -> None:
 
 
 def _files_under(base: Path) -> list[Path]:
+    """Return every file under ``base`` except its manifest, sorted."""
     return sorted(p for p in base.rglob("*") if p.is_file() and p != base / MANIFEST)
 
 
 def clear_partials(root: Path, stores: Iterable[str]) -> list[Path]:
-    """Delete every ``*.partial`` set of the stores. Returns the deleted folders.
+    """Delete every ``*.partial`` set of the stores. Return the deleted folders.
 
-    A run never overlaps another (the scheduler's no-overlap), so a partial set
-    at the start of a run is always dead: its run crashed or the host rebooted.
+    The scheduler never overlaps two runs, so a partial set at the start of a
+    run is always dead.
     """
     removed: list[Path] = []
     for store in stores:
@@ -167,11 +163,11 @@ def free_space_ok(
     min_free_gb: float = 10.0,
     factor: float = 1.5,
 ) -> bool:
-    """True when the backup disk has room for a new set of ``store``.
+    """Return True when the backup disk has room for a new set of ``store``.
 
     The room needed is the larger of ``min_free_gb`` GiB and ``factor`` times
-    the newest complete set. When the disk is short, the guard deletes the
-    oldest complete set while more than two remain, and checks again.
+    the newest set. When the disk is short, the guard deletes the oldest set
+    while more than two remain, and checks again.
     """
     while True:
         sets = complete_sets(root, store)
@@ -192,10 +188,7 @@ def free_space_ok(
 
 
 def prune_sets(root: Path, store: str, keep: int, current: str | None) -> list[str]:
-    """Keep the newest ``keep`` complete sets of ``store``. Returns the deleted ids.
-
-    The set ``current`` (the one this run made) is never deleted.
-    """
+    """Keep the newest ``keep`` sets of ``store``, and ``current`` always. Return the deleted ids."""
     sets = complete_sets(root, store)
     by_id = {s.set_id: s for s in sets}
     protect = {current} if current is not None else set()
@@ -221,13 +214,7 @@ def wait_for_marks(
     clock: Clock = time.time,
     sleep: Sleep = time.sleep,
 ) -> bool:
-    """Wait while a job that writes the data stores runs. False on a timeout.
-
-    A job runs while its ``<name>.running`` mark exists and is younger than
-    ``stale_s``; an older mark was left by a job that died. The wait starts with
-    ``grace_s``, so a job the scheduler fired in the same second has time to
-    write its mark. ``clock`` returns epoch seconds, the unit of the marks.
-    """
+    """Wait while a job that writes the data stores runs. Return False on a timeout."""
     return wait_while_busy(
         lambda now: fresh_marks(mark_dir, WRITER_MARKS, stale_s, now),
         grace_s=grace_s,
@@ -240,7 +227,7 @@ def wait_for_marks(
 
 
 def is_lock_error(exc: BaseException) -> bool:
-    """True for the IOException DuckDB raises while another process holds the file."""
+    """Return True for the error DuckDB raises while another process holds the file."""
     if type(exc).__name__ != "IOException":
         return False
     msg = str(exc).lower()
@@ -256,7 +243,7 @@ def open_read_only(
     clock: Clock = time.monotonic,
     sleep: Sleep = time.sleep,
 ) -> Any | None:
-    """Open a DuckDB file read-only. None when a writer still holds it after the wait.
+    """Open a DuckDB file read-only. Return None when a writer holds it past the wait.
 
     Any error other than the lock error rises at once.
     """
@@ -275,7 +262,7 @@ def open_read_only(
 
 
 def table_counts(con: Any) -> dict[str, int]:
-    """The row count of every table of the open database, keyed ``schema.table``."""
+    """Return the row count of every table, keyed ``schema.table``."""
     rows = con.execute(
         "SELECT schema_name, table_name FROM duckdb_tables() "
         "WHERE database_name = current_database() ORDER BY schema_name, table_name"
@@ -289,7 +276,7 @@ def table_counts(con: Any) -> dict[str, int]:
 
 
 def count_copy(path: Path) -> dict[str, int]:
-    """The table counts of a DuckDB copy, opened read-only."""
+    """Return the table counts of a DuckDB copy, opened read-only."""
     con = duckdb.connect(str(path), read_only=True)
     try:
         return table_counts(con)
@@ -298,6 +285,7 @@ def count_copy(path: Path) -> dict[str, int]:
 
 
 def _count_diff(want: dict[str, int], got: dict[str, int]) -> str:
+    """Return the tables whose counts differ, as one line of text."""
     parts = []
     for key in sorted(set(want) | set(got)):
         if key not in got:
@@ -315,6 +303,7 @@ def _count_diff(want: dict[str, int], got: dict[str, int]) -> str:
 
 
 def _start_set(root: Path, store: str, set_id: str) -> Path:
+    """Create an empty ``<set_id>.partial`` folder. Return its path."""
     if (root / store / set_id).exists():
         raise BackupError(f"the {store} set {set_id} already exists")
     partial = root / store / f"{set_id}{PARTIAL_SUFFIX}"
@@ -331,7 +320,10 @@ def _finish_set(
     extra: dict[str, Any],
     started: float,
 ) -> tuple[Path, int, float]:
-    """Hash every file, write the manifest last, flush, then rename the set."""
+    """Hash every file, write the manifest last, flush, then rename the set.
+
+    Return the final folder, its bytes and the run's seconds.
+    """
     files = []
     total = 0
     paths = _files_under(partial)
@@ -376,10 +368,10 @@ def backup_small_files(
     prop_validation: Path,
     mark_dir: Path,
 ) -> list[str]:
-    """Copy the small data files into ``<set>/data_files``. Returns their set paths.
+    """Copy the small data files into ``<set>/data_files``. Return their paths in the set.
 
-    A file that does not exist is skipped. The ``.running`` marks are not copied:
-    they describe a job, not data.
+    A missing file is skipped. The ``.running`` marks describe a job, not data,
+    so only the ``.last`` marks go in.
     """
     dest_dir = set_dir / DATA_FILES_DIR
     sources = [(calibration, calibration.name), (prop_validation, prop_validation.name)]
@@ -409,10 +401,10 @@ def backup_duckdb(
     clock: Clock = time.monotonic,
     sleep: Sleep = time.sleep,
 ) -> Path:
-    """Back up the DuckDB file and the small files into ``duckdb/<set_id>``.
+    """Back up the DuckDB file and the small files into ``duckdb/<set_id>``. Return the set.
 
-    The copy is made while a read-only handle is held, so no writer can change
-    the file during it. The copy must then open and give the same table counts.
+    The read-only handle stops a writer from changing the file during the
+    copy. The copy must then give the same table counts.
     """
     started = time.monotonic()
     if not duckdb_path.is_file():
@@ -465,11 +457,12 @@ def backup_duckdb(
 
 
 def _ignore_in_use(_dir: str, names: list[str]) -> set[str]:
+    """Return the app's in-use markers among ``names``, for ``copytree`` to skip."""
     return {n for n in names if n.startswith(IN_USE_PREFIX)}
 
 
 def backup_bundle(root: Path, set_id: str, *, play_pool_dir: Path) -> Path:
-    """Copy the published bundle version into ``bundle/<set_id>/<build id>``."""
+    """Copy the published bundle version into ``bundle/<set_id>/<build id>``. Return the set."""
     started = time.monotonic()
     link = play_pool_dir / BUNDLE_LINK
     if not link.is_dir():
@@ -500,7 +493,7 @@ def backup_bundle(root: Path, set_id: str, *, play_pool_dir: Path) -> Path:
 
 
 def find_set(root: Path, store: str, set_id: str) -> SetInfo | None:
-    """The complete set ``set_id`` of ``store`` ('latest' = the newest), or None."""
+    """Return the complete set ``set_id`` of ``store`` ('latest' is the newest), or None."""
     if set_id == "latest":
         return newest_complete_set(root, store)
     for info in complete_sets(root, store):
@@ -510,7 +503,7 @@ def find_set(root: Path, store: str, set_id: str) -> SetInfo | None:
 
 
 def read_manifest(info: SetInfo) -> dict[str, Any]:
-    """The manifest of a complete set."""
+    """Return the manifest of a complete set."""
     loaded = json.loads((info.path / MANIFEST).read_text(encoding="utf-8"))
     if not isinstance(loaded, dict):
         raise BackupError(f"the manifest of {info.store}/{info.set_id} is not an object")
@@ -520,7 +513,7 @@ def read_manifest(info: SetInfo) -> dict[str, Any]:
 def check_hashes(
     info: SetInfo, manifest: dict[str, Any], only: set[str] | None = None
 ) -> list[str]:
-    """Check every file the manifest lists by size and sha256. Returns the problems."""
+    """Check each listed file (or each in ``only``) by size and sha256. Return the problems."""
     problems: list[str] = []
     for entry in manifest.get("files", []):
         rel = str(entry["path"])
@@ -541,14 +534,17 @@ def check_hashes(
 
 
 def load_bundle(path: Path) -> None:
-    """Load a bundle copy with the engine-artifact loader (imported only here)."""
+    """Load a bundle copy with the engine-artifact loader.
+
+    The import sits here so the backup run never loads the loader's heavy imports.
+    """
     from pipeline.batch.engine_artifacts import EngineArtifacts
 
     EngineArtifacts.load(str(path))
 
 
 def verify_duckdb_set(info: SetInfo) -> list[str]:
-    """Check a DuckDB set: every hash, then the copy's counts. Returns the problems."""
+    """Check a DuckDB set: every hash, then the copy's counts. Return the problems."""
     manifest = read_manifest(info)
     problems = check_hashes(info, manifest)
     copy = info.path / DUCKDB_COPY
@@ -565,7 +561,7 @@ def verify_duckdb_set(info: SetInfo) -> list[str]:
 
 
 def verify_bundle_set(info: SetInfo) -> list[str]:
-    """Check a bundle set: every hash, then a load of the copy. Returns the problems."""
+    """Check a bundle set: every hash, then a load of the copy. Return the problems."""
     manifest = read_manifest(info)
     problems = check_hashes(info, manifest)
     build_id = str(manifest.get("build_id") or "")
@@ -582,9 +578,9 @@ def verify_bundle_set(info: SetInfo) -> list[str]:
 
 
 def verify_set(root: Path, set_id: str) -> bool:
-    """Verify the DuckDB and bundle sets ``set_id`` ('latest' = each store's newest).
+    """Verify the DuckDB and bundle sets ``set_id`` ('latest' is each store's newest).
 
-    True when at least one set is present and every present set verifies.
+    Return True when at least one set exists and every set found verifies.
     """
     checks = {"duckdb": verify_duckdb_set, "bundle": verify_bundle_set}
     found = 0
@@ -610,8 +606,8 @@ def verify_set(root: Path, set_id: str) -> bool:
 def restore_duckdb(root: Path, set_id: str, *, duckdb_path: Path) -> None:
     """Put a DuckDB set back onto the live path with ``os.replace``.
 
-    Stop every DuckDB reader first, and restart the app after: a reader that
-    stays open keeps reading the old file.
+    Stop every DuckDB reader first and restart the app after, because an open
+    reader keeps reading the old file.
     """
     info = find_set(root, "duckdb", set_id)
     if info is None:
@@ -630,7 +626,7 @@ def restore_duckdb(root: Path, set_id: str, *, duckdb_path: Path) -> None:
     if src_wal.is_file():
         copy_file_synced(src_wal, tmp_wal)
     if live_wal.exists():
-        # The live WAL belongs to the old file. Replayed onto the restored file, it corrupts it.
+        # The live WAL belongs to the old file; replayed onto the restored one, it corrupts it.
         aside = Path(f"{live_wal}.pre-restore-{datetime.now(UTC).strftime(SET_ID_FORMAT)}")
         os.replace(live_wal, aside)
         log(f"moved the live WAL aside to {aside}")
@@ -642,7 +638,7 @@ def restore_duckdb(root: Path, set_id: str, *, duckdb_path: Path) -> None:
 
 
 def restore_bundle(root: Path, set_id: str, *, play_pool_dir: Path, force: bool = False) -> Path:
-    """Copy a bundle set back as a version and publish it. Returns the version folder."""
+    """Copy a bundle set back as a version and publish it. Return the version folder."""
     info = find_set(root, "bundle", set_id)
     if info is None:
         raise BackupError(f"no complete bundle set {set_id}")
@@ -671,7 +667,7 @@ def restore_bundle(root: Path, set_id: str, *, play_pool_dir: Path, force: bool 
 
 
 def status_rows(root: Path, now: datetime | None = None) -> dict[str, dict[str, Any] | None]:
-    """The newest complete set of every store, as plain data."""
+    """Return the newest complete set of each store, as plain data."""
     now = now or datetime.now(UTC)
     rows: dict[str, dict[str, Any] | None] = {}
     for store in STORES:
@@ -713,6 +709,7 @@ def print_status(root: Path, as_json: bool) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
+    """Return the command-line parser."""
     p = argparse.ArgumentParser(
         prog="python -m operations.backup.back_up_data_stores",
         description="Back up, verify and restore the DuckDB file and the engine bundle.",
@@ -745,7 +742,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _paths(data_root: Path | None) -> dict[str, Path]:
-    """The data paths. A ``--data-root`` flag beats the variables; they beat /data."""
+    """Return the data paths. A ``--data-root`` flag beats the variables, which beat /data."""
     data = data_root or Path("/data")
 
     def env_path(name: str, default: Path) -> Path:
@@ -764,11 +761,9 @@ def _paths(data_root: Path | None) -> dict[str, Path]:
 def recent_sets(
     root: Path, stores: Sequence[str], *, window_s: float, now: float
 ) -> dict[str, str]:
-    """The stores whose newest complete set is younger than ``window_s``.
+    """Return ``{store: set id}`` for each store whose newest set is under ``window_s`` old.
 
-    The result maps each such store to its set id. A crash retry of the
-    nightly run reads it: a store that finished on the first attempt is not
-    backed up a second time. A window of 0 or less turns the check off.
+    A crash rerun skips those stores. A window of 0 or less turns the check off.
     """
     if window_s <= 0:
         return {}
@@ -777,7 +772,7 @@ def recent_sets(
         info = newest_complete_set(root, store)
         if info is None:
             continue
-        # The set id is the run's start time, on the same clock as ``now``.
+        # The set id is the run's start time, on the clock ``now`` reads.
         started = parse_set_id(info.set_id) or info.created_at
         if 0 <= now - started.timestamp() < window_s:
             done[store] = info.set_id
@@ -794,7 +789,7 @@ def run_backup(
     sleep: Sleep = time.sleep,
     opener: Opener = duckdb.connect,
 ) -> int:
-    """Back up the stores. Returns the exit code (0, 1 or 2)."""
+    """Back up the stores. Return the exit code (0, 1 or 2)."""
     if not root.is_dir() or not os.access(root, os.W_OK):
         log(f"refused: the backup root {root} is missing or cannot be written")
         return 2
@@ -870,9 +865,9 @@ def main(
     sleep: Sleep = time.sleep,
     opener: Opener = duckdb.connect,
 ) -> int:
-    """Run the command line. Returns the exit code.
+    """Run the command line. Return the exit code.
 
-    ``clock``, ``sleep`` and ``opener`` let the tests run the waits instantly.
+    The tests pass ``clock``, ``sleep`` and ``opener`` to run the waits instantly.
     """
     args = _parser().parse_args(argv)
     root = root_path(args.backups_root, "BACKUP_ROOT", "/backups")

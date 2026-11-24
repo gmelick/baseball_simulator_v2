@@ -1,31 +1,28 @@
 #!/usr/bin/env sh
 # =============================================================================
-# SIM-525: restore one Postgres backup set into an EMPTY database.
+# operations/backup/postgres/pg_restore.sh — restore one Postgres backup set into an empty database.
 #
 #   sh /opt/baseball/backup/pg_restore.sh <set dir>
 #
 # The script runs as the postgres OS user over the unix socket, like
-# pg_backup.sh. It never echoes a command (no shell trace). It takes three steps:
+# pg_backup.sh, and never echoes a command. Its steps:
 #
-#   0. The connection probe: 'select 1', retried every 2 s for up to
-#      PG_CONNECT_WAIT_S. A server that never answers exits 1 ('cannot
-#      connect'), never 3: a dead or restarting server is not a full one.
-#   1. The empty-target guard: 'DROP SCHEMA IF EXISTS raw' and '... sim',
-#      WITHOUT CASCADE, in one psql call. The image's init pre-creates both
-#      schemas empty, so on a fresh cluster the drop removes them and the dump
-#      creates them again. On a populated database the drop fails with
-#      'depend on', and the script refuses (exit 3) before it restores
-#      anything. Any other failure of the drop exits 1.
-#   2. pg_restore in parallel with --exit-on-error, so an error stops the
-#      restore instead of being ignored.
-#   3. The count check (COUNT_CHECK=1): the live count of every table in
-#      counts_before.tsv must lie between its count before and after the dump.
+#   0. Waits up to PG_CONNECT_WAIT_S for the server. No answer exits 1, never
+#      3: a dead server is not a full one.
+#   1. Drops the empty raw and sim schemas without CASCADE. The image's init
+#      creates both empty, and the dump creates them again. On a populated
+#      database the drop fails with 'depend on', and the script exits 3
+#      before it restores anything.
+#   2. Runs pg_restore in parallel with --exit-on-error.
+#   3. With COUNT_CHECK=1, requires each table's live count to lie between
+#      its counts before and after the dump.
 #
-# After a restore, the run book runs `make db-roles` (the grants) and
+# After a restore, run `make db-roles`, then
 # `docker compose run --rm migrate alembic current` (expect the head).
 #
 # Exit codes: 0 restored and every count passes; 1 no connection, or the
-# restore or a count failed; 2 a usage error or an incomplete set; 3 the target is not empty.
+# restore or a count failed; 2 a usage error or an incomplete set; 3 the
+# target is not empty.
 #
 # Settings (environment, with defaults):
 #   PG_RESTORE_JOBS=4  POSTGRES_USER=baseball_user  POSTGRES_DB=baseball_sim

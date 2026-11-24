@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-"""
-operations/gen_secrets.py
-======================
-Generate the stack's secrets. The code and the compose file carry no default
-password (the security hardening, SIM-443b), so every secret must sit in ``.env``.
+"""operations/gen_secrets.py — generate the stack's secrets into ``.env``.
 
-The script writes eight secrets: the three Postgres role passwords, the Redis
-password, the Grafana admin password, the session-signing key, the login
-password and one API key. Each value is ``secrets.token_urlsafe(32)``: 43
-characters of ``A-Z a-z 0-9 - _``, so a value needs no escaping inside a DSN.
+The code and the compose file hold no default password, so every secret must
+be in ``.env``. The script makes eight: the three Postgres role passwords, the
+Redis password, the Grafana admin password, the session-signing key, the login
+password and one API key. Each value is 43 URL-safe characters, so it needs no
+escaping inside a connection string.
 
-Usage (stdlib only; runs on the host with any Python 3.11+):
+Usage (standard library only; runs on the host with Python 3.11 or later):
 
-    python operations/gen_secrets.py                  # print KEY=value lines to stdout
-    python operations/gen_secrets.py --append .env    # add the missing secrets to .env
-    python operations/gen_secrets.py --check .env     # exit 1 when a secret is missing
+    python operations/gen_secrets.py                  # print KEY=value lines
+    python operations/gen_secrets.py --append .env    # add the missing secrets
+    python operations/gen_secrets.py --check .env     # exit 1 when one is missing
 
-``--append`` never changes a secret that has a value. A key that is missing gets
-a new line at the end of the file. A key that is present but blank (the shape
-``.env.example`` ships) gets its value filled in on its own line. The file is
-created when it does not exist. ``--append`` and ``--check`` print only key
-names, on stderr, never a value.
+``--append`` never changes a secret that has a value. It appends a missing
+key, fills a blank key in place, and creates the file when it is absent.
+``--append`` and ``--check`` print key names only, on stderr.
 """
 
 from __future__ import annotations
@@ -54,7 +49,7 @@ _LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 #: A quoted value, with an optional trailing comment after the closing quote.
 _QUOTED_RE = re.compile(r"""^(["'])(.*?)\1\s*(?:#.*)?$""")
 
-#: The UTF-8 byte-order mark. PowerShell 5.1 writes it; compose strips it.
+#: The UTF-8 byte-order mark. PowerShell 5.1 writes it, and compose ignores it.
 _BOM = "\ufeff"
 
 
@@ -64,7 +59,7 @@ def new_secret() -> str:
 
 
 def _clean_value(raw: str) -> str:
-    """Return a dotenv value without its quotes and its trailing comment."""
+    """Return a dotenv value without its quotes or its trailing comment."""
     value = raw.strip()
     quoted = _QUOTED_RE.match(value)
     if quoted:
@@ -77,8 +72,7 @@ def _clean_value(raw: str) -> str:
 def read_env(text: str) -> dict[str, str]:
     """Return ``{key: value}`` for every assignment line of a dotenv text.
 
-    A comment line is skipped. When a key appears twice, the last line wins,
-    the way docker compose reads the file.
+    When a key appears twice, the last line wins, as in docker compose.
     """
     found: dict[str, str] = {}
     for line in text.splitlines():
@@ -99,14 +93,14 @@ def missing_keys(text: str) -> list[str]:
 def append_secrets(path: Path) -> tuple[list[str], list[str], list[str]]:
     """Add the missing secrets to the dotenv file at ``path``.
 
-    Returns ``(added, filled, kept)``: the keys appended at the end, the blank
-    keys filled in place, and the keys left alone because they hold a value.
-    The file keeps its line endings. A new file is created with mode 0600 on a
-    POSIX host.
+    Return ``(added, filled, kept)``: the keys appended, the blank keys filled
+    in place, and the keys left alone because they hold a value. The file
+    keeps its line endings and its byte-order mark. A new file gets mode 0600
+    on a POSIX host.
     """
     existed = path.exists()
-    # Raw bytes keep a CRLF file's line endings; read_text would translate them.
-    # utf-8-sig drops a byte-order mark, which would hide the first line's key.
+    # Raw bytes keep CRLF endings, which read_text would translate.
+    # utf-8-sig drops a byte-order mark, which would hide the first key.
     raw = path.read_bytes() if existed else b""
     has_bom = raw.startswith(_BOM.encode("utf-8"))
     text = raw.decode("utf-8-sig")
@@ -125,8 +119,7 @@ def append_secrets(path: Path) -> tuple[list[str], list[str], list[str]]:
         match = _LINE_RE.match(line.rstrip("\r\n"))
         if not match or match.group(1) not in blank or _clean_value(match.group(2)):
             continue
-        # Every blank copy of a key is filled: compose reads the last line.
-        # A copy that holds a value is never changed.
+        # Fill every blank copy of a key, because compose reads the last one.
         key = match.group(1)
         ending = line[len(line.rstrip("\r\n")) :]
         lines[index] = f"{key}={new_secret()}{ending}"
@@ -174,6 +167,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command line. Return the exit code."""
     args = _parse_args(argv)
 
     if args.check is not None:

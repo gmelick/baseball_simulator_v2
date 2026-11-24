@@ -1,23 +1,17 @@
 #!/usr/bin/env sh
 # =============================================================================
-# operations/jobs/nightly_ingest.sh — nightly data ingestion chain.
+# operations/jobs/nightly_ingest.sh — the whole nightly data chain, for a run by hand.
 #
-# Runs the three steps in dependency order for the CURRENT season:
-#   1. refresh_seasons(YEAR)        — load games that have newly become Final
-#                                     (a guard skips future and in-progress games)
-#   2. player_profile_computor      — rebuild the DuckDB derived profiles + sim pools
-#   3. engine_artifacts             — rebuild the engine-artifact bundle the
-#                                     full-pool sampler reads
+# For the current season it runs, in order:
+#   1. refresh_seasons(YEAR): load the games that became Final;
+#   2. player_profile_computor: rebuild the DuckDB profiles and play pools;
+#   3. engine_artifacts: rebuild the bundle the sampler reads.
 #
-# The scheduler does not run this chain. It runs operations/jobs/nightly_finals.sh
-# (step 1's job, a three-day window) nightly and operations/jobs/weekly_refresh.sh on
-# Sunday; steps 2 and 3 are operations/jobs/nightly_rebuild.sh, the 08:00 UTC job (it
-# runs beside the app, which holds no DuckDB handle). This script is the whole
-# chain for a by-hand run:
+# The scheduler does not run this chain. It runs nightly_finals.sh,
+# weekly_refresh.sh and nightly_rebuild.sh instead. By hand:
 #   docker compose run --rm app sh /app/operations/jobs/nightly_ingest.sh
 #
-# BASEBALL_DB_DSN must point at the in-container DB (db:5432). The script has no
-# default: it exits at once, naming the variable, when the DSN is not set.
+# The script stops at once when BASEBALL_DB_DSN is not set.
 # =============================================================================
 set -eu
 
@@ -32,15 +26,9 @@ log() { echo "[nightly-ingest $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 log "start — season ${YEAR}"
 
 log "1/3 refresh_seasons(${YEAR}) — load newly-Final games"
-# refresh_seasons returns {attempted, loaded, failed, skipped, rows_written}
-# and contains per-game failures (a single malformed feed does not abort the
-# run; _CONSECUTIVE_FAILURE_LIMIT successive failures do). Exit
-# non-zero if ANY game failed, so `set -e` stops the chain here rather than
-# rebuilding profiles and the artifact bundle on a knowingly incomplete season.
-# NOTE: the heredoc delimiter is QUOTED ('PY'), so the shell performs NO
-# parameter expansion inside it — which is what we want for Python code, but it
-# means ${YEAR} would arrive as a literal string. The year is therefore passed
-# through the ENVIRONMENT and read with os.environ, not interpolated.
+# Exit 1 when any game failed, so set -e stops the chain before it rebuilds
+# on a season it knows is incomplete. The quoted heredoc ('PY') expands no
+# shell variable, so the year crosses into Python through the environment.
 export YEAR
 python - <<'PY'
 import os
