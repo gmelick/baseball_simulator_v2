@@ -412,7 +412,7 @@ async def run(args: argparse.Namespace) -> int:
         game_pks = await _fetch_game_pks(conn, args)
         log.info("SIM-545 audit: %d games with box-score rows.", len(game_pks))
         if not game_pks:
-            log.warning("No games to audit — run scripts/load_official_boxscores.py first.")
+            log.warning("No games to audit — run python -m ingest.load_boxscores first.")
             return 0
         derived_b: dict[Key, dict[str, int]] = {}
         derived_p: dict[Key, dict[str, int]] = {}

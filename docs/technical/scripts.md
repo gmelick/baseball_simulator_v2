@@ -35,14 +35,6 @@ The loader is `betting/historical_loader.py`, run as `python -m betting.historic
 `make load-historical-odds FLAGS="--seasons 2024"`. It loads the opening and closing lines of
 finished games. Its options and exit codes are on [betting.md](betting.md#bettinghistorical_loaderpy).
 
-### `scripts/load_official_boxscores.py`
-
-[Source](../../scripts/load_official_boxscores.py) · 344 lines · Tests: [test_boxscore_ingest.py](../../tests/unit/ingest/test_boxscore_ingest.py), [test_game_bullpen_listing.py](../../tests/unit/ingest/test_game_bullpen_listing.py)
-
-Backfills the official box score: one `raw.game_player_stats` row per player who appeared, from the MLB Stats API `/game/{pk}/boxscore` endpoint. The same fetch writes the per-game bullpen listing (`raw.game_bullpen`); `--bullpen-only` writes the listing alone. Props grade on this box (owner decision 2026-09-12, the official box-score ground truth, SIM-545). `--only-missing` (the default) skips a game that has rows. Five failures in a row stop the run (`--max-consecutive-failures`). The historical loader writes the box for each game it loads, so this script is for games already in `raw.games`.
-
-Run: `python scripts/load_official_boxscores.py --seasons 2024` in the app container.
-
 ### `ingest/games/reload_games.py`
 
 [Source](../../ingest/games/reload_games.py) · 374 lines · Tests: none

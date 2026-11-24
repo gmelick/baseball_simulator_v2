@@ -406,7 +406,6 @@ STAGES: list[tuple[int, str, str, list[str]]] = [
             "scripts/pitch_pool_rebuild/*",
             "scripts/rebuild_steal_pool.py",
             "scripts/steal_pool_rebuild/*",
-            "scripts/load_official_boxscores.py",
             "scripts/behaviour_fingerprint.py",
             "scripts/*",
             "scripts/probes/*",

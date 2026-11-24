@@ -13,7 +13,6 @@ import json
 import os
 
 import pytest
-from tests.script_loader import load_script
 
 from ingest.load_boxscores import (
     BULLPEN_COLUMNS,
@@ -129,7 +128,9 @@ class TestPersist:
 
 
 def _load_backfill_script():
-    return load_script("load_official_boxscores")
+    from ingest import load_boxscores
+
+    return load_boxscores
 
 
 class TestBackfillQuery:

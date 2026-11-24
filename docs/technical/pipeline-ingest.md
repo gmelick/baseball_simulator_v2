@@ -64,7 +64,7 @@ entry point. No scheduler job runs them; an operator runs them by hand.
 | Loader | Runs by | Writes |
 |---|---|---|
 | `HistoricalDataLoader` | the `nightly-finals` and `weekly-refresh` jobs; `ingest/games/reload_games.py`; `ingest/games/resumable_sweep.py` | `raw.venues`, `raw.teams`, `raw.players`, `raw.managers`, `raw.games`, `raw.game_lineups`, `raw.game_player_stats`, `raw.game_bullpen`, `raw.pitches`, `raw.play_events`, `raw.etl_errors`, `raw.etl_game_ingest`, `raw.etl_data_freshness` |
-| `BoxscoreIngest` | `scripts/load_official_boxscores.py` (backfill) | `raw.game_player_stats`, `raw.game_bullpen` |
+| `BoxscoreIngest` | `python -m ingest.load_boxscores` (backfill) | `raw.game_player_stats`, `raw.game_bullpen` |
 | `savant_loader` | by hand | the twelve `raw.savant_*` board tables |
 | `savant_pitch_tracking_loader` | by hand | `raw.savant_pitch_tracking` |
 | `SprintSpeedLoader` | by hand | `raw.sprint_speed` |
@@ -155,10 +155,11 @@ has no row, so the book voids his bet.
 | Function / class | What it does | Called from |
 |---|---|---|
 | `parse_boxscore` | PURE: turns a box score's `teams` block into one `PlayerGameStats` per player whose batting or pitching block is not empty. The box endpoint and the live feed share this shape. | `etl_historical_loader._ensure_game_player_stats`, `BoxscoreIngest.fetch_rows` |
-| `persist_sync` / `persist` | Upsert the rows on a psycopg2 cursor / an asyncpg connection (`ON CONFLICT (game_pk, player_id) DO UPDATE`). | the loader; `scripts/load_official_boxscores.py` |
+| `persist_sync` / `persist` | Upsert the rows on a psycopg2 cursor / an asyncpg connection (`ON CONFLICT (game_pk, player_id) DO UPDATE`). | the loader; the backfill (`run`, below) |
 | `parse_bullpen_listing` / `persist_bullpen_sync` | The arms the box lists per side for `raw.game_bullpen`: `started` (the first pitcher), `pitched` and `bullpen`. This listing is the simulator's pen for the game (the real managers and pens, SIM-427). | the loader |
 | `starting_position` / `parse_starting_positions` / `persist_starting_positions` | Each starter's position at the start of the game, and the repair of stored lineup rows. | `game_values._build_starting_lineup_rows`; `scripts/probes/backfill_start_positions.py` |
-| `BoxscoreIngest` | Fetches `/game/{game_pk}/boxscore` (`_mlb_get`, the one network seam, with a short retry) and persists the rows. | `scripts/load_official_boxscores.py` |
+| `BoxscoreIngest` | Fetches `/game/{game_pk}/boxscore` (`_mlb_get`, the one network seam, with a short retry) and persists the rows. | the backfill |
+| `run` / `main` | The backfill, `python -m ingest.load_boxscores`: loads the box score and the bullpen listing of every Final game in `raw.games` that lacks them (`--only-missing`, the default). `--bullpen-only` writes the listing alone. Five failures in a row stop the run with exit code 1. | the operator |
 
 ### `ingest/games/coercion.py`
 

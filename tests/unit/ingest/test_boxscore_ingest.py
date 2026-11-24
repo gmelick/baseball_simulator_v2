@@ -574,15 +574,13 @@ class TestLoaderHook:
 
 
 # ===========================================================================
-# scripts/load_official_boxscores.py — the backfill CLI (no network, no DB)
+# The backfill CLI in ingest/load_boxscores.py (no network, no DB)
 # ===========================================================================
 
 import sys  # noqa: E402
 import types  # noqa: E402
 
-from tests.script_loader import load_script  # noqa: E402
-
-cli = load_script("load_official_boxscores")
+from ingest import load_boxscores as cli  # noqa: E402
 
 
 class _FakePgConn:

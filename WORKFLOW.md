@@ -398,8 +398,7 @@ lines of Final games, one row per book, into `raw.game_odds` and
 `raw.prop_odds`. It needs `ODDS_API_KEY` in `.env`; without the key every game
 ends incomplete and the loader exits 1. The historical game loader
 writes each game's official box score as it loads the game;
-[`scripts/load_official_boxscores.py`](scripts/load_official_boxscores.py)
-backfills older games.
+`python -m ingest.load_boxscores` backfills older games.
 
 ### 5.6 Validate a data change at scale
 
