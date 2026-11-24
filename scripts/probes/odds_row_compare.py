@@ -7,7 +7,7 @@ a file of rows, and ``--compare`` checks that two such files hold the same rows.
 
 Usage (in the app container, the checkout under test mounted at /app)::
 
-    python scripts/probes/odds_row_compare.py --record DIR -- --seasons 2026 --game-dates ...
+    python scripts/probes/odds_row_compare.py --record DIR -- --seasons 2026 --reload --max-games 300
     python scripts/probes/odds_row_compare.py --replay DIR --out DIR2 -- <the same loader args>
     python scripts/probes/odds_row_compare.py --compare DIR DIR2
 """

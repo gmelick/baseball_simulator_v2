@@ -30,7 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -55,7 +55,7 @@ from betting.load_odds_to_db import (
     promote_closing_game_rows,
     promote_closing_prop_rows,
 )
-from betting.markets import GAME_MARKET_KIND, GAME_MARKET_TYPES  # noqa: E402
+from betting.markets import GAME_MARKET_KIND, GAME_MARKET_TYPES, PROP_STATS  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline, pregame_odds_cadence_s
 
 GAME_PK = 776465
@@ -793,9 +793,11 @@ def _load_loader() -> Any:
     return betting.historical_loader
 
 
-class TestLoaderGameDates:
+class TestLoaderMissingOdds:
+    """The loader picks only the Final games missing odds, unless ``--reload``."""
+
     @pytest.mark.asyncio
-    async def test_loader_game_dates_filter(self, monkeypatch) -> None:
+    async def test_the_game_query_carries_the_missing_clause(self, monkeypatch) -> None:
         loader = _load_loader()
         seen: list[tuple[str, tuple]] = []
 
@@ -814,64 +816,90 @@ class TestLoaderGameDates:
 
         monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=_connect))
         await loader._fetch_final_games("dsn", [2026], None)
-        assert "game_date" not in seen[-1][0] and seen[-1][1] == ()
-        dates = [date(2026, 10, 8), date(2026, 10, 7)]
-        await loader._fetch_final_games("dsn", [2026], None, game_dates=dates)
-        assert "AND game_date = ANY($1::date[])" in seen[-1][0]
-        assert seen[-1][1] == ([date(2026, 10, 7), date(2026, 10, 8)],)
-        # After the resume parameters, the dates take the next placeholder.
-        since = datetime(2026, 10, 9, 9, 0, tzinfo=UTC)
-        await loader._fetch_final_games(
-            "dsn", [2026], None, skip_loaded_since=since, game_dates=dates
+        assert "EXISTS" not in seen[-1][0] and seen[-1][1] == ()
+        sql, params = loader._missing_odds_clause(
+            line_types=("closing",), game_odds=True, props=False
         )
-        assert "AND game_date = ANY($3::date[])" in seen[-1][0]
-        assert seen[-1][1][-1] == [date(2026, 10, 7), date(2026, 10, 8)]
+        await loader._fetch_final_games("dsn", [2026], None, missing_sql=sql, missing_params=params)
+        assert sql in seen[-1][0]
+        assert seen[-1][1] == ("closing",)
 
-    def test_parse_args_reads_the_dates(self) -> None:
+    def test_each_line_type_and_table_is_checked(self) -> None:
         loader = _load_loader()
-        args = loader.parse_args(
-            [
-                "--seasons",
-                "2026",
-                "--line-types",
-                "closing",
-                "--game-dates",
-                "2026-10-08",
-                "2026-10-07",
-            ]
+        sql, params = loader._missing_odds_clause(
+            line_types=("closing",), game_odds=True, props=True
         )
-        assert args.game_dates == [date(2026, 10, 8), date(2026, 10, 7)]
-        assert loader.parse_args(["--seasons", "2026"]).game_dates is None
-        with pytest.raises(SystemExit) as exc:
-            loader.parse_args(["--seasons", "2026", "--game-dates", "10/08/2026"])
-        assert exc.value.code == 2
+        assert sql.startswith("AND (") and " OR " in sql
+        assert "NOT EXISTS (SELECT 1 FROM raw.game_odds t" in sql
+        # Props count only for a game with lineup rows.
+        assert "raw.game_lineups" in sql and "raw.prop_odds" in sql
+        assert "t.book LIKE 'bp:%'" in sql
+        assert params == ["closing", "closing"]
+
+    def test_an_opening_row_in_either_table_counts(self) -> None:
+        loader = _load_loader()
+        sql, params = loader._missing_odds_clause(
+            line_types=("opening",), game_odds=True, props=True
+        )
+        assert sql == (
+            "AND (NOT (EXISTS (SELECT 1 FROM raw.game_odds t WHERE t.game_pk = "
+            "raw.games.game_pk AND t.line_type = $1 AND t.book LIKE 'bp:%') OR "
+            "EXISTS (SELECT 1 FROM raw.prop_odds t WHERE t.game_pk = raw.games.game_pk "
+            "AND t.line_type = $2 AND t.book LIKE 'bp:%')))"
+        )
+        assert params == ["opening", "opening"]
+
+    def test_a_book_and_a_market_subset_narrow_the_check(self) -> None:
+        loader = _load_loader()
+        sql, params = loader._missing_odds_clause(
+            line_types=("closing",),
+            game_odds=True,
+            props=True,
+            book_id=12,
+            game_markets=("moneyline",),
+            prop_stats=("singles",),
+        )
+        assert "t.book = $1" in sql and "LIKE" not in sql
+        assert "t.market_type = ANY($2)" in sql and "t.prop_stat = ANY($3)" in sql
+        assert params == ["bp:12", ["moneyline"], ["singles"], "closing", "closing"]
+
+    def test_a_full_market_set_adds_no_market_filter(self) -> None:
+        loader = _load_loader()
+        sql, _ = loader._missing_odds_clause(
+            line_types=("closing",),
+            game_odds=True,
+            props=True,
+            game_markets=GAME_MARKET_TYPES,
+            prop_stats=PROP_STATS,
+        )
+        assert "market_type" not in sql and "prop_stat" not in sql
+
+    def test_a_run_that_writes_no_table_has_no_clause(self) -> None:
+        loader = _load_loader()
+        assert loader._missing_odds_clause(
+            line_types=("closing",), game_odds=False, props=False
+        ) == ("", [])
 
     @pytest.mark.asyncio
-    async def test_run_threads_the_dates_to_the_game_query(self, monkeypatch) -> None:
+    async def test_run_passes_the_clause_and_reload_drops_it(self, monkeypatch) -> None:
         loader = _load_loader()
-        captured: dict[str, Any] = {}
+        seen: list[dict[str, Any]] = []
 
         async def _fetch(dsn: str, seasons: list[int], max_games: Any, **kw: Any) -> list:
-            captured.update(kw)
+            seen.append(kw)
             return []
 
         monkeypatch.setattr(loader, "_fetch_final_games", _fetch)
         monkeypatch.setattr(loader, "odds_source", Recorded92857)
         monkeypatch.setenv("ODDS_OFFERS_CACHE_TTL_S", "0")
-        args = loader.parse_args(
-            [
-                "--seasons",
-                "2026",
-                "--line-types",
-                "closing",
-                "--game-dates",
-                "2026-10-08",
-                "2026-10-07",
-            ]
-        )
+        args = loader.parse_args(["--seasons", "2026", "--line-types", "closing"])
+        assert args.reload is False
         assert await loader.run(args) == 0
-        assert captured["game_dates"] == [date(2026, 10, 7), date(2026, 10, 8)]
-        assert captured["line_types"] == ("closing",)
+        assert seen[-1]["missing_sql"].startswith("AND (")
+        assert seen[-1]["missing_params"] == ["closing", "closing"]
+        args = loader.parse_args(["--seasons", "2026", "--reload"])
+        assert await loader.run(args) == 0
+        assert seen[-1]["missing_sql"] == "" and seen[-1]["missing_params"] == []
 
 
 _SCRIPT = _ROOT / "operations" / "jobs" / "nightly_closing_lines.sh"
@@ -914,20 +942,13 @@ class TestNightlyScript:
         assert "ODDS_API_KEY is not set" in proc.stdout
         assert not record.exists()  # the loader never ran: nothing written
 
-    def test_the_script_runs_the_opening_and_closing_pass_over_two_dates(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_script_loads_last_season_and_this_one(self, tmp_path: Path) -> None:
         proc, record = _run_script(tmp_path, ODDS_API_KEY="k")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         args = record.read_text(encoding="utf-8").split()
-        assert args[:2] == ["-m", "betting.historical_loader"]
-        today = datetime.now(UTC).date()
-        d1, d2 = today - timedelta(days=1), today - timedelta(days=2)
-        i = args.index("--game-dates")
-        assert args[i + 1 : i + 3] == [d1.isoformat(), d2.isoformat()]
-        j = args.index("--line-types")
-        assert args[j + 1 : j + 3] == ["opening", "closing"]
-        assert str(d1.year) in args[args.index("--seasons") + 1 : j]
+        year = datetime.now(UTC).year
+        # The loader's defaults: the games missing odds, opening and closing.
+        assert args == ["-m", "betting.historical_loader", "--seasons", str(year - 1), str(year)]
 
 
 def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
