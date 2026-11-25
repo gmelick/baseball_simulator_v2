@@ -2,8 +2,9 @@
 
 Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
 to C (2026-11-24, master 0f0fd61). Part 2 is deployed, Steps A to C
-(2026-11-24, master 8775d1e). Part 3's Step A is committed on branch `sim647-part3-profiles`;
-its byte check runs. Parts 4 to 7 have not started.
+(2026-11-24, master 8775d1e). Part 3's Step A is committed on branch `sim647-part3-profiles`,
+and its byte check finds no change of behaviour (2026-11-25). Part 3's Step C runs. Parts 4
+to 7 have not started.
 
 ## 1. Why
 
@@ -202,6 +203,12 @@ The nightly shell jobs call `python -m pipeline.batch.player_profile_computor` a
 `python -m pipeline.batch.engine_artifacts`; both change. The check: one profile build and one
 bundle build on a frozen DuckDB copy with the old code and the new code; the tables and the
 bundle's arrays must be byte-identical.
+
+As run (2026-11-25, `docs/audit/records/2026-11-25-sim647-part3-byte-check.md`): the two
+builds write the same rows. DuckDB stores the rebuilt season's rows in a different order,
+and the bundle exports read with no ORDER BY, so the bundle files hold the same rows in
+another order. Sums over the rows in that order differ only by float rounding. The pitcher
+fits differ only in their date stamp.
 
 ### Part 4 — `simulation/`, `runs/` and `outputs/`
 
