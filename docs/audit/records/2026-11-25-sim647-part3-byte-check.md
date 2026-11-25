@@ -54,3 +54,29 @@ run master's build twice to show the same order change between two master runs.
 `results/sim647_bytecheck/` (not committed): `run.sh`, `compare.py`, and the four
 diagnosis passes `diagnose.py` to `diagnose4.py`. The DuckDB copies and
 the two bundles are at `/data/sim647_bytecheck/` in the app's data volume.
+
+## The second check: the function review (2026-11-25)
+
+The function review (branch commit 4ca3a99) merges helpers and deletes dead code in the same
+builds, so it gets its own check. The check copies `old.duckdb` (the file master's build left)
+to `new2.duckdb`. The function-review code, exported with `git archive` to a frozen folder,
+reruns the same profile build and bundle build on that copy. `compare2.py` then compares
+`old.duckdb` and `bundle_old` with `new2.duckdb` and `bundle_new2` by content:
+
+- the tables by `EXCEPT ALL` both ways; a table that differs is compared row by row on its
+  key columns, floats equal within 1e-9 relative or absolute, the arsenal fit's date aside;
+- the pool files as joined rows (the metadata columns plus every array column, the pitch
+  pool's batted-ball row number mapped to its pitch id), sorted;
+- the embeddings aligned by key, their mean and standard deviation within 1e-4 relative;
+- the pitcher score matrix aligned by its index; the JSON files with floats within 1e-9.
+
+The comparer first read the first check's two builds as the same by content.
+
+| What | Result |
+|---|---|
+| 20 DuckDB tables | equal row for row |
+| `derived.catcher_season_metrics`, `derived.pitcher_season_metrics` | equal by content (the float rounding and the fit date of the first check) |
+| The 74 bundle files | equal by content |
+| **Result** | **SAME BY CONTENT** |
+
+The harness adds `run2.sh`, `compare2.py` and the frozen code folder `code_4ca3a99/`.

@@ -2,9 +2,9 @@
 
 Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
 to C (2026-11-24, master 0f0fd61). Part 2 is deployed, Steps A to C
-(2026-11-24, master 8775d1e). Part 3's Step A is committed on branch `sim647-part3-profiles`,
-and its byte check finds no change of behaviour (2026-11-25). Part 3's Step C runs. Parts 4
-to 7 have not started.
+(2026-11-24, master 8775d1e). Part 3's Steps A and C are committed on branch
+`sim647-part3-profiles` (2026-11-25), not yet merged; part 3 has no Step B. Parts 4 to 7 have
+not started.
 
 ## 1. Why
 
@@ -240,6 +240,16 @@ fits differ only in their date stamp.
 | `simulation/play_recorder.py` | `outputs/record_plays.py` |
 | `simulation/snapshots.py` | `outputs/field_snapshots.py` |
 
+Part 3's review left these for this part. `bundle.park_geometry.park_sector` and the sector
+expression in `simulation/sampler/fence.py` (twice) are one job; fence.py also still reads a
+plain-list (version 1) venue entry that only one test fixture holds. The sampler's
+`_pitcher_prof_score` (base.py) and the manager draw's `_pitcher_prof_scores` do one job but
+disagree on an all-zero matrix row (None against a row of zeros). The sampler's pitcher dict
+path (base.py, manager.py) serves only test fixtures, because the loader leaves the dict
+empty; once it goes, the bundle can stop writing the `sims` member of pitcher_sim.npz (about
+330 MB). `simulation/production_factory.py`'s DuckDB fallback repeats the two reference-table
+SELECTs of `bundle/reference_tables.py`.
+
 The tests that read the loop's source (the run ledger and the outs writer, CLAUDE.md
 section 15) follow the new file names. The check: `scripts/behaviour_fingerprint.py` reads the
 same fingerprint before and after; the unit, regression and acceptance-arithmetic lanes pass.
@@ -254,6 +264,9 @@ same fingerprint before and after; the unit, regression and acceptance-arithmeti
 | `scripts/fit_calibration.py` | `similarity/fit_constants/run_fit.py` |
 | `similarity/similarity_diagnostics.py` | `similarity/check_scores.py` |
 | `similarity/backtesting/*` | `validation/backtesting/` (part 7) |
+
+Part 3's review left one item here: `MIN_BATTER_PA` and `MIN_PITCHER_PITCHES` are copied into
+the batter and pitcher engines and never read there.
 
 Step B: the engine constants the draws read (SIM-587) come from one place. The check: the
 regression lane, and the score tables built on a frozen DuckDB copy are byte-identical.
@@ -287,6 +300,10 @@ command follows. The API snapshot is regenerated in the image (CLAUDE.md section
 the unit lane, the API snapshot, and a live check on the next game day.
 
 ### Part 7 — `validation/` and the rest of `scripts/`
+
+Part 3's review left one twin here: the strikeout event set of `pools/check_pool_labels.py`
+(`_STRIKEOUT_EVENTS`) is copied in `simulation/prop_validation.py` and
+`scripts/boxscore_audit.py`, and written inline in `profiles/catcher.py`.
 
 | Today | Moves to |
 |---|---|
