@@ -1,4 +1,4 @@
-# BUILT (branch, not merged) — the code layout, part 3: the profile build, the pools and the bundle move into profiles/, pools/ and bundle/, and the clean-up — SIM-647, 2026-11-25
+# DEPLOYED — the code layout, part 3: the profile build, the pools and the bundle move into profiles/, pools/ and bundle/, and the clean-up — SIM-647, 2026-11-25
 
 **Why it matters.** Part 3 of the code-layout plan
 (`docs/audit/2026-11-23-sim647-code-layout-plan.md`). The nightly data build now sits in three
@@ -87,6 +87,13 @@ is: the DuckDB table comment on `derived.at_bat_situations` names the deleted
 in eighths: 6,423 tests, after the function review and again after the comment rewrite (one
 test that read the rebuild's old log line now reads the command). The slow tests (23) and the
 regression lane (33) pass.
+
+**The deploy (2026-11-25, 18:48 UTC, master 80167d7).** `app`, `live` and `jobs` rebuilt and
+recreated; each mounts `profiles/`, `pools/` and `bundle/`. The scheduler is unchanged. Smoke:
+the ten moved entry modules import in all three containers and `pipeline.batch` no longer
+does; the two nightly rebuild commands parse their arguments; the app boots on the current
+bundle, and a fresh 20-game run of game 822679 through the API returns in 25 s (9.35 runs a
+game); the site answers through nginx.
 
 # DEPLOYED — the code layout, part 2: the loaders move into ingest/, one MLB client, the clean-up — SIM-647, 2026-11-24
 

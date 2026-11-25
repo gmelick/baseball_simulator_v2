@@ -2,9 +2,8 @@
 
 Status: IN PROGRESS. Every owner decision of section 8 is taken. Part 1 is deployed, Steps A
 to C (2026-11-24, master 0f0fd61). Part 2 is deployed, Steps A to C
-(2026-11-24, master 8775d1e). Part 3's Steps A and C are committed on branch
-`sim647-part3-profiles` (2026-11-25), not yet merged; part 3 has no Step B. Parts 4 to 7 have
-not started.
+(2026-11-24, master 8775d1e). Part 3 is deployed, Steps A and C (2026-11-25, master
+80167d7); part 3 has no Step B. Parts 4 to 7 have not started.
 
 ## 1. Why
 
