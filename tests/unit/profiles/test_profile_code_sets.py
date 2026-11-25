@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import re
 import string
+from datetime import date
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import duckdb
 import pytest
@@ -45,8 +47,10 @@ from ingest.statcast_events import (
     NON_SWING_TYPES,
     STRIKE_THREE_FOUL_TYPES,
     WHIFF_TYPES,
+    sql_list,
 )
-from profiles.sql import SQL_OUTCOME_TYPE, SQL_SWING, SQL_WHIFF, sql_in
+from profiles.build_profiles import PlayerProfileComputor
+from profiles.sql import SQL_OUTCOME_TYPE, SQL_SWING, SQL_WHIFF
 
 _SOURCE = Path(__file__).resolve().parents[3] / "profiles" / "build_profiles.py"
 
@@ -58,6 +62,15 @@ def _computor_source() -> str:
         *sorted((_SOURCE.parent.parent / "pools").glob("*.py")),
     ]
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
+
+
+def _batter_sql() -> str:
+    """The batter profile's INSERT as it reaches DuckDB, rendered on a stub connection."""
+    c = PlayerProfileComputor(pg_dsn="postgresql://x", duckdb_path="/tmp/y.duckdb")
+    c._conn = MagicMock()
+    c._compute_batter_profiles([2024], asof=date(2024, 6, 1))
+    sqls = [call.args[0] for call in c._conn.execute.call_args_list]
+    return next(s for s in sqls if "INSERT OR REPLACE INTO derived.batter_season_metrics" in s)
 
 
 #: Every code ``raw.pitches`` holds in ten seasons (17 codes; re-read 2026-09-25).
@@ -162,12 +175,12 @@ class TestSwingIsTheComplementOfTheNonSwings:
 
 
 class TestTheRenderedSqlIsUsable:
-    def test_sql_in_renders_a_quoted_list(self):
-        assert sql_in(("S", "W")) == "('S', 'W')"
+    def test_sql_list_renders_a_quoted_list(self):
+        assert sql_list(("S", "W")) == "('S', 'W')"
 
     def test_the_fragments_are_valid_sql_predicates(self):
-        assert f"type IN {sql_in(WHIFF_TYPES)}" == SQL_WHIFF
-        assert f"type NOT IN {sql_in(NON_SWING_TYPES)}" == SQL_SWING
+        assert f"type IN {sql_list(WHIFF_TYPES)}" == SQL_WHIFF
+        assert f"type NOT IN {sql_list(NON_SWING_TYPES)}" == SQL_SWING
 
     @pytest.mark.parametrize("fragment", [SQL_WHIFF, SQL_SWING])
     def test_a_fragment_carries_no_unrendered_placeholder(self, fragment):
@@ -201,7 +214,7 @@ class TestZSwingLegsCountSwings:
     _INVERTED = re.compile(r"zone BETWEEN 1 AND 9 AND type IN \('B', 'C', 'H', 'P', '\*B'\)")
 
     def test_no_z_swing_column_counts_the_non_swing_set(self):
-        src = _computor_source()
+        src = _computor_source() + _batter_sql()
         assert not self._INVERTED.search(src), (
             "a zone-swing predicate counts the NON-swing codes — that column holds a "
             "TAKE rate under a swing name (the SIM-501 / SIM-522 defect)"
@@ -209,10 +222,10 @@ class TestZSwingLegsCountSwings:
 
     @pytest.mark.parametrize("col", ["z_swing_rate", "z_swing_rate_vs_l", "z_swing_rate_vs_r"])
     def test_each_z_swing_column_is_defined_with_not_in(self, col):
-        src = _computor_source()
+        sql = _batter_sql()
         # The text between the previous column's alias and this alias is this
         # column's whole expression (numerator AND denominator). It must carry
         # the swing predicate, not the take one.
-        idx = src.index(f"AS {col},")
-        expr = src[src.rfind(" AS ", 0, idx) : idx]
+        idx = sql.index(f"AS {col},")
+        expr = sql[sql.rfind(" AS ", 0, idx) : idx]
         assert "type NOT IN ('B', 'C', 'H', 'P', '*B')" in expr, col

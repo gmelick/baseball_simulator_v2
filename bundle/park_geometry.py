@@ -4,13 +4,15 @@ season group, and the carry model the fence stage reads.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Any
 
 import duckdb
 import numpy as np
+
+from bundle.common import read_json, write_json
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -151,11 +153,11 @@ def carry_predict(coef: list[float] | np.ndarray, ev: float, la: float) -> float
 def load_air_balls(con: duckdb.DuckDBPyConnection, seasons: list[int]) -> dict[str, np.ndarray]:
     """The window's fly balls and line drives with a venue, a distance and a
     spray angle, as numpy arrays: ``venue``, ``season``, ``spray``, ``dist``,
-    ``hr`` (a home run), ``kept300`` (not a home run, 300 ft or more), and
-    ``ev`` / ``la`` (exit velocity and launch angle, NaN where the pool has
-    none — the fence lines keep every ball; the carry offset masks on them).
+    ``hr`` (a home run), and ``ev`` / ``la`` (exit velocity and launch angle,
+    NaN where the pool has none — the fence lines keep every ball; the carry
+    offset masks on them).
     No spray filter: the builder drops a ball outside the grid itself."""
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     d = con.execute(
         f"""
         SELECT venue_id, season, spray_angle, hit_distance, events, exit_velo, launch_angle
@@ -180,7 +182,6 @@ def load_air_balls(con: duckdb.DuckDBPyConnection, seasons: list[int]) -> dict[s
         "spray": spray,
         "dist": dist,
         "hr": hr,
-        "kept300": (~hr) & (dist >= PARK_KEPT_MIN_FT),
         "ev": ev,
         "la": la,
     }
@@ -189,11 +190,8 @@ def load_air_balls(con: duckdb.DuckDBPyConnection, seasons: list[int]) -> dict[s
 def carry_offset_design(ev: np.ndarray, la: np.ndarray, spray: np.ndarray) -> np.ndarray:
     """The carry offset's design matrix (``CARRY_OFFSET_FEATURES`` order)."""
     ev = np.asarray(ev, dtype=np.float64)
-    la = np.asarray(la, dtype=np.float64)
     sp = np.abs(np.asarray(spray, dtype=np.float64))
-    return np.column_stack(
-        [np.ones_like(ev), ev, la, la * la, ev * la, ev * ev, sp, sp * sp, ev * sp]
-    )
+    return np.column_stack([carry_design(ev, la), sp, sp * sp, ev * sp])
 
 
 def carry_offsets(
@@ -292,12 +290,7 @@ def sector_line(
     return None, None, n_hr, n_kept
 
 
-def published_at(
-    published: dict | None,
-    sec: int,
-    spray_min: float = PARK_SPRAY_MIN,
-    sector_deg: float = PARK_SECTOR_DEG,
-) -> float | None:
+def published_at(published: dict | None, sec: int) -> float | None:
     """The published fence at a sector's midpoint angle: the five published
     points (the lines at +-45 degrees, the alleys at +-22.5, centre at 0)
     linearly interpolated at the midpoint, clamped to [-45, +45] so the outer
@@ -312,7 +305,7 @@ def published_at(
     ]
     if len(pts) < 2:
         return None
-    angle = min(max(sector_midpoint(sec, spray_min, sector_deg), -45.0), 45.0)
+    angle = min(max(sector_midpoint(sec, PARK_SPRAY_MIN, PARK_SECTOR_DEG), -45.0), 45.0)
     xs = [p[0] for p in pts]
     if angle < xs[0] or angle > xs[-1]:
         return None
@@ -323,9 +316,6 @@ def league_offsets(
     own_lines: dict[int, list[float | None]],
     own_sources: dict[int, list[str | None]],
     published_by_venue: dict[int, dict],
-    n_sectors: int = PARK_N_SECTORS,
-    spray_min: float = PARK_SPRAY_MIN,
-    sector_deg: float = PARK_SECTOR_DEG,
 ) -> list[float | None]:
     """Per sector, the median over venues of (own whole-window line minus the
     published fence at the sector) — the league's typical gap between the
@@ -333,13 +323,13 @@ def league_offsets(
     rests on ``PARK_MIN_HR`` home runs ("both" or "hr") and it publishes a
     distance there; ``None`` under ``PARK_PRIOR_MIN_PARKS`` venues."""
     out: list[float | None] = []
-    for s in range(n_sectors):
+    for s in range(PARK_N_SECTORS):
         gaps = []
         for venue, line in own_lines.items():
-            src = own_sources.get(venue, [None] * n_sectors)[s]
+            src = own_sources.get(venue, [None] * PARK_N_SECTORS)[s]
             if line[s] is None or src not in ("both", "hr"):
                 continue
-            pub = published_at(published_by_venue.get(int(venue)), s, spray_min, sector_deg)
+            pub = published_at(published_by_venue.get(int(venue)), s)
             if pub is None:
                 continue
             gaps.append(float(line[s]) - pub)
@@ -347,18 +337,12 @@ def league_offsets(
     return out
 
 
-def prior_lines(
-    published: dict | None,
-    league_offset: list[float | None],
-    n_sectors: int = PARK_N_SECTORS,
-    spray_min: float = PARK_SPRAY_MIN,
-    sector_deg: float = PARK_SECTOR_DEG,
-) -> list[float | None]:
+def prior_lines(published: dict | None, league_offset: list[float | None]) -> list[float | None]:
     """One venue's PRIOR line per sector: the published fence at the sector's
     midpoint plus the league offset; ``None`` when either is missing."""
     out: list[float | None] = []
-    for s in range(n_sectors):
-        pub = published_at(published, s, spray_min, sector_deg)
+    for s in range(PARK_N_SECTORS):
+        pub = published_at(published, s)
         off = league_offset[s] if s < len(league_offset) else None
         out.append(round(pub + off, 1) if (pub is not None and off is not None) else None)
     return out
@@ -394,9 +378,7 @@ def _thin_rule(
 
 
 def detect_moves(
-    balls: dict[str, np.ndarray],
-    seasons: list[int],
-    n_sectors: int = PARK_N_SECTORS,
+    balls: dict[str, np.ndarray], seasons: list[int]
 ) -> tuple[list[tuple[int, int]], list[dict]]:
     """THE CHANGE DETECTOR on ONE venue's balls (``balls`` holds ``season``,
     ``sec``, ``dist``, ``hr``). Over the venue's seasons present in the
@@ -424,7 +406,7 @@ def detect_moves(
         return [
             (line, n_hr)
             for line, _src, n_hr, _n_kept in (
-                _line_of(balls, mask & (sec == s)) for s in range(n_sectors)
+                _line_of(balls, mask & (sec == s)) for s in range(PARK_N_SECTORS)
             )
         ]
 
@@ -440,7 +422,7 @@ def detect_moves(
             early = _lines(in_group & (season < y))
             late = _lines(in_group & (season >= y))
             secs, e_lines, l_lines, gaps = [], [], [], []
-            for s in range(n_sectors):
+            for s in range(PARK_N_SECTORS):
                 (le, ne), (ll, nl) = early[s], late[s]
                 if le is None or ll is None or ne < PARK_MOVE_MIN_HR or nl < PARK_MOVE_MIN_HR:
                     continue
@@ -593,9 +575,7 @@ def build_geometry_document(
     for s in range(n):
         vals = [float(lines[s]) for lines in own_lines.values() if lines[s] is not None]
         league.append(round(float(np.median(vals)), 1) if vals else None)
-    league_offset = league_offsets(
-        own_lines, own_sources, published_by_venue, n, PARK_SPRAY_MIN, PARK_SECTOR_DEG
-    )
+    league_offset = league_offsets(own_lines, own_sources, published_by_venue)
     # Every published venue gets a prior line — the ones in the pool and the
     # ones the pool has never seen (a new park before its first ball).
     priors: dict[str, dict] = {}
@@ -603,7 +583,7 @@ def build_geometry_document(
         pub = published_by_venue.get(v)
         if not pub:
             continue
-        line_p = prior_lines(pub, league_offset, n, PARK_SPRAY_MIN, PARK_SECTOR_DEG)
+        line_p = prior_lines(pub, league_offset)
         if all(p is None for p in line_p):
             continue
         priors[str(v)] = {
@@ -620,7 +600,7 @@ def build_geometry_document(
     for v in venue_ids:
         vm = b["venue"] == v
         vb = {k: arr[vm] for k, arr in b.items()}
-        groups, v_moves = detect_moves(vb, seasons, n)
+        groups, v_moves = detect_moves(vb, seasons)
         moves.extend(v_moves)
         prior = priors.get(str(v), {}).get("line", [None] * n)
         key_v = str(v)
@@ -707,15 +687,11 @@ def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: l
 
     balls = load_air_balls(con, seasons)
     published = write_venue_dimensions(out_dir, seasons)
-    overrides: dict = {}
-    ov_path = os.path.join(out_dir, "park_geometry_overrides.json")
-    if os.path.exists(ov_path):
-        with open(ov_path, encoding="utf-8") as fh:
-            overrides = json.load(fh)
+    overrides: dict = read_json(out_dir, "park_geometry_overrides.json") or {}
     doc = build_geometry_document(balls, seasons, published, overrides)
 
     # The carry model, fitted and validated on home runs.
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     d = con.execute(
         f"SELECT exit_velo, launch_angle, hit_distance FROM sim.outcome_pool "
         f"WHERE season IN ({season_list}) AND events = 'home_run' AND hit_distance > 0 "
@@ -736,8 +712,7 @@ def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: l
     doc["carry"] = carry
 
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "park_geometry.json"), "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2)
+    write_json(os.path.join(out_dir, "park_geometry.json"), doc)
     n_groups = sum(len(g) for g in doc["venues"].values())
     offsets = doc.get("carry_offset_ft") or {}
     if offsets:
@@ -766,13 +741,3 @@ def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: l
         offset_note,
     )
     return doc
-
-
-def load_park_geometry(art_dir: str) -> dict | None:
-    """Load the park geometry document; None when the bundle has none."""
-    park_geometry: dict | None = None
-    pg_path = os.path.join(art_dir, "park_geometry.json")
-    if os.path.exists(pg_path):
-        with open(pg_path, encoding="utf-8") as fh:
-            park_geometry = json.load(fh)
-    return park_geometry

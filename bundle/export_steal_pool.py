@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
 import duckdb
 import numpy as np
 
-from bundle.common import take_view, ymd_select
+from bundle.common import (
+    float_columns,
+    game_ymd_column,
+    meta_column,
+    optional_meta_column,
+    recency_column,
+    take_view,
+    write_json,
+    ymd_select,
+)
 from bundle.worker_pools import StealPool, steal_pitch_class_codes
 from db.introspect import duck_columns
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -42,7 +51,8 @@ def build_steal_pool_artifact(
     written under temporary names and moved into place only when both targets
     succeeded, the manifest last, so a failed export leaves the old pool whole.
     """
-    missing = [c for c in ("pitch_class", "is_pickoff_row") if c not in _steal_pool_columns(con)]
+    have = duck_columns(con, "sim", "steal_opportunity_pool", this_file_only=True)
+    missing = [c for c in ("pitch_class", "is_pickoff_row") if c not in have]
     if missing:
         raise RuntimeError(
             f"sim.steal_opportunity_pool has no {', '.join(missing)} column: apply "
@@ -51,7 +61,7 @@ def build_steal_pool_artifact(
         )
     pool_dir = os.path.join(out_dir, "steal_pool")
     os.makedirs(pool_dir, exist_ok=True)
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     counts: dict[str, int] = {}
     # (temporary path, final path) of every file written, moved into place last.
     staged: list[tuple[str, str]] = []
@@ -63,15 +73,11 @@ def build_steal_pool_artifact(
         for tmp, _final in staged:
             if os.path.exists(tmp):
                 os.remove(tmp)
-    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-        json.dump({"seasons": seasons, "counts": counts, "sit_cols": _STEAL_SIT_COLS}, fh, indent=2)
+    write_json(
+        os.path.join(pool_dir, "manifest.json"),
+        {"seasons": seasons, "counts": counts, "sit_cols": _STEAL_SIT_COLS},
+    )
     return counts
-
-
-def _steal_pool_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
-    """The columns of sim.steal_opportunity_pool in this DuckDB file
-    (an attached Postgres catalog is left out)."""
-    return duck_columns(con, "sim", "steal_opportunity_pool", this_file_only=True)
 
 
 def _write_steal_pool_targets(
@@ -96,11 +102,7 @@ def _write_steal_pool_targets(
             f"WHERE {w} ORDER BY pitch_id"
         ).fetchnumpy()
         n = len(d[_STEAL_SIT_COLS[0]])
-        sit = np.nan_to_num(
-            np.stack(
-                [np.ma.filled(d[c], np.nan).astype(np.float32) for c in _STEAL_SIT_COLS], axis=1
-            )
-        ).astype(np.float32)
+        sit = float_columns(d, _STEAL_SIT_COLS)
         sit_tmp = os.path.join(pool_dir, f"tmp_{target}.sit.npy")
         meta_tmp = os.path.join(pool_dir, f"tmp_{target}.meta.parquet")
         staged.append((sit_tmp, os.path.join(pool_dir, f"{target}.sit.npy")))
@@ -159,27 +161,11 @@ def load_steal_pools(
     if os.path.exists(os.path.join(sp_dir, "manifest.json")):
         for target in ("2", "3"):
             meta_path = os.path.join(sp_dir, f"{target}.meta.parquet")
-            # SELECT * so a parquet without the pickoff columns still
-            # loads; the taker fills the missing columns below.
             m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
-
-            def _sp_take(attr: str, col: str, dtype, fill, *, _t=target, _m=m) -> np.ndarray:
-                # _t/_m bind the loop variables at definition time (B023).
-                v = views.get(f"steal_pool.{_t}.{attr}")
-                if isinstance(v, np.ndarray):
-                    return v
-                if col not in _m:
-                    # A legacy bundle carries no pickoff columns:
-                    # all-zero labels stage no pickoffs.
-                    n_rows = len(_m["runner_id"])
-                    return np.full(n_rows, fill, dtype=dtype)
-                return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
-
-            # The class of each row's pitch. Not through
-            # _sp_take: its fill would read a pre-0031 bundle as all
-            # pickoff rows (code 0). No column means no classes (None),
-            # and the loop then runs the single pre-pitch draw.
-            pc_view = views.get(f"steal_pool.{target}.pitch_class")
+            p = f"steal_pool.{target}"
+            # The class of each row's pitch. No column means no classes
+            # (None), and the loop then runs the single pre-pitch draw.
+            pc_view = views.get(f"{p}.pitch_class")
             if isinstance(pc_view, np.ndarray):
                 pitch_class: np.ndarray | None = pc_view
             elif "pitch_class" in m:
@@ -188,45 +174,31 @@ def load_steal_pools(
                 )
             else:
                 pitch_class = None
-            po_view = views.get(f"steal_pool.{target}.is_pickoff_row")
-            if isinstance(po_view, np.ndarray):
-                is_pickoff_row: np.ndarray | None = po_view
-            elif "is_pickoff_row" in m:
-                is_pickoff_row = np.asarray(np.ma.filled(m["is_pickoff_row"], False), dtype=np.int8)
-            else:
-                is_pickoff_row = None
 
             steal_pools[target] = StealPool(
                 # The game date, for the draw-time cutoff.
-                game_ymd=(
-                    np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
-                    if "game_ymd" in m
-                    else None
-                ),
+                game_ymd=game_ymd_column(m),
                 sit=take_view(
                     views,
                     f"steal_pool.{target}.sit",
                     os.path.join(sp_dir, f"{target}.sit.npy"),
                 ),
-                runner_id=_sp_take("runner_id", "runner_id", np.int64, 0),
-                pitcher_id=_sp_take("pitcher_id", "pitcher_id", np.int64, 0),
-                catcher_id=_sp_take("catcher_id", "catcher_id", np.int64, 0),
-                season=_sp_take("season", "season", np.int64, 0),
-                attempted=_sp_take("attempted", "attempted", np.int8, 0),
-                success=_sp_take("success", "success", np.int8, 0),
-                recency=(
-                    views.get(f"steal_pool.{target}.recency")
-                    if isinstance(views.get(f"steal_pool.{target}.recency"), np.ndarray)
-                    else np.nan_to_num(
-                        np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
-                        nan=1.0,
-                    )
+                runner_id=meta_column(views, f"{p}.runner_id", m, "runner_id", np.int64),
+                pitcher_id=meta_column(views, f"{p}.pitcher_id", m, "pitcher_id", np.int64),
+                catcher_id=meta_column(views, f"{p}.catcher_id", m, "catcher_id", np.int64),
+                season=meta_column(views, f"{p}.season", m, "season", np.int64),
+                attempted=meta_column(views, f"{p}.attempted", m, "attempted", np.int8),
+                success=meta_column(views, f"{p}.success", m, "success", np.int8),
+                recency=recency_column(views, f"{p}.recency", m),
+                pickoff_out=meta_column(views, f"{p}.pickoff_out", m, "pickoff_out", np.int8),
+                pickoff_advancing=meta_column(
+                    views, f"{p}.pickoff_advancing", m, "pickoff_advancing", np.int8
                 ),
-                pickoff_out=_sp_take("pickoff_out", "pickoff_out", np.int8, 0),
-                pickoff_advancing=_sp_take("pickoff_advancing", "pickoff_advancing", np.int8, 0),
-                pickoff_error=_sp_take("pickoff_error", "pickoff_error", np.int8, 0),
+                pickoff_error=meta_column(views, f"{p}.pickoff_error", m, "pickoff_error", np.int8),
                 pitch_class=pitch_class,
-                is_pickoff_row=is_pickoff_row,
+                is_pickoff_row=optional_meta_column(
+                    views, f"{p}.is_pickoff_row", m, "is_pickoff_row", np.int8, False
+                ),
             )
             # The two files of a target come from two writes;
             # refuse a pair whose row counts differ (a torn export).

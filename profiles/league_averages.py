@@ -9,6 +9,7 @@ import logging
 import duckdb
 
 from db.introspect import duck_columns
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
@@ -38,24 +39,19 @@ class LeagueAverageProfiles:
     def __init__(self, duckdb_path: str) -> None:
         self._path = duckdb_path
 
-    @staticmethod
-    def _derived_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
-        """The columns ``derived.<table>`` carries (empty when the table is
-        absent): the probe the engines and the calibrator use, so a database
-        before migration 0029, or a fixture that builds only some tables,
-        still gets its league averages."""
-        return duck_columns(conn, "derived", table)
-
     def compute(self, seasons: list[int]) -> None:
         conn = duckdb.connect(self._path)
         try:
             conn.execute(self.LEAGUE_AVG_DDL)
-            season_list = ", ".join(str(s) for s in seasons)
-            # The newer columns and tables, probed rather than assumed.
-            brm_cols = self._derived_columns(conn, "baserunner_season_metrics")
-            bss_cols = self._derived_columns(conn, "baserunner_steal_metrics")
-            psm_cols = self._derived_columns(conn, "pitcher_steal_metrics")
-            fsm_cols = self._derived_columns(conn, "fielder_season_metrics")
+            season_list = sql_seasons(seasons)
+            # The newer columns and tables, probed rather than assumed (empty
+            # when the table is absent), so a database before migration 0029,
+            # or a fixture that builds only some tables, still gets its league
+            # averages.
+            brm_cols = duck_columns(conn, "derived", "baserunner_season_metrics")
+            bss_cols = duck_columns(conn, "derived", "baserunner_steal_metrics")
+            psm_cols = duck_columns(conn, "derived", "pitcher_steal_metrics")
+            fsm_cols = duck_columns(conn, "derived", "fielder_season_metrics")
 
             # Pitcher average (used for GMM fallback)
             conn.execute(f"""

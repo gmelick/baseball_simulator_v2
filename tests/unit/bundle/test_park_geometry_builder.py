@@ -108,7 +108,6 @@ class Balls:
             "spray": spray,
             "dist": dist,
             "hr": hr,
-            "kept300": (~hr) & (dist >= 300.0),
         }
         if with_factors:
             out["ev"] = np.asarray([r[5] for r in self.rows], dtype=np.float64)

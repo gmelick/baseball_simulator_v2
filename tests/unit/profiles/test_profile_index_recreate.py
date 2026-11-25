@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import duckdb
 
-from pools.pool_metadata import _ensure_index_if_not_exists
-from profiles.build_profiles import PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor, _ensure_index_if_not_exists
 
 
 # --------------------------------------------------------------------------- helper

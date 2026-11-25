@@ -331,11 +331,11 @@ def test_the_route_fragments_render_from_the_shared_sets(
 
 
 def test_the_profile_sql_binds_the_shared_sets() -> None:
-    """The profile SQL binds the six sets from the vocabulary module.
+    """The profile SQL binds the vocabulary module's sets and its swing.
 
-    ``profiles/sql.py`` builds the profiles' pitch-result SQL,
-    and each of its six sets is the vocabulary module's own object. So the
-    profiles hold no copy that could drift.
+    ``profiles/sql.py`` builds the profiles' pitch-result SQL. Each of its five
+    sets is the vocabulary module's own object, and its swing is the module's
+    ``sql_swing()``. So the profiles hold no copy that could drift.
     """
     from profiles import sql as computor
 
@@ -345,9 +345,9 @@ def test_the_profile_sql_binds_the_shared_sets() -> None:
         "WHIFF_TYPES",
         "FOUL_TYPES",
         "STRIKE_THREE_FOUL_TYPES",
-        "NON_SWING_TYPES",
     ):
         assert getattr(computor, name) is getattr(statcast_events, name), name
+    assert computor.SQL_SWING == statcast_events.sql_swing()
 
 
 def test_the_api_and_the_profiles_render_the_same_swing() -> None:

@@ -6,6 +6,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from db.introspect import duck_columns
+from profiles.sql import sql_seasons
+
 from .common import (
     EXPECT,
     LABELS,
@@ -14,8 +17,6 @@ from .common import (
     POOL,
     SNAP,
     _log,
-    _season_list,
-    _table_columns,
 )
 
 # ---------------------------------------------------------------------------
@@ -26,14 +27,16 @@ from .common import (
 def take_snapshot(con: Any, seasons: list[int]) -> None:
     """Every pool row's six values (and its pair) into a TEMP table. NULL
     labels read FALSE, the export's own reading."""
-    has_mark = "is_pickoff_row" in _table_columns(con, "sim", "steal_opportunity_pool")
+    has_mark = "is_pickoff_row" in duck_columns(
+        con, "sim", "steal_opportunity_pool", this_file_only=True
+    )
     mark = "COALESCE(is_pickoff_row, FALSE)" if has_mark else "FALSE"
     labels = ", ".join(f"COALESCE({c}, FALSE) AS {c}" for c in LABELS)
     con.execute(
         f"CREATE OR REPLACE TEMP TABLE {SNAP} AS "
         f"SELECT pitch_id, season, game_pk, at_bat_number, target_base, {labels}, "
         f"{mark} AS is_pickoff_row "
-        f"FROM {POOL} WHERE season IN ({_season_list(seasons)})"
+        f"FROM {POOL} WHERE season IN ({sql_seasons(seasons)})"
     )
 
 
@@ -66,7 +69,7 @@ def count_pickoff_rows(con: Any, seasons: list[int]) -> None:
                    END AS pair
             FROM pg.raw.play_events
             WHERE event_type IN ('pickoff', 'pickoff_error')
-              AND season IN ({_season_list(seasons)})
+              AND season IN ({sql_seasons(seasons)})
         ),
         pitched AS (
             SELECT DISTINCT game_pk, at_bat_number, target_base

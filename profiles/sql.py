@@ -10,7 +10,6 @@ from ingest.statcast_events import (
     CALLED_STRIKE_TYPES,
     FOUL_TYPES,
     IN_PLAY_TYPES,
-    NON_SWING_TYPES,
     STRIKE_THREE_FOUL_TYPES,
     WHIFF_TYPES,
     sql_batter_retired,
@@ -18,12 +17,13 @@ from ingest.statcast_events import (
     sql_in_play,
     sql_list,
     sql_outs_recorded,
+    sql_swing,
 )
 
-#: The outfield test of the fielder aggregate's jump columns. The jump is an
-#: outfield measurement, so an infield row gets NULL, never the player's
-#: figure from an outfield season.
-_SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
+
+def sql_seasons(seasons) -> str:
+    """Render seasons as the inside of a SQL ``IN`` list: ``2025, 2026``."""
+    return ", ".join(str(int(s)) for s in seasons)
 
 
 # ---------------------------------------------------------------------------
@@ -40,15 +40,7 @@ _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 # ---------------------------------------------------------------------------
 
 
-def sql_in(types: tuple[str, ...]) -> str:
-    """Render Statcast type codes as a SQL ``IN`` list: ``('S', 'W', 'M')``.
-
-    Delegates to the shared renderer, so the two cannot drift.
-    """
-    return sql_list(types)
-
-
-SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
+SQL_WHIFF = f"type IN {sql_list(WHIFF_TYPES)}"
 
 #: The pitch pool's class for one ``raw.pitches`` row: the class the
 #: simulator's count machine reads (the foul-tip strike three, SIM-553). The
@@ -60,13 +52,13 @@ SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
 #: the insert, and a person looks.
 SQL_OUTCOME_TYPE = f"""CASE
                         WHEN events = 'hit_by_pitch' OR TRIM(type) = 'H' THEN 'hit_by_pitch'
-                        WHEN TRIM(type) IN {sql_in(BALL_TYPES)} THEN 'ball'
-                        WHEN TRIM(type) IN {sql_in(CALLED_STRIKE_TYPES)} THEN 'called_strike'
-                        WHEN TRIM(type) IN {sql_in(WHIFF_TYPES)} THEN 'swinging_strike'
-                        WHEN TRIM(type) IN {sql_in(STRIKE_THREE_FOUL_TYPES)} AND strikes = 2
+                        WHEN TRIM(type) IN {sql_list(BALL_TYPES)} THEN 'ball'
+                        WHEN TRIM(type) IN {sql_list(CALLED_STRIKE_TYPES)} THEN 'called_strike'
+                        WHEN TRIM(type) IN {sql_list(WHIFF_TYPES)} THEN 'swinging_strike'
+                        WHEN TRIM(type) IN {sql_list(STRIKE_THREE_FOUL_TYPES)} AND strikes = 2
                             THEN 'swinging_strike'
-                        WHEN TRIM(type) IN {sql_in(FOUL_TYPES)} THEN 'foul'
-                        WHEN TRIM(type) IN {sql_in(IN_PLAY_TYPES)} THEN 'in_play'
+                        WHEN TRIM(type) IN {sql_list(FOUL_TYPES)} THEN 'foul'
+                        WHEN TRIM(type) IN {sql_list(IN_PLAY_TYPES)} THEN 'in_play'
                     END"""
 
 
@@ -117,11 +109,6 @@ PHYSICAL_COLUMN_ORDER: tuple[str, ...] = tuple(
     for stem in (*(f[0] for f in _SWING_FEATURES), *(f[0] for f in _STANCE_FEATURES))
     for suffix in ("", "_vs_l", "_vs_r")
 ) + ("physical_swings", "physical_swings_vs_l", "physical_swings_vs_r")
-
-#: Everything appended to ``derived.batter_season_metrics`` after ``updated_at``,
-#: in order. The physical block (migration 0025) then the cutoff stamp
-#: (migration 0026). Same positional-insert warning as above.
-PROFILE_TAIL_COLUMNS: tuple[str, ...] = (*PHYSICAL_COLUMN_ORDER, "asof_date")
 
 #: What counts as a competitive swing, FITTED against Savant's own published
 #: numbers rather than guessed.
@@ -272,7 +259,7 @@ def _sql_stance_select() -> str:
     return "\n".join(lines)
 
 
-SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
+SQL_SWING = sql_swing()
 
 
 # ---------------------------------------------------------------------------

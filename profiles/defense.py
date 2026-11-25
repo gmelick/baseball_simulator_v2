@@ -21,10 +21,8 @@ log = logging.getLogger("player_profile_computor")
 # ---------------------------------------------------------------------------
 
 HC_SCALE = 2.48  # hc units per foot
-HOME_PLATE = (125.42, 199.27)
 SECOND_BASE = (125.42, 108.27)
 FIRST_BASE = (162.5, 153.5)
-THIRD_BASE = (88.3, 153.5)
 
 AVG_FIELDER_POS = {
     "SS": {"R": (112.0, 152.0), "L": (118.0, 149.0)},
@@ -181,9 +179,6 @@ def _classify_direction_of(
     dx = ball_x - fielder_x
     dy = ball_y - fielder_y
 
-    # Angle from fielder to ball: 0° = toward home plate, 180° = away
-    math.degrees(math.atan2(dx, -dy))  # -dy because y decreases toward OF
-
     if position in ("LF", "CF", "RF"):
         # Outfield: going_back = ball is further from home plate than fielder
         going_back = ball_y < fielder_y  # smaller y = deeper outfield
@@ -213,14 +208,7 @@ def _classify_direction_of(
     return category, going_back
 
 
-def _sigmoid(x: np.ndarray, L: float, k: float, x0: float) -> np.ndarray:
-    """Standard sigmoid function."""
-    return L / (1.0 + np.exp(-k * (x - x0)))
-
-
-def _fit_logistic_model(
-    X: np.ndarray, y: np.ndarray, max_iter: int = 1000
-) -> LogisticRegression | None:
+def _fit_logistic_model(X: np.ndarray, y: np.ndarray) -> LogisticRegression | None:
     """
     Fit a logistic regression with standard scaling.
     Returns None if fitting fails or sample is too small.
@@ -232,7 +220,7 @@ def _fit_logistic_model(
     try:
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
-        model = LogisticRegression(max_iter=max_iter, solver="lbfgs")
+        model = LogisticRegression(max_iter=1000, solver="lbfgs")
         model.fit(X_scaled, y)
         # Store scaler as attribute for later prediction
         model._scaler = scaler
@@ -246,3 +234,13 @@ def _predict_proba(model: LogisticRegression, X: np.ndarray) -> np.ndarray:
     """Predict probability using a fitted logistic model with its stored scaler."""
     X_scaled = model._scaler.transform(X)
     return model.predict_proba(X_scaled)[:, 1]
+
+
+def _quick_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    """Fast AUC approximation without importing sklearn.metrics."""
+    try:
+        from sklearn.metrics import roc_auc_score
+
+        return roc_auc_score(y_true, y_score)
+    except Exception:
+        return 0.0

@@ -33,11 +33,12 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import duckdb
 
+from db.dsn import attach_pg
 from db.introspect import duck_relation_readable
 from pools.build_advancement_pool import AdvancementPoolMixin
 from pools.build_at_bat_situations import AtBatSituationsMixin
@@ -45,7 +46,6 @@ from pools.build_batted_ball_pool import BattedBallPoolMixin
 from pools.build_ibb_rates import IbbRatesMixin
 from pools.build_pitch_pool import PitchPoolMixin
 from pools.build_steal_pool import StealPoolMixin
-from pools.pool_metadata import _ensure_index_if_not_exists
 from profiles.base import ComputorBase
 from profiles.baserunner import BaserunnerProfilesMixin
 from profiles.batter import BatterProfilesMixin
@@ -57,6 +57,7 @@ from profiles.leverage import build_run_expectancy_matrix
 from profiles.manager import ManagerProfilesMixin
 from profiles.park_factors import ParkFactorsMixin
 from profiles.pitcher import PitcherProfilesMixin
+from profiles.sql import sql_seasons
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,8 +108,7 @@ class PlayerProfileComputor(
     def _connect(self) -> None:
         log.info("Opening DuckDB at %s …", self._duckdb_path)
         self._conn = duckdb.connect(self._duckdb_path)
-        self._conn.execute("INSTALL postgres; LOAD postgres;")
-        self._conn.execute(f"ATTACH '{self._pg_dsn}' AS pg (TYPE postgres, READ_ONLY);")
+        attach_pg(self._conn, self._pg_dsn)
         log.info("PostgreSQL attached as 'pg'.")
         self._run_schema_ddl()
 
@@ -158,7 +158,7 @@ class PlayerProfileComputor(
             If True, deletes and rewrites all derived metrics for the seasons.
         """
         if seasons is None:
-            seasons = [datetime.today().year]
+            seasons = [date.today().year]
 
         self._connect()
         try:
@@ -184,9 +184,9 @@ class PlayerProfileComputor(
             self._compute_baserunner_profiles(seasons, asof=asof)
             self._build_baserunner_steal_metrics(seasons, asof=asof)
             self._build_pitcher_steal_metrics(seasons, asof=asof)
-            # The per-game bullpen workload (_compute_bullpen_workload) is not
-            # built here: the bullpen-availability ingest computes it against
-            # the live roster, so a nightly copy would never be read.
+            # The per-game bullpen workload is not built here: the
+            # bullpen-availability ingest computes it against the live roster
+            # (ingest/load_bullpen_availability.py compute_bullpen_workload).
             self._compute_manager_profiles(seasons, asof=asof)
 
             # ── The defensive metrics ────────────────────────────────────────
@@ -262,7 +262,7 @@ class PlayerProfileComputor(
           - derived.run_expectancy_matrix, keyed by season range, not season.
           - the sim.* pools: each pool's build deletes its own seasons.
         """
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         tables = [
             # Children before parents (the foreign keys).
             "derived.pitcher_gmm_components",
@@ -365,15 +365,32 @@ class PlayerProfileComputor(
         return failed
 
 
+def _ensure_index_if_not_exists(create_index_sql: str) -> str:
+    """Inject ``IF NOT EXISTS`` into a ``CREATE [UNIQUE] INDEX`` statement.
+
+    It makes an index recreate idempotent, so a rerun of a profile build (or
+    of a half-applied earlier run) cannot fail on an index that is already
+    there. A statement that already has the clause, or is not a CREATE INDEX
+    form this recognises, comes back unchanged (the caller drops the index IF
+    EXISTS first anyway).
+    """
+    stmt = create_index_sql.strip()
+    low = stmt.lower()
+    if "if not exists" in low:
+        return stmt
+    for prefix in ("create unique index ", "create index "):
+        if low.startswith(prefix):
+            return stmt[: len(prefix)] + "IF NOT EXISTS " + stmt[len(prefix) :]
+    return stmt
+
+
 # =============================================================================
 # Entry point
 # =============================================================================
 
 if __name__ == "__main__":
     import argparse
-    import os
     import sys
-    from datetime import datetime
 
     parser = argparse.ArgumentParser(
         description=(
@@ -419,6 +436,7 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
+    seasons = args.seasons or [date.today().year]
 
     if not args.dsn:
         sys.stderr.write("ERROR: no Postgres DSN. Set BASEBALL_DB_DSN or pass --dsn.\n")
@@ -428,7 +446,7 @@ if __name__ == "__main__":
         "Starting player profile compute - dsn=%s duckdb=%s seasons=%s full_rebuild=%s",
         args.dsn.split("@", 1)[-1] if "@" in args.dsn else args.dsn,
         args.duckdb_path,
-        args.seasons,
+        seasons,
         args.full_rebuild,
     )
 
@@ -436,10 +454,10 @@ if __name__ == "__main__":
         pg_dsn=args.dsn,
         duckdb_path=args.duckdb_path,
     )
-    computor.run(seasons=args.seasons, full_rebuild=args.full_rebuild, asof=args.asof)
+    computor.run(seasons=seasons, full_rebuild=args.full_rebuild, asof=args.asof)
     log.info("Player profile compute complete.")
 
     if not args.skip_league_averages:
         log.info("Computing league averages ...")
-        LeagueAverageProfiles(args.duckdb_path).compute(args.seasons or [datetime.today().year])
+        LeagueAverageProfiles(args.duckdb_path).compute(seasons)
         log.info("League averages complete.")

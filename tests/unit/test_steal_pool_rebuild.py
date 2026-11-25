@@ -717,7 +717,7 @@ class TestTheChecks:
             "VALUES ('steal_opportunity_pool', 2024, 3, 'sim553.1')"
         )
         before = rb._steal_counts(c, [2024])
-        versions = rb._steal_versions(c, [2024])
+        versions = pool_meta.pool_builder_versions(c, "steal_opportunity_pool", [2024])
         c.execute("BEGIN TRANSACTION")
         c.execute("DELETE FROM sim.steal_opportunity_pool")
         _rebuilt(c)

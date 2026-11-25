@@ -78,7 +78,7 @@ def test_every_np_load_in_the_loader_refuses_pickle():
         source = path.read_text(encoding="utf-8")
         calls += len(_np_load_calls(source))
         bad += [f"{path.name}:{line}" for line in _np_load_calls_without_false(source)]
-    assert calls >= 8, "the loader lost its np.load calls"
+    assert calls >= 7, "the loader lost its np.load calls"
     assert bad == [], f"np.load without allow_pickle=False at {bad}"
 
 

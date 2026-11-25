@@ -582,20 +582,6 @@ def test_redact_dsn_never_echoes_the_secret(dsn: str) -> None:
     assert mfc._SAFE_DSN_SHAPE.match(got) or got in ("", mfc.REDACTED)
 
 
-def test_redact_text_scrubs_a_dsn_out_of_an_attach_error() -> None:
-    """A DuckDB ATTACH failure quotes the connection string back.
-
-    ``open_connection`` logs that message. Logging it raw writes the password to
-    stdout and into any captured CI log.
-    """
-    dsn = "host=db port=5432 user=x password=hunter2SECRET dbname=y"
-    message = f'Failed to connect using "{dsn}": connection refused'
-    got = mfc._redact_text(message, dsn)
-    assert "hunter2SECRET" not in got
-    assert "db:5432/y" in got
-    assert "connection refused" in got
-
-
 # ---------------------------------------------------------------------------
 # The widening ladder
 # ---------------------------------------------------------------------------

@@ -812,8 +812,6 @@ class TestTheLoader:
         shared = art.extract_shared_arrays()
         assert shared["steal_pool.2.pitch_class"].tolist() == [1, 4]
         view = np.array([3, 3], dtype=np.int8)
-        art.attach_shared_views({"steal_pool.2.pitch_class": view})
-        assert art.steal_pools["2"].pitch_class is view
         # A worker that loads with the shared views takes the view, not the disk.
         again = EngineArtifacts.load(str(tmp_path), shared_views={"steal_pool.2.pitch_class": view})
         assert again.steal_pools["2"].pitch_class is view

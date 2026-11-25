@@ -4,9 +4,8 @@ Unit tests for profiles/build_profiles.py
 
 Covers:
   - Module-level constants & dataclass-like config
-  - Pure math/physics helpers (compute_leverage_index, _hc_to_feet,
-    _euclidean_hc, _throw_time, _estimate_hang_time,
-    _estimate_gb_travel_time, _classify_direction_of, _sigmoid)
+  - Pure math/physics helpers (_hc_to_feet, _euclidean_hc, _throw_time, _estimate_hang_time,
+    _estimate_gb_travel_time, _classify_direction_of)
   - Logistic helpers (_fit_logistic_model, _predict_proba, _quick_auc)
   - GMM fitting helpers (_fit_gmm_for_pitcher, _label_component)
   - build_run_expectancy_matrix with a mocked DuckDB connection
@@ -24,7 +23,6 @@ brittle data-shape assertions).
 
 from __future__ import annotations
 
-import math
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -37,11 +35,9 @@ from profiles.arsenal_fit import (  # noqa: E402
     GMM_MIN_K,
     _fit_gmm_for_pitcher,
     _label_component,
-    _quick_auc,
 )
 from profiles.constants import (  # noqa: E402
     MIN_BATTER_PA,
-    MIN_FIELDER_BIP,
     MIN_PITCHER_PITCHES,
     PARK_PRIOR_PA,
 )
@@ -56,16 +52,13 @@ from profiles.defense import (  # noqa: E402
     _fit_logistic_model,
     _hc_to_feet,
     _predict_proba,
-    _sigmoid,
+    _quick_auc,
     _throw_time,
 )
 from profiles.league_averages import LeagueAverageProfiles  # noqa: E402
 from profiles.leverage import (  # noqa: E402
-    LI_HIGH,
-    LI_LOW,
     RE24_APPROX,
     build_run_expectancy_matrix,
-    compute_leverage_index,
 )
 from profiles.sql import (  # noqa: E402
     BARREL_MAX_LA,
@@ -95,13 +88,9 @@ class TestModuleConstants:
     def test_sample_thresholds_positive(self):
         assert MIN_PITCHER_PITCHES > 0
         assert MIN_BATTER_PA > 0
-        assert MIN_FIELDER_BIP > 0
 
     def test_park_prior_pa_positive(self):
         assert PARK_PRIOR_PA > 0
-
-    def test_li_low_lt_high(self):
-        assert LI_LOW < LI_HIGH
 
     def test_barrel_zone_correct_order(self):
         assert BARREL_MIN_LA < BARREL_MAX_LA
@@ -122,51 +111,6 @@ class TestModuleConstants:
         # No runners, 2 outs should be the lowest expected runs state listed.
         assert RE24_APPROX[(2, 0b000)] < RE24_APPROX[(0, 0b000)]
         assert RE24_APPROX[(0, 0b111)] > RE24_APPROX[(2, 0b001)]
-
-
-# ===========================================================================
-# compute_leverage_index
-# ===========================================================================
-
-
-class TestComputeLeverageIndex:
-    def test_late_inning_higher_than_early(self):
-        early = compute_leverage_index(inning=2, outs=1, runners_state=0b000, score_diff=0)
-        late = compute_leverage_index(inning=9, outs=1, runners_state=0b000, score_diff=0)
-        assert late > early
-
-    def test_close_game_higher_than_blowout(self):
-        close = compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=0)
-        blowout = compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=10)
-        assert close > blowout
-
-    def test_runners_on_base_higher_than_empty(self):
-        empty = compute_leverage_index(inning=8, outs=1, runners_state=0b000, score_diff=0)
-        loaded = compute_leverage_index(inning=8, outs=1, runners_state=0b111, score_diff=0)
-        assert loaded > empty
-
-    def test_two_outs_higher_than_one_out(self):
-        one = compute_leverage_index(inning=8, outs=1, runners_state=0b001, score_diff=0)
-        two = compute_leverage_index(inning=8, outs=2, runners_state=0b001, score_diff=0)
-        assert two > one
-
-    def test_inning_bands(self):
-        i3 = compute_leverage_index(inning=3, outs=0, runners_state=0, score_diff=0)
-        i6 = compute_leverage_index(inning=6, outs=0, runners_state=0, score_diff=0)
-        i8 = compute_leverage_index(inning=8, outs=0, runners_state=0, score_diff=0)
-        i10 = compute_leverage_index(inning=10, outs=0, runners_state=0, score_diff=0)
-        assert i3 < i6 < i8 < i10
-
-    def test_score_diff_clamped_to_five(self):
-        diff5 = compute_leverage_index(inning=9, outs=2, runners_state=0b111, score_diff=5)
-        diff20 = compute_leverage_index(inning=9, outs=2, runners_state=0b111, score_diff=20)
-        # |diff| beyond 5 should produce the same factor (clamped)
-        assert diff5 == diff20
-
-    def test_returns_finite_float(self):
-        out = compute_leverage_index(inning=5, outs=1, runners_state=0b010, score_diff=2)
-        assert isinstance(out, float)
-        assert math.isfinite(out)
 
 
 # ===========================================================================
@@ -294,28 +238,6 @@ class TestClassifyDirection:
     def test_infielder_lateral_2b(self):
         cat, _ = _classify_direction_of(141, 152, 120, 152, "2B")
         assert cat in ("glove_side", "arm_side")
-
-
-# ===========================================================================
-# Sigmoid helpers
-# ===========================================================================
-
-
-class TestSigmoid:
-    def test_standard_sigmoid_basic(self):
-        x = np.array([0.0])
-        out = _sigmoid(x, L=1.0, k=1.0, x0=0.0)
-        assert out[0] == pytest.approx(0.5)
-
-    def test_sigmoid_large_negative_zero(self):
-        x = np.array([-100.0])
-        out = _sigmoid(x, L=1.0, k=1.0, x0=0.0)
-        assert out[0] == pytest.approx(0.0, abs=1e-3)
-
-    def test_sigmoid_large_positive_one(self):
-        x = np.array([100.0])
-        out = _sigmoid(x, L=1.0, k=1.0, x0=0.0)
-        assert out[0] == pytest.approx(1.0, abs=1e-3)
 
 
 # ===========================================================================
@@ -728,7 +650,6 @@ def _make_taken_pitches_df(n: int = 2000) -> pd.DataFrame:
             "balls": rng.integers(0, 4, n),
             "strikes": rng.integers(0, 3, n),
             "is_strike": rng.integers(0, 2, n),
-            "is_taken": np.ones(n, dtype=int),
         }
     )
 
@@ -874,9 +795,6 @@ def _make_infield_plays_df(n: int = 800) -> pd.DataFrame:
             # play_outs(events, type) so the X-typed hidden runner out counts).
             "events": rng.choice(["single", "field_out", "force_out", "field_error"], n),
             "type": rng.choice(["X", "D"], n),
-            "fielding_error": [None] * n,
-            "throwing_error_1": [None] * n,
-            "throwing_error_2": [None] * n,
         }
     )
 

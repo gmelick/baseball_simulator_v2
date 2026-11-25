@@ -14,9 +14,85 @@ from profiles.defense import (
     RUNS_PER_OAA_INFIELD,
     RUNS_PER_OAA_OUTFIELD,
 )
-from profiles.sql import _SQL_IS_OF
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
+
+#: The outfield test of the fielder aggregate's jump columns. The jump is an
+#: outfield measurement, so an infield row gets NULL, never the player's
+#: figure from an outfield season.
+_SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
+
+#: The six per-play temp tables the fielder aggregator joins, each as a
+#: CREATE TABLE IF NOT EXISTS with the columns the aggregator references.
+#: The statement is idempotent: if the compute step DID create the table, it
+#: no-ops and the real data is preserved.
+_FIELDER_PLACEHOLDER_DDL = {
+    # Outfield catch probability — _compute_outfield_catch_probability
+    "_tmp_of_plays": """
+        CREATE TABLE IF NOT EXISTS _tmp_of_plays (
+            fielder_id INTEGER, position VARCHAR, season SMALLINT,
+            catch_probability FLOAT, caught BOOLEAN,
+            oaa_credit FLOAT, direction_cat VARCHAR, star_rating INTEGER
+        )
+    """,
+    # Infield OAA — _compute_infield_oaa
+    "_tmp_if_plays": """
+        CREATE TABLE IF NOT EXISTS _tmp_if_plays (
+            fielder_id INTEGER, position VARCHAR, season SMALLINT,
+            out_probability FLOAT, out_recorded BOOLEAN,
+            oaa_credit FLOAT, direction_category VARCHAR
+        )
+    """,
+    # Double-play metrics — _compute_dp_metrics
+    "_tmp_dp_plays": """
+        CREATE TABLE IF NOT EXISTS _tmp_dp_plays (
+            initiator_id INTEGER, initiator_position VARCHAR,
+            pivot_id INTEGER, pivot_position VARCHAR,
+            season SMALLINT,
+            dp_probability FLOAT, dp_turned BOOLEAN,
+            dp_run_value FLOAT
+        )
+    """,
+    # Errors — _compute_error_decomposition
+    # Schema follows the SELECT shape inside the aggregator's `err` CTE
+    # (SELECT * FROM _tmp_errors).  Keep the column set minimal but
+    # include the foreign-key columns the outer SELECT joins on.
+    #
+    # These names (fielding_error_count, throwing_error_count,
+    # fielding_error_rate, throwing_error_rate, and the unused
+    # total_plays_fielded) must match _compute_error_decomposition's
+    # output columns exactly. In production that builder always
+    # creates the real table first; the placeholder serves a caller
+    # that runs the aggregator alone, which fails with a Binder Error
+    # on any column this placeholder misnames.
+    "_tmp_errors": """
+        CREATE TABLE IF NOT EXISTS _tmp_errors (
+            fielder_id INTEGER, position VARCHAR, season SMALLINT,
+            total_plays_fielded INTEGER, fielding_error_count INTEGER,
+            throwing_error_count INTEGER, fielding_error_rate FLOAT,
+            throwing_error_rate FLOAT, error_rate FLOAT
+        )
+    """,
+    # Bunt defense — _compute_bunt_defense
+    # The same rule as _tmp_errors above: bunt_outs_recorded and
+    # bunt_fielding_rate are the names _compute_bunt_defense produces
+    # and the aggregator's outer SELECT reads from `b`.
+    "_tmp_bunt_defense": """
+        CREATE TABLE IF NOT EXISTS _tmp_bunt_defense (
+            fielder_id INTEGER, position VARCHAR, season SMALLINT,
+            bunt_opportunities INTEGER, bunt_outs_recorded INTEGER,
+            bunt_fielding_rate FLOAT
+        )
+    """,
+    # 1B scooping — _compute_first_base_scooping
+    "_tmp_1b_scoop": """
+        CREATE TABLE IF NOT EXISTS _tmp_1b_scoop (
+            season SMALLINT, fielder_id INTEGER, position VARCHAR,
+            scoop_opportunities INTEGER, scoop_success_rate FLOAT
+        )
+    """,
+}
 
 
 class FielderProfilesMixin(ComputorBase):
@@ -36,82 +112,7 @@ class FielderProfilesMixin(ComputorBase):
         to make the JOIN a no-op when the corresponding compute step
         was skipped, NOT to substitute real data.
         """
-        # Each entry: (table_name, CREATE TABLE DDL with the columns
-        # the aggregator references).  We use CREATE TABLE IF NOT EXISTS
-        # so this is idempotent: if the compute step DID create the
-        # table, this no-ops and the real data is preserved.
-        placeholders = {
-            # Outfield catch probability — _compute_outfield_catch_probability
-            "_tmp_of_plays": """
-                CREATE TABLE IF NOT EXISTS _tmp_of_plays (
-                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
-                    catch_probability FLOAT, caught BOOLEAN,
-                    oaa_credit FLOAT, direction_cat VARCHAR, star_rating INTEGER
-                )
-            """,
-            # Infield OAA — _compute_infield_oaa
-            "_tmp_if_plays": """
-                CREATE TABLE IF NOT EXISTS _tmp_if_plays (
-                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
-                    out_probability FLOAT, out_recorded BOOLEAN,
-                    oaa_credit FLOAT, direction_category VARCHAR
-                )
-            """,
-            # Double-play metrics — _compute_dp_metrics
-            "_tmp_dp_plays": """
-                CREATE TABLE IF NOT EXISTS _tmp_dp_plays (
-                    initiator_id INTEGER, initiator_position VARCHAR,
-                    pivot_id INTEGER, pivot_position VARCHAR,
-                    season SMALLINT,
-                    dp_probability FLOAT, dp_turned BOOLEAN,
-                    dp_run_value FLOAT
-                )
-            """,
-            # Errors — _compute_error_decomposition
-            # Schema follows the SELECT shape inside the aggregator's `err` CTE
-            # (SELECT * FROM _tmp_errors).  Keep the column set minimal but
-            # include the foreign-key columns the outer SELECT joins on.
-            #
-            # These names (fielding_error_count, throwing_error_count,
-            # fielding_error_rate, throwing_error_rate, and the unused
-            # total_plays_fielded) must match _compute_error_decomposition's
-            # output columns exactly. In production that builder always
-            # creates the real table first; the placeholder serves a caller
-            # that runs the aggregator alone, which fails with a Binder Error
-            # on any column this placeholder misnames.
-            "_tmp_errors": """
-                CREATE TABLE IF NOT EXISTS _tmp_errors (
-                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
-                    total_plays_fielded INTEGER, fielding_error_count INTEGER,
-                    throwing_error_count INTEGER, fielding_error_rate FLOAT,
-                    throwing_error_rate FLOAT, error_rate FLOAT
-                )
-            """,
-            # Bunt defense — _compute_bunt_defense
-            # The same rule as _tmp_errors above: bunt_outs_recorded and
-            # bunt_fielding_rate are the names _compute_bunt_defense produces
-            # and the aggregator's outer SELECT reads from `b`.
-            "_tmp_bunt_defense": """
-                CREATE TABLE IF NOT EXISTS _tmp_bunt_defense (
-                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
-                    bunt_opportunities INTEGER, bunt_outs_recorded INTEGER,
-                    bunt_fielding_rate FLOAT
-                )
-            """,
-            # 1B scooping — _compute_first_base_scooping
-            "_tmp_1b_scoop": """
-                CREATE TABLE IF NOT EXISTS _tmp_1b_scoop (
-                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
-                    scoop_opportunities INTEGER, scoop_successes INTEGER,
-                    scoop_success_rate FLOAT
-                )
-            """,
-        }
-        for table, ddl in placeholders.items():
-            try:
-                self._conn.execute(ddl)
-            except Exception as exc:  # noqa: BLE001  - defensive log + continue
-                log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
+        self._ensure_placeholder_tables(_FIELDER_PLACEHOLDER_DDL)
 
     def _aggregate_fielder_season_metrics(
         self, seasons: list[int], asof: date | None = None
@@ -155,14 +156,9 @@ class FielderProfilesMixin(ComputorBase):
         player and the jump columns are NULL on an infield row.
         """
         log.info("Aggregating fielder season metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
-        savant_season = (
-            f"(CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END)"
-            if asof is not None
-            else "c.season"
-        )
+        savant_season = self._savant_season_sql("c.season", asof)
         # The per-100 denominator follows the numerator's season.
         # For the season that contains the cutoff, the outs come from the
         # prior season, so the chances must too: from the build (`prev`)
@@ -196,11 +192,7 @@ class FielderProfilesMixin(ComputorBase):
         # A cutoff build also removes a season that had not
         # started yet — INSERT alone only overwrites rows the new query
         # produces, so a stale full-season row would otherwise survive.
-        delete_cutoff = f"OR season > {asof_date.year}" if asof is not None else ""
-        self._conn.execute(f"""
-            DELETE FROM derived.fielder_season_metrics
-            WHERE season IN ({season_list}) {delete_cutoff}
-        """)
+        self._delete_season_rows("derived.fielder_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT INTO derived.fielder_season_metrics
@@ -327,7 +319,7 @@ class FielderProfilesMixin(ComputorBase):
                 c.actual_catch_pct - c.expected_catch_pct AS catch_pct_added,
 
                 -- Range runs
-                CASE WHEN c.position IN ('LF','CF','RF')
+                CASE WHEN {_SQL_IS_OF}
                      THEN c.outs_above_average * {RUNS_PER_OAA_OUTFIELD}
                      ELSE c.outs_above_average * {RUNS_PER_OAA_INFIELD}
                 END AS range_runs,
@@ -489,6 +481,10 @@ class FielderProfilesMixin(ComputorBase):
         self._stamp_one_cutoff("derived.fielder_season_metrics", asof_sql)
         self._assert_fielder_profiles_have_no_leakage(seasons, asof_date)
 
+        # The per-play temp tables have served their one reader.
+        for table in _FIELDER_PLACEHOLDER_DDL:
+            self._conn.execute(f"DROP TABLE IF EXISTS {table}")
+
         log.info("  Fielder season metrics aggregated.")
 
     def _assert_fielder_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
@@ -503,13 +499,7 @@ class FielderProfilesMixin(ComputorBase):
         filtering. The arm block's own dated source, the advancement pool,
         is checked by ``_fill_outfield_arm_block``.
         """
-        season_list = ", ".join(str(s) for s in seasons)
-        self._check_leakage(
-            "raw.pitches",
-            f"SELECT MAX(game_date) FROM pg.raw.pitches "
-            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            asof,
-        )
+        self._check_pitch_sources_leakage(seasons, asof)
 
     # ------------------------------------------------------------------
     # The outfield arm block, from the advancement pool
@@ -545,7 +535,7 @@ class FielderProfilesMixin(ComputorBase):
             log.warning("  arm block skipped: sim.advancement_opportunity_pool absent")
             return
         log.info("Filling the outfield arm block from the advancement pool …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
         self._conn.execute(f"""
             CREATE OR REPLACE TEMP TABLE _arm AS
@@ -604,8 +594,7 @@ class FielderProfilesMixin(ComputorBase):
                 arm_assists                = a.thrown_out,
                 -- NULL until a runner has challenged him.
                 arm_thrown_out_rate        = a.thrown_out * 1.0 / NULLIF(a.attempts, 0),
-                arm_advancement_prevention = (a.expected_attempts - a.attempts) / a.chances,
-                of_arm_runs                = NULL
+                arm_advancement_prevention = (a.expected_attempts - a.attempts) / a.chances
             FROM _arm a
             WHERE f.player_id = a.player_id
               AND f.position = a.position

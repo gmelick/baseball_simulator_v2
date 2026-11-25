@@ -11,30 +11,41 @@ the ``multiprocessing.shared_memory`` plumbing in :mod:`simulation.batch_runner`
 — so each worker ATTACHES the parent's bundle zero-copy instead of re-reading
 it from disk.
 
-These tests exercise the EngineArtifacts side of that contract on a tiny
-synthetic bundle (no disk, no DuckDB) without spawning a real fork
-(``test_persistent_process_pool.py`` and ``test_batch_runner_concurrency.py``
-cover the fork lifecycle). They cover:
+These tests exercise the EngineArtifacts side of that contract without
+spawning a real fork (``test_persistent_process_pool.py`` and
+``test_batch_runner_concurrency.py`` cover the fork lifecycle). They cover:
 
   * the flat-name -> ndarray map :meth:`extract_shared_arrays` returns
-    (keys + dtypes + buffer identity);
-  * :meth:`attach_shared_views` REPLACES the bundle's arrays with the views
-    (no copy; buffer identity preserved);
-  * the worker-side splice round-trips end-to-end via the
-    :func:`simulation.batch_runner._worker_init` -> ``_WORKER_SHARED`` ->
-    :meth:`attach_shared_views` chain, with the shared-memory segments
-    actually live (a probe re-attach succeeds);
-  * defensive contract: unknown keys are ignored; an empty/None ``views``
-    dict is a no-op (the per-worker disk path is unaffected).
+    (keys + dtypes + buffer identity), on a tiny in-memory bundle;
+  * the worker path on a small bundle on disk: the parent loads it and
+    extracts the arrays, :func:`simulation.batch_runner._worker_init`
+    attaches the published segments, and ``EngineArtifacts.load(dir,
+    shared_views=...)`` takes EVERY extracted array as the shared view;
+  * defensive contract: a load ignores unknown keys; an empty views map
+    reads every array from disk.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import duckdb
 import numpy as np
 import pytest
 
+from bundle.common import _savez_plain
 from bundle.load_bundle import EngineArtifacts
-from bundle.worker_pools import BattedBallPool, HandPool
+from bundle.worker_pools import (
+    _ACTOR_EMB_SHAREABLE_ATTRS,
+    _ADV_POOL_SHAREABLE_ATTRS,
+    _BB_POOL_SHAREABLE_ATTRS,
+    _CHANGE_POOL_SHAREABLE_ATTRS,
+    _HAND_POOL_SHAREABLE_ATTRS,
+    _STEAL_POOL_SHAREABLE_ATTRS,
+    BattedBallPool,
+    HandPool,
+)
 from simulation.batch_runner import (
     _WORKER_SHARED,
     _worker_init,
@@ -105,9 +116,141 @@ def _synthetic_artifacts() -> EngineArtifacts:
         bb_pools={"L": _synthetic_bb_pool(seed=20), "R": _synthetic_bb_pool(seed=21)},
         pitcher_sim_index={f"{600_000 + i}:2024": i for i in range(6)},
         pitcher_sim={f"{600_000}:2024": {f"{600_001}:2024": 0.42}},
-        seasons=[2022, 2023, 2024],
         actor_emb=_synthetic_actor_emb(),
     )
+
+
+# ===========================================================================
+# Fixtures — a small bundle on disk with every shareable column
+# ===========================================================================
+
+#: The rows of every pool in the disk bundle.
+_N = 4
+
+
+def _parquet(con: duckdb.DuckDBPyConnection, path: Path, columns: str) -> None:
+    """Write ``_N`` rows of the SQL select list ``columns`` (``i`` is the row number) to ``path``."""
+    con.execute(
+        f"COPY (SELECT {columns} FROM range({_N}) t(i)) TO '{path.as_posix()}' (FORMAT parquet)"
+    )
+
+
+def _npy(path: Path, shape: tuple[int, ...], dtype: type = np.float32) -> None:
+    """Write a small array of distinct values to ``path``."""
+    np.save(path, np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape))
+
+
+def _write_bundle(root: Path) -> str:
+    """A bundle on disk whose every pool carries every shareable column: both
+    hands' pitch and batted-ball pools, both steal pools, one advancement pool,
+    the change pool, two actor embeddings, the pitcher matrix and one actor
+    score matrix. Returns the bundle directory."""
+    con = duckdb.connect(":memory:")
+    ymd = "20240601::INTEGER AS game_ymd"
+    pp = root / "pitch_pool"
+    bb = root / "battedball_pool"
+    for d in (pp, bb, root / "steal_pool", root / "advancement_pool", root / "manager_pool"):
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text("{}", encoding="utf-8")
+    for hand in ("L", "R"):
+        _npy(pp / f"{hand}.geom.npy", (_N, 10))
+        _npy(pp / f"{hand}.sit.npy", (_N, 6))
+        _npy(pp / f"{hand}.bb_row.npy", (_N,), np.int64)
+        _parquet(
+            con,
+            pp / f"{hand}.meta.parquet",
+            "600000 + i AS pitcher_id, 700000 + i AS batter_id, 2024::BIGINT AS season, "
+            "'ball' AS outcome_type, 1.0::FLOAT AS recency_weight, 500000 + i AS catcher_id, "
+            "0::TINYINT AS got_away, 1::TINYINT AS bat_home, "
+            "50::SMALLINT AS pitcher_pitch_count, 2::TINYINT AS times_through_order, "
+            f"5::TINYINT AS zone, {ymd}",
+        )
+        _npy(bb / f"{hand}.geom.npy", (_N, 3))
+        _npy(bb / f"{hand}.sit.npy", (_N, 6))
+        _npy(bb / f"{hand}.pgeom.npy", (_N, 10))
+        fielders = ", ".join(f"{k}00 + i AS fielder_{k}" for k in range(2, 10))
+        _parquet(
+            con,
+            bb / f"{hand}.meta.parquet",
+            "700000 + i AS batter_id, 2024::BIGINT AS season, 'single' AS events, "
+            "1::TINYINT AS result_hits, 0::TINYINT AS result_outs, "
+            "1.0::FLOAT AS recency_weight, 'R' AS p_throws, 15::BIGINT AS venue_id, "
+            "6::TINYINT AS fielded_by_position, 800000 + i AS fielder_player_id, "
+            "2::TINYINT AS runner_1b_dest, -1::TINYINT AS runner_2b_dest, "
+            "-1::TINYINT AS runner_3b_dest, 1::TINYINT AS batter_dest, 1::TINYINT AS dest_ok, "
+            "0::TINYINT AS r1_adv_out, 0::TINYINT AS r2_adv_out, 0::TINYINT AS r3_adv_out, "
+            "0::TINYINT AS is_air, 10.0::FLOAT AS spray_raw, 150.0::FLOAT AS hit_dist, "
+            "1::TINYINT AS bat_home, 600000 + i AS pitcher_id, 3::TINYINT AS bb_class, "
+            f"{fielders}, 32::SMALLINT AS putout_pos_mask, 0::SMALLINT AS assist_pos_mask, {ymd}",
+        )
+    for target in ("2", "3"):
+        _npy(root / "steal_pool" / f"{target}.sit.npy", (_N, 4))
+        _parquet(
+            con,
+            root / "steal_pool" / f"{target}.meta.parquet",
+            "100 + i AS runner_id, 600000 + i AS pitcher_id, 500000 + i AS catcher_id, "
+            "2024::BIGINT AS season, (i % 2)::TINYINT AS attempted, 0::TINYINT AS success, "
+            "1.0::FLOAT AS recency_weight, 0::TINYINT AS pickoff_out, "
+            "0::TINYINT AS pickoff_advancing, 0::TINYINT AS pickoff_error, "
+            f"'ball' AS pitch_class, 0::TINYINT AS is_pickoff_row, {ymd}",
+        )
+    _npy(root / "advancement_pool" / "1_1_3.feat.npy", (_N, 5))
+    _parquet(
+        con,
+        root / "advancement_pool" / "1_1_3.meta.parquet",
+        "100 + i AS runner_id, 800000 + i AS fielder_id, 9::TINYINT AS fielder_pos, "
+        "2024::BIGINT AS season, 1::TINYINT AS attempted, 1::TINYINT AS safe, "
+        f"0::TINYINT AS error_extra, 1.0::FLOAT AS recency_weight, {ymd}",
+    )
+    _npy(root / "manager_pool" / "change.sit.npy", (_N, 6))
+    _parquet(
+        con,
+        root / "manager_pool" / "change.meta.parquet",
+        "600000 + i AS pitcher_id, 610000 + i AS incoming_id, 2024::BIGINT AS season, "
+        "1::TINYINT AS is_starter, 1::TINYINT AS new_half, (i % 2)::TINYINT AS changed, "
+        "1.0::FLOAT AS recency_weight, 7::BIGINT AS manager_id, 5::TINYINT AS in_days_rest, "
+        "0::TINYINT AS in_pitched_2d, 0::SMALLINT AS in_pitches_3d, 2::TINYINT AS in_throws, "
+        f"{ymd}",
+    )
+    con.close()
+    keys = [f"{600_000 + i}:2024" for i in range(2)]
+    _savez_plain(
+        str(root / "pitcher_sim.npz"),
+        index=json.dumps({k: i for i, k in enumerate(keys)}),
+        pitcher_sim_matrix=np.eye(2, dtype=np.float32),
+    )
+    for actor in ("batter", "catcher"):
+        _savez_plain(
+            str(root / f"{actor}_emb.npz"),
+            keys=json.dumps(keys),
+            vecs=np.ones((2, 3), dtype=np.float32),
+            mean=np.zeros(3, dtype=np.float32),
+            std=np.ones(3, dtype=np.float32),
+            features=json.dumps(["a", "b", "c"]),
+        )
+    (root / "actor_sim").mkdir()
+    (root / "actor_sim" / "manifest.json").write_text(
+        json.dumps({"sizes": {"batter": 2}}), encoding="utf-8"
+    )
+    _savez_plain(
+        str(root / "actor_sim" / "batter.npz"),
+        index=json.dumps({k: i for i, k in enumerate(keys)}),
+        matrix=np.eye(2, dtype=np.float32),
+    )
+    return str(root)
+
+
+def _expected_keys() -> set[str]:
+    """Every flat name the disk bundle publishes: each shareable column of each pool."""
+    keys = {f"pool.{h}.{a}" for h in ("L", "R") for a in _HAND_POOL_SHAREABLE_ATTRS}
+    keys |= {f"bb_pool.{h}.{a}" for h in ("L", "R") for a in _BB_POOL_SHAREABLE_ATTRS}
+    keys |= {
+        f"actor_emb.{x}.{a}" for x in ("batter", "catcher") for a in _ACTOR_EMB_SHAREABLE_ATTRS
+    }
+    keys |= {f"steal_pool.{t}.{a}" for t in ("2", "3") for a in _STEAL_POOL_SHAREABLE_ATTRS}
+    keys |= {f"adv_pool.1_1_3.{a}" for a in _ADV_POOL_SHAREABLE_ATTRS}
+    keys |= {f"change_pool.{a}" for a in _CHANGE_POOL_SHAREABLE_ATTRS}
+    return keys | {"pitcher_sim.matrix", "actor_sim.batter.matrix"}
 
 
 # ===========================================================================
@@ -175,167 +318,67 @@ class TestExtractSharedArrays:
 
 
 # ===========================================================================
-# attach_shared_views() — in-place splice
+# The worker path: publish -> _worker_init -> load(shared_views=...)
 # ===========================================================================
 
 
-class TestAttachSharedViews:
-    def test_replaces_hand_pool_arrays_with_views(self):
-        art = _synthetic_artifacts()
-        # Build a substitute view for one specific slot.
-        new_geom_L = np.zeros_like(art.pools["L"].geom)
-        art.attach_shared_views({"pool.L.geom": new_geom_L})
-        assert art.pools["L"].geom is new_geom_L  # identity == zero-copy splice
+class TestTheWorkerLoad:
+    """The parent loads the bundle and publishes its arrays; the worker
+    attaches the segments (:func:`_worker_init`) and loads the bundle with
+    them, as :func:`simulation.production_factory` does. No fork: the
+    process-pool tests cover the multiprocessing lifecycle."""
 
-    def test_replaces_bb_pool_arrays_with_views(self):
-        art = _synthetic_artifacts()
-        new_sit_R = np.zeros_like(art.bb_pools["R"].sit)
-        art.attach_shared_views({"bb_pool.R.sit": new_sit_R})
-        assert art.bb_pools["R"].sit is new_sit_R
-
-    def test_replaces_actor_emb_arrays_with_views(self):
-        art = _synthetic_artifacts()
-        new_vecs = np.zeros_like(art.actor_emb["batter"]["vecs"])
-        art.attach_shared_views({"actor_emb.batter.vecs": new_vecs})
-        assert art.actor_emb["batter"]["vecs"] is new_vecs
-
-    def test_unknown_keys_silently_ignored(self):
-        """A stale registry from a previous artifact build (e.g. a flat name
-        the current bundle does not have) must not crash the worker — the attach is a
-        defensive splice, not a strict mapping."""
-        art = _synthetic_artifacts()
-        original_geom = art.pools["L"].geom
-        art.attach_shared_views(
-            {
-                "pool.L.geom": np.zeros_like(original_geom),
-                "this.does.not.exist": np.ones(5),
-                "pool.UNKNOWN_HAND.geom": np.ones(5),  # hand not in pools
-                "actor_emb.UNKNOWN_ACTOR.vecs": np.ones(5),
-            }
-        )
-        # The valid key applied; the unknown ones were silently ignored.
-        assert not np.array_equal(art.pools["L"].geom, original_geom)
-
-    def test_empty_views_is_a_noop(self):
-        art = _synthetic_artifacts()
-        before = art.pools["L"].geom
-        art.attach_shared_views({})
-        art.attach_shared_views(None)  # type: ignore[arg-type]
-        assert art.pools["L"].geom is before
-
-    def test_roundtrip_extract_then_attach_preserves_values(self):
-        """The flat-name contract is symmetric: extract -> attach on a fresh
-        bundle reproduces the original arrays (the names line up)."""
-        src = _synthetic_artifacts()
-        shareable = src.extract_shared_arrays()
-
-        # A fresh, "blank-but-shaped" bundle the splice should fill in.
-        dst = _synthetic_artifacts()  # same shapes/dtypes, different values
-        dst.attach_shared_views(shareable)
-
-        # After the splice, dst's shareable arrays MATCH src's exactly.
-        for hand in ("L", "R"):
-            for attr in ("geom", "sit", "pitcher_id", "batter_id", "season", "recency"):
-                np.testing.assert_array_equal(
-                    getattr(dst.pools[hand], attr), getattr(src.pools[hand], attr)
-                )
-            for attr in (
-                "geom",
-                "sit",
-                "batter_id",
-                "season",
-                "result_hits",
-                "result_outs",
-                "recency",
-            ):
-                np.testing.assert_array_equal(
-                    getattr(dst.bb_pools[hand], attr), getattr(src.bb_pools[hand], attr)
-                )
-        for actor in ("batter", "catcher"):
-            for attr in ("vecs", "mean", "std"):
-                np.testing.assert_array_equal(
-                    dst.actor_emb[actor][attr], src.actor_emb[actor][attr]
-                )
-
-
-# ===========================================================================
-# End-to-end through publish_shared_arrays + _worker_init (no fork required)
-# ===========================================================================
-
-
-class TestSharedMemoryRoundtrip:
-    """The full publish -> _worker_init -> splice chain, exercised in-process.
-
-    This stops short of a real fork (the process-pool tests cover the
-    multiprocessing lifecycle) and instead verifies the in-process contract:
-    publish the registry, drive ``_worker_init`` synchronously, splice via
-    ``attach_shared_views``, and assert the worker's bundle reads from the
-    parent's shared-memory segments (the views' ``base`` is the SharedMemory
-    buffer, not a private copy)."""
-
-    def test_publish_then_worker_init_then_splice(self):
-        art = _synthetic_artifacts()
-        payload = art.extract_shared_arrays()
+    def test_every_published_array_comes_back_as_the_shared_view(self, tmp_path):
+        art_dir = _write_bundle(tmp_path)
+        parent = EngineArtifacts.load(art_dir)
+        payload = parent.extract_shared_arrays()
+        assert set(payload) == _expected_keys()
         registry, owned = publish_shared_arrays(payload)
         try:
-            # Drive the pool initializer in-process (it populates _WORKER_SHARED).
             _worker_init(registry)
             views = _WORKER_SHARED["views"]
-            assert set(views.keys()) == set(payload.keys())
-
-            # The "worker" splices the views into a freshly-disk-loaded bundle.
-            worker_bundle = _synthetic_artifacts()  # stand-in for the disk load
-            worker_bundle.attach_shared_views(views)
-
-            # Every spliced array has its DATA equal to the parent's source
-            # (the bytes round-tripped through shared memory unchanged).
-            for hand in ("L", "R"):
-                np.testing.assert_array_equal(worker_bundle.pools[hand].geom, art.pools[hand].geom)
-                np.testing.assert_array_equal(
-                    worker_bundle.bb_pools[hand].result_hits, art.bb_pools[hand].result_hits
-                )
-            for actor in ("batter", "catcher"):
-                np.testing.assert_array_equal(
-                    worker_bundle.actor_emb[actor]["vecs"], art.actor_emb[actor]["vecs"]
-                )
-
-            # The spliced views are NOT private copies — mutating the parent's
-            # shared buffer would be visible (we don't mutate here, but the
-            # ``base`` reference proves the buffer is the shared segment).
+            assert set(views) == set(payload)
+            worker = EngineArtifacts.load(art_dir, shared_views=views)
+            got = worker.extract_shared_arrays()
+            # The same names in the same order, each one the shared view itself.
+            assert list(got) == list(payload)
             for key, view in views.items():
-                # numpy view over a SharedMemory.buf carries a non-None base.
-                assert view.base is not None, f"{key} appears to be a copy, not a view"
+                assert got[key] is view, f"{key} was read from disk, not taken from the view"
+                assert np.shares_memory(got[key], view)
+                np.testing.assert_array_equal(got[key], payload[key])
         finally:
-            # Reset the worker global + unlink the segments so a later test
-            # starts clean.
             _worker_init(None)
             unlink_shared_segments(owned)
 
-    def test_worker_init_with_no_registry_leaves_views_empty(self):
-        """A None registry (the per-process fallback) leaves
-        ``_WORKER_SHARED["views"]`` empty; attach_shared_views is a no-op."""
+    def test_the_load_ignores_unknown_keys(self, tmp_path):
+        """A stale registry from an earlier build names arrays this bundle
+        does not have; the load ignores them and takes the known one."""
+        art_dir = _write_bundle(tmp_path)
+        geom = np.zeros((_N, 10), dtype=np.float32)
+        art = EngineArtifacts.load(
+            art_dir,
+            shared_views={
+                "pool.L.geom": geom,
+                "this.does.not.exist": np.ones(5),
+                "pool.UNKNOWN_HAND.geom": np.ones(5),
+                "actor_emb.UNKNOWN_ACTOR.vecs": np.ones(5),
+            },
+        )
+        assert art.pools["L"].geom is geom
+        assert "UNKNOWN_HAND" not in art.pools
+
+    def test_no_registry_reads_every_array_from_disk(self, tmp_path):
+        """A None registry (the per-process fallback) leaves the views empty,
+        and the load then reads the same arrays from disk."""
         _worker_init(None)
         assert _WORKER_SHARED["views"] == {}
-
-        art = _synthetic_artifacts()
-        before = art.pools["L"].geom
-        art.attach_shared_views(_WORKER_SHARED["views"])
-        assert art.pools["L"].geom is before
-
-
-# ===========================================================================
-# Defensive: empty artifacts still round-trip safely
-# ===========================================================================
-
-
-def test_empty_artifacts_extract_attach_roundtrip():
-    """An EngineArtifacts with no pools / bb_pools / actor_emb (e.g. a partial
-    nightly build) extracts to {} and attaches a no-op — must not raise."""
-    art = EngineArtifacts(pools={})
-    assert art.extract_shared_arrays() == {}
-    art.attach_shared_views({"pool.L.geom": np.zeros(3)})  # unknown -> ignored
-    # Bundle is unchanged.
-    assert art.pools == {}
+        art_dir = _write_bundle(tmp_path)
+        disk = EngineArtifacts.load(art_dir).extract_shared_arrays()
+        art = EngineArtifacts.load(art_dir, shared_views=_WORKER_SHARED["views"])
+        got = art.extract_shared_arrays()
+        assert list(got) == list(disk)
+        for key, arr in disk.items():
+            np.testing.assert_array_equal(got[key], arr)
 
 
 if __name__ == "__main__":  # pragma: no cover

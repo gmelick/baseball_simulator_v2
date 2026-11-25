@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 
 from pools.pool_metadata import (
-    _canonical_ref_season,
     _recency_weight_sql,
     _record_pool_build,
-    _seasons_needing_rebuild,
+    _seasons_to_build,
 )
 from profiles.base import ComputorBase
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
@@ -38,14 +38,11 @@ class AdvancementPoolMixin(ComputorBase):
         match the DDL column order in db/schemas/02_duckdb_schema.sql
         (migration 0018).
         """
-        ref_season = _canonical_ref_season(self._conn, seasons)
-        if incremental:
-            seasons = _seasons_needing_rebuild(self._conn, "advancement_opportunity_pool", seasons)
-            if not seasons:
-                log.info("Building sim.advancement_opportunity_pool … all seasons fresh; skipped.")
-                return
-        log.info("Building sim.advancement_opportunity_pool … (seasons=%s)", seasons)
-        season_list = ", ".join(str(s) for s in seasons)
+        plan = _seasons_to_build(self._conn, "advancement_opportunity_pool", seasons, incremental)
+        if plan is None:
+            return
+        seasons, ref_season = plan
+        season_list = sql_seasons(seasons)
         recency_expr = _recency_weight_sql("op.season", ref_season)
 
         # A tag-up decision exists in exactly one shape: a caught ball, the

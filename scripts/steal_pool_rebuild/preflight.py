@@ -9,6 +9,8 @@ from typing import Any
 
 import pools.pool_metadata as pool_meta
 from bundle.common import RECENCY_FLOOR_SEASONS
+from pools.pool_metadata import pool_builder_versions, read_pool_builds
+from profiles.sql import sql_seasons
 
 from .bundle import _export_replaces, _strays, backup_plan, steal_pool_problem
 from .common import (
@@ -18,7 +20,6 @@ from .common import (
     POOL,
     _builder,
     _log,
-    _season_list,
     _tree_files,
 )
 from .migration import missing_columns
@@ -32,18 +33,8 @@ def _steal_counts(con: Any, seasons: list[int]) -> dict[int, int]:
     return {
         int(s): int(n)
         for s, n in con.execute(
-            f"SELECT season, COUNT(*) FROM {POOL} WHERE season IN ({_season_list(seasons)}) "
+            f"SELECT season, COUNT(*) FROM {POOL} WHERE season IN ({sql_seasons(seasons)}) "
             "GROUP BY 1 ORDER BY 1"
-        ).fetchall()
-    }
-
-
-def _steal_versions(con: Any, seasons: list[int]) -> dict[int, str | None]:
-    return {
-        int(s): v
-        for s, v in con.execute(
-            "SELECT season, builder_version FROM sim.pool_build_metadata "
-            f"WHERE pool_name = 'steal_opportunity_pool' AND season IN ({_season_list(seasons)})"
         ).fetchall()
     }
 
@@ -51,20 +42,14 @@ def _steal_versions(con: Any, seasons: list[int]) -> dict[int, str | None]:
 def pitch_pool_problems(con: Any, seasons: list[int]) -> list[str]:
     """The window's pitch pool must be present per season and built by a
     builder whose class the steal pool may copy."""
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     rows = {
         int(s): int(n)
         for s, n in con.execute(
             f"SELECT season, COUNT(*) FROM sim.pitch_pool WHERE season IN ({sl}) GROUP BY 1"
         ).fetchall()
     }
-    builders = {
-        int(s): v
-        for s, v in con.execute(
-            "SELECT season, builder_version FROM sim.pool_build_metadata "
-            f"WHERE pool_name = 'pitch_pool' AND season IN ({sl})"
-        ).fetchall()
-    }
+    builders = pool_builder_versions(con, "pitch_pool", seasons)
     problems: list[str] = []
     for s in seasons:
         good = rows.get(s, 0) > 0 and builders.get(s) in PITCH_POOL_BUILDERS
@@ -85,13 +70,9 @@ def watermark_problems(con: Any, seasons: list[int]) -> list[str]:
     """The steal pool's build watermark must equal ``raw.pitches`` today, per
     season. Otherwise the rebuild adds or drops pitch rows, and check b
     (every new row is a pickoff row) stops it after the work."""
-    meta = {
-        int(s): (d, n)
-        for s, d, n in con.execute(
-            "SELECT season, source_max_game_date, source_row_count FROM sim.pool_build_metadata "
-            f"WHERE pool_name = 'steal_opportunity_pool' AND season IN ({_season_list(seasons)})"
-        ).fetchall()
-    }
+    meta = read_pool_builds(
+        con, "steal_opportunity_pool", seasons, "source_max_game_date, source_row_count"
+    )
     problems: list[str] = []
     for s in seasons:
         src_max, src_n = pool_meta._source_state(con, s)

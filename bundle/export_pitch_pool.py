@@ -4,7 +4,6 @@ batter hand.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -14,11 +13,18 @@ import numpy as np
 from bundle.common import (
     _GEOM_COLS,
     _SIT_COLS,
+    float_columns,
+    game_ymd_column,
+    meta_column,
+    optional_meta_column,
+    recency_column,
     take_view,
+    write_json,
     ymd_select,
 )
 from bundle.worker_pools import HandPool
 from db.introspect import duck_columns
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -29,12 +35,12 @@ def build_pitch_pool_artifact(
     """Write the full per-hand pitch pool (recency-floored) as geom/sit/meta files."""
     pool_dir = os.path.join(out_dir, "pitch_pool")
     os.makedirs(pool_dir, exist_ok=True)
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     counts: dict[str, int] = {}
     for hand in ("L", "R"):
         cols = ", ".join(_GEOM_COLS + _SIT_COLS)
         d = con.execute(
-            f"SELECT {cols}, pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight "
+            f"SELECT {cols}, pitch_id "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})"
         ).fetchnumpy()
         # The optional pool columns (migrations 0022 /
@@ -48,12 +54,8 @@ def build_pitch_pool_artifact(
         zone_select = ", COALESCE(zone, 0) AS zone" if "zone" in pp_cols else ""
         n = len(d["pitch_id"])
         # fetchnumpy yields masked arrays for nullable cols; fill -> plain float32.
-        geom = np.nan_to_num(
-            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _GEOM_COLS], axis=1)
-        ).astype(np.float32)
-        sit = np.nan_to_num(
-            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _SIT_COLS], axis=1)
-        ).astype(np.float32)
+        geom = float_columns(d, _GEOM_COLS)
+        sit = float_columns(d, _SIT_COLS)
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
         # Metadata via DuckDB COPY (no pandas dependency).
@@ -83,36 +85,22 @@ def build_pitch_pool_artifact(
         )
         counts[hand] = int(n)
         log.info("pitch_pool[%s]: %d rows (seasons %s)", hand, n, seasons)
-    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "seasons": seasons,
-                "counts": counts,
-                "geom_cols": _GEOM_COLS,
-                "sit_cols": _SIT_COLS,
-                "conditioning": has_conditioning,
-            },
-            fh,
-            indent=2,
-        )
+    write_json(
+        os.path.join(pool_dir, "manifest.json"),
+        {
+            "seasons": seasons,
+            "counts": counts,
+            "geom_cols": _GEOM_COLS,
+            "sit_cols": _SIT_COLS,
+            "conditioning": has_conditioning,
+        },
+    )
     return counts
 
 
 #: The pitch-pool conditioning columns (migration 0023). Presence
 #: of ALL of them marks a 0023-migrated DB; the export writes them together.
 _PP_CONDITIONING_COLS = frozenset({"bat_home", "pitcher_pitch_count", "times_through_order"})
-
-
-def _pp_take(
-    views: dict[str, np.ndarray], hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
-) -> np.ndarray | None:
-    """The same optional-column rule for the PITCH pool."""
-    v = views.get(f"pool.{hand}.{attr}")
-    if isinstance(v, np.ndarray):
-        return v
-    if col in meta:
-        return np.asarray(np.ma.filled(meta[col], fill), dtype=dtype)
-    return None
 
 
 def load_pitch_pools(
@@ -151,68 +139,26 @@ def load_pitch_pools(
         ).fetchnumpy()
         # When the shared map has the id/season/recency columns too,
         # prefer them (they round-trip identically and skip more disk).
-        pid_view = views.get(f"pool.{hand}.pitcher_id")
-        bid_view = views.get(f"pool.{hand}.batter_id")
-        ssn_view = views.get(f"pool.{hand}.season")
-        rec_view = views.get(f"pool.{hand}.recency")
+        p = f"pool.{hand}"
         pools[hand] = HandPool(
             geom=geom,
             sit=sit,
-            pitcher_id=(
-                pid_view
-                if isinstance(pid_view, np.ndarray)
-                else np.asarray(np.ma.filled(m["pitcher_id"], 0), dtype=np.int64)
-            ),
-            batter_id=(
-                bid_view
-                if isinstance(bid_view, np.ndarray)
-                else np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64)
-            ),
-            season=(
-                ssn_view
-                if isinstance(ssn_view, np.ndarray)
-                else np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64)
-            ),
+            pitcher_id=meta_column(views, f"{p}.pitcher_id", m, "pitcher_id", np.int64),
+            batter_id=meta_column(views, f"{p}.batter_id", m, "batter_id", np.int64),
+            season=meta_column(views, f"{p}.season", m, "season", np.int64),
             outcome_type=np.asarray(m["outcome_type"], dtype=object),
-            game_ymd=(
-                np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
-                if "game_ymd" in m
-                else None
-            ),
-            recency=(
-                rec_view
-                if isinstance(rec_view, np.ndarray)
-                else np.nan_to_num(
-                    np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
-                    nan=1.0,
-                )
-            ),
-            catcher_id=(
-                views.get(f"pool.{hand}.catcher_id")
-                if isinstance(views.get(f"pool.{hand}.catcher_id"), np.ndarray)
-                else (
-                    np.asarray(np.ma.filled(m["catcher_id"], 0), dtype=np.int64)
-                    if "catcher_id" in m
-                    else None
-                )
-            ),
-            got_away=(
-                views.get(f"pool.{hand}.got_away")
-                if isinstance(views.get(f"pool.{hand}.got_away"), np.ndarray)
-                else (
-                    np.asarray(np.ma.filled(m["got_away"], 0), dtype=np.int8)
-                    if "got_away" in m
-                    else None
-                )
-            ),
+            game_ymd=game_ymd_column(m),
+            recency=recency_column(views, f"{p}.recency", m),
+            catcher_id=optional_meta_column(views, f"{p}.catcher_id", m, "catcher_id", np.int64),
+            got_away=optional_meta_column(views, f"{p}.got_away", m, "got_away", np.int8),
             # The draw-conditioning columns (unknown = -1 / -1 / 0).
-            bat_home=_pp_take(views, hand, m, "bat_home", "bat_home", np.int8, -1),
-            pitch_count=_pp_take(
-                views, hand, m, "pitch_count", "pitcher_pitch_count", np.int16, -1
+            bat_home=optional_meta_column(views, f"{p}.bat_home", m, "bat_home", np.int8, -1),
+            pitch_count=optional_meta_column(
+                views, f"{p}.pitch_count", m, "pitcher_pitch_count", np.int16, -1
             ),
-            tto=_pp_take(views, hand, m, "tto", "times_through_order", np.int8, 0),
+            tto=optional_meta_column(views, f"{p}.tto", m, "times_through_order", np.int8),
             # The zone (None on an older bundle).
-            zone=_pp_take(views, hand, m, "zone", "zone", np.int8, 0),
+            zone=optional_meta_column(views, f"{p}.zone", m, "zone", np.int8),
             # The pitch-id join (None on an older bundle).
             bb_row=(
                 views.get(f"pool.{hand}.bb_row")

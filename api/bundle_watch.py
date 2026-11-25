@@ -38,6 +38,7 @@ import time
 from collections.abc import Awaitable, Callable
 
 from bundle.versions import (
+    bundle_link,
     convert_legacy_bundle,
     mark_in_use,
     resolve_bundle_dir,
@@ -58,13 +59,6 @@ CHECK_SECONDS = 60.0
 
 #: The longest the restart waits for the run jobs to finish.
 DRAIN_CAP_SECONDS = 600.0
-
-
-def bundle_link() -> str:
-    """The published bundle path, ``$BASEBALL_PLAY_POOL_DIR/engine_artifacts``."""
-    return os.path.join(
-        os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
-    )
 
 
 def restart_enabled() -> bool:

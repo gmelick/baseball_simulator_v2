@@ -65,7 +65,7 @@ class _StubEngine:
         self.built: list[int] = []
         self._profiles: dict = {}
 
-    def build(self, seasons):
+    def build(self, seasons, **kw):
         self.built = list(seasons)
         self._profiles = {k: object() for k in self.profiles}
 
@@ -260,8 +260,6 @@ class TestTheLoader:
         assert "actor_sim.batter.matrix" in shared
         assert shared["actor_sim.batter.matrix"] is art.actor_sim["batter"]["matrix"]
         new = np.full((2, 2), 0.9, dtype=np.float32)
-        art.attach_shared_views({"actor_sim.batter.matrix": new})
-        assert art.actor_sim["batter"]["matrix"] is new
         # A load with the view supplied takes it in place of the disk read.
         art2 = EngineArtifacts.load(str(tmp_path), shared_views={"actor_sim.batter.matrix": new})
         assert art2.actor_sim["batter"]["matrix"] is new

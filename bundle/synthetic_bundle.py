@@ -133,13 +133,6 @@ class PlayRow:
     result_outs: int
     is_air: bool = False
     weight: float = 1.0
-    adv1: bool = False
-    adv2: bool = False
-    adv3: bool = False
-    exit_velo: float = 0.0
-    launch_angle: float = 0.0
-    spray: float = 0.0
-    dist: float = 0.0
 
 
 def canonical_transition(
@@ -182,7 +175,7 @@ def canonical_transition(
             0,
             0,
         )
-    if event in ("grounded_into_double_play", "ground_into_double_play"):
+    if event == "grounded_into_double_play":
         if not on1 or outs >= 2:
             return None
         return PlayRow(
@@ -251,8 +244,6 @@ def inplay_rows(
 def pitch_pool(
     model: dict[str, float] | None = None,
     *,
-    pitcher_id: int = 0,
-    batter_id: int = 0,
     season: int = 2024,
     got_away: bool = False,
 ) -> HandPool:
@@ -269,8 +260,8 @@ def pitch_pool(
     return HandPool(
         geom=np.zeros((n, 10), dtype=np.float32),
         sit=sit,
-        pitcher_id=np.full(n, int(pitcher_id), dtype=np.int64),
-        batter_id=np.full(n, int(batter_id), dtype=np.int64),
+        pitcher_id=np.zeros(n, dtype=np.int64),
+        batter_id=np.zeros(n, dtype=np.int64),
         season=np.full(n, int(season), dtype=np.int64),
         outcome_type=np.asarray([r[2] for r in rows], dtype=object),
         recency=np.asarray([r[3] for r in rows], dtype=np.float32),
@@ -287,7 +278,6 @@ def pitch_pool(
 def battedball_pool(
     rows: list[PlayRow],
     *,
-    batter_id: int = 0,
     season: int = 2024,
 ) -> BattedBallPool:
     """Materialize :class:`PlayRow` rows as a transition-carrying pool."""
@@ -298,17 +288,13 @@ def battedball_pool(
     def col(attr: str, dtype) -> np.ndarray:
         return np.asarray([getattr(r, attr) for r in rows], dtype=dtype)
 
-    geom = np.zeros((n, 3), dtype=np.float32)
-    geom[:, 0] = col("exit_velo", np.float32)
-    geom[:, 1] = col("launch_angle", np.float32)
-    geom[:, 2] = col("spray", np.float32)
     sit = np.zeros((n, 6), dtype=np.float32)
     sit[:, 2] = col("outs", np.float32)
     sit[:, 3] = col("runners_state", np.float32)
     return BattedBallPool(
-        geom=geom,
+        geom=np.zeros((n, 3), dtype=np.float32),
         sit=sit,
-        batter_id=np.full(n, int(batter_id), dtype=np.int64),
+        batter_id=np.zeros(n, dtype=np.int64),
         season=np.full(n, int(season), dtype=np.int64),
         event=np.asarray([r.event for r in rows], dtype=object),
         result_hits=col("result_hits", np.int8),
@@ -319,12 +305,12 @@ def battedball_pool(
         r3_dest=col("r3_dest", np.int8),
         batter_dest=col("batter_dest", np.int8),
         dest_ok=np.ones(n, dtype=np.int8),
-        r1_adv_out=col("adv1", np.int8),
-        r2_adv_out=col("adv2", np.int8),
-        r3_adv_out=col("adv3", np.int8),
+        r1_adv_out=np.zeros(n, dtype=np.int8),
+        r2_adv_out=np.zeros(n, dtype=np.int8),
+        r3_adv_out=np.zeros(n, dtype=np.int8),
         is_air=col("is_air", np.int8),
-        spray_raw=col("spray", np.float32),
-        hit_dist=col("dist", np.float32),
+        spray_raw=np.zeros(n, dtype=np.float32),
+        hit_dist=np.zeros(n, dtype=np.float32),
     )
 
 
@@ -374,7 +360,6 @@ def steal_pools(
     attempt_rate: float,
     success_rate: float = 0.78,
     *,
-    targets: tuple[str, ...] = ("2", "3"),
     season: int = 2024,
     by_class: bool = True,
     class_rates: dict[str, float] | None = None,
@@ -463,8 +448,8 @@ def steal_pools(
     sit = np.zeros((n, 4), dtype=np.float32)
     sit[:, :3] = np.asarray(sit_rows, dtype=np.float32)
     out: dict[str, StealPool] = {}
-    for target in targets:
-        out[str(target)] = StealPool(
+    for target in ("2", "3"):
+        out[target] = StealPool(
             sit=sit.copy(),
             runner_id=np.zeros(n, dtype=np.int64),
             pitcher_id=np.zeros(n, dtype=np.int64),
@@ -500,9 +485,7 @@ DEFAULT_CHANGE_RATES: dict[str, float] = {
 }
 
 
-def change_pool(
-    rates: dict[str, float] | None = None, *, season: int = 2024, manager_id: int = 1
-) -> ChangePool:
+def change_pool(rates: dict[str, float] | None = None, *, season: int = 2024) -> ChangePool:
     """A pitching-change opportunity pool for the no-DB paths.
 
     It holds three weighted rows (changed / changed / stayed) in every hard
@@ -556,7 +539,7 @@ def change_pool(
         new_half=np.asarray(half_col, dtype=np.int8),
         changed=np.asarray(changed_col, dtype=np.int8),
         recency=np.asarray(weight_col, dtype=np.float32),
-        manager_id=np.full(n, int(manager_id), dtype=np.int64),
+        manager_id=np.ones(n, dtype=np.int64),
         in_days_rest=np.full(n, 5, dtype=np.int8),
         in_pitched_2d=np.zeros(n, dtype=np.int8),
         in_pitches_3d=np.zeros(n, dtype=np.int16),
@@ -573,9 +556,7 @@ def synthetic_artifacts(
     advancement: dict[str, tuple[float, float]] | bool = False,
     steal: tuple[float, float] | None = None,
     steal_kw: dict | None = None,
-    hands: tuple[str, ...] = ("R", "L"),
     got_away: bool = False,
-    air_share: float = 0.45,
     season: int = 2024,
     manager: bool = False,
 ) -> EngineArtifacts:
@@ -589,11 +570,12 @@ def synthetic_artifacts(
     ``steal_kw`` passes :func:`steal_pools`' keywords (the classes, the
     class rates, the pickoff rows).
     """
+    hands = ("R", "L")
     pools: dict[str, HandPool] = {}
     for hand in hands:
         model = (pitch_models or {}).get(hand, pitch_model)
         pools[hand] = pitch_pool(model, season=season, got_away=got_away)
-    rows = bb_rows if bb_rows is not None else inplay_rows(inplay_model, air_share=air_share)
+    rows = bb_rows if bb_rows is not None else inplay_rows(inplay_model)
     bb = battedball_pool(rows, season=season)
     bb_pools = dict.fromkeys(hands, bb)
     adv: dict[str, AdvancementPool] = {}
@@ -607,7 +589,6 @@ def synthetic_artifacts(
         bb_pools=bb_pools,
         adv_pools=adv,
         steal_pools=stl,
-        seasons=[int(season)],
         # The change pool the manager draw reads (``manager=True``).
         change_pool=change_pool(season=season) if manager else None,
     )

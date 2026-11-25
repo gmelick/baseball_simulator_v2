@@ -96,7 +96,7 @@ def _original_solve_chain(rates: list[list[float]]) -> dict[str, float]:
 def _uniform(outcome: str) -> list[list[float]]:
     """A matrix where every pitch at every count is ``outcome``."""
     row = [0.0] * 6
-    row[pc.OUTCOMES.index(outcome)] = 1.0
+    row[PITCH_OUTCOMES.index(outcome)] = 1.0
     return [list(row) for _ in range(12)]
 
 
@@ -121,7 +121,7 @@ def _machine_chain(rates: list[list[float]]) -> dict[str, float]:
     for (b, s), i in index.items():
         row = rates[b * 3 + s]
         tot = sum(row)
-        for o, n in zip(pc.OUTCOMES, row, strict=True):
+        for o, n in zip(PITCH_OUTCOMES, row, strict=True):
             share = n / tot
             adv = advance_count(b, s, o)
             if not adv.terminal:
@@ -216,7 +216,7 @@ class TestTheSolverClosedForms:
 
 class TestTheSolverIsTheDeletedOriginal:
     def test_the_classes_are_the_original_classes(self):
-        assert pc.OUTCOMES == _ORIGINAL_OUTCOMES
+        assert PITCH_OUTCOMES == _ORIGINAL_OUTCOMES
 
     @pytest.mark.parametrize("seed", [0, 11, 553])
     def test_equal_to_the_original_on_a_fixed_matrix(self, seed):
@@ -242,9 +242,6 @@ class TestTheSolverIsTheDeletedOriginal:
 
 class TestTheSolverMatchesTheCountMachine:
     """The chain's rules are the loop's rules (``simulation.loop.values.advance_count``)."""
-
-    def test_the_chain_classes_are_the_simulator_vocabulary(self):
-        assert set(pc.OUTCOMES) == set(PITCH_OUTCOMES)
 
     @pytest.mark.parametrize("seed", [3, 42, 553])
     def test_the_closed_form_equals_the_linear_system_over_advance_count(self, seed):
@@ -293,7 +290,7 @@ class TestThePoolReader:
         assert len(mat) == 12 and all(len(row) == 6 for row in mat)
         # The grid puts one in-play row at every count.
         assert mat[0] == [2.0, 0.0, 0.0, 0.0, 1.0, 0.0]
-        assert mat[1 * 3 + 2][pc.OUTCOMES.index("foul")] == 1.0
+        assert mat[1 * 3 + 2][PITCH_OUTCOMES.index("foul")] == 1.0
         assert mat[3 * 3 + 2] == [0.0, 0.0, 1.0, 0.0, 1.0, 0.0]
         assert sum(sum(row) for row in mat) == 12.0 + 4.0
 
@@ -416,12 +413,6 @@ class TestRealPlateAppearances:
         con = _mini_raw([(1, 1, None, False, 2024)])
         with pytest.raises(ValueError, match="no plate appearance"):
             pc.real_pa_rates(con, "TRUE")
-
-    def test_attach_pg_is_a_no_op_when_pg_is_attached(self):
-        """A second attach must not reach for Postgres (the in-memory ``pg`` stays)."""
-        con = _mini_raw(self._rows())
-        pc.attach_pg(con, dsn="postgresql://nobody:secret@nowhere:1/none")
-        assert pc.real_pa_rates(con, "season = 2024")["n_pa"] == 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -727,15 +718,6 @@ class TestThePlateAppearanceCountLine:
         assert "no longer read the same plate appearances" in line
 
 
-class TestTheRedaction:
-    def test_the_dsn_and_its_password_leave_the_message(self):
-        dsn = "postgresql://user:hunter2@db:5432/baseball_sim"
-        msg = f"IO Error: Unable to connect to Postgres at {dsn}: password hunter2 rejected"
-        out = pc._redact(msg, dsn)
-        assert "hunter2" not in out
-        assert dsn not in out
-
-
 # ---------------------------------------------------------------------------
 # The label check
 # ---------------------------------------------------------------------------
@@ -743,6 +725,34 @@ class TestTheRedaction:
 
 def _rates(k: float, walk: float, hbp: float, pitches: float) -> dict[str, float]:
     return {"k": k, "walk": walk, "hbp": hbp, "pitches": pitches}
+
+
+class TestTheLabelCheckRun:
+    """``run_label_check`` runs the pa_only chain, the real rates, both counts and the verdict."""
+
+    def test_the_run_is_its_parts(self):
+        con = _twin_stores(_grid_pa() + _SPLIT_ROWS)
+        run = pc.run_label_check(con, _WINDOW)
+        real = pc.real_pa_rates(con, _WINDOW)
+        assert run.real == real
+        assert run.n_real == int(real["n_pa"]) == 3
+        assert run.n_pool == pc.pa_group_count(con, _WINDOW) == 3
+        assert run.rows == pc.label_check(pc.chain_rates(con, _WINDOW, pa_only=True), real)
+        assert run.ok == all(row[4] for row in run.rows)
+
+    def test_equal_counts_and_passing_channels_pass(self, monkeypatch):
+        con = _twin_stores(_grid_pa() + _SPLIT_ROWS)
+        monkeypatch.setattr(pc, "label_check", lambda chain, real: [("k", 0.2, 0.2, 0.0, True)])
+        assert pc.run_label_check(con, _WINDOW).ok
+
+    def test_unequal_counts_fail_when_every_channel_passes(self, monkeypatch):
+        """A plate appearance only ``raw.pitches`` holds: the two sides read different groups."""
+        con = _twin_stores(_grid_pa() + _SPLIT_ROWS)
+        con.execute("INSERT INTO pg.raw.pitches VALUES (2, 1, 1, 'single', FALSE, 2024, NULL)")
+        monkeypatch.setattr(pc, "label_check", lambda chain, real: [("k", 0.2, 0.2, 0.0, True)])
+        run = pc.run_label_check(con, _WINDOW)
+        assert (run.n_pool, run.n_real) == (3, 4)
+        assert not run.ok
 
 
 class TestTheLabelCheck:

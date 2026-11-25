@@ -168,11 +168,9 @@ from pitch_pool_rebuild.common import (  # noqa: E402
     EXPECTED_BUILDER,
     MOVE_CODES,
     WINDOW_EXPECTED_MOVES,
-    _builder_versions,
     _log,
     _pool_counts,
     _raw_code_rows_sql,
-    _season_list,
 )
 from pitch_pool_rebuild.export import (  # noqa: E402
     _backup_bundle,
@@ -184,10 +182,11 @@ from pitch_pool_rebuild.export import (  # noqa: E402
 from pitch_pool_rebuild.preflight import _preflight  # noqa: E402
 
 from bundle.common import last_n_seasons
+from db.dsn import attach_pg  # noqa: E402
 from ingest.statcast_events import STRIKE_THREE_FOUL_TYPES
-from pools.check_pool_labels import attach_pg  # noqa: E402
-from pools.pool_metadata import POOL_BUILDER_VERSION
+from pools.pool_metadata import POOL_BUILDER_VERSION, pool_builder_versions
 from profiles.build_profiles import PlayerProfileComputor
+from profiles.sql import sql_seasons
 
 # ---------------------------------------------------------------------------
 # The two modes
@@ -197,7 +196,7 @@ from profiles.build_profiles import PlayerProfileComputor
 def _code_report(con: Any, seasons: list[int], window: list[int]) -> None:
     """--check-only: the class of every MOVE_CODES pitch at each strike count,
     today and under the new coding, joined pool to source."""
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     rows = con.execute(
         f"""
         WITH r AS ({_raw_code_rows_sql(seasons)})
@@ -331,12 +330,12 @@ def _rebuild(args: argparse.Namespace, t0: float) -> int:
 
         _log("=== 1. snapshot ===")
         before = _pool_counts(con, seasons)
-        versions = _builder_versions(con, seasons)
+        versions = pool_builder_versions(con, "pitch_pool", seasons)
         rerun = [s for s in seasons if versions.get(s) == POOL_BUILDER_VERSION]
         con.execute(
             "CREATE OR REPLACE TEMP TABLE _sim553_before AS "
             "SELECT pitch_id, season, outcome_type FROM sim.pitch_pool "
-            f"WHERE season IN ({_season_list(seasons)})"
+            f"WHERE season IN ({sql_seasons(seasons)})"
         )
         _log(f"  snapshot: {sum(before.values()):,} rows")
 

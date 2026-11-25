@@ -106,20 +106,10 @@ The chain solver is the one ``scripts/sim429_chain_analysis.py`` carried
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
-from db.dsn import require_dsn
 from ingest.statcast_events import sql_list
-
-#: The six pitch-pool classes, in the column order of a count matrix row.
-OUTCOMES: tuple[str, ...] = (
-    "ball",
-    "called_strike",
-    "swinging_strike",
-    "foul",
-    "in_play",
-    "hit_by_pitch",
-)
+from simulation.game_state import PITCH_OUTCOMES
 
 #: The largest relative gap the label check accepts between the pool's chain
 #: (read with ``pa_only=True``) and real plate appearances; owner decision 5 of
@@ -152,21 +142,20 @@ _NON_PA_EVENT_PREFIXES: tuple[str, ...] = ("caught_stealing", "pickoff", "stolen
 _STRIKEOUT_EVENTS: tuple[str, ...] = ("strikeout", "strikeout_double_play")
 
 
-def _sql_is_batting_event(col: str = "events") -> str:
-    """The SQL test that ``col`` is a non-NULL batting event (a plate appearance's end)."""
-    prefixes = " OR ".join(f"{col} LIKE '{p}%'" for p in _NON_PA_EVENT_PREFIXES)
-    return f"({col} IS NOT NULL AND {col} NOT IN {sql_list(_NON_PA_EVENTS)} AND NOT ({prefixes}))"
-
-
 def _sql_pa_flag(col: str = "events") -> str:
     """The group aggregate that marks a plate appearance: 1 when a row's ``col`` is a batting event.
 
-    :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
+    A batting event is a non-NULL ``col`` that is not a runner event or a feed
+    note. :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
     chain (on ``sim.pitch_pool``) both judge a ``(game_pk, at_bat_number)``
     group with this one expression, so the two sides cannot disagree on what a
     plate appearance is.
     """
-    return f"MAX(CASE WHEN {_sql_is_batting_event(col)} THEN 1 ELSE 0 END)"
+    prefixes = " OR ".join(f"{col} LIKE '{p}%'" for p in _NON_PA_EVENT_PREFIXES)
+    batting = (
+        f"({col} IS NOT NULL AND {col} NOT IN {sql_list(_NON_PA_EVENTS)} AND NOT ({prefixes}))"
+    )
+    return f"MAX(CASE WHEN {batting} THEN 1 ELSE 0 END)"
 
 
 def _sql_pa_keys(pred: str) -> str:
@@ -211,7 +200,7 @@ def solve_chain(rates: list[list[float]]) -> dict[str, float]:
     strikes self-loops; the closed form divides the state's other terms by
     (1 - p_foul).
 
-    The row is in :data:`OUTCOMES` order and need not be normalised (counts or
+    The row is in :data:`PITCH_OUTCOMES` order and need not be normalised (counts or
     weights work). Returns the keys ``walk``, ``k``, ``in_play``, ``hbp`` and
     ``pitches``. The logic is the deleted ``scripts/sim429_chain_analysis.py``
     solver, unchanged; ``tests/unit/pools/test_pool_chain.py`` holds the
@@ -227,7 +216,7 @@ def solve_chain(rates: list[list[float]]) -> dict[str, float]:
     def shares(b: int, s: int) -> dict[str, float]:
         row = rates[b * 3 + s]
         tot = sum(row[:6]) or 1.0
-        return {o: row[i] / tot for i, o in enumerate(OUTCOMES)}
+        return {o: row[i] / tot for i, o in enumerate(PITCH_OUTCOMES)}
 
     def state(b: int, s: int) -> dict[str, float]:
         if (b, s) in p:
@@ -276,7 +265,7 @@ def pool_count_matrix(
 
     Row ``balls*3 + strikes`` holds the rows (or, with ``weighted``, the summed
     ``recency_weight``) of ``sim.pitch_pool WHERE {pred}`` per class, in
-    :data:`OUTCOMES` order. ``pred`` is a SQL predicate on the pool's columns
+    :data:`PITCH_OUTCOMES` order. ``pred`` is a SQL predicate on the pool's columns
     (``season``, ``game_date``, ...).
 
     ``pa_only`` keeps only the rows of real plate appearances: the
@@ -299,7 +288,7 @@ def pool_count_matrix(
     the ``real_pa_rates`` groups. The label check uses season predicates,
     where no group splits.
 
-    Raises ``ValueError`` when a row carries a class outside :data:`OUTCOMES`
+    Raises ``ValueError`` when a row carries a class outside :data:`PITCH_OUTCOMES`
     (or a NULL class) or a count outside 0-3 balls / 0-2 strikes. A new class
     must not vanish from the chain silently. It
     also raises when a count holds no volume: :func:`solve_chain` would read
@@ -326,12 +315,12 @@ def pool_count_matrix(
             f"FROM sim.pitch_pool WHERE ({pred}) GROUP BY 1, 2, 3"
         )
     rows = con.execute(sql).fetchall()
-    mat = [[0.0] * len(OUTCOMES) for _ in range(12)]
+    mat = [[0.0] * len(PITCH_OUTCOMES) for _ in range(12)]
     for balls, strikes, outcome, n in rows:
-        if outcome not in OUTCOMES:
+        if outcome not in PITCH_OUTCOMES:
             raise ValueError(
                 f"sim.pitch_pool holds class {outcome!r} at count {balls}-{strikes} "
-                f"({n} rows or weight) outside the chain's classes {OUTCOMES}; "
+                f"({n} rows or weight) outside the chain's classes {PITCH_OUTCOMES}; "
                 "the count chain cannot place it"
             )
         if balls is None or strikes is None or not (0 <= balls <= 3 and 0 <= strikes <= 2):
@@ -339,7 +328,7 @@ def pool_count_matrix(
                 f"sim.pitch_pool holds count {balls}-{strikes} ({n} rows or weight); "
                 "the count chain has no such state"
             )
-        mat[int(balls) * 3 + int(strikes)][OUTCOMES.index(outcome)] += float(n or 0.0)
+        mat[int(balls) * 3 + int(strikes)][PITCH_OUTCOMES.index(outcome)] += float(n or 0.0)
     empty = [f"{i // 3}-{i % 3}" for i, row in enumerate(mat) if not sum(row) > 0.0]
     if empty:
         scope = " (pa_only)" if pa_only else ""
@@ -366,45 +355,10 @@ def chain_rates(
 # ---------------------------------------------------------------------------
 
 
-def _redact(text: str, dsn: str) -> str:
-    """Replace the DSN (and its password) in ``text``; DuckDB quotes the DSN in an ATTACH error."""
-    body = str(text)
-    if dsn:
-        body = body.replace(dsn, "<dsn>")
-        # postgresql://user:password@host/...: drop the password on its own too.
-        head = dsn.split("@", 1)[0]
-        if ":" in head.split("//", 1)[-1]:
-            password = head.split("//", 1)[-1].split(":", 1)[1]
-            if password:
-                body = body.replace(password, "<password>")
-    return body
-
-
-def attach_pg(con: Any, dsn: str | None = None) -> None:
-    """Attach Postgres read-only as the catalog ``pg``; a no-op when ``pg`` is attached.
-
-    ``dsn`` defaults to ``BASEBALL_DB_DSN``; with neither, the attach raises
-    ``RuntimeError`` naming the variable (there is no default password). The
-    attach works on a read-only DuckDB connection. An attach failure raises
-    ``RuntimeError`` with the DSN's password redacted.
-    """
-    attached = con.execute(
-        "SELECT COUNT(*) FROM duckdb_databases() WHERE database_name = 'pg'"
-    ).fetchone()[0]
-    if attached:
-        return
-    dsn = dsn or require_dsn()
-    try:
-        con.execute("INSTALL postgres; LOAD postgres;")
-        con.execute(f"ATTACH '{dsn}' AS pg (TYPE postgres, READ_ONLY);")
-    except Exception as exc:  # noqa: BLE001 - any attach failure is reported the same way
-        raise RuntimeError(f"Postgres attach failed: {_redact(str(exc), dsn)}") from None
-
-
 def real_pa_rates(con: Any, pred: str) -> dict[str, float]:
     """Per-plate-appearance rates of real play from ``pg.raw.pitches``.
 
-    Needs :func:`attach_pg` first. ``pred`` is a SQL predicate on
+    Needs :func:`db.dsn.attach_pg` first. ``pred`` is a SQL predicate on
     ``raw.pitches`` columns (``season``, ``game_date``); the rows carry
     ``data_quality_flag = FALSE``, the pool build's own filter.
 
@@ -486,6 +440,33 @@ def label_check(
             gap = (c - r) / r
         out.append((channel, c, r, gap, abs(gap) <= tolerance))
     return out
+
+
+class LabelCheckRun(NamedTuple):
+    """One run of the label check (:func:`run_label_check`)."""
+
+    rows: list[tuple[str, float, float, float, bool]]
+    n_pool: int
+    n_real: int
+    real: dict[str, float]
+    ok: bool
+
+
+def run_label_check(con: Any, pred: str) -> LabelCheckRun:
+    """The label check over ``pred``: the ``pa_only`` chain against real plate appearances.
+
+    Needs :func:`db.dsn.attach_pg` first. ``rows`` are :func:`label_check`'s,
+    ``n_pool`` is :func:`pa_group_count`, ``n_real`` and ``real`` come from
+    :func:`real_pa_rates`. ``ok`` holds when the two counts are equal and every
+    channel is inside the tolerance. Each caller prints the run its own way.
+    """
+    chain = chain_rates(con, pred, pa_only=True)
+    real = real_pa_rates(con, pred)
+    n_real = int(real["n_pa"])
+    n_pool = pa_group_count(con, pred)
+    rows = label_check(chain, real)
+    ok = n_pool == n_real and all(row[4] for row in rows)
+    return LabelCheckRun(rows=rows, n_pool=n_pool, n_real=n_real, real=real, ok=ok)
 
 
 #: The printed name of each label-check channel.

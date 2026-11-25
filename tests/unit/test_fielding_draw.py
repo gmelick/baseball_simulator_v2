@@ -497,8 +497,8 @@ class TestTheArtifactClass:
         shared = art.extract_shared_arrays()
         assert shared["bb_pool.R.bb_class"] is bb.bb_class
         view = np.zeros(bb.n, dtype=np.int8)
-        art.attach_shared_views({"bb_pool.R.bb_class": view})
-        assert bb.bb_class is view
+        again = EngineArtifacts.load(str(tmp_path), shared_views={"bb_pool.R.bb_class": view})
+        assert again.bb_pools["R"].bb_class is view
 
     def test_a_pool_without_a_type_column_loads_none(self, tmp_path):
         con = duckdb.connect(":memory:")

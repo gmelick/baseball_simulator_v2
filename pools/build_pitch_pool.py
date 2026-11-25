@@ -5,19 +5,28 @@ from __future__ import annotations
 import logging
 
 from pools.pool_metadata import (
-    _canonical_ref_season,
     _recency_weight_sql,
     _record_pool_build,
-    _seasons_needing_rebuild,
+    _seasons_to_build,
+    sql_runners_state,
+    sql_score_diff,
 )
 from profiles.base import ComputorBase
 from profiles.sql import (
     SQL_OUTCOME_TYPE,
     SQL_PITCHER_PITCH_COUNT,
     SQL_TIMES_THROUGH_ORDER,
+    sql_seasons,
 )
 
 log = logging.getLogger("player_profile_computor")
+
+#: The got-away label of a ``raw.pitches`` row: the parser's per-pitch passed-ball
+#: or wild-pitch flag, or an uncaught third strike (a strikeout-final pitch whose
+#: description names a wild pitch or a passed ball).
+SQL_GOT_AWAY = """(COALESCE(passed_ball_wild_pitch, FALSE)
+                     OR (events IN ('strikeout', 'strikeout_double_play')
+                         AND (des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%')))"""
 
 
 class PitchPoolMixin(ComputorBase):
@@ -35,14 +44,11 @@ class PitchPoolMixin(ComputorBase):
           - recency_weight
         When ``incremental``, only the seasons whose source changed rebuild.
         """
-        ref_season = _canonical_ref_season(self._conn, seasons)
-        if incremental:
-            seasons = _seasons_needing_rebuild(self._conn, "pitch_pool", seasons)
-            if not seasons:
-                log.info("Building sim.pitch_pool … all seasons fresh; skipped.")
-                return
-        log.info("Building sim.pitch_pool … (seasons=%s)", seasons)
-        season_list = ", ".join(str(s) for s in seasons)
+        plan = _seasons_to_build(self._conn, "pitch_pool", seasons, incremental)
+        if plan is None:
+            return
+        seasons, ref_season = plan
+        season_list = sql_seasons(seasons)
         recency_expr = _recency_weight_sql(
             "CAST(EXTRACT(year FROM game_date) AS SMALLINT)", ref_season
         )
@@ -94,13 +100,11 @@ class PitchPoolMixin(ComputorBase):
                     strikes                             AS count_strikes,
                     outs,
                     -- Runners state bitmask: bit0=1B, bit1=2B, bit2=3B
-                    (CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END
-                     + CASE WHEN on_2b IS NOT NULL THEN 2 ELSE 0 END
-                     + CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END)::SMALLINT
+                    {sql_runners_state()}
                                                         AS runners_state,
                     inning,
                     -- Score diff capped at ±5 for similarity scoring
-                    GREATEST(-5, LEAST(5, bat_score - fld_score))::SMALLINT
+                    {sql_score_diff()}
                                                         AS score_diff,
 
                     -- Prev pitch context via LAG window over (game, at_bat, pitch_number)
@@ -135,9 +139,7 @@ class PitchPoolMixin(ComputorBase):
                     -- description names a wild pitch / passed ball — the
                     -- exact label, zero mid-PA leakage; see migration 0021).
                     fielder_2                           AS catcher_id,
-                    (COALESCE(passed_ball_wild_pitch, FALSE)
-                     OR (events IN ('strikeout', 'strikeout_double_play')
-                         AND (des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%')))
+                    {SQL_GOT_AWAY}
                                                         AS got_away,
 
                     -- SIM-518 (migration 0023): the draw-conditioning

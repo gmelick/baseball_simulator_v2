@@ -537,11 +537,12 @@ class TestSourceShape:
         assert "_compute_outfield_arm_metrics" not in src
         assert "_tmp_of_arm" not in src
         # SIM-532 re-created ``_SQL_IS_OF`` as the jump columns' outfield guard.
-        # In the fielder aggregator the guard wraps only the four jump columns
-        # (alias ``sj``), and the deleted board join (alias ``sbr``) is gone.
+        # In the fielder aggregator the guard wraps the range-runs CASE (alias
+        # ``c``) and the four jump columns (alias ``sj``), and the deleted
+        # board join (alias ``sbr``) is gone.
         body = _method_source("_aggregate_fielder_season_metrics")
         uses = re.findall(r"\{_SQL_IS_OF\}\s+THEN\s+(\w+)\.", body)
-        assert uses == ["sj"] * 4
+        assert uses == ["c"] + ["sj"] * 4
         assert "sbr." not in body
 
     def test_the_fielder_aggregator_reads_no_baserunning_board(self) -> None:

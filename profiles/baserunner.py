@@ -12,10 +12,12 @@ from ingest.statcast_events import (
 )
 from profiles.base import ComputorBase
 from profiles.constants import (
+    MIN_PITCHER_BASERUNNER_EVENTS,
     MIN_RUNNER_ADV_OPPS,
     MIN_RUNNER_SB_ATTEMPTS,
+    MIN_RUNNER_STEAL_ATTEMPTS,
 )
-from profiles.sql import SQL_OUTS_RECORDED
+from profiles.sql import SQL_OUTS_RECORDED, sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
@@ -60,27 +62,20 @@ class BaserunnerProfilesMixin(ComputorBase):
         substitute costs almost nothing.
         """
         log.info("Computing baserunner profiles …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         # The season shift described above; a live build (asof None) joins
         # `ap.season` itself.
-        sprint_speed_season = (
-            f"(CASE WHEN ap.season = {asof_date.year} THEN ap.season - 1 ELSE ap.season END)"
-            if asof is not None
-            else "ap.season"
-        )
+        sprint_speed_season = self._savant_season_sql("ap.season", asof)
 
         # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.baserunner_season_metrics", seasons, asof_date)
 
         if asof is not None:
-            self._conn.execute(f"""
-                DELETE FROM derived.baserunner_season_metrics
-                WHERE season IN ({season_list}) OR season > {asof_date.year}
-            """)
+            self._delete_season_rows("derived.baserunner_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.baserunner_season_metrics
@@ -289,13 +284,7 @@ class BaserunnerProfilesMixin(ComputorBase):
         season-shift substitution in the query itself, not by filtering, so
         there is nothing to assert here about that source.
         """
-        season_list = ", ".join(str(s) for s in seasons)
-        self._check_leakage(
-            "raw.pitches",
-            f"SELECT MAX(game_date) FROM pg.raw.pitches "
-            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            asof,
-        )
+        self._check_pitch_sources_leakage(seasons, asof)
 
     def _build_baserunner_steal_metrics(self, seasons: list[int], asof: date | None = None) -> None:
         """
@@ -334,29 +323,19 @@ class BaserunnerProfilesMixin(ComputorBase):
         cutoff joins the PRIOR season's row.
         """
         log.info("Building derived.baserunner_steal_metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         # The Savant season shift (no shift on a live build).
-        savant_season = (
-            f"(CASE WHEN r.season = {asof_date.year} THEN r.season - 1 ELSE r.season END)"
-            if asof is not None
-            else "r.season"
-        )
-        # Matches the engine's MIN_STEAL_ATTEMPTS gate (rows flagged below this
-        # are filtered out by the engine's `WHERE NOT below_minimum_sample`).
-        min_attempts = 10
+        savant_season = self._savant_season_sql("r.season", asof)
 
         # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.baserunner_steal_metrics", seasons, asof_date)
 
         if asof is not None:
-            self._conn.execute(f"""
-                DELETE FROM derived.baserunner_steal_metrics
-                WHERE season IN ({season_list}) OR season > {asof_date.year}
-            """)
+            self._delete_season_rows("derived.baserunner_steal_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.baserunner_steal_metrics (
@@ -457,7 +436,7 @@ class BaserunnerProfilesMixin(ComputorBase):
                 -- NULL when he never went (unmeasured, never 0.0).
                 a.n_success     * 1.0 / NULLIF(a.n_attempts, 0)       AS steal_success_rate,
                 a.n_success_2b  * 1.0 / NULLIF(a.n_attempts_2b, 0)    AS steal_success_rate_2b,
-                (COALESCE(a.n_attempts, 0) < {min_attempts})          AS below_minimum_sample,
+                (COALESCE(a.n_attempts, 0) < {MIN_RUNNER_STEAL_ATTEMPTS}) AS below_minimum_sample,
                 DATE '{asof_sql}'                                     AS asof_date,
                 sv.r_primary_lead                                     AS lead_primary_ft,
                 sv.r_secondary_lead                                   AS lead_secondary_ft,
@@ -481,13 +460,7 @@ class BaserunnerProfilesMixin(ComputorBase):
         self, seasons: list[int], asof: date
     ) -> None:
         """Prove raw.pitches contributed no row dated after the cutoff."""
-        season_list = ", ".join(str(s) for s in seasons)
-        self._check_leakage(
-            "raw.pitches",
-            f"SELECT MAX(game_date) FROM pg.raw.pitches "
-            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            asof,
-        )
+        self._check_pitch_sources_leakage(seasons, asof)
 
     def _build_pitcher_steal_metrics(self, seasons: list[int], asof: date | None = None) -> None:
         """
@@ -522,7 +495,7 @@ class BaserunnerProfilesMixin(ComputorBase):
         season containing the cutoff joins the PRIOR season's row.
         """
         log.info("Building derived.pitcher_steal_metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
@@ -531,22 +504,14 @@ class BaserunnerProfilesMixin(ComputorBase):
             asof_sql if asof is not None else None
         )
         # The Savant season shift (no shift on a live build).
-        savant_season = (
-            f"(CASE WHEN p.season = {asof_date.year} THEN p.season - 1 ELSE p.season END)"
-            if asof is not None
-            else "p.season"
-        )
-        min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
+        savant_season = self._savant_season_sql("p.season", asof)
 
         # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.pitcher_steal_metrics", seasons, asof_date)
 
         if asof is not None:
-            self._conn.execute(f"""
-                DELETE FROM derived.pitcher_steal_metrics
-                WHERE season IN ({season_list}) OR season > {asof_date.year}
-            """)
+            self._delete_season_rows("derived.pitcher_steal_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.pitcher_steal_metrics (
@@ -640,7 +605,7 @@ class BaserunnerProfilesMixin(ComputorBase):
                     / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS pickoff_rate,
                 COALESCE(dg.n_stepoffs * 1.0
                     / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS stepoff_rate,
-                (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample,
+                (COALESCE(b.n_br_events, 0) < {MIN_PITCHER_BASERUNNER_EVENTS}) AS below_minimum_sample,
                 DATE '{asof_sql}'                                            AS asof_date,
                 -- SIM-531: the lead he allows (NULL = no Savant row).
                 sv.r_primary_lead                                            AS lead_allowed_primary_ft,
@@ -667,23 +632,31 @@ class BaserunnerProfilesMixin(ComputorBase):
         (this method's own query) and raw.play_events (the two CTE
         helpers), the latter skipped when the table is absent.
         """
-        season_list = ", ".join(str(s) for s in seasons)
-        checks: list[tuple[str, str]] = [
-            (
-                "raw.pitches",
-                f"SELECT MAX(game_date) FROM pg.raw.pitches "
-                f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            ),
-        ]
+        self._check_pitch_sources_leakage(seasons, asof, play_events=True)
+
+    def _play_events_disengagement_cte(self, asof_sql: str | None = None) -> str:
+        """The pickoff throws and stepoffs per (pitcher, season).
+
+        These are the pitcher's hold-runner habits: how often he throws over
+        and how often he steps off. ``pitcher_id`` is the pitcher who threw.
+        A ``pickoff_error`` is still a throw, so it counts. The relation is
+        empty when the table is absent (a database before Alembic 0018, or a
+        unit-test fixture).
+
+        ``asof_sql`` keeps only the plays at or before the cutoff; ``None``
+        keeps every play of the season.
+        """
         if not duck_relation_readable(self._conn, "pg.raw.play_events"):
-            log.info("    no leakage check for raw.play_events (table absent)")
-        else:
-            checks.append(
-                (
-                    "raw.play_events",
-                    f"SELECT MAX(game_date) FROM pg.raw.play_events "
-                    f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-                )
+            return (
+                "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
+                "0 AS n_pickoffs, 0 AS n_stepoffs WHERE FALSE"
             )
-        for source, sql in checks:
-            self._check_leakage(source, sql, asof)
+        cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof_sql is not None else ""
+        return (
+            "SELECT pitcher_id::INTEGER AS pitcher_id, season::SMALLINT AS season, "
+            "SUM(CASE WHEN event_type IN ('pickoff', 'pickoff_error') "
+            "THEN 1 ELSE 0 END) AS n_pickoffs, "
+            "SUM(CASE WHEN event_type = 'stepoff' THEN 1 ELSE 0 END) AS n_stepoffs "
+            f"FROM pg.raw.play_events WHERE pitcher_id IS NOT NULL {cutoff} "
+            "GROUP BY pitcher_id, season"
+        )

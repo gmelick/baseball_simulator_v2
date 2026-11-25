@@ -15,7 +15,6 @@ from ingest.statcast_events import (
     batter_retired,
     play_outs,
 )
-from profiles.arsenal_fit import _quick_auc
 from profiles.base import ComputorBase
 from profiles.defense import (
     AVG_FIELDER_POS,
@@ -33,6 +32,7 @@ from profiles.defense import (
     _fit_logistic_model,
     _hc_to_feet,
     _predict_proba,
+    _quick_auc,
     _throw_time,
 )
 from profiles.leverage import RE24_APPROX
@@ -40,9 +40,35 @@ from profiles.sql import (
     SQL_BATTER_RETIRED,
     SQL_FIELDING_OUT,
     SQL_IN_PLAY,
+    sql_seasons,
 )
 
 log = logging.getLogger("player_profile_computor")
+
+
+def _nearest_position(
+    hc_x: float, hc_y: float, stand: str, positions: tuple[str, ...]
+) -> tuple[str | None, float]:
+    """The position whose average start is nearest the ball, and that distance in hc units."""
+    best_pos = None
+    best_dist = float("inf")
+    for pos in positions:
+        fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]["R"])
+        d = _euclidean_hc(hc_x, hc_y, fx, fy)
+        if d < best_dist:
+            best_dist = d
+            best_pos = pos
+    return best_pos, best_dist
+
+
+def _sprint_speed_map(speeds: pd.DataFrame) -> dict[tuple[int, int], float]:
+    """Each (player, season)'s sprint speed; a NULL speed reads the default."""
+    speed_map = {}
+    for _, r in speeds.iterrows():
+        speed_map[(int(r["player_id"]), int(r["season"]))] = (
+            r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
+        )
+    return speed_map
 
 
 class FielderPlayMetricsMixin(ComputorBase):
@@ -69,7 +95,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing outfield catch probability …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         df = self._conn.execute(f"""
@@ -121,15 +147,9 @@ class FielderPlayMetricsMixin(ComputorBase):
         for _, r in df.iterrows():
             # Assign to closest OF position based on ball landing location
             stand = r["stand"] if r["stand"] in ("L", "R") else "R"
-            best_pos = None
-            best_dist = float("inf")
-
-            for pos in ("LF", "CF", "RF"):
-                fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]["R"])
-                d = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pos = pos
+            best_pos, distance_hc = _nearest_position(
+                r["hc_x"], r["hc_y"], stand, ("LF", "CF", "RF")
+            )
 
             # Map position to fielder ID
             pos_to_col = {"LF": "fielder_7", "CF": "fielder_8", "RF": "fielder_9"}
@@ -138,7 +158,6 @@ class FielderPlayMetricsMixin(ComputorBase):
                 continue
 
             fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]["R"])
-            distance_hc = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
             distance_ft = _hc_to_feet(distance_hc)
 
             hang_time = _estimate_hang_time(r["launch_speed"], r["launch_angle"])
@@ -253,7 +272,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         JOIN.
         """
         log.info("Computing infield OAA …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         date_cutoff = f"AND game_date <= DATE '{asof_date.isoformat()}'" if asof is not None else ""
 
@@ -270,9 +289,7 @@ class FielderPlayMetricsMixin(ComputorBase):
                 launch_speed, launch_angle, spray_angle,
                 bb_type,
                 events,
-                type,
-                fielding_error,
-                throwing_error_1, throwing_error_2
+                type
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
               {date_cutoff}
@@ -300,13 +317,9 @@ class FielderPlayMetricsMixin(ComputorBase):
         batter_speeds = self._conn.execute(f"""
             SELECT player_id, season, sprint_speed
             FROM pg.raw.sprint_speed
-            WHERE season IN ({", ".join(str(s) for s in sorted(lookup_seasons))})
+            WHERE season IN ({sql_seasons(sorted(lookup_seasons))})
         """).fetchdf()
-        speed_map = {}
-        for _, r in batter_speeds.iterrows():
-            speed_map[(int(r["player_id"]), int(r["season"]))] = (
-                r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
-            )
+        speed_map = _sprint_speed_map(batter_speeds)
 
         def _speed_lookup_season(row_season: int) -> int:
             """The season shift (as in _compute_baserunner_profiles): the
@@ -321,14 +334,9 @@ class FielderPlayMetricsMixin(ComputorBase):
             stand = r["stand"] if r["stand"] in ("L", "R") else "R"
 
             # Determine which infielder is responsible
-            best_pos = None
-            best_dist = float("inf")
-            for pos in ("1B", "2B", "3B", "SS"):
-                fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]["R"])
-                d = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pos = pos
+            best_pos, fielder_dist_hc = _nearest_position(
+                r["hc_x"], r["hc_y"], stand, ("1B", "2B", "3B", "SS")
+            )
 
             # Map position to fielder column
             pos_to_col = {
@@ -342,7 +350,6 @@ class FielderPlayMetricsMixin(ComputorBase):
                 continue
 
             fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]["R"])
-            fielder_dist_hc = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
             fielder_dist_ft = _hc_to_feet(fielder_dist_hc)
 
             # Throw distance to 1B
@@ -396,12 +403,6 @@ class FielderPlayMetricsMixin(ComputorBase):
             # play_outs also counts the hidden runner out (an X-typed single
             # means a runner was thrown out), matching the DP and pool sites.
             out_recorded = play_outs(r["events"], r["type"]) > 0
-            is_error = pd.notna(r.get("fielding_error")) or pd.notna(r.get("throwing_error_1"))
-            error_type = None
-            if pd.notna(r.get("throwing_error_1")) or pd.notna(r.get("throwing_error_2")):
-                error_type = "throwing"
-            elif pd.notna(r.get("fielding_error")):
-                error_type = "fielding"
 
             rows.append(
                 {
@@ -416,8 +417,6 @@ class FielderPlayMetricsMixin(ComputorBase):
                     "runner_speed": batter_speed,
                     "direction_category": direction_cat,
                     "out_recorded": out_recorded,
-                    "is_error": is_error,
-                    "error_type": error_type,
                 }
             )
 
@@ -476,7 +475,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         as-of the same cutoff before this method runs.
         """
         log.info("Computing double play metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         date_cutoff = f"AND game_date <= DATE '{asof_date.isoformat()}'" if asof is not None else ""
 
@@ -529,24 +528,17 @@ class FielderPlayMetricsMixin(ComputorBase):
         # answers the shifted question and no per-row Python shift is
         # needed here (contrast _compute_infield_oaa, whose lookup source
         # has no bsm-style intermediary to carry the shift in SQL).
-        sprint_speed_season = (
-            f"(CASE WHEN bsm.season = {asof_date.year} THEN bsm.season - 1 ELSE bsm.season END)"
-            if asof is not None
-            else "bsm.season"
-        )
+        sprint_speed_season = self._savant_season_sql("bsm.season", asof)
         batter_speeds = self._conn.execute(f"""
-            SELECT bsm.player_id, bsm.season, COALESCE(ss.sprint_speed, 27.0) AS sprint_speed
+            SELECT bsm.player_id, bsm.season,
+                   COALESCE(ss.sprint_speed, {DEFAULT_SPRINT_SPEED_FPS}) AS sprint_speed
             FROM derived.baserunner_season_metrics bsm
             LEFT JOIN pg.raw.sprint_speed ss
                 ON bsm.player_id = ss.player_id
                 AND ss.season = {sprint_speed_season}
-            WHERE bsm.season IN ({", ".join(str(s) for s in seasons)})
+            WHERE bsm.season IN ({season_list})
         """).fetchdf()
-        speed_map = {}
-        for _, r in batter_speeds.iterrows():
-            speed_map[(int(r["player_id"]), int(r["season"]))] = (
-                r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
-            )
+        speed_map = _sprint_speed_map(batter_speeds)
 
         rows = []
         for _, r in df.iterrows():
@@ -745,7 +737,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing bunt defense metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
@@ -808,7 +800,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing 1B scooping metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
@@ -869,7 +861,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing error decomposition …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""

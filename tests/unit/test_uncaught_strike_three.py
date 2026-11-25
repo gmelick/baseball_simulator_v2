@@ -153,12 +153,15 @@ class TestPitchPoolReceivingColumns:
     def test_the_builder_selects_catcher_and_got_away(self):
         import inspect
 
+        from pools.build_pitch_pool import SQL_GOT_AWAY
+
         src = inspect.getsource(PlayerProfileComputor._build_pitch_pool)
         assert "fielder_2                           AS catcher_id" in src
+        assert "{SQL_GOT_AWAY}" in src
         # got_away = the parser flag OR the uncaught-K3 des label.
-        assert "COALESCE(passed_ball_wild_pitch, FALSE)" in src
-        assert "'strikeout', 'strikeout_double_play'" in src
-        assert "des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%'" in src
+        assert "COALESCE(passed_ball_wild_pitch, FALSE)" in SQL_GOT_AWAY
+        assert "'strikeout', 'strikeout_double_play'" in SQL_GOT_AWAY
+        assert "des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%'" in SQL_GOT_AWAY
 
     def test_the_real_ddl_carries_the_columns(self):
         c = duckdb.connect(":memory:")

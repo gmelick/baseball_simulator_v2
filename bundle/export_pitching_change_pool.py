@@ -4,16 +4,23 @@ relievers' role sidecar.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
 import duckdb
 import numpy as np
 
-from bundle.common import take_view
+from bundle.common import (
+    float_columns,
+    meta_column,
+    optional_meta_column,
+    recency_column,
+    take_view,
+    write_json,
+)
 from bundle.worker_pools import ChangePool
 from db.introspect import duck_columns
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -60,23 +67,12 @@ def _default_game_context(seasons: list[int]) -> tuple[dict, dict, dict] | None:
         return None
 
 
-#: The columns of the real managers and pens the change pool's meta
-#: parquet carries beyond the situation, and their "unknown" value.
-_CHANGE_CTX_COLS: tuple[tuple[str, int], ...] = (
-    ("manager_id", -1),
-    ("in_days_rest", -1),
-    ("in_pitched_2d", -1),
-    ("in_pitches_3d", -1),
-    ("in_throws", 0),
-)
-
-
 def build_pitching_change_pool(
     con: duckdb.DuckDBPyConnection,
     out_dir: str,
     seasons: list[int],
     *,
-    game_context: tuple[dict, dict] | None | bool = True,
+    game_context: tuple[dict, dict, dict] | None | bool = True,
 ) -> dict:
     """Write ``<out_dir>/manager_pool/change.{sit.npy, meta.parquet}``, the
     reliever ROLE sidecar ``roles.parquet`` and the manifest (the counts and
@@ -87,11 +83,11 @@ def build_pitching_change_pool(
     as of the game (``in_days_rest`` capped at five, ``in_pitched_2d``,
     ``in_pitches_3d`` — ``pipeline.bullpen_usage``'s definitions), read from
     Postgres through ``game_context`` (``True`` = read it; a ``(managers,
-    usage)`` pair = use it, the test seam; ``None`` / ``False`` = unknowns).
+    usage, throws)`` triple = use it, the test seam; ``None`` / ``False`` = unknowns).
     """
     pool_dir = os.path.join(out_dir, "manager_pool")
     os.makedirs(pool_dir, exist_ok=True)
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     # The row's game date (a YYYYMMDD integer) so the backtest's
     # point-in-time cutoff applies to this draw too; an older pitch pool
     # without the column leaves it NULL (the cutoff then refuses, loudly).
@@ -152,9 +148,7 @@ def build_pitching_change_pool(
         f"SELECT {', '.join(_CHANGE_SIT_COLS)} FROM _change_pool ORDER BY game_pk, at_bat_number"
     ).fetchnumpy()
     n = len(d[_CHANGE_SIT_COLS[0]])
-    sit = np.nan_to_num(
-        np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _CHANGE_SIT_COLS], axis=1)
-    ).astype(np.float32)
+    sit = float_columns(d, _CHANGE_SIT_COLS)
     np.save(os.path.join(pool_dir, "change.sit.npy"), sit)
     # --- The fielding manager and the incoming arm's rest per row ---
     ctx = _default_game_context(seasons) if game_context is True else game_context
@@ -170,8 +164,7 @@ def build_pitching_change_pool(
     rest = np.full((n, 3), -1, dtype=np.int64)
     throws_col = np.zeros(n, dtype=np.int64)
     if ctx:
-        managers, usage = ctx[0], ctx[1]
-        throws: dict = ctx[2] if len(ctx) > 2 else {}
+        managers, usage, throws = ctx
         for i in range(n):
             pair = managers.get(int(gpk[i]))
             if pair is not None:
@@ -246,8 +239,7 @@ def build_pitching_change_pool(
         # Whether every row carries its game date (the cutoff's input).
         "game_ymd": bool(have_date),
     }
-    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2)
+    write_json(os.path.join(pool_dir, "manifest.json"), manifest)
     log.info(
         "manager_pool[change]: %d boundaries over %d games; change rate %.4f "
         "(new half %.4f, mid-inning %.4f); manager on %.1f%% of rows, incoming-arm rest "
@@ -279,42 +271,34 @@ def load_change_pool(
             f"SELECT * FROM read_parquet('{os.path.join(mp_dir, 'change.meta.parquet')}')"
         ).fetchnumpy()
 
-        def _cp_take(attr: str, col: str, dtype, fill, *, _m=cm) -> np.ndarray:
-            v = views.get(f"change_pool.{attr}")
-            if isinstance(v, np.ndarray):
-                return v
-            return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
-
-        def _cp_opt(attr: str, col: str, dtype, *, _m=cm) -> np.ndarray | None:
-            # A column an older bundle lacks stays None.
-            v = views.get(f"change_pool.{attr}")
-            if isinstance(v, np.ndarray):
-                return v
-            if col not in _m:
-                return None
-            return np.asarray(np.ma.filled(_m[col], -1), dtype=dtype)
-
         change_pool = ChangePool(
             sit=take_view(views, "change_pool.sit", os.path.join(mp_dir, "change.sit.npy")),
-            pitcher_id=_cp_take("pitcher_id", "pitcher_id", np.int64, 0),
-            incoming_id=_cp_take("incoming_id", "incoming_id", np.int64, 0),
-            season=_cp_take("season", "season", np.int64, 0),
-            is_starter=_cp_take("is_starter", "is_starter", np.int8, 0),
-            new_half=_cp_take("new_half", "new_half", np.int8, 0),
-            changed=_cp_take("changed", "changed", np.int8, 0),
-            recency=(
-                views.get("change_pool.recency")
-                if isinstance(views.get("change_pool.recency"), np.ndarray)
-                else np.nan_to_num(
-                    np.ma.filled(cm["recency_weight"], 1.0).astype(np.float32), nan=1.0
-                )
+            pitcher_id=meta_column(views, "change_pool.pitcher_id", cm, "pitcher_id", np.int64),
+            incoming_id=meta_column(views, "change_pool.incoming_id", cm, "incoming_id", np.int64),
+            season=meta_column(views, "change_pool.season", cm, "season", np.int64),
+            is_starter=meta_column(views, "change_pool.is_starter", cm, "is_starter", np.int8),
+            new_half=meta_column(views, "change_pool.new_half", cm, "new_half", np.int8),
+            changed=meta_column(views, "change_pool.changed", cm, "changed", np.int8),
+            recency=recency_column(views, "change_pool.recency", cm),
+            # A column an older bundle lacks stays None.
+            manager_id=optional_meta_column(
+                views, "change_pool.manager_id", cm, "manager_id", np.int64, -1
             ),
-            manager_id=_cp_opt("manager_id", "manager_id", np.int64),
-            in_days_rest=_cp_opt("in_days_rest", "in_days_rest", np.int8),
-            in_pitched_2d=_cp_opt("in_pitched_2d", "in_pitched_2d", np.int8),
-            in_pitches_3d=_cp_opt("in_pitches_3d", "in_pitches_3d", np.int16),
-            in_throws=_cp_opt("in_throws", "in_throws", np.int8),
-            game_ymd=_cp_opt("game_ymd", "game_ymd", np.int32),
+            in_days_rest=optional_meta_column(
+                views, "change_pool.in_days_rest", cm, "in_days_rest", np.int8, -1
+            ),
+            in_pitched_2d=optional_meta_column(
+                views, "change_pool.in_pitched_2d", cm, "in_pitched_2d", np.int8, -1
+            ),
+            in_pitches_3d=optional_meta_column(
+                views, "change_pool.in_pitches_3d", cm, "in_pitches_3d", np.int16, -1
+            ),
+            in_throws=optional_meta_column(
+                views, "change_pool.in_throws", cm, "in_throws", np.int8, -1
+            ),
+            game_ymd=optional_meta_column(
+                views, "change_pool.game_ymd", cm, "game_ymd", np.int32, -1
+            ),
         )
         # A date column that is NULL on every row (a pitch pool
         # without dates) must read as ABSENT, so a cutoff refuses instead

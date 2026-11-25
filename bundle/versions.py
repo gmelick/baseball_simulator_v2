@@ -53,6 +53,13 @@ LEGACY_PREFIX = "legacy-"
 PUBLISHED_MARKER = ".published"
 
 
+def bundle_link(pool_dir: str | os.PathLike[str] | None = None) -> str:
+    """The published bundle link ``<pool_dir>/engine_artifacts``; ``pool_dir`` defaults to ``$BASEBALL_PLAY_POOL_DIR``."""
+    if pool_dir is None:
+        pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
+    return os.path.join(pool_dir, "engine_artifacts")
+
+
 def versions_root(link: str) -> str:
     """The folder that holds the versions of ``link``."""
     return os.path.normpath(link) + VERSIONS_SUFFIX

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 
 import duckdb
 import numpy as np
 
-from bundle.catcher_receiving import load_receiving
+from bundle.common import read_json
 from bundle.export_actor_embeddings import load_actor_embeddings
 from bundle.export_advancement_pool import (
     load_advancement_pools,
@@ -21,7 +20,6 @@ from bundle.export_pitch_pool import load_pitch_pools
 from bundle.export_pitcher_scores import load_pitcher_sim
 from bundle.export_pitching_change_pool import load_change_pool
 from bundle.export_steal_pool import load_steal_pools
-from bundle.park_geometry import load_park_geometry
 from bundle.reference_tables import (
     IBB_RATES_FILE,
     VENUE_RUN_FACTORS_FILE,
@@ -43,26 +41,22 @@ from bundle.worker_pools import (
     StealPool,
 )
 
-log = logging.getLogger("engine_artifacts")
-
 
 def _load_actor_sim(art_dir: str, views: dict[str, np.ndarray]) -> dict[str, dict]:
     """Load the actor score matrices; {} when the bundle has none."""
     actor_sim: dict[str, dict] = {}
     sim_dir = os.path.join(art_dir, "actor_sim")
-    if os.path.exists(os.path.join(sim_dir, "manifest.json")):
-        with open(os.path.join(sim_dir, "manifest.json"), encoding="utf-8") as fh:
-            sim_manifest = json.load(fh)
-        for name in sim_manifest.get("sizes", {}):
-            p = os.path.join(sim_dir, f"{name}.npz")
-            if not os.path.exists(p):
-                continue
-            z = np.load(p, allow_pickle=False)
-            mv = views.get(f"actor_sim.{name}.matrix")
-            actor_sim[name] = {
-                "index": json.loads(str(z["index"])),
-                "matrix": mv if isinstance(mv, np.ndarray) else z["matrix"],
-            }
+    sim_manifest = read_json(sim_dir, "manifest.json") or {}
+    for name in sim_manifest.get("sizes", {}):
+        p = os.path.join(sim_dir, f"{name}.npz")
+        if not os.path.exists(p):
+            continue
+        z = np.load(p, allow_pickle=False)
+        mv = views.get(f"actor_sim.{name}.matrix")
+        actor_sim[name] = {
+            "index": json.loads(str(z["index"])),
+            "matrix": mv if isinstance(mv, np.ndarray) else z["matrix"],
+        }
     return actor_sim
 
 
@@ -74,8 +68,8 @@ class EngineArtifacts:
 
     The big read-only numpy arrays (pitch pool + batted-ball pool +
     actor embeddings) can be PUBLISHED INTO SHARED MEMORY by the parent (via
-    :meth:`extract_shared_arrays`) and ATTACHED zero-copy by each worker (via
-    :meth:`attach_shared_views`), so a 10-worker pool resident-set drops from
+    :meth:`extract_shared_arrays`) and taken zero-copy by each worker (via
+    :meth:`load`'s ``shared_views``), so a 10-worker pool resident-set drops from
     ``10 × ~300 MB`` to ``~300 MB`` total + per-worker scratch. The shared-mem
     plumbing itself lives in :mod:`simulation.batch_runner` (``shared_arrays=``
     + :func:`_worker_init`); this module just defines the (flat-name -> array)
@@ -86,7 +80,6 @@ class EngineArtifacts:
         pools,
         pitcher_sim_index=None,
         pitcher_sim=None,
-        seasons=None,
         actor_emb=None,
         bb_pools=None,
         pitcher_sim_matrix=None,
@@ -140,7 +133,6 @@ class EngineArtifacts:
         #: NOT loaded per worker (it rides the shared-memory seam as one
         #: read-only view). None on a legacy bundle that predates the matrix.
         self.pitcher_sim_matrix: np.ndarray | None = pitcher_sim_matrix
-        self.seasons: list[int] = seasons or []
         #: actor -> {"key_index": {id:season -> row}, "vecs", "mean", "std", "features"}
         self.actor_emb: dict[str, dict] = actor_emb or {}
 
@@ -174,114 +166,32 @@ class EngineArtifacts:
         here under ``"pitcher_sim.matrix"`` and attached read-only by every
         worker.
         """
+        # (key prefix, {sub-key: object}, attributes); an empty sub-key adds no part.
+        groups: tuple[tuple[str, dict, tuple[str, ...]], ...] = (
+            ("pool", self.pools, _HAND_POOL_SHAREABLE_ATTRS),
+            ("bb_pool", self.bb_pools, _BB_POOL_SHAREABLE_ATTRS),
+            ("actor_emb", self.actor_emb, _ACTOR_EMB_SHAREABLE_ATTRS),
+            ("steal_pool", self.steal_pools, _STEAL_POOL_SHAREABLE_ATTRS),
+            ("adv_pool", self.adv_pools, _ADV_POOL_SHAREABLE_ATTRS),
+            (
+                "change_pool",
+                {"": self.change_pool} if self.change_pool is not None else {},
+                _CHANGE_POOL_SHAREABLE_ATTRS,
+            ),
+            # The dense pitcher similarity matrix (replaces the ~2 GB dict).
+            ("pitcher_sim", {"": {"matrix": self.pitcher_sim_matrix}}, ("matrix",)),
+            # The actor score matrices.
+            ("actor_sim", self.actor_sim, ("matrix",)),
+        )
         out: dict[str, np.ndarray] = {}
-        for hand, pool in self.pools.items():
-            for attr in _HAND_POOL_SHAREABLE_ATTRS:
-                arr = getattr(pool, attr, None)
-                if isinstance(arr, np.ndarray):
-                    out[f"pool.{hand}.{attr}"] = arr
-        for hand, pool in self.bb_pools.items():
-            for attr in _BB_POOL_SHAREABLE_ATTRS:
-                arr = getattr(pool, attr, None)
-                if isinstance(arr, np.ndarray):
-                    out[f"bb_pool.{hand}.{attr}"] = arr
-        for actor, emb in self.actor_emb.items():
-            for attr in _ACTOR_EMB_SHAREABLE_ATTRS:
-                v = emb.get(attr)
-                if isinstance(v, np.ndarray):
-                    out[f"actor_emb.{actor}.{attr}"] = v
-        # The steal opportunity pools.
-        for target, spool in self.steal_pools.items():
-            for attr in _STEAL_POOL_SHAREABLE_ATTRS:
-                arr = getattr(spool, attr, None)
-                if isinstance(arr, np.ndarray):
-                    out[f"steal_pool.{target}.{attr}"] = arr
-        # The advancement opportunity pools.
-        for key, apool in self.adv_pools.items():
-            for attr in _ADV_POOL_SHAREABLE_ATTRS:
-                arr = getattr(apool, attr, None)
-                if isinstance(arr, np.ndarray):
-                    out[f"adv_pool.{key}.{attr}"] = arr
-        # The pitching-change opportunity pool.
-        if self.change_pool is not None:
-            for attr in _CHANGE_POOL_SHAREABLE_ATTRS:
-                arr = getattr(self.change_pool, attr, None)
-                if isinstance(arr, np.ndarray):
-                    out[f"change_pool.{attr}"] = arr
-        # The dense pitcher similarity matrix (replaces the ~2 GB dict).
-        if isinstance(self.pitcher_sim_matrix, np.ndarray):
-            out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
-        # The actor score matrices.
-        for name, entry in self.actor_sim.items():
-            m = entry.get("matrix")
-            if isinstance(m, np.ndarray):
-                out[f"actor_sim.{name}.matrix"] = m
+        for prefix, subs, attrs in groups:
+            for sub, obj in subs.items():
+                head = f"{prefix}.{sub}" if sub else prefix
+                for attr in attrs:
+                    arr = obj.get(attr) if isinstance(obj, dict) else getattr(obj, attr, None)
+                    if isinstance(arr, np.ndarray):
+                        out[f"{head}.{attr}"] = arr
         return out
-
-    def attach_shared_views(self, views: dict[str, np.ndarray]) -> None:
-        """In-place replace this bundle's shareable arrays with ``views``.
-
-        Worker-side: after :meth:`load` returns a freshly-disk-loaded bundle,
-        call this with the attached shared-memory views (from
-        :data:`simulation.batch_runner._WORKER_SHARED` ``["views"]``) so each
-        large array is REPLACED by a zero-copy view over the parent's segment.
-        The disk-loaded buffers then become unreferenced and the worker's
-        resident-set drops to the shared one.
-
-        ``views`` is the same flat-name -> ndarray map :meth:`extract_shared_arrays`
-        emits (the runner pickles the segment registry across the fork; the worker
-        initializer rebuilds the ndarray views over the attached segments). Keys
-        that don't match this bundle's structure are silently ignored — a
-        defensive contract so a stale registry from a previous artifact build
-        doesn't crash the worker.
-        """
-        if not views:
-            return
-        for hand, pool in self.pools.items():
-            for attr in _HAND_POOL_SHAREABLE_ATTRS:
-                key = f"pool.{hand}.{attr}"
-                v = views.get(key)
-                if isinstance(v, np.ndarray):
-                    setattr(pool, attr, v)
-        for hand, pool in self.bb_pools.items():
-            for attr in _BB_POOL_SHAREABLE_ATTRS:
-                key = f"bb_pool.{hand}.{attr}"
-                v = views.get(key)
-                if isinstance(v, np.ndarray):
-                    setattr(pool, attr, v)
-        for actor, emb in self.actor_emb.items():
-            for attr in _ACTOR_EMB_SHAREABLE_ATTRS:
-                key = f"actor_emb.{actor}.{attr}"
-                v = views.get(key)
-                if isinstance(v, np.ndarray):
-                    emb[attr] = v
-        # Attach the shared steal-pool views.
-        for target, spool in self.steal_pools.items():
-            for attr in _STEAL_POOL_SHAREABLE_ATTRS:
-                v = views.get(f"steal_pool.{target}.{attr}")
-                if isinstance(v, np.ndarray):
-                    setattr(spool, attr, v)
-        # Attach the shared advancement-pool views.
-        for key, apool in self.adv_pools.items():
-            for attr in _ADV_POOL_SHAREABLE_ATTRS:
-                v = views.get(f"adv_pool.{key}.{attr}")
-                if isinstance(v, np.ndarray):
-                    setattr(apool, attr, v)
-        # Attach the shared change-pool views.
-        if self.change_pool is not None:
-            for attr in _CHANGE_POOL_SHAREABLE_ATTRS:
-                v = views.get(f"change_pool.{attr}")
-                if isinstance(v, np.ndarray):
-                    setattr(self.change_pool, attr, v)
-        # Attach the shared dense pitcher-sim matrix view.
-        mv = views.get("pitcher_sim.matrix")
-        if isinstance(mv, np.ndarray):
-            self.pitcher_sim_matrix = mv
-        # Attach the shared actor score matrices.
-        for name, entry in self.actor_sim.items():
-            v = views.get(f"actor_sim.{name}.matrix")
-            if isinstance(v, np.ndarray):
-                entry["matrix"] = v
 
     @classmethod
     def load(
@@ -304,9 +214,6 @@ class EngineArtifacts:
         from disk — they're small (typically <5 MB combined per worker).
         """
         views = shared_views or {}
-        pool_dir = os.path.join(art_dir, "pitch_pool")
-        with open(os.path.join(pool_dir, "manifest.json"), encoding="utf-8") as fh:
-            manifest = json.load(fh)
         con = duckdb.connect(":memory:")
         try:
             pools = load_pitch_pools(con, art_dir, views)
@@ -316,28 +223,24 @@ class EngineArtifacts:
             change_pool, change_roles = load_change_pool(con, art_dir, views)
         finally:
             con.close()
-        ps_index, ps_sims, ps_matrix = load_pitcher_sim(art_dir, views)
+        ps_index, ps_matrix = load_pitcher_sim(art_dir, views)
         actor_sim = _load_actor_sim(art_dir, views)
-        receiving = load_receiving(art_dir)
-        park_geometry = load_park_geometry(art_dir)
         actor_emb = load_actor_embeddings(art_dir, views)
         # The reference tables (absent on an older bundle).
         ibb_rows = _read_reference_rows(art_dir, IBB_RATES_FILE)
         venue_rows = _read_reference_rows(art_dir, VENUE_RUN_FACTORS_FILE)
         return cls(
             pools,
-            ps_index,
-            ps_sims,
-            manifest.get("seasons"),
-            actor_emb,
-            bb_pools,
-            ps_matrix,
-            steal_pools,
-            adv_pools,
+            pitcher_sim_index=ps_index,
+            actor_emb=actor_emb,
+            bb_pools=bb_pools,
+            pitcher_sim_matrix=ps_matrix,
+            steal_pools=steal_pools,
+            adv_pools=adv_pools,
             actor_sim=actor_sim,
-            park_geometry=park_geometry,
+            park_geometry=read_json(art_dir, "park_geometry.json"),
             change_pool=change_pool,
-            receiving=receiving,
+            receiving=read_json(art_dir, "receiving.json"),
             change_roles=change_roles,
             ibb_rates=ibb_rates_from_rows(ibb_rows) if ibb_rows is not None else None,
             venue_run_factors=(

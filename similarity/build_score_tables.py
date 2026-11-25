@@ -13,6 +13,8 @@ import numpy as np
 from bundle.common import (
     _savez_plain,
 )
+from profiles.sql import sql_seasons
+from simulation.constants import FIELD_POSITION_NAMES
 
 log = logging.getLogger("engine_artifacts")
 
@@ -73,7 +75,10 @@ _ACTOR_SIM_SPECS: dict[str, dict] = {
 }
 
 
-_FIELDER_POSITIONS = ("1B", "2B", "3B", "SS", "LF", "CF", "RF")
+#: The fielder matrices' positions: scorekeeping numbers 3 to 9 and their names.
+_FIELDER_POSITION_NAMES: dict[int, str] = {
+    num: name for num, name in FIELD_POSITION_NAMES.items() if num >= 3
+}
 
 
 #: The engines that score their THIN profiles too, so the matrices cover
@@ -162,10 +167,7 @@ def build_actor_sim_matrices(
             module, cls = _ACTOR_SIM_ENGINES[name]
             eng = _ENGINE_LOADER(module, cls)(duckdb_path=duckdb_path)
             if name in _THIN_PROFILE_ENGINES:
-                try:
-                    eng.build(seasons=sorted(season_set), include_below_minimum=True)
-                except TypeError:  # a stand-in engine without the option
-                    eng.build(seasons=sorted(season_set))
+                eng.build(seasons=sorted(season_set), include_below_minimum=True)
             else:
                 eng.build(seasons=sorted(season_set))
             engines[name] = eng
@@ -184,7 +186,7 @@ def build_actor_sim_matrices(
         log.info("actor_sim[%s]: %d x %d", name, len(index), len(index))
     if not only or any(n.startswith("fielder_") for n in only):
         feng = _engine("fielder")
-        for pos in _FIELDER_POSITIONS:
+        for pos in _FIELDER_POSITION_NAMES.values():
             if only and f"fielder_{pos}" not in only:
                 continue
             keys = sorted(k for k in feng._profiles if k[1] == pos and int(k[2]) in season_set)
@@ -254,23 +256,18 @@ def concentration_report(
     own-staff share / unweighted own-staff share) and of the effective sample
     share of the actor's matrix row over the pool."""
     pw = powers or {}  # The fitted powers (1.0 = the raw score)
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     con = duckdb.connect(duckdb_path, read_only=True)
     try:
         pp = con.execute(
             "SELECT season, catcher_id, pitcher_id FROM sim.pitch_pool "
             f"WHERE season IN ({season_list}) AND catcher_id IS NOT NULL AND catcher_id > 0"
         ).fetchnumpy()
-        op_cols = {
-            str(d[0]) for d in con.execute("SELECT * FROM sim.outcome_pool LIMIT 0").description
-        }
-        bb = None
-        if {"fielder_player_id", "fielded_by_position", "pitcher_id"} <= op_cols:
-            bb = con.execute(
-                "SELECT season, fielder_player_id, fielded_by_position, pitcher_id "
-                f"FROM sim.outcome_pool WHERE season IN ({season_list}) "
-                "AND fielder_player_id IS NOT NULL AND fielder_player_id > 0"
-            ).fetchnumpy()
+        bb = con.execute(
+            "SELECT season, fielder_player_id, fielded_by_position, pitcher_id "
+            f"FROM sim.outcome_pool WHERE season IN ({season_list}) "
+            "AND fielder_player_id IS NOT NULL AND fielder_player_id > 0"
+        ).fetchnumpy()
     finally:
         con.close()
 
@@ -324,42 +321,40 @@ def concentration_report(
             )
         report[name] = _summarize(entries)
     # --- fielders over the batted-ball pool, per position
-    if bb is not None:
-        pos_name = {3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF"}
-        seasons_arr = np.ma.filled(bb["season"], 0).astype(np.int64)
-        fid = np.ma.filled(bb["fielder_player_id"], 0).astype(np.int64)
-        fpos = np.ma.filled(bb["fielded_by_position"], 0).astype(np.int64)
-        pid = np.ma.filled(bb["pitcher_id"], 0).astype(np.int64)
-        for pnum, pos in pos_name.items():
-            index, mat = _load(f"fielder_{pos}")
-            if index is None:
+    seasons_arr = np.ma.filled(bb["season"], 0).astype(np.int64)
+    fid = np.ma.filled(bb["fielder_player_id"], 0).astype(np.int64)
+    fpos = np.ma.filled(bb["fielded_by_position"], 0).astype(np.int64)
+    pid = np.ma.filled(bb["pitcher_id"], 0).astype(np.int64)
+    for pnum, pos in _FIELDER_POSITION_NAMES.items():
+        index, mat = _load(f"fielder_{pos}")
+        if index is None:
+            continue
+        at_pos = fpos == pnum
+        col = np.fromiter(
+            (
+                index.get(f"{f}:{pos}:{s}", -1) if ok else -1
+                for f, s, ok in zip(fid, seasons_arr, at_pos, strict=False)
+            ),
+            dtype=np.int64,
+            count=fid.size,
+        )
+        entries = []
+        for key, row in index.items():
+            f, _p, s = key.split(":")
+            f, s = int(f), int(s)
+            in_season = seasons_arr == s
+            staff = set(pid[in_season & at_pos & (fid == f)].tolist())
+            if not staff:
                 continue
-            at_pos = fpos == pnum
-            col = np.fromiter(
-                (
-                    index.get(f"{f}:{pos}:{s}", -1) if ok else -1
-                    for f, s, ok in zip(fid, seasons_arr, at_pos, strict=False)
-                ),
-                dtype=np.int64,
-                count=fid.size,
-            )
-            entries = []
-            for key, row in index.items():
-                f, _p, s = key.split(":")
-                f, s = int(f), int(s)
-                in_season = seasons_arr == s
-                staff = set(pid[in_season & at_pos & (fid == f)].tolist())
-                if not staff:
-                    continue
-                entries.append(
-                    concentration_share(
-                        mat,
-                        row,
-                        col[in_season],
-                        pid[in_season],
-                        staff,
-                        pw.get(f"fielder_{pos}", pw.get("fielder", 1.0)),
-                    )
+            entries.append(
+                concentration_share(
+                    mat,
+                    row,
+                    col[in_season],
+                    pid[in_season],
+                    staff,
+                    pw.get(f"fielder_{pos}", pw.get("fielder", 1.0)),
                 )
-            report[f"fielder_{pos}"] = _summarize(entries)
+            )
+        report[f"fielder_{pos}"] = _summarize(entries)
     return report

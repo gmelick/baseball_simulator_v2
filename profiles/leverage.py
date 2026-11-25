@@ -1,4 +1,4 @@
-"""The leverage index and the run-expectancy matrix."""
+"""The run-expectancy matrix."""
 
 from __future__ import annotations
 
@@ -7,12 +7,9 @@ from datetime import date
 
 import duckdb
 
+from profiles.sql import sql_seasons
+
 log = logging.getLogger("player_profile_computor")
-
-
-# Leverage index simplified bins (used for manager profiles)
-LI_LOW = 0.7
-LI_HIGH = 1.5
 
 
 RE24_APPROX = {
@@ -27,52 +24,6 @@ RE24_APPROX = {
     (1, 0b000): 0.26,
     (2, 0b001): 0.22,
 }
-
-
-def compute_leverage_index(
-    inning: int,
-    outs: int,
-    runners_state: int,  # bitmask 0-7
-    score_diff: int,  # bat_score - fld_score, capped
-) -> float:
-    """
-    Simplified leverage index based on the Tango/Litchman framework.
-
-    Canonical spec: production mirrors this formula as an inline SQL expression
-    when building ``derived.at_bat_situations`` (see ``_build_at_bat_situations``);
-    keep the two in sync.
-
-    Full LI requires win-probability tables; this implementation uses a
-    well-calibrated approximation that captures the key drivers:
-      - Late innings increase leverage
-      - Close score differential increases leverage
-      - Runners on base increase leverage
-      - Two outs increase leverage slightly
-
-    The approximation is enough for the manager profiles, its one use.
-    """
-    # Base inning weight: increases in later innings
-    if inning <= 3:
-        inning_factor = 0.6
-    elif inning <= 6:
-        inning_factor = 0.9
-    elif inning <= 8:
-        inning_factor = 1.3
-    else:
-        inning_factor = 1.5  # 9th+
-
-    # Score differential factor: close games have higher leverage
-    abs_diff = min(abs(score_diff), 5)
-    score_factor = max(0.3, 1.5 - abs_diff * 0.24)
-
-    # Runners on base: more runners = more scoring potential
-    runners_on = bin(runners_state).count("1")
-    runner_factor = 1.0 + runners_on * 0.15
-
-    # Outs factor: two outs increases pressure slightly
-    outs_factor = 1.0 if outs < 2 else 1.1
-
-    return inning_factor * score_factor * runner_factor * outs_factor
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +50,7 @@ def build_run_expectancy_matrix(
     returns the dict only; no reader of that table needs a cutoff, so the
     live table stays as it is.
     """
-    season_list = ", ".join(str(s) for s in seasons)
+    season_list = sql_seasons(seasons)
     log.info("Building run expectancy matrix for seasons %s …", seasons)
     date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 

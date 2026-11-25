@@ -48,6 +48,7 @@ from typing import Any
 
 import numpy as np
 
+from bundle.versions import bundle_link
 from simulation.batch_runner import GameSpec
 from simulation.flags import FLAGS, actor_power_overrides, read_bool, read_float, read_int
 from simulation.sim_loop import StateMachine
@@ -106,12 +107,11 @@ PINNED_ARTIFACT_DIR_ENV = "BASEBALL_ENGINE_ARTIFACT_DIR"
 def _artifact_dir(spec: GameSpec) -> str:
     explicit = _kwarg(spec, "_pool_dir", None)
     if explicit:
-        return os.path.join(explicit, "engine_artifacts")
+        return bundle_link(explicit)
     pinned = os.environ.get(PINNED_ARTIFACT_DIR_ENV)
     if pinned:
         return pinned
-    pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
-    return os.path.join(pool_dir, "engine_artifacts")
+    return bundle_link()
 
 
 def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:

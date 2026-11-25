@@ -10,6 +10,8 @@ import os
 
 import duckdb
 
+from bundle.common import read_json
+
 log = logging.getLogger("engine_artifacts")
 
 
@@ -74,8 +76,5 @@ def build_reference_tables(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
 
 
 def _read_reference_rows(art_dir: str, name: str) -> list | None:
-    path = os.path.join(art_dir, name)
-    if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8") as fh:
-        return list(json.load(fh).get("rows", []))
+    doc = read_json(art_dir, name)
+    return None if doc is None else list(doc.get("rows", []))

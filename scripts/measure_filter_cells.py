@@ -745,20 +745,6 @@ def _redact_dsn(dsn: str) -> str:
     return REDACTED
 
 
-def _redact_text(text: str, dsn: str) -> str:
-    """Replace any verbatim copy of ``dsn`` inside ``text`` with its redaction.
-
-    A DuckDB ATTACH failure quotes the connection string back in the exception
-    message. Logging that message unredacted writes the password to stdout and
-    into any captured CI log.
-    """
-    body = str(text)
-    secret = (dsn or "").strip()
-    if secret:
-        body = body.replace(secret, _redact_dsn(secret))
-    return body
-
-
 def open_connection(duckdb_path: str, dsn: str, source: str) -> tuple[Any, str]:
     """Open the pools READ ONLY and return ``(connection, half_inning_source)``.
 
@@ -769,6 +755,8 @@ def open_connection(duckdb_path: str, dsn: str, source: str) -> tuple[Any, str]:
     """
     import duckdb  # lazy: the unit tests import this module with no database
 
+    from db.dsn import attach_pg
+
     con = duckdb.connect(duckdb_path, read_only=True)
     if source == "duckdb":
         return con, "duckdb"
@@ -778,17 +766,14 @@ def open_connection(duckdb_path: str, dsn: str, source: str) -> tuple[Any, str]:
         log.warning("no DSN set; falling back to the DuckDB half-inning source")
         return con, "duckdb"
     try:
-        con.execute("INSTALL postgres; LOAD postgres;")
-        con.execute(f"ATTACH '{dsn}' AS pg (TYPE postgres, READ_ONLY);")
-    except Exception as exc:  # noqa: BLE001 - any attach failure means fall back
-        # DuckDB quotes the connection string back inside the ATTACH error, so
-        # the message can carry the password. Redact before it reaches a log or
-        # a traceback, and drop the original exception with `from None` so the
-        # chained message cannot carry it either.
-        detail = _redact_text(exc, dsn)
+        attach_pg(con, dsn)
+    except RuntimeError as exc:
+        # DuckDB quotes the connection string back inside the ATTACH error.
+        # attach_pg redacts it and drops the original exception, so neither
+        # the message nor a chained traceback carries the password.
         if source == "postgres":
-            raise RuntimeError(f"Postgres attach failed: {detail}") from None
-        log.warning("Postgres attach failed (%s); falling back to the DuckDB source", detail)
+            raise
+        log.warning("%s; falling back to the DuckDB source", exc)
         return con, "duckdb"
     return con, "postgres"
 

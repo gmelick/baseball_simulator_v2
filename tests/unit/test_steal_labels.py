@@ -26,7 +26,7 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from ingest.statcast_events import sql_steal_attempt, sql_steal_success
+from ingest.statcast_events import sql_any_steal_attempt, sql_steal_attempt, sql_steal_success
 from profiles.build_profiles import PlayerProfileComputor
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,12 @@ class TestTheLabelHelpers:
             sql_steal_attempt("1b")
         with pytest.raises(ValueError):
             sql_steal_success("second")
+
+    def test_any_attempt_is_the_three_bases_in_one_parenthesis(self):
+        assert sql_any_steal_attempt("rp.") == (
+            f"({sql_steal_attempt('2b', 'rp.')} OR {sql_steal_attempt('3b', 'rp.')} "
+            f"OR {sql_steal_attempt('home', 'rp.')})"
+        )
 
 
 # ---------------------------------------------------------------------------

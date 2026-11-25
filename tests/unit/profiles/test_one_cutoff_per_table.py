@@ -259,10 +259,13 @@ def test_the_check_runs_before_the_first_write_in_every_builder() -> None:
         check = body.index(f'self._refuse_a_mixed_cutoff("{table}"')
         # The statements, not the docstrings (one docstring says "INSERT OR
         # REPLACE" in prose): a write is a DELETE or an INSERT that names a
-        # derived table.
+        # derived table, or a call of the shared cutoff delete.
         writes = [
             m.start()
-            for m in re.finditer(r"(DELETE FROM|INSERT(?: OR REPLACE)?(?: INTO)?) derived\.", body)
+            for m in re.finditer(
+                r"(DELETE FROM|INSERT(?: OR REPLACE)?(?: INTO)?) derived\.|self\._delete_season_rows\(",
+                body,
+            )
         ]
         assert writes, name
         assert check < min(writes), name

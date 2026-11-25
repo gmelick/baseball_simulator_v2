@@ -12,10 +12,12 @@ from typing import Any
 import duckdb
 import numpy as np
 
+from bundle.export_batted_ball_pool import pitch_join_rows
 from bundle.export_pitch_pool import build_pitch_pool_artifact
+from profiles.sql import sql_seasons
 
-from .common import _ROOT, HANDS, UNCHANGED_POOLS, _log, _npy_rows, _pq, _season_list, _sha256
-from .preflight import _copy_problem, _join_bb_row, _pitch_pool_problem, _pitch_pool_strays
+from .common import _ROOT, HANDS, UNCHANGED_POOLS, _log, _npy_rows, _pq, _sha256
+from .preflight import _copy_problem, _pitch_pool_problem, _pitch_pool_strays
 
 # ---------------------------------------------------------------------------
 # The bundle: copy, export, round-trip
@@ -86,7 +88,7 @@ def _export(duckdb_path: str, art_dir: str, window: list[int]) -> None:
     so their file order moves, and ``pitch_pool/{hand}.bb_row.npy`` (each
     pitch's row in the batted-ball pool) must move with them. This step
     recomputes it exactly as ``build_battedball_pool_artifact`` computes it
-    (:func:`_join_bb_row`), against the bundle's untouched
+    (``pitch_join_rows``), against the bundle's untouched
     ``battedball_pool/{hand}.pitch_id.npy``. The step writes no batted-ball,
     steal or advancement pool: DuckDB's steal and advancement pools can run
     ahead of the bundle (the drift line), and a refresh of them is a separate
@@ -96,10 +98,10 @@ def _export(duckdb_path: str, art_dir: str, window: list[int]) -> None:
     try:
         counts = build_pitch_pool_artifact(ro, art_dir, window)
         for hand in ("L", "R"):
-            bb_row = _join_bb_row(
+            bb_row = pitch_join_rows(
                 ro,
                 os.path.join(art_dir, "pitch_pool", f"{hand}.meta.parquet"),
-                os.path.join(art_dir, "battedball_pool", f"{hand}.pitch_id.npy"),
+                np.load(os.path.join(art_dir, "battedball_pool", f"{hand}.pitch_id.npy")),
             )
             np.save(os.path.join(art_dir, "pitch_pool", f"{hand}.bb_row.npy"), bb_row)
             _log(
@@ -302,7 +304,7 @@ def _roundtrip_pitch_pool(
     that differs from the copy (the rebuild recomputes those columns from
     ``raw.pitches``; checks a-e read the table against the source).
     """
-    wl = _season_list(window)
+    wl = sql_seasons(window)
     ids, raw_moves = moves
     mem.execute(
         "CREATE OR REPLACE TEMP TABLE _sim553_exp AS "

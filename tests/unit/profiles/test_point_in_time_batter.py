@@ -20,6 +20,7 @@ import datetime as dt
 import inspect
 import re
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,8 +29,6 @@ from ingest.savant import load_pitch_tracking as ptl
 from ingest.savant.boards import BOARDS
 from profiles.build_profiles import PlayerProfileComputor
 from profiles.sql import (
-    PHYSICAL_COLUMN_ORDER,
-    PROFILE_TAIL_COLUMNS,
     _sql_pitch_swing_agg,
     _sql_swing_select,
 )
@@ -82,19 +81,42 @@ def test_every_dated_source_is_filtered_by_the_cutoff() -> None:
     )
 
 
+def _computor() -> PlayerProfileComputor:
+    """A computor on a stub connection: every query runs and returns a mock."""
+    c = PlayerProfileComputor(pg_dsn="postgresql://x", duckdb_path="/tmp/y.duckdb")
+    c._conn = MagicMock()
+    return c
+
+
+def _batter_deletes(asof: dt.date | None) -> list[str]:
+    """The DELETE statements one batter build sends for the 2024 season."""
+    c = _computor()
+    c._compute_batter_profiles([2024], asof=asof)
+    sqls = [call.args[0] for call in c._conn.execute.call_args_list]
+    return [s for s in sqls if s.startswith("DELETE FROM derived.batter_season_metrics")]
+
+
 def test_the_leakage_assertion_covers_every_dated_source() -> None:
-    body = _method_source("_assert_batter_profiles_have_no_leakage")[:3000]
+    c = _computor()
+    c._check_leakage = MagicMock()
+    c._assert_batter_profiles_have_no_leakage([2024], dt.date(2024, 4, 15))
+    checked = [call.args[0] for call in c._check_leakage.call_args_list]
     for table in _DATED_SOURCES:
-        assert f'"{table}"' in body, f"{table} is not checked by the leakage assertion"
+        assert table in checked, f"{table} is not checked by the leakage assertion"
 
 
 def test_a_cutoff_build_deletes_seasons_that_had_not_started() -> None:
     """INSERT OR REPLACE only overwrites rows the query produces. Without the
     delete, a 2025 profile survives a build as of April 2024 and the backtest
     scores against a batter who has not played yet."""
-    src = _computor_source()
-    assert "DELETE FROM derived.batter_season_metrics" in src
-    assert "season > {asof_date.year}" in src
+    assert _batter_deletes(dt.date(2024, 4, 15)) == [
+        "DELETE FROM derived.batter_season_metrics WHERE season IN (2024) OR season > 2024"
+    ]
+
+
+def test_a_live_build_deletes_no_batter_row() -> None:
+    """The live nightly run only inserts or replaces."""
+    assert _batter_deletes(None) == []
 
 
 def test_every_profile_ends_up_stamped() -> None:
@@ -242,11 +264,6 @@ def test_a_tracking_row_with_no_join_key_is_dropped() -> None:
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
-
-
-def test_the_cutoff_stamp_is_the_last_profile_column() -> None:
-    assert PROFILE_TAIL_COLUMNS[-1] == "asof_date"
-    assert PROFILE_TAIL_COLUMNS[:-1] == PHYSICAL_COLUMN_ORDER
 
 
 def test_migration_0026_adds_only_the_stamp() -> None:

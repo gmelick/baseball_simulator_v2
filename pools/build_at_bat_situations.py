@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from profiles.base import ComputorBase
+from profiles.sql import SQL_PITCHER_PITCH_COUNT, sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
@@ -20,12 +21,12 @@ class AtBatSituationsMixin(ComputorBase):
 
         One row per (game_pk, at_bat_number), taken at the FIRST pitch of the PA
         so outs / base-state / score reflect the situation the batter came up to.
-        ``leverage_index`` replicates :func:`compute_leverage_index` as a SQL
-        expression (inning × score-diff × runners × outs factors).  Idempotent
+        ``leverage_index`` is a SQL expression (inning × score-diff × runners ×
+        outs factors).  Idempotent
         via INSERT OR REPLACE on the (game_pk, at_bat_number) PK.
         """
         log.info("Building derived.at_bat_situations …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.at_bat_situations (
@@ -41,12 +42,8 @@ class AtBatSituationsMixin(ComputorBase):
                     on_1b, on_2b, on_3b,
                     home_score, away_score, bat_score, fld_score,
                     batter,
-                    -- pitches thrown by this pitcher in this game up to & incl. this pitch
-                    COUNT(*) OVER (
-                        PARTITION BY game_pk, pitcher
-                        ORDER BY at_bat_number, pitch_number
-                        ROWS UNBOUNDED PRECEDING
-                    ) AS pitcher_pitches_thru
+                    -- pitches this pitcher threw in this game before this plate appearance
+                    {SQL_PITCHER_PITCH_COUNT} AS pitcher_pitch_count
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
@@ -78,7 +75,7 @@ class AtBatSituationsMixin(ComputorBase):
                 CASE WHEN on_3b IS NOT NULL THEN 1 ELSE 0 END                     AS on_3b,
                 home_score,
                 away_score,
-                -- compute_leverage_index(inning, outs, runners_state, bat-fld) in SQL
+                -- the leverage index: inning x score-diff x runners x outs factors
                 (CASE WHEN inning <= 3 THEN 0.6 WHEN inning <= 6 THEN 0.9
                       WHEN inning <= 8 THEN 1.3 ELSE 1.5 END)
                   * GREATEST(0.3, 1.5 - LEAST(ABS(bat_score - fld_score), 5) * 0.24)
@@ -86,7 +83,7 @@ class AtBatSituationsMixin(ComputorBase):
                           + (CASE WHEN on_2b IS NOT NULL THEN 1 ELSE 0 END)
                           + (CASE WHEN on_3b IS NOT NULL THEN 1 ELSE 0 END)) * 0.15)
                   * (CASE WHEN outs < 2 THEN 1.0 ELSE 1.1 END)                    AS leverage_index,
-                GREATEST(pitcher_pitches_thru - 1, 0)                             AS pitcher_pitch_count,
+                pitcher_pitch_count,
                 batter_pa_seq                                                     AS batter_pa_count
             FROM pa
         """)

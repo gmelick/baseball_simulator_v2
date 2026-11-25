@@ -12,6 +12,7 @@ from profiles.sql import (
     HARD_HIT_MIN_VELO,
     SQL_IN_PLAY,
     SQL_PULL_SPRAY,
+    SQL_SWING,
     SQL_WHIFF,
     _barrel_case_sql,
     _sql_pitch_swing_agg,
@@ -19,6 +20,7 @@ from profiles.sql import (
     _sql_stance_select,
     _sql_swing_pivot,
     _sql_swing_select,
+    sql_seasons,
 )
 
 log = logging.getLogger("player_profile_computor")
@@ -44,7 +46,7 @@ class BatterProfilesMixin(ComputorBase):
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         log.info("Computing batter profiles (as of %s) …", asof_sql)
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
 
         # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
@@ -61,10 +63,7 @@ class BatterProfilesMixin(ComputorBase):
             #     yet, whose full-season row from an earlier build would remain.
             # Only the cutoff path deletes; the live nightly run only inserts
             # or replaces.
-            self._conn.execute(f"""
-                DELETE FROM derived.batter_season_metrics
-                WHERE season IN ({season_list}) OR season > {asof_date.year}
-            """)
+            self._delete_season_rows("derived.batter_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.batter_season_metrics
@@ -90,7 +89,7 @@ class BatterProfilesMixin(ComputorBase):
                         NULLIF(COUNT(CASE WHEN pitch_number = 1 THEN 1 END), 0) AS first_pitch_take_rate,
 
                     -- O-swing
-                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0
+                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND {SQL_SWING} THEN 1.0 ELSE 0
                         END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS o_swing_rate,
 
                     -- Z-SWING: the batter DID swing at a pitch in the zone.
@@ -98,16 +97,16 @@ class BatterProfilesMixin(ComputorBase):
                     -- column held the z-TAKE rate. `o_swing_rate` on the line above uses
                     -- `NOT IN` and is correct, which is what makes this one easy to miss:
                     -- the two sit three lines apart and read almost identically.
-                    SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END)
+                    SUM(CASE WHEN zone BETWEEN 1 AND 9 AND {SQL_SWING} THEN 1.0 ELSE 0 END)
                         * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS z_swing_rate,
 
                     -- Whiff: swinging strikes / swings
-                    SUM(CASE WHEN {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
-                        ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS whiff_rate,
+                    SUM(CASE WHEN {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
+                        {SQL_SWING} THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                     -- Contact: in-play / swings
-                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
-                        ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS contact_rate,
+                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
+                        {SQL_SWING} THEN 1 ELSE 0 END), 0) AS contact_rate,
 
                     -- Walk / K rates (per PA)
                     -- SIM-504: `= 'walk'` by DECISION (uBB — see the is_bb note).
@@ -168,20 +167,20 @@ class BatterProfilesMixin(ComputorBase):
                         END) AS sample_pa_vs_r,
 
                     -- Platoon splits — vs LHP
-                    SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                    SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND {SQL_SWING}
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_l,
                     -- SIM-522: this leg kept the inverted `type IN (...)` predicate after
                     -- SIM-501 fixed the season-level z_swing_rate, so it held the z-TAKE
                     -- rate (live 2024: 0.32 vs 0.68). Same fix: a swing is NOT a non-swing.
-                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND {SQL_SWING}
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS z_swing_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
-                        WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
+                        WHEN p_throws='L' AND {SQL_SWING} THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_SWING} THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND events = 'walk' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
@@ -210,20 +209,20 @@ class BatterProfilesMixin(ComputorBase):
                         NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
 
                     -- Platoon splits — vs RHP
-                    SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                    SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND {SQL_SWING}
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_r,
                     -- SIM-522: this leg kept the inverted `type IN (...)` predicate after
                     -- SIM-501 fixed the season-level z_swing_rate, so it held the z-TAKE
                     -- rate (live 2024: 0.32 vs 0.68). Same fix: a swing is NOT a non-swing.
-                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND {SQL_SWING}
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS z_swing_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
-                        WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
+                        WHEN p_throws='R' AND {SQL_SWING} THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_SWING} THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND events = 'walk' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
@@ -454,13 +453,9 @@ class BatterProfilesMixin(ComputorBase):
         produces no error and no visibly wrong number — it produces a backtest
         that quietly knows the future. This turns that into a crash.
         """
-        season_list = ", ".join(str(s) for s in seasons)
+        self._check_pitch_sources_leakage(seasons, asof)
+        season_list = sql_seasons(seasons)
         checks = (
-            (
-                "raw.pitches",
-                f"SELECT MAX(game_date) FROM pg.raw.pitches "
-                f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            ),
             (
                 "raw.savant_pitch_tracking",
                 f"SELECT MAX(t.game_date) FROM pg.raw.savant_pitch_tracking t "
@@ -486,19 +481,4 @@ class BatterProfilesMixin(ComputorBase):
             ),
         )
         for source, sql in checks:
-            newest = self._conn.execute(sql).fetchone()[0]
-            if newest is None:
-                log.info("    no leakage from %-28s (no rows)", source)
-                continue
-            if not isinstance(newest, date):
-                # A stubbed connection in a unit test, not a real result. Say so
-                # rather than crashing on the comparison — and rather than
-                # passing silently, which would let the check rot unnoticed.
-                log.warning("    leakage check SKIPPED for %s: got %r, not a date", source, newest)
-                continue
-            if newest > asof:
-                raise RuntimeError(
-                    f"data leakage: {source} contributed a row dated {newest}, "
-                    f"after the {asof} cutoff."
-                )
-            log.info("    no leakage from %-28s newest = %s", source, newest)
+            self._check_leakage(source, sql, asof)

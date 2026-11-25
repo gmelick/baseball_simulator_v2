@@ -209,8 +209,6 @@ class TestTheBuilder:
         shared = art.extract_shared_arrays()
         assert shared["change_pool.sit"] is art.change_pool.sit
         view = np.zeros(art.change_pool.n, dtype=np.int8)
-        art.attach_shared_views({"change_pool.changed": view})
-        assert art.change_pool.changed is view
         art2 = EngineArtifacts.load(str(tmp_path), shared_views={"change_pool.changed": view})
         assert art2.change_pool is not None and art2.change_pool.changed is view
 
@@ -235,7 +233,7 @@ class TestTheBuilder:
     def test_the_game_context_lands_on_the_right_rows(self, tmp_path):
         # game 1: home manager 7, away manager 8; the reliever 101 entered on
         # two days' rest, having pitched in the last two days, 15 pitches in 3.
-        ctx = ({1: (7, 8)}, {(1, 101): (2, 1, 15)})
+        ctx = ({1: (7, 8)}, {(1, 101): (2, 1, 15)}, {})
         con = duckdb.connect(":memory:")
         try:
             _seed(con)

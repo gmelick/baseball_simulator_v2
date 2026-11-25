@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -88,20 +89,53 @@ def test_pitcher_steal_metrics_now_passes_its_own_cutoff_to_the_helper() -> None
     assert "self._play_events_outs_cte(asof_sqlifasofisnotNoneelseNone)" in body
 
 
+def _pitcher_leakage_checks(c: ppc.PlayerProfileComputor) -> list[tuple[str, str]]:
+    """The (source, query) pairs the pitcher leakage assertion checks."""
+    c._check_leakage = MagicMock()
+    c._assert_pitcher_profiles_have_no_leakage([2024], date(2024, 4, 15))
+    return [(call.args[0], call.args[1]) for call in c._check_leakage.call_args_list]
+
+
 def test_the_pitcher_leakage_assertion_covers_both_sources() -> None:
-    body = _method_source("_assert_pitcher_profiles_have_no_leakage")
-    assert '"raw.pitches"' in body
-    assert '"raw.play_events"' in body
-    # The table-absent case must be a schema-availability skip, not a crash:
-    # the shared probe answers "unreadable" instead of raising.
-    assert "duck_relation_readable(" in body
+    checks = _pitcher_leakage_checks(_computor())
+    assert [source for source, _ in checks] == ["raw.pitches", "raw.play_events"]
+    for source, sql in checks:
+        assert sql == (
+            f"SELECT MAX(game_date) FROM pg.{source} "
+            "WHERE season IN (2024) AND game_date <= DATE '2024-04-15'"
+        )
+
+
+def test_the_pitcher_leakage_assertion_skips_an_absent_play_events_table() -> None:
+    """The table-absent case is a schema-availability skip, not a crash: the
+    shared probe answers "unreadable" instead of raising."""
+    c = _computor()
+    c._conn.execute.side_effect = Exception("table not found")
+    assert [source for source, _ in _pitcher_leakage_checks(c)] == ["raw.pitches"]
+
+
+def _pitcher_deletes(asof: date | None) -> list[str]:
+    """The DELETE statements one pitcher build sends for the 2024 season."""
+    c = _computor()
+    c._compute_pitcher_profiles([2024], asof=asof)
+    sqls = [call.args[0] for call in c._conn.execute.call_args_list]
+    return [s for s in sqls if s.startswith("DELETE FROM derived.")]
 
 
 def test_a_pitcher_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_compute_pitcher_profiles")
-    assert "DELETE FROM derived.pitcher_gmm_components" in body
-    assert "DELETE FROM derived.pitcher_season_metrics" in body
-    assert body.count("season > {asof_date.year}") >= 1
+    """The child table first (the foreign key), then the profile table, each
+    with every season after the cutoff's."""
+    assert _pitcher_deletes(date(2024, 4, 15)) == [
+        "DELETE FROM derived.pitcher_gmm_components WHERE season IN (2024) OR season > 2024",
+        "DELETE FROM derived.pitcher_season_metrics WHERE season IN (2024) OR season > 2024",
+    ]
+
+
+def test_a_live_pitcher_build_deletes_only_the_mixture_components() -> None:
+    """INSERT OR REPLACE replaces the profile rows; the child rows go first."""
+    assert _pitcher_deletes(None) == [
+        "DELETE FROM derived.pitcher_gmm_components WHERE season IN (2024)"
+    ]
 
 
 def test_every_pitcher_profile_ends_up_stamped() -> None:
@@ -158,10 +192,38 @@ def test_manager_query_filters_raw_pitches_by_the_cutoff() -> None:
     assert body.count("{date_cutoff}") == 2
 
 
+def _manager_deletes(asof: date | None) -> list[str]:
+    """The DELETE statements one manager build sends for the 2024 season."""
+    c = _computor()
+    c._compute_manager_profiles([2024], asof=asof)
+    sqls = [call.args[0] for call in c._conn.execute.call_args_list]
+    return [s for s in sqls if s.startswith("DELETE FROM derived.")]
+
+
 def test_a_manager_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_compute_manager_profiles")
-    assert "DELETE FROM derived.manager_season_metrics" in body
-    assert "season > {asof_date.year}" in body
+    assert _manager_deletes(date(2024, 4, 15)) == [
+        "DELETE FROM derived.manager_season_metrics WHERE season IN (2024) OR season > 2024"
+    ]
+
+
+def test_a_live_manager_build_deletes_nothing() -> None:
+    """INSERT OR REPLACE replaces the live build's rows."""
+    assert _manager_deletes(None) == []
+
+
+def test_the_manager_leakage_assertion_checks_raw_pitches() -> None:
+    """Through the shared check, so a query that cannot run is logged and
+    skipped, the rule of every other profile."""
+    c = _computor()
+    c._check_leakage = MagicMock()
+    c._assert_manager_profiles_have_no_leakage([2024], date(2024, 4, 15))
+    assert [call.args[:2] for call in c._check_leakage.call_args_list] == [
+        (
+            "raw.pitches",
+            "SELECT MAX(game_date) FROM pg.raw.pitches "
+            "WHERE season IN (2024) AND game_date <= DATE '2024-04-15'",
+        )
+    ]
 
 
 def test_every_manager_profile_ends_up_stamped() -> None:

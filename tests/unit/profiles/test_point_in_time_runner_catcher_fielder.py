@@ -23,13 +23,16 @@ run-value guard the board needed is gone.
 Most tests follow test_point_in_time_pitcher_manager.py's style: reading the
 computor's actual source text and asserting the cutoff reaches every dated
 source, rather than executing the SQL against a live DuckDB (which a fast
-unit test does not have).
+unit test does not have). Where a shared helper renders the SQL (the cutoff
+delete, the Savant season shift, the leakage queries), the test reads the
+statements a method runs against a recording stub connection instead.
 """
 
 from __future__ import annotations
 
 import inspect
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -82,6 +85,59 @@ def _nowhitespace(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+CUTOFF = date(2024, 6, 15)
+#: The raw.pitches leakage query of a 2024 build as of CUTOFF.
+PITCHES_LEAK_SQL = (
+    "SELECT MAX(game_date) FROM pg.raw.pitches "
+    "WHERE season IN (2024) AND game_date <= DATE '2024-06-15'"
+)
+
+
+class _Recorder:
+    """A stub DuckDB connection: it records every statement and returns no rows."""
+
+    def __init__(self, play_events: bool = True) -> None:
+        self.sql: list[str] = []
+        self._play_events = play_events
+
+    def execute(self, sql: str, params: object = None) -> _Recorder:
+        self.sql.append(sql)
+        if not self._play_events and "play_events" in sql and "LIMIT 0" in sql:
+            raise RuntimeError("raw.play_events is absent")
+        return self
+
+    def fetchone(self) -> tuple:
+        return (None,)
+
+    def fetchall(self) -> list:
+        return []
+
+
+def _rendered(method: str, *args, play_events: bool = True, **kwargs) -> list[str]:
+    """Every statement ``method`` runs, each with its whitespace collapsed."""
+    comp = PlayerProfileComputor.__new__(PlayerProfileComputor)
+    comp._conn = _Recorder(play_events)
+    getattr(comp, method)(*args, **kwargs)
+    return [" ".join(sql.split()) for sql in comp._conn.sql]
+
+
+def _insert(statements: list[str]) -> str:
+    """The one INSERT among ``statements``."""
+    (insert,) = [sql for sql in statements if sql.startswith("INSERT")]
+    return insert
+
+
+def _shifted(col: str) -> str:
+    """The season-shift CASE of a 2024 cutoff build, as rendered."""
+    return f"(CASE WHEN {col} = 2024 THEN {col} - 1 ELSE {col} END)"
+
+
+def test_the_savant_season_helper_shifts_only_a_cutoff_build() -> None:
+    shift = PlayerProfileComputor._savant_season_sql
+    assert shift("bsm.season", None) == "bsm.season"
+    assert shift("bsm.season", CUTOFF) == _shifted("bsm.season")
+
+
 # ---------------------------------------------------------------------------
 # Baserunner: the cutoff reaches raw.pitches; the sprint speed join has no
 # date of its own, so it is made safe by a season-shift substitution.
@@ -95,16 +151,20 @@ def test_baserunner_profiles_filter_raw_pitches_by_the_cutoff() -> None:
 
 
 def test_baserunner_profiles_season_shift_the_sprint_speed_join() -> None:
-    body = _method_source("_compute_baserunner_profiles")
-    assert "CASE WHEN ap.season = {asof_date.year} THEN ap.season - 1 ELSE ap.season END" in body
-    assert 'else "ap.season"' in body
-    assert "ss.season = {sprint_speed_season}" in body
+    cut = _insert(_rendered("_compute_baserunner_profiles", [2024], asof=CUTOFF))
+    assert f"ss.season = {_shifted('ap.season')}" in cut
+    live = _insert(_rendered("_compute_baserunner_profiles", [2024], asof=None))
+    assert "ss.season = ap.season " in live
 
 
 def test_a_baserunner_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_compute_baserunner_profiles")
-    assert "DELETE FROM derived.baserunner_season_metrics" in body
-    assert "season > {asof_date.year}" in body
+    cut = _rendered("_compute_baserunner_profiles", [2024], asof=CUTOFF)
+    assert (
+        "DELETE FROM derived.baserunner_season_metrics WHERE season IN (2024) OR season > 2024"
+        in cut
+    )
+    live = _rendered("_compute_baserunner_profiles", [2024], asof=None)
+    assert not any(sql.startswith("DELETE") for sql in live)
 
 
 def test_every_baserunner_profile_ends_up_stamped() -> None:
@@ -120,9 +180,8 @@ def test_every_baserunner_profile_ends_up_stamped() -> None:
 
 
 def test_the_baserunner_leakage_assertion_covers_raw_pitches() -> None:
-    body = _method_source("_assert_baserunner_profiles_have_no_leakage")[:1200]
-    assert "raw.pitches" in body
-    assert "game_date <=" in body
+    statements = _rendered("_assert_baserunner_profiles_have_no_leakage", [2024], CUTOFF)
+    assert statements == [PITCHES_LEAK_SQL]
 
 
 def test_baserunner_asof_is_threaded_from_run() -> None:
@@ -143,9 +202,13 @@ def test_baserunner_steal_metrics_filter_raw_pitches_by_the_cutoff() -> None:
 
 
 def test_a_baserunner_steal_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_build_baserunner_steal_metrics")
-    assert "DELETE FROM derived.baserunner_steal_metrics" in body
-    assert "season > {asof_date.year}" in body
+    cut = _rendered("_build_baserunner_steal_metrics", [2024], asof=CUTOFF)
+    assert (
+        "DELETE FROM derived.baserunner_steal_metrics WHERE season IN (2024) OR season > 2024"
+        in cut
+    )
+    live = _rendered("_build_baserunner_steal_metrics", [2024], asof=None)
+    assert not any(sql.startswith("DELETE") for sql in live)
 
 
 def test_every_baserunner_steal_profile_ends_up_stamped() -> None:
@@ -229,16 +292,25 @@ def test_disengagement_cte_falls_back_when_the_table_is_absent() -> None:
 
 
 def test_a_pitcher_steal_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_build_pitcher_steal_metrics")
-    assert "DELETE FROM derived.pitcher_steal_metrics" in body
-    assert "season > {asof_date.year}" in body
+    cut = _rendered("_build_pitcher_steal_metrics", [2024], asof=CUTOFF)
+    assert (
+        "DELETE FROM derived.pitcher_steal_metrics WHERE season IN (2024) OR season > 2024" in cut
+    )
+    live = _rendered("_build_pitcher_steal_metrics", [2024], asof=None)
+    assert not any(sql.startswith("DELETE") for sql in live)
 
 
 def test_the_pitcher_steal_leakage_assertion_covers_both_sources() -> None:
-    body = _method_source("_assert_pitcher_steal_profiles_have_no_leakage")
-    assert '"raw.pitches"' in body
-    assert '"raw.play_events"' in body
-    assert "duck_relation_readable(" in body
+    play_events_sql = PITCHES_LEAK_SQL.replace("pg.raw.pitches", "pg.raw.play_events")
+    statements = _rendered("_assert_pitcher_steal_profiles_have_no_leakage", [2024], CUTOFF)
+    assert PITCHES_LEAK_SQL in statements
+    assert play_events_sql in statements
+    # An absent raw.play_events is skipped, not checked.
+    absent = _rendered(
+        "_assert_pitcher_steal_profiles_have_no_leakage", [2024], CUTOFF, play_events=False
+    )
+    assert PITCHES_LEAK_SQL in absent
+    assert play_events_sql not in absent
 
 
 def test_pitcher_steal_asof_is_threaded_from_run() -> None:
@@ -269,16 +341,22 @@ def test_catcher_methods_filter_raw_pitches_by_the_cutoff(
 
 
 def test_a_catcher_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_aggregate_catcher_season_metrics")
-    assert "DELETE FROM derived.catcher_season_metrics" in body
-    assert "season > {asof_date.year}" in body
+    cut = _rendered("_aggregate_catcher_season_metrics", [2024], asof=CUTOFF)
+    assert (
+        "DELETE FROM derived.catcher_season_metrics WHERE season IN (2024) OR season > 2024" in cut
+    )
+    live = _rendered("_aggregate_catcher_season_metrics", [2024], asof=None)
+    assert "DELETE FROM derived.catcher_season_metrics WHERE season IN (2024)" in live
 
 
 def test_catcher_aggregator_season_shifts_the_two_savant_joins() -> None:
-    body = _method_source("_aggregate_catcher_season_metrics")
-    assert "CASE WHEN {catcher_season_col} = {asof_date.year}" in body
-    assert "spt.season    = {savant_season}" in body
-    assert "sct.season    = {savant_season}" in body
+    col = "COALESCE(f.season, b.season, t.season)"
+    cut = _insert(_rendered("_aggregate_catcher_season_metrics", [2024], asof=CUTOFF))
+    assert f"spt.season = {_shifted(col)}" in cut
+    assert f"sct.season = {_shifted(col)}" in cut
+    live = _insert(_rendered("_aggregate_catcher_season_metrics", [2024], asof=None))
+    assert f"spt.season = {col}" in live
+    assert f"sct.season = {col}" in live
 
 
 def test_every_catcher_profile_ends_up_stamped() -> None:
@@ -291,9 +369,8 @@ def test_every_catcher_profile_ends_up_stamped() -> None:
 
 
 def test_the_catcher_leakage_assertion_covers_raw_pitches() -> None:
-    body = _method_source("_assert_catcher_profiles_have_no_leakage")[:1200]
-    assert "raw.pitches" in body
-    assert "game_date <=" in body
+    statements = _rendered("_assert_catcher_profiles_have_no_leakage", [2024], CUTOFF)
+    assert statements == [PITCHES_LEAK_SQL]
 
 
 def test_catcher_asof_is_threaded_from_run() -> None:
@@ -345,15 +422,19 @@ def test_infield_oaa_season_shifts_its_sprint_speed_lookup() -> None:
 
 
 def test_dp_metrics_season_shifts_its_sprint_speed_join() -> None:
+    """The join renders through the shared helper (its own test is above)."""
     body = _method_source("_compute_dp_metrics")
-    assert "CASE WHEN bsm.season = {asof_date.year} THEN bsm.season - 1 ELSE bsm.season END" in body
+    assert 'self._savant_season_sql("bsm.season", asof)' in body
     assert "ss.season = {sprint_speed_season}" in body
 
 
 def test_a_fielder_cutoff_build_deletes_seasons_that_had_not_started() -> None:
-    body = _method_source("_aggregate_fielder_season_metrics")
-    assert "DELETE FROM derived.fielder_season_metrics" in body
-    assert "season > {asof_date.year}" in body
+    cut = _rendered("_aggregate_fielder_season_metrics", [2024], asof=CUTOFF)
+    assert (
+        "DELETE FROM derived.fielder_season_metrics WHERE season IN (2024) OR season > 2024" in cut
+    )
+    live = _rendered("_aggregate_fielder_season_metrics", [2024], asof=None)
+    assert "DELETE FROM derived.fielder_season_metrics WHERE season IN (2024)" in live
 
 
 def test_fielder_aggregator_season_shifts_all_four_savant_joins() -> None:
@@ -361,13 +442,13 @@ def test_fielder_aggregator_season_shifts_all_four_savant_joins() -> None:
     (the last two joined by SIM-532; neither board has a date control). The
     baserunning board's join left with SIM-550: the arm block now comes
     from our own dated pool."""
+    cut = _insert(_rendered("_aggregate_fielder_season_metrics", [2024], asof=CUTOFF))
+    assert cut.count(f"season = {_shifted('c.season')}") == 4
+    live = _insert(_rendered("_aggregate_fielder_season_metrics", [2024], asof=None))
+    for alias in ("ss", "sas", "soaa", "sj"):
+        assert f"{alias}.season = {_shifted('c.season')}" in cut, alias
+        assert re.search(rf"\b{alias}\.season = c\.season(\s|$)", live), alias
     body = _method_source("_aggregate_fielder_season_metrics")
-    assert "CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END" in body
-    assert body.count("season = {savant_season}") == 4
-    assert "ss.season = {savant_season}" in body
-    assert "sas.season = {savant_season}" in body
-    assert "soaa.season = {savant_season}" in body
-    assert "sj.season = {savant_season}" in body
     assert "savant_baserunning" not in body
     assert "of_arm_runs_in_cutoff_season" not in body  # the run-value guard is gone
 
@@ -418,9 +499,8 @@ def test_every_fielder_profile_ends_up_stamped_last() -> None:
 
 
 def test_the_fielder_leakage_assertion_covers_raw_pitches() -> None:
-    body = _method_source("_assert_fielder_profiles_have_no_leakage")[:1200]
-    assert "raw.pitches" in body
-    assert "game_date <=" in body
+    statements = _rendered("_assert_fielder_profiles_have_no_leakage", [2024], CUTOFF)
+    assert statements == [PITCHES_LEAK_SQL]
 
 
 def test_fielder_asof_is_threaded_from_run() -> None:

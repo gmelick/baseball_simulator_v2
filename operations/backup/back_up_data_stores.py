@@ -49,6 +49,7 @@ import duckdb
 from bundle.versions import (
     IN_USE_PREFIX,
     PUBLISHED_MARKER,
+    bundle_link,
     publish_bundle_version,
     resolve_bundle_dir,
     versions_root,
@@ -96,10 +97,6 @@ DATA_FILES_DIR = "data_files"
 
 #: The jobs that write the data stores. A backup waits while one runs.
 WRITER_MARKS = ("nightly-rebuild", "nightly-finals", "weekly-refresh")
-
-#: The link to the published bundle version, in the play-pool folder.
-BUNDLE_LINK = "engine_artifacts"
-
 
 #: The default waits, in seconds. Each one has a command-line flag.
 DEFAULTS: dict[str, float] = {
@@ -472,7 +469,7 @@ def _ignore_in_use(_dir: str, names: list[str]) -> set[str]:
 def backup_bundle(root: Path, set_id: str, *, play_pool_dir: Path) -> Path:
     """Copy the published bundle version into ``bundle/<set_id>/<build id>``. Return the set."""
     started = time.monotonic()
-    link = play_pool_dir / BUNDLE_LINK
+    link = Path(bundle_link(play_pool_dir))
     if not link.is_dir():
         raise BackupError(f"no published bundle at {link}")
     source = Path(resolve_bundle_dir(str(link)))
@@ -671,7 +668,7 @@ def restore_bundle(root: Path, set_id: str, *, play_pool_dir: Path, force: bool 
     problems = check_hashes(info, manifest)
     if problems:
         raise BackupError("the set fails its check: " + "; ".join(problems))
-    link = play_pool_dir / BUNDLE_LINK
+    link = Path(bundle_link(play_pool_dir))
     dest = Path(versions_root(str(link))) / build_id
     if dest.exists() and not force:
         raise BackupError(f"{dest} exists; pass --force to copy over it")

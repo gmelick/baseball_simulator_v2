@@ -16,15 +16,19 @@ These tests pin the invariants that make it SAFE + REAL:
   3. **Fallback parity** — a pitcher absent from the index, or an all-zero
      (unscored/empty) row, both fall back to flat weights exactly like ``if not sims``.
   4. **Shared-memory seam** — ``pitcher_sim.matrix`` round-trips through
-     extract_shared_arrays / attach_shared_views.
+     extract_shared_arrays and ``EngineArtifacts.load(shared_views=...)``.
 
-Synthetic bundle only (no DuckDB / disk).
+Synthetic bundle only, except the seam test, which loads a small bundle from disk.
 """
 
 from __future__ import annotations
 
+import json
+
+import duckdb
 import numpy as np
 
+from bundle.common import _savez_plain
 from bundle.load_bundle import EngineArtifacts
 from bundle.worker_pools import BattedBallPool, HandPool
 from simulation.full_pool_sampler import FullPoolSampler
@@ -216,18 +220,39 @@ class TestFallbackParity:
         )
 
 
+def _disk_bundle_without_matrix(root) -> str:
+    """A bundle on disk with an empty pitch pool and the pitcher index, but no matrix."""
+    d = root / "pitch_pool"
+    d.mkdir()
+    con = duckdb.connect(":memory:")
+    for hand in ("L", "R"):
+        np.save(d / f"{hand}.geom.npy", np.zeros((0, 10), dtype=np.float32))
+        np.save(d / f"{hand}.sit.npy", np.zeros((0, 6), dtype=np.float32))
+        con.execute(
+            "COPY (SELECT 0::BIGINT AS pitcher_id, 0::BIGINT AS batter_id, "
+            "0::BIGINT AS season, ''::VARCHAR AS outcome_type, "
+            "1.0::FLOAT AS recency_weight WHERE 1=0) "
+            f"TO '{(d / f'{hand}.meta.parquet').as_posix()}' (FORMAT parquet)"
+        )
+    con.close()
+    _savez_plain(str(root / "pitcher_sim.npz"), index=json.dumps(_INDEX))
+    return str(root)
+
+
 class TestSharedMemorySeam:
-    def test_matrix_round_trips_through_extract_and_attach(self):
+    def test_matrix_round_trips_through_extract_and_load(self, tmp_path):
         src = _bundle(with_matrix=True, with_dict=False)
         shared = src.extract_shared_arrays()
         assert "pitcher_sim.matrix" in shared
         assert shared["pitcher_sim.matrix"].dtype == np.float32
 
-        # A worker bundle that disk-loaded WITHOUT the matrix attaches the view.
-        dst = _bundle(with_matrix=False, with_dict=True)
-        dst.pitcher_sim_matrix = None
-        dst.attach_shared_views({"pitcher_sim.matrix": shared["pitcher_sim.matrix"]})
+        # A worker whose disk bundle has no matrix takes the shared view.
+        dst = EngineArtifacts.load(
+            _disk_bundle_without_matrix(tmp_path),
+            shared_views={"pitcher_sim.matrix": shared["pitcher_sim.matrix"]},
+        )
         assert dst.pitcher_sim_matrix is shared["pitcher_sim.matrix"]
+        assert dst.pitcher_sim_index == _INDEX
 
     def test_no_matrix_means_not_published(self):
         legacy = _bundle(with_matrix=False, with_dict=True)

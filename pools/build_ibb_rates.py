@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 
+from pools.pool_metadata import sql_runners_state
 from profiles.base import ComputorBase
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
@@ -28,16 +30,14 @@ class IbbRatesMixin(ComputorBase):
         moved the runners before the IBB — ``GREATEST`` clamps so a rate never
         exceeds 1. Full recompute every run (the table is ~48 rows and
         window-scoped, so the per-season watermark machinery does not apply)."""
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         log.info("Building sim.ibb_rates … (seasons=%s)", seasons)
         self._conn.execute("DELETE FROM sim.ibb_rates")
         self._conn.execute(f"""
             INSERT INTO sim.ibb_rates
             WITH first_pitch AS (
                 SELECT game_pk, at_bat_number,
-                       (CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END
-                        + CASE WHEN on_2b IS NOT NULL THEN 2 ELSE 0 END
-                        + CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END)::SMALLINT
+                       {sql_runners_state()}
                                                             AS runners_state,
                        LEAST(outs, 2)::SMALLINT             AS outs,
                        inning >= 7                          AS is_late,

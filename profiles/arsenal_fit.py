@@ -33,21 +33,6 @@ GMM_FEATURE_NAMES = [
 
 
 # ---------------------------------------------------------------------------
-# The area under the curve, for the component labels
-# ---------------------------------------------------------------------------
-
-
-def _quick_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
-    """Fast AUC approximation without importing sklearn.metrics."""
-    try:
-        from sklearn.metrics import roc_auc_score
-
-        return roc_auc_score(y_true, y_score)
-    except Exception:
-        return 0.0
-
-
-# ---------------------------------------------------------------------------
 # One pitcher-season's mixture
 # ---------------------------------------------------------------------------
 
@@ -99,7 +84,6 @@ def _fit_gmm_for_pitcher(
     # BIC-select K in range [GMM_MIN_K, GMM_MAX_K]
     # Cap max K so each component has at least GMM_MIN_PITCHES_PER_K pitches
     max_k = min(GMM_MAX_K, len(features) // GMM_MIN_PITCHES_PER_K)
-    max_k = max(max_k, GMM_MIN_K)
 
     best_gmm = None
     best_bic = np.inf

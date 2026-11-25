@@ -39,7 +39,6 @@ def _balls(rows: list[tuple[int, int, float, float, bool]]) -> dict[str, np.ndar
         "spray": np.asarray(spray, dtype=np.float64),
         "dist": d,
         "hr": h,
-        "kept300": (~h) & (d >= 300.0),
     }
 
 
@@ -606,7 +605,6 @@ def transfer_balls() -> dict[str, np.ndarray]:
         "spray": np.zeros(len(rows)),
         "dist": dist,
         "hr": hr,
-        "kept300": (~hr) & (dist >= 300.0),
         "ev": ev,
         "la": la,
         "game_pk": game_pk,

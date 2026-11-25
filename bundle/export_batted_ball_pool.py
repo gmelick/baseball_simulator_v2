@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -12,11 +11,18 @@ import numpy as np
 from bundle.common import (
     _GEOM_COLS,
     _SIT_COLS,
+    float_columns,
+    game_ymd_column,
     join_rows,
+    meta_column,
+    optional_meta_column,
+    recency_column,
     take_view,
+    write_json,
     ymd_select,
 )
 from bundle.worker_pools import BattedBallPool
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -49,7 +55,7 @@ def build_battedball_pool_artifact(
     metadata (batter, event, result deltas)."""
     pool_dir = os.path.join(out_dir, "battedball_pool")
     os.makedirs(pool_dir, exist_ok=True)
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     where = (
         f"stand='%s' AND season IN ({season_list}) AND exit_velo IS NOT NULL "
         "AND launch_angle IS NOT NULL AND pull_relative_spray_angle IS NOT NULL"
@@ -116,12 +122,8 @@ def build_battedball_pool_artifact(
             f"FROM sim.outcome_pool WHERE {w}"
         ).fetchnumpy()
         n = len(d[_BB_GEOM_COLS[0]])
-        geom = np.nan_to_num(
-            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _BB_GEOM_COLS], axis=1)
-        ).astype(np.float32)
-        sit = np.nan_to_num(
-            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _SIT_COLS], axis=1)
-        ).astype(np.float32)
+        geom = float_columns(d, _BB_GEOM_COLS)
+        sit = float_columns(d, _SIT_COLS)
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
         # The pitch-id JOIN, the reverse of the ``pgeom`` export: for every
@@ -133,23 +135,14 @@ def build_battedball_pool_artifact(
         np.save(os.path.join(pool_dir, f"{hand}.pitch_id.npy"), bb_pid)
         pp_meta = os.path.join(out_dir, "pitch_pool", f"{hand}.meta.parquet")
         if os.path.exists(pp_meta):
-            pp_pid = np.asarray(
-                np.ma.filled(
-                    con.execute(f"SELECT pitch_id FROM read_parquet('{pp_meta}')").fetchnumpy()[
-                        "pitch_id"
-                    ],
-                    -1,
-                ),
-                dtype=np.int64,
-            )
-            bb_row = join_rows(pp_pid, bb_pid)
+            bb_row = pitch_join_rows(con, pp_meta, bb_pid)
             np.save(os.path.join(out_dir, "pitch_pool", f"{hand}.bb_row.npy"), bb_row)
             pitch_join[hand] = int((bb_row >= 0).sum())
             log.info(
                 "battedball_pool[%s]: pitch join %d of %d pitch rows -> a batted ball",
                 hand,
                 pitch_join[hand],
-                len(pp_pid),
+                len(bb_row),
             )
         if has_pgeom:
             # NaN is PRESERVED here (unlike geom/sit): a row whose pitch is
@@ -175,26 +168,41 @@ def build_battedball_pool_artifact(
         )
         counts[hand] = int(n)
         log.info("battedball_pool[%s]: %d rows (seasons %s)", hand, n, seasons)
-    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "seasons": seasons,
-                "counts": counts,
-                "geom_cols": _BB_GEOM_COLS,
-                "sit_cols": _SIT_COLS,
-                "transition": has_transition,
-                # The pitch-geometry columns of {hand}.pgeom.npy.
-                "pgeom_cols": _GEOM_COLS if has_pgeom else [],
-                # Pitch rows joined to a batted ball, per hand
-                # (the join file lives in pitch_pool/{hand}.bb_row.npy).
-                "pitch_join": pitch_join,
-                # The fielding chain columns are in the parquet.
-                "chain": has_chain,
-            },
-            fh,
-            indent=2,
-        )
+    write_json(
+        os.path.join(pool_dir, "manifest.json"),
+        {
+            "seasons": seasons,
+            "counts": counts,
+            "geom_cols": _BB_GEOM_COLS,
+            "sit_cols": _SIT_COLS,
+            "transition": has_transition,
+            # The pitch-geometry columns of {hand}.pgeom.npy.
+            "pgeom_cols": _GEOM_COLS if has_pgeom else [],
+            # Pitch rows joined to a batted ball, per hand
+            # (the join file lives in pitch_pool/{hand}.bb_row.npy).
+            "pitch_join": pitch_join,
+            # The fielding chain columns are in the parquet.
+            "chain": has_chain,
+        },
+    )
     return counts
+
+
+def pitch_join_rows(
+    con: duckdb.DuckDBPyConnection, meta_path: str, bb_pid: np.ndarray
+) -> np.ndarray:
+    """For every row of the pitch pool's meta parquet ``meta_path``, the row of
+    the batted-ball pool (pitch ids ``bb_pid``) that holds its batted ball, or -1."""
+    pp_pid = np.asarray(
+        np.ma.filled(
+            con.execute(f"SELECT pitch_id FROM read_parquet('{meta_path}')").fetchnumpy()[
+                "pitch_id"
+            ],
+            -1,
+        ),
+        dtype=np.int64,
+    )
+    return join_rows(pp_pid, bb_pid)
 
 
 #: The outcome-pool columns the transition export needs. Presence of
@@ -211,21 +219,6 @@ _BB_TRANSITION_SOURCE_COLS = frozenset(
         "runner_3b_out_advancing",
     }
 )
-
-
-def _bb_take(
-    views: dict[str, np.ndarray], hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
-) -> np.ndarray | None:
-    """Load an OPTIONAL numeric batted-ball meta column.
-    Prefer a published shared view; else fill the parquet column (NULL ->
-    ``fill``); else (a pre-0012 artifact that lacks the column) return None
-    so the consumer falls back to a neutral factor."""
-    v = views.get(f"bb_pool.{hand}.{attr}")
-    if isinstance(v, np.ndarray):
-        return v
-    if col in meta:
-        return np.asarray(np.ma.filled(meta[col], fill), dtype=dtype)
-    return None
 
 
 def _bb_fielders(views: dict[str, np.ndarray], hand: str, meta: dict) -> np.ndarray | None:
@@ -315,82 +308,65 @@ def load_battedball_pools(
             m = con.execute(
                 f"SELECT {', '.join(base_cols + opt_cols)} FROM read_parquet('{meta_path}')"
             ).fetchnumpy()
-            bb_pid_view = views.get(f"bb_pool.{hand}.batter_id")
-            bb_ssn_view = views.get(f"bb_pool.{hand}.season")
-            bb_rh_view = views.get(f"bb_pool.{hand}.result_hits")
-            bb_ro_view = views.get(f"bb_pool.{hand}.result_outs")
-            bb_rec_view = views.get(f"bb_pool.{hand}.recency")
+            p = f"bb_pool.{hand}"
             bb_pools[hand] = BattedBallPool(
-                game_ymd=(
-                    np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
-                    if "game_ymd" in m
-                    else None
-                ),
+                game_ymd=game_ymd_column(m),
                 geom=take_view(
                     views, f"bb_pool.{hand}.geom", os.path.join(bb_dir, f"{hand}.geom.npy")
                 ),
                 sit=take_view(
                     views, f"bb_pool.{hand}.sit", os.path.join(bb_dir, f"{hand}.sit.npy")
                 ),
-                batter_id=(
-                    bb_pid_view
-                    if isinstance(bb_pid_view, np.ndarray)
-                    else np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64)
-                ),
-                season=(
-                    bb_ssn_view
-                    if isinstance(bb_ssn_view, np.ndarray)
-                    else np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64)
-                ),
+                batter_id=meta_column(views, f"{p}.batter_id", m, "batter_id", np.int64),
+                season=meta_column(views, f"{p}.season", m, "season", np.int64),
                 event=np.asarray(m["events"], dtype=object),
-                result_hits=(
-                    bb_rh_view
-                    if isinstance(bb_rh_view, np.ndarray)
-                    else np.asarray(np.ma.filled(m["result_hits"], 0), dtype=np.int8)
-                ),
-                result_outs=(
-                    bb_ro_view
-                    if isinstance(bb_ro_view, np.ndarray)
-                    else np.asarray(np.ma.filled(m["result_outs"], 0), dtype=np.int8)
-                ),
-                recency=(
-                    bb_rec_view
-                    if isinstance(bb_rec_view, np.ndarray)
-                    else np.nan_to_num(
-                        np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
-                        nan=1.0,
-                    )
-                ),
+                result_hits=meta_column(views, f"{p}.result_hits", m, "result_hits", np.int8),
+                result_outs=meta_column(views, f"{p}.result_outs", m, "result_outs", np.int8),
+                recency=recency_column(views, f"{p}.recency", m),
                 # Pitcher hand per row (object 'L'/'R', not shared —
                 # object-dtype like ``event``). None on a legacy artifact.
                 p_throws=(np.asarray(m["p_throws"], dtype=object) if "p_throws" in m else None),
                 # The numeric per-row facts (shared when published; None on
                 # a pre-0012 bundle).
-                venue_id=_bb_take(views, hand, m, "venue_id", "venue_id", np.int64, 0),
-                fielder_pos=_bb_take(
-                    views, hand, m, "fielder_pos", "fielded_by_position", np.int8, 0
+                venue_id=optional_meta_column(views, f"{p}.venue_id", m, "venue_id", np.int64),
+                fielder_pos=optional_meta_column(
+                    views, f"{p}.fielder_pos", m, "fielded_by_position", np.int8
                 ),
-                fielder_id=_bb_take(views, hand, m, "fielder_id", "fielder_player_id", np.int64, 0),
+                fielder_id=optional_meta_column(
+                    views, f"{p}.fielder_id", m, "fielder_player_id", np.int64
+                ),
                 # The transition destinations (-1 = no runner on
                 # that base pre-pitch; None on a pre-0018 bundle).
-                r1_dest=_bb_take(views, hand, m, "r1_dest", "runner_1b_dest", np.int8, -1),
-                r2_dest=_bb_take(views, hand, m, "r2_dest", "runner_2b_dest", np.int8, -1),
-                r3_dest=_bb_take(views, hand, m, "r3_dest", "runner_3b_dest", np.int8, -1),
-                batter_dest=_bb_take(views, hand, m, "batter_dest", "batter_dest", np.int8, -1),
-                dest_ok=_bb_take(views, hand, m, "dest_ok", "dest_ok", np.int8, 0),
+                r1_dest=optional_meta_column(
+                    views, f"{p}.r1_dest", m, "runner_1b_dest", np.int8, -1
+                ),
+                r2_dest=optional_meta_column(
+                    views, f"{p}.r2_dest", m, "runner_2b_dest", np.int8, -1
+                ),
+                r3_dest=optional_meta_column(
+                    views, f"{p}.r3_dest", m, "runner_3b_dest", np.int8, -1
+                ),
+                batter_dest=optional_meta_column(
+                    views, f"{p}.batter_dest", m, "batter_dest", np.int8, -1
+                ),
+                dest_ok=optional_meta_column(views, f"{p}.dest_ok", m, "dest_ok", np.int8),
                 # The normalization facts + geometry.
-                r1_adv_out=_bb_take(views, hand, m, "r1_adv_out", "r1_adv_out", np.int8, 0),
-                r2_adv_out=_bb_take(views, hand, m, "r2_adv_out", "r2_adv_out", np.int8, 0),
-                r3_adv_out=_bb_take(views, hand, m, "r3_adv_out", "r3_adv_out", np.int8, 0),
-                is_air=_bb_take(views, hand, m, "is_air", "is_air", np.int8, 0),
-                spray_raw=_bb_take(views, hand, m, "spray_raw", "spray_raw", np.float32, 0),
-                hit_dist=_bb_take(views, hand, m, "hit_dist", "hit_dist", np.float32, 0),
+                r1_adv_out=optional_meta_column(views, f"{p}.r1_adv_out", m, "r1_adv_out", np.int8),
+                r2_adv_out=optional_meta_column(views, f"{p}.r2_adv_out", m, "r2_adv_out", np.int8),
+                r3_adv_out=optional_meta_column(views, f"{p}.r3_adv_out", m, "r3_adv_out", np.int8),
+                is_air=optional_meta_column(views, f"{p}.is_air", m, "is_air", np.int8),
+                spray_raw=optional_meta_column(views, f"{p}.spray_raw", m, "spray_raw", np.float32),
+                hit_dist=optional_meta_column(views, f"{p}.hit_dist", m, "hit_dist", np.float32),
                 # The batting side (None on a pre-0019 bundle).
-                bat_home=_bb_take(views, hand, m, "bat_home", "bat_home", np.int8, 0),
+                bat_home=optional_meta_column(views, f"{p}.bat_home", m, "bat_home", np.int8),
                 # The fielding chain (None on an older bundle).
                 fielders=_bb_fielders(views, hand, m),
-                putout_mask=_bb_take(views, hand, m, "putout_mask", "putout_pos_mask", np.int16, 0),
-                assist_mask=_bb_take(views, hand, m, "assist_mask", "assist_pos_mask", np.int16, 0),
+                putout_mask=optional_meta_column(
+                    views, f"{p}.putout_mask", m, "putout_pos_mask", np.int16
+                ),
+                assist_mask=optional_meta_column(
+                    views, f"{p}.assist_mask", m, "assist_pos_mask", np.int16
+                ),
                 # The producing pitch (None on a
                 # pre-sim518 export).
                 pgeom=(
@@ -402,8 +378,10 @@ def load_battedball_pools(
                         else None
                     )
                 ),
-                pitcher_id=_bb_take(views, hand, m, "pitcher_id", "pitcher_id", np.int64, 0),
+                pitcher_id=optional_meta_column(
+                    views, f"{p}.pitcher_id", m, "pitcher_id", np.int64
+                ),
                 # The batted-ball class (None on an older bundle).
-                bb_class=_bb_take(views, hand, m, "bb_class", "bb_class", np.int8, 0),
+                bb_class=optional_meta_column(views, f"{p}.bb_class", m, "bb_class", np.int8),
             )
     return bb_pools

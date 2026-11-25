@@ -78,17 +78,15 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from db.dsn import attach_pg  # noqa: E402
 from pools.check_pool_labels import (  # noqa: E402
     LABEL_CHECK_TOLERANCE,
-    attach_pg,
-    chain_rates,
     format_gaps,
     format_label_check,
     format_pa_count,
     label_check,
-    pa_group_count,
     pool_count_matrix,
-    real_pa_rates,
+    run_label_check,
     solve_chain,
 )
 from simulation.sim_kwargs import open_sim_duckdb  # noqa: E402
@@ -189,28 +187,23 @@ def main(argv: list[str] | None = None) -> None:
             print(f" label check: NOT RUN ({pg_error})")
             failed_windows.append(name)
         else:
-            real = real_pa_rates(con, pred)
-            n_real = int(real["n_pa"])
             # Both sides must read the same plate appearances. The
             # pool's count comes from the SQL the pa_only chain reads.
-            n_pool = pa_group_count(con, pred)
-            chain_pa = chain_rates(con, pred, pa_only=True)
-            check = label_check(chain_pa, real)
-            ok = n_pool == n_real and all(row[4] for row in check)
+            run = run_label_check(con, pred)
             print(
-                f" label check (the chain over the pool rows of the {n_real:,} real"
+                f" label check (the chain over the pool rows of the {run.n_real:,} real"
                 f" PAs vs raw.pitches, tolerance {LABEL_CHECK_TOLERANCE * 100.0:.1f}%):"
-                f" {'PASS' if ok else 'FAIL'}"
+                f" {'PASS' if run.ok else 'FAIL'}"
             )
-            print(f"   {format_pa_count(n_pool, n_real)}")
-            for line in format_label_check(check):
+            print(f"   {format_pa_count(run.n_pool, run.n_real)}")
+            for line in format_label_check(run.rows):
                 print(f"   {line}")
             # For the record: the all-rows centres against the same real PAs.
             # The gap includes the groups cut short (about +0.6 points on
             # walks in 2023-2026), so it is information, not the verdict.
-            all_rows = format_gaps(label_check(chain, real))
+            all_rows = format_gaps(label_check(chain, run.real))
             print(f"   for the record, the all-rows centres vs the same PAs: {all_rows}")
-            if not ok:
+            if not run.ok:
                 failed_windows.append(name)
 
         # --- batted-ball pool: volume, event mix, thin cells ---------------

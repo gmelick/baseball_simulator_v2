@@ -18,12 +18,16 @@ BASERUNNER_TAIL_COLUMNS: tuple[str, ...] = ("asof_date", *XB_COLUMN_ORDER)
 # The sample floors (each matches its column's comment in the DuckDB schema).
 MIN_PITCHER_PITCHES = 200
 MIN_BATTER_PA = 100
-MIN_FIELDER_BIP = 50
 MIN_RUNNER_ADV_OPPS = 20
 MIN_RUNNER_SB_ATTEMPTS = 5
 MIN_FIELDER_PLAYS = 50
 MIN_CATCHER_SB_ATTEMPTS = 10
 MIN_MANAGER_GAMES = 50
+# The two steal tables' floors copy their engines' gates: MIN_STEAL_ATTEMPTS
+# (the baserunner-steal engine) and MIN_BASERUNNER_EVENTS (the pitcher-steal
+# engine). Each engine reads only the rows not flagged below its floor.
+MIN_RUNNER_STEAL_ATTEMPTS = 10
+MIN_PITCHER_BASERUNNER_EVENTS = 30
 
 #: The chance count at which an outfielder's arm block repeats year to year
 #: at about 0.5 (measured on the advancement pool; the outfield arm block,

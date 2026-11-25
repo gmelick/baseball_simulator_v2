@@ -62,19 +62,16 @@ def build_pitcher_sim_matrix(
 
 def load_pitcher_sim(
     art_dir: str, views: dict[str, np.ndarray]
-) -> tuple[dict[str, int], dict[str, dict[str, float]], np.ndarray | None]:
-    """Load the pitcher similarity index and its dense matrix (or, on a bundle
-    without the matrix, the similarity dict)."""
+) -> tuple[dict[str, int], np.ndarray | None]:
+    """Load the pitcher similarity index and its dense matrix."""
     ps_index: dict[str, int] = {}
-    ps_sims: dict[str, dict[str, float]] = {}
     ps_matrix: np.ndarray | None = None
     ps_path = os.path.join(art_dir, "pitcher_sim.npz")
     if os.path.exists(ps_path):
-        # Prefer the dense matrix. A worker gets it as a shared view
+        # A worker gets the dense matrix as a shared view
         # (``views["pitcher_sim.matrix"]``); the parent/dev path reads it from
         # the npz. In EITHER case we read ONLY the tiny ``index`` from disk and
-        # SKIP json-parsing the ~2 GB ``sims`` dict. The dict is parsed solely
-        # on a legacy bundle that has no ``pitcher_sim_matrix`` array.
+        # never json-parse the ~2 GB ``sims`` dict.
         mv = views.get("pitcher_sim.matrix")
         # The bundle never carries a pickle. Every load here refuses
         # one, and ``_savez_plain`` keeps the builder from writing one.
@@ -84,6 +81,4 @@ def load_pitcher_sim(
             ps_matrix = mv
         elif "pitcher_sim_matrix" in z.files:
             ps_matrix = z["pitcher_sim_matrix"]
-        else:
-            ps_sims = json.loads(str(z["sims"]))
-    return ps_index, ps_sims, ps_matrix
+    return ps_index, ps_matrix

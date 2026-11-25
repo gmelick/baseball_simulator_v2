@@ -4,20 +4,49 @@ from __future__ import annotations
 
 import logging
 
+from db.introspect import duck_columns, duck_relation_readable
 from ingest.statcast_events import (
     sql_steal_attempt,
     sql_steal_success,
 )
 from pools.pool_metadata import (
-    _canonical_ref_season,
     _recency_weight_sql,
     _record_pool_build,
-    _require_steal_pool_0031,
-    _seasons_needing_rebuild,
+    _seasons_to_build,
+    sql_runners_state,
+    sql_score_diff,
 )
 from profiles.base import ComputorBase
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
+
+#: The two columns migration 0031 appends to sim.steal_opportunity_pool, and
+#: the file that adds them.
+STEAL_POOL_0031_COLUMNS: tuple[str, ...] = ("pitch_class", "is_pickoff_row")
+MIGRATION_0031 = "db/migrations/duckdb/0031_sim554_steal_pool_pitch_class.sql"
+
+
+def _require_steal_pool_0031(conn) -> None:
+    """Raise unless sim.steal_opportunity_pool carries migration 0031.
+
+    The nightly job applies no DuckDB migration. The steal-pool builder deletes
+    a season's rows, then runs a positional INSERT. On an un-migrated table the
+    INSERT fails AFTER the delete, and the season's steal rows are gone. The
+    builder calls this probe first, so the build fails with the rows intact.
+
+    A database with no such table has no rows to lose: the probe passes, and
+    the DELETE then fails on the missing table by itself.
+    """
+    have = duck_columns(conn, "sim", "steal_opportunity_pool", this_file_only=True)
+    if not have:
+        return
+    missing = [c for c in STEAL_POOL_0031_COLUMNS if c not in have]
+    if missing:
+        raise RuntimeError(
+            f"sim.steal_opportunity_pool has no {', '.join(missing)} column: apply "
+            f"{MIGRATION_0031} before the pool build (SIM-554). No row was deleted."
+        )
 
 
 class StealPoolMixin(ComputorBase):
@@ -31,14 +60,11 @@ class StealPoolMixin(ComputorBase):
         Adds recency_weight. When ``incremental``, only the seasons whose
         source changed rebuild.
         """
-        ref_season = _canonical_ref_season(self._conn, seasons)
-        if incremental:
-            seasons = _seasons_needing_rebuild(self._conn, "stolen_base_pool", seasons)
-            if not seasons:
-                log.info("Building sim.stolen_base_pool … all seasons fresh; skipped.")
-                return
-        log.info("Building sim.stolen_base_pool … (seasons=%s)", seasons)
-        season_list = ", ".join(str(s) for s in seasons)
+        plan = _seasons_to_build(self._conn, "stolen_base_pool", seasons, incremental)
+        if plan is None:
+            return
+        seasons, ref_season = plan
+        season_list = sql_seasons(seasons)
         recency_expr = _recency_weight_sql("s.season", ref_season)
 
         self._conn.execute(f"DELETE FROM sim.stolen_base_pool WHERE season IN ({season_list})")
@@ -59,11 +85,9 @@ class StealPoolMixin(ComputorBase):
                     rp.pitcher,
                     rp.inning,
                     rp.outs,
-                    (CASE WHEN rp.on_1b IS NOT NULL THEN 1 ELSE 0 END
-                     + CASE WHEN rp.on_2b IS NOT NULL THEN 2 ELSE 0 END
-                     + CASE WHEN rp.on_3b IS NOT NULL THEN 4 ELSE 0 END)::SMALLINT
+                    {sql_runners_state("rp.")}
                                                 AS runners_state,
-                    GREATEST(-5, LEAST(5, rp.bat_score - rp.fld_score))::SMALLINT
+                    {sql_score_diff("rp.")}
                                                 AS score_diff,
                     rp.balls                    AS count_balls,
                     rp.strikes                  AS count_strikes,
@@ -179,14 +203,11 @@ class StealPoolMixin(ComputorBase):
         0015 + 0017 + 0031). The builder refuses a table without the 0031
         columns BEFORE it deletes anything.
         """
-        ref_season = _canonical_ref_season(self._conn, seasons)
-        if incremental:
-            seasons = _seasons_needing_rebuild(self._conn, "steal_opportunity_pool", seasons)
-            if not seasons:
-                log.info("Building sim.steal_opportunity_pool … all seasons fresh; skipped.")
-                return
-        log.info("Building sim.steal_opportunity_pool … (seasons=%s)", seasons)
-        season_list = ", ".join(str(s) for s in seasons)
+        plan = _seasons_to_build(self._conn, "steal_opportunity_pool", seasons, incremental)
+        if plan is None:
+            return
+        seasons, ref_season = plan
+        season_list = sql_seasons(seasons)
         recency_expr = _recency_weight_sql("f.season", ref_season)
         pickoff_recency_expr = _recency_weight_sql("e.season", ref_season)
         pickoff_cte = self._pickoff_outcomes_cte(season_list)
@@ -229,7 +250,7 @@ class StealPoolMixin(ComputorBase):
                     rp.outs::SMALLINT               AS outs,
                     rp.balls::SMALLINT              AS count_balls,
                     rp.strikes::SMALLINT            AS count_strikes,
-                    GREATEST(-5, LEAST(5, rp.bat_score - rp.fld_score))::SMALLINT
+                    {sql_score_diff("rp.")}
                                                     AS score_diff,
                     -- The flags for THIS pair's target base only: an attempt of
                     -- another base on the same pitch is a different decision.
@@ -386,7 +407,7 @@ class StealPoolMixin(ComputorBase):
                 e.outs_before::SMALLINT                   AS outs,
                 0::SMALLINT                               AS count_balls,
                 0::SMALLINT                               AS count_strikes,
-                GREATEST(-5, LEAST(5, e.bat_score - e.fld_score))::SMALLINT
+                {sql_score_diff("e.")}
                                                           AS score_diff,
                 FALSE                                     AS attempted,
                 FALSE                                     AS success,
@@ -403,3 +424,71 @@ class StealPoolMixin(ComputorBase):
         """)
         log.info("  sim.steal_opportunity_pool done.")
         _record_pool_build(self._conn, "steal_opportunity_pool", seasons, ref_season)
+
+    def _pickoff_outcomes_cte(self, season_list: str) -> str:
+        """Each pickoff throw, mapped to the steal pool's pair of its held runner.
+
+        The runner state entering the play picks the pair:
+
+          * a runner on 1B with 2B open -> the target-2 pair. An out at base 1
+            is a plain pickoff; an out at base 2 is a picked-off caught
+            stealing (the runner broke for the next base, and MLB scores a CS).
+          * a runner on 2B with 3B open -> the target-3 pair: an out at 2 is
+            plain, an out at 3 advancing.
+
+        The throws that fit no pair are dropped: a runner held at 3B or thrown
+        out at home (about 26 outs a season, measured on 2023) and a 1B pickoff
+        with 1B and 2B both taken (the pool's row for that pitch belongs to the
+        2B runner). Together they come to about 0.006 a team-game, a residual
+        documented with the steals of home. The relation is empty when the
+        table is absent (a database before Alembic 0018, or a unit-test fixture).
+
+        Each row also carries the throw's own facts (its id, the runner, the
+        pitcher, the half-inning, the outs and the score before the throw).
+        The pool builder tags an outcome to one pitch of its pair in the plate
+        appearance. An outcome with no such pitch (the throw came before the
+        first pitch: 394 of 1,788 in 2023-2026, measured 2026-09-30) becomes a
+        pickoff row of its own, built from these columns (the running game on
+        the pitch, SIM-554). Every row is a throw; most have no outcome
+        (``is_out_i`` and ``is_err_i`` both 0).
+        """
+        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
+            return (
+                "SELECT NULL::BIGINT AS id, NULL::INTEGER AS game_pk, "
+                "NULL::INTEGER AS at_bat_number, NULL::DATE AS game_date, "
+                "NULL::SMALLINT AS season, NULL::INTEGER AS runner_id, "
+                "NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS inning, "
+                "NULL::VARCHAR AS inning_topbot, NULL::SMALLINT AS outs_before, "
+                "NULL::SMALLINT AS bat_score, NULL::SMALLINT AS fld_score, "
+                "NULL::SMALLINT AS target_base, 0 AS is_out_i, 0 AS is_adv_i, "
+                "0 AS is_err_i WHERE FALSE"
+            )
+        return f"""
+                SELECT
+                    id, game_pk, at_bat_number, game_date, season,
+                    runner_id, pitcher_id, inning, inning_topbot,
+                    outs_before, bat_score, fld_score,
+                    CASE
+                        WHEN base = 1 AND (runners_state & 1) = 1
+                             AND (runners_state & 2) = 0 THEN 2
+                        WHEN base = 2 AND (runners_state & 1) = 1
+                             AND (runners_state & 2) = 0 THEN 2
+                        WHEN base = 2 AND (runners_state & 2) = 2
+                             AND (runners_state & 4) = 0 THEN 3
+                        WHEN base = 3 AND (runners_state & 2) = 2
+                             AND (runners_state & 4) = 0 THEN 3
+                    END::SMALLINT AS target_base,
+                    CASE WHEN event_type = 'pickoff' AND is_out
+                         THEN 1 ELSE 0 END AS is_out_i,
+                    CASE WHEN event_type = 'pickoff' AND is_out AND (
+                              (base = 2 AND (runners_state & 1) = 1
+                                        AND (runners_state & 2) = 0)
+                           OR (base = 3 AND (runners_state & 2) = 2
+                                        AND (runners_state & 4) = 0))
+                         THEN 1 ELSE 0 END AS is_adv_i,
+                    CASE WHEN event_type = 'pickoff_error'
+                         THEN 1 ELSE 0 END AS is_err_i
+                FROM pg.raw.play_events
+                WHERE event_type IN ('pickoff', 'pickoff_error')
+                  AND season IN ({season_list})
+        """

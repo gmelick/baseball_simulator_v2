@@ -387,10 +387,12 @@ class TestTheArtifactRoundTrip:
         shared = art.extract_shared_arrays()
         assert "steal_pool.2.sit" in shared
         assert "steal_pool.2.attempted" in shared
-        # Attach round-trip: a replacement view lands on the pool.
+        # A load with a replacement view takes it in place of the disk read.
         new_att = np.zeros_like(art.steal_pools["2"].attempted)
-        art.attach_shared_views({"steal_pool.2.attempted": new_att})
-        assert art.steal_pools["2"].attempted is new_att
+        again = EngineArtifacts.load(
+            str(tmp_path), shared_views={"steal_pool.2.attempted": new_att}
+        )
+        assert again.steal_pools["2"].attempted is new_att
 
 
 # ---------------------------------------------------------------------------

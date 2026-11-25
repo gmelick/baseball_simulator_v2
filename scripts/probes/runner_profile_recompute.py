@@ -63,8 +63,9 @@ if str(_ROOT) not in sys.path:
 
 import duckdb  # noqa: E402
 
-from profiles.build_profiles import LeagueAverageProfiles, PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor
 from profiles.constants import BASERUNNER_TAIL_COLUMNS
+from profiles.league_averages import LeagueAverageProfiles
 
 log = logging.getLogger("runner_profile_recompute")
 

@@ -116,31 +116,21 @@ def load_actor_embeddings(art_dir: str, views: dict[str, np.ndarray]) -> dict[st
         p = os.path.join(art_dir, f"{actor}_emb.npz")
         if os.path.exists(p):
             # When all three shareable arrays for this actor are in views,
-            # SKIP the .npz load entirely — load only the keys + features
-            # (the small JSON members) from a lightweight read.
-            vecs_v = views.get(f"actor_emb.{actor}.vecs")
-            mean_v = views.get(f"actor_emb.{actor}.mean")
-            std_v = views.get(f"actor_emb.{actor}.std")
-            if all(isinstance(v, np.ndarray) for v in (vecs_v, mean_v, std_v)):
-                # Cheap partial-load of the npz: keys + features are tiny.
-                z = np.load(p, allow_pickle=False)
-                keys = json.loads(str(z["keys"]))
-                features = json.loads(str(z["features"]))
-                actor_emb[actor] = {
-                    "key_index": {k: i for i, k in enumerate(keys)},
-                    "vecs": vecs_v,
-                    "mean": mean_v,
-                    "std": std_v,
-                    "features": features,
-                }
+            # the npz gives only the keys + features (the small JSON members):
+            # the npz reads a member only when it is asked for.
+            shared = [views.get(f"actor_emb.{actor}.{a}") for a in ("vecs", "mean", "std")]
+            use_views = all(isinstance(v, np.ndarray) for v in shared)
+            z = np.load(p, allow_pickle=False)
+            keys = json.loads(str(z["keys"]))
+            if use_views:
+                vecs, mean, std = shared
             else:
-                z = np.load(p, allow_pickle=False)
-                keys = json.loads(str(z["keys"]))
-                actor_emb[actor] = {
-                    "key_index": {k: i for i, k in enumerate(keys)},
-                    "vecs": z["vecs"],
-                    "mean": z["mean"],
-                    "std": z["std"],
-                    "features": json.loads(str(z["features"])),
-                }
+                vecs, mean, std = z["vecs"], z["mean"], z["std"]
+            actor_emb[actor] = {
+                "key_index": {k: i for i, k in enumerate(keys)},
+                "vecs": vecs,
+                "mean": mean,
+                "std": std,
+                "features": json.loads(str(z["features"])),
+            }
     return actor_emb

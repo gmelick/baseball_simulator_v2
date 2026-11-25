@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .common import MIGRATION, NEW_COLUMNS, _table_columns
+from db.introspect import duck_columns
+from pools.build_steal_pool import STEAL_POOL_0031_COLUMNS
+
+from .common import MIGRATION
 
 # ---------------------------------------------------------------------------
 # The migration (the same statement splitter as scripts/probes/fielder_profile_recompute.py)
@@ -21,9 +24,9 @@ def migration_statements(text: str) -> list[str]:
 
 
 def missing_columns(con: Any) -> list[str]:
-    """The migration-0031 columns the steal pool does not have yet."""
-    have = _table_columns(con, "sim", "steal_opportunity_pool")
-    return [c for c in NEW_COLUMNS if c not in have]
+    """The migration-0031 columns the steal pool does not have yet (both when the table is absent)."""
+    have = duck_columns(con, "sim", "steal_opportunity_pool", this_file_only=True)
+    return [c for c in STEAL_POOL_0031_COLUMNS if c not in have]
 
 
 def apply_migration(con: Any, migration: Path = MIGRATION) -> int:

@@ -4,12 +4,14 @@ multipliers on taken pitches.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
 import duckdb
 import numpy as np
+
+from bundle.common import write_json
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -68,7 +70,7 @@ def build_receiving_profiles(
     """Write ``<out_dir>/receiving.json``: the league called-strike rate per
     zone group and got-away rate per blocking cell over taken pitches, and
     every catcher-season's framing multipliers and blocking ratio."""
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     pz_case = (
         f"(CASE WHEN plate_z < {RECV_PZ_EDGES[0]} THEN 0 WHEN plate_z < {RECV_PZ_EDGES[1]} THEN 1 "
         f"WHEN plate_z < {RECV_PZ_EDGES[2]} THEN 2 ELSE 3 END) * 2 "
@@ -163,8 +165,7 @@ def build_receiving_profiles(
         "catchers": catchers,
     }
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "receiving.json"), "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2)
+    write_json(os.path.join(out_dir, "receiving.json"), doc)
     log.info(
         "receiving: %d catcher-seasons; league called-strike rate per group %s; got-away per cell %s",
         len(catchers),
@@ -172,13 +173,3 @@ def build_receiving_profiles(
         [round(v, 4) for v in league_block_all],
     )
     return doc
-
-
-def load_receiving(art_dir: str) -> dict | None:
-    """Load the receiving document; None when the bundle has none."""
-    receiving: dict | None = None
-    rv_path = os.path.join(art_dir, "receiving.json")
-    if os.path.exists(rv_path):
-        with open(rv_path, encoding="utf-8") as fh:
-            receiving = json.load(fh)
-    return receiving

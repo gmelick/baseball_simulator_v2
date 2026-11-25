@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
 import duckdb
 import numpy as np
 
-from bundle.common import take_view, ymd_select
+from bundle.common import (
+    float_columns,
+    game_ymd_column,
+    meta_column,
+    recency_column,
+    take_view,
+    write_json,
+    ymd_select,
+)
 from bundle.worker_pools import AdvancementPool
 from db.introspect import duck_table_exists
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("engine_artifacts")
 
@@ -43,7 +51,7 @@ def build_advancement_pool_artifact(
         return {}
     pool_dir = os.path.join(out_dir, "advancement_pool")
     os.makedirs(pool_dir, exist_ok=True)
-    season_list = ", ".join(str(int(s)) for s in seasons)
+    season_list = sql_seasons(seasons)
     counts: dict[str, int] = {}
     for key in _ADV_KEYS:
         scen, frm, tgt = (int(x) for x in key.split("_"))
@@ -55,11 +63,7 @@ def build_advancement_pool_artifact(
             f"SELECT {', '.join(_ADV_FEAT_COLS)} FROM sim.advancement_opportunity_pool WHERE {w}"
         ).fetchnumpy()
         n = len(d[_ADV_FEAT_COLS[0]])
-        feat = np.nan_to_num(
-            np.stack(
-                [np.ma.filled(d[c], np.nan).astype(np.float32) for c in _ADV_FEAT_COLS], axis=1
-            )
-        ).astype(np.float32)
+        feat = float_columns(d, _ADV_FEAT_COLS)
         np.save(os.path.join(pool_dir, f"{key}.feat.npy"), feat)
         con.execute(
             "COPY (SELECT runner_id, fielder_id, fielder_pos, season, "
@@ -70,8 +74,10 @@ def build_advancement_pool_artifact(
         )
         counts[key] = int(n)
         log.info("advancement_pool[%s]: %d rows (seasons %s)", key, n, seasons)
-    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-        json.dump({"seasons": seasons, "counts": counts, "feat_cols": _ADV_FEAT_COLS}, fh, indent=2)
+    write_json(
+        os.path.join(pool_dir, "manifest.json"),
+        {"seasons": seasons, "counts": counts, "feat_cols": _ADV_FEAT_COLS},
+    )
     return counts
 
 
@@ -90,40 +96,22 @@ def load_advancement_pools(
             if not os.path.exists(meta_path):
                 continue
             m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
-
-            def _ap_take(attr: str, col: str, dtype, fill, *, _k=key, _m=m) -> np.ndarray:
-                # _k/_m bind the loop variables at definition time (B023).
-                v = views.get(f"adv_pool.{_k}.{attr}")
-                if isinstance(v, np.ndarray):
-                    return v
-                return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
-
+            p = f"adv_pool.{key}"
             adv_pools[key] = AdvancementPool(
                 # None on a bundle exported before the date
                 # existed, which the sampler reports rather than
                 # silently drawing from the future.
-                game_ymd=(
-                    np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
-                    if "game_ymd" in m
-                    else None
-                ),
+                game_ymd=game_ymd_column(m),
                 feat=take_view(
                     views, f"adv_pool.{key}.feat", os.path.join(ap_dir, f"{key}.feat.npy")
                 ),
-                runner_id=_ap_take("runner_id", "runner_id", np.int64, 0),
-                fielder_id=_ap_take("fielder_id", "fielder_id", np.int64, 0),
-                fielder_pos=_ap_take("fielder_pos", "fielder_pos", np.int8, 0),
-                season=_ap_take("season", "season", np.int64, 0),
-                attempted=_ap_take("attempted", "attempted", np.int8, 0),
-                safe=_ap_take("safe", "safe", np.int8, 0),
-                error_extra=_ap_take("error_extra", "error_extra", np.int8, 0),
-                recency=(
-                    views.get(f"adv_pool.{key}.recency")
-                    if isinstance(views.get(f"adv_pool.{key}.recency"), np.ndarray)
-                    else np.nan_to_num(
-                        np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
-                        nan=1.0,
-                    )
-                ),
+                runner_id=meta_column(views, f"{p}.runner_id", m, "runner_id", np.int64),
+                fielder_id=meta_column(views, f"{p}.fielder_id", m, "fielder_id", np.int64),
+                fielder_pos=meta_column(views, f"{p}.fielder_pos", m, "fielder_pos", np.int8),
+                season=meta_column(views, f"{p}.season", m, "season", np.int64),
+                attempted=meta_column(views, f"{p}.attempted", m, "attempted", np.int8),
+                safe=meta_column(views, f"{p}.safe", m, "safe", np.int8),
+                error_extra=meta_column(views, f"{p}.error_extra", m, "error_extra", np.int8),
+                recency=recency_column(views, f"{p}.recency", m),
             )
     return adv_pools

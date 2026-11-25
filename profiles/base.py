@@ -8,14 +8,16 @@ from datetime import date, datetime
 import duckdb
 
 from db.introspect import duck_relation_readable
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
 
 class ComputorBase:
     """The computor's state and the helpers every builder shares: the
-    play-event common table expressions, the one-cutoff-per-table guard and the
-    leakage check. Every mixin subclasses this class, so each sees the state.
+    pickoff-out common table expression, the one-cutoff-per-table guard, the
+    cutoff delete, the Savant season shift, the temp-table placeholders and the
+    leakage checks. Every mixin subclasses this class, so each sees the state.
     """
 
     _pg_dsn: str
@@ -24,7 +26,7 @@ class ComputorBase:
     _re_matrix: dict
 
     # ------------------------------------------------------------------
-    # The play-event common table expressions
+    # The pickoff-out common table expression
     # ------------------------------------------------------------------
 
     def _play_events_outs_cte(self, asof_sql: str | None = None) -> str:
@@ -51,101 +53,6 @@ class ComputorBase:
             "COUNT(*) AS n_outs FROM pg.raw.play_events "
             f"WHERE is_out {cutoff} GROUP BY pitcher_id, season"
         )
-
-    def _play_events_disengagement_cte(self, asof_sql: str | None = None) -> str:
-        """The pickoff throws and stepoffs per (pitcher, season).
-
-        These are the pitcher's hold-runner habits: how often he throws over
-        and how often he steps off. ``pitcher_id`` is the pitcher who threw.
-        A ``pickoff_error`` is still a throw, so it counts. The relation is
-        empty when the table is absent (a database before Alembic 0018, or a
-        unit-test fixture).
-
-        ``asof_sql`` keeps only the plays at or before the cutoff; ``None``
-        keeps every play of the season.
-        """
-        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
-            return (
-                "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
-                "0 AS n_pickoffs, 0 AS n_stepoffs WHERE FALSE"
-            )
-        cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof_sql is not None else ""
-        return (
-            "SELECT pitcher_id::INTEGER AS pitcher_id, season::SMALLINT AS season, "
-            "SUM(CASE WHEN event_type IN ('pickoff', 'pickoff_error') "
-            "THEN 1 ELSE 0 END) AS n_pickoffs, "
-            "SUM(CASE WHEN event_type = 'stepoff' THEN 1 ELSE 0 END) AS n_stepoffs "
-            f"FROM pg.raw.play_events WHERE pitcher_id IS NOT NULL {cutoff} "
-            "GROUP BY pitcher_id, season"
-        )
-
-    def _pickoff_outcomes_cte(self, season_list: str) -> str:
-        """Each pickoff throw, mapped to the steal pool's pair of its held runner.
-
-        The runner state entering the play picks the pair:
-
-          * a runner on 1B with 2B open -> the target-2 pair. An out at base 1
-            is a plain pickoff; an out at base 2 is a picked-off caught
-            stealing (the runner broke for the next base, and MLB scores a CS).
-          * a runner on 2B with 3B open -> the target-3 pair: an out at 2 is
-            plain, an out at 3 advancing.
-
-        The throws that fit no pair are dropped: a runner held at 3B or thrown
-        out at home (about 26 outs a season, measured on 2023) and a 1B pickoff
-        with 1B and 2B both taken (the pool's row for that pitch belongs to the
-        2B runner). Together they come to about 0.006 a team-game, a residual
-        documented with the steals of home. The relation is empty when the
-        table is absent (a database before Alembic 0018, or a unit-test fixture).
-
-        Each row also carries the throw's own facts (its id, the runner, the
-        pitcher, the half-inning, the outs and the score before the throw).
-        The pool builder tags an outcome to one pitch of its pair in the plate
-        appearance. An outcome with no such pitch (the throw came before the
-        first pitch: 394 of 1,788 in 2023-2026, measured 2026-09-30) becomes a
-        pickoff row of its own, built from these columns (the running game on
-        the pitch, SIM-554). Every row is a throw; most have no outcome
-        (``is_out_i`` and ``is_err_i`` both 0).
-        """
-        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
-            return (
-                "SELECT NULL::BIGINT AS id, NULL::INTEGER AS game_pk, "
-                "NULL::INTEGER AS at_bat_number, NULL::DATE AS game_date, "
-                "NULL::SMALLINT AS season, NULL::INTEGER AS runner_id, "
-                "NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS inning, "
-                "NULL::VARCHAR AS inning_topbot, NULL::SMALLINT AS outs_before, "
-                "NULL::SMALLINT AS bat_score, NULL::SMALLINT AS fld_score, "
-                "NULL::SMALLINT AS target_base, 0 AS is_out_i, 0 AS is_adv_i, "
-                "0 AS is_err_i WHERE FALSE"
-            )
-        return f"""
-                SELECT
-                    id, game_pk, at_bat_number, game_date, season,
-                    runner_id, pitcher_id, inning, inning_topbot,
-                    outs_before, bat_score, fld_score,
-                    CASE
-                        WHEN base = 1 AND (runners_state & 1) = 1
-                             AND (runners_state & 2) = 0 THEN 2
-                        WHEN base = 2 AND (runners_state & 1) = 1
-                             AND (runners_state & 2) = 0 THEN 2
-                        WHEN base = 2 AND (runners_state & 2) = 2
-                             AND (runners_state & 4) = 0 THEN 3
-                        WHEN base = 3 AND (runners_state & 2) = 2
-                             AND (runners_state & 4) = 0 THEN 3
-                    END::SMALLINT AS target_base,
-                    CASE WHEN event_type = 'pickoff' AND is_out
-                         THEN 1 ELSE 0 END AS is_out_i,
-                    CASE WHEN event_type = 'pickoff' AND is_out AND (
-                              (base = 2 AND (runners_state & 1) = 1
-                                        AND (runners_state & 2) = 0)
-                           OR (base = 3 AND (runners_state & 2) = 2
-                                        AND (runners_state & 4) = 0))
-                         THEN 1 ELSE 0 END AS is_adv_i,
-                    CASE WHEN event_type = 'pickoff_error'
-                         THEN 1 ELSE 0 END AS is_err_i
-                FROM pg.raw.play_events
-                WHERE event_type IN ('pickoff', 'pickoff_error')
-                  AND season IN ({season_list})
-        """
 
     # ------------------------------------------------------------------
     # One cutoff per profile table
@@ -194,7 +101,7 @@ class ComputorBase:
         """
         if not seasons:
             return
-        season_list = ", ".join(str(int(s)) for s in seasons)
+        season_list = sql_seasons(seasons)
         try:
             survivors = self._conn.execute(f"""
                 SELECT season, asof_date, COUNT(*)
@@ -273,10 +180,33 @@ class ComputorBase:
         """)
         log.info("  %s stamped as of %s (one cutoff).", table, asof_sql)
 
+    def _delete_season_rows(self, table: str, seasons: list[int], asof: date | None) -> None:
+        """Delete ``seasons`` from ``table``, and every later season on a cutoff build."""
+        later = f" OR season > {asof.year}" if asof is not None else ""
+        self._conn.execute(f"DELETE FROM {table} WHERE season IN ({sql_seasons(seasons)}){later}")
+
+    @staticmethod
+    def _savant_season_sql(col: str, asof: date | None) -> str:
+        """The season an undated Savant board joins: the prior one for the cutoff's own season."""
+        if asof is None:
+            return col
+        return f"(CASE WHEN {col} = {asof.year} THEN {col} - 1 ELSE {col} END)"
+
+    def _ensure_placeholder_tables(self, placeholders: dict[str, str]) -> None:
+        """Run each placeholder ``CREATE TABLE IF NOT EXISTS``; log a failure and go on."""
+        for table, ddl in placeholders.items():
+            try:
+                self._conn.execute(ddl)
+            except Exception as exc:  # noqa: BLE001  - defensive log + continue
+                log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
+
+    # ------------------------------------------------------------------
+    # The leakage checks
+    # ------------------------------------------------------------------
+
     def _check_leakage(self, source: str, sql: str, asof: date) -> None:
-        """The shared body of the baserunner, catcher and fielder
-        ``*_have_no_leakage`` checks: raise when ``sql``'s newest date passes
-        the cutoff.
+        """The shared body of every ``*_have_no_leakage`` check: raise when
+        ``sql``'s newest date passes the cutoff.
 
         Three answers are not evidence of a leak; each is logged, not raised:
 
@@ -303,3 +233,23 @@ class ComputorBase:
                 f"data leakage: {source} contributed a row dated {newest}, after the {asof} cutoff."
             )
         log.info("    no leakage from %-28s newest = %s", source, newest)
+
+    def _check_pitch_sources_leakage(
+        self, seasons: list[int], asof: date, *, play_events: bool = False
+    ) -> None:
+        """Check ``raw.pitches``, and ``raw.play_events`` with ``play_events``, for leakage."""
+        season_list = sql_seasons(seasons)
+        sources = ["raw.pitches"]
+        if play_events:
+            # An absent table is a question of the schema, not a leak.
+            if duck_relation_readable(self._conn, "pg.raw.play_events"):
+                sources.append("raw.play_events")
+            else:
+                log.info("    no leakage check for raw.play_events (table absent)")
+        for source in sources:
+            self._check_leakage(
+                source,
+                f"SELECT MAX(game_date) FROM pg.{source} "
+                f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+                asof,
+            )

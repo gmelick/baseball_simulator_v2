@@ -6,6 +6,7 @@ import logging
 
 from profiles.base import ComputorBase
 from profiles.constants import PARK_PRIOR_PA
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
@@ -55,7 +56,7 @@ class ParkFactorsMixin(ComputorBase):
         the raw ``factor_overall``, in the sim path.
         """
         log.info("Computing park factors …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
 
         # Build a per-venue per-season per-factor table in one DuckDB query.
         # Each PA is counted once from the pitcher's perspective (avoiding
@@ -68,13 +69,6 @@ class ParkFactorsMixin(ComputorBase):
                 SELECT
                     p.venue_id,
                     p.season,
-                    p.p_throws,
-                    p.stand,
-                    p.events,
-                    p.bb_type,
-                    p.launch_speed,
-                    p.at_bat_number,
-                    p.game_pk,
                     -- Count each event type
                     CASE WHEN p.events = 'home_run'                              THEN 1 ELSE 0 END AS is_hr,
                     CASE WHEN p.events = 'single'                                THEN 1 ELSE 0 END AS is_1b,

@@ -7,9 +7,9 @@ Three units under test, all without a live DB / network / docker:
 
   1. The Alembic migration 0015 chains off 0014 and creates
      raw.game_bullpen_availability with the documented shape.
-  2. PlayerProfileComputor._compute_bullpen_workload — the raw.pitches-derived
-     rest/recent-workload half, against a mocked DuckDB connection (the SQL is
-     issued + the returned DataFrame is surfaced; the run() call site caches it).
+  2. compute_bullpen_workload — the raw.pitches-derived rest/recent-workload
+     half, against a mocked DuckDB connection (the SQL is issued + the returned
+     DataFrame is surfaced).
   3. BullpenAvailabilityIngest — the MLB-API roster/IL PARSE + the availability
      decision + the workload↔roster merge, with the network seam (_mlb_get) wired
      to a captured roster fixture and the DB seam (_persist) captured in-memory.
@@ -31,8 +31,8 @@ from ingest.load_bullpen_availability import (
     _as_date,
     _opt_int,
     _rest_as_of,
+    compute_bullpen_workload,
 )
-from profiles import build_profiles as ppc
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _FIX = REPO_ROOT / "tests" / "fixtures" / "bullpen"
@@ -82,7 +82,7 @@ class TestMigration0015:
 
 
 # ===========================================================================
-# 2. PlayerProfileComputor._compute_bullpen_workload
+# 2. compute_bullpen_workload
 # ===========================================================================
 
 
@@ -118,44 +118,42 @@ def _workload_df() -> pd.DataFrame:
     )
 
 
-def _computor_with_df(df: pd.DataFrame) -> ppc.PlayerProfileComputor:
-    c = ppc.PlayerProfileComputor(pg_dsn="postgresql://x", duckdb_path="/tmp/y.duckdb")
+def _conn_with_df(df: pd.DataFrame) -> MagicMock:
     conn = MagicMock()
     result = MagicMock()
     result.fetchdf.return_value = df
     conn.execute.return_value = result
-    c._conn = conn
-    return c
+    return conn
 
 
 class TestComputeBullpenWorkload:
     def test_returns_dataframe_from_duckdb(self):
-        c = _computor_with_df(_workload_df())
-        out = c._compute_bullpen_workload([2024])
+        conn = _conn_with_df(_workload_df())
+        out = compute_bullpen_workload(conn, [2024])
         assert isinstance(out, pd.DataFrame)
         assert len(out) == 2
         assert set(out["pitcher_id"]) == {622663, 643410}
 
     def test_sql_reads_raw_pitches_with_quality_filter_and_season(self):
-        c = _computor_with_df(_workload_df())
-        c._compute_bullpen_workload([2024, 2025])
-        sql = c._conn.execute.call_args_list[-1].args[0]
+        conn = _conn_with_df(_workload_df())
+        compute_bullpen_workload(conn, [2024, 2025])
+        sql = conn.execute.call_args_list[-1].args[0]
         assert "pg.raw.pitches" in sql
         assert "data_quality_flag = FALSE" in sql
         assert "2024, 2025" in sql
 
     def test_sql_derives_fielding_team_from_half_inning(self):
         # Home fields the Top, away the Bottom — the team_id derivation.
-        c = _computor_with_df(_workload_df())
-        c._compute_bullpen_workload([2024])
-        sql = c._conn.execute.call_args_list[-1].args[0]
+        conn = _conn_with_df(_workload_df())
+        compute_bullpen_workload(conn, [2024])
+        sql = conn.execute.call_args_list[-1].args[0]
         assert "inning_topbot = 'Top'" in sql
         assert "home_id" in sql and "away_id" in sql
 
     def test_sql_computes_rest_and_3day_workload(self):
-        c = _computor_with_df(_workload_df())
-        c._compute_bullpen_workload([2024])
-        sql = c._conn.execute.call_args_list[-1].args[0]
+        conn = _conn_with_df(_workload_df())
+        compute_bullpen_workload(conn, [2024])
+        sql = conn.execute.call_args_list[-1].args[0]
         assert "days_rest" in sql
         assert "back_to_back" in sql
         assert "pitches_last_3d" in sql
@@ -163,15 +161,15 @@ class TestComputeBullpenWorkload:
         assert "INTERVAL 3 DAY" in sql  # 3-day window
 
     def test_empty_result_returns_empty_frame(self):
-        c = _computor_with_df(pd.DataFrame())
-        out = c._compute_bullpen_workload([2024])
+        conn = _conn_with_df(pd.DataFrame())
+        out = compute_bullpen_workload(conn, [2024])
         assert out.empty
 
     def test_does_not_write_to_postgres(self):
         # Postgres is attached READ_ONLY — the method must only SELECT, never INSERT.
-        c = _computor_with_df(_workload_df())
-        c._compute_bullpen_workload([2024])
-        sql = c._conn.execute.call_args_list[-1].args[0]
+        conn = _conn_with_df(_workload_df())
+        compute_bullpen_workload(conn, [2024])
+        sql = conn.execute.call_args_list[-1].args[0]
         assert "INSERT" not in sql.upper()
 
 

@@ -328,15 +328,13 @@ class TestSharedMemoryNewColumns:
         out = art.extract_shared_arrays()
         assert not any(k.endswith((".venue_id", ".fielder_pos", ".fielder_id")) for k in out)
 
-    def test_attach_round_trips_numeric_cols(self):
-        art = _bb_with_realism()
-        bundle = EngineArtifacts(pools={}, bb_pools={"L": art})
-        shareable = bundle.extract_shared_arrays()
-        dst = EngineArtifacts(pools={}, bb_pools={"L": _bb_with_realism()})
-        # Zero out dst then splice the views back in.
-        dst.bb_pools["L"].venue_id = np.zeros(3, dtype=np.int64)
-        dst.attach_shared_views(shareable)
-        np.testing.assert_array_equal(dst.bb_pools["L"].venue_id, art.venue_id)
+    def test_a_load_with_the_views_takes_the_numeric_cols(self, tmp_path):
+        _build_full_artifact(str(tmp_path))
+        shared = EngineArtifacts.load(str(tmp_path)).extract_shared_arrays()
+        views = {k: v.copy() for k, v in shared.items() if k.startswith("bb_pool.L.")}
+        art = EngineArtifacts.load(str(tmp_path), shared_views=views)
+        for attr in ("venue_id", "fielder_pos", "fielder_id"):
+            assert getattr(art.bb_pools["L"], attr) is views[f"bb_pool.L.{attr}"]
 
 
 if __name__ == "__main__":  # pragma: no cover

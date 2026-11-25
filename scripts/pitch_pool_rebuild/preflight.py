@@ -11,9 +11,10 @@ from typing import Any
 import duckdb
 import numpy as np
 
-from bundle.common import _GEOM_COLS, _SIT_COLS, RECENCY_FLOOR_SEASONS, join_rows
-from pools.pool_metadata import POOL_BUILDER_VERSION
-from profiles.sql import SQL_OUTCOME_TYPE
+from bundle.common import _GEOM_COLS, _SIT_COLS, RECENCY_FLOOR_SEASONS
+from bundle.export_batted_ball_pool import pitch_join_rows
+from pools.pool_metadata import POOL_BUILDER_VERSION, pool_builder_versions
+from profiles.sql import SQL_OUTCOME_TYPE, sql_seasons
 
 from .common import (
     DRIFT_POOLS,
@@ -21,13 +22,11 @@ from .common import (
     HANDS,
     PITCH_POOL_PARTS,
     UNCHANGED_POOLS,
-    _builder_versions,
     _log,
     _npy_shape,
     _pool_counts,
     _pq,
     _raw_code_rows_sql,
-    _season_list,
     _sha256,
     _source_counts,
     _sql_in,
@@ -50,7 +49,7 @@ def _unknown_codes(con: Any, seasons: list[int]) -> list[tuple[Any, Any, int]]:
         (code, strikes, int(n))
         for code, strikes, n in con.execute(
             f"SELECT TRIM(type) AS code, strikes, COUNT(*) FROM pg.raw.pitches "
-            f"WHERE data_quality_flag = FALSE AND season IN ({_season_list(seasons)}) "
+            f"WHERE data_quality_flag = FALSE AND season IN ({sql_seasons(seasons)}) "
             f"AND ({SQL_OUTCOME_TYPE}) IS NULL GROUP BY 1, 2 ORDER BY 3 DESC"
         ).fetchall()
     ]
@@ -175,28 +174,6 @@ def _copy_problem(art_dir: str, backup_dir: str) -> str | None:
     return None
 
 
-def _join_bb_row(con: Any, pitch_meta: str, bb_pitch_ids: str) -> np.ndarray:
-    """The pitch pool's batted-ball join, computed exactly as
-    ``engine_artifacts.build_battedball_pool_artifact`` computes it.
-
-    For every row of ``pitch_meta`` (the pitch pool's meta parquet, in read
-    order), the row of the batted-ball pool that holds its batted ball, or
-    -1: ``join_rows`` over the meta's ``pitch_id`` and the batted-ball pool's
-    ``{hand}.pitch_id.npy``.
-    """
-    pp_pid = np.asarray(
-        np.ma.filled(
-            con.execute(f"SELECT pitch_id FROM read_parquet('{pitch_meta}')").fetchnumpy()[
-                "pitch_id"
-            ],
-            -1,
-        ),
-        dtype=np.int64,
-    )
-    bb_pid = np.asarray(np.load(bb_pitch_ids), dtype=np.int64)
-    return join_rows(pp_pid, bb_pid)
-
-
 def _bb_row_problems(con: Any, source: str) -> list[str]:
     """A fresh join of ``source``'s pitch and batted-ball ids must reproduce its
     own ``bb_row``. That proves, before any write, that the export's recomputed
@@ -204,10 +181,10 @@ def _bb_row_problems(con: Any, source: str) -> list[str]:
     problems: list[str] = []
     for hand in ("L", "R"):
         pitch_dir = os.path.join(source, "pitch_pool")
-        fresh = _join_bb_row(
+        fresh = pitch_join_rows(
             con,
             os.path.join(pitch_dir, f"{hand}.meta.parquet"),
-            os.path.join(source, "battedball_pool", f"{hand}.pitch_id.npy"),
+            np.load(os.path.join(source, "battedball_pool", f"{hand}.pitch_id.npy")),
         )
         held = np.load(os.path.join(pitch_dir, f"{hand}.bb_row.npy"))
         same = held.shape == fresh.shape and bool(np.array_equal(held, fresh))
@@ -246,10 +223,10 @@ def _rollback_point_problems(con: Any, source: str, window: list[int]) -> list[s
         never changes them, so a difference is a misaligned or stale file.
     """
     problems: list[str] = []
-    wl = _season_list(window)
+    wl = sql_seasons(window)
     hands = _sql_in(HANDS)
     pitch_dir = os.path.join(source, "pitch_pool")
-    versions = _builder_versions(con, window)
+    versions = pool_builder_versions(con, "pitch_pool", window)
     duck_new = all(versions.get(s) == EXPECTED_BUILDER for s in window)
     src_sql = " UNION ALL ".join(
         f"SELECT '{h}' AS hand, pitch_id, outcome_type "
@@ -526,7 +503,7 @@ def _newer_rows(con: Any, table: str, keep: str, window: list[int], pool_dir: st
             return ""
         n, first, last = con.execute(
             f"SELECT COUNT(*), MIN(game_date), MAX(game_date) FROM {table} "
-            f"WHERE season IN ({_season_list(window)}) AND {keep} "
+            f"WHERE season IN ({sql_seasons(window)}) AND {keep} "
             f"AND CAST(strftime(game_date, '%Y%m%d') AS INTEGER) > {int(newest)}"
         ).fetchone()
     except Exception:  # noqa: BLE001 - the dates are a courtesy; the counts carry the finding
@@ -545,7 +522,7 @@ def _pool_drift(con: Any, art_dir: str, window: list[int]) -> None:
     files as they are, so the drift does not touch this rebuild. The
     line names it so the owner can decide; the next full pool export carries it.
     """
-    wl = _season_list(window)
+    wl = sql_seasons(window)
     ahead: list[str] = []
     for sub, table, key_sql, keep in DRIFT_POOLS:
         pool_dir = os.path.join(art_dir, sub)
@@ -616,7 +593,7 @@ def _preflight(
             f"the seasons {seasons} leave out the window seasons {missing}; the export and "
             "check d need the whole window on one coding"
         )
-    versions = _builder_versions(con, seasons)
+    versions = pool_builder_versions(con, "pitch_pool", seasons)
     _log(f"  builder per season before: {versions}")
     pool = _pool_counts(con, seasons)
     source = _source_counts(con, seasons)

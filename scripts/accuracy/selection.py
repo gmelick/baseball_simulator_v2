@@ -14,6 +14,7 @@ import json
 import os
 from typing import Any
 
+from bundle.versions import bundle_link
 from simulation import flags
 
 
@@ -54,9 +55,7 @@ def bundle_provenance(calibration_path: str) -> dict[str, Any]:
     """
     import hashlib
 
-    art_dir = os.path.join(
-        os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
-    )
+    art_dir = bundle_link()
     stamps: dict[str, float | None] = {}
     # The change pool and the steal pool are part of the frozen bundle too. A
     # steal-pool rebuild exports steal_pool/ alone and leaves every other file

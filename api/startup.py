@@ -295,7 +295,8 @@ async def build_sim_runner(app: FastAPI) -> None:
     # is pinned before the worker pool starts (the forkserver's workers inherit
     # the environment), so a worker that respawns after a rebuild reads the
     # same version as the shared arrays. The shutdown undoes the pin.
-    from api.bundle_watch import PINNED_ENV, bundle_link, pin_bundle_version
+    from api.bundle_watch import PINNED_ENV, pin_bundle_version
+    from bundle.versions import bundle_link
 
     app.state.bundle_pin_prev_env = os.environ.get(PINNED_ENV)
     app.state.bundle_version = None
@@ -349,7 +350,8 @@ def start_bundle_watch(app: FastAPI) -> None:
     With ``SIM_RESTART_ON_NEW_BUNDLE`` on and a pinned version, a task watches
     the bundle link (``api.bundle_watch.watch_for_new_bundle``).
     """
-    from api.bundle_watch import bundle_link, restart_enabled, watch_for_new_bundle
+    from api.bundle_watch import restart_enabled, watch_for_new_bundle
+    from bundle.versions import bundle_link
 
     app.state.bundle_watch_task = None
     if restart_enabled() and app.state.bundle_version:

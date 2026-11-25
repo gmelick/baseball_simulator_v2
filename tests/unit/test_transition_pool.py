@@ -717,8 +717,10 @@ class TestTheArtifactRoundTrip:
         assert "adv_pool.1_1_3.feat" in shared
         assert "adv_pool.1_1_3.attempted" in shared
         new_att = np.zeros_like(art.adv_pools["1_1_3"].attempted)
-        art.attach_shared_views({"adv_pool.1_1_3.attempted": new_att})
-        assert art.adv_pools["1_1_3"].attempted is new_att
+        again = EngineArtifacts.load(
+            str(tmp_path), shared_views={"adv_pool.1_1_3.attempted": new_att}
+        )
+        assert again.adv_pools["1_1_3"].attempted is new_att
 
     def test_battedball_meta_carries_the_transition_columns(self, tmp_path):
         c = _op_conn()

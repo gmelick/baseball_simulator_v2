@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 
 import duckdb
 
 from bundle.catcher_receiving import build_receiving_profiles
 from bundle.common import (
     DEFAULT_DUCKDB_PATH,
-    DEFAULT_POOL_DIR,
     last_n_seasons,
 )
 from bundle.export_actor_embeddings import build_actor_embeddings
@@ -30,6 +28,7 @@ from bundle.reference_tables import (
     build_reference_tables,
 )
 from bundle.versions import (
+    bundle_link,
     discard_bundle_version,
     prune_bundle_versions,
     publish_bundle_version,
@@ -49,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Write the bundle IN PLACE here. Omit it to build a new VERSION of the "
-            "published bundle (DEFAULT_POOL_DIR/engine_artifacts) and swap it in when "
+            "published bundle ($BASEBALL_PLAY_POOL_DIR/engine_artifacts) and swap it in when "
             "the build is complete (SIM-563)."
         ),
     )
@@ -99,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     # With no --out-dir, build a staged version and publish it at the end.
-    link = os.path.join(DEFAULT_POOL_DIR, "engine_artifacts")
+    link = bundle_link()
     staged = args.out_dir is None
     if staged:
         args.out_dir = stage_bundle_version(link)

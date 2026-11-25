@@ -13,7 +13,9 @@ from typing import Any
 import numpy as np
 
 from bundle.export_advancement_pool import _ADV_KEYS
-from profiles.sql import SQL_OUTCOME_TYPE
+from bundle.versions import bundle_link
+from pools.build_pitch_pool import SQL_GOT_AWAY
+from profiles.sql import SQL_OUTCOME_TYPE, sql_seasons
 
 #: The repository root (this file is scripts/<package>/<module>.py).
 _ROOT = Path(__file__).resolve().parents[2]
@@ -25,9 +27,7 @@ EXPECTED_BUILDER = "sim553.1"
 DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 #: The bundle the app loads at boot: ``$BASEBALL_PLAY_POOL_DIR/engine_artifacts``
 #: (``simulation/production_factory.py``), unless the operator names another.
-ART_DIR = os.environ.get("BASEBALL_ENGINE_ARTIFACT_DIR") or os.path.join(
-    os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
-)
+ART_DIR = os.environ.get("BASEBALL_ENGINE_ARTIFACT_DIR") or bundle_link()
 BACKUP_SUFFIX = ".pre_sim553"
 
 #: The rebuild covers all ten seasons (owner decision 4, the design's §14).
@@ -107,14 +107,6 @@ SQL_EXPECTED_MOVE = """CASE
             WHEN code = 'R' THEN 'ball>foul'
         END"""
 
-#: The pool build's got-away label, computed from ``raw.pitches`` (the same
-#: expression ``_build_pitch_pool`` writes). A pool row from a builder older
-#: than the got-away column (sim509.1) holds no got-away value, so
-#: ``--check-only`` reads the label from the source.
-SQL_RAW_GOT_AWAY = """(COALESCE(passed_ball_wild_pitch, FALSE)
-                     OR (events IN ('strikeout', 'strikeout_double_play')
-                         AND (des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%')))"""
-
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_STOPPED = 2
@@ -131,10 +123,6 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def _season_list(seasons: list[int]) -> str:
-    return ", ".join(str(int(s)) for s in seasons)
-
-
 def _sql_in(values: tuple[str, ...]) -> str:
     return "(" + ", ".join(f"'{v}'" for v in values) + ")"
 
@@ -144,7 +132,7 @@ def _pool_counts(con: Any, seasons: list[int]) -> dict[int, int]:
     return {
         int(s): int(n)
         for s, n in con.execute(
-            f"SELECT season, COUNT(*) FROM sim.pitch_pool WHERE season IN ({_season_list(seasons)}) "
+            f"SELECT season, COUNT(*) FROM sim.pitch_pool WHERE season IN ({sql_seasons(seasons)}) "
             "GROUP BY 1 ORDER BY 1"
         ).fetchall()
     }
@@ -156,35 +144,28 @@ def _source_counts(con: Any, seasons: list[int]) -> dict[int, int]:
         int(s): int(n)
         for s, n in con.execute(
             "SELECT season, COUNT(*) FROM pg.raw.pitches "
-            f"WHERE data_quality_flag = FALSE AND season IN ({_season_list(seasons)}) "
+            f"WHERE data_quality_flag = FALSE AND season IN ({sql_seasons(seasons)}) "
             "GROUP BY 1 ORDER BY 1"
-        ).fetchall()
-    }
-
-
-def _builder_versions(con: Any, seasons: list[int]) -> dict[int, str | None]:
-    """The builder that wrote each season of the pitch pool."""
-    return {
-        int(s): v
-        for s, v in con.execute(
-            "SELECT season, builder_version FROM sim.pool_build_metadata "
-            f"WHERE pool_name = 'pitch_pool' AND season IN ({_season_list(seasons)}) ORDER BY 1"
         ).fetchall()
     }
 
 
 def _raw_code_rows_sql(seasons: list[int]) -> str:
     """The ``raw.pitches`` rows of the MOVE_CODES: the code, the count, the new
-    class (SQL_OUTCOME_TYPE), the expected move and the raw got-away label."""
+    class (SQL_OUTCOME_TYPE), the expected move and the raw got-away label.
+
+    The got-away label is the pool build's own expression (SQL_GOT_AWAY): a
+    pool row from a builder older than the got-away column (sim509.1) holds no
+    got-away value, so ``--check-only`` reads the label from the source."""
     return f"""
         SELECT game_pk, at_bat_number, pitch_number, code, strikes, events,
                got_away_raw, new_class, {SQL_EXPECTED_MOVE} AS expected_move
         FROM (
             SELECT game_pk, at_bat_number, pitch_number, TRIM(type) AS code, strikes, events,
-                   {SQL_RAW_GOT_AWAY} AS got_away_raw,
+                   {SQL_GOT_AWAY} AS got_away_raw,
                    {SQL_OUTCOME_TYPE} AS new_class
             FROM pg.raw.pitches
-            WHERE data_quality_flag = FALSE AND season IN ({_season_list(seasons)})
+            WHERE data_quality_flag = FALSE AND season IN ({sql_seasons(seasons)})
               AND TRIM(type) IN {_sql_in(MOVE_CODES)}
         )"""
 

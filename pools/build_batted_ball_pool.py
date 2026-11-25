@@ -10,16 +10,16 @@ from ingest.statcast_events import (
     sql_runner_dest,
 )
 from pools.pool_metadata import (
-    _canonical_ref_season,
     _recency_weight_sql,
     _record_pool_build,
-    _seasons_needing_rebuild,
+    _seasons_to_build,
 )
 from profiles.base import ComputorBase
 from profiles.sql import (
     _ASSIST_SLOTS,
     _PUTOUT_SLOTS,
     sql_credit_mask,
+    sql_seasons,
 )
 
 log = logging.getLogger("player_profile_computor")
@@ -38,14 +38,11 @@ class BattedBallPoolMixin(ComputorBase):
         Fielder position is looked up from the fielder_N columns so the
         simulation engine knows which positional number fielded the ball.
         """
-        ref_season = _canonical_ref_season(self._conn, seasons)
-        if incremental:
-            seasons = _seasons_needing_rebuild(self._conn, "outcome_pool", seasons)
-            if not seasons:
-                log.info("Building sim.outcome_pool … all seasons fresh; skipped.")
-                return
-        log.info("Building sim.outcome_pool … (seasons=%s)", seasons)
-        season_list = ", ".join(str(s) for s in seasons)
+        plan = _seasons_to_build(self._conn, "outcome_pool", seasons, incremental)
+        if plan is None:
+            return
+        seasons, ref_season = plan
+        season_list = sql_seasons(seasons)
         recency_expr = _recency_weight_sql("pp.season", ref_season)
 
         self._conn.execute(f"DELETE FROM sim.outcome_pool WHERE season IN ({season_list})")

@@ -1,10 +1,17 @@
 """The sim-pool build metadata: the builder version, the recency weights, the
-incremental-rebuild gate, the steal-pool migration guard and the index DDL helper.
+incremental-rebuild gate, the build-record reader and the situation SQL the pool
+builders share.
 """
 
 from __future__ import annotations
 
-from db.introspect import duck_columns
+import logging
+from collections.abc import Iterable
+from typing import Any
+
+from profiles.sql import sql_seasons
+
+log = logging.getLogger("player_profile_computor")
 
 # ---------------------------------------------------------------------------
 # The recency weights and the incremental-rebuild gate of the sim pools
@@ -68,6 +75,21 @@ def _canonical_ref_season(conn, seasons: list[int]) -> int:
     if prev is not None:
         ref = max(ref, int(prev))
     return ref
+
+
+def _seasons_to_build(
+    conn, pool_name: str, seasons: list[int], incremental: bool
+) -> tuple[list[int], int] | None:
+    """The seasons a build of ``sim.<pool_name>`` writes and its recency reference; None when all are fresh."""
+    # The reference reads the FULL season list, before the incremental gate narrows it.
+    ref_season = _canonical_ref_season(conn, seasons)
+    if incremental:
+        seasons = _seasons_needing_rebuild(conn, pool_name, seasons)
+        if not seasons:
+            log.info("Building sim.%s … all seasons fresh; skipped.", pool_name)
+            return None
+    log.info("Building sim.%s … (seasons=%s)", pool_name, seasons)
+    return seasons, ref_season
 
 
 def _source_state(conn, season: int):
@@ -157,53 +179,41 @@ def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int
         )
 
 
-#: The two columns migration 0031 appends to sim.steal_opportunity_pool, and
-#: the file that adds them.
-STEAL_POOL_0031_COLUMNS: tuple[str, ...] = ("pitch_class", "is_pickoff_row")
-MIGRATION_0031 = "db/migrations/duckdb/0031_sim554_steal_pool_pitch_class.sql"
-
-
-def _require_steal_pool_0031(conn) -> None:
-    """Raise unless sim.steal_opportunity_pool carries migration 0031.
-
-    The nightly job applies no DuckDB migration. The steal-pool builder deletes
-    a season's rows, then runs a positional INSERT. On an un-migrated table the
-    INSERT fails AFTER the delete, and the season's steal rows are gone. The
-    builder calls this probe first, so the build fails with the rows intact.
-
-    A database with no such table has no rows to lose: the probe passes, and
-    the DELETE then fails on the missing table by itself.
-    """
-    have = duck_columns(conn, "sim", "steal_opportunity_pool", this_file_only=True)
-    if not have:
-        return
-    missing = [c for c in STEAL_POOL_0031_COLUMNS if c not in have]
-    if missing:
-        raise RuntimeError(
-            f"sim.steal_opportunity_pool has no {', '.join(missing)} column: apply "
-            f"{MIGRATION_0031} before the pool build (SIM-554). No row was deleted."
-        )
-
-
 # ---------------------------------------------------------------------------
-# The index recreate after a bulk delete
+# The build records
 # ---------------------------------------------------------------------------
 
 
-def _ensure_index_if_not_exists(create_index_sql: str) -> str:
-    """Inject ``IF NOT EXISTS`` into a ``CREATE [UNIQUE] INDEX`` statement.
+def read_pool_builds(
+    conn: Any, pool_name: str, seasons: Iterable[int], columns: str = "builder_version"
+) -> dict[int, tuple]:
+    """``season -> (columns...)`` from ``sim.pool_build_metadata`` for one pool's ``seasons``, in season order."""
+    rows = conn.execute(
+        f"SELECT season, {columns} FROM sim.pool_build_metadata "
+        f"WHERE pool_name = '{pool_name}' AND season IN ({sql_seasons(seasons)})"
+    ).fetchall()
+    return {int(row[0]): tuple(row[1:]) for row in sorted(rows, key=lambda row: row[0])}
 
-    It makes an index recreate idempotent, so a rerun of a profile build (or
-    of a half-applied earlier run) cannot fail on an index that is already
-    there. A statement that already has the clause, or is not a CREATE INDEX
-    form this recognises, comes back unchanged (the caller drops the index IF
-    EXISTS first anyway).
-    """
-    stmt = create_index_sql.strip()
-    low = stmt.lower()
-    if "if not exists" in low:
-        return stmt
-    for prefix in ("create unique index ", "create index "):
-        if low.startswith(prefix):
-            return stmt[: len(prefix)] + "IF NOT EXISTS " + stmt[len(prefix) :]
-    return stmt
+
+def pool_builder_versions(conn: Any, pool_name: str, seasons: Iterable[int]) -> dict[int, Any]:
+    """``season -> builder_version`` of one pool's ``seasons`` (:func:`read_pool_builds`)."""
+    return {season: row[0] for season, row in read_pool_builds(conn, pool_name, seasons).items()}
+
+
+# ---------------------------------------------------------------------------
+# The situation columns the pool builders share
+# ---------------------------------------------------------------------------
+
+
+def sql_runners_state(q: str = "") -> str:
+    """The base-state bitmask (bit 0 = 1B, bit 1 = 2B, bit 2 = 3B); ``q`` prefixes the columns."""
+    return (
+        f"(CASE WHEN {q}on_1b IS NOT NULL THEN 1 ELSE 0 END"
+        f" + CASE WHEN {q}on_2b IS NOT NULL THEN 2 ELSE 0 END"
+        f" + CASE WHEN {q}on_3b IS NOT NULL THEN 4 ELSE 0 END)::SMALLINT"
+    )
+
+
+def sql_score_diff(q: str = "") -> str:
+    """The batting side's lead, clamped to -5..5; ``q`` prefixes the columns."""
+    return f"GREATEST(-5, LEAST(5, {q}bat_score - {q}fld_score))::SMALLINT"

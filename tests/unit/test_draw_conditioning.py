@@ -656,8 +656,7 @@ class TestArtifactRoundTrip:
                 assert f"pool.{hand}.{attr}" in shared
             for attr in ("pgeom", "pitcher_id"):
                 assert f"bb_pool.{hand}.{attr}" in shared
-        # Attach round-trips the same values onto a second bundle.
-        other = EngineArtifacts.load(_export(tmp_path / "b", sim518=True))
-        other.attach_shared_views(shared)
+        # A second bundle loaded with the views takes the same arrays.
+        other = EngineArtifacts.load(_export(tmp_path / "b", sim518=True), shared_views=shared)
         assert other.pools["R"].pitch_count is shared["pool.R.pitch_count"]
         assert other.bb_pools["R"].pgeom is shared["bb_pool.R.pgeom"]

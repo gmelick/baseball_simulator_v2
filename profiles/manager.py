@@ -1,122 +1,39 @@
-"""The manager season profiles and the per-game bullpen workload."""
+"""The manager season profiles."""
 
 from __future__ import annotations
 
 import logging
 from datetime import date
 
-import pandas as pd
-
 from ingest.statcast_events import sql_steal_attempt
 from profiles.base import ComputorBase
 from profiles.constants import MIN_MANAGER_GAMES
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
+#: The fielding team's manager: the home manager fields the top half, the
+#: away manager the bottom.
+_SQL_FIELDING_MANAGER = (
+    "CASE WHEN inning_topbot = 'Top' THEN home_manager_id ELSE away_manager_id END"
+)
+
+#: The simplified leverage tests (the situation engine's LI drivers): a close
+#: late game is high leverage, a lopsided or early one low.
+_SQL_HIGH_LEVERAGE = "ABS(bat_score - fld_score) <= 1 AND inning >= 7"
+_SQL_LOW_LEVERAGE = "ABS(bat_score - fld_score) >= 4 OR inning <= 5"
+
+#: The leverage bucket as a label: 'high', 'low' or 'mid'.
+_SQL_LI_BUCKET = (
+    f"CASE WHEN {_SQL_HIGH_LEVERAGE} THEN 'high' WHEN {_SQL_LOW_LEVERAGE} THEN 'low' ELSE 'mid' END"
+)
+
+#: The leverage bucket as a number: low=0 / mid=1 / high=2.
+_SQL_LI_LEVEL = f"CASE WHEN {_SQL_HIGH_LEVERAGE} THEN 2 WHEN {_SQL_LOW_LEVERAGE} THEN 0 ELSE 1 END"
+
 
 class ManagerProfilesMixin(ComputorBase):
-    """Builds ``derived.manager_season_metrics`` and the bullpen workload table."""
-
-    def _compute_bullpen_workload(self, seasons: list[int]) -> pd.DataFrame:
-        """
-        Derive the per-game rest and recent workload the availability table
-        (``raw.game_bullpen_availability``) needs, straight from ``raw.pitches``
-        (no network).
-
-        ``raw.game_lineups`` records who *played*; the manager profile's USAGE
-        sub-score also needs the available-but-unused signal, which
-        starts with workload: an arm that threw 45 pitches yesterday is
-        rest-unavailable today regardless of whether the manager "chose" not to
-        use it. This method builds, per (game_pk, team_id, pitcher_id) where the
-        pitcher actually appeared:
-
-          * ``last_game_date``   — this pitcher's appearance date (the game's date)
-          * ``days_rest``        — days since the pitcher's PREVIOUS appearance
-                                   (NULL for the first appearance in the window)
-          * ``pitches_last_3d``  — pitches thrown in the 3 calendar days BEFORE
-                                   this game's date (excludes this game)
-          * ``back_to_back``     — pitched on the immediately preceding calendar
-                                   day
-
-        ``team_id`` is the FIELDING team for the pitcher in each appearance: the
-        home team when the half-inning is the top (``inning_topbot='Top'``), else
-        the away team. (A pitcher only ever fields for one team in a game, so the
-        per-(game, pitcher) MIN over the half-inning derivation is unambiguous.)
-
-        This is the raw.pitches half of the bullpen availability. It does NOT
-        persist: the computor attaches PostgreSQL READ_ONLY, so it returns the
-        workload
-        rows as a DataFrame for
-        :class:`ingest.load_bullpen_availability.BullpenAvailabilityIngest`
-        to merge with the MLB-API active-roster / IL fetch and persist to
-        ``raw.game_bullpen_availability``. Returns an EMPTY DataFrame (with the
-        documented columns) when there are no qualifying rows.
-        """
-        log.info("Deriving bullpen workload (SIM-433) …")
-        season_list = ", ".join(str(s) for s in seasons)
-
-        # One row per (game_pk, pitcher) appearance with that game's date, the
-        # pitcher's fielding team, and pitches thrown; then a self-referential
-        # window over the pitcher's appearance timeline derives rest/workload.
-        df = self._conn.execute(f"""
-            WITH appearances AS (
-                SELECT
-                    game_pk,
-                    pitcher                                                  AS pitcher_id,
-                    season,
-                    MIN(game_date)                                           AS game_date,
-                    -- Fielding team: home fields the top half, away the bottom.
-                    MIN(CASE WHEN inning_topbot = 'Top' THEN home_id ELSE away_id END)
-                                                                             AS team_id,
-                    COUNT(*)                                                 AS pitches_in_game
-                FROM pg.raw.pitches
-                WHERE data_quality_flag = FALSE
-                  AND season IN ({season_list})
-                GROUP BY game_pk, pitcher, season
-            ),
-            with_prev AS (
-                SELECT
-                    a.*,
-                    LAG(a.game_date) OVER (
-                        PARTITION BY a.pitcher_id ORDER BY a.game_date, a.game_pk
-                    )                                                        AS prev_game_date
-                FROM appearances a
-            )
-            SELECT
-                w.game_pk,
-                w.team_id,
-                w.pitcher_id,
-                w.season,
-                w.game_date,
-                w.pitches_in_game,
-                CASE WHEN w.prev_game_date IS NOT NULL
-                     THEN DATE_DIFF('day', w.prev_game_date, w.game_date)
-                END                                                          AS days_rest,
-                CASE WHEN w.prev_game_date IS NOT NULL
-                       AND DATE_DIFF('day', w.prev_game_date, w.game_date) = 1
-                     THEN TRUE ELSE FALSE END                                AS back_to_back,
-                -- Pitches thrown by this arm in the 3 calendar days BEFORE this
-                -- game (a correlated sum over the same appearances set).
-                COALESCE((
-                    SELECT SUM(p.pitches_in_game)
-                    FROM appearances p
-                    WHERE p.pitcher_id = w.pitcher_id
-                      AND p.game_date < w.game_date
-                      AND p.game_date >= w.game_date - INTERVAL 3 DAY
-                ), 0)                                                        AS pitches_last_3d
-            FROM with_prev w
-            ORDER BY w.pitcher_id, w.game_date, w.game_pk
-        """).fetchdf()
-
-        if df.empty:
-            log.info("  bullpen workload: no qualifying appearances.")
-            return df
-        log.info(
-            "  bullpen workload: %d appearance rows (%d pitchers).",
-            len(df),
-            df["pitcher_id"].nunique(),
-        )
-        return df
+    """Builds ``derived.manager_season_metrics``."""
 
     def _compute_manager_profiles(self, seasons: list[int], asof: date | None = None) -> None:
         """
@@ -155,7 +72,7 @@ class ManagerProfilesMixin(ComputorBase):
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         log.info("Computing manager profiles (as of %s) …", asof_sql)
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
 
         # Refuse, before any write, a rebuild that would leave the
@@ -167,10 +84,7 @@ class ManagerProfilesMixin(ComputorBase):
             # REPLACE only overwrites the rows this query produces, so a
             # season that had not started at the cutoff would otherwise
             # survive a backtest rebuild from an earlier, full-season run.
-            self._conn.execute(
-                f"DELETE FROM derived.manager_season_metrics "
-                f"WHERE season IN ({season_list}) OR season > {asof_date.year}"
-            )
+            self._delete_season_rows("derived.manager_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.manager_season_metrics (
@@ -195,14 +109,9 @@ class ManagerProfilesMixin(ComputorBase):
                     -- batting manager makes offensive calls; fielding manager defensive
                     CASE WHEN inning_topbot = 'Top' THEN away_manager_id
                          ELSE home_manager_id END AS bat_mgr,
-                    CASE WHEN inning_topbot = 'Top' THEN home_manager_id
-                         ELSE away_manager_id END AS fld_mgr,
+                    {_SQL_FIELDING_MANAGER} AS fld_mgr,
                     -- simplified leverage bucket (matches the situation-engine LI drivers)
-                    CASE
-                        WHEN ABS(bat_score - fld_score) <= 1 AND inning >= 7 THEN 'high'
-                        WHEN ABS(bat_score - fld_score) >= 4 OR inning <= 5  THEN 'low'
-                        ELSE 'mid'
-                    END AS li_bucket,
+                    {_SQL_LI_BUCKET} AS li_bucket,
                     -- the PA's terminal event is on the last pitch; broadcast it
                     MAX(events) OVER (PARTITION BY game_pk, at_bat_number) AS pa_event
                 FROM pg.raw.pitches
@@ -313,8 +222,7 @@ class ManagerProfilesMixin(ComputorBase):
             staff AS (
                 SELECT
                     game_pk, season,
-                    CASE WHEN inning_topbot = 'Top' THEN home_manager_id
-                         ELSE away_manager_id END                     AS manager_id,
+                    {_SQL_FIELDING_MANAGER} AS manager_id,
                     -- the fielding team (joins the SIM-433 availability table)
                     MIN(CASE WHEN inning_topbot = 'Top' THEN home_id
                              ELSE away_id END)                        AS team_id,
@@ -324,24 +232,18 @@ class ManagerProfilesMixin(ComputorBase):
                     MIN(at_bat_number * 1000 + pitch_number)          AS entry_seq,
                     -- leverage bucket (low=0 / mid=1 / high=2) at this arm's FIRST pitch
                     arg_min(
-                        CASE WHEN ABS(bat_score - fld_score) <= 1 AND inning >= 7 THEN 2
-                             WHEN ABS(bat_score - fld_score) >= 4 OR inning <= 5 THEN 0
-                             ELSE 1 END,
+                        {_SQL_LI_LEVEL},
                         at_bat_number * 1000 + pitch_number
                     )                                                 AS entry_li
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
-                  AND (CASE WHEN inning_topbot = 'Top' THEN home_manager_id
-                            ELSE away_manager_id END) IS NOT NULL
+                  AND ({_SQL_FIELDING_MANAGER}) IS NOT NULL
                   -- SIM-537: the cutoff. raw.game_bullpen_availability needs no
                   -- filter of its own -- it only contributes via a join onto
                   -- this (now cutoff-filtered) staff CTE.
                   {date_cutoff}
-                GROUP BY game_pk, season,
-                         CASE WHEN inning_topbot = 'Top' THEN home_manager_id
-                              ELSE away_manager_id END,
-                         pitcher
+                GROUP BY game_pk, season, {_SQL_FIELDING_MANAGER}, pitcher
             ),
             staff_ranked AS (
                 SELECT *,
@@ -382,16 +284,12 @@ class ManagerProfilesMixin(ComputorBase):
                                                                                 AS high_leverage_reliever_rate
                 FROM (
                     SELECT game_pk, season, pitcher,
-                        CASE WHEN inning_topbot = 'Top' THEN home_manager_id
-                             ELSE away_manager_id END AS manager_id,
-                        CASE WHEN ABS(bat_score - fld_score) <= 1 AND inning >= 7 THEN 'high'
-                             WHEN ABS(bat_score - fld_score) >= 4 OR inning <= 5 THEN 'low'
-                             ELSE 'mid' END            AS li_bucket
+                        {_SQL_FIELDING_MANAGER} AS manager_id,
+                        {_SQL_LI_BUCKET} AS li_bucket
                     FROM pg.raw.pitches
                     WHERE data_quality_flag = FALSE
                       AND season IN ({season_list})
-                      AND (CASE WHEN inning_topbot = 'Top' THEN home_manager_id
-                                ELSE away_manager_id END) IS NOT NULL
+                      AND ({_SQL_FIELDING_MANAGER}) IS NOT NULL
                 ) sp
                 JOIN staff_ranked sr
                   ON sr.game_pk = sp.game_pk AND sr.manager_id = sp.manager_id
@@ -490,19 +388,4 @@ class ManagerProfilesMixin(ComputorBase):
         row from it can never reach the output past the cutoff regardless of
         its own date.
         """
-        season_list = ", ".join(str(s) for s in seasons)
-        newest = self._conn.execute(
-            f"SELECT MAX(game_date) FROM pg.raw.pitches "
-            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'"
-        ).fetchone()[0]
-        if newest is None:
-            log.info("    no leakage from raw.pitches (no rows)")
-        elif not isinstance(newest, date):
-            log.warning("    leakage check SKIPPED for raw.pitches: got %r, not a date", newest)
-        elif newest > asof:
-            raise RuntimeError(
-                f"data leakage: raw.pitches contributed a row dated {newest}, "
-                f"after the {asof} cutoff."
-            )
-        else:
-            log.info("    no leakage from raw.pitches newest = %s", newest)
+        self._check_pitch_sources_leakage(seasons, asof)

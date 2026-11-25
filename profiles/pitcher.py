@@ -8,7 +8,6 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from db.introspect import duck_relation_readable
 from profiles.arsenal_fit import (
     GMM_FEATURE_NAMES,
     _chunk_tasks,
@@ -26,6 +25,7 @@ from profiles.sql import (
     SQL_OUTS_RECORDED,
     SQL_SWING,
     SQL_WHIFF,
+    sql_seasons,
 )
 
 log = logging.getLogger("player_profile_computor")
@@ -54,7 +54,7 @@ class PitcherProfilesMixin(ComputorBase):
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         log.info("Computing pitcher profiles (as of %s) …", asof_sql)
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         pickoff_outs_cte = self._play_events_outs_cte(asof_sql if asof is not None else None)
 
@@ -62,28 +62,17 @@ class PitcherProfilesMixin(ComputorBase):
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.pitcher_season_metrics", seasons, asof_date)
 
+        # Delete child rows first so INSERT OR REPLACE on pitcher_season_metrics
+        # can implicitly remove the old parent row without a FK violation.
+        self._delete_season_rows("derived.pitcher_gmm_components", seasons, asof)
         if asof is not None:
             # The removal rule of the batter profiles: INSERT OR REPLACE
             # only overwrites the rows the query below produces, so a
             # season that had not started at the cutoff (no 2025 pitcher on
             # 15 April 2024) would otherwise survive a backtest rebuild from
-            # an earlier, full-season run. Delete the CHILD table first
-            # (gmm_components references pitcher_season_metrics), same order
-            # the unconditional delete below already uses.
-            self._conn.execute(
-                f"DELETE FROM derived.pitcher_gmm_components "
-                f"WHERE season IN ({season_list}) OR season > {asof_date.year}"
-            )
-            self._conn.execute(
-                f"DELETE FROM derived.pitcher_season_metrics "
-                f"WHERE season IN ({season_list}) OR season > {asof_date.year}"
-            )
-
-        # Delete child rows first so INSERT OR REPLACE on pitcher_season_metrics
-        # can implicitly remove the old parent row without a FK violation.
-        self._conn.execute(
-            f"DELETE FROM derived.pitcher_gmm_components WHERE season IN ({season_list})"
-        )
+            # an earlier, full-season run. The child table's delete above
+            # covers the same seasons.
+            self._delete_season_rows("derived.pitcher_season_metrics", seasons, asof)
 
         # --- Pass 1: command + result metrics ----------------------------
         self._conn.execute(f"""
@@ -362,36 +351,4 @@ class PitcherProfilesMixin(ComputorBase):
         unit-test fixture: a missing table is a schema-availability question,
         not a leakage question, and skips rather than crashes.
         """
-        season_list = ", ".join(str(s) for s in seasons)
-        checks: list[tuple[str, str]] = [
-            (
-                "raw.pitches",
-                f"SELECT MAX(game_date) FROM pg.raw.pitches "
-                f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            ),
-        ]
-        if not duck_relation_readable(self._conn, "pg.raw.play_events"):
-            log.info("    no leakage check for raw.play_events (table absent)")
-        else:
-            checks.append(
-                (
-                    "raw.play_events",
-                    f"SELECT MAX(game_date) FROM pg.raw.play_events "
-                    f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-                )
-            )
-        for source, sql in checks:
-            newest = self._conn.execute(sql).fetchone()[0]
-            if newest is None:
-                log.info("    no leakage from %-28s (no rows)", source)
-                continue
-            if not isinstance(newest, date):
-                # A stubbed connection in a unit test, not a real result.
-                log.warning("    leakage check SKIPPED for %s: got %r, not a date", source, newest)
-                continue
-            if newest > asof:
-                raise RuntimeError(
-                    f"data leakage: {source} contributed a row dated {newest}, "
-                    f"after the {asof} cutoff."
-                )
-            log.info("    no leakage from %-28s newest = %s", source, newest)
+        self._check_pitch_sources_leakage(seasons, asof, play_events=True)

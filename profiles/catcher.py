@@ -10,6 +10,7 @@ from datetime import date
 import numpy as np
 
 from ingest.statcast_events import (
+    sql_any_steal_attempt,
     sql_steal_attempt,
     sql_steal_success,
 )
@@ -23,8 +24,51 @@ from profiles.defense import (
     _fit_logistic_model,
     _predict_proba,
 )
+from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
+
+#: The three temp tables the catcher aggregator FULL-OUTER-JOINs, each as a
+#: CREATE TABLE IF NOT EXISTS placeholder:
+#:   _tmp_framing            <- created by _compute_catcher_framing
+#:   _tmp_blocking           <- created by _compute_catcher_blocking
+#:   _tmp_catcher_throwing   <- created by _compute_catcher_throwing
+#: Each compute step may early-`return` when the per-season sample size falls
+#: below its guard (typical on partial / small data loads). Empty placeholders
+#: preserve the aggregator's join shape without injecting fake rows.
+_CATCHER_PLACEHOLDER_DDL = {
+    "_tmp_framing": """
+        CREATE TABLE IF NOT EXISTS _tmp_framing (
+            catcher_id INTEGER, season SMALLINT,
+            called_pitches INTEGER, called_strikes INTEGER,
+            expected_called_strikes FLOAT, strikes_above_average FLOAT,
+            framing_runs FLOAT,
+            framing_low FLOAT, framing_high FLOAT,
+            framing_inside FLOAT, framing_outside FLOAT,
+            shadow_zone_strike_rate FLOAT, heart_zone_strike_rate FLOAT
+        )
+    """,
+    "_tmp_blocking": """
+        CREATE TABLE IF NOT EXISTS _tmp_blocking (
+            catcher_id INTEGER, season SMALLINT,
+            expected_pbwp FLOAT, actual_pbwp INTEGER,
+            blocks_above_average FLOAT, blocking_runs FLOAT,
+            blocks_aa_bounced FLOAT, blocks_aa_high FLOAT,
+            blocks_aa_lateral FLOAT
+        )
+    """,
+    "_tmp_catcher_throwing": """
+        CREATE TABLE IF NOT EXISTS _tmp_catcher_throwing (
+            catcher_id INTEGER, season SMALLINT,
+            sb_attempts_faced INTEGER, cs_total INTEGER,
+            sb_attempts_2b INTEGER, cs_rate_2b FLOAT,
+            sb_attempts_3b INTEGER, cs_rate_3b FLOAT,
+            cs_rate FLOAT, sb_allowed_rate FLOAT,
+            sb_opportunities_pa INTEGER,
+            steal_attempt_rate_against FLOAT
+        )
+    """,
+}
 
 
 class CatcherProfilesMixin(ComputorBase):
@@ -51,7 +95,7 @@ class CatcherProfilesMixin(ComputorBase):
         (docs/audit/2026-09-10-savant-point-in-time-data.md §6).
         """
         log.info("Computing catcher framing …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         # Extract all taken pitches (not swung at)
@@ -71,8 +115,7 @@ class CatcherProfilesMixin(ComputorBase):
                 balls,
                 strikes,
                 -- Called strike = 1, called ball = 0
-                CASE WHEN type = 'C' THEN 1 ELSE 0 END AS is_strike,
-                CASE WHEN type IN ('B', 'C') THEN 1 ELSE 0 END AS is_taken
+                CASE WHEN type = 'C' THEN 1 ELSE 0 END AS is_strike
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
               AND type IN ('B', 'C')
@@ -216,10 +259,6 @@ class CatcherProfilesMixin(ComputorBase):
         ].replace(0, np.nan)
 
         # Store framing results in a temp table for later aggregation
-        self._conn.execute("DROP TABLE IF EXISTS _tmp_framing")
-        self._conn.execute(
-            "CREATE TABLE _tmp_framing AS SELECT * FROM framing_agg",
-        )
         self._conn.register("framing_agg", framing_agg)
         self._conn.execute("""
             DROP TABLE IF EXISTS _tmp_framing;
@@ -247,7 +286,7 @@ class CatcherProfilesMixin(ComputorBase):
         ``asof`` keeps raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing catcher blocking …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         df = self._conn.execute(f"""
@@ -342,11 +381,7 @@ class CatcherProfilesMixin(ComputorBase):
         blocking_agg["blocking_runs"] = blocking_agg["blocks_above_average"] * RUNS_PER_BLOCK_SAVED
 
         # Category breakdowns
-        for cat_name, _cat_mask_col in [
-            ("bounced", "bounced"),
-            ("high", "height_at_catcher"),
-            ("lateral", "lateral_dist"),
-        ]:
+        for cat_name in ("bounced", "high", "lateral"):
             if cat_name == "bounced":
                 mask = df_model["bounced"] == 1
             elif cat_name == "high":
@@ -393,7 +428,7 @@ class CatcherProfilesMixin(ComputorBase):
         ``asof`` keeps both raw.pitches reads to ``game_date <= asof``.
         """
         log.info("Computing catcher throwing metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
@@ -417,8 +452,7 @@ class CatcherProfilesMixin(ComputorBase):
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
                   {date_cutoff}
-                  AND ({sql_steal_attempt("2b")} OR {sql_steal_attempt("3b")}
-                       OR {sql_steal_attempt("home")})
+                  AND {sql_any_steal_attempt()}
             ),
             sb_aggregated AS (
                 SELECT
@@ -524,58 +558,6 @@ class CatcherProfilesMixin(ComputorBase):
 
         log.info("  Catcher throwing metrics computed.")
 
-    def _ensure_catcher_temp_tables_exist(self) -> None:
-        """Defensive — same pattern as _ensure_fielder_temp_tables_exist.
-
-        The catcher aggregator FULL-OUTER-JOINs three temp tables:
-          _tmp_framing            ← created by _compute_catcher_framing
-          _tmp_blocking           ← created by _compute_catcher_blocking
-          _tmp_catcher_throwing   ← created by _compute_catcher_throwing
-
-        Each compute step may early-`return` when the per-season sample
-        size falls below its guard (typical on partial / small data
-        loads).  Empty placeholders preserve the aggregator's join
-        shape without injecting fake rows.
-        """
-        placeholders = {
-            "_tmp_framing": """
-                CREATE TABLE IF NOT EXISTS _tmp_framing (
-                    catcher_id INTEGER, season SMALLINT,
-                    called_pitches INTEGER, called_strikes INTEGER,
-                    expected_called_strikes FLOAT, strikes_above_average FLOAT,
-                    framing_runs FLOAT,
-                    framing_low FLOAT, framing_high FLOAT,
-                    framing_inside FLOAT, framing_outside FLOAT,
-                    shadow_zone_strike_rate FLOAT, heart_zone_strike_rate FLOAT
-                )
-            """,
-            "_tmp_blocking": """
-                CREATE TABLE IF NOT EXISTS _tmp_blocking (
-                    catcher_id INTEGER, season SMALLINT,
-                    expected_pbwp FLOAT, actual_pbwp INTEGER,
-                    blocks_above_average FLOAT, blocking_runs FLOAT,
-                    blocks_aa_bounced FLOAT, blocks_aa_high FLOAT,
-                    blocks_aa_lateral FLOAT
-                )
-            """,
-            "_tmp_catcher_throwing": """
-                CREATE TABLE IF NOT EXISTS _tmp_catcher_throwing (
-                    catcher_id INTEGER, season SMALLINT,
-                    sb_attempts_faced INTEGER, cs_total INTEGER,
-                    sb_attempts_2b INTEGER, cs_rate_2b FLOAT,
-                    sb_attempts_3b INTEGER, cs_rate_3b FLOAT,
-                    cs_rate FLOAT, sb_allowed_rate FLOAT,
-                    sb_opportunities_pa INTEGER,
-                    steal_attempt_rate_against FLOAT
-                )
-            """,
-        }
-        for table, ddl in placeholders.items():
-            try:
-                self._conn.execute(ddl)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
-
     def _aggregate_catcher_season_metrics(
         self, seasons: list[int], asof: date | None = None
     ) -> None:
@@ -587,7 +569,6 @@ class CatcherProfilesMixin(ComputorBase):
         date column at all — see the season-shift note on those joins.
         """
         log.info("Aggregating catcher season metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         # The Savant pop-time and arm-strength boards have no date
@@ -598,30 +579,20 @@ class CatcherProfilesMixin(ComputorBase):
         # accumulating. Measured year-to-year correlation: arm strength
         # 0.894, pop time 0.726, so the substitute costs little. A live
         # build (asof None) joins its own season, unshifted.
-        catcher_season_col = "COALESCE(f.season, b.season, t.season)"
-        savant_season = (
-            f"(CASE WHEN {catcher_season_col} = {asof_date.year} "
-            f"THEN {catcher_season_col} - 1 ELSE {catcher_season_col} END)"
-            if asof is not None
-            else catcher_season_col
-        )
+        savant_season = self._savant_season_sql("COALESCE(f.season, b.season, t.season)", asof)
 
         # See _ensure_fielder_temp_tables_exist for the rationale. When a
         # per-season sample is too thin, the upstream
         # _compute_catcher_{framing,blocking,throwing} method returns early
         # without creating its _tmp_* table.  Guarantee the aggregator's
         # FULL OUTER JOIN inputs all exist (possibly empty) before running.
-        self._ensure_catcher_temp_tables_exist()
+        self._ensure_placeholder_tables(_CATCHER_PLACEHOLDER_DDL)
 
         # Refuse, before any write, a rebuild that would leave the
         # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.catcher_season_metrics", seasons, asof_date)
 
-        delete_cutoff = f"OR season > {asof_date.year}" if asof is not None else ""
-        self._conn.execute(f"""
-            DELETE FROM derived.catcher_season_metrics
-            WHERE season IN ({season_list}) {delete_cutoff}
-        """)
+        self._delete_season_rows("derived.catcher_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
             INSERT INTO derived.catcher_season_metrics (
@@ -741,17 +712,7 @@ class CatcherProfilesMixin(ComputorBase):
         self._stamp_one_cutoff("derived.catcher_season_metrics", asof_sql)
 
         # Clean up temp tables
-        for t in [
-            "_tmp_framing",
-            "_tmp_blocking",
-            "_tmp_catcher_throwing",
-            "_tmp_of_plays",
-            "_tmp_if_plays",
-            "_tmp_dp_plays",
-            "_tmp_bunt_defense",
-            "_tmp_1b_scoop",
-            "_tmp_errors",
-        ]:
+        for t in _CATCHER_PLACEHOLDER_DDL:
             self._conn.execute(f"DROP TABLE IF EXISTS {t}")
 
         log.info("  Catcher season metrics aggregated.")
@@ -786,7 +747,7 @@ class CatcherProfilesMixin(ComputorBase):
         chain, so the leakage check for the whole grouping runs here.
         """
         log.info("Computing catcher uncaught strike-3 rates (SIM-517) …")
-        season_list = ", ".join(str(s) for s in seasons)
+        season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         date_cutoff = f"AND game_date <= DATE '{asof_date.isoformat()}'" if asof is not None else ""
         self._conn.execute(f"""
@@ -842,10 +803,4 @@ class CatcherProfilesMixin(ComputorBase):
         they are made safe by the season-shift substitution in the
         aggregator's query, not by filtering.
         """
-        season_list = ", ".join(str(s) for s in seasons)
-        self._check_leakage(
-            "raw.pitches",
-            f"SELECT MAX(game_date) FROM pg.raw.pitches "
-            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
-            asof,
-        )
+        self._check_pitch_sources_leakage(seasons, asof)
