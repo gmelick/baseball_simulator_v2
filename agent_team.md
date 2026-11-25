@@ -35,7 +35,7 @@ parts fit together.
 | 1 | Product Manager | The ticket list, priorities, acceptance criteria, the plans | `BACKLOG.xlsx`, `CHANGES.md` |
 | 2 | Baseball Analyst | Baseball realism: the draws' filters, the acceptance bands, the domain checks | [Loop cheat sheet](docs/technical/sim-loop-cheat-sheet.md) |
 | 3 | ML / Modeling Engineer | The similarity engines, the weights, calibration, the designed experiment | [Similarity](docs/technical/similarity.md) |
-| 4 | Data Engineer | The schemas, migrations, loaders, nightly builds and backups | [Database](docs/technical/database.md), [Data ingestion](docs/technical/ingest.md), [Live service](docs/technical/live.md), [Pipeline: nightly builds](docs/technical/pipeline-batch.md), [Operations](docs/technical/operations.md) |
+| 4 | Data Engineer | The schemas, migrations, loaders, nightly builds and backups | [Database](docs/technical/database.md), [Data ingestion](docs/technical/ingest.md), [Live service](docs/technical/live.md), [Player profiles](docs/technical/profiles.md), [Play pools](docs/technical/pools.md), [The bundle](docs/technical/bundle.md), [Operations](docs/technical/operations.md) |
 | 5 | Backend Developer | The simulation loop, the runner, the API | [Simulation](docs/technical/simulation.md), [API](docs/technical/api.md) |
 | 6 | Performance Engineer | Throughput: the worker pool, the sampler's hot paths, memory | [Architecture](docs/technical/architecture.md) |
 | 7 | UX Designer | The frontend and its design system | [Frontend](docs/technical/frontend.md) |
@@ -105,7 +105,7 @@ weights, calibration and validation.
 
 - `similarity/`: the engines, the calibration fit and the backtester.
 - The actor score matrices in the bundle (`build_actor_sim_matrices` in
-  `pipeline/batch/engine_artifacts.py`; `bundle/export_actor_embeddings.py`
+  `similarity/build_score_tables.py`; `bundle/export_actor_embeddings.py`
   maps the pool rows onto their columns) and the powers that turn a score into a weight
   (`SIM_ACTOR_POWER_*`).
 - The weight functions in `simulation/sampler/kernels.py`.
@@ -141,7 +141,7 @@ builds that turn it into what the simulator reads.
   numbered migrations with the version file, the database roles, the database address
   reader (`db/dsn.py`).
 - `ingest/` and `pipeline/live/`: the loaders of the raw data and the live service.
-- `pipeline/batch/`: the profile computor, the pools and the engine-artifact bundle.
+- `profiles/`, `pools/` and `bundle/`: the profile build, the pools and the engine-artifact bundle.
 - `operations/jobs/` and `operations/backup/`: the nightly shell jobs, the backups of the
   three stores (the two Postgres scripts included) and the off-site copy.
 - The odds load in `betting/`: the BettingPros fetch (`betting/bettingpros/`), the load

@@ -59,12 +59,12 @@ the environment tiers.
 
 ### Which code a container runs
 
-The `app` service mounts seven folders from the checkout: `api/`, `pipeline/`,
-`betting/`, `operations/`, `similarity/`, `simulation/` and `db/`. The `jobs`
-service mounts the same seven. The `live` service mounts all of them except
-`similarity/`. The nightly jobs and the backups live in `operations/`, so a
-scheduled job runs the checkout's copy. `scripts/` and `tests/` are baked into
-the image at build time.
+The `app` service mounts eleven folders from the checkout: `api/`, `pipeline/`,
+`betting/`, `ingest/`, `profiles/`, `pools/`, `bundle/`, `operations/`,
+`similarity/`, `simulation/` and `db/`. The `jobs` service mounts the same eleven.
+The `live` service mounts all of them except `similarity/`. The nightly jobs and
+the backups live in `operations/`, so a scheduled job runs the checkout's copy.
+`scripts/` and `tests/` are baked into the image at build time.
 
 - A change to a mounted folder reaches the app after `docker compose restart app`.
   uvicorn's `--reload` may restart it by itself, but a file event does not
@@ -348,7 +348,7 @@ picks the games up.
 ### 5.2 Rebuild the profiles and pools
 
 The nightly rebuild already does the current season. A bare
-`player_profile_computor` run also builds the current season only. For a full
+`profiles.build_profiles` run also builds the current season only. For a full
 recompute, name every season:
 
 ```bat

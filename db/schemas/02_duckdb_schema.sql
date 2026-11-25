@@ -858,7 +858,7 @@ CREATE TABLE IF NOT EXISTS derived.at_bat_situations (
     on_3b                       SMALLINT,
     home_score                  SMALLINT,
     away_score                  SMALLINT,
-    leverage_index              FLOAT,                  -- compute_leverage_index(), computed in SQL
+    leverage_index              FLOAT,                  -- computed in SQL in pools/build_at_bat_situations.py
     pitcher_pitch_count         INTEGER,                -- current pitcher's pitches entering the PA
     batter_pa_count             INTEGER,                -- batter's PA sequence number in the game
 

@@ -3,7 +3,7 @@
 The `ingest/` folder brings the real data into the Postgres `raw.*` tables. It is the
 first step of the program. It reads two sources. The MLB Stats API is the league's public
 service for schedules, game feeds and box scores. Baseball Savant is the league's Statcast
-site. The nightly builds read these tables next ([Nightly builds](pipeline-batch.md)).
+site. The nightly builds read these tables next ([Player profiles](profiles.md), [Play pools](pools.md)).
 The table layouts are on the [database page](database.md).
 
 Two other parts also write `raw.*` tables, and both read the league through this folder's
@@ -475,13 +475,13 @@ costs the box rows their commit.
 
 ### `ingest/load_bullpen_availability.py`
 
-[Source](../../ingest/load_bullpen_availability.py) · 564 lines · Tests: [test_bullpen_availability.py](../../tests/unit/ingest/test_bullpen_availability.py), [test_mlb_client.py](../../tests/unit/ingest/test_mlb_client.py)
+[Source](../../ingest/load_bullpen_availability.py) · 670 lines · Tests: [test_bullpen_availability.py](../../tests/unit/ingest/test_bullpen_availability.py), [test_mlb_client.py](../../tests/unit/ingest/test_mlb_client.py)
 
 Writes `raw.game_bullpen_availability`: one row per pitcher on each team's roster, used or
 not, with whether he could pitch and why. The manager usage profile
 (`profiles/manager.py`) reads it. A reliever the manager held back differs
 from one who could not pitch. Each arm's rest and recent workload come from `raw.pitches`,
-through the profile computor's `_compute_bullpen_workload`. The roster and the injured list (IL) come from the
+through `compute_bullpen_workload` in this module. The roster and the injured list (IL) come from the
 MLB roster endpoint.
 
 | Function / class | What it does | Called from |
@@ -492,6 +492,7 @@ MLB roster endpoint.
 | `BullpenAvailabilityIngest._resolve_game_meta` | The game's official date and both teams, from the schedule's played entry. | `ingest_game` |
 | `BullpenAvailabilityIngest.ingest` / `ingest_game` | Builds every arm's appearance timeline once, then resolves and upserts each game. A failed game logs a warning, and the run goes on. | `main` |
 | `_rest_as_of` | The rest of an arm who did not pitch in the game, from his appearance timeline. | `build_rows` |
+| `compute_bullpen_workload` | Each arm's rest and pitches in the last 3 days per game, from `raw.pitches` (no network). | `_load_workload_records` (for `main`) |
 
 Run: `python -m ingest.load_bullpen_availability --seasons 2024 --duckdb /data/baseball_sim.duckdb`.
 The load reads the network for every game, so a season is slow.
@@ -664,9 +665,9 @@ so the API reads it without the profile computor's imports.
 |---|---|---|
 | `PLAY_OUTS_BY_EVENT` / `FIELDING_OUT_EVENTS` / `play_outs` / `sql_fielding_out` | How many outs a play recorded (question 1). `play_outs` adds the hidden runner out when the type is `X`. | `play_outs`: `profiles/fielder_plays.py`. `sql_fielding_out`: `profiles/sql.py` |
 | `BATTER_RETIRED_EVENTS` / `batter_retired` / `sql_batter_retired` | Whether the batter was retired (question 2). The batter reaches on `force_out` and on both fielder's-choice events. | `batter_retired`: `fielder_plays.py`. `sql_batter_retired`: `profiles/sql.py` |
-| `sql_play_outs` / `sql_cs_out` / `sql_outs_recorded` | The outs on a row: the event's outs and a hidden runner out; then a caught stealing in the middle of a plate appearance. `sql_outs_recorded` is the innings-pitched building block. | `sql_play_outs`: `profiles/pools.py`. `sql_outs_recorded`: `profiles/sql.py`, `scripts/boxscore_audit.py` |
-| `sql_runner_dest` / `sql_batter_dest` | Each runner's and the batter's base after the play: 0 is out, 4 is scored. | `profiles/pools.py` |
-| `sql_steal_attempt` / `sql_steal_success` | The one steal label every site reuses. | `profiles/baserunner.py`, `catcher.py`, `manager.py`, `pools.py`; `sql_steal_success` also `scripts/boxscore_audit.py` |
+| `sql_play_outs` / `sql_cs_out` / `sql_outs_recorded` | The outs on a row: the event's outs and a hidden runner out; then a caught stealing in the middle of a plate appearance. `sql_outs_recorded` is the innings-pitched building block. | `sql_play_outs`: `pools/build_batted_ball_pool.py`. `sql_outs_recorded`: `profiles/sql.py`, `scripts/boxscore_audit.py` |
+| `sql_runner_dest` / `sql_batter_dest` | Each runner's and the batter's base after the play: 0 is out, 4 is scored. | `pools/build_batted_ball_pool.py` |
+| `sql_steal_attempt` / `sql_steal_success` | The one steal label every site reuses. | `profiles/baserunner.py`, `catcher.py`, `manager.py`; `pools/build_steal_pool.py`; `sql_steal_success` also `scripts/boxscore_audit.py` |
 | `BALL_TYPES`, `CALLED_STRIKE_TYPES`, `WHIFF_TYPES`, `FOUL_TYPES`, `STRIKE_THREE_FOUL_TYPES`, `NON_SWING_TYPES`, `IN_PLAY_TYPES`, `FOUL_TIP_TYPES`, `SAVANT_WHIFF_TYPES` | The pitch-result code sets. `STRIKE_THREE_FOUL_TYPES` marks a two-strike foul tip or foul bunt as strike three. | `profiles/sql.py`; `STRIKE_THREE_FOUL_TYPES` also `scripts/rebuild_pitch_pool.py`, `scripts/pitch_pool_rebuild/checks.py` |
 | `sql_in_play` / `sql_swing` / `sql_savant_whiff` / `sql_called_strike` / `sql_csw` / `sql_list` | Row filters built from those sets. The model's whiff counts a foul tip as contact; Savant's whiff, which the Data Lab shows, counts it as a whiff. | `api/routes/analytics.py`, `api/routes/ai_assistant.py`; `sql_in_play` and `sql_list` also `profiles/sql.py`; `sql_list` also `pools/check_pool_labels.py` |
 

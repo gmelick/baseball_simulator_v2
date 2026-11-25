@@ -205,7 +205,7 @@ feature group, with its own bandwidth σ; fixed weights combine them. A thin pro
 shrunk toward the league average: the shrinkage prior is the sample size at which a player keeps
 half of his own number.
 
-The nightly rebuild (`python -m pipeline.batch.engine_artifacts --what all`) scores every pair of
+The nightly rebuild (`python -m bundle.build_bundle --what all`) scores every pair of
 profiles into the bundle's matrices, with the weights and bandwidths written in the engine files.
 The app's calibration report (`/data/calibration.json`) recalibrates the API's own engines; it
 does not reach these matrices.

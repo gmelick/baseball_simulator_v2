@@ -4,7 +4,8 @@ This page describes the system one level above the code: the parts, where data l
 how the processes run, and the three paths that move data through them. Each area page
 holds the module detail: [API](api.md), [Simulation](simulation.md),
 [Similarity](similarity.md), [Data ingestion](ingest.md), [Live service](live.md),
-[Pipeline: nightly builds](pipeline-batch.md), [Betting](betting.md),
+[Player profiles](profiles.md), [Play pools](pools.md), [The bundle](bundle.md),
+[Betting](betting.md),
 [Database](database.md), [Frontend](frontend.md), [Scripts](scripts.md),
 [Operations](operations.md) and [Tests](tests.md). The [loop cheat sheet](sim-loop-cheat-sheet.md) lists every draw and
 its weights.
@@ -98,9 +99,9 @@ draw; the draws use their own hard cells and Gaussian kernels instead.
 |---|---|---|---|
 | `db` | PostgreSQL 15 | 127.0.0.1:5432 | The `postgres_data` volume. Creates the app roles on a fresh volume (`db/roles/`). The scheduler runs the Postgres backup here as the `postgres` user. |
 | `redis` | Redis 7, password required, 256 MB, least-recently-used eviction | 127.0.0.1:6379 | The sim cache, the similarity cache, the live channels. |
-| `app` | `uvicorn api.main:app --reload` (the image's `dev` target) | 127.0.0.1:8000 | Postgres as `baseball_app`, and the read-only pool as `baseball_ro`; the `duckdb_data` volume at `/data`; Redis; `/backups` and `/offsite` read-only. Mounts `api/`, `pipeline/`, `betting/`, `operations/`, `similarity/`, `simulation/`, `db/` from the checkout. |
-| `live` | `python -m pipeline.live.run_live` | none (8001 inside) | Postgres as `baseball_app`; publishes on Redis. Mounts `api/`, `pipeline/`, `betting/`, `operations/`, `simulation/`, `db/` from the checkout. |
-| `jobs` | `sleep infinity`: a container the scheduler execs the nightly jobs into, as `appuser` | none | Postgres as `baseball_app`; `/data` read-write; `/backups` and `/offsite` read-write. Mounts the same seven folders as `app`. |
+| `app` | `uvicorn api.main:app --reload` (the image's `dev` target) | 127.0.0.1:8000 | Postgres as `baseball_app`, and the read-only pool as `baseball_ro`; the `duckdb_data` volume at `/data`; Redis; `/backups` and `/offsite` read-only. Mounts `api/`, `pipeline/`, `betting/`, `ingest/`, `profiles/`, `pools/`, `bundle/`, `operations/`, `similarity/`, `simulation/`, `db/` from the checkout. |
+| `live` | `python -m pipeline.live.run_live` | none (8001 inside) | Postgres as `baseball_app`; publishes on Redis. Mounts the same folders as `app` except `similarity/`. |
+| `jobs` | `sleep infinity`: a container the scheduler execs the nightly jobs into, as `appuser` | none | Postgres as `baseball_app`; `/data` read-write; `/backups` and `/offsite` read-write. Mounts the same eleven folders as `app`. |
 | `nginx` | The built React app and the reverse proxy (`frontend/Dockerfile`, `deploy/nginx/nginx.conf`) | 80, every interface | Forwards to the app. |
 | `scheduler` | Ofelia, the cron (`deploy/ofelia/config.ini`) | none | The Docker socket, to exec jobs into `jobs`, `db` and `app`. |
 | `prometheus` | Prometheus 2.53 | 127.0.0.1:9090 | Scrapes the app's `/metrics` with an API key (`deploy/monitoring/`). |
@@ -293,10 +294,11 @@ The rebuild is the step that reaches users. The profile build
 ([`profiles/build_profiles.py`](../../profiles/build_profiles.py))
 reads Postgres `raw.*` through DuckDB's postgres extension and writes `derived.*` and
 `sim.*`. The bundle build
-([`pipeline/batch/engine_artifacts.py`](../../pipeline/batch/engine_artifacts.py)
+([`bundle/build_bundle.py`](../../bundle/build_bundle.py)
 `--what all`) reads that file, runs the engines for the score matrices and publishes the
 new version. The app's bundle watch then restarts the app, which loads both. See
-[Operations](operations.md), [Pipeline: nightly builds](pipeline-batch.md) and the operator manual
+[Operations](operations.md), [Player profiles](profiles.md), [Play pools](pools.md),
+[The bundle](bundle.md) and the operator manual
 ([`WORKFLOW.md`](../../WORKFLOW.md)).
 
 ## Security at a glance

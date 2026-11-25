@@ -567,7 +567,7 @@ def _print_rollback(art_dir: str, rollback_dir: str, moves: tuple[list[int], lis
     _log(
         "  HOLD every pool export until sim.pitch_pool is rebuilt on the coding you keep: "
         "make engine-artifacts, the nightly rebuild (operations/jobs/nightly_rebuild.sh, run "
-        "by the scheduler) and any engine_artifacts --what pool or --what all. Each one exports "
+        "by the scheduler) and any bundle.build_bundle --what pool or --what all. Each one exports "
         "the table's coding again and undoes this rollback."
     )
     _log(

@@ -160,4 +160,4 @@ def test_a_failing_finals_load_does_not_fail_the_rebuild(tmp_path):
 
 def test_the_rebuild_script_waits_before_its_first_step():
     text = (SCRIPTS / "nightly_rebuild.sh").read_text(encoding="utf-8")
-    assert text.index("wait_for_ingest.sh") < text.index("player_profile_computor")
+    assert text.index("wait_for_ingest.sh") < text.index("python -m profiles.build_profiles")

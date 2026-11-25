@@ -227,8 +227,8 @@ class PlayerProfileComputor(
             # The outfield arm block: an UPDATE over the fielder rows
             # aggregated above, from the advancement pool.
             self._fill_outfield_arm_block(seasons, asof=asof)
-            # The intentional-walk rates: a full recompute every run (the
-            # table is small and covers the pool window).
+            # The intentional-walk rates: a full recompute from this run's
+            # seasons only (the nightly passes one season; SIM-649).
             self._build_ibb_rates(seasons)
 
             # The plate-appearance situations the situation engine reads

@@ -1,4 +1,4 @@
-<!-- file-index-key: 9b9a33d3d1c7d43d -->
+<!-- file-index-key: 97daee2d9788918d -->
 # File index
 
 Every source and config file in the repository, in the order of the [code review path](code-review-path.md). Data files (test fixtures, script inputs, logos, fonts) and the documents are not listed.
@@ -13,20 +13,20 @@ Every source and config file in the repository, in the order of the [code review
 |---|--:|--:|
 | [1. The game's vocabulary](#stage-1) | 7 | 1,876 |
 | [2. One pitch: the loop](#stage-2) | 9 | 3,546 |
-| [3. The draws: the sampler](#stage-3) | 13 | 4,584 |
-| [4. The sampler's data: the bundle](#stage-4) | 14 | 3,893 |
+| [3. The draws: the sampler](#stage-3) | 13 | 4,540 |
+| [4. The sampler's data: the bundle](#stage-4) | 18 | 4,496 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
-| [6. Profiles and pools: the DuckDB layer](#stage-6) | 51 | 10,455 |
-| [7. Getting data in: the raw tables](#stage-7) | 64 | 14,851 |
+| [6. Profiles and pools: the DuckDB layer](#stage-6) | 59 | 11,250 |
+| [7. Getting data in: the raw tables](#stage-7) | 64 | 15,002 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 8 | 4,858 |
-| [10. The API](#stage-10) | 41 | 13,766 |
+| [10. The API](#stage-10) | 41 | 13,762 |
 | [11. Game day: the live service](#stage-11) | 11 | 2,945 |
 | [12. The frontend](#stage-12) | 82 | 26,173 |
-| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,041 |
-| [14. Measurement and maintenance tools](#stage-14) | 75 | 37,485 |
-| [15. Tests and CI](#stage-15) | 317 | 124,690 |
-| **All** | **781** | **280,223** |
+| [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,040 |
+| [14. Measurement and maintenance tools](#stage-14) | 75 | 37,374 |
+| [15. Tests and CI](#stage-15) | 317 | 124,923 |
+| **All** | **793** | **281,845** |
 
 <a id="stage-1"></a>
 
@@ -82,7 +82,7 @@ Every decision is a similarity-weighted draw from a filtered pool of real plays.
 | [`simulation/sampler/steal.py`](../../simulation/sampler/steal.py) | 361 | The steal and pickoff draws over the steal opportunity pool. | — |
 | [`simulation/sampler/manager.py`](../../simulation/sampler/manager.py) | 440 | The pitching-change draw and the reliever draw. | — |
 | [`simulation/filter_cells.py`](../../simulation/filter_cells.py) | 193 | simulation/filter_cells.py — the hard-filter cell algebra of the pitch draw. | 3: `test_flag_registry.py`, `test_pitch_cell_index.py`, `test_fatigue_kernel_scan.py` |
-| [`bundle/synthetic_bundle.py`](../../bundle/synthetic_bundle.py) | 689 | An in-memory engine-artifact bundle for every no-DB path. | 27: `test_synthetic_bundle.py`, `test_run_ledger.py`, `bench_simulation.py` +24 |
+| [`bundle/synthetic_bundle.py`](../../bundle/synthetic_bundle.py) | 645 | The in-memory engine-artifact bundle that every no-database path draws from. | 27: `test_synthetic_bundle.py`, `test_run_ledger.py`, `bench_simulation.py` +24 |
 
 <a id="stage-4"></a>
 
@@ -92,20 +92,24 @@ The nightly build that exports the pools and the score matrices the sampler read
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`bundle/common.py`](../../bundle/common.py) | 118 | What every artifact builder shares: the pool columns, the default paths, the season window, the game-date column and the plain-array writer. | 4: `test_filter_cells.py`, `test_pool_label_check.py`, `test_bundle_no_pickle.py` +1 |
-| [`bundle/worker_pools.py`](../../bundle/worker_pools.py) | 419 | The in-memory pools the sampler draws from, and the arrays of each that the parent process shares with the workers. | 30: `test_steal_draw.py`, `test_fence_stage.py`, `test_relief_draw.py` +27 |
-| [`bundle/export_pitch_pool.py`](../../bundle/export_pitch_pool.py) | 227 | The per-hand pitch pool: one geometry, situation and metadata file set per batter hand. | 5: `test_fielding_draw.py`, `test_draw_conditioning.py`, `test_pitch_result_split.py` +2 |
-| [`bundle/export_batted_ball_pool.py`](../../bundle/export_batted_ball_pool.py) | 409 | The per-hand batted-ball pool the fielding draw reads. | 9: `test_fence_stage.py`, `test_fielding_draw.py`, `test_transition_pool.py` +6 |
-| [`bundle/export_steal_pool.py`](../../bundle/export_steal_pool.py) | 240 | The steal opportunity pools, one per target base. | 3: `test_steal_draw.py`, `test_steal_pool_data.py`, `test_steal_pool_rebuild.py` |
-| [`bundle/export_advancement_pool.py`](../../bundle/export_advancement_pool.py) | 129 | The advancement opportunity pools, one per runner decision. | 1: `test_transition_pool.py` |
-| [`bundle/export_pitching_change_pool.py`](../../bundle/export_pitching_change_pool.py) | 334 | The pitching-change opportunity pool the manager draw reads, with the relievers' role sidecar. | 1: `test_manager_draw.py` |
-| [`bundle/export_pitcher_scores.py`](../../bundle/export_pitcher_scores.py) | 89 | The pitcher-by-pitcher similarity matrix the pitch draw weights by. | — |
-| [`bundle/export_actor_embeddings.py`](../../bundle/export_actor_embeddings.py) | 146 | The actor embeddings: each player's standardized profile vector by season. | 2: `test_profile_data_additions.py`, `test_engine_artifacts_realism.py` |
-| [`bundle/park_geometry.py`](../../bundle/park_geometry.py) | 778 | The park geometry document: every park's effective fence by spray sector and season group, and the carry model the fence stage reads. | 3: `test_park_geometry_builder.py`, `test_fence_check.py`, `test_fence_stage.py` |
-| [`bundle/catcher_receiving.py`](../../bundle/catcher_receiving.py) | 184 | The catcher receiving document: each catcher's framing and blocking multipliers on taken pitches. | 1: `test_receiving_ratio.py` |
-| [`bundle/reference_tables.py`](../../bundle/reference_tables.py) | 81 | The reference tables the workers read from the bundle: the intentional-walk rates and the venue run factors. | 1: `test_bundle_worker_and_boot.py` |
-| [`bundle/versions.py`](../../bundle/versions.py) | 207 | bundle/versions.py — the engine-artifact bundle as published versions. | 1: `test_bundle_versions.py` |
-| [`pools/check_pool_labels.py`](../../pools/check_pool_labels.py) | 532 | The count chain of the pitch pool, and the label check against real plate appearances. | 2: `test_pool_chain.py`, `test_pool_label_check.py` |
+| [`bundle/build_bundle.py`](../../bundle/build_bundle.py) | 166 | Build a bundle version and publish it: the nightly entry point. | — |
+| [`bundle/load_bundle.py`](../../bundle/load_bundle.py) | 231 | Load the engine-artifact bundle from disk: the pools, the score tables and the reference data. | 32: `test_steal_draw.py`, `test_fence_stage.py`, `test_relief_draw.py` +29 |
+| [`similarity/build_score_tables.py`](../../similarity/build_score_tables.py) | 393 | Build the actor score matrices that the draws look up, and check their concentration. | 3: `test_actor_powers.py`, `test_actor_matrices.py`, `test_bundle_no_pickle.py` |
+| [`bundle/common.py`](../../bundle/common.py) | 191 | The helpers the bundle's exports and loaders share. | 6: `test_filter_cells.py`, `test_pool_label_check.py`, `test_bundle_no_pickle.py` +3 |
+| [`bundle/worker_pools.py`](../../bundle/worker_pools.py) | 360 | The pool classes a worker draws from, and the arrays of each pool that the workers share. | 30: `test_steal_draw.py`, `test_fence_stage.py`, `test_relief_draw.py` +27 |
+| [`bundle/export_pitch_pool.py`](../../bundle/export_pitch_pool.py) | 171 | Export the pitch pool, one file set per batter hand, and load it back in a worker. | 5: `test_fielding_draw.py`, `test_draw_conditioning.py`, `test_pitch_result_split.py` +2 |
+| [`bundle/export_batted_ball_pool.py`](../../bundle/export_batted_ball_pool.py) | 379 | Export the batted-ball pool the fielding draw reads, one file set per hand, and load it back. | 9: `test_fence_stage.py`, `test_fielding_draw.py`, `test_transition_pool.py` +6 |
+| [`bundle/export_steal_pool.py`](../../bundle/export_steal_pool.py) | 213 | Export the steal opportunity pools, one per target base, and load them back in a worker. | 3: `test_steal_draw.py`, `test_steal_pool_data.py`, `test_steal_pool_rebuild.py` |
+| [`bundle/export_advancement_pool.py`](../../bundle/export_advancement_pool.py) | 122 | Export the advancement opportunity pools, one per runner decision, and load them back. | 1: `test_transition_pool.py` |
+| [`bundle/export_pitching_change_pool.py`](../../bundle/export_pitching_change_pool.py) | 317 | Export the pitching-change opportunity pool for the manager draw, and load it in a worker. | 1: `test_manager_draw.py` |
+| [`bundle/export_pitcher_scores.py`](../../bundle/export_pitcher_scores.py) | 91 | Export the pitcher-by-pitcher similarity matrix the pitch draw weights by, and load it. | — |
+| [`bundle/export_actor_embeddings.py`](../../bundle/export_actor_embeddings.py) | 141 | Export the actor embeddings (each player-season's metrics vector), and load them back. | 2: `test_profile_data_additions.py`, `test_engine_artifacts_realism.py` |
+| [`bundle/park_geometry.py`](../../bundle/park_geometry.py) | 739 | Build and read park_geometry.json: each park's fence by spray sector, and the carry model. | 3: `test_park_geometry_builder.py`, `test_fence_check.py`, `test_fence_stage.py` |
+| [`bundle/catcher_receiving.py`](../../bundle/catcher_receiving.py) | 181 | Export the catcher receiving document: each catcher-season's framing and blocking weights. | 1: `test_receiving_ratio.py` |
+| [`bundle/reference_tables.py`](../../bundle/reference_tables.py) | 92 | Export the intentional-walk rates and the venue run factors into the bundle, and read them. | 1: `test_bundle_worker_and_boot.py` |
+| [`bundle/__init__.py`](../../bundle/__init__.py) | 10 | Package the pools and the score tables into the versioned bundle, and load it in each worker. | 2: `test_bundle_versions.py`, `test_bundle_worker_and_boot.py` |
+| [`bundle/versions.py`](../../bundle/versions.py) | 218 | Publish each bundle build as a version behind one link, swapped in one atomic step. | 2: `test_bundle_versions.py`, `test_api_main_wiring.py` |
+| [`pools/check_pool_labels.py`](../../pools/check_pool_labels.py) | 481 | The pitch pool's count chain, and the label check against real plate appearances. | 2: `test_pool_chain.py`, `test_pool_label_check.py` |
 
 <a id="stage-5"></a>
 
@@ -154,23 +158,31 @@ The nightly computor that turns raw pitches into player profiles and pools of re
 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
-| [`profiles/build_profiles.py`](../../profiles/build_profiles.py) | 445 | The nightly profile build: the player profiles, the defensive metrics and the simulation pools. | 28: `test_ibb_rates.py`, `test_steal_draw.py`, `test_park_factors.py` +25 |
-| [`profiles/base.py`](../../profiles/base.py) | 305 | The state and the shared helpers every profile-computor mixin uses. | — |
-| [`profiles/constants.py`](../../profiles/constants.py) | 61 | The profile build's sample floors, shrinkage priors and positional-insert column orders. | 7: `test_lead_distance.py`, `test_outfield_arm_block.py`, `test_outfield_arm_model.py` +4 |
-| [`profiles/sql.py`](../../profiles/sql.py) | 378 | The SQL fragments the profile and pool builds share: the pitch-result classes, the swing and stance columns, the out labels, the barrel band, the fielding-credit mask and the fatigue window expressions. | 10: `test_hit_by_pitch.py`, `test_barrel_definition.py`, `test_profile_code_sets.py` +7 |
-| [`profiles/pitcher.py`](../../profiles/pitcher.py) | 397 | The pitcher season profiles, with the arsenal mixture fit. | 1: `test_arsenal_fit_reproducible.py` |
-| [`profiles/arsenal_fit.py`](../../profiles/arsenal_fit.py) | 369 | The pitcher arsenal mixture fit: one Gaussian mixture per pitcher-season, fitted in a process pool, and the writes of its results. | 3: `test_arsenal_fit_reproducible.py`, `test_gmm_batch_pipeline.py`, `test_player_profile_computor.py` |
-| [`profiles/batter.py`](../../profiles/batter.py) | 504 | The batter season profiles, with the physical swing and stance block. | — |
-| [`profiles/fielder.py`](../../profiles/fielder.py) | 621 | The fielder season profile: the aggregate of the per-play metrics and the outfield arm block. | — |
-| [`profiles/fielder_plays.py`](../../profiles/fielder_plays.py) | 925 | The per-play fielder metrics: outfield catch probability, infield outs above average, double plays, bunt defense, first-base scooping and errors. | — |
-| [`profiles/defense.py`](../../profiles/defense.py) | 248 | The defensive constants and the field-geometry helpers the fielder and catcher metrics use. | 2: `test_simulation_constants.py`, `test_player_profile_computor.py` |
-| [`profiles/catcher.py`](../../profiles/catcher.py) | 851 | The catcher metrics: framing, blocking, throwing by base, the season aggregate and the uncaught-strike-three slice of the receiving profile. | — |
-| [`profiles/baserunner.py`](../../profiles/baserunner.py) | 689 | The baserunner season profiles and the two steal-engine tables. | — |
-| [`profiles/manager.py`](../../profiles/manager.py) | 508 | The manager season profiles and the per-game bullpen workload. | — |
-| [`profiles/park_factors.py`](../../profiles/park_factors.py) | 260 | The park factors, regressed toward league average. | — |
-| [`profiles/leverage.py`](../../profiles/leverage.py) | 221 | The leverage index and the run-expectancy matrix. | 2: `test_player_profile_computor.py`, `test_point_in_time_runner_catcher_fielder.py` |
-| [`profiles/league_averages.py`](../../profiles/league_averages.py) | 311 | The league-average profile rows: one row per entity type and season, read by the similarity engines as the shrinkage target. | 4: `test_outfield_arm_block.py`, `test_league_average_profiles.py`, `test_player_profile_computor.py` +1 |
-| [`pools/pool_metadata.py`](../../pools/pool_metadata.py) | 209 | The sim-pool build metadata: the builder version, the recency weights, the incremental-rebuild gate, the steal-pool migration guard and the index DDL helper. | 10: `test_park_factors.py`, `test_hit_by_pitch.py`, `test_steal_pool_data.py` +7 |
+| [`profiles/build_profiles.py`](../../profiles/build_profiles.py) | 458 | Run the nightly build: the player profiles, the defensive metrics and the simulation pools. | 28: `test_ibb_rates.py`, `test_steal_draw.py`, `test_park_factors.py` +25 |
+| [`profiles/base.py`](../../profiles/base.py) | 262 | Hold the computor's state and the helpers that every profile builder mixin shares. | — |
+| [`profiles/constants.py`](../../profiles/constants.py) | 67 | The profile build's sample floors, shrinkage priors and positional-insert column orders. | 7: `test_lead_distance.py`, `test_outfield_arm_block.py`, `test_outfield_arm_model.py` +4 |
+| [`profiles/sql.py`](../../profiles/sql.py) | 353 | The SQL fragments that the profile and pool builds share. | 10: `test_hit_by_pitch.py`, `test_barrel_definition.py`, `test_profile_code_sets.py` +7 |
+| [`profiles/pitcher.py`](../../profiles/pitcher.py) | 344 | The pitcher season profiles, with the arsenal mixture fit. | 1: `test_arsenal_fit_reproducible.py` |
+| [`profiles/arsenal_fit.py`](../../profiles/arsenal_fit.py) | 351 | Fit one Gaussian mixture per pitcher-season to describe the arsenal, and write the results. | 3: `test_arsenal_fit_reproducible.py`, `test_gmm_batch_pipeline.py`, `test_player_profile_computor.py` |
+| [`profiles/batter.py`](../../profiles/batter.py) | 483 | The batter season profiles, with the physical swing and stance block. | — |
+| [`profiles/fielder.py`](../../profiles/fielder.py) | 575 | The fielder season profile: the aggregate of the per-play metrics and the outfield arm. | — |
+| [`profiles/fielder_plays.py`](../../profiles/fielder_plays.py) | 896 | The per-play fielder metrics: outfield catch probability, infield outs above average, double plays, bunt defense, first-base scooping and errors. | — |
+| [`profiles/defense.py`](../../profiles/defense.py) | 238 | The defensive constants and the field-geometry helpers that the fielder and catcher metrics use. | 2: `test_simulation_constants.py`, `test_player_profile_computor.py` |
+| [`profiles/catcher.py`](../../profiles/catcher.py) | 787 | The catcher season profile: framing, blocking, throwing by base and the uncaught third strike. | — |
+| [`profiles/baserunner.py`](../../profiles/baserunner.py) | 644 | The baserunner season profile and the two steal tables: the runner's and the pitcher's. | — |
+| [`profiles/manager.py`](../../profiles/manager.py) | 379 | The manager season profile: each manager's usage, aggression and platoon tendencies. | — |
+| [`profiles/park_factors.py`](../../profiles/park_factors.py) | 237 | Build the park factors: each venue's event rates over the league's, shrunk toward 1.0. | — |
+| [`profiles/leverage.py`](../../profiles/leverage.py) | 170 | The run-expectancy matrix: the average runs from each state of outs and bases to the end of the half-inning. | 2: `test_player_profile_computor.py`, `test_point_in_time_runner_catcher_fielder.py` |
+| [`profiles/league_averages.py`](../../profiles/league_averages.py) | 308 | Compute the league-average profile rows: one row per entity type and season. | 5: `test_lead_distance.py`, `test_outfield_arm_block.py`, `test_league_average_profiles.py` +2 |
+| [`pools/build_pitch_pool.py`](../../pools/build_pitch_pool.py) | 173 | Build the pitch pool, `sim.pitch_pool`, the rows the pitch draw samples. | 1: `test_uncaught_strike_three.py` |
+| [`pools/build_batted_ball_pool.py`](../../pools/build_batted_ball_pool.py) | 248 | Build the batted-ball pool, `sim.outcome_pool`: the in-play rows of the pitch pool. | — |
+| [`pools/build_steal_pool.py`](../../pools/build_steal_pool.py) | 498 | Build the two steal pools that the running-game draws sample. | — |
+| [`pools/build_advancement_pool.py`](../../pools/build_advancement_pool.py) | 190 | Build the advancement pool, the rows the runner-advancement draws sample. | — |
+| [`pools/build_ibb_rates.py`](../../pools/build_ibb_rates.py) | 98 | Build the intentional-walk rates, `sim.ibb_rates`. | — |
+| [`pools/build_at_bat_situations.py`](../../pools/build_at_bat_situations.py) | 90 | Build `derived.at_bat_situations`, the game state before each plate appearance. | — |
+| [`pools/pool_metadata.py`](../../pools/pool_metadata.py) | 227 | The parts the pool builders share: the builder version, the recency weights, the rebuild gate. | 9: `test_park_factors.py`, `test_hit_by_pitch.py`, `test_steal_pool_data.py` +6 |
+| [`profiles/__init__.py`](../../profiles/__init__.py) | 10 | Build each player's season profile in DuckDB `derived.*`: the second step of the program. | 5: `test_hit_by_pitch.py`, `test_draw_conditioning.py`, `test_player_profile_computor.py` +2 |
+| [`pools/__init__.py`](../../pools/__init__.py) | 11 | Build the play pools in DuckDB `sim.*` that the draws sample, and check their labels. | 2: `test_pool_chain.py`, `test_pool_label_check.py` |
 | [`db/schemas/02_duckdb_schema.sql`](../../db/schemas/02_duckdb_schema.sql) | 1,482 | BASEBALL SIMULATION SYSTEM — DuckDB Schema | — |
 | [`db/schemas/duckdb_schema_version.txt`](../../db/schemas/duckdb_schema_version.txt) | 1 | The DuckDB schema version: the number of the newest file under db/migrations/duckdb/. | — |
 | [`db/migrations/duckdb/0001_initial_schema.sql`](../../db/migrations/duckdb/0001_initial_schema.sql) | 23 | DuckDB Migration 0001: initial_schema | — |
@@ -215,7 +227,7 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`db/schemas/01_postgres_schema.sql`](../../db/schemas/01_postgres_schema.sql) | 1,352 | BASEBALL SIMULATION SYSTEM — PostgreSQL Schema | — |
-| [`ingest/statcast_events.py`](../../ingest/statcast_events.py) | 466 | The Statcast code sets and their SQL: the outs, the pitch results, the runners and the steals. | 6: `test_out_label.py`, `test_steal_labels.py`, `test_transition_pool.py` +3 |
+| [`ingest/statcast_events.py`](../../ingest/statcast_events.py) | 474 | The Statcast code sets and their SQL: the outs, the pitch results, the runners and the steals. | 6: `test_out_label.py`, `test_steal_labels.py`, `test_transition_pool.py` +3 |
 | [`ingest/mlb/client.py`](../../ingest/mlb/client.py) | 261 | The one MLB Stats API client: the endpoint addresses, one GET with a retry, one async reader. | 4: `test_mlb_client.py`, `test_etl_hardening.py`, `test_savant_loader.py` +1 |
 | [`ingest/mlb/schedule.py`](../../ingest/mlb/schedule.py) | 335 | Parse the MLB schedule: which games exist on a date, when they start and their card state. | 2: `test_schedule_client.py`, `test_odds_matcher.py` |
 | [`ingest/mlb/game_feed.py`](../../ingest/mlb/game_feed.py) | 688 | Parse the MLB per-game live feed into the slate card's detail and the what-if's start state. | 3: `test_game_feed.py`, `test_game_page_whatif.py`, `test_starting_position.py` |
@@ -239,10 +251,10 @@ The loaders that pull MLB, Statcast and Savant data into the Postgres raw tables
 | [`ingest/savant/load_sprint_speed.py`](../../ingest/savant/load_sprint_speed.py) | 194 | Load Savant's sprint speed leaderboard into `raw.sprint_speed`, one row per player-season. | 1: `test_savant_loader.py` |
 | [`ingest/venues/load_venue_dimensions.py`](../../ingest/venues/load_venue_dimensions.py) | 152 | Fetch each park's published fence distances from the MLB Stats API for the fence prior. | 2: `test_fence_stage.py`, `test_park_geometry_builder.py` |
 | [`ingest/venues/backfill_venues.py`](../../ingest/venues/backfill_venues.py) | 332 | Fill the NULL `venue_id` of `raw.games` rows from the MLB schedule. | 2: `test_etl_flow.py`, `test_venue_id_fallback.py` |
-| [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 564 | Record which pitchers each team can use in each game, in `raw.game_bullpen_availability`. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
+| [`ingest/load_bullpen_availability.py`](../../ingest/load_bullpen_availability.py) | 670 | Record which pitchers each team can use in each game, in `raw.game_bullpen_availability`. | 2: `test_mlb_client.py`, `test_bullpen_availability.py` |
 | [`ingest/__init__.py`](../../ingest/__init__.py) | 13 | Get the real data into the Postgres `raw.*` tables: the first step of the program. | 3: `test_boxscore_ingest.py`, `test_game_bullpen_listing.py`, `test_pitch_result_vocabulary.py` |
 | [`pipeline/bullpen_usage.py`](../../pipeline/bullpen_usage.py) | 303 | The pen's facts from the official box score and the MLB API's per-game bullpen listing, for the pitching-change draw and the reliever draw. | 1: `test_bullpen_usage.py` |
-| [`db/dsn.py`](../../db/dsn.py) | 57 | db/dsn.py — the one reader of the Postgres connection string for scripts and jobs. | 1: `test_db_dsn.py` |
+| [`db/dsn.py`](../../db/dsn.py) | 94 | db/dsn.py — the one reader of the Postgres connection string for scripts and jobs. | 2: `test_db_dsn.py`, `test_pool_label_check.py` |
 | [`db/introspect.py`](../../db/introspect.py) | 119 | Ask a database whether a table or a column exists. | 2: `test_db_introspect.py`, `test_outfield_arm_block.py` |
 | [`alembic.ini`](../../alembic.ini) | 150 | A generic, single database configuration. | — |
 | [`db/migrations/env.py`](../../db/migrations/env.py) | 114 | Alembic environment configuration. | — |
@@ -332,7 +344,7 @@ The FastAPI app: its boot, the login, the routes the frontend calls and the run 
 | File | Lines | What it is | Tested by |
 |---|--:|---|---|
 | [`api/main.py`](../../api/main.py) | 483 | The FastAPI app of the MLB Baseball Simulation Platform: the app factory and its lifespan. | 6: `test_api_main_wiring.py`, `test_sim_kwargs.py`, `test_api_auth_session.py` +3 |
-| [`api/startup.py`](../../api/startup.py) | 457 | The startup and shutdown steps of the app's lifespan (`api/main.py`) that no test patches. | — |
+| [`api/startup.py`](../../api/startup.py) | 459 | The startup and shutdown steps of the app's lifespan (`api/main.py`) that no test patches. | — |
 | [`api/env_check.py`](../../api/env_check.py) | 68 | The environment check the app runs first at startup. | 1: `test_route_auth_coverage.py` |
 | [`api/middleware.py`](../../api/middleware.py) | 49 | The app's own response middleware. | — |
 | [`api/state.py`](../../api/state.py) | 471 | The builders of the resources the lifespan (`api/main.py`) attaches to `app.state`: | 6: `test_api_state.py`, `test_sql_console_pool.py`, `test_similarity_endpoint.py` +3 |
@@ -340,7 +352,7 @@ The FastAPI app: its boot, the login, the routes the frontend calls and the run 
 | [`api/errors.py`](../../api/errors.py) | 59 | The app's exception handling: a structured error envelope for a 500. | 1: `test_api_error_envelope.py` |
 | [`api/serialization.py`](../../api/serialization.py) | 140 | The array-safe JSON helper of the API's response models. | 6: `test_api_schemas.py`, `test_cache_codec.py`, `test_inning_grid.py` +3 |
 | [`api/sim_jobs.py`](../../api/sim_jobs.py) | 365 | One simulation run per game: the job registry. | 2: `test_sim_jobs.py`, `test_game_page_whatif.py` |
-| [`api/bundle_watch.py`](../../api/bundle_watch.py) | 153 | The app picks up a nightly rebuild by restarting itself. | 3: `test_bundle_versions.py`, `test_api_main_wiring.py`, `test_bundle_worker_and_boot.py` |
+| [`api/bundle_watch.py`](../../api/bundle_watch.py) | 147 | The app picks up a nightly rebuild by restarting itself. | 2: `test_bundle_versions.py`, `test_bundle_worker_and_boot.py` |
 | [`api/routes/__init__.py`](../../api/routes/__init__.py) | 12 | The API's routers. | 8: `test_segment_edges.py`, `test_backup_age_gauge.py`, `test_game_type_filter.py` +5 |
 | [`api/routes/_common.py`](../../api/routes/_common.py) | 112 | The small helpers that several route modules share. | 2: `test_api_data_health.py`, `test_read_only_routes.py` |
 | [`api/routes/games.py`](../../api/routes/games.py) | 1,674 | The game routes (prefix `/api/games`) and the simulation seam they share. | 22: `test_api_games.py`, `test_api_games_plays.py`, `test_sim_jobs.py` +19 |
@@ -509,7 +521,7 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) | 32 | operations/jobs/nightly_rebuild.sh — rebuild the current season's profiles and the engine bundle. | — |
 | [`operations/jobs/weekly_refresh.sh`](../../operations/jobs/weekly_refresh.sh) | 36 | operations/jobs/weekly_refresh.sh — sweep the current season for any final game the nightly window missed. | — |
 | [`operations/backup/__init__.py`](../../operations/backup/__init__.py) | 14 | operations/backup — the backups of the data stores and their off-site copy. | 4: `test_backup_common.py`, `test_backup_status.py`, `test_backup_offsite.py` +1 |
-| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 921 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
+| [`operations/backup/back_up_data_stores.py`](../../operations/backup/back_up_data_stores.py) | 918 | operations/backup/back_up_data_stores.py — back up, verify and restore the DuckDB file and the bundle. | 3: `test_backup_common.py`, `test_backup_offsite.py`, `test_backup_data_stores.py` |
 | [`operations/backup/backup_status.py`](../../operations/backup/backup_status.py) | 145 | operations/backup/backup_status.py — which backup sets exist, and how old they are. | 4: `test_backup_status.py`, `test_backup_offsite.py`, `test_backup_age_gauge.py` +1 |
 | [`operations/backup/common.py`](../../operations/backup/common.py) | 146 | operations/backup/common.py — the helpers the two backup jobs share. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
 | [`operations/backup/copy_offsite.py`](../../operations/backup/copy_offsite.py) | 955 | operations/backup/copy_offsite.py — the off-site copy of the backup sets. | 2: `test_backup_common.py`, `test_backup_offsite.py` |
@@ -528,7 +540,7 @@ How the services run, what runs every night, and how the data is backed up. The 
 | [`requirements.txt`](../../requirements.txt) | 111 | The Python packages the app image installs. | — |
 | [`requirements-dev.txt`](../../requirements-dev.txt) | 48 | The extra Python packages for tests, lint and type checks. | — |
 | [`requirements-docs.txt`](../../requirements-docs.txt) | 5 | The packages that build the technical reference website (MkDocs). | — |
-| [`mkdocs.yml`](../../mkdocs.yml) | 69 | The MkDocs settings that build the technical reference website from docs/technical/. | — |
+| [`mkdocs.yml`](../../mkdocs.yml) | 71 | The MkDocs settings that build the technical reference website from docs/technical/. | — |
 | [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) | 24 | pre-commit configuration | — |
 | [`.gitignore`](../../.gitignore) | 179 | MLB Baseball Simulation Platform — .gitignore | — |
 | [`.gitattributes`](../../.gitattributes) | 24 | Normalize all text files to LF in the git object store. | — |
@@ -553,32 +565,32 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/accuracy/records.py`](../../scripts/accuracy/records.py) | 262 | The accuracy record, and the market vocabulary every stage shares. | 8: `test_odds_readers.py`, `test_segment_markets.py`, `test_rescore_runlines.py` +5 |
 | [`scripts/accuracy/replay.py`](../../scripts/accuracy/replay.py) | 787 | Each game's replay and scoring, in one process or across a pool of worker processes. | 4: `test_sim_kwargs.py`, `test_odds_readers.py`, `test_accuracy_comparison.py` +1 |
 | [`scripts/accuracy/report.py`](../../scripts/accuracy/report.py) | 368 | The accuracy table: the records rolled into one row per market, and the text table the run prints. | 5: `test_odds_readers.py`, `test_rescore_runlines.py`, `test_accuracy_comparison.py` +2 |
-| [`scripts/accuracy/selection.py`](../../scripts/accuracy/selection.py) | 201 | The game selection: which games a run scores, and the frozen inputs it scores them with. | 1: `test_accuracy_comparison.py` |
+| [`scripts/accuracy/selection.py`](../../scripts/accuracy/selection.py) | 200 | The game selection: which games a run scores, and the frozen inputs it scores them with. | 1: `test_accuracy_comparison.py` |
 | [`scripts/pair_accuracy.py`](../../scripts/pair_accuracy.py) | 411 | scripts/pair_accuracy.py — SIM-518: pair two accuracy-comparison reports. | 3: `test_pair_accuracy.py`, `test_odds_readers.py`, `test_accuracy_fit_instruments.py` |
 | [`scripts/designed_experiment.py`](../../scripts/designed_experiment.py) | 544 | scripts/designed_experiment.py — SIM-548 §5.3: the DESIGNED EXPERIMENT on the full simulator. | 2: `test_designed_experiment.py`, `test_accuracy_fit_instruments.py` |
 | [`scripts/designed_experiment_run.sh`](../../scripts/designed_experiment_run.sh) | 37 | The designed experiment on the full simulator (the accuracy fit, SIM-548; the review's §4 design): four factors as a full 2^4 — the pitch draw's pitcher power 16 / 4, the result draw's pitcher power 16 / 4, the result... | — |
-| [`scripts/fence_check.py`](../../scripts/fence_check.py) | 1,444 | scripts/fence_check.py — the certification of the outfield fence (SIM-478/479/480): the fence stage's decision against every real air ball of the pool window, with the thresholds of the plan's §7 (docs/audit/2026-09-2... | 1: `test_fence_check.py` |
-| [`scripts/pool_window_census.py`](../../scripts/pool_window_census.py) | 306 | scripts/pool_window_census.py — measure the three pool-window options + the pool-referenced frequency centres (the owner's questions of 2026-08-20). | — |
+| [`scripts/fence_check.py`](../../scripts/fence_check.py) | 1,443 | scripts/fence_check.py — the certification of the outfield fence (SIM-478/479/480): the fence stage's decision against every real air ball of the pool window, with the thresholds of the plan's §7 (docs/audit/2026-09-2... | 1: `test_fence_check.py` |
+| [`scripts/pool_window_census.py`](../../scripts/pool_window_census.py) | 299 | scripts/pool_window_census.py — measure the three pool-window options + the pool-referenced frequency centres (the owner's questions of 2026-08-20). | — |
 | [`scripts/validate_props.py`](../../scripts/validate_props.py) | 611 | Validate the simulator's win probabilities + prop PMFs (probability mass functions: the probability of each count) against REAL completed-game outcomes, write a validation report, and (optionally) fit the win-probabil... | 3: `test_validate_props.py`, `test_accuracy_comparison_props.py`, `test_calibration_reconciliation.py` |
 | [`scripts/fit_calibration.py`](../../scripts/fit_calibration.py) | 296 | Fit + persist a `CalibrationReport` over the real DuckDB profiles and (optionally) check that it lands every engine's median similarity near the 0.50 target. | — |
 | [`scripts/calibrate_markets.py`](../../scripts/calibrate_markets.py) | 565 | scripts/calibrate_markets.py — SIM-548 §5.4 / §7: the per-market CALIBRATION LAYER — a map from the simulator's probability to a calibrated one, fitted on one set of games and validated on another it never saw. | 3: `test_odds_readers.py`, `test_market_calibration.py`, `test_accuracy_fit_instruments.py` |
 | [`scripts/market_skill.py`](../../scripts/market_skill.py) | 629 | scripts/market_skill.py — SIM-548 §5.1: the per-market SKILL table of one production read, and the composite objective between two reads. | 3: `test_odds_readers.py`, `test_market_calibration.py`, `test_accuracy_fit_instruments.py` |
 | [`scripts/offline_draw_fit.py`](../../scripts/offline_draw_fit.py) | 1,059 | scripts/offline_draw_fit.py — SIM-548 §5.2: the OFFLINE JOINT FIT of the pitch draws' weights against the real outcomes of held-out plays (v2, 2026-09-15, after the instruments' review). | — |
-| [`scripts/rebuild_pitch_pool.py`](../../scripts/rebuild_pitch_pool.py) | 494 | scripts/rebuild_pitch_pool.py — the pitch-pool rebuild on the foul-tip coding (SIM-553), end to end. | — |
+| [`scripts/rebuild_pitch_pool.py`](../../scripts/rebuild_pitch_pool.py) | 493 | scripts/rebuild_pitch_pool.py — the pitch-pool rebuild on the foul-tip coding (SIM-553), end to end. | — |
 | [`scripts/pitch_pool_rebuild/__init__.py`](../../scripts/pitch_pool_rebuild/__init__.py) | 8 | The steps of the pitch-pool rebuild (`scripts/rebuild_pitch_pool.py`). | — |
-| [`scripts/pitch_pool_rebuild/checks.py`](../../scripts/pitch_pool_rebuild/checks.py) | 409 | Step 3, the checks a to e inside the rebuild's transaction, the rollback and the restore. | — |
-| [`scripts/pitch_pool_rebuild/common.py`](../../scripts/pitch_pool_rebuild/common.py) | 224 | The constants and the small helpers every step of the pitch-pool rebuild shares: the paths, the files of a whole pitch pool, the expected class moves, the exit codes. | — |
-| [`scripts/pitch_pool_rebuild/export.py`](../../scripts/pitch_pool_rebuild/export.py) | 633 | Steps 4 to 6: the bundle copy, the pitch-pool export, the round-trip and the rollback text. | — |
-| [`scripts/pitch_pool_rebuild/preflight.py`](../../scripts/pitch_pool_rebuild/preflight.py) | 645 | Step 0, the pre-flight: every reason the write path must not start, and the drift line (information only). | — |
-| [`scripts/rebuild_steal_pool.py`](../../scripts/rebuild_steal_pool.py) | 458 | scripts/rebuild_steal_pool.py — the steal-pool rebuild for the running game on the pitch (SIM-554), end to end. | 1: `test_steal_pool_rebuild.py` |
+| [`scripts/pitch_pool_rebuild/checks.py`](../../scripts/pitch_pool_rebuild/checks.py) | 403 | Step 3, the checks a to e inside the rebuild's transaction, the rollback and the restore. | — |
+| [`scripts/pitch_pool_rebuild/common.py`](../../scripts/pitch_pool_rebuild/common.py) | 205 | The constants and the small helpers every step of the pitch-pool rebuild shares: the paths, the files of a whole pitch pool, the expected class moves, the exit codes. | — |
+| [`scripts/pitch_pool_rebuild/export.py`](../../scripts/pitch_pool_rebuild/export.py) | 635 | Steps 4 to 6: the bundle copy, the pitch-pool export, the round-trip and the rollback text. | — |
+| [`scripts/pitch_pool_rebuild/preflight.py`](../../scripts/pitch_pool_rebuild/preflight.py) | 622 | Step 0, the pre-flight: every reason the write path must not start, and the drift line (information only). | — |
+| [`scripts/rebuild_steal_pool.py`](../../scripts/rebuild_steal_pool.py) | 459 | scripts/rebuild_steal_pool.py — the steal-pool rebuild for the running game on the pitch (SIM-554), end to end. | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/steal_pool_rebuild/__init__.py`](../../scripts/steal_pool_rebuild/__init__.py) | 9 | The steps of the steal-pool rebuild (`scripts/rebuild_steal_pool.py`). | — |
 | [`scripts/steal_pool_rebuild/bundle.py`](../../scripts/steal_pool_rebuild/bundle.py) | 230 | The bundle's steal pool: whether it is whole, the rollback copy (step 4) and the hashes that prove the export touched nothing else. | 1: `test_steal_pool_rebuild.py` |
-| [`scripts/steal_pool_rebuild/checks.py`](../../scripts/steal_pool_rebuild/checks.py) | 400 | Step 3, the checks a to h inside the rebuild's transaction, and the rollback. | 1: `test_steal_pool_rebuild.py` |
-| [`scripts/steal_pool_rebuild/common.py`](../../scripts/steal_pool_rebuild/common.py) | 158 | The constants and the small helpers every step of the steal-pool rebuild shares: the paths, the files of a whole steal pool, the labels, the exit codes. | 1: `test_steal_pool_rebuild.py` |
+| [`scripts/steal_pool_rebuild/checks.py`](../../scripts/steal_pool_rebuild/checks.py) | 403 | Step 3, the checks a to h inside the rebuild's transaction, and the rollback. | 1: `test_steal_pool_rebuild.py` |
+| [`scripts/steal_pool_rebuild/common.py`](../../scripts/steal_pool_rebuild/common.py) | 141 | The constants and the small helpers every step of the steal-pool rebuild shares: the paths, the files of a whole steal pool, the labels, the exit codes. | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/steal_pool_rebuild/export.py`](../../scripts/steal_pool_rebuild/export.py) | 351 | Steps 5 to 7: the export, the round-trip, the steal band centres and the rollback text. | 1: `test_steal_pool_rebuild.py` |
-| [`scripts/steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) | 35 | DuckDB migration 0031, applied inside the rebuild's own transaction (step 2). | 1: `test_steal_pool_rebuild.py` |
-| [`scripts/steal_pool_rebuild/pickoffs.py`](../../scripts/steal_pool_rebuild/pickoffs.py) | 142 | Step 1: the snapshot, and the pickoff rows counted from the play records (never from the builder's SQL). | — |
-| [`scripts/steal_pool_rebuild/preflight.py`](../../scripts/steal_pool_rebuild/preflight.py) | 225 | Step 0, the pre-flight: every reason the write path must not start. | 1: `test_steal_pool_rebuild.py` |
+| [`scripts/steal_pool_rebuild/migration.py`](../../scripts/steal_pool_rebuild/migration.py) | 38 | DuckDB migration 0031, applied inside the rebuild's own transaction (step 2). | 1: `test_steal_pool_rebuild.py` |
+| [`scripts/steal_pool_rebuild/pickoffs.py`](../../scripts/steal_pool_rebuild/pickoffs.py) | 145 | Step 1: the snapshot, and the pickoff rows counted from the play records (never from the builder's SQL). | — |
+| [`scripts/steal_pool_rebuild/preflight.py`](../../scripts/steal_pool_rebuild/preflight.py) | 206 | Step 0, the pre-flight: every reason the write path must not start. | 1: `test_steal_pool_rebuild.py` |
 | [`scripts/behaviour_fingerprint.py`](../../scripts/behaviour_fingerprint.py) | 546 | Prove that a refactor leaves the simulator's output unchanged. | — |
 | [`scripts/accuracy_baseline_1000.sh`](../../scripts/accuracy_baseline_1000.sh) | 28 | The 1,000-game accuracy baseline of production (the accuracy fit, SIM-548; the split ON at 16 / 16 / 8 and the fatigue weight at 0.5 since 2026-09-14): the simulator's Brier score against the closing line's, per marke... | — |
 | [`scripts/accuracy_split_arm.sh`](../../scripts/accuracy_split_arm.sh) | 24 | The pitch / pitch-result split as one paired accuracy arm (the accuracy fit, SIM-548). | — |
@@ -587,8 +599,8 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/docs_file_index.py`](../../scripts/docs_file_index.py) | 842 | Write the file index: every source file, in the order of the code review path. | 1: `test_docs_file_index.py` |
 | [`scripts/export_openapi.py`](../../scripts/export_openapi.py) | 45 | Export the FastAPI OpenAPI schema to `frontend/openapi.json`. | — |
 | [`scripts/genexpr_crash_probe.py`](../../scripts/genexpr_crash_probe.py) | 434 | The SIM-445 crash class — a probe that re-runs the workload that segfaulted, with and without the database. | — |
-| [`scripts/measure_filter_cells.py`](../../scripts/measure_filter_cells.py) | 1,378 | Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy measurement, SIM-451). | 2: `test_filter_cells.py`, `test_pitch_cell_index.py` |
-| [`scripts/running_game_replay.py`](../../scripts/running_game_replay.py) | 1,473 | scripts/running_game_replay.py — SIM-554: the running-game replay. | 1: `test_running_game_replay.py` |
+| [`scripts/measure_filter_cells.py`](../../scripts/measure_filter_cells.py) | 1,363 | Measure how full the 2,880 hard-filter cells are (the filter-cell occupancy measurement, SIM-451). | 2: `test_filter_cells.py`, `test_pitch_cell_index.py` |
+| [`scripts/running_game_replay.py`](../../scripts/running_game_replay.py) | 1,472 | scripts/running_game_replay.py — SIM-554: the running-game replay. | 1: `test_running_game_replay.py` |
 | [`scripts/trace_game.py`](../../scripts/trace_game.py) | 183 | scripts/trace_game.py — a per-pitch trace of one simulated game. | — |
 | [`scripts/probes/actor_concentration_check.py`](../../scripts/probes/actor_concentration_check.py) | 86 | scripts/probes/actor_concentration_check.py — SIM-523 part F: the concentration check at the FITTED powers. | — |
 | [`scripts/probes/arm_angle_probe.py`](../../scripts/probes/arm_angle_probe.py) | 1,223 | scripts/probes/arm_angle_probe.py — the evidence behind the arm-angle decision (SIM-533): what Savant's arm angle, active spin and spin-axis deviation add to the pitcher model. | 1: `test_arm_angle_decision.py` |
@@ -600,20 +612,20 @@ The scripts that measure the simulator, rebuild the pools and backfill data. The
 | [`scripts/probes/catcher_receiving_probe.py`](../../scripts/probes/catcher_receiving_probe.py) | 198 | scripts/probes/catcher_receiving_probe.py — SIM-523 part E: the catcher receiving RATIO, on vs off. | — |
 | [`scripts/probes/check_bat_side_coverage.py`](../../scripts/probes/check_bat_side_coverage.py) | 188 | scripts/probes/check_bat_side_coverage.py - SIM-160 Audit raw.pitches.bat_hand coverage per season. | — |
 | [`scripts/probes/conditional_rate_probe.py`](../../scripts/probes/conditional_rate_probe.py) | 1,100 | scripts/probes/conditional_rate_probe.py — SIM-523 part F: the conditional-rate FIT instrument. | 1: `test_outfield_arm_recompute.py` |
-| [`scripts/probes/fatigue_kernel_scan.py`](../../scripts/probes/fatigue_kernel_scan.py) | 749 | scripts/probes/fatigue_kernel_scan.py — SIM-518: the OFFLINE fatigue-kernel scan. | 1: `test_fatigue_kernel_scan.py` |
+| [`scripts/probes/fatigue_kernel_scan.py`](../../scripts/probes/fatigue_kernel_scan.py) | 748 | scripts/probes/fatigue_kernel_scan.py — SIM-518: the OFFLINE fatigue-kernel scan. | 1: `test_fatigue_kernel_scan.py` |
 | [`scripts/probes/fatigue_probe.py`](../../scripts/probes/fatigue_probe.py) | 582 | scripts/probes/fatigue_probe.py — SIM-518: the IN-LOOP fatigue probe (plan §5.2). | 1: `test_odds_readers.py` |
-| [`scripts/probes/fielder_profile_recompute.py`](../../scripts/probes/fielder_profile_recompute.py) | 728 | scripts/probes/fielder_profile_recompute.py — Savant's per-position outs above average and the outfield jump in the fielder profile (SIM-532), run-book step 4: the DuckDB migration, the fielder chain, the league rows,... | 1: `test_fielder_profile_recompute.py` |
+| [`scripts/probes/fielder_profile_recompute.py`](../../scripts/probes/fielder_profile_recompute.py) | 722 | scripts/probes/fielder_profile_recompute.py — Savant's per-position outs above average and the outfield jump in the fielder profile (SIM-532), run-book step 4: the DuckDB migration, the fielder chain, the league rows,... | 1: `test_fielder_profile_recompute.py` |
 | [`scripts/probes/manager_probe.py`](../../scripts/probes/manager_probe.py) | 915 | scripts/probes/manager_probe.py — SIM-427: the manager probe (plan part 4f). | 1: `test_odds_readers.py` |
-| [`scripts/probes/manager_profile_recompute.py`](../../scripts/probes/manager_profile_recompute.py) | 142 | scripts/probes/manager_profile_recompute.py — SIM-427 part 4a: the manager profiles and the manager league-average row, recomputed on their own (not the five-hour full rebuild). | — |
+| [`scripts/probes/manager_profile_recompute.py`](../../scripts/probes/manager_profile_recompute.py) | 140 | scripts/probes/manager_profile_recompute.py — SIM-427 part 4a: the manager profiles and the manager league-average row, recomputed on their own (not the five-hour full rebuild). | — |
 | [`scripts/probes/odds_book_census.py`](../../scripts/probes/odds_book_census.py) | 1,880 | scripts/probes/odds_book_census.py — SIM-555: the read-only census of the vendor's books, the gate before the re-load. | 2: `test_odds_book_census.py`, `test_odds_census_sql.py` |
 | [`scripts/probes/odds_census.sql`](../../scripts/probes/odds_census.sql) | 459 | scripts/probes/odds_census.sql | — |
 | [`scripts/probes/odds_row_compare.py`](../../scripts/probes/odds_row_compare.py) | 161 | Run the historical odds loader with its vendor reads recorded or replayed, and capture its writes. | — |
-| [`scripts/probes/outfield_arm_recompute.py`](../../scripts/probes/outfield_arm_recompute.py) | 837 | scripts/probes/outfield_arm_recompute.py — the outfield arm block (SIM-550), run-book step 2: the block rebuilt from our own advancement pool, the league rows, and the verify block. | 1: `test_outfield_arm_recompute.py` |
+| [`scripts/probes/outfield_arm_recompute.py`](../../scripts/probes/outfield_arm_recompute.py) | 832 | scripts/probes/outfield_arm_recompute.py — the outfield arm block (SIM-550), run-book step 2: the block rebuilt from our own advancement pool, the league rows, and the verify block. | 1: `test_outfield_arm_recompute.py` |
 | [`scripts/probes/rescore_graded_book.py`](../../scripts/probes/rescore_graded_book.py) | 672 | scripts/probes/rescore_graded_book.py — SIM-555: re-price the fixed-line records of stored accuracy reports against the graded book, beside the originals. | 1: `test_rescore_graded_book.py` |
 | [`scripts/probes/rescore_runlines.py`](../../scripts/probes/rescore_runlines.py) | 460 | scripts/probes/rescore_runlines.py — SIM-549: re-price the run-line records of stored accuracy reports, beside the originals. | 2: `test_rescore_runlines.py`, `test_odds_readers.py` |
 | [`scripts/probes/retire_consensus_odds.py`](../../scripts/probes/retire_consensus_odds.py) | 421 | scripts/probes/retire_consensus_odds.py — SIM-555: archive, then delete, the old `consensus` odds rows, one season at a time. | 2: `test_retire_consensus_odds.py`, `test_schema_migrations.py` |
 | [`scripts/probes/run_index_acceptance.py`](../../scripts/probes/run_index_acceptance.py) | 380 | Runs the EXPLAIN (ANALYZE, BUFFERS) acceptance gates for the SIM-085 and SIM-089 indexes against a populated staging database, captures the plan text and per-query latency, and emits a Markdown report fragment that th... | 1: `test_index_acceptance_harness.py` |
-| [`scripts/probes/runner_profile_recompute.py`](../../scripts/probes/runner_profile_recompute.py) | 368 | scripts/probes/runner_profile_recompute.py — SIM-531 run-book step 4: the three runner-side profile tables and the league averages, recomputed on their own (not the five-hour full rebuild). | — |
+| [`scripts/probes/runner_profile_recompute.py`](../../scripts/probes/runner_profile_recompute.py) | 369 | scripts/probes/runner_profile_recompute.py — SIM-531 run-book step 4: the three runner-side profile tables and the league averages, recomputed on their own (not the five-hour full rebuild). | — |
 | [`scripts/probes/running_game_census.py`](../../scripts/probes/running_game_census.py) | 1,067 | scripts/probes/running_game_census.py — SIM-554: where the simulator's steals and pickoffs land. | 1: `test_running_game_census.py` |
 | [`scripts/probes/steal_weight_volume_probe.py`](../../scripts/probes/steal_weight_volume_probe.py) | 1,161 | scripts/probes/steal_weight_volume_probe.py — why the steal draw's look-alike weights lower the number of steal attempts, and what restores it. | 1: `test_steal_weight_volume_probe.py` |
 | [`scripts/probes/wall_zone_probe.py`](../../scripts/probes/wall_zone_probe.py) | 418 | scripts/probes/wall_zone_probe.py — the wall-play check (SIM-478/479/480, plan §5.4 and §7 C). | 1: `test_fence_counters.py` |
@@ -637,18 +649,18 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/acceptance/bands.py`](../../tests/acceptance/bands.py) | 1,412 | The reference rates, the band rule, and the contract that governs both (the acceptance lane, SIM-450). | 4: `test_production_bands.py`, `test_band_arithmetic.py`, `test_pool_label_check.py` +1 |
 | [`tests/acceptance/conftest.py`](../../tests/acceptance/conftest.py) | 954 | The fixtures that run the simulator in the PRODUCTION configuration (the acceptance lane, SIM-450). | 4: `test_fence_counters.py`, `test_band_arithmetic.py`, `test_pool_label_check.py` +1 |
 | [`tests/acceptance/test_band_arithmetic.py`](../../tests/acceptance/test_band_arithmetic.py) | 1,494 | The band rule of the acceptance lane (SIM-450), tested on synthetic inputs. | — |
-| [`tests/acceptance/test_pool_label_check.py`](../../tests/acceptance/test_pool_label_check.py) | 258 | SIM-553 — the standing label check: the pitch pool's count chain against real play. | — |
+| [`tests/acceptance/test_pool_label_check.py`](../../tests/acceptance/test_pool_label_check.py) | 255 | SIM-553 — the standing label check: the pitch pool's count chain against real play. | — |
 | [`tests/acceptance/test_production_bands.py`](../../tests/acceptance/test_production_bands.py) | 720 | The acceptance lane (SIM-450): the PRODUCTION simulator against reference rates. | — |
 | [`tests/unit/bundle/test_bundle_no_pickle.py`](../../tests/unit/bundle/test_bundle_no_pickle.py) | 134 | The engine-artifact bundle loads without a pickle (SIM-565). | — |
 | [`tests/unit/bundle/test_bundle_versions.py`](../../tests/unit/bundle/test_bundle_versions.py) | 190 | SIM-563 — the engine-artifact bundle is published as a version behind a link. | — |
 | [`tests/unit/bundle/test_bundle_worker_and_boot.py`](../../tests/unit/bundle/test_bundle_worker_and_boot.py) | 304 | The workers read only the bundle, and the app restarts on a new bundle version. | — |
-| [`tests/unit/bundle/test_engine_artifacts_realism.py`](../../tests/unit/bundle/test_engine_artifacts_realism.py) | 343 | SIM-411 / SIM-413 / SIM-425b — the batted-ball-artifact realism-column plumbing. | — |
-| [`tests/unit/bundle/test_engine_artifacts_shared_memory.py`](../../tests/unit/bundle/test_engine_artifacts_shared_memory.py) | 342 | The EngineArtifacts shared-memory publish/attach contract. | — |
-| [`tests/unit/bundle/test_park_geometry_builder.py`](../../tests/unit/bundle/test_park_geometry_builder.py) | 872 | The fence certification (SIM-478/479/480; the plan at docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §4 and §5.1): the version-2 park-geometry builder's pure pieces on toy numpy balls (no DuckDB), and t... | — |
-| [`tests/unit/bundle/test_pitcher_sim_matrix.py`](../../tests/unit/bundle/test_pitcher_sim_matrix.py) | 234 | tests/unit/bundle/test_pitcher_sim_matrix.py — the dense pitcher similarity matrix. | — |
+| [`tests/unit/bundle/test_engine_artifacts_realism.py`](../../tests/unit/bundle/test_engine_artifacts_realism.py) | 341 | SIM-411 / SIM-413 / SIM-425b — the batted-ball-artifact realism-column plumbing. | — |
+| [`tests/unit/bundle/test_engine_artifacts_shared_memory.py`](../../tests/unit/bundle/test_engine_artifacts_shared_memory.py) | 385 | The EngineArtifacts shared-memory publish/attach contract. | — |
+| [`tests/unit/bundle/test_park_geometry_builder.py`](../../tests/unit/bundle/test_park_geometry_builder.py) | 871 | The fence certification (SIM-478/479/480; the plan at docs/audit/2026-09-20-sim478-480-fence-certification-plan.md, §4 and §5.1): the version-2 park-geometry builder's pure pieces on toy numpy balls (no DuckDB), and t... | — |
+| [`tests/unit/bundle/test_pitcher_sim_matrix.py`](../../tests/unit/bundle/test_pitcher_sim_matrix.py) | 259 | tests/unit/bundle/test_pitcher_sim_matrix.py — the dense pitcher similarity matrix. | — |
 | [`tests/unit/bundle/test_synthetic_bundle.py`](../../tests/unit/bundle/test_synthetic_bundle.py) | 229 | The in-memory bundle every no-DB path draws from (`bundle/synthetic_bundle.py`). | — |
 | [`tests/unit/ingest/test_boxscore_ingest.py`](../../tests/unit/ingest/test_boxscore_ingest.py) | 763 | The official box-score ground truth (SIM-545): the parser over a REAL captured payload, the persist seams over in-memory fakes, and the fetch seam's retry. | — |
-| [`tests/unit/ingest/test_bullpen_availability.py`](../../tests/unit/ingest/test_bullpen_availability.py) | 644 | SIM-433 — per-game bullpen availability + IL ingestion. | — |
+| [`tests/unit/ingest/test_bullpen_availability.py`](../../tests/unit/ingest/test_bullpen_availability.py) | 642 | SIM-433 — per-game bullpen availability + IL ingestion. | — |
 | [`tests/unit/ingest/test_etl_connection_pool.py`](../../tests/unit/ingest/test_etl_connection_pool.py) | 212 | Before SIM-090, `HistoricalDataLoader._get_conn()` opened a fresh `psycopg2.connect(self.dsn)` and `conn.close()`-d it on every single DB round-trip. | — |
 | [`tests/unit/ingest/test_etl_ensure_rows.py`](../../tests/unit/ingest/test_etl_ensure_rows.py) | 369 | The historical loader's per-table prerequisite writers: _ensure_teams, _ensure_players, _ensure_managers and _ensure_game. | — |
 | [`tests/unit/ingest/test_etl_error_ledger.py`](../../tests/unit/ingest/test_etl_error_ledger.py) | 146 | The ETL error ledger: `raw.etl_errors` holds one row per pitch the historical loader skips, and the loader writes it on the pitch insert's cursor. | — |
@@ -683,7 +695,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/operations/test_retry_wrapper.py`](../../tests/unit/operations/test_retry_wrapper.py) | 84 | The crash-retry wrapper (`operations/jobs/with_retry.sh`). | — |
 | [`tests/unit/operations/test_shell_dsn_guards.py`](../../tests/unit/operations/test_shell_dsn_guards.py) | 66 | The nightly shell scripts carry no default DSN. | — |
 | [`tests/unit/pools/test_ibb_rates.py`](../../tests/unit/pools/test_ibb_rates.py) | 170 | The measured intentional-walk (IBB) rate table. | — |
-| [`tests/unit/pools/test_pool_chain.py`](../../tests/unit/pools/test_pool_chain.py) | 835 | The count chain of the pitch pool and the label check. | — |
+| [`tests/unit/pools/test_pool_chain.py`](../../tests/unit/pools/test_pool_chain.py) | 845 | The count chain of the pitch pool and the label check. | — |
 | [`tests/unit/pools/test_pool_cutoff.py`](../../tests/unit/pools/test_pool_cutoff.py) | 284 | The play pools must not offer plays that had not happened yet (the cutoff). | — |
 | [`tests/unit/pools/test_pool_pull_relative_spray.py`](../../tests/unit/pools/test_pool_pull_relative_spray.py) | 237 | Unit tests for SIM-051 — handedness-corrected `pull_relative_spray_angle` on `sim.outcome_pool`, as corrected by SIM-440. | — |
 | [`tests/unit/pools/test_pool_recency_and_incremental_rebuild.py`](../../tests/unit/pools/test_pool_recency_and_incremental_rebuild.py) | 210 | Unit tests for SIM-076 (recency_weight + pool_build_metadata) and SIM-095 (incremental pool rebuild) helpers. | — |
@@ -696,23 +708,23 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/profiles/test_fielder_placeholder_schema.py`](../../tests/unit/profiles/test_fielder_placeholder_schema.py) | 205 | SIM-542 — the fielder temp-table placeholders must name the columns the aggregator actually reads. | — |
 | [`tests/unit/profiles/test_gmm_batch_pipeline.py`](../../tests/unit/profiles/test_gmm_batch_pipeline.py) | 157 | Unit tests for SIM-113 — GMM batch pipeline performance. | — |
 | [`tests/unit/profiles/test_league_average_profiles.py`](../../tests/unit/profiles/test_league_average_profiles.py) | 384 | Regression test for Data Engineer ticket SIM-162 — LeagueAverageProfiles. | — |
-| [`tests/unit/profiles/test_one_cutoff_per_table.py`](../../tests/unit/profiles/test_one_cutoff_per_table.py) | 276 | SIM-551 — one cutoff per profile table. | — |
-| [`tests/unit/profiles/test_outfield_arm_block.py`](../../tests/unit/profiles/test_outfield_arm_block.py) | 639 | SIM-550 — the outfield arm block, rebuilt from our own advancement pool. | — |
+| [`tests/unit/profiles/test_one_cutoff_per_table.py`](../../tests/unit/profiles/test_one_cutoff_per_table.py) | 279 | SIM-551 — one cutoff per profile table. | — |
+| [`tests/unit/profiles/test_outfield_arm_block.py`](../../tests/unit/profiles/test_outfield_arm_block.py) | 640 | SIM-550 — the outfield arm block, rebuilt from our own advancement pool. | — |
 | [`tests/unit/profiles/test_park_factors.py`](../../tests/unit/profiles/test_park_factors.py) | 483 | Unit tests for SIM-336 (park-factor UNPIVOT/factor_overall fix + real L/R splits + pool-neutralization policy) and SIM-345 (data-layer fixes: incremental watermark `>=` + row-count guard, canonical cross-pool recency_... | — |
-| [`tests/unit/profiles/test_player_profile_computor.py`](../../tests/unit/profiles/test_player_profile_computor.py) | 979 | Covers: - Module-level constants & dataclass-like config - Pure math/physics helpers (compute_leverage_index, _hc_to_feet, _euclidean_hc, _throw_time, _estimate_hang_time, _estimate_gb_travel_time, _classify_direction... | — |
-| [`tests/unit/profiles/test_point_in_time_batter.py`](../../tests/unit/profiles/test_point_in_time_batter.py) | 263 | SIM-534 — point-in-time batter profiles, and the guards against leakage. | — |
-| [`tests/unit/profiles/test_point_in_time_pitcher_manager.py`](../../tests/unit/profiles/test_point_in_time_pitcher_manager.py) | 245 | SIM-537 — point-in-time pitcher and manager profiles. | — |
-| [`tests/unit/profiles/test_point_in_time_runner_catcher_fielder.py`](../../tests/unit/profiles/test_point_in_time_runner_catcher_fielder.py) | 564 | SIM-537 — point-in-time baserunner, catcher, and fielder profiles. | — |
-| [`tests/unit/profiles/test_profile_code_sets.py`](../../tests/unit/profiles/test_profile_code_sets.py) | 218 | SIM-501: the profile SQL's pitch-code sets must agree with the pool build. | 1: `test_out_label.py` |
+| [`tests/unit/profiles/test_player_profile_computor.py`](../../tests/unit/profiles/test_player_profile_computor.py) | 897 | Covers: - Module-level constants & dataclass-like config - Pure math/physics helpers (_hc_to_feet, _euclidean_hc, _throw_time, _estimate_hang_time, _estimate_gb_travel_time, _classify_direction_of) - Logistic helpers... | — |
+| [`tests/unit/profiles/test_point_in_time_batter.py`](../../tests/unit/profiles/test_point_in_time_batter.py) | 280 | SIM-534 — point-in-time batter profiles, and the guards against leakage. | — |
+| [`tests/unit/profiles/test_point_in_time_pitcher_manager.py`](../../tests/unit/profiles/test_point_in_time_pitcher_manager.py) | 307 | SIM-537 — point-in-time pitcher and manager profiles. | — |
+| [`tests/unit/profiles/test_point_in_time_runner_catcher_fielder.py`](../../tests/unit/profiles/test_point_in_time_runner_catcher_fielder.py) | 644 | SIM-537 — point-in-time baserunner, catcher, and fielder profiles. | — |
+| [`tests/unit/profiles/test_profile_code_sets.py`](../../tests/unit/profiles/test_profile_code_sets.py) | 231 | SIM-501: the profile SQL's pitch-code sets must agree with the pool build. | 1: `test_out_label.py` |
 | [`tests/unit/profiles/test_profile_data_additions.py`](../../tests/unit/profiles/test_profile_data_additions.py) | 229 | SIM-523 part G — the DATA additions (plan part G): | — |
-| [`tests/unit/profiles/test_profile_index_recreate.py`](../../tests/unit/profiles/test_profile_index_recreate.py) | 99 | Unit tests for the SIM-419 hardening of the DuckDB profile-rebuild index recreate. | — |
+| [`tests/unit/profiles/test_profile_index_recreate.py`](../../tests/unit/profiles/test_profile_index_recreate.py) | 98 | Unit tests for the SIM-419 hardening of the DuckDB profile-rebuild index recreate. | — |
 | [`tests/unit/test_accuracy_comparison.py`](../../tests/unit/test_accuracy_comparison.py) | 1,160 | Unit tests for the sim-vs-closing-line accuracy comparison (`scripts/accuracy_comparison.py`). | — |
 | [`tests/unit/test_accuracy_comparison_markets.py`](../../tests/unit/test_accuracy_comparison_markets.py) | 111 | Unit tests for the plain data in `scripts/accuracy/records.py`: the 15-market prop vocabulary map (the original seven plus the eight of the prop-market work, SIM-421) and the market trust labels. | — |
 | [`tests/unit/test_accuracy_comparison_props.py`](../../tests/unit/test_accuracy_comparison_props.py) | 714 | The backtest wiring for the fifteen prop markets (the prop-market work, SIM-421) and the official box-score ground truth (the owner's ruling to grade props on the box, SIM-545), in `scripts/accuracy_comparison.py` and... | — |
 | [`tests/unit/test_accuracy_fit_instruments.py`](../../tests/unit/test_accuracy_fit_instruments.py) | 463 | The instruments of the joint-fit plan (the accuracy fit, SIM-548), on synthetic inputs (no DB, no bundle): | — |
 | [`tests/unit/test_accuracy_hypothetical_return.py`](../../tests/unit/test_accuracy_hypothetical_return.py) | 406 | Unit tests for the hypothetical dollar return, an OPT-IN companion report to the accuracy comparison in `scripts/accuracy_comparison.py`. | — |
 | [`tests/unit/test_accuracy_minimum_sample.py`](../../tests/unit/test_accuracy_minimum_sample.py) | 547 | Unit tests for the stated MINIMUM SAMPLE SIZE of the accuracy reports that need one (`scripts/accuracy/confidence.py`): the sim-vs-closing-line accuracy comparison and the hypothetical dollar return. | — |
-| [`tests/unit/test_actor_matrices.py`](../../tests/unit/test_actor_matrices.py) | 625 | The nightly ACTOR SCORE MATRICES and the sampler factors that read them (the play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md). | — |
+| [`tests/unit/test_actor_matrices.py`](../../tests/unit/test_actor_matrices.py) | 623 | The nightly ACTOR SCORE MATRICES and the sampler factors that read them (the play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md). | — |
 | [`tests/unit/test_actor_powers.py`](../../tests/unit/test_actor_powers.py) | 446 | SIM-523 part F — the FIT's knobs (plan: docs/audit/2026-09-08-sim523-play-picker- redesign-plan.md, part F). | — |
 | [`tests/unit/test_api_auth.py`](../../tests/unit/test_api_auth.py) | 113 | The CORS allowlist and the latency middleware of `api/auth.py`. | — |
 | [`tests/unit/test_api_auth_session.py`](../../tests/unit/test_api_auth_session.py) | 378 | The browser session login (`api/auth.py` and `api/routes/auth.py`). | — |
@@ -757,19 +769,19 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_catcher_engine_throwing.py`](../../tests/unit/test_catcher_engine_throwing.py) | 302 | Tests of the catcher engine's throwing and deterrence sub-scores. | — |
 | [`tests/unit/test_catcher_similarity_scores.py`](../../tests/unit/test_catcher_similarity_scores.py) | 145 | The catcher similarity engine's scores: range, symmetry, self-exclusion, the four defensive sub-scores and the empirical-Bayes prior. | — |
 | [`tests/unit/test_check_file_integrity.py`](../../tests/unit/test_check_file_integrity.py) | 150 | Unit tests for `scripts/check_file_integrity.py`, the file-integrity guard. | — |
-| [`tests/unit/test_db_dsn.py`](../../tests/unit/test_db_dsn.py) | 61 | SIM-443b — the connection-string reader has no default password. | — |
+| [`tests/unit/test_db_dsn.py`](../../tests/unit/test_db_dsn.py) | 116 | SIM-443b — the connection-string reader has no default password. | — |
 | [`tests/unit/test_db_introspect.py`](../../tests/unit/test_db_introspect.py) | 93 | The existence probe (`db/introspect.py`), on a real in-memory DuckDB. | — |
 | [`tests/unit/test_designed_experiment.py`](../../tests/unit/test_designed_experiment.py) | 275 | The designed-experiment runner (scripts/designed_experiment.py), on synthetic reports (no DB, no bundle). | — |
 | [`tests/unit/test_docs_alembic_head.py`](../../tests/unit/test_docs_alembic_head.py) | 58 | Doc guard: the Alembic head the living docs cite is the newest migration on disk. | — |
 | [`tests/unit/test_docs_duckdb_version.py`](../../tests/unit/test_docs_duckdb_version.py) | 66 | Doc guard: the DuckDB schema version the living docs cite is the one on disk. | — |
 | [`tests/unit/test_docs_file_index.py`](../../tests/unit/test_docs_file_index.py) | 64 | Doc guard: the file index lists every source file in its review stage. | — |
-| [`tests/unit/test_draw_conditioning.py`](../../tests/unit/test_draw_conditioning.py) | 663 | The draw-conditioning inputs: the pool columns that carry them and the draw weights that read them. | — |
+| [`tests/unit/test_draw_conditioning.py`](../../tests/unit/test_draw_conditioning.py) | 662 | The draw-conditioning inputs: the pool columns that carry them and the draw weights that read them. | — |
 | [`tests/unit/test_dropped_third_strike_credits.py`](../../tests/unit/test_dropped_third_strike_credits.py) | 380 | The box-score credits on the dropped-third-strike play. | — |
 | [`tests/unit/test_engine_build_smoke.py`](../../tests/unit/test_engine_build_smoke.py) | 252 | Smoke tests of each similarity engine's build(). | — |
 | [`tests/unit/test_engine_calibration_regression.py`](../../tests/unit/test_engine_calibration_regression.py) | 325 | The sigma fit of the RBF kernel on three engines' feature matrices, and the FAISS lookup of the two nearest-neighbour engines. | — |
 | [`tests/unit/test_fatigue_kernel_scan.py`](../../tests/unit/test_fatigue_kernel_scan.py) | 165 | The arithmetic of the offline fatigue-kernel scan (scripts/probes/fatigue_kernel_scan.py). | — |
 | [`tests/unit/test_fence_carry_and_margin.py`](../../tests/unit/test_fence_carry_and_margin.py) | 780 | Tests of the fence certification's three amendments on the fielding draw. | 1: `test_fence_counters.py` |
-| [`tests/unit/test_fence_check.py`](../../tests/unit/test_fence_check.py) | 849 | SIM-478/479/480 — the fence certification script's metrics on fixtures with KNOWN answers (`scripts/fence_check.py`). | — |
+| [`tests/unit/test_fence_check.py`](../../tests/unit/test_fence_check.py) | 847 | SIM-478/479/480 — the fence certification script's metrics on fixtures with KNOWN answers (`scripts/fence_check.py`). | — |
 | [`tests/unit/test_fence_counters.py`](../../tests/unit/test_fence_counters.py) | 454 | The fence counters in the harness, the wall-play probe's arithmetic and the acceptance lane's JSON record. | — |
 | [`tests/unit/test_fence_season_groups.py`](../../tests/unit/test_fence_season_groups.py) | 285 | The fence stage reads a version-2 park geometry (the fence certification, SIM-478/480): an eleven-sector grid (spray -55 to +55 degrees) and, per venue, SEASON GROUPS keyed `"FIRST-LAST"` (a fence that moved gets a ne... | — |
 | [`tests/unit/test_fence_stage.py`](../../tests/unit/test_fence_stage.py) | 593 | Tests of the PARK GEOMETRY, the CARRY model and the FENCE STAGE. | — |
@@ -779,7 +791,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_fielder_similarity.py`](../../tests/unit/test_fielder_similarity.py) | 1,358 | The fielder-to-fielder similarity engine, similarity/engines/fielder_similarity.py. | — |
 | [`tests/unit/test_fielding_and_baserunning_steps.py`](../../tests/unit/test_fielding_and_baserunning_steps.py) | 351 | The loop's **fielding** step and its **baserunning + steals** step (:class:`simulation.sim_loop.StateMachine`), plus the dropped-third-strike edge. | — |
 | [`tests/unit/test_fielding_draw.py`](../../tests/unit/test_fielding_draw.py) | 546 | The FIELDING draw's filters and weights (plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md, part C). | — |
-| [`tests/unit/test_filter_cells.py`](../../tests/unit/test_filter_cells.py) | 1,061 | Unit tests for the filter-cell measurement (`scripts/measure_filter_cells.py`). | — |
+| [`tests/unit/test_filter_cells.py`](../../tests/unit/test_filter_cells.py) | 1,047 | Unit tests for the filter-cell measurement (`scripts/measure_filter_cells.py`). | — |
 | [`tests/unit/test_flag_registry.py`](../../tests/unit/test_flag_registry.py) | 138 | The `SIM_*` flag registry (`simulation/flags.py`). | — |
 | [`tests/unit/test_foul_tip_strike_three.py`](../../tests/unit/test_foul_tip_strike_three.py) | 303 | A two-strike foul tip or foul bunt is strike three in the pitch pool. | — |
 | [`tests/unit/test_game_page_grading.py`](../../tests/unit/test_game_page_grading.py) | 51 | The game page's betting box: each side graded on the real final. | — |
@@ -793,7 +805,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_index_acceptance_harness.py`](../../tests/unit/test_index_acceptance_harness.py) | 140 | Pure-string unit tests for the index-acceptance harness (`scripts/probes/run_index_acceptance.py`). | — |
 | [`tests/unit/test_inning_grid.py`](../../tests/unit/test_inning_grid.py) | 273 | The inning grid on the per-game result and the cached summary. | — |
 | [`tests/unit/test_invalid_state_detection.py`](../../tests/unit/test_invalid_state_detection.py) | 450 | The **invalid-state detection harness** for the simulation loop. | — |
-| [`tests/unit/test_lead_distance.py`](../../tests/unit/test_lead_distance.py) | 1,528 | Tests of lead distance in the stolen-base and baserunning models. | — |
+| [`tests/unit/test_lead_distance.py`](../../tests/unit/test_lead_distance.py) | 1,553 | Tests of lead distance in the stolen-base and baserunning models. | — |
 | [`tests/unit/test_linescore.py`](../../tests/unit/test_linescore.py) | 261 | Tests of the per-inning linescore and the team R/H/E in simulation.linescore. | — |
 | [`tests/unit/test_lineup_resolver.py`](../../tests/unit/test_lineup_resolver.py) | 621 | The runtime lineup / substitution resolver (`simulation/lineup_resolver.py`): it reads the lineup store to BUILD a `GameState`. | — |
 | [`tests/unit/test_live_bridge.py`](../../tests/unit/test_live_bridge.py) | 258 | SIM-519 Part C — the live service: the Redis bridge, the heartbeat, the poll window, the Preview-to-Live hook and the vendor reads off the loop. | — |
@@ -806,7 +818,7 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_live_run_lines.py`](../../tests/unit/test_live_run_lines.py) | 175 | The live betting pages price a run line by its shape. | — |
 | [`tests/unit/test_manager_decisions.py`](../../tests/unit/test_manager_decisions.py) | 251 | The manager decisions of the simulation loop's pre-pitch hook (`simulation/loop/manager.py`): the leverage index and the intentional walk. | — |
 | [`tests/unit/test_manager_defensive_subs.py`](../../tests/unit/test_manager_defensive_subs.py) | 168 | `defensive_sub` is a per-pitch column on `raw.pitches`, but how MANY pitch rows carry the flag is a property of the ETL parser, not of the manager: | — |
-| [`tests/unit/test_manager_draw.py`](../../tests/unit/test_manager_draw.py) | 654 | The manager decisions at the START of a plate appearance: the pitching change as a DRAW from an opportunity pool (the play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md). | — |
+| [`tests/unit/test_manager_draw.py`](../../tests/unit/test_manager_draw.py) | 652 | The manager decisions at the START of a plate appearance: the pitching change as a DRAW from an opportunity pool (the play-picker redesign plan: docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md). | — |
 | [`tests/unit/test_manager_model.py`](../../tests/unit/test_manager_model.py) | 383 | The manager plumbing around the pitching-change draw: the **pitch count** and the **SIM_MANAGER gate** (the manager wiring in the production factory and the `simulate_game` passthrough). | — |
 | [`tests/unit/test_manager_profile_snapshot.py`](../../tests/unit/test_manager_profile_snapshot.py) | 461 | Tests that the API's runs read each manager's profile from the boot snapshot. | — |
 | [`tests/unit/test_manager_similarity.py`](../../tests/unit/test_manager_similarity.py) | 134 | The manager similarity engine's scores: range, symmetry, the three sub-scores, the usage weight and the empirical-Bayes prior. | — |
@@ -908,17 +920,17 @@ How the code is tested, and what CI runs on every push. The [review path](code-r
 | [`tests/unit/test_sql_safety.py`](../../tests/unit/test_sql_safety.py) | 575 | The read-only SQL guard of `api/routes/sql_safety.py`. | — |
 | [`tests/unit/test_starter_resolution.py`](../../tests/unit/test_starter_resolution.py) | 438 | Tests that each side's starting pitcher comes from the official box, and that a game with a missing starter is refused (the real starter on both sides, SIM-558). | — |
 | [`tests/unit/test_state_machine.py`](../../tests/unit/test_state_machine.py) | 310 | The GameState-driven plate-appearance / half-inning **state machine** (:class:`simulation.sim_loop.StateMachine`). | — |
-| [`tests/unit/test_steal_draw.py`](../../tests/unit/test_steal_draw.py) | 765 | The steal opportunity pool and the steal draw. | — |
-| [`tests/unit/test_steal_labels.py`](../../tests/unit/test_steal_labels.py) | 168 | SIM-506 — the steal labels read BOTH homes of a steal outcome. | — |
-| [`tests/unit/test_steal_pool_data.py`](../../tests/unit/test_steal_pool_data.py) | 831 | SIM-554 — the data under the running game on the pitch. | — |
+| [`tests/unit/test_steal_draw.py`](../../tests/unit/test_steal_draw.py) | 767 | The steal opportunity pool and the steal draw. | — |
+| [`tests/unit/test_steal_labels.py`](../../tests/unit/test_steal_labels.py) | 174 | SIM-506 — the steal labels read BOTH homes of a steal outcome. | — |
+| [`tests/unit/test_steal_pool_data.py`](../../tests/unit/test_steal_pool_data.py) | 829 | SIM-554 — the data under the running game on the pitch. | — |
 | [`tests/unit/test_steal_pool_rebuild.py`](../../tests/unit/test_steal_pool_rebuild.py) | 1,133 | The steal-pool rebuild (`scripts/rebuild_steal_pool.py` and its steps in `scripts/steal_pool_rebuild/`), on in-memory fixtures (no live DB, no bundle). | — |
 | [`tests/unit/test_steal_run_credit.py`](../../tests/unit/test_steal_run_credit.py) | 125 | Tests that a steal run earns no RBI (Rule 9.04(b)) and stays EARNED (9.16(a)). | — |
 | [`tests/unit/test_steal_weight_volume_probe.py`](../../tests/unit/test_steal_weight_volume_probe.py) | 116 | The steal-weight volume probe's arithmetic, on synthetic inputs (no DB, no bundle). | — |
 | [`tests/unit/test_steal_weights_seam.py`](../../tests/unit/test_steal_weights_seam.py) | 100 | The steal draw's weights as a seam. | — |
 | [`tests/unit/test_transition_draw.py`](../../tests/unit/test_transition_draw.py) | 499 | The transition fielding draw + the five-scenario advancement draws (the owner's rulings of 2026-08-19). | — |
-| [`tests/unit/test_transition_pool.py`](../../tests/unit/test_transition_pool.py) | 753 | SIM-510 — transition columns on sim.outcome_pool + the advancement opportunity pool. | — |
+| [`tests/unit/test_transition_pool.py`](../../tests/unit/test_transition_pool.py) | 755 | SIM-510 — transition columns on sim.outcome_pool + the advancement opportunity pool. | — |
 | [`tests/unit/test_trusted_proxy.py`](../../tests/unit/test_trusted_proxy.py) | 167 | The rate limiter behind nginx counts a request against the real client's address. | — |
-| [`tests/unit/test_uncaught_strike_three.py`](../../tests/unit/test_uncaught_strike_three.py) | 218 | SIM-517 part A — the uncaught-strike-3 slice of the catcher receiving profile (`PlayerProfileComputor._compute_catcher_uncaught_k3`). | — |
+| [`tests/unit/test_uncaught_strike_three.py`](../../tests/unit/test_uncaught_strike_three.py) | 221 | SIM-517 part A — the uncaught-strike-3 slice of the catcher receiving profile (`PlayerProfileComputor._compute_catcher_uncaught_k3`). | — |
 | [`tests/unit/test_validate_props.py`](../../tests/unit/test_validate_props.py) | 529 | Validate prop PMFs (a probability for each count) and fit the win-probability reliability curve over synthetic, deterministic outcomes; derive real prop actuals from per-PA `events`. | — |
 | [`tests/unit/test_weighted_rbf_kernel.py`](../../tests/unit/test_weighted_rbf_kernel.py) | 69 | The shared `WeightedRBFSimilarity` kernel, an RBF kernel (radial basis function: a similarity that falls off with the weighted distance between two profiles): an identical pair scores 1, every score is in [0, 1], the... | — |
 | [`tests/unit/test_win_probability.py`](../../tests/unit/test_win_probability.py) | 336 | Tests of the calibrated game win probability, :func:`simulation.win_probability.win_probability`. | — |

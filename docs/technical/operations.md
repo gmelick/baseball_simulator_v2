@@ -15,7 +15,8 @@ targets and the operator run the rest.
 
 The run book (how to run, check and recover each job) is the operator's manual,
 [WORKFLOW.md](../../WORKFLOW.md). The code the jobs call is on
-[Nightly builds](pipeline-batch.md) and [Data ingestion](ingest.md).
+[Player profiles](profiles.md), [Play pools](pools.md), [The bundle](bundle.md) and
+[Data ingestion](ingest.md).
 
 ## How it fits together
 
@@ -124,7 +125,7 @@ Rebuilds the current season's profiles and the engine-artifact bundle, in three 
 
 1. `wait_for_ingest.sh`.
 2. `python -m profiles.build_profiles --seasons <year>`.
-3. `python -m pipeline.batch.engine_artifacts --what all`.
+3. `python -m bundle.build_bundle --what all`.
 
 The profile step writes DuckDB and needs its write lock; the bundle step opens it
 read-only. The app holds no handle on that file, so the job runs beside the app. The

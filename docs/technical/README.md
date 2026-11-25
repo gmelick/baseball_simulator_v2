@@ -24,7 +24,9 @@ codebase.
 |---|---|
 | [Simulation](simulation.md) | The pitch-by-pitch state machine, the sampler that makes every draw, the runner that plays 100 games, and the outputs: win odds, prop distributions, market prices. |
 | [Similarity engines](similarity.md) | The eleven engines that score how alike two players or situations are, how a score becomes a draw weight, calibration and backtesting. |
-| [Pipeline: the nightly builds](pipeline-batch.md) | The profile computor, the pools of real plays, and the engine-artifact bundle the sampler reads. |
+| [Player profiles](profiles.md) | The nightly profile build and the player profiles in DuckDB `derived.*`. |
+| [Play pools](pools.md) | The pools of real plays in DuckDB `sim.*`, their recency weights and the label check. |
+| [The bundle](bundle.md) | The engine-artifact bundle the sampler reads, its nightly build, its versioned link and its loader. |
 | [Data ingestion](ingest.md) | The `ingest/` folder: the MLB Stats API client, the game loader, the box score, the bullpen availability, the venues, the Savant loaders and the Statcast code sets. |
 | [Live service](live.md) | The game-day service in `pipeline/live/`: the schedule poll, the game state, the published lineups, the odds hooks and the Redis bridge. |
 | [Database](database.md) | Every Postgres and DuckDB table, the migrations, the database roles and the database address reader. |

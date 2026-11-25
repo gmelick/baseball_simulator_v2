@@ -347,7 +347,7 @@ def test_the_profile_sql_binds_the_shared_sets() -> None:
         "STRIKE_THREE_FOUL_TYPES",
     ):
         assert getattr(computor, name) is getattr(statcast_events, name), name
-    assert computor.SQL_SWING == statcast_events.sql_swing()
+    assert statcast_events.sql_swing() == computor.SQL_SWING
 
 
 def test_the_api_and_the_profiles_render_the_same_swing() -> None:

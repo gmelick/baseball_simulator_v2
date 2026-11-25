@@ -268,7 +268,7 @@ The loop cheat sheet holds the detail; these are the facts a change most often t
 ### Data runs and their traps
 
 - **The profile recompute.** The nightly rebuild recomputes the current season's profiles and
-  pools, then publishes a new bundle. A bare `player_profile_computor` run also builds the
+  pools, then publishes a new bundle. A bare `profiles.build_profiles` run also builds the
   current season only. A full recompute must pass `--seasons 2017 … 2026 --full-rebuild`, then
   verify `sim.pool_build_metadata.builder_version` (`sim554.1` today), rebuild the bundle and
   refit the calibration.
@@ -326,8 +326,17 @@ and the three paths (a simulation request, game day, the nightly builds).
 - `ingest/` — the loaders of the raw data: `mlb/` (the MLB Stats API client, the schedule
   and the game feed), `games/` (the finished-game loader), `savant/`, `venues/`, the box
   scores and the bullpens.
-- `pipeline/` — `live/` (the game-day service) and `batch/` (the profile computor in
-  `profiles/`, the bundle builder in `artifacts/`, the versioned link). `live/ingestion/`
+- `profiles/` — the nightly profile build (`build_profiles.py`, `python -m
+  profiles.build_profiles`): one mixin per player profile on `base.py`'s `ComputorBase`,
+  writing DuckDB `derived.*`.
+- `pools/` — the play pools in DuckDB `sim.*`, one mixin per pool, mixed into the profile
+  build; `pool_metadata.py` (the recency weights, the incremental gate) and
+  `check_pool_labels.py` (the pool's label check).
+- `bundle/` — the engine-artifact bundle: `build_bundle.py` (the nightly build, `python -m
+  bundle.build_bundle`), one `export_*.py` per artifact, `versions.py` (the versioned link),
+  `load_bundle.py` (`EngineArtifacts`, loaded in every worker) and `synthetic_bundle.py` (the
+  no-database bundle). `similarity/build_score_tables.py` builds the actor score tables.
+- `pipeline/` — `live/` (the game-day service) and `bullpen_usage.py`. `live/ingestion/`
   keeps the live odds hooks; they call `betting/load_odds_to_db.py`.
 - `betting/` — the odds and the pricing, one file per step: `markets.py` (our market names
   and book labels), `bettingpros/match_games.py` (the HTTP client and the game match),

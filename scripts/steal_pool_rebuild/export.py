@@ -325,7 +325,7 @@ def print_rollback(art_dir: str, backup_dir: str) -> None:
     )
     _log(
         "  sim.steal_opportunity_pool in DuckDB keeps the sim554.1 rows. HOLD every pool export "
-        "(the nightly chain, make engine-artifacts, engine_artifacts --what pool or all) until "
+        "(the nightly chain, make engine-artifacts, bundle.build_bundle --what pool or all) until "
         "the table is on the rows you keep: an export ships them again. To undo the pickoff "
         "rows in DuckDB (the app stopped): DELETE FROM sim.steal_opportunity_pool WHERE "
         "is_pickoff_row."

@@ -471,7 +471,7 @@ The tables group the 285 modules by the code they cover. "slow" marks a module w
 | [test_calibration_fit_and_apply.py](../../tests/unit/test_calibration_fit_and_apply.py), [test_calibration_report_json.py](../../tests/unit/test_calibration_report_json.py), [test_calibration_reconciliation.py](../../tests/unit/test_calibration_reconciliation.py) | The calibration report reaches every engine; its JSON form and the win-probability map; the fit runs on the live schema |
 | [test_probabilistic_backtester.py](../../tests/unit/test_probabilistic_backtester.py), [test_recency_walk_forward.py](../../tests/unit/pools/test_recency_walk_forward.py) | The backtester's calibration metrics; the recency walk-forward |
 
-### The profiles and pools (`pipeline/batch/`)
+### The profiles and pools (`profiles/`, `pools/`)
 
 | File | What it pins |
 |---|---|
@@ -490,7 +490,7 @@ The tables group the 285 modules by the code they cover. "slow" marks a module w
 | [test_ibb_rates.py](../../tests/unit/pools/test_ibb_rates.py) | The measured intentional-walk rate table |
 | [test_transition_pool.py](../../tests/unit/test_transition_pool.py), [test_steal_pool_data.py](../../tests/unit/test_steal_pool_data.py), [test_profile_data_additions.py](../../tests/unit/profiles/test_profile_data_additions.py) | The transition columns and the advancement pool; the steal pool's pitch class and pickoff rows; the fielding chain and sprint speed |
 
-### The bundle (`pipeline/batch/engine_artifacts.py`, `pipeline/batch/artifacts/`)
+### The bundle (`bundle/`)
 
 | File | What it pins |
 |---|---|

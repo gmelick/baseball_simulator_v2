@@ -217,8 +217,8 @@ class BattedBallPoolMixin(ComputorBase):
                   AND pp.season IN ({season_list})
             )
             -- SIM-510: the guard column — retired bodies must equal the
-            -- events-derived result_outs. The artifact export excludes rows
-            -- where this is FALSE; validation measures their rate.
+            -- events-derived result_outs. The export keeps every row; the
+            -- fielding draw skips the rows where this is FALSE.
             -- SIM-491: bat_home is EXCLUDEd from the star and re-appended
             -- LAST so the positional INSERT matches the 0019 DDL order
             -- (bat_home after dest_outs_consistent).

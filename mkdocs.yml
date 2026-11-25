@@ -55,7 +55,9 @@ nav:
   - Area pages:
       - Simulation: simulation.md
       - Similarity engines: similarity.md
-      - "Pipeline: the nightly builds": pipeline-batch.md
+      - "Player profiles": profiles.md
+      - "Play pools": pools.md
+      - "The bundle": bundle.md
       - "Getting data in": ingest.md
       - "Game day: the live service": live.md
       - Database: database.md
