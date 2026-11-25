@@ -6,27 +6,24 @@ from __future__ import annotations
 from typing import Any
 
 from ingest.statcast_events import STRIKE_THREE_FOUL_TYPES
-from pipeline.batch.pool_chain import (
+from pools.check_pool_labels import (
     LABEL_CHECK_TOLERANCE,
-    OUTCOMES,
     chain_rates,
     format_label_check,
     format_pa_count,
-    label_check,
-    pa_group_count,
-    real_pa_rates,
+    run_label_check,
 )
-from pipeline.batch.profiles.pool_meta import POOL_BUILDER_VERSION
+from pools.pool_metadata import POOL_BUILDER_VERSION, pool_builder_versions, read_pool_builds
+from profiles.sql import sql_seasons
+from simulation.game_state import PITCH_OUTCOMES
 
 from .common import (
     ALL_SEASONS_EXPECTED_MOVES,
     MOVE_CODES,
     WINDOW_EXPECTED_MOVES,
-    _builder_versions,
     _log,
     _pool_counts,
     _raw_code_rows_sql,
-    _season_list,
     _sql_in,
 )
 
@@ -38,7 +35,7 @@ from .common import (
 def _check_rows(con: Any, seasons: list[int], before: dict[int, int]) -> bool:
     """Check a: the rows per season equal the snapshot's; every row keeps its
     pitch_id; no class is NULL or outside the chain's six."""
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     after = _pool_counts(con, seasons)
     ok = True
     for s in seasons:
@@ -63,12 +60,12 @@ def _check_rows(con: Any, seasons: list[int], before: dict[int, int]) -> bool:
     ).fetchone()[0]
     odd = con.execute(
         f"SELECT outcome_type, COUNT(*) FROM sim.pitch_pool WHERE season IN ({sl}) "
-        f"AND outcome_type NOT IN {_sql_in(OUTCOMES)} GROUP BY 1"
+        f"AND outcome_type NOT IN {_sql_in(PITCH_OUTCOMES)} GROUP BY 1"
     ).fetchall()
     good = nulls == 0 and not odd
     ok = ok and good
     _log(
-        f"  a. NULL classes {nulls}; classes outside {OUTCOMES}: {odd or 'none'} "
+        f"  a. NULL classes {nulls}; classes outside {PITCH_OUTCOMES}: {odd or 'none'} "
         f"{'OK' if good else 'MISMATCH'}"
     )
     return ok
@@ -93,7 +90,7 @@ def _check_moves(con: Any, seasons: list[int], window: list[int], rerun: list[in
     copy-to-export changes on it (:func:`_window_moves`), so a re-run grades
     the same as a first run.
     """
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     con.execute(
         """
         CREATE OR REPLACE TEMP TABLE _sim553_changed AS
@@ -104,7 +101,7 @@ def _check_moves(con: Any, seasons: list[int], window: list[int], rerun: list[in
         WHERE b.outcome_type IS DISTINCT FROM n.outcome_type
         """
     )
-    rerun_list = _season_list(rerun) if rerun else "NULL"
+    rerun_list = sql_seasons(rerun) if rerun else "NULL"
     # Every MOVE_CODES pool row with its source code, count and expected move
     # (check c reads the code from here too).
     con.execute(
@@ -207,7 +204,7 @@ def _window_moves(con: Any, window: list[int]) -> tuple[list[int], list[str]]:
     round-trip reads these after the writable connection closes."""
     rows = con.execute(
         "SELECT pitch_id, raw_move FROM _sim553_expected "
-        f"WHERE raw_move IS NOT NULL AND season IN ({_season_list(window)}) "
+        f"WHERE raw_move IS NOT NULL AND season IN ({sql_seasons(window)}) "
         "AND stand IN ('L', 'R') ORDER BY pitch_id"
     ).fetchall()
     return [int(r[0]) for r in rows], [str(r[1]) for r in rows]
@@ -225,7 +222,7 @@ def _check_got_away(con: Any, window: list[int]) -> bool:
     does not fail on them. (For example: game 824606, at-bat 14,
     pitch 8, a strikeout on a swinging pitchout with a passed ball.)
     """
-    wl = _season_list(window)
+    wl = sql_seasons(window)
     foul_tips = _sql_in(STRIKE_THREE_FOUL_TYPES)
     gated, gated_win, other, null_n, n_all = con.execute(
         f"""
@@ -284,19 +281,15 @@ def _check_label(con: Any, window: list[int], prefix: str = "d.") -> bool:
     ``real_pa_rates``' ``n_pa``, or the check FAILS (for example, when
     ``raw.pitches`` gained games the pool has not been rebuilt for).
     """
-    pred = f"season IN ({_season_list(window)})"
-    chain = chain_rates(con, pred, pa_only=True)
-    real = real_pa_rates(con, pred)
-    n_real = int(real["n_pa"])
-    n_pool = pa_group_count(con, pred)
-    rows = label_check(chain, real)
+    pred = f"season IN ({sql_seasons(window)})"
+    run = run_label_check(con, pred)
     _log(
         f"  {prefix} the count chain of the pool's plate appearances (the at-bats that end in a "
-        f"batting event) against {n_real:,} real plate appearances ({pred}), "
+        f"batting event) against {run.n_real:,} real plate appearances ({pred}), "
         f"tolerance {LABEL_CHECK_TOLERANCE:.1%}:"
     )
-    _log(f"     {format_pa_count(n_pool, n_real)}")
-    for line in format_label_check(rows):
+    _log(f"     {format_pa_count(run.n_pool, run.n_real)}")
+    for line in format_label_check(run.rows):
         _log(f"     {line}")
     full = chain_rates(con, pred)
     weighted = chain_rates(con, pred, weighted=True)
@@ -308,9 +301,8 @@ def _check_label(con: Any, window: list[int], prefix: str = "d.") -> bool:
         f"BB/PA {weighted['walk']:.4f}  HBP/PA {weighted['hbp']:.4f}  "
         f"in play {weighted['in_play']:.4f}  pitches/PA {weighted['pitches']:.3f}"
     )
-    ok = n_pool == n_real and all(row[4] for row in rows)
-    _log(f"  {prefix} label check {'PASS' if ok else 'FAIL'}")
-    return ok
+    _log(f"  {prefix} label check {'PASS' if run.ok else 'FAIL'}")
+    return run.ok
 
 
 def _check_metadata(con: Any, seasons: list[int]) -> bool:
@@ -318,11 +310,10 @@ def _check_metadata(con: Any, seasons: list[int]) -> bool:
     and its row count is the table's."""
     after = _pool_counts(con, seasons)
     meta = {
-        int(s): (v, int(n))
-        for s, v, n in con.execute(
-            "SELECT season, builder_version, row_count FROM sim.pool_build_metadata "
-            f"WHERE pool_name = 'pitch_pool' AND season IN ({_season_list(seasons)})"
-        ).fetchall()
+        s: (v, int(n))
+        for s, (v, n) in read_pool_builds(
+            con, "pitch_pool", seasons, "builder_version, row_count"
+        ).items()
     }
     ok = True
     for s in seasons:
@@ -337,7 +328,10 @@ def _matches_snapshot(
     con: Any, seasons: list[int], before: dict[int, int], versions: dict[int, str | None]
 ) -> bool:
     """TRUE when the pool holds the snapshot's rows, classes and builders."""
-    if _pool_counts(con, seasons) != before or _builder_versions(con, seasons) != versions:
+    if (
+        _pool_counts(con, seasons) != before
+        or pool_builder_versions(con, "pitch_pool", seasons) != versions
+    ):
         return False
     differ = con.execute(
         "SELECT COUNT(*) FROM _sim553_before b "

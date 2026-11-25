@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, StealPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import StealPool
 from simulation.full_pool_sampler import FullPoolSampler
 
 KW = {"outs": 0, "balls": 0, "strikes": 0, "score_diff": 0}

@@ -1,0 +1,170 @@
+"""The run-expectancy matrix: the average runs from each state of outs and bases to the end of
+the half-inning.
+
+``build_run_expectancy_matrix`` builds it from ``raw.pitches`` and writes
+``derived.run_expectancy_matrix``. The double-play model reads it for its run values.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import date
+
+import duckdb
+
+from profiles.sql import sql_seasons
+
+log = logging.getLogger("player_profile_computor")
+
+
+#: Approximate run expectancies for ten (outs, bases) states: the fallback when the
+#: built matrix lacks a state. ``bases`` is a bitmask: bit 0 first, bit 1 second, bit 2 third.
+RE24_APPROX = {
+    (0, 0b001): 0.83,
+    (0, 0b011): 1.45,
+    (0, 0b111): 2.20,
+    (1, 0b001): 0.50,
+    (1, 0b011): 0.90,
+    (1, 0b111): 1.50,
+    (2, 0b000): 0.10,
+    (0, 0b000): 0.48,
+    (1, 0b000): 0.26,
+    (2, 0b001): 0.22,
+}
+
+
+def build_run_expectancy_matrix(
+    conn: duckdb.DuckDBPyConnection, seasons: list[int], asof: date | None = None
+) -> dict:
+    """Build the 24-state run-expectancy matrix from the plate appearances of ``seasons``.
+
+    Returns a dict of (outs, bases) -> the average runs to the end of the
+    half-inning. ``bases`` is a bitmask: bit 0 first, bit 1 second, bit 2 third.
+
+    ``asof`` keeps the plays with ``game_date <= asof``. The matrix feeds
+    ``dp_run_value`` in ``_compute_dp_metrics``, so an uncut matrix leaks later
+    run scoring into a cutoff build.
+
+    A live build replaces the ``season_range`` rows of
+    ``derived.run_expectancy_matrix``. A cutoff build returns the dict and
+    writes nothing. The table's key is the season range (such as "2023-2026"),
+    not the cutoff, so a cutoff build would overwrite the live rows. No reader
+    of the table needs a cutoff.
+    """
+    season_list = sql_seasons(seasons)
+    log.info("Building run expectancy matrix for seasons %s …", seasons)
+    date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
+
+    df = conn.execute(f"""
+        WITH plays AS (
+            SELECT
+                game_pk,
+                inning,
+                inning_topbot,
+                at_bat_number,
+                outs,
+                -- Runners state bitmask: bit0=1B, bit1=2B, bit2=3B
+                (CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END)
+                + (CASE WHEN on_2b IS NOT NULL THEN 2 ELSE 0 END)
+                + (CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END) AS runners_state,
+                home_score,
+                away_score,
+                CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END AS bat_score
+            FROM pg.raw.pitches
+            WHERE season IN ({season_list})
+              AND inning <= 8            -- exclude 9th+ for unbiased estimates
+              AND events IS NOT NULL     -- one row per PA
+              {date_cutoff}
+        ),
+        -- Get the final score for each half-inning.
+        --
+        -- SIM-458 (re-landed 2026-08-13; first landed in c11c919, reverted with
+        -- it for the OTHER tickets' defect): this was `MAX(bat_score)` over the
+        -- `plays` rows. `bat_score` is the score ENTERING a plate appearance, so
+        -- runs scored on the LAST plate appearance of a half-inning appear on no
+        -- later row and were invisible. Every run-expectancy value was biased
+        -- LOW. Measured on 2024, innings 1-8: 126 of 39,543 half-innings (0.3%)
+        -- and 146 runs — concentrated exactly where a run scores on a play that
+        -- also ends the inning. The matrix feeds BOTH the SIM-499 run-value
+        -- ledger and the SIM-473 baserunner weighting, so it is load-bearing
+        -- twice.
+        --
+        -- BOTH available formulas are LOWER BOUNDS and they miss different
+        -- runs: `MAX(bat_score)` misses the last plate appearance; the
+        -- running-score sum misses any run whose `runs_on_pitch` is unset (11
+        -- half-innings in 2024). Neither can invent a run, so GREATEST of the
+        -- two is the tighter bound. Read from the RAW table, not from `plays`:
+        -- `plays` keeps one row per plate appearance (`events IS NOT NULL`),
+        -- and a run can score on a pitch that ends no plate appearance — a
+        -- steal of home, a wild pitch, a balk. Summing inside `plays` would
+        -- miss exactly those.
+        inning_final AS (
+            SELECT
+                game_pk, inning, inning_topbot,
+                GREATEST(
+                    MAX(CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END),
+                    MIN(CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END)
+                        + SUM(COALESCE(runs_on_pitch, 0))
+                ) AS final_bat_score
+            FROM pg.raw.pitches
+            WHERE season IN ({season_list})
+              AND inning <= 8
+              {date_cutoff}
+            GROUP BY game_pk, inning, inning_topbot
+        ),
+        scored AS (
+            SELECT
+                p.outs,
+                p.runners_state,
+                (f.final_bat_score - p.bat_score) AS runs_to_end_of_inning
+            FROM plays p
+            JOIN inning_final f
+              ON p.game_pk = f.game_pk
+              AND p.inning = f.inning
+              AND p.inning_topbot = f.inning_topbot
+        )
+        SELECT
+            outs,
+            runners_state,
+            AVG(runs_to_end_of_inning) AS expected_runs,
+            COUNT(*) AS sample_size
+        FROM scored
+        GROUP BY outs, runners_state
+        ORDER BY outs, runners_state
+    """).fetchdf()
+
+    re_matrix = {}
+    season_range = f"{min(seasons)}-{max(seasons)}"
+
+    for _, row in df.iterrows():
+        key = (int(row["outs"]), int(row["runners_state"]))
+        re_matrix[key] = float(row["expected_runs"])
+
+    if asof is not None:
+        log.info(
+            "  RE matrix built as of %s: %d states (not persisted — a cutoff "
+            "build keeps its matrix in memory only).",
+            asof,
+            len(re_matrix),
+        )
+        return re_matrix
+
+    conn.execute("DELETE FROM derived.run_expectancy_matrix WHERE season_range = ?", [season_range])
+    for _, row in df.iterrows():
+        conn.execute(
+            """
+            INSERT INTO derived.run_expectancy_matrix
+            (season_range, outs, runners_state, expected_runs, sample_size)
+            VALUES (?, ?, ?, ?, ?)
+        """,
+            [
+                season_range,
+                int(row["outs"]),
+                int(row["runners_state"]),
+                float(row["expected_runs"]),
+                int(row["sample_size"]),
+            ],
+        )
+
+    log.info("  RE matrix built: %d states", len(re_matrix))
+    return re_matrix

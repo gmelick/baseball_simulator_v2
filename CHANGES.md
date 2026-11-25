@@ -1,3 +1,93 @@
+# BUILT (branch, not merged) — the code layout, part 3: the profile build, the pools and the bundle move into profiles/, pools/ and bundle/, and the clean-up — SIM-647, 2026-11-25
+
+**Why it matters.** Part 3 of the code-layout plan
+(`docs/audit/2026-11-23-sim647-code-layout-plan.md`). The nightly data build now sits in three
+folders, in run order: `profiles/` writes each player's season profile, `pools/` writes the
+pools of real plays, and `bundle/` packages them into the files every simulation worker reads.
+`pipeline/batch/` is gone. The function review removed about 560 lines of duplicate and dead
+code, and the comment rewrite about 170 more. The review also found nine defects, now filed;
+two of them break the simulator at the year turn unless they land before 2027-01-01.
+
+**Step A, the move (Data Engineer, QA / DevOps).** 44 code files: `profiles/` (the profile
+build `build_profiles.py`, one mixin per profile, `arsenal_fit.py`, `park_factors.py`),
+`pools/` (the one pools mixin split into six, one per pool; `pool_metadata.py`;
+`check_pool_labels.py`), `bundle/` (`build_bundle.py`, `load_bundle.py`, one `export_*.py` per
+artifact, `versions.py`, `synthetic_bundle.py` from `simulation/`) and
+`similarity/build_score_tables.py` (the actor score tables). 32 tests move to
+`tests/unit/{profiles,pools,bundle}/`. The three folders join the compose mounts of `app`,
+`live` and `jobs`, the Dockerfile, the mypy and coverage scopes; the nightly rebuild runs
+`python -m profiles.build_profiles` and `python -m bundle.build_bundle`. Proof: 477
+definitions are identical to master's by syntax tree (docstrings and imports removed); the
+only differences are the profile build's list of mixins and the six new mixin classes.
+
+**The byte check (Step A).** Master's code and the branch's each rebuilt the 2026 profiles
+and pools on a copy of the production DuckDB file, then built a bundle. The two builds write
+the same rows. DuckDB stores the rebuilt season's rows in a different order, and the bundle
+exports read with no ORDER BY, so the bundle files hold the same rows in another order (the
+export-order tickets SIM-635, SIM-636 and SIM-597 already cover this); sums over the rows in
+that order differ only by float rounding, and the pitcher fits differ only in their date stamp
+(`docs/audit/records/2026-11-25-sim647-part3-byte-check.md`).
+
+**Step C, the clean-up.** The function review: five read-only reviewers, five builders on
+disjoint files in two waves.
+
+| Function or group | Reason | Kept, merged or deleted |
+|---|---|---|
+| Seven season deletes; five raw-pitch leakage checks (one inlined without its error rule); six Savant season shifts; two placeholder-table loops | Repeated in each profile builder | Merged onto `ComputorBase`: `_delete_season_rows`, `_check_pitch_sources_leakage`, `_savant_season_sql`, `_ensure_placeholder_tables`. A failed check query now logs and skips everywhere |
+| The batter's twelve inline swing lists; `SQL_SWING`; `sql_in` | Copies of the shared code sets | `SQL_SWING` is `ingest.statcast_events.sql_swing()`; `sql_in` deleted |
+| The manager's leverage-bucket and fielding-manager CASE texts (nine copies) | Repeated SQL | Module constants, same text |
+| fielder_plays: two sprint-speed loops, two nearest-position loops, a recomputed distance | Duplicates | Merged; the distance is reused (the same float) |
+| Five pool builders' incremental set-up; three label-check runs; five pool-metadata readers; the got-away SQL; the runners-state and score-margin SQL | Repeated in the builders and the rebuild scripts | Merged into `pools/pool_metadata.py`, `check_pool_labels.run_label_check` and `pools/build_pitch_pool.py`; the reference season still reads the full season list |
+| `attach_pg` and the profile build's own attach | Two Postgres attaches; the profile build's printed the DSN on a failure | One `db.dsn.attach_pg`; a failed attach hides the password |
+| The pool exports' column takers, recency and game-date reads, float stacks, manifest writes, JSON loaders | Seven-fold copies | `bundle/common.py`: `float_columns`, `meta_column`, `optional_meta_column`, `recency_column`, `game_ymd_column`, `write_json`, `read_json` |
+| The bundle link path (nine copies) | Duplicates | `bundle.versions.bundle_link()` |
+| `EngineArtifacts.attach_shared_views` | Test-only; repeated the extract in reverse | Deleted; one round-trip test of all 139 shared keys replaces its uses |
+| `extract_shared_arrays`'s seven blocks; the two embedding-load branches | Repeated blocks | One loop each; the same keys in the same order |
+| `_compute_bullpen_workload` | Only the bullpen load called it, through a whole profile build | `ingest.load_bullpen_availability.compute_bullpen_workload(conn, seasons)` |
+| `compute_leverage_index`, `_sigmoid`, `MIN_FIELDER_BIP`, `PROFILE_TAIL_COLUMNS`, `HOME_PLATE`, `THIRD_BASE`, `_CHANGE_CTX_COLS`, `EngineArtifacts.seasons`, the `sims` read in `load_pitcher_sim`, the TypeError retry and the 0012 column probe in the score tables, the synthetic bundle's unused parameters, unread SQL columns | No program reader | Deleted |
+| `_pickoff_outcomes_cte`, `_play_events_disengagement_cte`, `_quick_auc`, the steal-pool migration guard, `_ensure_index_if_not_exists` | In the wrong module | Moved to their one caller |
+| `_build_stolen_base_pool`, `park_sector`, `convert_legacy_bundle`, `recency_weight`, the `sims` member of pitcher_sim.npz | An open ticket, a twin in part 4, a live path, the SQL's check, a file format | Kept |
+
+Proof: each builder rendered every SQL statement it touched, old and new, on a stub connection;
+all are byte-identical or whitespace-only, except the planned removals of unread columns. The
+pool exports (174 files), the loaded arrays, the synthetic bundle (2,002 arrays) and
+park_geometry.json are identical on the builders' checks. A second full rebuild with the
+function-review code (4ca3a99), on a copy of the DuckDB file master's build left, matches
+master's build by content: every table and every bundle file, the pools compared as joined
+rows (`docs/audit/records/2026-11-25-sim647-part3-byte-check.md`).
+
+The comment rewrite: every docstring and comment in the 44 files says what the code does and
+why, without ticket history; 13,408 lines become 13,238. Docstrings that described code that
+does not exist are corrected, and the known defects are stated as they are. Proof: each
+file's syntax tree with docstrings removed is identical to the function-review commit's (44 of
+44). The docs: `docs/technical/profiles.md`, `pools.md` and `bundle.md` are new, written from
+the code; `pipeline-batch.md` is deleted; every link, the review path, CLAUDE.md's map and the
+mount lists follow; every "N lines" count in `docs/technical/` is recomputed.
+
+**Defects found and filed (not fixed here).** The intentional-walk rates hold one season, and
+the first nightly of 2027 empties them, so no intentional walk fires (SIM-649, P2, before
+2027-01-01). The older seasons' recency weights are not rewritten when the year turns
+(SIM-650, P2, before 2027-01-01). Double steals go to the trailing runner (SIM-651). Three
+pitch-code lists differ from the shared sets (SIM-652). The catcher's steal chances and the
+double-play model's runner speed (SIM-653). The park factors ignore the cutoff (SIM-654).
+The leakage checks cannot fail (SIM-655). A verification limit publishes a cut-down bundle
+(SIM-656). Two small loader gaps (SIM-657). Point (4) of SIM-611 (the fielder's always-NULL
+double-play rate) and a check before the catcher-receiving enable (SIM-526) are added.
+
+**QA (independent pass, two reviewers).** No bug and no changed number. Handled: the
+steal-pool pickoff columns read as optional again (a pre-pickoff bundle zero-fills, as
+before); the synthetic bundle accepts the canonical double-play spelling again; two
+docstrings and eight facts in the new pages corrected. Declared and kept: a pre-0012
+database now raises in the concentration check; the loader leaves the pitcher dict empty
+(production reads the dense matrix; the sampler's dict path is part 4's to remove). Left as
+is: the DuckDB table comment on `derived.at_bat_situations` names the deleted
+`compute_leverage_index()` (DDL; added to SIM-617).
+
+**Checks.** ruff, the format check and mypy (217 files) pass. The container unit lane passes
+in eighths: 6,423 tests, after the function review and again after the comment rewrite (one
+test that read the rebuild's old log line now reads the command). The slow tests (23) and the
+regression lane (33) pass.
+
 # DEPLOYED — the code layout, part 2: the loaders move into ingest/, one MLB client, the clean-up — SIM-647, 2026-11-24
 
 **Why it matters.** Part 2 of the code-layout plan

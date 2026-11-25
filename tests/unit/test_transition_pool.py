@@ -25,11 +25,11 @@ from pathlib import Path
 import duckdb
 import numpy as np
 
+from bundle.export_advancement_pool import build_advancement_pool_artifact
+from bundle.export_batted_ball_pool import build_battedball_pool_artifact
+from bundle.load_bundle import EngineArtifacts
 from ingest.statcast_events import sql_batter_dest, sql_runner_dest
-from pipeline.batch.artifacts.advancement_pool import build_advancement_pool_artifact
-from pipeline.batch.artifacts.battedball_pool import build_battedball_pool_artifact
-from pipeline.batch.engine_artifacts import EngineArtifacts
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(encoding="utf-8")
@@ -717,8 +717,10 @@ class TestTheArtifactRoundTrip:
         assert "adv_pool.1_1_3.feat" in shared
         assert "adv_pool.1_1_3.attempted" in shared
         new_att = np.zeros_like(art.adv_pools["1_1_3"].attempted)
-        art.attach_shared_views({"adv_pool.1_1_3.attempted": new_att})
-        assert art.adv_pools["1_1_3"].attempted is new_att
+        again = EngineArtifacts.load(
+            str(tmp_path), shared_views={"adv_pool.1_1_3.attempted": new_att}
+        )
+        assert again.adv_pools["1_1_3"].attempted is new_att
 
     def test_battedball_meta_carries_the_transition_columns(self, tmp_path):
         c = _op_conn()

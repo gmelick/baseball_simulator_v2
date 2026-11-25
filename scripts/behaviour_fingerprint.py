@@ -31,7 +31,7 @@ Modes
     record.
 ``bundle``
     Hash every array of a built bundle by content (``--bundle-dir``). Build two
-    bundles with ``python -m pipeline.batch.engine_artifacts --out-dir ...``, one
+    bundles with ``python -m bundle.build_bundle --out-dir ...``, one
     on each commit, and fingerprint both.
 ``compare``
     Diff two records and exit 1 when any hash differs.
@@ -198,9 +198,9 @@ def in_memory_bundle() -> Iterator[None]:
     The bundle carries the steal pools and the change pool, so the running game
     and the pitching change draw.
     """
-    from pipeline.batch.engine_artifacts import EngineArtifacts
+    from bundle.load_bundle import EngineArtifacts
+    from bundle.synthetic_bundle import league_artifacts
     from simulation import production_factory
-    from simulation.synthetic_bundle import league_artifacts
 
     original = EngineArtifacts.__dict__["load"]
 

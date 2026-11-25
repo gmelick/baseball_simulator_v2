@@ -256,7 +256,7 @@ The JSON request helpers that every client except `auth.ts` and `assistant.ts` u
 
 ### `frontend/src/api/games.ts`
 
-[Source](../../frontend/src/api/games.ts) · 693 lines · Tests: [slate.spec.ts](../../frontend/e2e/slate.spec.ts), [gamepage.spec.ts](../../frontend/e2e/gamepage.spec.ts), [simulation.spec.ts](../../frontend/e2e/simulation.spec.ts)
+[Source](../../frontend/src/api/games.ts) · 692 lines · Tests: [slate.spec.ts](../../frontend/e2e/slate.spec.ts), [gamepage.spec.ts](../../frontend/e2e/gamepage.spec.ts), [simulation.spec.ts](../../frontend/e2e/simulation.spec.ts)
 
 The client of the game routes (`/api/games`). Its interfaces mirror the models in
 `api/routes/games_models.py` and `api/schemas/` by hand.
@@ -274,7 +274,7 @@ The client of the game routes (`/api/games`). Its interfaces mirror the models i
 
 ### `frontend/src/api/betting.ts`
 
-[Source](../../frontend/src/api/betting.ts) · 139 lines · Tests: [smoke.spec.ts](../../frontend/e2e/smoke.spec.ts), [gamepage.spec.ts](../../frontend/e2e/gamepage.spec.ts), [slate.spec.ts](../../frontend/e2e/slate.spec.ts)
+[Source](../../frontend/src/api/betting.ts) · 138 lines · Tests: [smoke.spec.ts](../../frontend/e2e/smoke.spec.ts), [gamepage.spec.ts](../../frontend/e2e/gamepage.spec.ts), [slate.spec.ts](../../frontend/e2e/slate.spec.ts)
 
 | Function / class | What it does | Called from |
 |---|---|---|
@@ -380,7 +380,7 @@ then the pitchers, the starter first. A line input redraws the over / under mark
 
 ### `frontend/src/components/games/BettingCard.tsx`
 
-[Source](../../frontend/src/components/games/BettingCard.tsx) · 298 lines · Tests: [smoke.spec.ts](../../frontend/e2e/smoke.spec.ts), [gamepage.spec.ts](../../frontend/e2e/gamepage.spec.ts)
+[Source](../../frontend/src/components/games/BettingCard.tsx) · 289 lines · Tests: [smoke.spec.ts](../../frontend/e2e/smoke.spec.ts), [gamepage.spec.ts](../../frontend/e2e/gamepage.spec.ts)
 
 The Betting panel. "Load betting" reads `/edges`, then `/signals` (both run a simulation on the
 server). The card renders every market the response carries, in the response's `markets` order,

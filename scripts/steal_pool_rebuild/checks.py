@@ -4,24 +4,25 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASSES
+from bundle.worker_pools import STEAL_PITCH_CLASSES
+from pools.build_steal_pool import STEAL_POOL_0031_COLUMNS
+from pools.pool_metadata import pool_builder_versions, read_pool_builds
+from profiles.sql import sql_seasons
 
 from .common import (
     DEAD_BALL_CLASSES,
     EXPECT,
     LABELS,
     MIGRATION,
-    NEW_COLUMNS,
     POOL,
     SNAP,
     _builder,
     _log,
     _ok,
-    _season_list,
 )
 from .migration import missing_columns
 from .pickoffs import PickoffCount
-from .preflight import _steal_counts, _steal_versions
+from .preflight import _steal_counts
 
 # ---------------------------------------------------------------------------
 # The checks (inside the rebuild's transaction)
@@ -72,7 +73,7 @@ def check_new_rows(con: Any, seasons: list[int]) -> bool:
     """Check b: every row the snapshot does not hold is a pickoff row."""
     base = (
         f"FROM {POOL} n LEFT JOIN {SNAP} b ON b.pitch_id = n.pitch_id "
-        f"WHERE n.season IN ({_season_list(seasons)}) AND b.pitch_id IS NULL"
+        f"WHERE n.season IN ({sql_seasons(seasons)}) AND b.pitch_id IS NULL"
     )
     new, bad = con.execute(
         "SELECT COUNT(*), COUNT(*) FILTER (WHERE NOT (n.pitch_id < 0 "
@@ -124,7 +125,7 @@ _PICKOFF_ROW_DIFFS = " OR ".join(
 def check_pickoff_rows(con: Any, seasons: list[int], counts: dict[int, PickoffCount]) -> bool:
     """Check c: the pickoff rows are exactly the counted outcomes, one row
     each, and each row carries its outcome's facts."""
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     joined = (
         f"FROM (SELECT * FROM {EXPECT} WHERE NOT has_pitch AND has_ids) e "
         f"FULL OUTER JOIN (SELECT * FROM {POOL} WHERE season IN ({sl}) AND pitch_id < 0) s "
@@ -186,7 +187,7 @@ def check_identity(con: Any, seasons: list[int], counts: dict[int, PickoffCount]
     """Check d: tagged rows + pickoff rows equal the outcomes that fit a
     pair, less the listed ones (no runner or pitcher id; a second outcome
     folded into one tag)."""
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     tagged = {
         int(s): int(n)
         for s, n in con.execute(
@@ -219,7 +220,7 @@ def check_classes(con: Any, seasons: list[int]) -> bool:
     """Check e: the class is set on every pitch row and NULL on every pickoff
     row; it equals the pitch pool's class for the same pitch, so the shares
     per (target, outs, balls, strikes) equal the pitch pool's."""
-    sl = _season_list(seasons)
+    sl = sql_seasons(seasons)
     classes = "(" + ", ".join(f"'{c}'" for c in STEAL_PITCH_CLASSES) + ")"
     pitch_null, pitch_marked, odd, po_class, po_unmarked = con.execute(
         f"""
@@ -287,7 +288,7 @@ def check_dead_ball_attempts(con: Any, seasons: list[int]) -> bool:
     dead = "(" + ", ".join(f"'{c}'" for c in DEAD_BALL_CLASSES) + ")"
     n = int(
         con.execute(
-            f"SELECT COUNT(*) FROM {POOL} WHERE season IN ({_season_list(seasons)}) "
+            f"SELECT COUNT(*) FROM {POOL} WHERE season IN ({sql_seasons(seasons)}) "
             f"AND COALESCE(attempted, FALSE) AND pitch_class IN {dead}"
         ).fetchone()[0]
     )
@@ -300,13 +301,13 @@ def check_pickoff_row_ids(con: Any, seasons: list[int]) -> bool:
     """Check g: every pickoff row has a game date, a runner and a pitcher."""
     n = int(
         con.execute(
-            f"SELECT COUNT(*) FROM {POOL} WHERE season IN ({_season_list(seasons)}) "
+            f"SELECT COUNT(*) FROM {POOL} WHERE season IN ({sql_seasons(seasons)}) "
             "AND pitch_id < 0 AND (game_date IS NULL OR runner_id IS NULL OR pitcher_id IS NULL)"
         ).fetchone()[0]
     )
     no_catcher = int(
         con.execute(
-            f"SELECT COUNT(*) FROM {POOL} WHERE season IN ({_season_list(seasons)}) "
+            f"SELECT COUNT(*) FROM {POOL} WHERE season IN ({sql_seasons(seasons)}) "
             "AND pitch_id < 0 AND catcher_id IS NULL"
         ).fetchone()[0]
     )
@@ -323,11 +324,10 @@ def check_metadata(con: Any, seasons: list[int]) -> bool:
     the table's row count."""
     after = _steal_counts(con, seasons)
     meta = {
-        int(s): (v, int(n))
-        for s, v, n in con.execute(
-            "SELECT season, builder_version, row_count FROM sim.pool_build_metadata "
-            f"WHERE pool_name = 'steal_opportunity_pool' AND season IN ({_season_list(seasons)})"
-        ).fetchall()
+        s: (v, int(n))
+        for s, (v, n) in read_pool_builds(
+            con, "steal_opportunity_pool", seasons, "builder_version, row_count"
+        ).items()
     }
     ok = True
     for s in seasons:
@@ -342,7 +342,10 @@ def matches_snapshot(
     con: Any, seasons: list[int], before: dict[int, int], versions: dict[int, str | None]
 ) -> bool:
     """TRUE when the pool holds exactly the snapshot's rows, labels and builders."""
-    if _steal_counts(con, seasons) != before or _steal_versions(con, seasons) != versions:
+    if (
+        _steal_counts(con, seasons) != before
+        or pool_builder_versions(con, "steal_opportunity_pool", seasons) != versions
+    ):
         return False
     diffs = " OR ".join(f"COALESCE(n.{c}, FALSE) IS DISTINCT FROM b.{c}" for c in LABELS)
     differ = con.execute(
@@ -360,7 +363,7 @@ def _log_migration_rolled_back(con: Any, migrated_here: bool) -> None:
     committed them, or someone applied 0031 by hand), the rollback cannot
     remove them, and a pool builder older than sim554.1 fails on them.
     """
-    left = [c for c in NEW_COLUMNS if c not in missing_columns(con)]
+    left = [c for c in STEAL_POOL_0031_COLUMNS if c not in missing_columns(con)]
     if not migrated_here:
         if left:
             _log(

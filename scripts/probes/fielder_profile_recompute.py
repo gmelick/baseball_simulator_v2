@@ -67,7 +67,7 @@ Before this: Alembic 0027 applied and the two boards loaded
 per position). After this: ``make calibrate`` (then write the win-probability curve
 back — the SIM-427 trap), copy ``sigma_of_range`` and the range weights into the
 module defaults, and rebuild the seven fielder matrices
-(``python -m pipeline.batch.engine_artifacts --what actors_sim --matrix fielder_LF
+(``python -m bundle.build_bundle --what actors_sim --matrix fielder_LF
 ...``). Run book: ``docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md`` §8.
 """
 
@@ -92,12 +92,10 @@ if str(_ROOT) not in sys.path:
 import duckdb  # noqa: E402
 
 from db.introspect import duck_table_exists
-from pipeline.batch.player_profile_computor import (
-    LeagueAverageProfiles,
-    PlayerProfileComputor,
-    build_run_expectancy_matrix,
-)
-from pipeline.batch.profiles.constants import FIELDER_TAIL_COLUMNS
+from profiles.build_profiles import PlayerProfileComputor
+from profiles.constants import FIELDER_TAIL_COLUMNS
+from profiles.league_averages import LeagueAverageProfiles
+from profiles.leverage import build_run_expectancy_matrix
 
 log = logging.getLogger("fielder_profile_recompute")
 
@@ -154,10 +152,6 @@ def _connect_writable(duckdb_path: str) -> duckdb.DuckDBPyConnection:
             "the file: a rebuild, or a reader in another container. The app holds no "
             "handle since SIM-524; wait for the other process and retry."
         ) from exc
-
-
-def _season_list(seasons: list[int]) -> str:
-    return ", ".join(str(int(s)) for s in seasons)
 
 
 def migration_statements(text: str) -> list[str]:

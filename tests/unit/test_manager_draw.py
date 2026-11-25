@@ -37,16 +37,14 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    ChangePool,
-    EngineArtifacts,
-    build_pitching_change_pool,
-)
+from bundle.export_pitching_change_pool import build_pitching_change_pool
+from bundle.load_bundle import EngineArtifacts
+from bundle.synthetic_bundle import league_artifacts
+from bundle.worker_pools import ChangePool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.production_factory import _manager_draw_enabled, apply_manager_env
 from simulation.sim_loop import StateMachine
-from simulation.synthetic_bundle import league_artifacts
 
 _SEASON = 2024
 
@@ -211,8 +209,6 @@ class TestTheBuilder:
         shared = art.extract_shared_arrays()
         assert shared["change_pool.sit"] is art.change_pool.sit
         view = np.zeros(art.change_pool.n, dtype=np.int8)
-        art.attach_shared_views({"change_pool.changed": view})
-        assert art.change_pool.changed is view
         art2 = EngineArtifacts.load(str(tmp_path), shared_views={"change_pool.changed": view})
         assert art2.change_pool is not None and art2.change_pool.changed is view
 
@@ -237,7 +233,7 @@ class TestTheBuilder:
     def test_the_game_context_lands_on_the_right_rows(self, tmp_path):
         # game 1: home manager 7, away manager 8; the reliever 101 entered on
         # two days' rest, having pitched in the last two days, 15 pitches in 3.
-        ctx = ({1: (7, 8)}, {(1, 101): (2, 1, 15)})
+        ctx = ({1: (7, 8)}, {(1, 101): (2, 1, 15)}, {})
         con = duckdb.connect(":memory:")
         try:
             _seed(con)
@@ -459,7 +455,7 @@ class _Recorder(StateMachine):
 
 
 def _machine(manager=None, *, draw: bool = False) -> _Recorder:
-    from simulation.synthetic_bundle import synthetic_sampler
+    from bundle.synthetic_bundle import synthetic_sampler
 
     fp = synthetic_sampler(league_artifacts(), seed=3)
     m = _Recorder(fp, rng=np.random.default_rng(3), manager=manager)

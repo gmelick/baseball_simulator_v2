@@ -51,12 +51,15 @@ ALEMBIC_0026 = REPO / "db" / "migrations" / "versions" / "0026_sim531_savant_run
 VERSION_FILE = REPO / "db" / "schemas" / "duckdb_schema_version.txt"
 SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 PG_SCHEMA_SQL = REPO / "db" / "schemas" / "01_postgres_schema.sql"
-COMPUTOR = REPO / "pipeline" / "batch" / "player_profile_computor.py"
+COMPUTOR = REPO / "profiles" / "build_profiles.py"
 
 
 def _computor_source() -> str:
     """The computor's whole source: the main module and its ``profiles`` package."""
-    paths = [COMPUTOR, *sorted((COMPUTOR.parent / "profiles").glob("*.py"))]
+    paths = [
+        *sorted(COMPUTOR.parent.glob("*.py")),
+        *sorted((COMPUTOR.parent.parent / "pools").glob("*.py")),
+    ]
     return "\n".join(p.read_text(encoding="utf-8") for p in paths)
 
 
@@ -191,7 +194,7 @@ class TestMigrations:
         """The baserunner INSERT is positional: the DDL's trailing columns must
         be exactly ``BASERUNNER_TAIL_COLUMNS``, so the schema and the SELECT
         stay in step."""
-        from pipeline.batch.profiles.constants import BASERUNNER_TAIL_COLUMNS
+        from profiles.constants import BASERUNNER_TAIL_COLUMNS
 
         con = duckdb.connect(":memory:")
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
@@ -383,7 +386,7 @@ def _seed(con: duckdb.DuckDBPyConnection, *, savant_season: int = 2024) -> None:
 
 
 def _computor(con: duckdb.DuckDBPyConnection):
-    from pipeline.batch.player_profile_computor import PlayerProfileComputor
+    from profiles.build_profiles import PlayerProfileComputor
 
     c = PlayerProfileComputor(pg_dsn="", duckdb_path=":memory:")
     c._conn = con
@@ -484,7 +487,7 @@ class TestBuildersExecuted:
             assert (xb is not None) is expect_lead, (savant_season, xb)
 
     def test_the_league_average_writer_emits_the_two_steal_rows(self, tmp_path: Path) -> None:
-        from pipeline.batch.player_profile_computor import LeagueAverageProfiles
+        from profiles.league_averages import LeagueAverageProfiles
 
         path = str(tmp_path / "sim531.duckdb")
         con = duckdb.connect(path)
@@ -538,7 +541,7 @@ class TestBuildersExecuted:
         tables, still gets its league averages: the writer probes, never
         assumes. The fixture of ``test_league_average_profiles.py`` builds
         only a few narrow tables."""
-        from pipeline.batch.player_profile_computor import LeagueAverageProfiles
+        from profiles.league_averages import LeagueAverageProfiles
 
         path = str(tmp_path / "old.duckdb")
         con = duckdb.connect(path)
@@ -626,14 +629,38 @@ class TestBuilderSource:
         start = src.index(f"def {name}")
         return src[start : src.index(next_marker, start)]
 
+    @staticmethod
+    def _rendered_insert(name: str, asof: date | None) -> str:
+        """The builder's INSERT as it runs, recorded off a stub connection."""
+        from profiles.build_profiles import PlayerProfileComputor
+
+        statements: list[str] = []
+
+        class _Stub:
+            def execute(self, sql, params=None):
+                statements.append(sql)
+                return self
+
+            def fetchone(self):
+                return (None,)
+
+            def fetchall(self):
+                return []
+
+        comp = PlayerProfileComputor.__new__(PlayerProfileComputor)
+        comp._conn = _Stub()
+        getattr(comp, name)([2024], asof=asof)
+        return next(sql for sql in statements if "INSERT OR REPLACE INTO" in sql)
+
     def test_the_steal_builder_shifts_the_savant_season_under_a_cutoff(self) -> None:
+        cut = self._rendered_insert("_build_baserunner_steal_metrics", date(2024, 6, 15))
+        assert "sv.season = (CASE WHEN r.season = 2024 THEN r.season - 1 ELSE r.season END)" in cut
+        live = self._rendered_insert("_build_baserunner_steal_metrics", None)
+        assert re.search(r"sv\.season = r\.season\s", live)
         body = self._body(
             "_build_baserunner_steal_metrics",
             "def _assert_baserunner_steal_profiles_have_no_leakage",
         )
-        assert "CASE WHEN r.season = {asof_date.year} THEN r.season - 1 ELSE r.season END" in body
-        assert 'else "r.season"' in body
-        assert "sv.season = {savant_season}" in body
         assert "FROM pg.raw.savant_basestealing" in body
         assert re.search(
             r"asof_date,\s*\n\s*lead_primary_ft, lead_secondary_ft, lead_jump_ft, savant_steal_opps",
@@ -642,13 +669,14 @@ class TestBuilderSource:
         assert "SELECT player_id, season FROM opp_1b" in body  # every runner with a chance
 
     def test_the_pitcher_builder_shifts_the_savant_season_under_a_cutoff(self) -> None:
+        cut = self._rendered_insert("_build_pitcher_steal_metrics", date(2024, 6, 15))
+        assert "sv.season = (CASE WHEN p.season = 2024 THEN p.season - 1 ELSE p.season END)" in cut
+        live = self._rendered_insert("_build_pitcher_steal_metrics", None)
+        assert re.search(r"sv\.season = p\.season\s", live)
         body = self._body(
             "_build_pitcher_steal_metrics", "def _assert_pitcher_steal_profiles_have_no_leakage"
         )
-        assert "CASE WHEN p.season = {asof_date.year} THEN p.season - 1 ELSE p.season END" in body
-        assert 'else "p.season"' in body
         assert "LEFT JOIN pg.raw.savant_pitcher_running_game sv" in body
-        assert "sv.season = {savant_season}" in body
         for col in HOLD_COLUMNS:
             assert col in body, col
 

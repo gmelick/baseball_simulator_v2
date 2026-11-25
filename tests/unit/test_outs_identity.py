@@ -37,17 +37,17 @@ from typing import Any
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import StealPool
-from simulation.game_state import PlayResult, Team
-from simulation.loop.boxscore import GameSimResult
-from simulation.play_recorder import RecordingMachine
-from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import (
+from bundle.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,
     synthetic_artifacts,
     synthetic_sampler,
 )
+from bundle.worker_pools import StealPool
+from simulation.game_state import PlayResult, Team
+from simulation.loop.boxscore import GameSimResult
+from simulation.play_recorder import RecordingMachine
+from simulation.sim_loop import StateMachine, simulate_game
 
 SEASON = 2024
 GAMES = 25

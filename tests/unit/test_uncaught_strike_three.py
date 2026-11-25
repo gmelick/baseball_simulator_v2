@@ -22,7 +22,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from profiles.build_profiles import PlayerProfileComputor
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(encoding="utf-8")
@@ -153,12 +153,15 @@ class TestPitchPoolReceivingColumns:
     def test_the_builder_selects_catcher_and_got_away(self):
         import inspect
 
+        from pools.build_pitch_pool import SQL_GOT_AWAY
+
         src = inspect.getsource(PlayerProfileComputor._build_pitch_pool)
         assert "fielder_2                           AS catcher_id" in src
+        assert "{SQL_GOT_AWAY}" in src
         # got_away = the parser flag OR the uncaught-K3 des label.
-        assert "COALESCE(passed_ball_wild_pitch, FALSE)" in src
-        assert "'strikeout', 'strikeout_double_play'" in src
-        assert "des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%'" in src
+        assert "COALESCE(passed_ball_wild_pitch, FALSE)" in SQL_GOT_AWAY
+        assert "'strikeout', 'strikeout_double_play'" in SQL_GOT_AWAY
+        assert "des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%'" in SQL_GOT_AWAY
 
     def test_the_real_ddl_carries_the_columns(self):
         c = duckdb.connect(":memory:")
@@ -177,7 +180,7 @@ class TestPitchPoolReceivingColumns:
         construct without them (None), the batted-ball realism precedent."""
         import numpy as np
 
-        from pipeline.batch.artifacts.pools import HandPool
+        from bundle.worker_pools import HandPool
 
         p = HandPool(
             geom=np.zeros((2, 10), dtype=np.float32),
@@ -191,7 +194,7 @@ class TestPitchPoolReceivingColumns:
         assert p.catcher_id is None and p.got_away is None
 
     def test_receiving_attrs_are_shareable(self):
-        from pipeline.batch.artifacts.pools import _HAND_POOL_SHAREABLE_ATTRS
+        from bundle.worker_pools import _HAND_POOL_SHAREABLE_ATTRS
 
         assert "catcher_id" in _HAND_POOL_SHAREABLE_ATTRS
         assert "got_away" in _HAND_POOL_SHAREABLE_ATTRS

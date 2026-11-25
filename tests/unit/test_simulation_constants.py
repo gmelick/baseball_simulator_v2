@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import unittest
 
-import pipeline.batch.profiles.defense as profile_defense
+import profiles.defense as profile_defense
 from simulation.constants import CANONICAL_OUTCOME_KEYS, DEFENSIVE_RUN_VALUES
 
 # The defensible canonical outcome set: the 12 standard PA outcomes plus

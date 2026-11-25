@@ -29,12 +29,10 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import (
-    EngineArtifacts,
-    StealPool,
-    build_steal_pool_artifact,
-)
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
+from bundle.export_steal_pool import build_steal_pool_artifact
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import StealPool
+from profiles.build_profiles import PlayerProfileComputor
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, PlayResult, Team
 from simulation.sim_loop import StateMachine
@@ -389,10 +387,12 @@ class TestTheArtifactRoundTrip:
         shared = art.extract_shared_arrays()
         assert "steal_pool.2.sit" in shared
         assert "steal_pool.2.attempted" in shared
-        # Attach round-trip: a replacement view lands on the pool.
+        # A load with a replacement view takes it in place of the disk read.
         new_att = np.zeros_like(art.steal_pools["2"].attempted)
-        art.attach_shared_views({"steal_pool.2.attempted": new_att})
-        assert art.steal_pools["2"].attempted is new_att
+        again = EngineArtifacts.load(
+            str(tmp_path), shared_views={"steal_pool.2.attempted": new_att}
+        )
+        assert again.steal_pools["2"].attempted is new_att
 
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import pipeline.batch.profiles.sql as profile_sql
+import profiles.sql as profile_sql
 from api.auth import require_auth
 from api.routes import analytics
 from api.routes.ai_assistant import _SYSTEM_PROMPT
@@ -331,13 +331,13 @@ def test_the_route_fragments_render_from_the_shared_sets(
 
 
 def test_the_profile_sql_binds_the_shared_sets() -> None:
-    """The profile SQL binds the six sets from the vocabulary module.
+    """The profile SQL binds the vocabulary module's sets and its swing.
 
-    ``pipeline/batch/profiles/sql.py`` builds the profiles' pitch-result SQL,
-    and each of its six sets is the vocabulary module's own object. So the
-    profiles hold no copy that could drift.
+    ``profiles/sql.py`` builds the profiles' pitch-result SQL. Each of its five
+    sets is the vocabulary module's own object, and its swing is the module's
+    ``sql_swing()``. So the profiles hold no copy that could drift.
     """
-    from pipeline.batch.profiles import sql as computor
+    from profiles import sql as computor
 
     for name in (
         "BALL_TYPES",
@@ -345,9 +345,9 @@ def test_the_profile_sql_binds_the_shared_sets() -> None:
         "WHIFF_TYPES",
         "FOUL_TYPES",
         "STRIKE_THREE_FOUL_TYPES",
-        "NON_SWING_TYPES",
     ):
         assert getattr(computor, name) is getattr(statcast_events, name), name
+    assert statcast_events.sql_swing() == computor.SQL_SWING
 
 
 def test_the_api_and_the_profiles_render_the_same_swing() -> None:
@@ -384,7 +384,7 @@ def test_the_api_loads_the_vocabulary_without_the_computor() -> None:
     probe = (
         "import json, sys\n"
         "import api.routes.analytics\n"
-        "names = ('ingest.statcast_events', 'pipeline.batch.player_profile_computor',"
+        "names = ('ingest.statcast_events', 'profiles.build_profiles',"
         " 'duckdb', 'sklearn')\n"
         "print(json.dumps({name: name in sys.modules for name in names}))\n"
     )
@@ -400,7 +400,7 @@ def test_the_api_loads_the_vocabulary_without_the_computor() -> None:
     loaded = json.loads(done.stdout.strip().splitlines()[-1])
     assert loaded == {
         "ingest.statcast_events": True,
-        "pipeline.batch.player_profile_computor": False,
+        "profiles.build_profiles": False,
         "duckdb": False,
         "sklearn": False,
     }

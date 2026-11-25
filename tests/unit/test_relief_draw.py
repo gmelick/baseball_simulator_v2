@@ -38,7 +38,9 @@ from datetime import date
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import ChangePool, EngineArtifacts
+from bundle.load_bundle import EngineArtifacts
+from bundle.synthetic_bundle import DEFAULT_CHANGE_RATES, change_pool, league_artifacts
+from bundle.worker_pools import ChangePool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.lineup_resolver import (
@@ -54,7 +56,6 @@ from simulation.sim_kwargs import (
     sim_kwargs_from_state,
 )
 from simulation.sim_loop import StateMachine
-from simulation.synthetic_bundle import DEFAULT_CHANGE_RATES, change_pool, league_artifacts
 
 _SEASON = 2024
 

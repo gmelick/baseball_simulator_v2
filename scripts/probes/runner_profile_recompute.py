@@ -39,7 +39,7 @@ Before this: Alembic 0026 applied and the five boards loaded
 first_base_receiving --seasons 2023 2024 2025 2026``). After this: ``make calibrate``
 (then write the win-probability curve back — the SIM-427 trap), copy the two fitted
 sigmas into the module defaults, and rebuild the three matrices
-(``python -m pipeline.batch.engine_artifacts --what actors_sim --matrix runner_steal
+(``python -m bundle.build_bundle --what actors_sim --matrix runner_steal
 --matrix pitcher_steal --matrix runner_adv``) — see the plan's run book. The paired
 accuracy read is cross-bundle by nature (the matrices and the calibration file both
 change between the OFF and ON arms), so ``scripts/pair_accuracy.py`` needs
@@ -63,8 +63,9 @@ if str(_ROOT) not in sys.path:
 
 import duckdb  # noqa: E402
 
-from pipeline.batch.player_profile_computor import LeagueAverageProfiles, PlayerProfileComputor
-from pipeline.batch.profiles.constants import BASERUNNER_TAIL_COLUMNS
+from profiles.build_profiles import PlayerProfileComputor
+from profiles.constants import BASERUNNER_TAIL_COLUMNS
+from profiles.league_averages import LeagueAverageProfiles
 
 log = logging.getLogger("runner_profile_recompute")
 

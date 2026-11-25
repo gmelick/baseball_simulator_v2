@@ -126,7 +126,7 @@ def _write_managers(con, manager_rows, league_rows) -> None:
         con.executemany(
             f"INSERT INTO derived.manager_season_metrics VALUES ({marks})", manager_rows
         )
-    # The real table (pipeline/batch/profiles/league_averages.py) holds a JSON
+    # The real table (profiles/league_averages.py) holds a JSON
     # column; a VARCHAR holding the JSON text is what the resolver parses.
     con.execute("DROP TABLE IF EXISTS derived.league_averages")
     con.execute(

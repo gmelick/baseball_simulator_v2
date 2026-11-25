@@ -52,7 +52,7 @@ Run book: ``docs/audit/2026-09-16-sim550-outfield-arm-block-plan.md`` §8. After
 this: ``make calibrate`` (then write the win-probability curve back — the SIM-427
 trap), copy ``sigma_of_arm`` and the three reliability weights into the module
 defaults, and rebuild the three outfield matrices
-(``python -m pipeline.batch.engine_artifacts --what actors_sim --matrix fielder_LF
+(``python -m bundle.build_bundle --what actors_sim --matrix fielder_LF
 --matrix fielder_CF --matrix fielder_RF``).
 """
 
@@ -78,10 +78,9 @@ if str(_ROOT) not in sys.path:
 import duckdb  # noqa: E402
 
 from db.introspect import duck_table_exists
-from pipeline.batch.player_profile_computor import (  # noqa: E402
-    LeagueAverageProfiles,
-    PlayerProfileComputor,
-)
+from profiles.build_profiles import PlayerProfileComputor  # noqa: E402
+from profiles.league_averages import LeagueAverageProfiles  # noqa: E402
+from profiles.sql import sql_seasons  # noqa: E402
 
 log = logging.getLogger("outfield_arm_recompute")
 
@@ -149,10 +148,6 @@ def _connect_writable(duckdb_path: str) -> duckdb.DuckDBPyConnection:
         ) from exc
 
 
-def _season_list(seasons: list[int]) -> str:
-    return ", ".join(str(int(s)) for s in seasons)
-
-
 def block_floor(season: int, today: date) -> int:
     """The least outfield rows with a block ``season`` may carry."""
     if season == 2020:
@@ -181,7 +176,7 @@ def _pool_block_sql(seasons: list[int], *, position_num: int | None = None) -> s
             SELECT season, scenario, from_base, target_base, outs,
                    fielder_id, fielder_pos, attempted, safe
             FROM sim.advancement_opportunity_pool
-            WHERE season IN ({_season_list(seasons)})
+            WHERE season IN ({sql_seasons(seasons)})
               AND fielder_pos IN (7, 8, 9) AND fielder_id IS NOT NULL
         ),
         expected AS (
@@ -342,13 +337,13 @@ def check_block_only_where_fielded(con: Any, seasons: list[int]) -> list[str]:
                CASE fielder_pos WHEN 7 THEN 'LF' WHEN 8 THEN 'CF' ELSE 'RF' END AS position,
                season
         FROM sim.advancement_opportunity_pool
-        WHERE season IN ({_season_list(seasons)})
+        WHERE season IN ({sql_seasons(seasons)})
           AND fielder_pos IN (7, 8, 9) AND fielder_id IS NOT NULL
     """
     without_chance = con.execute(
         f"""
         SELECT COUNT(*) FROM derived.fielder_season_metrics f
-        WHERE f.season IN ({_season_list(seasons)}) AND f.position IN {OUTFIELD_SQL}
+        WHERE f.season IN ({sql_seasons(seasons)}) AND f.position IN {OUTFIELD_SQL}
           AND f.arm_opportunities IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM ({fielded}) x
@@ -450,11 +445,11 @@ def check_of_arm_runs_null(con: Any, seasons: list[int]) -> list[str]:
     problems: list[str] = []
     inside = con.execute(
         "SELECT COUNT(*) FROM derived.fielder_season_metrics "
-        f"WHERE season IN ({_season_list(seasons)}) AND of_arm_runs IS NOT NULL"
+        f"WHERE season IN ({sql_seasons(seasons)}) AND of_arm_runs IS NOT NULL"
     ).fetchone()[0]
     outside = con.execute(
         "SELECT COUNT(*) FROM derived.fielder_season_metrics "
-        f"WHERE season NOT IN ({_season_list(seasons)}) AND of_arm_runs IS NOT NULL"
+        f"WHERE season NOT IN ({sql_seasons(seasons)}) AND of_arm_runs IS NOT NULL"
     ).fetchone()[0]
     log.info("  of_arm_runs non-NULL: %d in the requested seasons, %d outside", inside, outside)
     if inside:
@@ -766,14 +761,14 @@ def clear_arm_block(con: Any, seasons: list[int]) -> int:
     Returns the number of rows that carried a block."""
     stale = con.execute(
         "SELECT COUNT(*) FROM derived.fielder_season_metrics "
-        f"WHERE season IN ({_season_list(seasons)}) AND ("
+        f"WHERE season IN ({sql_seasons(seasons)}) AND ("
         + " OR ".join(f"{c} IS NOT NULL" for c in ARM_BLOCK_COLUMNS)
         + ")"
     ).fetchone()[0]
     con.execute(
         "UPDATE derived.fielder_season_metrics SET "
         + ", ".join(f"{c} = NULL" for c in ARM_BLOCK_COLUMNS)
-        + f" WHERE season IN ({_season_list(seasons)})"
+        + f" WHERE season IN ({sql_seasons(seasons)})"
     )
     log.info("  the arm block cleared on %d rows before the fill", int(stale))
     return int(stale)

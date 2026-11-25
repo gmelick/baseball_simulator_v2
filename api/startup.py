@@ -295,7 +295,8 @@ async def build_sim_runner(app: FastAPI) -> None:
     # is pinned before the worker pool starts (the forkserver's workers inherit
     # the environment), so a worker that respawns after a rebuild reads the
     # same version as the shared arrays. The shutdown undoes the pin.
-    from api.bundle_watch import PINNED_ENV, bundle_link, pin_bundle_version
+    from api.bundle_watch import PINNED_ENV, pin_bundle_version
+    from bundle.versions import bundle_link
 
     app.state.bundle_pin_prev_env = os.environ.get(PINNED_ENV)
     app.state.bundle_version = None
@@ -304,7 +305,7 @@ async def build_sim_runner(app: FastAPI) -> None:
         app.state.bundle_version, app.state.bundle_in_use_marker = pin_bundle_version()
     shared_arrays_payload: dict | None = None
     try:
-        from pipeline.batch.engine_artifacts import EngineArtifacts
+        from bundle.load_bundle import EngineArtifacts
 
         art_dir = app.state.bundle_version or bundle_link()
         log.info(
@@ -349,7 +350,8 @@ def start_bundle_watch(app: FastAPI) -> None:
     With ``SIM_RESTART_ON_NEW_BUNDLE`` on and a pinned version, a task watches
     the bundle link (``api.bundle_watch.watch_for_new_bundle``).
     """
-    from api.bundle_watch import bundle_link, restart_enabled, watch_for_new_bundle
+    from api.bundle_watch import restart_enabled, watch_for_new_bundle
+    from bundle.versions import bundle_link
 
     app.state.bundle_watch_task = None
     if restart_enabled() and app.state.bundle_version:
@@ -379,7 +381,7 @@ async def close_resources(app: FastAPI) -> None:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
     from api.bundle_watch import PINNED_ENV as _PINNED_ENV
-    from pipeline.batch.bundle_versions import unmark_in_use
+    from bundle.versions import unmark_in_use
 
     unmark_in_use(getattr(app.state, "bundle_in_use_marker", None))
     if getattr(app.state, "bundle_version", None):

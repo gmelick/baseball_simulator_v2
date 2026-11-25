@@ -41,6 +41,12 @@ import numpy as np
 import pytest
 from tests.script_loader import load_script
 
+from bundle.synthetic_bundle import (
+    LEAGUE_INPLAY_MODEL,
+    LEAGUE_PITCH_MODEL,
+    synthetic_artifacts,
+    synthetic_sampler,
+)
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult
 from simulation.linescore import InningLine, linescore_from_plays
 from simulation.pitcher_decisions import decisions_from_plays
@@ -48,12 +54,6 @@ from simulation.play_recorder import RecordingMachine
 from simulation.production_factory import apply_running_game_env
 from simulation.sim_loop import StateMachine, simulate_game
 from simulation.snapshots import PlayByPlay, thrown_pitches
-from simulation.synthetic_bundle import (
-    LEAGUE_INPLAY_MODEL,
-    LEAGUE_PITCH_MODEL,
-    synthetic_artifacts,
-    synthetic_sampler,
-)
 
 SEASON = 2024
 PITCHER = 477132
@@ -555,7 +555,7 @@ class TestTheFlag:
         sampler here over a classed synthetic bundle: the bundle load is the
         one step replaced."""
         import simulation.production_factory as pf
-        from pipeline.batch.engine_artifacts import EngineArtifacts
+        from bundle.load_bundle import EngineArtifacts
         from simulation.batch_runner import GameSpec
 
         art = _pickoff_artifacts(0.01)

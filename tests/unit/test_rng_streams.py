@@ -35,11 +35,11 @@ import copy
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts
+from bundle.load_bundle import EngineArtifacts
+from bundle.synthetic_bundle import synthetic_artifacts
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.loop.values import FULL_POOL_STREAM, LOOP_STREAM, spawn_rng_streams
 from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import synthetic_artifacts
 
 _SEASON = 2024
 _PITCHER = 900

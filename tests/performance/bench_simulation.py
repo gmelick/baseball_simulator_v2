@@ -109,7 +109,7 @@ SIM_LOOP_PER_PITCH_BUDGET_MS = 1.233  # the time budget's per-pitch roll-up (§3
 #   The single-game SLA is 2 s; the time budget's per-game roll-up is
 #   ~0.37 s (1.233 ms × 300 pitches).  The no-DB batch game is a real game.
 #   The production StateMachine plays it over the in-memory league bundle
-#   (simulation/synthetic_bundle.py): it records real outs and ends by its own
+#   (bundle/synthetic_bundle.py): it records real outs and ends by its own
 #   rules, at about 300 pitches.  The bench checks the per-game wall time
 #   against this budget.  It also checks the per-pitch throughput against the
 #   per-pitch budget.  Both are hard gates under PERF_STRICT_LOOP.
@@ -454,7 +454,7 @@ def test_bench_gmm_fit_single_season(benchmark):
 # — with NO live DuckDB.  The machine runs in count-machine-only mode: the
 # bench supplies an explicit pitch_outcome per pitch, so no pitch draw runs.
 # Contact draws from a fixed-play bundle in which every play is a field out
-# (simulation/synthetic_bundle.py).  This exercises the count machine (§5.1,
+# (bundle/synthetic_bundle.py).  This exercises the count machine (§5.1,
 # incl. the two-strike-foul absorbing rule: a two-strike foul keeps the count),
 # outcome determination (step 4), fielding/baserunning resolution (steps 6/7
 # via resolve_runs), and state-update / half-inning loop control (step 8).
@@ -505,7 +505,7 @@ def test_bench_phase4_simulation_loop(benchmark):
     def _fresh_state() -> GameState:
         return GameState(pitcher_id=1, bat_hand="R", season=2024)
 
-    from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
+    from bundle.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
     machine = StateMachine(synthetic_sampler(fixed_play_artifacts("field_out"), 335), rng=rng)
     # Mutable cursor over the outcome cycle + the live game state.  The benched
@@ -543,7 +543,7 @@ def test_bench_phase4_simulation_loop(benchmark):
 # the in-process (max_workers=1) path, with NO live DB.  The picklable no-DB
 # factory (simulation.batch_runner.rng_driven_machine_factory) builds the
 # production StateMachine over a FullPoolSampler.  The sampler reads the
-# in-memory league bundle (simulation/synthetic_bundle.py).  Every pitch and
+# in-memory league bundle (bundle/synthetic_bundle.py).  Every pitch and
 # every batted ball is a real full-pool draw.  The loop records real outs.  The
 # game ends by its own rules.  This is the real batch hot path (derive seeds ->
 # simulate_game per iteration -> GameSimSummary.from_results).  The bench

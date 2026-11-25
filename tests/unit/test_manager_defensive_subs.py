@@ -33,7 +33,7 @@ import duckdb
 
 def _fld_agg_sql() -> str:
     """The `fld_agg` CTE body, taken from the production source, comments stripped."""
-    from pipeline.batch.player_profile_computor import PlayerProfileComputor
+    from profiles.build_profiles import PlayerProfileComputor
 
     src = inspect.getsource(PlayerProfileComputor._compute_manager_profiles)
     assert "fld_agg AS (" in src, "fld_agg CTE moved — retarget this test"
@@ -150,7 +150,7 @@ class TestRateDenominatorUnchanged(unittest.TestCase):
     def test_rate_is_still_per_game(self):
         """n_def_sub_late / n_fld_games — the numerator's unit changed, so confirm
         the denominator is still games, not PAs or pitches."""
-        from pipeline.batch.player_profile_computor import PlayerProfileComputor
+        from profiles.build_profiles import PlayerProfileComputor
 
         src = inspect.getsource(PlayerProfileComputor._compute_manager_profiles)
         line = next(

@@ -15,7 +15,8 @@ targets and the operator run the rest.
 
 The run book (how to run, check and recover each job) is the operator's manual,
 [WORKFLOW.md](../../WORKFLOW.md). The code the jobs call is on
-[Nightly builds](pipeline-batch.md) and [Data ingestion](ingest.md).
+[Player profiles](profiles.md), [Play pools](pools.md), [The bundle](bundle.md) and
+[Data ingestion](ingest.md).
 
 ## How it fits together
 
@@ -93,7 +94,7 @@ and [test_no_default_password.py](../../tests/unit/test_no_default_password.py) 
 
 ### `operations/jobs/nightly_finals.sh`
 
-[Source](../../operations/jobs/nightly_finals.sh) · 48 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/nightly_finals.sh) · 54 lines · Tests: [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Loads every game that became Final from today minus `DAYS` (default 3) to today, with
 "today" in Eastern time, the league's day. It calls `HistoricalDataLoader.load_date_range`,
@@ -104,7 +105,7 @@ Run: the scheduler at 07:00 UTC, as `with_mark.sh nightly-finals with_retry.sh 6
 
 ### `operations/jobs/weekly_refresh.sh`
 
-[Source](../../operations/jobs/weekly_refresh.sh) · 30 lines · Tests: [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
+[Source](../../operations/jobs/weekly_refresh.sh) · 36 lines · Tests: [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py), [test_shell_dsn_guards.py](../../tests/unit/operations/test_shell_dsn_guards.py), [test_no_default_password.py](../../tests/unit/test_no_default_password.py)
 
 Calls `HistoricalDataLoader.refresh_seasons(year, year)` on the current season. It catches
 a Final game that the three-day window missed. It writes Postgres only. It exits 1 when
@@ -123,8 +124,8 @@ Run: the scheduler on Sunday at 08:00 UTC, through `with_mark.sh weekly-refresh`
 Rebuilds the current season's profiles and the engine-artifact bundle, in three steps:
 
 1. `wait_for_ingest.sh`.
-2. `python -m pipeline.batch.player_profile_computor --seasons <year>`.
-3. `python -m pipeline.batch.engine_artifacts --what all`.
+2. `python -m profiles.build_profiles --seasons <year>`.
+3. `python -m bundle.build_bundle --what all`.
 
 The profile step writes DuckDB and needs its write lock; the bundle step opens it
 read-only. The app holds no handle on that file, so the job runs beside the app. The
@@ -192,7 +193,7 @@ The package docstring: which module does what.
 
 ### `operations/backup/backup_status.py`
 
-[Source](../../operations/backup/backup_status.py) · 127 lines · Tests: [test_backup_status.py](../../tests/unit/operations/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/operations/test_backup_age_gauge.py)
+[Source](../../operations/backup/backup_status.py) · 145 lines · Tests: [test_backup_status.py](../../tests/unit/operations/test_backup_status.py), [test_backup_age_gauge.py](../../tests/unit/operations/test_backup_age_gauge.py)
 
 Which sets exist and how old they are. It is pure standard library, because the API
 imports it.
@@ -215,7 +216,7 @@ than the stale limit), `wait_while_busy` (the poll loop behind `wait_for_marks` 
 
 ### `operations/backup/back_up_data_stores.py`
 
-[Source](../../operations/backup/back_up_data_stores.py) · 900 lines · Tests: [test_backup_data_stores.py](../../tests/unit/operations/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py)
+[Source](../../operations/backup/back_up_data_stores.py) · 918 lines · Tests: [test_backup_data_stores.py](../../tests/unit/operations/test_backup_data_stores.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py), [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py)
 
 Backs up, verifies and restores the DuckDB file and the bundle. The module docstring is
 the design. Exit codes: 0 every store succeeded; 1 a store failed (the job still tried
@@ -234,7 +235,7 @@ the other); 2 a refusal before any write.
 
 ### `operations/backup/copy_offsite.py`
 
-[Source](../../operations/backup/copy_offsite.py) · 953 lines · Tests: [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[Source](../../operations/backup/copy_offsite.py) · 955 lines · Tests: [test_backup_offsite.py](../../tests/unit/operations/test_backup_offsite.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 The off-site copy (SIM-568). It copies the newest complete sets of each store from
 `/backups` to `/offsite`. The OneDrive client uploads them, and this module cannot see
@@ -256,7 +257,7 @@ root from `BACKUPS_ROOT`; the backup jobs read `BACKUP_ROOT`. Both default to `/
 
 ### `operations/backup/backup_drill.py`
 
-[Source](../../operations/backup/backup_drill.py) · 494 lines · Tests: [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
+[Source](../../operations/backup/backup_drill.py) · 505 lines · Tests: [test_backup_drill.py](../../tests/unit/operations/test_backup_drill.py), [test_backup_schedule.py](../../tests/unit/operations/test_backup_schedule.py)
 
 The restore drill. It proves a backup set restores, without touching the live database:
 

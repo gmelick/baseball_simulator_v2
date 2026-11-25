@@ -8,8 +8,8 @@ The module writes one row for every pitcher on each team's roster, used or not.
 Two sources feed a row:
 
 * the rest and the recent workload (``days_rest``, ``pitches_last_3d``,
-  ``back_to_back``). ``ManagerProfilesMixin._compute_bullpen_workload`` in
-  ``pipeline.batch.profiles.manager`` derives them from ``raw.pitches``. An arm
+  ``back_to_back``). :func:`compute_bullpen_workload` derives them from
+  ``raw.pitches``. An arm
   that did not pitch in the game takes his rest from his appearance timeline
   (:func:`_rest_as_of`), so an unused arm who threw yesterday still reads
   unavailable.
@@ -38,11 +38,15 @@ import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from db.dsn import require_dsn
 from ingest.mlb import client as mlb_client
 from ingest.mlb.schedule import played_index, schedule_entries
+
+if TYPE_CHECKING:
+    import duckdb
+    import pandas as pd
 
 log = logging.getLogger("ingest.load_bullpen_availability")
 
@@ -281,7 +285,7 @@ class BullpenAvailabilityIngest:
     ) -> list[AvailabilityRow]:
         """One availability row per pitcher on each team's roster, used or not.
 
-        ``workload`` holds the ``_compute_bullpen_workload`` rows of the arms that
+        ``workload`` holds the :func:`compute_bullpen_workload` rows of the arms that
         pitched in this game. ``roster_by_team`` maps a team id to its staff from
         :meth:`_fetch_team_pitchers`. ``timeline`` maps a pitcher id to his
         ``(date, pitches)`` appearances.
@@ -399,7 +403,7 @@ class BullpenAvailabilityIngest:
     def ingest(self, workload_records: Iterable[Mapping[str, Any]]) -> int:
         """Build and store the availability of every game in ``workload_records``.
 
-        ``workload_records`` is the whole ``_compute_bullpen_workload`` output,
+        ``workload_records`` is the whole :func:`compute_bullpen_workload` output,
         as records. The method builds each pitcher's appearance timeline once
         from them, so each game can derive the rest of the arms that did not
         pitch. A failed game logs a warning, and the run goes on. Returns the
@@ -499,7 +503,7 @@ def _rest_as_of(
     """An arm's ``(days_rest, pitches_last_3d, back_to_back)`` as of ``game_date``.
 
     The values come from his appearance timeline and match what
-    ``_compute_bullpen_workload`` gives an arm who pitched: the days since the
+    :func:`compute_bullpen_workload` gives an arm who pitched: the days since the
     last appearance, and the pitches in the 3 calendar days before the game
     (the game excluded). An arm with no earlier appearance (a call-up, say)
     returns ``(None, 0, False)``: fully rested.
@@ -516,20 +520,121 @@ def _rest_as_of(
     return days_rest, int(pitches_last_3d), back_to_back
 
 
+def compute_bullpen_workload(conn: duckdb.DuckDBPyConnection, seasons: list[int]) -> pd.DataFrame:
+    """
+    Derive the per-game rest and recent workload the availability table
+    (``raw.game_bullpen_availability``) needs, straight from ``raw.pitches``
+    (no network).
+
+    ``raw.game_lineups`` records who *played*; the manager profile's USAGE
+    sub-score also needs the available-but-unused signal, which
+    starts with workload: an arm that threw 45 pitches yesterday is
+    rest-unavailable today regardless of whether the manager "chose" not to
+    use it. The function builds, per (game_pk, team_id, pitcher_id) where the
+    pitcher actually appeared:
+
+      * ``last_game_date``   — this pitcher's appearance date (the game's date)
+      * ``days_rest``        — days since the pitcher's PREVIOUS appearance
+                               (NULL for the first appearance in the window)
+      * ``pitches_last_3d``  — pitches thrown in the 3 calendar days BEFORE
+                               this game's date (excludes this game)
+      * ``back_to_back``     — pitched on the immediately preceding calendar
+                               day
+
+    ``team_id`` is the FIELDING team for the pitcher in each appearance: the
+    home team when the half-inning is the top (``inning_topbot='Top'``), else
+    the away team. (A pitcher only ever fields for one team in a game, so the
+    per-(game, pitcher) MIN over the half-inning derivation is unambiguous.)
+
+    This is the raw.pitches half of the bullpen availability. It does NOT
+    persist: ``conn`` attaches PostgreSQL READ_ONLY (as ``pg``), so it returns
+    the workload rows as a DataFrame for :class:`BullpenAvailabilityIngest`
+    to merge with the MLB-API active-roster / IL fetch and persist to
+    ``raw.game_bullpen_availability``. Returns an EMPTY DataFrame (with the
+    documented columns) when there are no qualifying rows.
+    """
+    log.info("Deriving bullpen workload (SIM-433) …")
+    season_list = ", ".join(str(s) for s in seasons)
+
+    # One row per (game_pk, pitcher) appearance with that game's date, the
+    # pitcher's fielding team, and pitches thrown; then a self-referential
+    # window over the pitcher's appearance timeline derives rest/workload.
+    df = conn.execute(f"""
+        WITH appearances AS (
+            SELECT
+                game_pk,
+                pitcher                                                  AS pitcher_id,
+                season,
+                MIN(game_date)                                           AS game_date,
+                -- Fielding team: home fields the top half, away the bottom.
+                MIN(CASE WHEN inning_topbot = 'Top' THEN home_id ELSE away_id END)
+                                                                         AS team_id,
+                COUNT(*)                                                 AS pitches_in_game
+            FROM pg.raw.pitches
+            WHERE data_quality_flag = FALSE
+              AND season IN ({season_list})
+            GROUP BY game_pk, pitcher, season
+        ),
+        with_prev AS (
+            SELECT
+                a.*,
+                LAG(a.game_date) OVER (
+                    PARTITION BY a.pitcher_id ORDER BY a.game_date, a.game_pk
+                )                                                        AS prev_game_date
+            FROM appearances a
+        )
+        SELECT
+            w.game_pk,
+            w.team_id,
+            w.pitcher_id,
+            w.season,
+            w.game_date,
+            w.pitches_in_game,
+            CASE WHEN w.prev_game_date IS NOT NULL
+                 THEN DATE_DIFF('day', w.prev_game_date, w.game_date)
+            END                                                          AS days_rest,
+            CASE WHEN w.prev_game_date IS NOT NULL
+                   AND DATE_DIFF('day', w.prev_game_date, w.game_date) = 1
+                 THEN TRUE ELSE FALSE END                                AS back_to_back,
+            -- Pitches thrown by this arm in the 3 calendar days BEFORE this
+            -- game (a correlated sum over the same appearances set).
+            COALESCE((
+                SELECT SUM(p.pitches_in_game)
+                FROM appearances p
+                WHERE p.pitcher_id = w.pitcher_id
+                  AND p.game_date < w.game_date
+                  AND p.game_date >= w.game_date - INTERVAL 3 DAY
+            ), 0)                                                        AS pitches_last_3d
+        FROM with_prev w
+        ORDER BY w.pitcher_id, w.game_date, w.game_pk
+    """).fetchdf()
+
+    if df.empty:
+        log.info("  bullpen workload: no qualifying appearances.")
+        return df
+    log.info(
+        "  bullpen workload: %d appearance rows (%d pitchers).",
+        len(df),
+        df["pitcher_id"].nunique(),
+    )
+    return df
+
+
 def _load_workload_records(
     duckdb_path: str, pg_dsn: str, seasons: list[int]
 ) -> list[dict[str, Any]]:
     """The bullpen workload rows of ``seasons``, as records.
 
-    The function opens a ``PlayerProfileComputor`` (its DuckDB connection
-    attaches Postgres read-only) and runs only ``_compute_bullpen_workload``.
+    The function opens a ``PlayerProfileComputor`` for its DuckDB connection
+    (which attaches Postgres read-only) and runs :func:`compute_bullpen_workload`
+    on it.
     """
-    from pipeline.batch.player_profile_computor import PlayerProfileComputor
+    from profiles.build_profiles import PlayerProfileComputor
 
     computor = PlayerProfileComputor(pg_dsn=pg_dsn, duckdb_path=duckdb_path)
     computor._connect()
     try:
-        df = computor._compute_bullpen_workload(seasons)
+        df = compute_bullpen_workload(computor._conn, seasons)
     finally:
         computor._close()
     return df.to_dict("records") if df is not None and not df.empty else []
@@ -557,6 +662,7 @@ __all__ = [
     "BullpenAvailabilityIngest",
     "PitcherStatus",
     "REST_PITCHES_3D",
+    "compute_bullpen_workload",
 ]
 
 

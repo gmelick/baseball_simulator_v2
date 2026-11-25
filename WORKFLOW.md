@@ -59,12 +59,12 @@ the environment tiers.
 
 ### Which code a container runs
 
-The `app` service mounts seven folders from the checkout: `api/`, `pipeline/`,
-`betting/`, `operations/`, `similarity/`, `simulation/` and `db/`. The `jobs`
-service mounts the same seven. The `live` service mounts all of them except
-`similarity/`. The nightly jobs and the backups live in `operations/`, so a
-scheduled job runs the checkout's copy. `scripts/` and `tests/` are baked into
-the image at build time.
+The `app` service mounts eleven folders from the checkout: `api/`, `pipeline/`,
+`betting/`, `ingest/`, `profiles/`, `pools/`, `bundle/`, `operations/`,
+`similarity/`, `simulation/` and `db/`. The `jobs` service mounts the same eleven.
+The `live` service mounts all of them except `similarity/`. The nightly jobs and
+the backups live in `operations/`, so a scheduled job runs the checkout's copy.
+`scripts/` and `tests/` are baked into the image at build time.
 
 - A change to a mounted folder reaches the app after `docker compose restart app`.
   uvicorn's `--reload` may restart it by itself, but a file event does not
@@ -150,7 +150,7 @@ already loaded, so a rerun resumes.
 | 1b. The current season | `docker compose run --rm app sh /app/operations/jobs/with_retry.sh 6 sh /app/operations/jobs/weekly_refresh.sh` | The same tables for this season's Final games. The bare loader of step 1a stops at last season. |
 | 2. Sprint speed | `docker compose run --rm app python -m ingest.savant.load_sprint_speed --seasons 2023 2024 2025 2026` | `raw.sprint_speed` |
 | 3. The Savant leaderboards | `docker compose run --rm app python -m ingest.savant.load_leaderboards --seasons 2023 2024 2025 2026` | the `raw.savant_*` tables |
-| 4. The profiles and pools | `docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild` | the `derived.*` profiles and the `sim.*` play pools in the analytics file |
+| 4. The profiles and pools | `docker compose run --rm app python -m profiles.build_profiles --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild` | the `derived.*` profiles and the `sim.*` play pools in the analytics file |
 | 5. The bundle | `make engine-artifacts` | a new bundle version; the app restarts itself on it |
 | 6. The calibration | section 6 | `/data/calibration.json` |
 | 7. The odds (optional) | `make load-historical-odds FLAGS="--seasons 2024"` | `raw.game_odds`, `raw.prop_odds` (needs `ODDS_API_KEY`) |
@@ -268,7 +268,7 @@ docker compose exec -T app python -c "import duckdb; c = duckdb.connect('/data/b
 
 The version file must equal the newest file's number under
 `db/migrations/duckdb/`. The builder version of each pool must be the one in
-[`pipeline/batch/profiles/pool_meta.py`](pipeline/batch/profiles/pool_meta.py)
+[`pools/pool_metadata.py`](pools/pool_metadata.py)
 (`POOL_BUILDER_VERSION`).
 
 A DuckDB writer opens the file only when no other process holds it, read-only
@@ -348,11 +348,11 @@ picks the games up.
 ### 5.2 Rebuild the profiles and pools
 
 The nightly rebuild already does the current season. A bare
-`player_profile_computor` run also builds the current season only. For a full
+`profiles.build_profiles` run also builds the current season only. For a full
 recompute, name every season:
 
 ```bat
-docker compose run --rm app python -m pipeline.batch.player_profile_computor --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild
+docker compose run --rm app python -m profiles.build_profiles --seasons 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 --full-rebuild
 make engine-artifacts
 ```
 

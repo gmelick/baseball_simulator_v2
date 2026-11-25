@@ -32,8 +32,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.battedball_pool import BB_CLASS
-from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts
+from bundle.export_batted_ball_pool import BB_CLASS
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import BattedBallPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.production_factory import apply_fielding_env
 

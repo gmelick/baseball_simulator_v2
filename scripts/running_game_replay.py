@@ -238,7 +238,7 @@ class RunningData:
     def __init__(self, fp: Any, duck: Any, art_dir: str):
         import duckdb
 
-        from pipeline.batch.engine_artifacts import StealPool
+        from bundle.worker_pools import StealPool
 
         self.fp = fp
         t0 = time.time()
@@ -1377,6 +1377,7 @@ def report(args: argparse.Namespace) -> int:
 def _build(args: argparse.Namespace) -> tuple[Any, RunningData, dict[str, float]]:
     from sim_stats import _FACTORY, _resolve, open_sim_duckdb, sim_kwargs_from_state
 
+    from bundle.versions import bundle_link
     from simulation.batch_runner import GameSpec
     from simulation.production_factory import production_machine_factory
 
@@ -1393,9 +1394,7 @@ def _build(args: argparse.Namespace) -> tuple[Any, RunningData, dict[str, float]
         if not fp.pitch_cell_index:
             raise RuntimeError("the pitch cell index is off; the replay needs the production draw")
         production = {k: float(getattr(fp, k)) for k in POWER_ATTRS}
-        art_dir = os.path.join(
-            os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
-        )
+        art_dir = bundle_link()
         data = RunningData(fp, duck, art_dir)
     finally:
         duck.close()

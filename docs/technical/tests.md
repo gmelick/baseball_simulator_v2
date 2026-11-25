@@ -18,7 +18,7 @@ GitHub Actions workflows under `.github/workflows/` run the lanes.
    event loop.
 3. The **unit lane** (`tests/unit/`) needs no database, no Redis and no network. It
    builds the production `StateMachine` and `FullPoolSampler` over an in-memory bundle
-   ([`simulation/synthetic_bundle.py`](../../simulation/synthetic_bundle.py)), and fakes
+   ([`bundle/synthetic_bundle.py`](../../bundle/synthetic_bundle.py)), and fakes
    asyncpg, Redis and HTTP. Some tests open a real in-memory DuckDB.
 4. The **regression lane** (`tests/regression/`) checks properties that every
    similarity engine's scores must keep for any weights and any data.
@@ -61,12 +61,12 @@ The Makefile wraps each Python lane in `docker compose run --rm -v "$(CURDIR):/a
 
 | Target | Command inside the app container |
 |---|---|
-| `make test` | `pytest tests/ -v --tb=short --timeout=60` with coverage of the eight program folders |
+| `make test` | `pytest tests/ -v --tb=short --timeout=60` with coverage of the eleven program folders |
 | `make test-unit` | `pytest $(TESTS) -v --tb=short --timeout=30` with coverage; `TESTS` defaults to `tests/unit/` |
 | `make test-regression` | `pytest tests/regression/ -v --tb=short --timeout=60 -m regression` |
 | `make test-integration` | `pytest tests/integration/ -v --tb=short --timeout=120 -m integration` |
 | `make lint` / `make format` | `ruff check . --output-format=full` / `ruff format .` |
-| `make type-check` | `mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports --python-version 3.13` |
+| `make type-check` | `mypy similarity/ ingest/ profiles/ pools/ bundle/ pipeline/ api/ simulation/ betting/ operations/ db/ --ignore-missing-imports --python-version 3.13` |
 
 - **The mount.** The `-v "$(CURDIR):/app"` mount puts the whole checkout over the
   image's copy, so a run tests the checkout's `tests/`, `scripts/` and
@@ -115,7 +115,7 @@ live-database modules that the unit lane only touches through mocks. The CI
 
 ### `tests/conftest.py`
 
-[Source](../../tests/conftest.py) · 382 lines · Tests: [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py), [test_odds_provider_pin.py](../../tests/unit/test_odds_provider_pin.py)
+[Source](../../tests/conftest.py) · 373 lines · Tests: [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py), [test_odds_provider_pin.py](../../tests/unit/test_odds_provider_pin.py)
 
 The root conftest. It sets the environment at import time, for the whole process, so
 the unit lane's output stays byte-identical (the same, bit for bit) whatever the
@@ -166,9 +166,9 @@ if it pins `SIM_STEAL_PITCH_CLASS`.
 | `scripts_on_path()` | Puts the repository root and `scripts/` on `sys.path`, so a stage package such as `scripts/accuracy/` imports by name | The script tests, `load_script` |
 | `script_path(name)` | Finds the script in `scripts/` or `scripts/probes/` | `load_script` |
 
-### `simulation/synthetic_bundle.py`
+### `bundle/synthetic_bundle.py`
 
-[Source](../../simulation/synthetic_bundle.py) · 688 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/test_synthetic_bundle.py)
+[Source](../../bundle/synthetic_bundle.py) · 645 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py)
 
 The in-memory engine-artifact bundle every no-DB test draws from. It builds a small
 `EngineArtifacts` in the exact shape the production loader produces. The sampler,
@@ -277,12 +277,12 @@ method really ran (`_full_pool_outcome`, `_full_pool_fielding`,
 
 ### `tests/acceptance/test_pool_label_check.py`
 
-[Source](../../tests/acceptance/test_pool_label_check.py) · 259 lines · 4 tests · needs DuckDB and Postgres
+[Source](../../tests/acceptance/test_pool_label_check.py) · 255 lines · 4 tests · needs DuckDB and Postgres
 
 The pitch pool's count chain against real plate appearances (the foul-tip coding fix,
 SIM-553). It counts strikeouts, walks, hit by pitch and pitches per plate appearance
 from `raw.pitches` and fails when the chain drifts more than 0.5%
-(`pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE`). The pool bands cannot see a
+(`pools.check_pool_labels.LABEL_CHECK_TOLERANCE`). The pool bands cannot see a
 labelling defect, because they read the same labels.
 
 ## The regression lane
@@ -385,7 +385,7 @@ in the same commit as the change.
 | [test_run_ledger.py](../../tests/unit/test_run_ledger.py) | Each resolver snapshots the bases before it changes them (`inspect.getsource` of each method) |
 | [test_pitcher_outs_credit.py](../../tests/unit/test_pitcher_outs_credit.py) | `_record_outs` is the one writer of a box line's `outs_recorded`, across `sim_loop.py` and every `simulation/loop/` module |
 | [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py) | Every reader of a per-pitch result skips a no-pitch result |
-| [test_bundle_no_pickle.py](../../tests/unit/test_bundle_no_pickle.py) | Every `np.load` in the bundle loader passes `allow_pickle=False` |
+| [test_bundle_no_pickle.py](../../tests/unit/bundle/test_bundle_no_pickle.py) | Every `np.load` in the bundle loader passes `allow_pickle=False` |
 | [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py) | Every non-exempt route of the real app requires a login |
 | [test_etl_hardening.py](../../tests/unit/ingest/test_etl_hardening.py) (`TestHttpHygiene`) | `ingest/games/load_games.py` and every module of `ingest/savant/` open no URL of their own; `ingest/mlb/client.py` calls `urlopen` once; neither `load_games.py` nor the client imports `requests` |
 
@@ -414,7 +414,7 @@ The tables group the 285 modules by the code they cover. "slow" marks a module w
 | [test_manager_decisions.py](../../tests/unit/test_manager_decisions.py), [test_manager_model.py](../../tests/unit/test_manager_model.py), [test_situational_decisions.py](../../tests/unit/test_situational_decisions.py) | Leverage and the intentional walk; the pitch count and the `SIM_MANAGER` gate; whole games with and without a manager profile |
 | [test_matchup_weight_cache.py](../../tests/unit/test_matchup_weight_cache.py) | The sampler's weights refresh on three separate keys |
 | [test_receiving_kernel_consumers.py](../../tests/unit/test_receiving_kernel_consumers.py) | The got-away pitch: read from the drawn row, resolved in the loop |
-| [test_synthetic_bundle.py](../../tests/unit/test_synthetic_bundle.py) | The in-memory bundle's shape |
+| [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py) | The in-memory bundle's shape |
 | [test_baseball_sniff.py](../../tests/unit/test_baseball_sniff.py) (slow), [test_invalid_state_detection.py](../../tests/unit/test_invalid_state_detection.py) (slow) | Whole games produce sane baseball and never an invalid state |
 
 ### The sampler (`simulation/full_pool_sampler.py`, `simulation/sampler/`)
@@ -431,16 +431,16 @@ The tables group the 285 modules by the code they cover. "slow" marks a module w
 | [test_manager_draw.py](../../tests/unit/test_manager_draw.py), [test_relief_draw.py](../../tests/unit/test_relief_draw.py) | The pitching change as a draw; the reliever draw over the real pen (SIM-427) |
 | [test_receiving_ratio.py](../../tests/unit/test_receiving_ratio.py) | The catcher receiving ratio on taken pitches (built, off) |
 | [test_situation_sigma_env.py](../../tests/unit/test_situation_sigma_env.py), [test_sampler_hot_path_cache.py](../../tests/unit/test_sampler_hot_path_cache.py) | The situation bandwidth's variable; the per-plate-appearance cache |
-| [test_pool_cutoff.py](../../tests/unit/test_pool_cutoff.py) | The pools offer no play from after the simulated game's date |
+| [test_pool_cutoff.py](../../tests/unit/pools/test_pool_cutoff.py) | The pools offer no play from after the simulated game's date |
 
 ### The runner and its outputs
 
 | File | What it pins |
 |---|---|
 | [test_batch_runner.py](../../tests/unit/test_batch_runner.py) (slow), [test_batch_runner_concurrency.py](../../tests/unit/test_batch_runner_concurrency.py) (slow), [test_batch_runner_hit_rate.py](../../tests/unit/test_batch_runner_hit_rate.py) | The batch runner, its concurrency, the `_` prefix on factory-only kwargs |
-| [test_persistent_process_pool.py](../../tests/unit/test_persistent_process_pool.py) (slow), [test_shared_memory_attach.py](../../tests/unit/test_shared_memory_attach.py) (slow), [test_engine_artifacts_shared_memory.py](../../tests/unit/test_engine_artifacts_shared_memory.py) | The warm worker pool and the shared-memory attach of the bundle arrays |
+| [test_persistent_process_pool.py](../../tests/unit/test_persistent_process_pool.py) (slow), [test_shared_memory_attach.py](../../tests/unit/test_shared_memory_attach.py) (slow), [test_engine_artifacts_shared_memory.py](../../tests/unit/bundle/test_engine_artifacts_shared_memory.py) | The warm worker pool and the shared-memory attach of the bundle arrays |
 | [test_worker_forkserver.py](../../tests/unit/test_worker_forkserver.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py) (slow) | The forkserver start method; the worker prewarm contracts |
-| [test_bundle_worker_and_boot.py](../../tests/unit/test_bundle_worker_and_boot.py) | Workers read only the bundle; the app restarts on a new version and waits for a DuckDB writer at boot |
+| [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py) | Workers read only the bundle; the app restarts on a new version and waits for a DuckDB writer at boot |
 | [test_cache_codec.py](../../tests/unit/test_cache_codec.py) | The Redis cache stores typed JSON, never a pickle |
 | [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_manager_profile_snapshot.py](../../tests/unit/test_manager_profile_snapshot.py) | The one `simulate_game` kwargs builder; the defense and park inputs; the app holds no DuckDB handle; the API's runs read each manager's profile from the boot snapshot (SIM-575) |
 | [test_lineup_resolver.py](../../tests/unit/test_lineup_resolver.py), [test_starter_resolution.py](../../tests/unit/test_starter_resolution.py), [test_fielder_map.py](../../tests/unit/test_fielder_map.py), [test_bullpen_usage.py](../../tests/unit/test_bullpen_usage.py) | The lineup resolver; the starter from the official box (SIM-558); the per-position fielder map; the pen from the box (`pipeline/bullpen_usage.py`) |
@@ -459,7 +459,7 @@ The tables group the 285 modules by the code they cover. "slow" marks a module w
 | [test_pitcher_similarity.py](../../tests/unit/test_pitcher_similarity.py), [test_pitcher_similarity_contract.py](../../tests/unit/test_pitcher_similarity_contract.py), [test_pitcher_engine_calibration.py](../../tests/unit/test_pitcher_engine_calibration.py) | The pitcher engine, its result shape, its arsenal calibration |
 | [test_arsenal_cache_vectorized.py](../../tests/unit/test_arsenal_cache_vectorized.py), [test_arsenal_w2_standardization.py](../../tests/unit/test_arsenal_w2_standardization.py) | The arsenal distance cache; the W₂ (Wasserstein-2) distance on one scale |
 | [test_arm_angle_decision.py](../../tests/unit/test_arm_angle_decision.py) | The arm angle and spin shape are not pitcher features (SIM-533) |
-| [test_batter_similarity.py](../../tests/unit/test_batter_similarity.py), [test_batter_physical_features.py](../../tests/unit/test_batter_physical_features.py) | The batter engine; its physical group and the arm measurements |
+| [test_batter_similarity.py](../../tests/unit/test_batter_similarity.py), [test_batter_physical_features.py](../../tests/unit/profiles/test_batter_physical_features.py) | The batter engine; its physical group and the arm measurements |
 | [test_fielder_similarity.py](../../tests/unit/test_fielder_similarity.py), [test_fielder_oaa_jump_model.py](../../tests/unit/test_fielder_oaa_jump_model.py), [test_outfield_arm_model.py](../../tests/unit/test_outfield_arm_model.py) | The fielder engine; outs above average and the outfield jump; the outfield arm group |
 | [test_baserunner_extra_base_similarity.py](../../tests/unit/test_baserunner_extra_base_similarity.py), [test_baserunner_steal_engine.py](../../tests/unit/test_baserunner_steal_engine.py), [test_baserunner_steal_scores.py](../../tests/unit/test_baserunner_steal_scores.py), [test_weighted_rbf_kernel.py](../../tests/unit/test_weighted_rbf_kernel.py) | The two runner engines and the shared weighted RBF kernel (a similarity that falls off as a bell curve with distance) |
 | [test_catcher_engine_throwing.py](../../tests/unit/test_catcher_engine_throwing.py), [test_catcher_similarity_scores.py](../../tests/unit/test_catcher_similarity_scores.py) | The catcher engine |
@@ -469,35 +469,35 @@ The tables group the 285 modules by the code they cover. "slow" marks a module w
 | [test_pitch_pitch_engine.py](../../tests/unit/test_pitch_pitch_engine.py), [test_batted_ball_engine.py](../../tests/unit/test_batted_ball_engine.py) | The two FAISS nearest-neighbour engines |
 | [test_engine_build_smoke.py](../../tests/unit/test_engine_build_smoke.py), [test_engine_calibration_regression.py](../../tests/unit/test_engine_calibration_regression.py) | Each engine's `build()`; the RBF sigma fit and the FAISS lookup |
 | [test_calibration_fit_and_apply.py](../../tests/unit/test_calibration_fit_and_apply.py), [test_calibration_report_json.py](../../tests/unit/test_calibration_report_json.py), [test_calibration_reconciliation.py](../../tests/unit/test_calibration_reconciliation.py) | The calibration report reaches every engine; its JSON form and the win-probability map; the fit runs on the live schema |
-| [test_probabilistic_backtester.py](../../tests/unit/test_probabilistic_backtester.py), [test_recency_walk_forward.py](../../tests/unit/test_recency_walk_forward.py) | The backtester's calibration metrics; the recency walk-forward |
+| [test_probabilistic_backtester.py](../../tests/unit/test_probabilistic_backtester.py), [test_recency_walk_forward.py](../../tests/unit/pools/test_recency_walk_forward.py) | The backtester's calibration metrics; the recency walk-forward |
 
-### The profiles and pools (`pipeline/batch/`)
+### The profiles and pools (`profiles/`, `pools/`)
 
 | File | What it pins |
 |---|---|
-| [test_player_profile_computor.py](../../tests/unit/test_player_profile_computor.py), [test_league_average_profiles.py](../../tests/unit/test_league_average_profiles.py) | The profile computor's helpers; the league-average rows |
-| [test_one_cutoff_per_table.py](../../tests/unit/test_one_cutoff_per_table.py), [test_delete_seasons_coverage.py](../../tests/unit/test_delete_seasons_coverage.py), [test_profile_index_recreate.py](../../tests/unit/test_profile_index_recreate.py) | One `asof_date` per profile table (SIM-551); a full rebuild deletes every season-keyed table; the index recreate |
-| [test_point_in_time_batter.py](../../tests/unit/test_point_in_time_batter.py), [test_point_in_time_pitcher_manager.py](../../tests/unit/test_point_in_time_pitcher_manager.py), [test_point_in_time_runner_catcher_fielder.py](../../tests/unit/test_point_in_time_runner_catcher_fielder.py) | No profile reads data dated after its cutoff |
-| [test_gmm_batch_pipeline.py](../../tests/unit/test_gmm_batch_pipeline.py), [test_arsenal_fit_reproducible.py](../../tests/unit/test_arsenal_fit_reproducible.py) (slow), [test_barrel_definition.py](../../tests/unit/test_barrel_definition.py) | The pitch-mix model (GMM) batch; the same pitches in any stored order give the same arsenal (SIM-580); the barrel definition |
-| [test_profile_code_sets.py](../../tests/unit/test_profile_code_sets.py), [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py) | The pitch-code sets, the out label and the steal labels agree across the profile SQL and the pool build |
+| [test_player_profile_computor.py](../../tests/unit/profiles/test_player_profile_computor.py), [test_league_average_profiles.py](../../tests/unit/profiles/test_league_average_profiles.py) | The profile computor's helpers; the league-average rows |
+| [test_one_cutoff_per_table.py](../../tests/unit/profiles/test_one_cutoff_per_table.py), [test_delete_seasons_coverage.py](../../tests/unit/profiles/test_delete_seasons_coverage.py), [test_profile_index_recreate.py](../../tests/unit/profiles/test_profile_index_recreate.py) | One `asof_date` per profile table (SIM-551); a full rebuild deletes every season-keyed table; the index recreate |
+| [test_point_in_time_batter.py](../../tests/unit/profiles/test_point_in_time_batter.py), [test_point_in_time_pitcher_manager.py](../../tests/unit/profiles/test_point_in_time_pitcher_manager.py), [test_point_in_time_runner_catcher_fielder.py](../../tests/unit/profiles/test_point_in_time_runner_catcher_fielder.py) | No profile reads data dated after its cutoff |
+| [test_gmm_batch_pipeline.py](../../tests/unit/profiles/test_gmm_batch_pipeline.py), [test_arsenal_fit_reproducible.py](../../tests/unit/profiles/test_arsenal_fit_reproducible.py) (slow), [test_barrel_definition.py](../../tests/unit/profiles/test_barrel_definition.py) | The pitch-mix model (GMM) batch; the same pitches in any stored order give the same arsenal (SIM-580); the barrel definition |
+| [test_profile_code_sets.py](../../tests/unit/profiles/test_profile_code_sets.py), [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py) | The pitch-code sets, the out label and the steal labels agree across the profile SQL and the pool build |
 | [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_hit_by_pitch.py](../../tests/unit/test_hit_by_pitch.py) | A two-strike foul tip is strike three (SIM-553); a hit by pitch is its own outcome |
-| [test_fielder_oaa_jump_profile.py](../../tests/unit/test_fielder_oaa_jump_profile.py), [test_fielder_placeholder_schema.py](../../tests/unit/test_fielder_placeholder_schema.py), [test_outfield_arm_block.py](../../tests/unit/test_outfield_arm_block.py) | The fielder profile's Savant columns, its temp-table placeholders, the outfield arm block |
+| [test_fielder_oaa_jump_profile.py](../../tests/unit/profiles/test_fielder_oaa_jump_profile.py), [test_fielder_placeholder_schema.py](../../tests/unit/profiles/test_fielder_placeholder_schema.py), [test_outfield_arm_block.py](../../tests/unit/profiles/test_outfield_arm_block.py) | The fielder profile's Savant columns, its temp-table placeholders, the outfield arm block |
 | [test_lead_distance.py](../../tests/unit/test_lead_distance.py) | Savant's lead and hold measures in the steal and baserunning models (SIM-531) |
 | [test_manager_defensive_subs.py](../../tests/unit/test_manager_defensive_subs.py), [test_uncaught_strike_three.py](../../tests/unit/test_uncaught_strike_three.py) | Late defensive subs count plate appearances; the catcher's uncaught third strikes |
-| [test_park_factors.py](../../tests/unit/test_park_factors.py), [test_park_geometry_builder.py](../../tests/unit/test_park_geometry_builder.py) | Park factors and their splits; the version-2 park geometry |
-| [test_pool_pull_relative_spray.py](../../tests/unit/test_pool_pull_relative_spray.py), [test_pool_recency_and_incremental_rebuild.py](../../tests/unit/test_pool_recency_and_incremental_rebuild.py) | The handedness-corrected spray angle; recency weight and the incremental rebuild |
-| [test_pool_chain.py](../../tests/unit/test_pool_chain.py) | The count chain of the pitch pool and the label check |
-| [test_ibb_rates.py](../../tests/unit/test_ibb_rates.py) | The measured intentional-walk rate table |
-| [test_transition_pool.py](../../tests/unit/test_transition_pool.py), [test_steal_pool_data.py](../../tests/unit/test_steal_pool_data.py), [test_profile_data_additions.py](../../tests/unit/test_profile_data_additions.py) | The transition columns and the advancement pool; the steal pool's pitch class and pickoff rows; the fielding chain and sprint speed |
+| [test_park_factors.py](../../tests/unit/profiles/test_park_factors.py), [test_park_geometry_builder.py](../../tests/unit/bundle/test_park_geometry_builder.py) | Park factors and their splits; the version-2 park geometry |
+| [test_pool_pull_relative_spray.py](../../tests/unit/pools/test_pool_pull_relative_spray.py), [test_pool_recency_and_incremental_rebuild.py](../../tests/unit/pools/test_pool_recency_and_incremental_rebuild.py) | The handedness-corrected spray angle; recency weight and the incremental rebuild |
+| [test_pool_chain.py](../../tests/unit/pools/test_pool_chain.py) | The count chain of the pitch pool and the label check |
+| [test_ibb_rates.py](../../tests/unit/pools/test_ibb_rates.py) | The measured intentional-walk rate table |
+| [test_transition_pool.py](../../tests/unit/test_transition_pool.py), [test_steal_pool_data.py](../../tests/unit/test_steal_pool_data.py), [test_profile_data_additions.py](../../tests/unit/profiles/test_profile_data_additions.py) | The transition columns and the advancement pool; the steal pool's pitch class and pickoff rows; the fielding chain and sprint speed |
 
-### The bundle (`pipeline/batch/engine_artifacts.py`, `pipeline/batch/artifacts/`)
+### The bundle (`bundle/`)
 
 | File | What it pins |
 |---|---|
-| [test_engine_artifacts_realism.py](../../tests/unit/test_engine_artifacts_realism.py) | The batted-ball artifact's realism columns |
-| [test_pitcher_sim_matrix.py](../../tests/unit/test_pitcher_sim_matrix.py) | The dense pitcher similarity matrix |
-| [test_bundle_no_pickle.py](../../tests/unit/test_bundle_no_pickle.py) | The bundle loads with `allow_pickle=False` (SIM-565) |
-| [test_bundle_versions.py](../../tests/unit/test_bundle_versions.py) | A build publishes a new version behind a link and moves the link in one step (SIM-563) |
+| [test_engine_artifacts_realism.py](../../tests/unit/bundle/test_engine_artifacts_realism.py) | The batted-ball artifact's realism columns |
+| [test_pitcher_sim_matrix.py](../../tests/unit/bundle/test_pitcher_sim_matrix.py) | The dense pitcher similarity matrix |
+| [test_bundle_no_pickle.py](../../tests/unit/bundle/test_bundle_no_pickle.py) | The bundle loads with `allow_pickle=False` (SIM-565) |
+| [test_bundle_versions.py](../../tests/unit/bundle/test_bundle_versions.py) | A build publishes a new version behind a link and moves the link in one step (SIM-563) |
 
 ### Data ingestion (`ingest/`)
 
@@ -594,7 +594,7 @@ container and in CI.
 
 ### `.github/workflows/ci.yml`
 
-[Source](../../.github/workflows/ci.yml) · 753 lines
+[Source](../../.github/workflows/ci.yml) · 759 lines
 
 Runs on every push to any branch, and on a pull request to `main` or `release/**`.
 Python jobs use 3.13 and `pip install -r requirements-dev.txt`; the frontend jobs use
@@ -603,7 +603,7 @@ Node 20 and `npm ci`. A newer run on the same ref cancels an older one.
 | Job | What it runs | Needs |
 |---|---|---|
 | `lint` | `ruff check .` and `ruff format --check .` with ruff 0.16.7 | — |
-| `type-check` | `mypy similarity/ ingest/ pipeline/ api/ simulation/ betting/ operations/ db/` | — |
+| `type-check` | `mypy similarity/ ingest/ profiles/ pools/ bundle/ pipeline/ api/ simulation/ betting/ operations/ db/` | — |
 | `unit-tests` | the fast unit lane at `--timeout=30` with `--tb=native`, then the 80% coverage gate | — |
 | `slow-tests` | `tests/unit/ -m slow` at `--timeout=120` | — |
 | `regression` | `tests/regression/` at `--timeout=60` | `unit-tests` |

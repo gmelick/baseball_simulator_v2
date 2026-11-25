@@ -209,14 +209,14 @@ def _ro_lifespan_setup(monkeypatch, role_check):
     # and the bundle load, so no test loads the real bundle or starts workers
     # (that raised the pytest process's peak memory past the 2 GB single-process
     # budget, SIM-280).
-    import api.bundle_watch as bundle_watch
+    import bundle.versions as bundle_versions
     import simulation.batch_runner as batch_runner
-    from pipeline.batch.engine_artifacts import EngineArtifacts
+    from bundle.load_bundle import EngineArtifacts
 
     def _no_bundle(*_args, **_kwargs):
         raise FileNotFoundError("no bundle in this test")
 
-    monkeypatch.setattr(bundle_watch, "bundle_link", lambda: "/nonexistent/engine_artifacts")
+    monkeypatch.setattr(bundle_versions, "bundle_link", lambda: "/nonexistent/engine_artifacts")
     monkeypatch.setattr(EngineArtifacts, "load", staticmethod(_no_bundle))
     monkeypatch.setattr(batch_runner, "BatchRunner", MagicMock(name="BatchRunner"))
     monkeypatch.setattr(main_mod, "_background_prewarm", AsyncMock(return_value=None))

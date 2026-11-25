@@ -175,11 +175,12 @@ from steal_pool_rebuild.pickoffs import (  # noqa: E402
     pickoff_summary,
     take_snapshot,
 )
-from steal_pool_rebuild.preflight import _steal_counts, _steal_versions, preflight  # noqa: E402
+from steal_pool_rebuild.preflight import _steal_counts, preflight  # noqa: E402
 
-import pipeline.batch.player_profile_computor as ppc  # noqa: E402
-from pipeline.batch.engine_artifacts import last_n_seasons  # noqa: E402
-from pipeline.batch.pool_chain import attach_pg  # noqa: E402
+import profiles.build_profiles as ppc  # noqa: E402
+from bundle.common import last_n_seasons
+from db.dsn import attach_pg  # noqa: E402
+from pools.pool_metadata import pool_builder_versions  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # The two modes
@@ -281,7 +282,7 @@ def _rebuild(args: argparse.Namespace, t0: float) -> int:
 
         _log("=== 1. snapshot, and the pickoff rows counted from the play records ===")
         before = _steal_counts(con, seasons)
-        versions = _steal_versions(con, seasons)
+        versions = pool_builder_versions(con, "steal_opportunity_pool", seasons)
         take_snapshot(con, seasons)
         _log(f"  snapshot: {sum(before.values()):,} rows; builders {versions}")
         count_pickoff_rows(con, seasons)

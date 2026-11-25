@@ -101,7 +101,7 @@ for _p in (str(_ROOT), str(_ROOT / "scripts")):
 
 import numpy as np  # noqa: E402
 
-from pipeline.batch.artifacts.park_geometry import (
+from bundle.park_geometry import (
     PARK_N_SECTORS,
     PARK_SECTOR_DEG,
     PARK_SPRAY_MAX,
@@ -503,7 +503,7 @@ def moved_walls(
     out = []
     for v in np.unique(b["venue"]):
         vb = subset(b, b["venue"] == v)
-        _groups, moves = detect_moves(vb, seasons, BUILDER_GRID.n_sectors)
+        _groups, moves = detect_moves(vb, seasons)
         for mv in moves:
             to = int(mv["to"])
             late_seasons = [int(s) for s in seasons if int(s) >= to]
@@ -1081,7 +1081,6 @@ def load_check_balls(con: Any, seasons: list[int]) -> dict[str, np.ndarray]:
         "spray": spray,
         "dist": dist,
         "hr": hr,
-        "kept300": (~hr) & np.isfinite(dist) & (dist >= 300.0),
         "ev": ev,
         "la": la,
         "game_pk": game_pk,

@@ -33,6 +33,7 @@ import logging
 import numpy as np
 import pytest
 
+from bundle.synthetic_bundle import league_artifacts, synthetic_sampler
 from simulation.game_state import GameState, Half
 from simulation.lineup_resolver import (
     LineupResolutionError,
@@ -44,7 +45,6 @@ from simulation.lineup_resolver import (
 )
 from simulation.loop.boxscore import GameSimResult
 from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 GAME_PK = 823372
 SEASON = 2026

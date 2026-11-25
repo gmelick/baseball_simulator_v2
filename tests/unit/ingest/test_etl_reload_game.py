@@ -1193,7 +1193,7 @@ class TestPullRelativeSprayAngle:
 
     @staticmethod
     def _outcome_pool_sql() -> str:
-        from pipeline.batch.player_profile_computor import PlayerProfileComputor
+        from profiles.build_profiles import PlayerProfileComputor
 
         return inspect.getsource(PlayerProfileComputor._build_outcome_pool)
 

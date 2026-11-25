@@ -11,7 +11,9 @@ from typing import Any
 
 import numpy as np
 
-import pipeline.batch.profiles.pool_meta as pool_meta
+import pools.pool_metadata as pool_meta
+from bundle.versions import bundle_link
+from pools.build_steal_pool import MIGRATION_0031
 
 #: The repository root (this file is scripts/<package>/<module>.py).
 _ROOT = Path(__file__).resolve().parents[2]
@@ -27,14 +29,11 @@ PITCH_POOL_BUILDERS: tuple[str, ...] = ("sim553.1", "sim554.1")
 DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 #: The bundle the app loads at boot: ``$BASEBALL_PLAY_POOL_DIR/engine_artifacts``
 #: (``simulation/production_factory.py``), unless the operator names another.
-ART_DIR = os.environ.get("BASEBALL_ENGINE_ARTIFACT_DIR") or os.path.join(
-    os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
-)
+ART_DIR = os.environ.get("BASEBALL_ENGINE_ARTIFACT_DIR") or bundle_link()
 #: The copy of the bundle's steal pool, a sibling OUTSIDE the bundle: a
 #: directory inside it would change every later comparison of the bundle.
 BACKUP_SUFFIX = ".pre_sim554_steal_pool"
-MIGRATION = _ROOT / "db" / "migrations" / "duckdb" / "0031_sim554_steal_pool_pitch_class.sql"
-NEW_COLUMNS: tuple[str, ...] = ("pitch_class", "is_pickoff_row")
+MIGRATION = _ROOT / MIGRATION_0031
 
 TARGETS: tuple[str, ...] = ("2", "3")
 #: The files a whole steal pool holds, and no other.
@@ -98,10 +97,6 @@ def _ok(good: bool) -> str:
     return "OK" if good else "MISMATCH"
 
 
-def _season_list(seasons: list[int]) -> str:
-    return ", ".join(str(int(s)) for s in seasons)
-
-
 def _builder() -> str:
     """The builder the computor writes. Read at call time, so a test can set it."""
     return str(pool_meta.POOL_BUILDER_VERSION)
@@ -134,18 +129,6 @@ def _npy_shape(path: str) -> tuple[int, ...]:
 
 def _columns(con: Any, path: str) -> list[str]:
     return [str(r[0]) for r in con.execute(f"DESCRIBE SELECT * FROM {_pq(path)}").fetchall()]
-
-
-def _table_columns(con: Any, schema: str, table: str) -> set[str]:
-    """The columns of a table of this DuckDB file (not of the attached Postgres)."""
-    return {
-        str(r[0])
-        for r in con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_catalog = current_database() AND table_schema = ? AND table_name = ?",
-            [schema, table],
-        ).fetchall()
-    }
 
 
 def _tree_files(root: str) -> dict[str, int]:

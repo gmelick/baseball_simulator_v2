@@ -30,7 +30,8 @@ import numpy as np
 import pytest
 from tests.script_loader import load_script
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import HandPool
 from simulation import filter_cells as fc
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import Bases, GameState, Half, Team

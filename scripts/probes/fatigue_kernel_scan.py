@@ -50,6 +50,7 @@ if str(_ROOT) not in sys.path:
 
 import numpy as np  # noqa: E402
 
+from bundle.versions import bundle_link  # noqa: E402
 from simulation.filter_cells import (  # noqa: E402
     N_BAND,
     N_COUNT,
@@ -92,9 +93,7 @@ MIN_ROWS_PER_BAND = 20
 FLAT = 0.0
 DEFAULT_PC_SIGMAS: tuple[float, ...] = (FLAT, 10.0, 20.0, 35.0, 60.0)
 DEFAULT_TTO_SIGMAS: tuple[float, ...] = (FLAT, 0.5, 1.0, 2.0)
-DEFAULT_ART_DIR = os.path.join(
-    os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
-)
+DEFAULT_ART_DIR = bundle_link()
 
 
 # ---------------------------------------------------------------------------

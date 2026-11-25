@@ -34,15 +34,15 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.pools import (
+from bundle.export_steal_pool import build_steal_pool_artifact
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import (
     STEAL_PITCH_CLASS_CODE,
     STEAL_PITCH_CLASSES,
     steal_pitch_class_codes,
 )
-from pipeline.batch.artifacts.steal_pool import build_steal_pool_artifact
-from pipeline.batch.engine_artifacts import EngineArtifacts
-from pipeline.batch.player_profile_computor import PlayerProfileComputor
-from pipeline.batch.profiles.pool_meta import recency_weight
+from pools.pool_metadata import recency_weight
+from profiles.build_profiles import PlayerProfileComputor
 from simulation.game_state import PITCH_OUTCOMES
 
 REPO = Path(__file__).resolve().parents[2]
@@ -812,8 +812,6 @@ class TestTheLoader:
         shared = art.extract_shared_arrays()
         assert shared["steal_pool.2.pitch_class"].tolist() == [1, 4]
         view = np.array([3, 3], dtype=np.int8)
-        art.attach_shared_views({"steal_pool.2.pitch_class": view})
-        assert art.steal_pools["2"].pitch_class is view
         # A worker that loads with the shared views takes the view, not the disk.
         again = EngineArtifacts.load(str(tmp_path), shared_views={"steal_pool.2.pitch_class": view})
         assert again.steal_pools["2"].pitch_class is view

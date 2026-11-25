@@ -44,13 +44,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASS_CODE, STEAL_PITCH_CLASSES
-from pipeline.batch.engine_artifacts import EngineArtifacts, StealPool
-from simulation.full_pool_sampler import FullPoolSampler
-from simulation.game_state import NO_PITCH, PITCH_OUTCOMES, Bases, GameState, Half
-from simulation.loop.values import STEAL_CAUGHT, STEAL_SAFE, StealResolution
-from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import (
+from bundle.load_bundle import EngineArtifacts
+from bundle.synthetic_bundle import (
     LEAGUE_INPLAY_MODEL,
     LEAGUE_PITCH_MODEL,
     STEALABLE_CLASSES,
@@ -59,6 +54,11 @@ from simulation.synthetic_bundle import (
     synthetic_artifacts,
     synthetic_sampler,
 )
+from bundle.worker_pools import STEAL_PITCH_CLASS_CODE, STEAL_PITCH_CLASSES, StealPool
+from simulation.full_pool_sampler import FullPoolSampler
+from simulation.game_state import NO_PITCH, PITCH_OUTCOMES, Bases, GameState, Half
+from simulation.loop.values import STEAL_CAUGHT, STEAL_SAFE, StealResolution
+from simulation.sim_loop import StateMachine, simulate_game
 
 SEASON = 2024
 PITCHER = 477132

@@ -19,7 +19,8 @@ import logging
 import numpy as np
 import pytest
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import HandPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.production_factory import DEFAULT_SIT_SIGMA, apply_sit_sigma_env
 

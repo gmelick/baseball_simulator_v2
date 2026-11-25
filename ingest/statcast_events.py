@@ -430,6 +430,14 @@ def sql_steal_attempt(base: str, q: str = "") -> str:
     )
 
 
+def sql_any_steal_attempt(q: str = "") -> str:
+    """Boolean: a steal of second, third or home was attempted on this pitch row."""
+    return (
+        f"({sql_steal_attempt('2b', q)} OR {sql_steal_attempt('3b', q)} "
+        f"OR {sql_steal_attempt('home', q)})"
+    )
+
+
 def sql_steal_success(base: str, q: str = "") -> str:
     """Boolean: an attempted steal of ``base`` succeeded on this pitch row.
 

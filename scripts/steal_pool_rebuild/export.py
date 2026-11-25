@@ -13,8 +13,9 @@ from typing import Any
 import duckdb
 import numpy as np
 
-from pipeline.batch.artifacts.pools import STEAL_PITCH_CLASS_CODE
-from pipeline.batch.engine_artifacts import build_steal_pool_artifact
+from bundle.export_steal_pool import build_steal_pool_artifact
+from bundle.worker_pools import STEAL_PITCH_CLASS_CODE
+from profiles.sql import sql_seasons
 
 from .bundle import bundle_hashes, compare_hashes, steal_pool_problem
 from .common import (
@@ -28,7 +29,6 @@ from .common import (
     _log,
     _ok,
     _pq,
-    _season_list,
     _sql_path,
 )
 
@@ -70,7 +70,7 @@ def roundtrip_target(
             "round-trip keys on pitch_id  MISMATCH"
         )
         return False
-    where = f"target_base = {int(target)} AND season IN ({_season_list(window)})"
+    where = f"target_base = {int(target)} AND season IN ({sql_seasons(window)})"
     n_duck = int(con.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0])
     n_file, n_ids = con.execute(
         f"SELECT COUNT(*), COUNT(DISTINCT pitch_id) FROM {_pq(meta)}"
@@ -325,7 +325,7 @@ def print_rollback(art_dir: str, backup_dir: str) -> None:
     )
     _log(
         "  sim.steal_opportunity_pool in DuckDB keeps the sim554.1 rows. HOLD every pool export "
-        "(the nightly chain, make engine-artifacts, engine_artifacts --what pool or all) until "
+        "(the nightly chain, make engine-artifacts, bundle.build_bundle --what pool or all) until "
         "the table is on the rows you keep: an export ships them again. To undo the pickoff "
         "rows in DuckDB (the app stopped): DELETE FROM sim.steal_opportunity_pool WHERE "
         "is_pickoff_row."

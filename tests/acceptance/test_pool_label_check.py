@@ -19,7 +19,7 @@ expression hid that way:
 This test counts the same four rates (strikeouts, walks, hit by pitch, pitches
 per plate appearance) from REAL plate appearances in ``raw.pitches`` and fails
 when the chain drifts more than 0.5% from any of them
-(``pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE``, owner decision 5 of the
+(``pools.check_pool_labels.LABEL_CHECK_TOLERANCE``, owner decision 5 of the
 SIM-553 plan). The real count shares no label with the pool.
 
 The two sides count the same plate appearances. The chain reads only the pool
@@ -31,7 +31,7 @@ count (708,439 on 2023-2026). A difference means the two sides no longer read
 the same plate appearances, for example because ``raw.pitches`` gained games
 the pool has not been rebuilt for. The all-rows chain also plays on the groups
 cut short by a runner out, which adds about +0.6 points to its walk gap; the
-report prints that gap for the record only (``pipeline/batch/pool_chain.py``,
+report prints that gap for the record only (``pools/check_pool_labels.py``,
 THE POPULATION RULE). Measured 2026-09-25 on 2023-2026 (strikeouts / walks /
 hit by pitch / pitches): the corrected coding reads +0.09% / -0.25% / +0.08% /
 +0.07%; the SIM-553 coding reads -4.29% / +2.31% / +1.12% / +0.90% and fails.
@@ -45,7 +45,7 @@ tables (``tests/unit/test_foul_tip_strike_three.py``) guard those.
 THE WINDOW
 ==========
 The test reads its window from the live pool: the seasons the engine-artifact
-bundle exports (``pipeline.batch.engine_artifacts.last_n_seasons``, the latest
+bundle exports (``bundle.common.last_n_seasons``, the latest
 ``RECENCY_FLOOR_SEASONS`` seasons of ``sim.pitch_pool``). When a new season's
 rows arrive, the check grades the new window at once, so a coding change that
 reaches only the new season's rows is graded too.
@@ -75,7 +75,7 @@ in (the Dockerfile's dev stage) and the app service does not mount it.
 
 To run it alone, from the repo root:
 
-    MSYS_NO_PATHCONV=1 docker compose run --rm -T -e SIM_ACCEPTANCE=1 -v "$PWD/tests:/app/tests" -v "$PWD/pipeline:/app/pipeline" app python -m pytest tests/acceptance/test_pool_label_check.py -p no:cacheprovider -rs
+    MSYS_NO_PATHCONV=1 docker compose run --rm -T -e SIM_ACCEPTANCE=1 -v "$PWD/tests:/app/tests" -v "$PWD/pools:/app/pools" app python -m pytest tests/acceptance/test_pool_label_check.py -p no:cacheprovider -rs
 
 Where either store is unreachable (the host, CI) the live tests SKIP. Under
 ``SIM_ACCEPTANCE=1`` they FAIL instead, the package's rule: an explicit request
@@ -88,7 +88,7 @@ A FAIL MEANS one of three things. Read which test failed:
   * the channels: the pool build codes a pitch into the wrong class, or the
     pool predates the fix. A strikeout shortfall with a walk and pitch surplus
     is the SIM-553 shape. The fix is in ``SQL_OUTCOME_TYPE``
-    (``pipeline/batch/player_profile_computor.py``) and a pool rebuild
+    (``profiles/sql.py``) and a pool rebuild
     (``scripts/rebuild_pitch_pool.py``), never in this tolerance;
   * the plate-appearance counts: the pool and ``raw.pitches`` hold different
     games. Rebuild the pool for the window before you read the channels;
@@ -103,9 +103,9 @@ from typing import Any, NoReturn
 
 import pytest
 
-from pipeline.batch import pool_chain
-from pipeline.batch.artifacts.common import RECENCY_FLOOR_SEASONS
-from pipeline.batch.engine_artifacts import last_n_seasons
+from bundle.common import RECENCY_FLOOR_SEASONS, last_n_seasons
+from db.dsn import attach_pg
+from pools import check_pool_labels as pool_chain
 from tests.acceptance import bands
 from tests.acceptance.conftest import opted_in
 
@@ -158,7 +158,7 @@ def live_con() -> Any:
         if not has_pool:
             _unavailable(f"{path} holds no sim.pitch_pool")
         try:
-            pool_chain.attach_pg(con)
+            attach_pg(con)
         except RuntimeError as exc:
             _unavailable(str(exc))
         yield con
@@ -176,9 +176,9 @@ def window(live_con: Any) -> list[int]:
 
 
 @pytest.fixture(scope="module")
-def real(live_con: Any, window: list[int]) -> dict[str, float]:
-    """The real plate-appearance rates over the live window."""
-    return pool_chain.real_pa_rates(live_con, _season_pred(window))
+def label_run(live_con: Any, window: list[int]) -> pool_chain.LabelCheckRun:
+    """The label check over the live window: the pa_only chain, the real rates and both counts."""
+    return pool_chain.run_label_check(live_con, _season_pred(window))
 
 
 def test_the_bands_window_spans_the_export_floor() -> None:
@@ -187,7 +187,7 @@ def test_the_bands_window_spans_the_export_floor() -> None:
     assert len(seasons) == RECENCY_FLOOR_SEASONS, (
         f"bands.POOL_WINDOW reads {bands.POOL_WINDOW!r} ({len(seasons)} seasons), but the "
         f"bundle exports RECENCY_FLOOR_SEASONS = {RECENCY_FLOOR_SEASONS} "
-        "(pipeline/batch/engine_artifacts.py); restate one of them"
+        "(bundle/common.py); restate one of them"
     )
 
 
@@ -204,14 +204,12 @@ def test_the_live_window_is_the_bands_window(window: list[int]) -> None:
 
 
 def test_both_sides_read_the_same_plate_appearances(
-    live_con: Any, window: list[int], real: dict[str, float]
+    window: list[int], label_run: pool_chain.LabelCheckRun
 ) -> None:
     """The pool's plate appearances (the ``pa_only`` groups) equal the real count."""
-    n_pool = pool_chain.pa_group_count(live_con, _season_pred(window))
-    n_real = int(real["n_pa"])
-    line = pool_chain.format_pa_count(n_pool, n_real)
+    line = pool_chain.format_pa_count(label_run.n_pool, label_run.n_real)
     print(f"window {_season_pred(window)}:\n{line}")
-    assert n_pool == n_real, (
+    assert label_run.n_pool == label_run.n_real, (
         f"window {_season_pred(window)}:\n{line}\n"
         "The label check would compare different plate appearances. Rebuild the pool "
         "for the window (scripts/rebuild_pitch_pool.py or the nightly "
@@ -220,15 +218,13 @@ def test_both_sides_read_the_same_plate_appearances(
 
 
 def test_the_pool_chain_matches_real_plate_appearances(
-    live_con: Any, window: list[int], real: dict[str, float]
+    live_con: Any, window: list[int], label_run: pool_chain.LabelCheckRun
 ) -> None:
     pred = _season_pred(window)
     # SIM-553: the chain over the pool rows of real plate appearances only, so
     # both sides count the same groups (pool_chain, THE POPULATION RULE).
-    chain = pool_chain.chain_rates(live_con, pred, pa_only=True)
-    rows = pool_chain.label_check(chain, real)
-    failed = [row[0] for row in rows if not row[4]]
-    n_pool = pool_chain.pa_group_count(live_con, pred)
+    real = label_run.real
+    failed = [row[0] for row in label_run.rows if not row[4]]
 
     # For the record only: the all-rows chain (the band centres) against the
     # same plate appearances. Its gap includes the groups cut short.
@@ -243,8 +239,8 @@ def test_the_pool_chain_matches_real_plate_appearances(
             f"pitch pool built by {[v[0] for v in versions]}; tolerance "
             f"{pool_chain.LABEL_CHECK_TOLERANCE * 100.0:.1f}%; the chain over the pool "
             "rows of those plate appearances:",
-            pool_chain.format_pa_count(n_pool, int(real["n_pa"])),
-            *pool_chain.format_label_check(rows),
+            pool_chain.format_pa_count(label_run.n_pool, label_run.n_real),
+            *pool_chain.format_label_check(label_run.rows),
             "for the record, the all-rows chain against the same plate appearances: "
             + pool_chain.format_gaps(all_rows),
         ]
@@ -254,6 +250,6 @@ def test_the_pool_chain_matches_real_plate_appearances(
         f"the pitch pool's count chain drifts from real plate appearances on {failed}:\n"
         f"{report}\n"
         "The pool build codes a pitch into the wrong class (see SQL_OUTCOME_TYPE in "
-        "pipeline/batch/player_profile_computor.py), or the pool predates the fix "
+        "profiles/sql.py), or the pool predates the fix "
         "(rebuild: scripts/rebuild_pitch_pool.py)."
     )

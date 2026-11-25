@@ -44,10 +44,10 @@ import numpy as np
 import pytest
 
 import simulation.production_factory as pf
+from bundle.synthetic_bundle import change_pool, league_artifacts, synthetic_sampler
 from simulation.batch_runner import GameSpec
 from simulation.game_state import Bases, GameState, Half, Team
 from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import change_pool, league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132

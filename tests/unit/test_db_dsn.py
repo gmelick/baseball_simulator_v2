@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from db.dsn import dsn_label, require_dsn
+from db.dsn import _redact, attach_pg, dsn_label, require_dsn
 
 
 def test_returns_the_stripped_value(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -59,3 +59,58 @@ def test_no_default_password_in_the_module() -> None:
 def test_dsn_label_never_holds_the_password(dsn: str, label: str) -> None:
     assert dsn_label(dsn) == label
     assert "SECRET" not in dsn_label(dsn)
+
+
+def test_redact_drops_a_url_dsn_and_its_password() -> None:
+    dsn = "postgresql://user:hunter2@db:5432/baseball_sim"
+    msg = f"IO Error: Unable to connect to Postgres at {dsn}: password hunter2 rejected"
+    out = _redact(msg, dsn)
+    assert "hunter2" not in out
+    assert dsn not in out
+
+
+def test_redact_drops_a_keyword_dsn() -> None:
+    """A DuckDB ATTACH failure quotes the connection string back."""
+    dsn = "host=db port=5432 user=x password=hunter2SECRET dbname=y"
+    out = _redact(f'Failed to connect using "{dsn}": connection refused', dsn)
+    assert "hunter2SECRET" not in out
+    assert "connection refused" in out
+
+
+def test_attach_pg_is_a_no_op_when_pg_is_attached() -> None:
+    """A second attach must not reach for Postgres (the in-memory ``pg`` stays)."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect(":memory:")
+    con.execute("ATTACH ':memory:' AS pg")
+    con.execute("CREATE TABLE pg.t AS SELECT 1 AS x")
+    attach_pg(con, dsn="postgresql://nobody:secret@nowhere:1/none")
+    assert con.execute("SELECT x FROM pg.t").fetchone()[0] == 1
+
+
+class _FailingAttach:
+    """A connection whose ATTACH fails with the DSN quoted back, as DuckDB's does."""
+
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def execute(self, sql: str) -> _FailingAttach:
+        self.executed.append(sql)
+        if sql.startswith("ATTACH"):
+            raise RuntimeError(f"IO Error: Unable to connect at {sql}: password hunter2 rejected")
+        return self
+
+    def fetchall(self) -> list:
+        return []
+
+
+def test_attach_pg_redacts_the_password_from_a_failed_attach() -> None:
+    con = _FailingAttach()
+    with pytest.raises(RuntimeError) as info:
+        attach_pg(con, dsn="postgresql://user:hunter2@db:5432/x")
+    assert str(info.value).startswith("Postgres attach failed: ")
+    assert "hunter2" not in str(info.value)
+    assert info.value.__cause__ is None and info.value.__suppress_context__
+    assert con.executed[1:] == [
+        "INSTALL postgres; LOAD postgres;",
+        "ATTACH 'postgresql://user:hunter2@db:5432/x' AS pg (TYPE postgres, READ_ONLY);",
+    ]

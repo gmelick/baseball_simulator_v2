@@ -1042,9 +1042,9 @@ def test_the_roe_reached_probe_skips_a_dropped_third_strike_reach() -> None:
     """
     import numpy as np
 
+    from bundle.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
     from simulation.game_state import GameState
     from simulation.sim_loop import StateMachine
-    from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
     from tests.acceptance.conftest import _blank_tally, _install_probes
 
     art = fixed_play_artifacts("field_out", pitch_model={"swinging_strike": 1.0}, got_away=True)
@@ -1351,8 +1351,8 @@ def _running_game_lane_machine(**steal_kw: object) -> tuple[object, dict, dict, 
     class, and on a ball the runner always goes and is always safe."""
     import numpy as np
 
+    from bundle.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
     from simulation.sim_loop import StateMachine
-    from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
     from tests.acceptance.conftest import _blank_tally, _install_probes
 
     art = fixed_play_artifacts(
@@ -1422,9 +1422,9 @@ def test_the_lane_refuses_a_bundle_that_cannot_run_the_new_order() -> None:
     inert)."""
     import numpy as np
 
+    from bundle.synthetic_bundle import fixed_play_artifacts
     from simulation.full_pool_sampler import FullPoolSampler
     from simulation.sim_loop import StateMachine
-    from simulation.synthetic_bundle import fixed_play_artifacts
     from tests.acceptance.conftest import (
         check_running_game_order,
         running_game_on_the_pitch_wanted,

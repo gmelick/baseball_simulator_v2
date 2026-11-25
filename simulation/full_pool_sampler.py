@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts
+from bundle.load_bundle import EngineArtifacts
 from simulation.sampler.advancement import AdvancementMixin
 from simulation.sampler.fence import FenceMixin
 from simulation.sampler.fielding import FieldingMixin

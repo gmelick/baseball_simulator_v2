@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts, HandPool
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import BattedBallPool, HandPool
 from simulation.full_pool_sampler import FullPoolSampler
 
 _BATTERS = ["200:2024", "201:2024", "202:2024", "203:2024"]

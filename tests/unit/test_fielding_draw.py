@@ -32,14 +32,10 @@ import duckdb
 import numpy as np
 import pytest
 
-from pipeline.batch.artifacts.battedball_pool import BB_CLASS
-from pipeline.batch.engine_artifacts import (
-    BattedBallPool,
-    EngineArtifacts,
-    HandPool,
-    build_battedball_pool_artifact,
-    build_pitch_pool_artifact,
-)
+from bundle.export_batted_ball_pool import BB_CLASS, build_battedball_pool_artifact
+from bundle.export_pitch_pool import build_pitch_pool_artifact
+from bundle.load_bundle import EngineArtifacts
+from bundle.worker_pools import BattedBallPool, HandPool
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half, Team
 from simulation.production_factory import apply_fielding_env
@@ -501,8 +497,8 @@ class TestTheArtifactClass:
         shared = art.extract_shared_arrays()
         assert shared["bb_pool.R.bb_class"] is bb.bb_class
         view = np.zeros(bb.n, dtype=np.int8)
-        art.attach_shared_views({"bb_pool.R.bb_class": view})
-        assert bb.bb_class is view
+        again = EngineArtifacts.load(str(tmp_path), shared_views={"bb_pool.R.bb_class": view})
+        assert again.bb_pools["R"].bb_class is view
 
     def test_a_pool_without_a_type_column_loads_none(self, tmp_path):
         con = duckdb.connect(":memory:")

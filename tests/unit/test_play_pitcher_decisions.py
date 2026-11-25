@@ -36,6 +36,13 @@ from typing import Any
 import numpy as np
 import pytest
 
+from bundle.synthetic_bundle import (
+    LEAGUE_INPLAY_MODEL,
+    LEAGUE_PITCH_MODEL,
+    fixed_play_artifacts,
+    synthetic_artifacts,
+    synthetic_sampler,
+)
 from simulation.batch_runner import GameSpec, rng_driven_machine_factory
 from simulation.game_state import NO_PITCH, Bases, GameState, Half, PlayResult, Team
 from simulation.loop.values import EVENT_INTENTIONAL_WALK
@@ -46,13 +53,6 @@ from simulation.pitcher_decisions import (
 )
 from simulation.play_recorder import RecordingMachine
 from simulation.sim_loop import StateMachine, simulate_game
-from simulation.synthetic_bundle import (
-    LEAGUE_INPLAY_MODEL,
-    LEAGUE_PITCH_MODEL,
-    fixed_play_artifacts,
-    synthetic_artifacts,
-    synthetic_sampler,
-)
 
 SEASON = 2024
 HOME_SP = 100

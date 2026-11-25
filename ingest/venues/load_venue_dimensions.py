@@ -6,7 +6,7 @@ season with its ``fieldInfo``: the five published distances (``leftLine``,
 points (``left``, ``right``) some parks publish, the roof and the turf.
 
 The geometry builder (``build_park_geometry`` in
-``pipeline/batch/artifacts/park_geometry.py``) interpolates the five distances
+``bundle/park_geometry.py``) interpolates the five distances
 at a sector's middle angle and adds the league's offset. The result is the
 prior: the fence line of a sector that the pool's own balls cannot support.
 

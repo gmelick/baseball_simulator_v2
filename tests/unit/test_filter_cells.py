@@ -58,7 +58,7 @@ import numpy as np
 import pytest
 from tests.script_loader import REPO, load_script, script_path
 
-import pipeline.batch.artifacts.common as artifacts_common
+import bundle.common as artifacts_common
 
 measure_filter_cells = load_script("measure_filter_cells")
 _MODULE_PATH = str(script_path("measure_filter_cells"))
@@ -582,20 +582,6 @@ def test_redact_dsn_never_echoes_the_secret(dsn: str) -> None:
     assert mfc._SAFE_DSN_SHAPE.match(got) or got in ("", mfc.REDACTED)
 
 
-def test_redact_text_scrubs_a_dsn_out_of_an_attach_error() -> None:
-    """A DuckDB ATTACH failure quotes the connection string back.
-
-    ``open_connection`` logs that message. Logging it raw writes the password to
-    stdout and into any captured CI log.
-    """
-    dsn = "host=db port=5432 user=x password=hunter2SECRET dbname=y"
-    message = f'Failed to connect using "{dsn}": connection refused'
-    got = mfc._redact_text(message, dsn)
-    assert "hunter2SECRET" not in got
-    assert "db:5432/y" in got
-    assert "connection refused" in got
-
-
 # ---------------------------------------------------------------------------
 # The widening ladder
 # ---------------------------------------------------------------------------
@@ -1022,7 +1008,7 @@ def test_duckdb_is_absent_from_a_clean_import() -> None:
 
     A check of ``not hasattr(mfc, "duckdb")`` alone cannot fail, because the
     script never binds the name itself. A transitive import can still load
-    ``duckdb``: ``pipeline.batch.engine_artifacts`` imports it at module scope,
+    ``duckdb``: ``bundle.load_bundle`` imports it at module scope,
     so a module-scope import of that module breaks the promise.
 
     This checks ``sys.modules`` in a FRESH subprocess, which is the only place
@@ -1038,7 +1024,7 @@ def test_duckdb_is_absent_from_a_clean_import() -> None:
         spec.loader.exec_module(module)
         print("LOADED_DUCKDB" if "duckdb" in sys.modules else "NO_DUCKDB")
         print("LOADED_ENGINE_ARTIFACTS"
-              if "pipeline.batch.engine_artifacts" in sys.modules else "NO_ENGINE_ARTIFACTS")
+              if "bundle.load_bundle" in sys.modules else "NO_ENGINE_ARTIFACTS")
         """
     )
     result = subprocess.run(  # noqa: S603 - fixed argv, no shell

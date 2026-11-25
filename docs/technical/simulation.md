@@ -183,7 +183,7 @@ class, one draw before the pitch answers both questions.
 
 ### `simulation/loop/manager.py`
 
-[Source](../../simulation/loop/manager.py) · 282 lines · Tests: [test_manager_draw.py](../../tests/unit/test_manager_draw.py), [test_relief_draw.py](../../tests/unit/test_relief_draw.py), [test_manager_decisions.py](../../tests/unit/test_manager_decisions.py), [test_ibb_rates.py](../../tests/unit/test_ibb_rates.py)
+[Source](../../simulation/loop/manager.py) · 282 lines · Tests: [test_manager_draw.py](../../tests/unit/test_manager_draw.py), [test_relief_draw.py](../../tests/unit/test_relief_draw.py), [test_manager_decisions.py](../../tests/unit/test_manager_decisions.py), [test_ibb_rates.py](../../tests/unit/pools/test_ibb_rates.py)
 
 `ManagerMixin`: the leverage index, the intentional walk and the pitching change. With no manager
 wired (`StateMachine.manager is None`), every hook does nothing.
@@ -239,7 +239,7 @@ Module-level helpers.
 
 ### `simulation/sampler/base.py`
 
-[Source](../../simulation/sampler/base.py) · 483 lines · Tests: [test_pool_cutoff.py](../../tests/unit/test_pool_cutoff.py), [test_actor_matrices.py](../../tests/unit/test_actor_matrices.py), [test_actor_powers.py](../../tests/unit/test_actor_powers.py), [test_pitcher_sim_matrix.py](../../tests/unit/test_pitcher_sim_matrix.py)
+[Source](../../simulation/sampler/base.py) · 484 lines · Tests: [test_pool_cutoff.py](../../tests/unit/pools/test_pool_cutoff.py), [test_actor_matrices.py](../../tests/unit/test_actor_matrices.py), [test_actor_powers.py](../../tests/unit/test_actor_powers.py), [test_pitcher_sim_matrix.py](../../tests/unit/bundle/test_pitcher_sim_matrix.py)
 
 `BaseMixin`: what more than one draw reads.
 
@@ -331,7 +331,7 @@ born ball's carry meets the live park's fence at its direction (the park geometr
 
 ### `simulation/sampler/steal.py`
 
-[Source](../../simulation/sampler/steal.py) · 362 lines · Tests: [test_steal_draw.py](../../tests/unit/test_steal_draw.py), [test_steal_weights_seam.py](../../tests/unit/test_steal_weights_seam.py), [test_running_game_on_the_pitch.py](../../tests/unit/test_running_game_on_the_pitch.py)
+[Source](../../simulation/sampler/steal.py) · 361 lines · Tests: [test_steal_draw.py](../../tests/unit/test_steal_draw.py), [test_steal_weights_seam.py](../../tests/unit/test_steal_weights_seam.py), [test_running_game_on_the_pitch.py](../../tests/unit/test_running_game_on_the_pitch.py)
 
 `StealMixin`: the steal and pickoff draws over the steal opportunity pool (one row per real pitch
 with a stealable runner, plus the pickoff rows: real pickoffs thrown before any pitch of their
@@ -431,7 +431,7 @@ its own outcome, never a hit. An import-time check makes every alias target a ca
 |---|---|---|
 | `resolve_event_to_canonical` | A Statcast event or canonical key to its canonical key; None for an unknown token. | `run_resolution.resolve_runs`, `CreditMixin._accumulate_pa` |
 | `FIELD_POSITION_NAMES` | Scorebook number (1-9) to position name. | `loop/in_play.py`, `sampler/fielding.py`, `sampler/advancement.py` |
-| `DEFENSIVE_RUN_VALUES` | Runs saved per out above average (0.75 infield, 0.90 outfield), per block (0.25) and per framing strike (0.125). | `pipeline/batch/profiles/defense.py` |
+| `DEFENSIVE_RUN_VALUES` | Runs saved per out above average (0.75 infield, 0.90 outfield), per block (0.25) and per framing strike (0.125). | `profiles/defense.py` |
 
 ### `simulation/flags.py`
 
@@ -498,7 +498,7 @@ needs. `tests/unit/test_cache_codec.py` fails if this module imports `pickle`.
 
 ### `simulation/production_factory.py`
 
-[Source](../../simulation/production_factory.py) · 633 lines · Tests: [test_actor_powers.py](../../tests/unit/test_actor_powers.py), [test_manager_model.py](../../tests/unit/test_manager_model.py), [test_ibb_rates.py](../../tests/unit/test_ibb_rates.py), [test_situation_sigma_env.py](../../tests/unit/test_situation_sigma_env.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py)
+[Source](../../simulation/production_factory.py) · 633 lines · Tests: [test_actor_powers.py](../../tests/unit/test_actor_powers.py), [test_manager_model.py](../../tests/unit/test_manager_model.py), [test_ibb_rates.py](../../tests/unit/pools/test_ibb_rates.py), [test_situation_sigma_env.py](../../tests/unit/test_situation_sigma_env.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py)
 
 The production machine factory. It builds a `FullPoolSampler` over the on-disk bundle once per
 worker process, sets every `SIM_*` switch on it, and attaches the manager when `SIM_MANAGER` is on.
@@ -565,14 +565,14 @@ the live candidates then share one definition. Each query comes in two spellings
 | `rotation_starters_sql` | The team's rotation: the starters of its last 5 games who threw at least 45 pitches. An opener does not count. | `fetch_pen_for_game` |
 | `pen_from_listing` | PURE: the pen is the arms the box lists as `bullpen` or `pitched`, minus the rotation, minus today's starter. The arms who pitched come first. | `fetch_pen_for_game` |
 | `fetch_pen_for_game` | The pen and each arm's usage for one game and team, or None when the box lists nothing. | `lineup_resolver._attach_bullpens`, `scripts/probes/bullpen_check.py` |
-| `fetch_game_context_sync` | The pool builder's one Postgres read: each game's managers, each appearance's usage and each pitcher's hand. | `pipeline/batch/artifacts/manager_pool.py` |
+| `fetch_game_context_sync` | The pool builder's one Postgres read: each game's managers, each appearance's usage and each pitcher's hand. | `bundle/export_pitching_change_pool.py` |
 
 **Watch out:** every window ends strictly before the game DATE, so the two games of a
 doubleheader do not see each other's usage.
 
 ### `simulation/sim_kwargs.py`
 
-[Source](../../simulation/sim_kwargs.py) · 1,183 lines · Tests: [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_pool_cutoff.py](../../tests/unit/test_pool_cutoff.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_manager_profile_snapshot.py](../../tests/unit/test_manager_profile_snapshot.py)
+[Source](../../simulation/sim_kwargs.py) · 1,183 lines · Tests: [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_park_factor_snapshot.py](../../tests/unit/test_park_factor_snapshot.py), [test_pool_cutoff.py](../../tests/unit/pools/test_pool_cutoff.py), [test_api_realism_wiring.py](../../tests/unit/test_api_realism_wiring.py), [test_manager_profile_snapshot.py](../../tests/unit/test_manager_profile_snapshot.py)
 
 The one builder that turns a resolved `GameState` into sim kwargs, plus the park-factor lookup and
 the managers' profiles. One builder serves the API and every script, so the two cannot send
@@ -755,9 +755,9 @@ the tag `summary`, `prop_set` or `json`. A pickle load runs code, so the cache n
 
 ## Support
 
-### `simulation/synthetic_bundle.py`
+### `bundle/synthetic_bundle.py`
 
-[Source](../../simulation/synthetic_bundle.py) · 688 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/test_synthetic_bundle.py), [test_baseball_sniff.py](../../tests/unit/test_baseball_sniff.py), [test_simulate_game_driver.py](../../tests/unit/test_simulate_game_driver.py)
+[Source](../../bundle/synthetic_bundle.py) · 645 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py), [test_baseball_sniff.py](../../tests/unit/test_baseball_sniff.py), [test_simulate_game_driver.py](../../tests/unit/test_simulate_game_driver.py)
 
 A small in-memory bundle in the exact shape the production loader produces: the pitch pools, a
 batted-ball pool with transitions, the advancement pools, the steal pools and the change pool. The

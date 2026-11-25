@@ -8,6 +8,6 @@
 - :mod:`ingest.savant`: load the Baseball Savant leaderboards, pitch tracking and sprint speed.
 - :mod:`ingest.statcast_events`: the Statcast event and pitch-result code sets.
 
-The next steps are the profiles (in ``pipeline/batch/``), the pools, the similarity
+The next steps are the profiles (``profiles/``), the pools (``pools/``), the similarity
 engines, the bundle, the simulation and the outputs.
 """

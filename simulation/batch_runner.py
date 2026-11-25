@@ -1184,7 +1184,7 @@ class BatchRunner:
 #
 # Module-level (so it pickles by dotted reference). It builds the SAME machine
 # production builds, a StateMachine over a FullPoolSampler, but over the
-# in-memory league bundle from :mod:`simulation.synthetic_bundle`. A whole game
+# in-memory league bundle from :mod:`bundle.synthetic_bundle`. A whole game
 # then runs with NO DuckDB and no artifact directory, and every play goes
 # through the production in-play path (the transition draw).
 
@@ -1194,7 +1194,7 @@ def _inplay_model_for(hit_rate: float | None) -> dict[str, float] | None:
     (``_hit_rate``), keeping the relative shape of hits and outs."""
     if hit_rate is None:
         return None
-    from simulation.synthetic_bundle import LEAGUE_INPLAY_MODEL
+    from bundle.synthetic_bundle import LEAGUE_INPLAY_MODEL
 
     hit_rate = float(min(max(hit_rate, 0.0), 1.0))
     hits = {"single", "double", "triple", "home_run"}
@@ -1215,9 +1215,9 @@ def rng_driven_machine_factory(seed: int | None, spec: GameSpec):
     on a :class:`GameSpec`; ``simulate_game`` re-seeds both generators from
     the per-game ``seed``.
     """
+    from bundle.synthetic_bundle import league_artifacts
     from simulation.full_pool_sampler import FullPoolSampler
     from simulation.sim_loop import StateMachine
-    from simulation.synthetic_bundle import league_artifacts
 
     kw = spec.sim_kwargs if isinstance(spec.sim_kwargs, dict) else {}
     hit_rate = kw.get("_hit_rate")

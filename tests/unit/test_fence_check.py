@@ -23,7 +23,7 @@ for _p in (str(_ROOT), str(_ROOT / "scripts")):
 
 import fence_check as fc  # noqa: E402
 
-from pipeline.batch.artifacts.park_geometry import PARK_N_SECTORS, PARK_SPRAY_MIN  # noqa: E402
+from bundle.park_geometry import PARK_N_SECTORS, PARK_SPRAY_MIN  # noqa: E402
 
 CENTRE = 0.0  # spray 0: sector 5 on the eleven-sector grid, sector 4 on the nine
 LINE_LEFT = -50.0  # beyond the old grid; sector 0 on the eleven-sector grid
@@ -39,7 +39,6 @@ def _balls(rows: list[tuple[int, int, float, float, bool]]) -> dict[str, np.ndar
         "spray": np.asarray(spray, dtype=np.float64),
         "dist": d,
         "hr": h,
-        "kept300": (~h) & (d >= 300.0),
     }
 
 
@@ -606,7 +605,6 @@ def transfer_balls() -> dict[str, np.ndarray]:
         "spray": np.zeros(len(rows)),
         "dist": dist,
         "hr": hr,
-        "kept300": (~hr) & (dist >= 300.0),
         "ev": ev,
         "la": la,
         "game_pk": game_pk,

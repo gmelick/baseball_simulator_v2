@@ -77,7 +77,7 @@ calls yet. The deep review does that.
    [simulation/production_factory.py](../../simulation/production_factory.py) builds
    the sampler once per worker, from the bundle of pools and score matrices on disk
    (`EngineArtifacts.load` in
-   [pipeline/batch/engine_artifacts.py](../../pipeline/batch/engine_artifacts.py)).
+   [bundle/load_bundle.py](../../bundle/load_bundle.py)).
 6. **One game.** `simulate_game` in
    [simulation/sim_loop.py](../../simulation/sim_loop.py) sets up the two lineups and
    calls `step_pitch` until the game ends.
@@ -226,7 +226,7 @@ ones, and picks one row at random by that weight.
    extra-base decisions.
 8. [simulation/sampler/manager.py](../../simulation/sampler/manager.py):
    `pitching_change_draw` and `relief_arm_draw`.
-9. [simulation/synthetic_bundle.py](../../simulation/synthetic_bundle.py): the
+9. [bundle/synthetic_bundle.py](../../bundle/synthetic_bundle.py): the
    in-memory bundle the tests draw from. It shows the shape of every pool in a few
    hundred lines.
 
@@ -261,14 +261,18 @@ booted with and restarts itself when the link moves.
 
 **Read in this order.**
 
-1. [pipeline/batch/engine_artifacts.py](../../pipeline/batch/engine_artifacts.py): the
-   builder's command line, `EngineArtifacts` and `EngineArtifacts.load`.
-2. [pipeline/batch/artifacts/](../../pipeline/batch/artifacts/): one module per
-   artifact. Start with `common.py` and `pools.py`, then the pool you care about
-   (`pitch_pool.py`, `battedball_pool.py`, `steal_pool.py`, ...).
-3. [pipeline/batch/bundle_versions.py](../../pipeline/batch/bundle_versions.py): the
+1. [bundle/build_bundle.py](../../bundle/build_bundle.py): the builder's command line
+   and the order of the artifacts.
+2. [bundle/load_bundle.py](../../bundle/load_bundle.py): `EngineArtifacts`,
+   `EngineArtifacts.load` and the shared-memory views a worker attaches.
+3. [bundle/](../../bundle/): one module per artifact. Start with `common.py` and
+   `worker_pools.py`, then the export you care about (`export_pitch_pool.py`,
+   `export_batted_ball_pool.py`, `export_steal_pool.py`, ...).
+4. [similarity/build_score_tables.py](../../similarity/build_score_tables.py): the
+   actor score tables the bundle carries, and the concentration check.
+5. [bundle/versions.py](../../bundle/versions.py): the
    versioned link, the publish step and the pruning.
-4. [pipeline/batch/pool_chain.py](../../pipeline/batch/pool_chain.py): the check that
+6. [pools/check_pool_labels.py](../../pools/check_pool_labels.py): the check that
    the pool's labels agree with real plate appearances.
 
 **Check.**
@@ -282,7 +286,7 @@ booted with and restarts itself when the link moves.
 `test_bundle_worker_and_boot.py`, `test_engine_artifacts_realism.py`,
 `test_actor_matrices.py`, `test_pool_chain.py`.
 
-**Reference.** [Pipeline: the nightly builds](pipeline-batch.md).
+**Reference.** [The bundle](bundle.md) and [Play pools](pools.md) (the label check).
 
 <a id="stage-5"></a>
 
@@ -332,12 +336,17 @@ bundle of stage 4 is built from these tables.
 
 **Read in this order.**
 
-1. [pipeline/batch/player_profile_computor.py](../../pipeline/batch/player_profile_computor.py):
+1. [profiles/build_profiles.py](../../profiles/build_profiles.py):
    the command line and the order of the steps.
-2. [pipeline/batch/profiles/](../../pipeline/batch/profiles/): one module per profile
-   (pitcher with its arsenal model in `gmm.py`, batter, fielder, catcher, baserunner,
-   manager, park), then `pools.py` and `pool_meta.py` for the pools.
-3. [db/schemas/02_duckdb_schema.sql](../../db/schemas/02_duckdb_schema.sql) and the
+2. [profiles/](../../profiles/): one module per profile (pitcher with its arsenal fit
+   in `arsenal_fit.py`, batter, fielder and `fielder_plays.py`, catcher, baserunner,
+   manager, `park_factors.py`, `league_averages.py`), on the shared `base.py` and
+   `sql.py`.
+3. [pools/](../../pools/): one module per pool (`build_pitch_pool.py`,
+   `build_batted_ball_pool.py`, `build_steal_pool.py`, `build_advancement_pool.py`,
+   `build_ibb_rates.py`, `build_at_bat_situations.py`), then `pool_metadata.py` for the
+   recency weights and the incremental gate.
+4. [db/schemas/02_duckdb_schema.sql](../../db/schemas/02_duckdb_schema.sql) and the
    numbered files under [db/migrations/duckdb/](../../db/migrations/duckdb/).
 
 **Check.**
@@ -351,7 +360,7 @@ bundle of stage 4 is built from these tables.
 `test_point_in_time_batter.py`, `test_pool_cutoff.py`,
 `test_pool_recency_and_incremental_rebuild.py`, `test_league_average_profiles.py`.
 
-**Reference.** [Pipeline: the nightly builds](pipeline-batch.md) and
+**Reference.** [Player profiles](profiles.md), [Play pools](pools.md) and
 [Database](database.md).
 
 <a id="stage-7"></a>
