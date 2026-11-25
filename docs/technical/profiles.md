@@ -41,7 +41,7 @@ bundle build then reads both ([The bundle](bundle.md)). The table layouts are on
 | **Sample floor** (`below_minimum_sample`) | TRUE when a profile's sample is under its floor in `constants.py`. The engines then fall back to the league-average row. |
 | **Work table** | A `_tmp_*` table that one defence step writes. A season aggregate reads it, then drops it. |
 | **Placeholder table** | An empty `CREATE TABLE IF NOT EXISTS` stand-in for a work table. A step skips its work table on a small sample; the placeholder keeps the aggregate's join working. |
-| **Leakage check** | A check, after a builder's insert, that no source row is dated after the cutoff. The checks cannot fail today (see `base.py`). |
+| **Leakage check** | A check, after a builder's insert, that no source row carries a date after the cutoff. The checks cannot fail today (see `base.py`). |
 | **Run expectancy** | The average runs from one state of outs and bases to the end of the half-inning. Three out counts times eight base states give 24 states. |
 | **Positional insert** | An `INSERT` with no column list. DuckDB matches the `SELECT` to the table by position, so the column order matters. |
 | **Outs above average (OAA)** | The outs a fielder makes beyond what an average fielder makes on the same chances. |
@@ -65,7 +65,7 @@ crash: exit 139, or "Fatal Python error" in the output. Any other failure stops 
    Sunday at 08:00, `weekly-refresh` also sweeps the whole season.
 2. **08:00 UTC: the rebuild** (`nightly-rebuild`).
    [`nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) runs in the `jobs`
-   container, with up to three attempts. It has three steps:
+   container, with up to three attempts. It runs a wait step, then two build steps:
    1. [`wait_for_ingest.sh`](../../operations/jobs/wait_for_ingest.sh) waits 60 seconds.
       Then it waits while the finals load or the Sunday sweep runs, at most two hours. When
       the finals load did not run today, it runs it first. It never fails the rebuild.
@@ -137,7 +137,7 @@ Postgres raw.*  --(DuckDB ATTACH, read-only)-->  PlayerProfileComputor.run  (pro
 16. `run` closes the connection, after an error too.
 
 After `run`, the entry point runs `LeagueAverageProfiles.compute` over the same seasons,
-unless `--skip-league-averages` is set.
+unless you pass `--skip-league-averages`.
 
 ### A cutoff build (`--asof`)
 
@@ -293,7 +293,7 @@ decision, SIM-504).
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `PitcherProfilesMixin._compute_pitcher_profiles` | Pass 1 (SQL): the walk, strikeout, zone, chase, take, whiff and called-strike-plus-whiff rates. It also computes the batted-ball mix, ERA, FIP (fielding-independent pitching), xFIP, home runs per nine and WHIP. The innings count adds the pickoff outs. Pass 2: the arsenal fit of each pitcher-season with 200 or more pitches, in a process pool. Then the stamp and the leakage check. | `run`; `scripts/probes/arsenal_reproducibility_check.py` |
+| `PitcherProfilesMixin._compute_pitcher_profiles` | Pass 1 (SQL): the walk, strikeout, zone, chase, take, whiff and called-strike-plus-whiff rates. It also computes the batted-ball mix, ERA (earned runs per nine innings), FIP (fielding-independent pitching), xFIP (FIP with a league-average home-run rate on fly balls), home runs per nine and WHIP (walks and hits per inning). The innings count adds the pickoff outs. Pass 2: the arsenal fit of each pitcher-season with 200 or more pitches, in a process pool. Then the stamp and the leakage check. | `run`; `scripts/probes/arsenal_reproducibility_check.py` |
 | `_assert_pitcher_profiles_have_no_leakage` | The leakage check on `raw.pitches` and `raw.play_events`. | `_compute_pitcher_profiles` |
 
 **Watch out:** three pitch-code lists differ from the shared code sets (SIM-652); two are
@@ -332,7 +332,7 @@ for the cores, and the fit runs about four times slower.
 
 ### `profiles/batter.py`
 
-[Source](../../profiles/batter.py) · 483 lines · Tests: through `PlayerProfileComputor`: [test_batter_physical_features.py](../../tests/unit/profiles/test_batter_physical_features.py), [test_point_in_time_batter.py](../../tests/unit/profiles/test_point_in_time_batter.py), [test_profile_code_sets.py](../../tests/unit/profiles/test_profile_code_sets.py), [test_one_cutoff_per_table.py](../../tests/unit/profiles/test_one_cutoff_per_table.py)
+[Source](../../profiles/batter.py) · 484 lines · Tests: through `PlayerProfileComputor`: [test_batter_physical_features.py](../../tests/unit/profiles/test_batter_physical_features.py), [test_point_in_time_batter.py](../../tests/unit/profiles/test_point_in_time_batter.py), [test_profile_code_sets.py](../../tests/unit/profiles/test_profile_code_sets.py), [test_one_cutoff_per_table.py](../../tests/unit/profiles/test_one_cutoff_per_table.py)
 
 `BatterProfilesMixin` writes `derived.batter_season_metrics`: one row per batter-season,
 with a split against each pitcher hand.
@@ -431,7 +431,7 @@ pitches and passed balls he prevents. Three steps fill work tables; the aggregat
 | Function / class | What it does | Called from |
 |---|---|---|
 | `_compute_catcher_framing` | Fits a called-strike model on the taken pitches: a logistic regression (a fit of a yes-or-no outcome). It reads the location, the distance outside the zone, the count and both hands. Writes `_tmp_framing`. It skips below 1,000 taken pitches. | `run` |
-| `_compute_catcher_blocking` | Fits a wild-pitch and passed-ball model (Tango's method). The main input is the pitch's height at the catcher. The others are the bounce, the distance from the zone centre, the lateral distance, the end speed and the break. Writes `_tmp_blocking`. It skips below 1,000 pitches. | `run` |
+| `_compute_catcher_blocking` | Fits a wild-pitch and passed-ball model (Tom Tango's published method for catcher blocking). The main input is the pitch's height at the catcher. The others are the bounce, the distance from the zone centre, the lateral distance, the end speed and the break. Writes `_tmp_blocking`. It skips below 1,000 pitches. | `run` |
 | `_compute_catcher_throwing` | The steal attempts faced and the caught-stealing rates by base. `steal_attempt_rate_against` divides the attempts of second and third by the steal chances; it is NULL below 100 chances. Writes `_tmp_catcher_throwing`. | `run` |
 | `_aggregate_catcher_season_metrics` | Joins the three work tables and the Savant pop-time and catcher-throwing boards into `derived.catcher_season_metrics`, then drops the work tables. The insert replaces nothing, so it deletes the run's seasons first. | `run` |
 | `_compute_catcher_uncaught_k3` | Updates the catcher rows with the uncaught-third-strike counts and `uncaught_k3_rate_eb`. The rate shrinks toward the season's league rate, with a prior of 2,000 third strikes. Then it runs the catcher leakage check. | `run` |
@@ -457,7 +457,7 @@ small.
 |---|---|---|
 | `_compute_outfield_catch_probability` | Statcast's method. The speed needed divides the distance from the fielder's average spot by the hang time plus 0.4 s. Going back adds 1 ft/s. A logistic curve gives the catch probability. A catch earns 1 − P; a miss costs P. Writes `_tmp_of_plays`. It skips below 500 plays. | `run`; `scripts/probes/fielder_profile_recompute.py` |
 | `_compute_infield_oaa` | The time-margin model: the batter-runner's time to first base minus the defense's time. The defense's time is the ball's travel, the exchange and the throw. Writes `_tmp_if_plays`. It reads `raw.sprint_speed` and does the season shift in Python. It skips below 500 plays. | the same |
-| `_compute_dp_metrics` | Tango's double-play model, on ground balls with a runner on first only and fewer than two outs. It credits the fielder who fields the ball and the pivot. `dp_run_value` is the drop in run expectancy, from `self._re_matrix`. Writes `_tmp_dp_plays`. It skips below 200 chances. | the same |
+| `_compute_dp_metrics` | Tom Tango's published double-play model, on ground balls with a runner on first only and fewer than two outs. It credits the fielder who fields the ball and the pivot. `dp_run_value` is the drop in run expectancy, from `self._re_matrix`. Writes `_tmp_dp_plays`. It skips below 200 chances. | the same |
 | `_compute_bunt_defense` | The bunt fielding rates of the first and third basemen. Writes `_tmp_bunt_defense`. | the same |
 | `_compute_first_base_scooping` | The first baseman's success on long throws from third base or shortstop. Writes `_tmp_1b_scoop`. | the same |
 | `_compute_error_decomposition` | The fielding-error and throwing-error rates per fielder and position. Writes `_tmp_errors`. | the same |
@@ -510,7 +510,7 @@ Positions are in Statcast's hit coordinates (`hc_x`, `hc_y`).
 | `_estimate_gb_travel_time` | A ground ball's time to a distance, slowed by the grass. None when it stops short. | `_compute_infield_oaa`, `_compute_dp_metrics` |
 | `_classify_direction_of` | The direction a fielder moves: glove side, arm side, charging or deep. | the outfield and infield steps |
 | `_fit_logistic_model` / `_predict_proba` | A logistic fit on standardized features, and its probabilities. None under 100 rows, or under 5 rows of either outcome. | the framing, blocking, outfield, infield and double-play steps |
-| `_quick_auc` | The AUC (area under the ROC curve: how well a model ranks the outcomes), for the log. | the outfield and infield steps |
+| `_quick_auc` | The AUC (area under the curve: how well a model ranks the outcomes, from 0.5 for a coin flip to 1), for the log. | the outfield and infield steps |
 
 **Watch out:** the run values are a settled design decision (CLAUDE.md §10). Change them in
 `simulation/constants.py`, never here.
@@ -534,8 +534,8 @@ Positions are in Statcast's hit coordinates (`hc_x`, `hc_y`).
 The readers: every actor engine, and `simulation/sim_kwargs.py`, which reads the manager rows.
 
 **Watch out:** `compute` takes no cutoff. It reads the profile tables as they stand, so run
-it after the build it describes. The loop asks for a `fielder_C` row, but the fielder table
-holds no catcher, so no `fielder_C` row is written. `--skip-league-averages` keeps the
+it after the build it describes. The position loop in `compute` asks for a `fielder_C` row, but the fielder table
+holds no catcher, so `compute` writes no `fielder_C` row. `--skip-league-averages` keeps the
 previous build's rows.
 
 ---

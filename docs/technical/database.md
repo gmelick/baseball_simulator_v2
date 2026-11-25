@@ -152,7 +152,7 @@ A new, empty file therefore gets the current tables. An existing file gets a sch
 only from its numbered migration under `db/migrations/duckdb/`, which a run book or a
 rebuild script applies. The nightly job applies no DuckDB migration. A builder that needs a
 migrated table checks for it first and refuses before it deletes anything (for example
-`_require_steal_pool_0031` in `pools/pool_metadata.py`).
+`_require_steal_pool_0031` in `pools/build_steal_pool.py`).
 
 The computor reads Postgres through DuckDB's Postgres extension:
 `ATTACH '<dsn>' AS pg (TYPE postgres, READ_ONLY)`, then `pg.raw.pitches`.
@@ -452,7 +452,7 @@ echoes a command.
 
 ### `db/dsn.py`
 
-[Source](../../db/dsn.py) · 65 lines · Tests: [test_db_dsn.py](../../tests/unit/test_db_dsn.py)
+[Source](../../db/dsn.py) · 94 lines · Tests: [test_db_dsn.py](../../tests/unit/test_db_dsn.py)
 
 `require_dsn` returns `BASEBALL_DB_DSN` or raises an error that names the variable. The code
 carries no default password. `dsn_label` gives `host[:port]/dbname` for a log line. The

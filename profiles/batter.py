@@ -449,8 +449,9 @@ class BatterProfilesMixin(ComputorBase):
         pass. That is why it is here: the query is long, it has five dated
         sources, and the next person to add a sixth will not remember. A
         missing cutoff gives no error and no visibly wrong number; it gives a
-        backtest that quietly knows the future. This check turns that into a
-        crash.
+        backtest that quietly knows the future. The check is meant to catch
+        that, but each check query applies the cutoff itself, so today it cannot
+        fail (SIM-655).
         """
         self._check_pitch_sources_leakage(seasons, asof)
         season_list = sql_seasons(seasons)

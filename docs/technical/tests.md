@@ -115,7 +115,7 @@ live-database modules that the unit lane only touches through mocks. The CI
 
 ### `tests/conftest.py`
 
-[Source](../../tests/conftest.py) · 382 lines · Tests: [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py), [test_odds_provider_pin.py](../../tests/unit/test_odds_provider_pin.py)
+[Source](../../tests/conftest.py) · 373 lines · Tests: [test_no_pitch_readers.py](../../tests/unit/test_no_pitch_readers.py), [test_odds_provider_pin.py](../../tests/unit/test_odds_provider_pin.py)
 
 The root conftest. It sets the environment at import time, for the whole process, so
 the unit lane's output stays byte-identical (the same, bit for bit) whatever the
@@ -168,7 +168,7 @@ if it pins `SIM_STEAL_PITCH_CLASS`.
 
 ### `bundle/synthetic_bundle.py`
 
-[Source](../../bundle/synthetic_bundle.py) · 688 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py)
+[Source](../../bundle/synthetic_bundle.py) · 645 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py)
 
 The in-memory engine-artifact bundle every no-DB test draws from. It builds a small
 `EngineArtifacts` in the exact shape the production loader produces. The sampler,
@@ -277,7 +277,7 @@ method really ran (`_full_pool_outcome`, `_full_pool_fielding`,
 
 ### `tests/acceptance/test_pool_label_check.py`
 
-[Source](../../tests/acceptance/test_pool_label_check.py) · 259 lines · 4 tests · needs DuckDB and Postgres
+[Source](../../tests/acceptance/test_pool_label_check.py) · 255 lines · 4 tests · needs DuckDB and Postgres
 
 The pitch pool's count chain against real plate appearances (the foul-tip coding fix,
 SIM-553). It counts strikeouts, walks, hit by pitch and pitches per plate appearance
@@ -594,7 +594,7 @@ container and in CI.
 
 ### `.github/workflows/ci.yml`
 
-[Source](../../.github/workflows/ci.yml) · 753 lines
+[Source](../../.github/workflows/ci.yml) · 759 lines
 
 Runs on every push to any branch, and on a pull request to `main` or `release/**`.
 Python jobs use 3.13 and `pip install -r requirements-dev.txt`; the frontend jobs use

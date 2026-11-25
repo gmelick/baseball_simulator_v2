@@ -47,7 +47,7 @@ current version ([Operations](operations.md#operationsbackupback_up_data_storesp
 
 **1. The nightly build.** The `nightly-rebuild` job runs
 [`operations/jobs/nightly_rebuild.sh`](../../operations/jobs/nightly_rebuild.sh) at 08:00 UTC.
-Its second step is `python -m bundle.build_bundle --what all`. `make engine-artifacts` runs
+After its wait step and the profile build, it runs `python -m bundle.build_bundle --what all`. `make engine-artifacts` runs
 the same command.
 
 1. `main` finds the link through `bundle_link()`.
@@ -219,7 +219,7 @@ half-written file.
 
 | Function / class | What it does | Called from |
 |---|---|---|
-| `bundle_link` | The link's path, `<pool_dir>/engine_artifacts`. `pool_dir` defaults to `$BASEBALL_PLAY_POOL_DIR`, else `/data/play_pool`. | `build_bundle.main`, `api/startup.py`, `api/bundle_watch.py`, `simulation/production_factory.py`, `operations/backup/back_up_data_stores.py`, `scripts/accuracy/selection.py`, the pool-rebuild scripts |
+| `bundle_link` | The link's path, `<pool_dir>/engine_artifacts`. `pool_dir` defaults to `$BASEBALL_PLAY_POOL_DIR`, else `/data/play_pool`. | `build_bundle.main`, `api/startup.py`, `api/bundle_watch.py`, `simulation/production_factory.py`, `operations/backup/back_up_data_stores.py`, `scripts/accuracy/selection.py`, the pool-rebuild scripts, `scripts/running_game_replay.py`, `scripts/probes/fatigue_kernel_scan.py` |
 | `versions_root` / `resolve_bundle_dir` | The folder that holds the versions (`engine_artifacts.versions`); the real folder the link points to. | this module; `api/bundle_watch.py`; `back_up_data_stores.py` |
 | `stage_bundle_version` | Creates `engine_artifacts.versions/<build id>/` and copies the current version into it. The copy leaves out the in-use markers, the `tmp_*` files and `.published`. With no current bundle, the folder starts empty. | `build_bundle.main` |
 | `publish_bundle_version` | Converts a legacy folder first. Writes `.published` into the version, then moves a temporary relative link onto the link with `os.replace`. | `build_bundle.main`, `back_up_data_stores.restore_bundle` |
@@ -288,7 +288,7 @@ stays neutral.
 | `ChangePool` | The pitching-change opportunity pool. | `load_change_pool`, `synthetic_bundle.change_pool` |
 | `STEAL_PITCH_CLASSES` / `STEAL_PITCH_CLASS_CODE` | The six pitch classes and their codes, 1 to 6. Code 0 means no class: a pickoff row. | `simulation/sampler/steal.py`, `synthetic_bundle`, `scripts/steal_pool_rebuild/` |
 | `steal_pitch_class_codes` | Maps the exported class names to int8 codes, once per distinct name. An unknown name reads 0 and logs a warning. | `load_steal_pools` |
-| `_HAND_POOL_SHAREABLE_ATTRS` and the four other `_*_SHAREABLE_ATTRS` tuples | The numeric columns of each pool that the parent publishes into shared memory. | `EngineArtifacts.extract_shared_arrays` |
+| `_HAND_POOL_SHAREABLE_ATTRS` and the five other `_*_SHAREABLE_ATTRS` tuples | The numeric columns of each pool, and the arrays of each actor embedding, that the parent publishes into shared memory. | `EngineArtifacts.extract_shared_arrays` |
 
 **Watch out:**
 
@@ -352,13 +352,13 @@ writes the join from each pitch row to its ball.
   hits then moves with no change in code or data. The fix is to export the batted-ball pool
   in pitch order (SIM-636).
 - `pgeom.npy` keeps NaN; `geom.npy` and `sit.npy` turn NaN into 0. The pitch-similarity
-  kernel treats a missing value as neutral, and a 0.0 would be an outlier.
+  kernel (the function that turns a distance into a 0-to-1 score) treats a missing value as neutral, and a 0.0 would be an outlier.
 - The export keeps the rows whose runner transition fails the outs check. The fielding
   draw's cell index drops them (`dest_ok = 0`).
 
 ### `bundle/export_steal_pool.py`
 
-[Source](../../bundle/export_steal_pool.py) · 213 lines · Tests: [test_steal_draw.py](../../tests/unit/test_steal_draw.py), [test_steal_pool_data.py](../../tests/unit/test_steal_pool_data.py), [test_steal_pool_rebuild.py](../../tests/unit/test_steal_pool_rebuild.py)
+[Source](../../bundle/export_steal_pool.py) · 217 lines · Tests: [test_steal_draw.py](../../tests/unit/test_steal_draw.py), [test_steal_pool_data.py](../../tests/unit/test_steal_pool_data.py), [test_steal_pool_rebuild.py](../../tests/unit/test_steal_pool_rebuild.py)
 
 The steal opportunity pools: target "2" is the steal of second base, target "3" the steal
 of third. One row is a pitch where a steal was possible, attempted or not. The pickoff rows

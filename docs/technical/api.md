@@ -225,7 +225,7 @@ so a production route reads both lookups from the boot snapshot.
 
 ### `api/main.py`
 
-[Source](../../api/main.py) · 487 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py), [test_replay_store.py](../../tests/unit/test_replay_store.py), [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_openapi_snapshot.py](../../tests/unit/test_openapi_snapshot.py)
+[Source](../../api/main.py) · 483 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_route_auth_coverage.py](../../tests/unit/test_route_auth_coverage.py), [test_replay_store.py](../../tests/unit/test_replay_store.py), [test_sim_kwargs.py](../../tests/unit/test_sim_kwargs.py), [test_openapi_snapshot.py](../../tests/unit/test_openapi_snapshot.py)
 
 The app factory and the lifespan. `app = create_app()` at the bottom is what uvicorn serves.
 
@@ -248,7 +248,7 @@ route; Starlette matches routes in registration order.
 
 ### `api/startup.py`
 
-[Source](../../api/startup.py) · 457 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py)
+[Source](../../api/startup.py) · 459 lines · Tests: [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py), [test_worker_prewarm.py](../../tests/unit/test_worker_prewarm.py), [test_sql_console_pool.py](../../tests/unit/test_sql_console_pool.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py)
 
 The lifespan's steps that no test patches, one function per step. They log under `api.main`,
 so the boot reads as one log.
@@ -309,7 +309,7 @@ names by hand; an engine added here and not there is built but never shown.
 
 ### `api/bundle_watch.py`
 
-[Source](../../api/bundle_watch.py) · 153 lines · Tests: [test_bundle_versions.py](../../tests/unit/bundle/test_bundle_versions.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py), [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py)
+[Source](../../api/bundle_watch.py) · 147 lines · Tests: [test_bundle_versions.py](../../tests/unit/bundle/test_bundle_versions.py), [test_bundle_worker_and_boot.py](../../tests/unit/bundle/test_bundle_worker_and_boot.py), [test_api_main_wiring.py](../../tests/unit/test_api_main_wiring.py)
 
 The app picks up a nightly rebuild by restarting itself. The bundle path
 `/data/play_pool/engine_artifacts` is a link to a version folder
@@ -328,7 +328,7 @@ workers inherit the environment.
 
 ### `ingest/mlb/client.py`
 
-[Source](../../ingest/mlb/client.py) · 65 lines · Tests: [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
+[Source](../../ingest/mlb/client.py) · 261 lines · Tests: [test_slate_endpoint.py](../../tests/unit/test_slate_endpoint.py), [test_game_feed.py](../../tests/unit/ingest/test_game_feed.py), [test_game_page_whatif.py](../../tests/unit/test_game_page_whatif.py)
 
 The app's reader of the league's public endpoints, over one lazy `aiohttp` session.
 

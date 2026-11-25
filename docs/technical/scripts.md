@@ -52,7 +52,7 @@ Both rebuilds rewrite one pool in DuckDB inside one transaction, prove the rebui
 
 ### `scripts/rebuild_pitch_pool.py` and `scripts/pitch_pool_rebuild/`
 
-[Source](../../scripts/rebuild_pitch_pool.py) · 494 lines · Tests: [test_pool_label_check.py](../../tests/acceptance/test_pool_label_check.py)
+[Source](../../scripts/rebuild_pitch_pool.py) · 493 lines · Tests: [test_pool_label_check.py](../../tests/acceptance/test_pool_label_check.py)
 
 Rebuilds `sim.pitch_pool` on the foul-tip coding: a two-strike foul tip or foul bunt is strike three (the foul-tip strike three, SIM-553; builder `sim553.1`). Steps: 0 the pre-flight, 1 a snapshot of every pitch's class, 2 the rebuild, 3 the checks inside the transaction, 4–6 the bundle copy, the export and the round-trip. `--check-only` runs the pre-flight alone.
 
@@ -66,7 +66,7 @@ Rebuilds `sim.pitch_pool` on the foul-tip coding: a two-strike foul tip or foul 
 
 ### `scripts/rebuild_steal_pool.py` and `scripts/steal_pool_rebuild/`
 
-[Source](../../scripts/rebuild_steal_pool.py) · 458 lines · Tests: [test_steal_pool_rebuild.py](../../tests/unit/test_steal_pool_rebuild.py)
+[Source](../../scripts/rebuild_steal_pool.py) · 459 lines · Tests: [test_steal_pool_rebuild.py](../../tests/unit/test_steal_pool_rebuild.py)
 
 Rebuilds `sim.steal_opportunity_pool` for the running game on the pitch (SIM-554; builder `sim554.1`). The pool gains the class of the pitch each row rode (`pitch_class`) and the pickoff rows thrown before any pitch (`is_pickoff_row`). `--apply-migration` applies DuckDB migration 0031 inside the rebuild's own transaction, after the snapshot, so a failed check rolls the columns back with the rows. Never apply 0031 as a separate step.
 
@@ -101,7 +101,7 @@ Run: `python scripts/sim_stats.py --iters 200 744795 661032 --json-out results/x
 
 ### `scripts/accuracy_comparison.py` and `scripts/accuracy/`
 
-[Source](../../scripts/accuracy_comparison.py) · 601 lines · Tests: [test_accuracy_comparison.py](../../tests/unit/test_accuracy_comparison.py), [test_accuracy_comparison_props.py](../../tests/unit/test_accuracy_comparison_props.py), [test_accuracy_minimum_sample.py](../../tests/unit/test_accuracy_minimum_sample.py), [test_segment_markets.py](../../tests/unit/test_segment_markets.py)
+[Source](../../scripts/accuracy_comparison.py) · 603 lines · Tests: [test_accuracy_comparison.py](../../tests/unit/test_accuracy_comparison.py), [test_accuracy_comparison_props.py](../../tests/unit/test_accuracy_comparison_props.py), [test_accuracy_minimum_sample.py](../../tests/unit/test_accuracy_minimum_sample.py), [test_segment_markets.py](../../tests/unit/test_segment_markets.py)
 
 The platform's validation of the simulator against the market. For every completed game with a closing line, it scores the simulator's probability and the closing line's de-vigged probability (the book's margin removed) against what happened, with the Brier score and log loss. Both scores come from the same game and outcome, so the comparison is paired: per observation, the simulator's score minus the market's. The closing line is the benchmark by owner decision 2026-09-10. Props grade on the official box score, with the event labels as a per-game fallback. The comparison grades each market against one book: the first book on `GRADED_BOOK_PREFERENCE` with a closing row (one graded book, SIM-555).
 
@@ -133,7 +133,7 @@ Run: `python scripts/pair_accuracy.py off.json on.json --json-out results/pair.j
 
 ### `scripts/market_skill.py`
 
-[Source](../../scripts/market_skill.py) · 628 lines · Tests: [test_market_calibration.py](../../tests/unit/test_market_calibration.py), [test_accuracy_fit_instruments.py](../../tests/unit/test_accuracy_fit_instruments.py)
+[Source](../../scripts/market_skill.py) · 629 lines · Tests: [test_market_calibration.py](../../tests/unit/test_market_calibration.py), [test_accuracy_fit_instruments.py](../../tests/unit/test_accuracy_fit_instruments.py)
 
 The per-market skill table of one read: the simulator's and the market's Brier score, a base forecast that knows only the outcome rate, the skill (base minus model), the gap to the line with a game-clustered range, the bias, the spread, the AUC (the chance that a real "yes" drew the higher probability) and the reliability by bin. It merges several reports of one configuration on disjoint game sets. `--compare` adds the composite objective Z between two reads on the same games (the accuracy fit, SIM-548). It refuses reports graded against different odds rows.
 
@@ -169,7 +169,7 @@ Builds the balanced certifying game set (owner ruling 2026-09-09): three full-da
 
 ### `scripts/pool_window_census.py`
 
-[Source](../../scripts/pool_window_census.py) · 306 lines · Tests: [test_pool_label_check.py](../../tests/acceptance/test_pool_label_check.py)
+[Source](../../scripts/pool_window_census.py) · 299 lines · Tests: [test_pool_label_check.py](../../tests/acceptance/test_pool_label_check.py)
 
 Measures three pool windows (W1 full seasons 2023–2026, the production window; W2 2024–2026; W3 a rolling three years): the pool volumes, the per-count outcome shares run through the count chain to per-plate-appearance centres, the thinnest hard-filter cells. It also runs the label check: the pool's chain against real plate appearances counted from `raw.pitches`, PASS within 0.5% (`pools.check_pool_labels.LABEL_CHECK_TOLERANCE`). The pool-totals grade cannot see a labelling defect, because it reads the same labels; this check can. `--strict` exits 1 when a window's check fails or cannot run.
 

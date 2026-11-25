@@ -14,9 +14,9 @@ Every source and config file in the repository, in the order of the [code review
 | [1. The game's vocabulary](#stage-1) | 7 | 1,876 |
 | [2. One pitch: the loop](#stage-2) | 9 | 3,546 |
 | [3. The draws: the sampler](#stage-3) | 13 | 4,540 |
-| [4. The sampler's data: the bundle](#stage-4) | 18 | 4,496 |
+| [4. The sampler's data: the bundle](#stage-4) | 18 | 4,500 |
 | [5. The similarity scores](#stage-5) | 30 | 14,375 |
-| [6. Profiles and pools: the DuckDB layer](#stage-6) | 59 | 11,250 |
+| [6. Profiles and pools: the DuckDB layer](#stage-6) | 59 | 11,251 |
 | [7. Getting data in: the raw tables](#stage-7) | 64 | 15,002 |
 | [8. Running many games and reading the results](#stage-8) | 18 | 9,685 |
 | [9. Odds and betting](#stage-9) | 8 | 4,858 |
@@ -26,7 +26,7 @@ Every source and config file in the repository, in the order of the [code review
 | [13. Operations: the stack, the nightly jobs, the backups](#stage-13) | 41 | 7,040 |
 | [14. Measurement and maintenance tools](#stage-14) | 75 | 37,374 |
 | [15. Tests and CI](#stage-15) | 317 | 124,923 |
-| **All** | **793** | **281,845** |
+| **All** | **793** | **281,850** |
 
 <a id="stage-1"></a>
 
@@ -99,7 +99,7 @@ The nightly build that exports the pools and the score matrices the sampler read
 | [`bundle/worker_pools.py`](../../bundle/worker_pools.py) | 360 | The pool classes a worker draws from, and the arrays of each pool that the workers share. | 30: `test_steal_draw.py`, `test_fence_stage.py`, `test_relief_draw.py` +27 |
 | [`bundle/export_pitch_pool.py`](../../bundle/export_pitch_pool.py) | 171 | Export the pitch pool, one file set per batter hand, and load it back in a worker. | 5: `test_fielding_draw.py`, `test_draw_conditioning.py`, `test_pitch_result_split.py` +2 |
 | [`bundle/export_batted_ball_pool.py`](../../bundle/export_batted_ball_pool.py) | 379 | Export the batted-ball pool the fielding draw reads, one file set per hand, and load it back. | 9: `test_fence_stage.py`, `test_fielding_draw.py`, `test_transition_pool.py` +6 |
-| [`bundle/export_steal_pool.py`](../../bundle/export_steal_pool.py) | 213 | Export the steal opportunity pools, one per target base, and load them back in a worker. | 3: `test_steal_draw.py`, `test_steal_pool_data.py`, `test_steal_pool_rebuild.py` |
+| [`bundle/export_steal_pool.py`](../../bundle/export_steal_pool.py) | 217 | Export the steal opportunity pools, one per target base, and load them back in a worker. | 3: `test_steal_draw.py`, `test_steal_pool_data.py`, `test_steal_pool_rebuild.py` |
 | [`bundle/export_advancement_pool.py`](../../bundle/export_advancement_pool.py) | 122 | Export the advancement opportunity pools, one per runner decision, and load them back. | 1: `test_transition_pool.py` |
 | [`bundle/export_pitching_change_pool.py`](../../bundle/export_pitching_change_pool.py) | 317 | Export the pitching-change opportunity pool for the manager draw, and load it in a worker. | 1: `test_manager_draw.py` |
 | [`bundle/export_pitcher_scores.py`](../../bundle/export_pitcher_scores.py) | 91 | Export the pitcher-by-pitcher similarity matrix the pitch draw weights by, and load it. | — |
@@ -164,7 +164,7 @@ The nightly computor that turns raw pitches into player profiles and pools of re
 | [`profiles/sql.py`](../../profiles/sql.py) | 353 | The SQL fragments that the profile and pool builds share. | 10: `test_hit_by_pitch.py`, `test_barrel_definition.py`, `test_profile_code_sets.py` +7 |
 | [`profiles/pitcher.py`](../../profiles/pitcher.py) | 344 | The pitcher season profiles, with the arsenal mixture fit. | 1: `test_arsenal_fit_reproducible.py` |
 | [`profiles/arsenal_fit.py`](../../profiles/arsenal_fit.py) | 351 | Fit one Gaussian mixture per pitcher-season to describe the arsenal, and write the results. | 3: `test_arsenal_fit_reproducible.py`, `test_gmm_batch_pipeline.py`, `test_player_profile_computor.py` |
-| [`profiles/batter.py`](../../profiles/batter.py) | 483 | The batter season profiles, with the physical swing and stance block. | — |
+| [`profiles/batter.py`](../../profiles/batter.py) | 484 | The batter season profiles, with the physical swing and stance block. | — |
 | [`profiles/fielder.py`](../../profiles/fielder.py) | 575 | The fielder season profile: the aggregate of the per-play metrics and the outfield arm. | — |
 | [`profiles/fielder_plays.py`](../../profiles/fielder_plays.py) | 896 | The per-play fielder metrics: outfield catch probability, infield outs above average, double plays, bunt defense, first-base scooping and errors. | — |
 | [`profiles/defense.py`](../../profiles/defense.py) | 238 | The defensive constants and the field-geometry helpers that the fielder and catcher metrics use. | 2: `test_simulation_constants.py`, `test_player_profile_computor.py` |

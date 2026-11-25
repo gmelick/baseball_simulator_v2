@@ -160,7 +160,7 @@ def canonical_transition(
             0,
             0,
         )
-    if event == "grounded_into_double_play":
+    if event in ("grounded_into_double_play", "ground_into_double_play"):
         if not on1 or outs >= 2:
             return None
         return PlayRow(

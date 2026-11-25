@@ -203,7 +203,7 @@ EB_N_PRIOR = 5
 # (enforce_min_cluster_size).
 MIN_CLUSTER_SIZE = 30
 
-# The minimum sample of a profile, as in player_profile_computor.py. The engine
+# The minimum sample of a profile, as in profiles/constants.py. The engine
 # loads only the profiles that the computor marks at or above it.
 MIN_PITCHER_PITCHES = 200
 

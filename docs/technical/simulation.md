@@ -239,7 +239,7 @@ Module-level helpers.
 
 ### `simulation/sampler/base.py`
 
-[Source](../../simulation/sampler/base.py) · 483 lines · Tests: [test_pool_cutoff.py](../../tests/unit/pools/test_pool_cutoff.py), [test_actor_matrices.py](../../tests/unit/test_actor_matrices.py), [test_actor_powers.py](../../tests/unit/test_actor_powers.py), [test_pitcher_sim_matrix.py](../../tests/unit/bundle/test_pitcher_sim_matrix.py)
+[Source](../../simulation/sampler/base.py) · 484 lines · Tests: [test_pool_cutoff.py](../../tests/unit/pools/test_pool_cutoff.py), [test_actor_matrices.py](../../tests/unit/test_actor_matrices.py), [test_actor_powers.py](../../tests/unit/test_actor_powers.py), [test_pitcher_sim_matrix.py](../../tests/unit/bundle/test_pitcher_sim_matrix.py)
 
 `BaseMixin`: what more than one draw reads.
 
@@ -331,7 +331,7 @@ born ball's carry meets the live park's fence at its direction (the park geometr
 
 ### `simulation/sampler/steal.py`
 
-[Source](../../simulation/sampler/steal.py) · 362 lines · Tests: [test_steal_draw.py](../../tests/unit/test_steal_draw.py), [test_steal_weights_seam.py](../../tests/unit/test_steal_weights_seam.py), [test_running_game_on_the_pitch.py](../../tests/unit/test_running_game_on_the_pitch.py)
+[Source](../../simulation/sampler/steal.py) · 361 lines · Tests: [test_steal_draw.py](../../tests/unit/test_steal_draw.py), [test_steal_weights_seam.py](../../tests/unit/test_steal_weights_seam.py), [test_running_game_on_the_pitch.py](../../tests/unit/test_running_game_on_the_pitch.py)
 
 `StealMixin`: the steal and pickoff draws over the steal opportunity pool (one row per real pitch
 with a stealable runner, plus the pickoff rows: real pickoffs thrown before any pitch of their
@@ -757,7 +757,7 @@ the tag `summary`, `prop_set` or `json`. A pickle load runs code, so the cache n
 
 ### `bundle/synthetic_bundle.py`
 
-[Source](../../bundle/synthetic_bundle.py) · 688 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py), [test_baseball_sniff.py](../../tests/unit/test_baseball_sniff.py), [test_simulate_game_driver.py](../../tests/unit/test_simulate_game_driver.py)
+[Source](../../bundle/synthetic_bundle.py) · 645 lines · Tests: [test_synthetic_bundle.py](../../tests/unit/bundle/test_synthetic_bundle.py), [test_baseball_sniff.py](../../tests/unit/test_baseball_sniff.py), [test_simulate_game_driver.py](../../tests/unit/test_simulate_game_driver.py)
 
 A small in-memory bundle in the exact shape the production loader produces: the pitch pools, a
 batted-ball pool with transitions, the advancement pools, the steal pools and the change pool. The

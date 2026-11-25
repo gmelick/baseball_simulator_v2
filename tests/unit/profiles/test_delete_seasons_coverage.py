@@ -42,7 +42,7 @@ def _parse_derived_tables_with_season() -> set[str]:
 
 
 def _parse_delete_seasons_table_list() -> list[str]:
-    """Read the table list literal out of player_profile_computor.py::_delete_seasons."""
+    """Read the table list literal out of profiles/build_profiles.py::_delete_seasons."""
     path = _ROOT / "profiles" / "build_profiles.py"
     text = _read(path)
     m = re.search(
@@ -88,7 +88,7 @@ class TestDeleteSeasonsCoverage:
             "SIM-091 regression: the following derived.* tables have a "
             "`season` column but are not in _delete_seasons():\n  "
             + "\n  ".join(missing)
-            + "\n\nAdd them to the `tables` list in player_profile_computor.py "
+            + "\n\nAdd them to the `tables` list in profiles/build_profiles.py "
             "or, if intentional, add them to _EXCLUDED_FROM_DELETE_SEASONS "
             "in this test with a comment explaining why."
         )

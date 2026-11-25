@@ -191,11 +191,15 @@ def load_steal_pools(
                 attempted=meta_column(views, f"{p}.attempted", m, "attempted", np.int8),
                 success=meta_column(views, f"{p}.success", m, "success", np.int8),
                 recency=recency_column(views, f"{p}.recency", m),
-                pickoff_out=meta_column(views, f"{p}.pickoff_out", m, "pickoff_out", np.int8),
-                pickoff_advancing=meta_column(
+                pickoff_out=optional_meta_column(
+                    views, f"{p}.pickoff_out", m, "pickoff_out", np.int8
+                ),
+                pickoff_advancing=optional_meta_column(
                     views, f"{p}.pickoff_advancing", m, "pickoff_advancing", np.int8
                 ),
-                pickoff_error=meta_column(views, f"{p}.pickoff_error", m, "pickoff_error", np.int8),
+                pickoff_error=optional_meta_column(
+                    views, f"{p}.pickoff_error", m, "pickoff_error", np.int8
+                ),
                 pitch_class=pitch_class,
                 is_pickoff_row=optional_meta_column(
                     views, f"{p}.is_pickoff_row", m, "is_pickoff_row", np.int8, False

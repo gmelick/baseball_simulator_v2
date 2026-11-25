@@ -286,7 +286,7 @@ booted with and restarts itself when the link moves.
 `test_bundle_worker_and_boot.py`, `test_engine_artifacts_realism.py`,
 `test_actor_matrices.py`, `test_pool_chain.py`.
 
-**Reference.** [The bundle](bundle.md).
+**Reference.** [The bundle](bundle.md) and [Play pools](pools.md) (the label check).
 
 <a id="stage-5"></a>
 

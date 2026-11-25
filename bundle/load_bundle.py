@@ -129,8 +129,8 @@ class EngineArtifacts:
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
         #: The dense (n_prof x n_prof) float32 same-hand pitcher similarity matrix. The
         #: sampler reads one contiguous row of it in place of the dict, and the workers share
-        #: it as one read-only view. None on a bundle without it; the sampler then reads the
-        #: dict.
+        #: it as one read-only view. On a bundle without it, ``load`` leaves the dict empty
+        #: too, so the pitcher factor is flat.
         self.pitcher_sim_matrix: np.ndarray | None = pitcher_sim_matrix
         #: actor -> {"key_index": {id:season -> row}, "vecs", "mean", "std", "features"}
         self.actor_emb: dict[str, dict] = actor_emb or {}

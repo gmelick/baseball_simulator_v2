@@ -507,7 +507,7 @@ western night game's UTC date is the next day, so the roster read would take the
 
 ### `ingest/venues/load_venue_dimensions.py`
 
-[Source](../../ingest/venues/load_venue_dimensions.py) · 150 lines · Tests: [test_park_geometry_builder.py](../../tests/unit/bundle/test_park_geometry_builder.py), [test_fence_stage.py](../../tests/unit/test_fence_stage.py)
+[Source](../../ingest/venues/load_venue_dimensions.py) · 152 lines · Tests: [test_park_geometry_builder.py](../../tests/unit/bundle/test_park_geometry_builder.py), [test_fence_stage.py](../../tests/unit/test_fence_stage.py)
 
 The MLB API's published fence distances. They are the prior of a park's fence line where
 the pool's own balls are too few (the fence certification, SIM-478). The bundle keeps the
@@ -654,7 +654,7 @@ not JSON. The game loader's venue step reads the fence dimensions with it.
 
 ### `ingest/statcast_events.py`
 
-[Source](../../ingest/statcast_events.py) · 466 lines · Tests: [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py), [test_profile_code_sets.py](../../tests/unit/profiles/test_profile_code_sets.py), [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py), [test_transition_pool.py](../../tests/unit/test_transition_pool.py)
+[Source](../../ingest/statcast_events.py) · 474 lines · Tests: [test_out_label.py](../../tests/unit/ingest/test_out_label.py), [test_pitch_result_vocabulary.py](../../tests/unit/test_pitch_result_vocabulary.py), [test_profile_code_sets.py](../../tests/unit/profiles/test_profile_code_sets.py), [test_foul_tip_strike_three.py](../../tests/unit/test_foul_tip_strike_three.py), [test_steal_labels.py](../../tests/unit/test_steal_labels.py), [test_transition_pool.py](../../tests/unit/test_transition_pool.py)
 
 The one place that decides what a `raw.pitches` row means. Every out label derives from
 `events`, the plate-appearance result on its last pitch, never from `outs_on_pitch`. The

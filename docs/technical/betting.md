@@ -124,7 +124,7 @@ one is missing.
 
 ### `betting/bettingpros/match_games.py`
 
-[Source](../../betting/bettingpros/match_games.py) · 754 lines · Tests: [test_bettingpros_provider.py](../../tests/unit/test_bettingpros_provider.py), [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py)
+[Source](../../betting/bettingpros/match_games.py) · 661 lines · Tests: [test_bettingpros_provider.py](../../tests/unit/test_bettingpros_provider.py), [test_odds_matcher.py](../../tests/unit/test_odds_matcher.py)
 
 Finds BettingPros' event for an MLB game. The module also holds the HTTP client every
 BettingPros read uses. Each class is a mixin (a class that adds methods to the provider
@@ -223,7 +223,7 @@ that first posts in play) can take an in-play row on a later promotion.
 
 ### `betting/historical_loader.py`
 
-[Source](../../betting/historical_loader.py) · 871 lines · Tests: [test_historical_odds_load.py](../../tests/unit/test_historical_odds_load.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py)
+[Source](../../betting/historical_loader.py) · 810 lines · Tests: [test_historical_odds_load.py](../../tests/unit/test_historical_odds_load.py), [test_odds_writers.py](../../tests/unit/test_odds_writers.py), [test_odds_loader_retry.py](../../tests/unit/test_odds_loader_retry.py), [test_odds_game_markets.py](../../tests/unit/test_odds_game_markets.py), [test_odds_vocabulary.py](../../tests/unit/test_odds_vocabulary.py)
 
 Loads the odds of finished games. By default it picks only the Final games of the seasons
 that are missing odds: a game with no stored row at one of the run's line types. An

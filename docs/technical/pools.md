@@ -57,7 +57,7 @@ builders by hand ([Scripts](scripts.md#the-pool-rebuilds)).
 |---|---|---|---|
 | `sim.pitch_pool` | `pitch_pool/{L,R}.*`, one set per batter hand | ⑤a the pitch thrown (`draw`, `simulation/sampler/pitch.py`) and ⑤b its result (`_result_draw`, `simulation/sampler/pitch_result.py`) | the batted-ball and steal pool builds; the change opportunity pool (①); the catcher-receiving export (off); the pitch-to-pitch engine; the concentration check; the label check |
 | `sim.outcome_pool` | `battedball_pool/{L,R}.*` | ⑥ the fielding draw (`battedball_draw`, `simulation/sampler/fielding.py`). The born ball of ⑤b is a row of this pool, found through `pitch_pool/{L,R}.bb_row.npy`. | the advancement pool build; the park geometry; the batted-ball engine; the concentration check |
-| `sim.steal_opportunity_pool` | `steal_pool/{2,3}.*`, one set per target base | ④a the pickoff (`pickoff_draw`) and ④b the steal (`steal_draw`), in `simulation/sampler/steal.py` | none |
+| `sim.steal_opportunity_pool` | `steal_pool/{2,3}.*`, one set per target base | ④a the pickoff (`pickoff_draw`) and ④b the steal (`steal_draw`), in `simulation/sampler/steal.py` | `scripts/pool_window_census.py`, `scripts/running_game_replay.py`, the steal-pool rebuild's checks |
 | `sim.advancement_opportunity_pool` | `advancement_pool/{key}.*`, one set per decision | ⑦ the extra bases (`advancement_draw`, `simulation/sampler/advancement.py`) | the outfield arm block of the fielder profile (`_fill_outfield_arm_block`) |
 | `sim.ibb_rates` | `ibb_rates.json` | ③ the intentional walk (`_should_issue_ibb`, `simulation/loop/manager.py`) | none |
 | `derived.at_bat_situations` | `manager_pool/change.*`, joined to the pitch pool | ① the pitching change (`pitching_change_draw`, `simulation/sampler/manager.py`) | the situation engine, which feeds no draw; `scripts/measure_filter_cells.py` |
@@ -171,7 +171,7 @@ incremental gate, the build records and two situation columns.
 | `_seasons_needing_rebuild` | The stale seasons of one pool. A missing build-record table makes every season stale. | `_seasons_to_build` |
 | `_record_pool_build` | Inserts or replaces the build record of each season built. | the five pool builders |
 | `read_pool_builds` / `pool_builder_versions` | One pool's build records per season; the builder version per season. | `scripts/rebuild_pitch_pool.py`, `scripts/rebuild_steal_pool.py`, `scripts/pitch_pool_rebuild/checks.py` and `preflight.py`, `scripts/steal_pool_rebuild/checks.py` and `preflight.py` |
-| `sql_runners_state` / `sql_score_diff` | The SQL of `runners_state` and of the score margin. `q` prefixes the column names. | the pitch pool and the two steal pools; `sql_runners_state` also the intentional-walk rates |
+| `sql_runners_state` / `sql_score_diff` | The SQL of `runners_state` and of the score margin. `q` prefixes the column names. | `sql_runners_state`: the pitch pool, the stolen-base pool and the intentional-walk rates. `sql_score_diff`: the pitch pool and the two steal pools. |
 
 **Watch out:** each row stores its recency weight, and a run rewrites only the seasons it
 builds. At the year turn, the nightly takes the new year as the reference season. It
@@ -253,7 +253,7 @@ fielding chain to the end with `EXCLUDE`, to match the DDL's order. A new column
 after `assist_pos_mask`. The pull-relative spray angle keys on `stand`, and a negative
 value is the pull side for both hands. The build must run after `_build_pitch_pool` in
 the same run. The export keeps the rows whose `dest_outs_consistent` is FALSE; the
-fielding draw's cell index drops them. The build's own comment says the export drops them.
+fielding draw's cell index drops them.
 
 The insert has no ORDER BY, so each build stores the rows in a new order. The fielding
 draw lowers the weight of a ball in a crowded region. It measures the crowding against
@@ -327,7 +327,7 @@ an extra base. The advancement draw samples the pool, one set per decision.
 | 4 | third to home; second to third; first to second | a tag-up: the batter out on a fly ball, popup or line drive with fewer than two outs |
 | 5 | the batter to second; the batter to third | a single; a double |
 
-`attempted` is true when the runner reached the target or was thrown out advancing.
+`attempted` is true when the runner reached the target or the defence threw him out advancing.
 `safe` is true when he reached it. `error_extra` is true when he went past the target,
 an extra base on a bad throw. A runner doubled off on a tag-up had no decision, so his
 row leaves the pool.
@@ -363,8 +363,8 @@ manager wired.
 season. So the table holds one season, not the pool window. The first nightly of a new
 year finds no games, and the table empties. An empty table loads as None. Then no
 intentional walk fires in any game (build the intentional-walk rates over the pool window
-every night, SIM-649). The comment in `PlayerProfileComputor.run` and the docstring of
-`_should_issue_ibb` say the table covers the pool window. It does not. The table has no
+every night, SIM-649). The docstring of `_should_issue_ibb` says the table covers the
+pool window. It does not. The table has no
 game date, so the backtest cutoff does not apply to it.
 
 ### `pools/build_at_bat_situations.py`

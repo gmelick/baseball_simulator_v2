@@ -120,8 +120,8 @@
   running container only after `docker compose build app` and `docker compose up -d app`.
   Edits to the mounted folders need only `docker compose restart app`. Run a script that is
   not in the image yet with `docker compose run --rm -v "$PWD:/app" app python scripts/<x>.py`.
-- **Every program folder but `scripts/` is mounted into `app`, `live` and `jobs`.** An edit to
-  one needs no image rebuild; the nightly jobs (the profile build, the bundle build, the odds
+- **Every program folder but `scripts/` is mounted into `app` and `jobs`, and every one but
+  `scripts/` and `similarity/` into `live`.** An edit to one needs no image rebuild; the nightly jobs (the profile build, the bundle build, the odds
   pass) run the mounted copy.
 - **The container test and lint targets run the checkout (SIM-567).** The seven Makefile
   targets (`test`, `test-unit`, `test-regression`, `test-integration`, `lint`, `format`,
