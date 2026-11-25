@@ -1,4 +1,9 @@
-"""The steal opportunity pools, one per target base."""
+"""Export the steal opportunity pools, one per target base, and load them back in a worker.
+
+The export writes ``steal_pool/{2,3}.sit.npy`` (the situation), ``{2,3}.meta.parquet``
+(the actors, the outcome and the pitch's class) and ``manifest.json``. Target "2" is the
+steal of second base; target "3" is the steal of third.
+"""
 
 from __future__ import annotations
 
@@ -25,31 +30,30 @@ from profiles.sql import sql_seasons
 log = logging.getLogger("engine_artifacts")
 
 
-#: The steal draw's situation columns. `outs` and the count are the
-#: hard-filter cell; `score_diff` is soft-kernelled. `inning` is deliberately
-#: excluded — leverage shaping rides on the manager weight, not the pool.
+#: The steal draw's situation columns. The outs and the count form the hard-filter cell.
+#: The similarity kernel weights score_diff instead of filtering on it. The pool leaves
+#: out the inning on purpose: the manager weight carries the game's leverage.
 _STEAL_SIT_COLS = ["count_balls", "count_strikes", "outs", "score_diff"]
 
 
 def build_steal_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
-    """Write the per-target-base steal OPPORTUNITY pools the steal draw reads.
+    """Write the steal opportunity pools, one per target base, and the manifest.
 
-    One row per pitch where a steal was possible, attempted or not —
-    the `attempted` flag is the denominator the attempts-only pool lacks, so a
-    single draw answers both "does the runner go" and "safe or caught".
-    Sub-pools are split by target base ("2" = 1B->2B, "3" = 2B->3B), mirroring
-    the per-hand split of the other pools.
+    A row is a pitch where a steal was possible, attempted or not; the pickoff rows sit in
+    the same pool. The ``attempted`` flag gives the draw its denominator, so one draw
+    answers both "does the runner go" and "safe or caught".
 
-    The meta parquet carries ``pitch_id``, the pitch's class
-    (``pitch_class``; '' on a pickoff row) and ``is_pickoff_row``. The loader
-    maps the class to the codes of :data:`STEAL_PITCH_CLASS_CODE`. A DuckDB
-    without migration 0031 is refused before any file is written: the run book
-    applies the migration before the export, and a bundle without classes
-    would run the loop's old order without a word. Each target's two files are
-    written under temporary names and moved into place only when both targets
-    succeeded, the manifest last, so a failed export leaves the old pool whole.
+    The meta parquet carries ``pitch_id``, the pitch's class (``pitch_class``; '' on a
+    pickoff row) and ``is_pickoff_row``. The loader maps the class to the codes of
+    ``bundle.worker_pools.STEAL_PITCH_CLASS_CODE``.
+
+    Raises RuntimeError, before it writes a file, when the table lacks the columns of
+    DuckDB migration 0031. A bundle without the classes would silently run the loop's
+    single pre-pitch steal draw. The export writes each target's files under temporary
+    names and moves them into place only when both targets succeed, the manifest last. A
+    failed export leaves the old pool whole. Returns the row count per target.
     """
     have = duck_columns(con, "sim", "steal_opportunity_pool", this_file_only=True)
     missing = [c for c in ("pitch_class", "is_pickoff_row") if c not in have]
@@ -88,15 +92,15 @@ def _write_steal_pool_targets(
     counts: dict[str, int],
     staged: list[tuple[str, str]],
 ) -> None:
-    """Write each target's sit and meta files under temporary names
-    (``tmp_<target>.*``) and record them in ``staged``; the caller moves them
-    into place once every target succeeded."""
+    """Write each target's sit and meta files under temporary names (``tmp_<target>.*``).
+
+    The function records each file in ``staged``; the caller moves them into place once
+    every target succeeds.
+    """
     for target in ("2", "3"):
         w = f"target_base = {target} AND season IN ({season_list})"
-        # Both queries sort by pitch_id. The sit rows and the meta rows
-        # are written by two queries, and row i of one must be row i of the
-        # other. Without the sort they lined up only because two unsorted scans
-        # of the same filter happened to return the same order.
+        # Two queries write the sit rows and the meta rows, and row i of one must be
+        # row i of the other. Both sort by pitch_id for that reason.
         d = con.execute(
             f"SELECT {', '.join(_STEAL_SIT_COLS)} FROM sim.steal_opportunity_pool "
             f"WHERE {w} ORDER BY pitch_id"
@@ -111,17 +115,14 @@ def _write_steal_pool_targets(
         con.execute(
             "COPY (SELECT runner_id, pitcher_id, catcher_id, season, "
             "attempted, success, recency_weight, "
-            # COALESCE keeps a pre-0017 DuckDB (NULL columns absent
-            # from an un-migrated table would fail the SELECT outright — the
-            # migration adds them; NULLs only appear on rows an old builder
-            # wrote) reading as plain no-outcome rows.
+            # A NULL pickoff flag (a row an old builder wrote) reads as FALSE: a plain
+            # row with no pickoff outcome.
             "COALESCE(pickoff_out, FALSE) AS pickoff_out, "
             "COALESCE(pickoff_advancing, FALSE) AS pickoff_advancing, "
             "COALESCE(pickoff_error, FALSE) AS pickoff_error, "
-            # The caller refused a table without these
-            # two columns. A NULL class (a pickoff row, or a pitch row an old
-            # builder wrote) exports as '', which the loader reads as 0;
-            # is_pickoff_row tells the two apart.
+            # The caller refused a table without these two columns. A NULL class (a
+            # pickoff row, or a pitch row an old builder wrote) exports as '', and the
+            # loader reads '' as 0. is_pickoff_row tells the two apart.
             "pitch_id, COALESCE(pitch_class, '') AS pitch_class, "
             "COALESCE(is_pickoff_row, FALSE) AS is_pickoff_row "
             f"{ymd_select(con, 'sim.steal_opportunity_pool')}"
@@ -130,10 +131,9 @@ def _write_steal_pool_targets(
         )
         counts[target] = int(n)
         log.info("steal_pool[%s]: %d rows (seasons %s)", target, n, seasons)
-        # A pitch row with no class comes from a season that no
-        # builder has rebuilt since migration 0031 (a ten-season export, say).
-        # The sampler then keeps the single pre-pitch draw for the whole
-        # bundle and logs it, so the export goes on and says so here.
+        # A pitch row with no class comes from a season no builder has rebuilt since
+        # migration 0031. The sampler then runs the single pre-pitch draw for the whole
+        # bundle. The export goes on, and warns here.
         unclassed = con.execute(
             "SELECT COUNT(*) FROM sim.steal_opportunity_pool "
             f"WHERE {w} AND pitch_class IS NULL AND NOT COALESCE(is_pickoff_row, FALSE)"
@@ -152,10 +152,11 @@ def _write_steal_pool_targets(
 def load_steal_pools(
     con: duckdb.DuckDBPyConnection, art_dir: str, views: dict[str, np.ndarray]
 ) -> dict[str, StealPool]:
-    """Load the steal pools by target base; {} when the bundle has none."""
-    # The steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
-    # Presence-gated like the batted-ball pool: {} on a legacy bundle,
-    # and the sampler then stages no steals.
+    """Load the steal pools by target base; {} when the bundle has none.
+
+    With no steal pool, the sampler stages no steals. Raises ValueError when a target's
+    two files hold different row counts.
+    """
     steal_pools: dict[str, StealPool] = {}
     sp_dir = os.path.join(art_dir, "steal_pool")
     if os.path.exists(os.path.join(sp_dir, "manifest.json")):
@@ -163,8 +164,8 @@ def load_steal_pools(
             meta_path = os.path.join(sp_dir, f"{target}.meta.parquet")
             m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
             p = f"steal_pool.{target}"
-            # The class of each row's pitch. No column means no classes
-            # (None), and the loop then runs the single pre-pitch draw.
+            # The class of each row's pitch. With no column the classes are None, and the
+            # loop then runs the single pre-pitch draw.
             pc_view = views.get(f"{p}.pitch_class")
             if isinstance(pc_view, np.ndarray):
                 pitch_class: np.ndarray | None = pc_view
@@ -200,8 +201,8 @@ def load_steal_pools(
                     views, f"{p}.is_pickoff_row", m, "is_pickoff_row", np.int8, False
                 ),
             )
-            # The two files of a target come from two writes;
-            # refuse a pair whose row counts differ (a torn export).
+            # A target's two files come from two writes. Refuse a pair whose row counts
+            # differ: a half-finished export.
             n_meta = len(m["runner_id"])
             if steal_pools[target].n != n_meta:
                 raise ValueError(

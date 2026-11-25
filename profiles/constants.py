@@ -1,5 +1,7 @@
-"""The profile build's sample floors, shrinkage priors and positional-insert
-column orders."""
+"""The profile build's sample floors, shrinkage priors and positional-insert column orders.
+
+Shrinkage pulls a small sample toward the league average; a prior sets how hard.
+"""
 
 from __future__ import annotations
 
@@ -30,9 +32,9 @@ MIN_RUNNER_STEAL_ATTEMPTS = 10
 MIN_PITCHER_BASERUNNER_EVENTS = 30
 
 #: The chance count at which an outfielder's arm block repeats year to year
-#: at about 0.5 (measured on the advancement pool; the outfield arm block,
-#: SIM-550). The fielder model shares this value: it is the prior of the arm
-#: group's shrinkage confidence, chances / (chances + 50).
+#: at about 0.5, measured on the advancement pool. The fielder model shares
+#: this value as the prior of the arm group's shrinkage confidence (the weight
+#: on the player's own figure): chances / (chances + 50).
 ARM_ALPHA_PRIOR_CHANCES = 50
 
 # derived.fielder_season_metrics takes a POSITIONAL insert (no column list),
@@ -51,13 +53,13 @@ OAA_JUMP_COLUMN_ORDER: tuple[str, ...] = (
 FIELDER_TAIL_COLUMNS: tuple[str, ...] = ("asof_date", *OAA_JUMP_COLUMN_ORDER)
 
 #: The play count at which the outfield jump's year-to-year repeat passes
-#: 0.8 (the Savant outs-above-average and jump fit, SIM-532). The fielder
-#: model shares this value: it is the prior of the jump features' shrinkage
-#: confidence, plays / (plays + 25).
+#: 0.8. The fielder model shares this value as the prior of the jump
+#: features' shrinkage confidence: plays / (plays + 25).
 JUMP_ALPHA_PRIOR_PLAYS = 25
 
 
-# The FIP constant: one league-wide approximation for every season.
+# The FIP (fielding-independent pitching) constant: one league-wide
+# approximation for every season.
 FIP_CONSTANT = 3.17
 
 # The park factor's shrinkage toward league average (1.0): at

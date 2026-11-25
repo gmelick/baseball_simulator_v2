@@ -1,5 +1,7 @@
-"""The league-average profile rows: one row per entity type and season, read by
-the similarity engines as the shrinkage target.
+"""Compute the league-average profile rows: one row per entity type and season.
+
+The similarity engines read these rows from ``derived.league_averages`` as the shrinkage
+target: they pull a thin profile toward the league average.
 """
 
 from __future__ import annotations
@@ -40,20 +42,20 @@ class LeagueAverageProfiles:
         self._path = duckdb_path
 
     def compute(self, seasons: list[int]) -> None:
+        """Write the league-average rows of ``seasons`` into derived.league_averages."""
         conn = duckdb.connect(self._path)
         try:
             conn.execute(self.LEAGUE_AVG_DDL)
             season_list = sql_seasons(seasons)
-            # The newer columns and tables, probed rather than assumed (empty
-            # when the table is absent), so a database before migration 0029,
-            # or a fixture that builds only some tables, still gets its league
-            # averages.
+            # Probe the newer columns and tables (an empty set when a table is
+            # absent), so a database without migration 0029, or a fixture that
+            # builds only some tables, still gets its league averages.
             brm_cols = duck_columns(conn, "derived", "baserunner_season_metrics")
             bss_cols = duck_columns(conn, "derived", "baserunner_steal_metrics")
             psm_cols = duck_columns(conn, "derived", "pitcher_steal_metrics")
             fsm_cols = duck_columns(conn, "derived", "fielder_season_metrics")
 
-            # Pitcher average (used for GMM fallback)
+            # The pitcher average (the fallback of a pitcher with no arsenal fit).
             conn.execute(f"""
                 INSERT OR REPLACE INTO derived.league_averages
                 SELECT
@@ -76,7 +78,7 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
-            # Batter average
+            # The batter average.
             conn.execute(f"""
                 INSERT OR REPLACE INTO derived.league_averages
                 SELECT
@@ -99,36 +101,35 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
-            # Fielder average — one row per position so shrinkage falls
-            # back to position-specific league averages (a 1B should not
-            # be compared to an OF league average).
+            # The fielder average: one row per position, so the shrinkage
+            # target is the position's own (a first baseman is not pulled
+            # toward the outfield's average).
             #
             # The three arm keys the fielder model shrinks toward join the
-            # row. Without them a thin arm is pulled toward 0.0,
-            # and a 0 thrown-out rate is the weakest arm in the league. The
+            # row. Without them a thin arm is pulled toward 0.0, and a 0
+            # thrown-out rate is the weakest arm in the league. The
             # per-position WHERE below keeps the positions apart: an infield
-            # row never enters an outfield row's AVG. AVG skipping NULL does
-            # a different job: an outfielder without a block (he fielded no
-            # chance) or without a velocity does not pull his position's
-            # mean. An infield row's two pool-derived keys come out null
-            # (the block is never filled there); its `arm_strength` is the
-            # infield velocity, which the aggregator fills for every
-            # position. Each key is written only when the fielder table
-            # carries its column (a narrow fixture may not).
+            # row never enters an outfield row's AVG. AVG skips NULL, which
+            # does a different job: an outfielder without a block (he fielded
+            # no chance) or without a velocity does not pull his position's
+            # mean. An infield row's two pool-derived keys come out null (the
+            # block is never filled there); its `arm_strength` is the infield
+            # velocity, which the aggregator fills for every position. Each
+            # key is written only when the fielder table carries its column
+            # (a narrow fixture may not).
             arm_keys = "".join(
                 f", '{col}', AVG({col})"
                 for col in ("arm_advancement_prevention", "arm_thrown_out_rate", "arm_strength")
                 if col in fsm_cols
             )
-            # The Savant keys the fielder model shrinks toward.
-            # Every fielding position (not the catcher) gets Savant's outs
-            # above average per 100 chances; the three outfield positions
-            # also get the three jump parts. AVG skips NULL: an outfielder
-            # without a jump row (about two thirds of outfield rows) does
-            # not pull the mean, and a row without a Savant figure does not
-            # pull the per-100 mean. Each key is written only when the
-            # fielder table carries its column (a database that has not
-            # run migration 0030, or a narrow fixture).
+            # The Savant keys the fielder model shrinks toward. Every fielding
+            # position except the catcher gets Savant's outs above average per
+            # 100 chances; the three outfield positions also get the three jump
+            # parts. AVG skips NULL: an outfielder without a jump row (most
+            # outfield rows) does not pull the mean, and a row without a Savant
+            # figure does not pull the per-100 mean. Each key is written only
+            # when the fielder table carries its column (a database without
+            # migration 0030, or a narrow fixture).
             savant_cols: dict[str, tuple[str, ...]] = {
                 "C": (),
                 "1B": ("savant_oaa_per_100",),
@@ -161,11 +162,11 @@ class LeagueAverageProfiles:
                     GROUP BY season
                 """)
 
-            # Baserunner average. The extra-base attempt rate above
-            # expectation joins so the advancement model can shrink a thin
-            # runner's figure toward the league's (AVG skips NULLs, so a
-            # runner with no Savant row does not pull the mean). The key is
-            # written only when the table carries the 0029 column.
+            # The baserunner average. The extra-base attempt rate above
+            # expectation joins, so the advancement model can shrink a thin
+            # runner's figure toward the league's. AVG skips NULL, so a runner
+            # with no Savant row does not pull the mean. The key is written
+            # only when the table carries the migration 0029 column.
             xb_key = (
                 ", 'xb_attempt_rate_above_expected', AVG(xb_attempt_rate_above_expected)"
                 if "xb_attempt_rate_above_expected" in brm_cols
@@ -192,8 +193,8 @@ class LeagueAverageProfiles:
             # two steal engines read (``_load_league_averages`` filters on these
             # entity types). Savant's lead boards load at a minimum of one
             # initiation, so a 20-initiation lead must not be read at face
-            # value. Each row is written when its table exists; the lead keys
-            # when the migration 0029 columns do.
+            # value. Each row is written when its table exists, and the lead
+            # keys when the migration 0029 columns exist.
             if bss_cols:
                 lead_keys = (
                     ", 'lead_primary_ft', AVG(lead_primary_ft), 'lead_jump_ft', AVG(lead_jump_ft)"
@@ -239,7 +240,7 @@ class LeagueAverageProfiles:
                     GROUP BY season
                 """)
 
-            # Catcher average
+            # The catcher average.
             conn.execute(f"""
                 INSERT OR REPLACE INTO derived.league_averages
                 SELECT
@@ -256,14 +257,14 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
-            # Manager average: the GAME-weighted mean of the seventeen
-            # tendency columns per season — the manager engine's
+            # The manager average: the GAME-weighted mean of the seventeen
+            # tendency columns per season. It is the manager engine's
             # shrinkage target (``ManagerSimilarityEngine._load_league_averages``
             # reads the feature names as JSON keys) and the steal weight's
             # measured denominator (``steal_order_rate_per_1b_opp``). A column
-            # that is NULL on every row (hit-and-run, the double switch) averages
-            # to NULL, which the engine reads as 0.0 — the same value the
-            # profiles carry for it.
+            # that is NULL on every row (hit-and-run, the double switch)
+            # averages to NULL, which the engine reads as 0.0, the same value
+            # the profiles carry for it.
             manager_cols = (
                 "starter_avg_pitch_count",
                 "starter_pull_pct_before_100",

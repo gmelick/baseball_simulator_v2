@@ -32,35 +32,33 @@ class BatterProfilesMixin(ComputorBase):
     def _compute_batter_profiles(self, seasons: list[int], asof: date | None = None) -> None:
         """Rebuild ``derived.batter_season_metrics`` for ``seasons``.
 
-        ``asof`` is the date the profile's data runs through. Every source in
-        this query is filtered by it, so a profile built for a backtest cannot
-        contain a pitch, a swing or a stance measurement recorded after the
-        date being simulated. Left unset it means "everything known today",
-        which is what a live simulation wants.
+        ``asof`` is the date the profile's data runs through. It filters every
+        source in this query, so a profile built for a backtest holds no pitch,
+        swing or stance measurement recorded after the simulated date. Unset,
+        it means "everything known today", which a live simulation wants.
 
         The cutoff is not a per-season idea. A season that ENDED before the
-        cutoff is admissible whole — a 2023 aggregate holds nothing that
-        postdates a 2025 date. Only the season containing the cutoff is
-        truncated, and the date arithmetic does that without special cases.
+        cutoff is admissible whole: a 2023 aggregate holds nothing that
+        postdates a 2025 date. Only the season that contains the cutoff is
+        truncated, and the date arithmetic does that with no special case.
         """
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         log.info("Computing batter profiles (as of %s) …", asof_sql)
         season_list = sql_seasons(seasons)
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
+        # The check runs before any write.
         self._refuse_a_mixed_cutoff("derived.batter_season_metrics", seasons, asof_date)
 
         if asof is not None:
-            # A point-in-time build has to REMOVE as well as write.
-            # INSERT OR REPLACE only overwrites rows the query produces, so two
-            # kinds of stale row would otherwise survive a backtest rebuild and
-            # leak the future:
+            # A point-in-time build must REMOVE as well as write.
+            # INSERT OR REPLACE overwrites only the rows the query produces, so
+            # two kinds of stale row would otherwise survive a backtest rebuild
+            # and leak the future:
             #   * a season that had not started at the cutoff (there is no 2025
-            #     batter on 15 April 2024), and
-            #   * a batter inside the cutoff season with no plate appearances
-            #     yet, whose full-season row from an earlier build would remain.
+            #     batter on 15 April 2024);
+            #   * a batter of the cutoff season with no plate appearance yet,
+            #     whose full-season row from an earlier build would remain.
             # Only the cutoff path deletes; the live nightly run only inserts
             # or replaces.
             self._delete_season_rows("derived.batter_season_metrics", seasons, asof)
@@ -435,23 +433,24 @@ class BatterProfilesMixin(ComputorBase):
             LEFT JOIN savant_stance st
                 ON st.st_batter_id = bp.batter_id AND st.st_season = bp.season
         """)
-        # Leave the whole table at ONE cutoff. The seasons
-        # this run did not touch passed _refuse_a_mixed_cutoff above, so every
-        # survivor is a whole season, and stamping it at this cutoff says the
-        # true thing: this is what we know as of the cutoff.
+        # Leave the whole table at ONE cutoff. The seasons this run did not
+        # touch passed _refuse_a_mixed_cutoff above, so every survivor is a
+        # whole season, and its stamp at this cutoff is true: this is what we
+        # know as of the cutoff.
         self._stamp_one_cutoff("derived.batter_season_metrics", asof_sql)
 
         self._assert_batter_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Batter profiles done (as of %s).", asof_sql)
 
     def _assert_batter_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
-        """Prove no source that fed the batter profiles postdates the cutoff.
+        """Raise RuntimeError when a source of the batter profiles postdates the cutoff.
 
-        The filters are in the query above, so in principle this can only pass.
-        That is exactly why it is here: the query is long, it has four sources,
-        and the next person to add a fifth will not remember. A missing cutoff
-        produces no error and no visibly wrong number — it produces a backtest
-        that quietly knows the future. This turns that into a crash.
+        The query above holds the filters, so in principle this check can only
+        pass. That is why it is here: the query is long, it has five dated
+        sources, and the next person to add a sixth will not remember. A
+        missing cutoff gives no error and no visibly wrong number; it gives a
+        backtest that quietly knows the future. This check turns that into a
+        crash.
         """
         self._check_pitch_sources_leakage(seasons, asof)
         season_list = sql_seasons(seasons)

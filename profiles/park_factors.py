@@ -1,4 +1,4 @@
-"""The park factors, regressed toward league average."""
+"""Build the park factors: each venue's event rates over the league's, shrunk toward 1.0."""
 
 from __future__ import annotations
 
@@ -15,52 +15,35 @@ class ParkFactorsMixin(ComputorBase):
     """Builds ``derived.park_factors``."""
 
     def _compute_park_factors(self, seasons: list[int]) -> None:
-        """
-        Computes park factors per venue per season per event type
-        (HR, 1B, 2B, 3B, R, K, BB, GB, FB).
+        """Rebuild ``derived.park_factors``: one row per venue, season and event type.
 
-        Method: compare the rate of each event at a given park to the
-        league-average rate.  Bayesian shrinkage toward 1.0 based on
-        sample_pa (PARK_PRIOR_PA controls the shrinkage rate).
+        The event types: HR, 1B, 2B, 3B, BB, K, GB, FB and R (runs). A factor is
+        the venue's rate of the event over the league's rate; 1.0 is neutral.
+        ``regressed_factor`` shrinks the overall factor toward 1.0 (Bayesian
+        shrinkage: it pulls a small sample toward the league). At
+        ``sample_pa == PARK_PRIOR_PA`` it is half the venue's own factor. An
+        overall factor with no events reads 1.0.
 
-        Handedness splits
-        -----------------
-        ``factor_vs_l`` / ``factor_vs_r`` are split on the **batter's**
-        handedness (``stand``), the standard sabermetric convention: short
-        porches and outfield dimensions interact with the batter's pull side,
-        and ``stand`` is the key the pitch and outcome reads filter on.
+        ``factor_vs_l`` and ``factor_vs_r`` split on the BATTER's side
+        (``stand``), the usual convention: short porches and the outfield's
+        shape act on the batter's pull side, and the pitch and outcome reads
+        filter on ``stand``. ``stand`` is the side the batter took in that plate
+        appearance, so it is never 'S'; ``bat_hand``, the roster's side, is 'S'
+        for a switch hitter (db/schemas/01_postgres_schema.sql defines both).
+        So every plate appearance lands in a real L or R split. Each split is
+        the venue's vs-hand rate over the league's vs-hand rate, so it centres
+        on 1.0 by itself. The splits are stored unshrunk.
 
-        ``stand`` is the side the batter took in that plate appearance, so it
-        is never 'S' (``bat_hand``, the roster's side, is 'S' for every switch
-        hitter; db/schemas/01_postgres_schema.sql defines both). Every plate
-        appearance, switch hitters included, lands in a real L or R bucket.
-        Each L/R split is the venue's vs-hand rate over its own vs-hand league
-        average, so it is centered on 1.0 on its own.
-
-        Pool-neutralization policy
-        --------------------------
-        The sim pools (``sim.pitch_pool`` / ``sim.outcome_pool``) are drawn
-        from *real* PAs that ALREADY occurred in some park, so their empirical
-        rates are park-influenced. To apply a venue's park factor at sim time
-        WITHOUT double-counting, the caller must first NEUTRALIZE each sampled
-        comp by dividing out the park factor of the venue the comp was played
-        in, then multiply by the target venue's factor:
-            adjusted = base_rate * (target_factor / comp_origin_factor)
-        Equivalently, sample from a park-neutral pool (each row pre-divided by
-        its origin venue's ``regressed_factor``) and multiply by the target
-        venue factor once. ``factor_overall == 1.0`` for a perfectly neutral
-        park, so a league-average comp pool needs no adjustment. This policy is
-        documented on ``derived.park_factors`` (schema) and enforced by the
-        park-application engine, not by this builder (which only materializes
-        the factors). Always use ``regressed_factor`` (Bayesian-shrunk), never
-        the raw ``factor_overall``, in the sim path.
+        Every reader takes the 'R' row's ``regressed_factor``, never the raw
+        ``factor_overall``: the situation engine, and the simulator's park
+        weight on the fielding draw.
         """
         log.info("Computing park factors …")
         season_list = sql_seasons(seasons)
 
-        # Build a per-venue per-season per-factor table in one DuckDB query.
-        # Each PA is counted once from the pitcher's perspective (avoiding
-        # double-counting home/away splits).
+        # One DuckDB query builds every (venue, season, factor) row. Each plate
+        # appearance counts once, at its venue, so the home and away halves
+        # are not counted twice.
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.park_factors
 

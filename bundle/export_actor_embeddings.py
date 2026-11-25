@@ -1,4 +1,8 @@
-"""The actor embeddings: each player's standardized profile vector by season."""
+"""Export the actor embeddings (each player-season's metrics vector), and load them back.
+
+The export writes one ``{actor}_emb.npz`` per actor: the keys and the feature names as
+JSON strings, the vectors, and each feature's mean and standard deviation.
+"""
 
 from __future__ import annotations
 
@@ -14,26 +18,26 @@ from bundle.common import _savez_plain
 log = logging.getLogger("engine_artifacts")
 
 
-#: The actor engines whose per-(id, season) season-metrics vector is exported
-#: as an embedding (the worker z-scores it for the actor factors).
+#: The actor engines whose (id, season) metrics vector the export writes as an
+#: embedding. The worker standardizes it (a z-score) for the actor factors.
 _ACTOR_TABLES = {
     "batter": "batter_season_metrics",
     "catcher": "catcher_season_metrics",
     "fielder": "fielder_season_metrics",
     "baserunner": "baserunner_season_metrics",
     "manager": "manager_season_metrics",
-    # The pitcher's hold-runner outcomes (sb_against_per_9,
-    # cs_rate_forced, steal_attempt_rate_allowed) weight the steal draw. The
-    # id column resolves to pitcher_id via the `endswith("_id")` rule below.
+    # The pitcher's outcomes against the run (sb_against_per_9, cs_rate_forced,
+    # steal_attempt_rate_allowed) weight the steal draw. The id column resolves to
+    # pitcher_id through the `endswith("_id")` rule below.
     "pitcher_steal": "pitcher_steal_metrics",
 }
 _NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
 
 
-#: The catcher's got-away columns never enter a similarity score (the
-#: play-picker redesign, SIM-523). The receiving ratio reads got-aways from the
-#: pool itself, as a draw WEIGHT on the got-away row; as a SELECTION feature a
-#: catcher's got-away rate stands in for his staff's wildness.
+#: The catcher's got-away columns never enter a similarity score. As a similarity
+#: feature, a catcher's got-away rate measures his staff's wildness, not his blocking.
+#: The receiving ratio reads the got-aways from the pool instead, as a draw WEIGHT on
+#: the got-away row.
 _EMBEDDING_EXCLUDE: dict[str, frozenset[str]] = {
     "catcher": frozenset(
         {
@@ -52,8 +56,13 @@ _EMBEDDING_EXCLUDE: dict[str, frozenset[str]] = {
 
 
 def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict[str, int]:
-    """Export per-(actor_id, season) embeddings + global mean/std for each actor
-    engine, so the worker can z-score + RBF-score the actor factor on the fly."""
+    """Write one embedding file per actor engine. Returns the row count per actor.
+
+    Each file holds every (id, season) vector, the feature means and standard
+    deviations, and the feature names. The worker standardizes two vectors with them and
+    scores the two players' similarity at draw time. The features leave out the
+    ``sample_*`` columns and the columns of ``_EMBEDDING_EXCLUDE``.
+    """
     os.makedirs(out_dir, exist_ok=True)
     counts: dict[str, int] = {}
     for actor, table in _ACTOR_TABLES.items():
@@ -70,13 +79,10 @@ def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
             and not c.startswith("sample_")
             and c not in _EMBEDDING_EXCLUDE.get(actor, frozenset())
         ]
-        # The fielder engine is POSITION-PARTITIONED — the same player has
-        # one row per position they played, so keying the embedding by
-        # player_id:season alone collapses multi-position fielders (last-wins;
-        # ~11.3k rows → ~5.3k keys). Key the FIELDER embedding by
-        # player_id:position:season so each (player, position, season) stays distinct.
-        # Every other actor keeps the player_id:season key its consumer looks up
-        # (batter/catcher/baserunner key lookups in FullPoolSampler).
+        # The fielder table holds one row per player, position and season. A
+        # player_id:season key would merge a player's positions, so the fielder key is
+        # player_id:position:season. Every other actor keeps the player_id:season key
+        # the sampler looks up.
         use_position = actor == "fielder" and any(c == "position" for c, _ in schema)
         select = [id_col, "season"] + (["position"] if use_position else []) + feats
         d = con.execute(f"SELECT {', '.join(select)} FROM derived.{table}").fetchnumpy()
@@ -115,9 +121,8 @@ def load_actor_embeddings(art_dir: str, views: dict[str, np.ndarray]) -> dict[st
     for actor in _ACTOR_TABLES:
         p = os.path.join(art_dir, f"{actor}_emb.npz")
         if os.path.exists(p):
-            # When all three shareable arrays for this actor are in views,
-            # the npz gives only the keys + features (the small JSON members):
-            # the npz reads a member only when it is asked for.
+            # With all three arrays in views, the loader reads only the small JSON
+            # members from the npz: np.load reads a member only on access.
             shared = [views.get(f"actor_emb.{actor}.{a}") for a in ("vecs", "mean", "std")]
             use_views = all(isinstance(v, np.ndarray) for v in shared)
             z = np.load(p, allow_pickle=False)

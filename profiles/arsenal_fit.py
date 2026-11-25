@@ -1,5 +1,8 @@
-"""The pitcher arsenal mixture fit: one Gaussian mixture per pitcher-season,
-fitted in a process pool, and the writes of its results.
+"""Fit one Gaussian mixture per pitcher-season to describe the arsenal, and write the results.
+
+A Gaussian mixture (GMM) models the pitches as a sum of bell-shaped clusters, roughly one per
+pitch type. A process pool runs the fits. The results go to the ``gmm_model`` column of
+``derived.pitcher_season_metrics`` and to ``derived.pitcher_gmm_components``.
 """
 
 from __future__ import annotations
@@ -18,8 +21,8 @@ log = logging.getLogger("player_profile_computor")
 # The mixture fit's settings.
 GMM_MIN_K = 2
 GMM_MAX_K = 7
-GMM_MIN_PITCHES_PER_K = 50  # minimum pitches per component to attempt K
-GMM_IVB_CAP_SD = 3.0  # cap IVB at ±N standard deviations before fitting
+GMM_MIN_PITCHES_PER_K = 50  # the fewest pitches per component (K components)
+GMM_IVB_CAP_SD = 3.0  # cap the induced vertical break at ±N standard deviations
 GMM_FEATURE_NAMES = [
     "velo",
     "ivb",
@@ -42,17 +45,12 @@ def _fit_gmm_for_pitcher(
     pitcher_id: int,
     season: int,
 ) -> tuple[dict | None, list[dict]]:
-    """
-    Fits a Gaussian Mixture Model to the pitch feature vectors for one
-    pitcher/season.
+    """Fit one pitcher-season's mixture; return ``(model_json, component_rows)``.
 
-    Returns
-    -------
-    model_json : dict or None
-        Serializable GMM model dict matching the schema's gmm_model JSON
-        structure. None if fitting failed or sample too small.
-    components : list[dict]
-        One dict per GMM component for derived.pitcher_gmm_components.
+    ``model_json`` is the ``gmm_model`` JSON. It is None when every fit fails
+    or the pitcher has fewer than GMM_MIN_PITCHES_PER_K × GMM_MIN_K clean
+    pitches; ``component_rows`` is then empty. Otherwise ``component_rows``
+    holds one dict per component, for ``derived.pitcher_gmm_components``.
     """
     features = pitches_df[GMM_FEATURE_NAMES].dropna()
 
@@ -67,7 +65,6 @@ def _fit_gmm_for_pitcher(
 
     X = features.values.astype(np.float64)
 
-    # Cap IVB at ±GMM_IVB_CAP_SD standard deviations (index 1 in feature order)
     ivb_col = GMM_FEATURE_NAMES.index("ivb")
     ivb_mean = X[:, ivb_col].mean()
     ivb_std = X[:, ivb_col].std()
@@ -75,14 +72,17 @@ def _fit_gmm_for_pitcher(
         cap = GMM_IVB_CAP_SD * ivb_std
         X[:, ivb_col] = np.clip(X[:, ivb_col], ivb_mean - cap, ivb_mean + cap)
 
-    # Standardize (store global mean/std for de-standardization at query time)
+    # Standardize. The model JSON stores the means and standard deviations,
+    # so a reader can standardize its own input the same way.
     feature_means = X.mean(axis=0)
     feature_stds = X.std(axis=0)
     feature_stds[feature_stds == 0] = 1.0  # avoid divide-by-zero
     X_std = (X - feature_means) / feature_stds
 
-    # BIC-select K in range [GMM_MIN_K, GMM_MAX_K]
-    # Cap max K so each component has at least GMM_MIN_PITCHES_PER_K pitches
+    # Keep the component count K with the lowest BIC (Bayesian information
+    # criterion: the fit's quality less a penalty per parameter). K runs from
+    # GMM_MIN_K up to the count that leaves each component
+    # GMM_MIN_PITCHES_PER_K pitches, at most GMM_MAX_K.
     max_k = min(GMM_MAX_K, len(features) // GMM_MIN_PITCHES_PER_K)
 
     best_gmm = None
@@ -117,19 +117,18 @@ def _fit_gmm_for_pitcher(
     if best_gmm is None:
         return None, []
 
-    # Soft-assign pitches to components for n_pitches_assigned
+    # Soft-assign the pitches to the components, for n_pitches_assigned.
     responsibilities = best_gmm.predict_proba(X_std)  # shape (n_pitches, K)
     soft_counts = responsibilities.sum(axis=0)
 
-    # Build model JSON (means stored in original feature units for readability;
-    # covariance stored in STANDARDIZED space so the similarity engine operates
-    # in a well-conditioned space where all features are O(1) variance.
-    # Similarity engine contract:
-    #   1. Standardize input: x_std = (x - feature_means) / feature_stds
-    #   2. Use covariance (standardized) for Mahalanobis / Gaussian kernel
-    # DO NOT de-standardize the covariance — spin_rate std ~118 RPM means
-    # de-standardizing multiplies those entries by 118² ≈ 14,000, making
-    # spin_rate dominate all similarity scores regardless of actual difference.
+    # The model JSON stores the means in the original units, for display, and
+    # the covariance in STANDARDIZED units, where every feature has a variance
+    # near 1. The similarity engine's contract:
+    #   1. Standardize the input: x_std = (x - feature_means) / feature_stds.
+    #   2. Use the standardized covariance for the distance or the kernel.
+    # DO NOT de-standardize the covariance. The spin rate's standard deviation
+    # is about 118 rpm, so de-standardizing multiplies its entries by about
+    # 14,000, and the spin rate then dominates every similarity score.
     components_json = []
     for c in range(best_k):
         mean_std = best_gmm.means_[c]  # standardized
@@ -163,10 +162,10 @@ def _fit_gmm_for_pitcher(
         },
     }
 
-    # Build component rows for derived.pitcher_gmm_components.
-    # mean_* columns store original-unit means (for display/interpretation).
-    # var_* columns store STANDARDIZED variances (diagonal of standardized
-    # covariance) so SQL-level similarity scoring stays well-conditioned.
+    # The component rows of derived.pitcher_gmm_components. The mean_* columns
+    # hold the means in the original units, for display. The var_* columns
+    # hold the STANDARDIZED variances (the diagonal of the standardized
+    # covariance), so a similarity score in SQL keeps every feature on one scale.
     component_rows = []
     for c_json in components_json:
         mean_orig = c_json["mean"]
@@ -220,10 +219,10 @@ def _resolve_gmm_workers(n_tasks: int) -> int:
 
 
 def _chunk_tasks(tasks: list, n_chunks: int) -> list[list]:
-    """Round-robin ``tasks`` into at most ``n_chunks`` non-empty lists.
+    """Deal ``tasks`` in turn into at most ``n_chunks`` non-empty lists.
 
-    Round-robin keeps per-chunk wall-time balanced when fit cost varies by
-    pitcher (high-volume starters vs. relievers).
+    Dealing in turn keeps the chunks' run times balanced when the fit's cost
+    varies by pitcher (a high-volume starter against a reliever).
     """
     if n_chunks <= 1:
         return [list(tasks)] if tasks else []
@@ -239,9 +238,8 @@ def _fit_gmm_batch(
     """Fit the mixtures of a *chunk* of pitchers in one worker process.
 
     One task per chunk, not one per pitcher, makes one round trip per worker.
-    Each task carries a compact float32 feature array rather than a pandas
-    DataFrame, which roughly halves the bytes pickled across the process
-    boundary.
+    Each task carries a float32 feature array rather than a pandas DataFrame,
+    which roughly halves the bytes sent to the worker process.
     """
     results: list[tuple[int, int, dict | None, list[dict]]] = []
     for arr, pitcher_id, season in task_chunk:
@@ -256,9 +254,10 @@ def _flush_gmm_results(
     fitted: list[tuple[int, int, dict, list[dict]]],
     fallbacks: list[tuple[int, int]],
 ) -> None:
-    """Write every mixture result in three set-based statements, driven by
-    registered frames, instead of one UPDATE or INSERT per pitcher (5,000 and
-    more round trips on a full nine-season build).
+    """Write every mixture result in three set-based statements over registered frames.
+
+    One UPDATE or INSERT per pitcher would cost thousands of round trips on a
+    full build. A fallback pitcher is flagged ``below_minimum_sample``.
     """
     if fallbacks:
         fb_df = pd.DataFrame(fallbacks, columns=["pitcher_id", "season"])
@@ -308,10 +307,9 @@ def _flush_gmm_results(
 
 
 def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
-    """
-    Post-hoc human-readable label for a GMM component.
-    Used for UI display only — never touches similarity calculations.
-    Heuristic rules based on velocity and movement signature.
+    """Return a readable pitch-type label for a component, from its speed and movement, or None.
+
+    The label is for display only; no similarity score reads it.
     """
     velo = mean[fi["velo"]]
     ivb = mean[fi["ivb"]]

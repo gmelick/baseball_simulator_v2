@@ -1,4 +1,7 @@
-"""Build the batted-ball pool, ``sim.outcome_pool``, the rows the pitch-result and fielding draws sample."""
+"""Build the batted-ball pool, ``sim.outcome_pool``: the in-play rows of the pitch pool.
+
+The pitch-result and fielding draws sample its rows.
+"""
 
 from __future__ import annotations
 
@@ -29,14 +32,19 @@ class BattedBallPoolMixin(ComputorBase):
     """Build the batted-ball pool."""
 
     def _build_outcome_pool(self, seasons: list[int], incremental: bool = False) -> None:
-        """
-        Rebuilds sim.outcome_pool as the in-play subset of sim.pitch_pool
-        with full batted ball detail and fielding outcome columns added.
-        Adds recency_weight. When ``incremental``, only the seasons whose
-        source changed rebuild.
+        """Rebuild ``sim.outcome_pool`` from the in-play rows of ``sim.pitch_pool``.
 
-        Fielder position is looked up from the fielder_N columns so the
-        simulation engine knows which positional number fielded the ball.
+        Each row adds the batted ball, the result, the runners' transitions, the
+        defensive alignment, the fielding chain (the positions credited with a
+        putout or an assist) and the recency weight. The
+        build reads the fielder's position number from the ``fielder_N``
+        columns, so the simulator knows which position fielded the ball. It
+        reads ``sim.pitch_pool``, so it runs after ``_build_pitch_pool``. With
+        ``incremental``, only the seasons whose source or builder changed
+        rebuild.
+
+        ⚠ The INSERT is positional (no column list): the SELECT order MUST match
+        the DDL column order in db/schemas/02_duckdb_schema.sql.
         """
         plan = _seasons_to_build(self._conn, "outcome_pool", seasons, incremental)
         if plan is None:

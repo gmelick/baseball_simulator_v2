@@ -1,4 +1,4 @@
-"""The state and the shared helpers every profile-computor mixin uses."""
+"""Hold the computor's state and the helpers that every profile builder mixin shares."""
 
 from __future__ import annotations
 
@@ -14,10 +14,12 @@ log = logging.getLogger("player_profile_computor")
 
 
 class ComputorBase:
-    """The computor's state and the helpers every builder shares: the
-    pickoff-out common table expression, the one-cutoff-per-table guard, the
-    cutoff delete, the Savant season shift, the temp-table placeholders and the
-    leakage checks. Every mixin subclasses this class, so each sees the state.
+    """The computor's state and the helpers every builder shares.
+
+    The helpers: the pickoff-out common table expression (a named subquery in
+    a WITH clause), the one-cutoff-per-table guard, the cutoff delete, the
+    Savant season shift, the temp-table placeholders and the leakage checks.
+    Every mixin subclasses this class, so each one sees the state.
     """
 
     _pg_dsn: str
@@ -30,14 +32,14 @@ class ComputorBase:
     # ------------------------------------------------------------------
 
     def _play_events_outs_cte(self, asof_sql: str | None = None) -> str:
-        """The pickoff outs per (pitcher, season), from ``raw.play_events``.
+        """Return the SQL of the pickoff outs per (pitcher, season), from ``raw.play_events``.
 
         A pickoff out lives in no ``raw.pitches`` row (the innings-pitched
         residual documented in ``ingest/statcast_events.py``), so the two
         ``outs_recorded`` readers add these counts. ``pitcher_id`` there is
         the pitcher who threw, so the out lands on the right arm. The relation
-        is empty when the table is absent (a database before Alembic 0018, or
-        a unit-test fixture), so the join adds nothing.
+        is empty when the table is absent (Alembic 0018 adds it; a unit-test
+        fixture may lack it), so the join adds nothing.
 
         ``asof_sql`` (an ISO date) keeps only the plays at or before the
         cutoff; ``None`` keeps every play of the season.
@@ -59,11 +61,11 @@ class ComputorBase:
     # ------------------------------------------------------------------
 
     #: The profile tables that carry a point-in-time stamp. ``asof_date`` is
-    #: the date a row's data runs through. Every engine
-    #: that reads one of these tables refuses a set of rows stamped at two
-    #: different dates, so a build that leaves two stamps behind takes that
-    #: engine down at the next boot. A unit test keeps this list equal to the
-    #: tables that declare the column in ``02_duckdb_schema.sql``.
+    #: the date a row's data runs through. Every engine that reads one of
+    #: these tables refuses a set of rows stamped at two different dates, so a
+    #: build that leaves two stamps behind takes that engine down at the next
+    #: boot. A unit test keeps this list equal to the tables that declare the
+    #: column in ``02_duckdb_schema.sql``.
     STAMPED_TABLES: tuple[str, ...] = (
         "derived.pitcher_season_metrics",
         "derived.batter_season_metrics",
@@ -76,28 +78,28 @@ class ComputorBase:
     )
 
     def _refuse_a_mixed_cutoff(self, table: str, seasons: list[int], asof_date: date) -> None:
-        """Refuse a rebuild of ``seasons`` that would leave ``table`` at two
-        cutoffs. The check runs BEFORE the delete and the insert, so a
-        refusal leaves the table exactly as it found it.
+        """Raise RuntimeError when a rebuild of ``seasons`` would leave ``table`` at two cutoffs.
 
-        A table at two stamps takes its engine down at the next boot (the
-        one-cutoff rule, SIM-551).
+        The check runs BEFORE the delete and the insert, so a refusal leaves
+        the table unchanged. A table at two stamps takes its engine down at the
+        next boot (the one-cutoff rule). A table with no ``asof_date`` column
+        also raises: apply the DuckDB migrations first.
 
-        The rule: after the build, every row must hold data through the new
-        cutoff and none after it. The rows the build rewrites hold that by
-        construction. A row the build leaves alone (a "survivor") holds it
-        only when its season ended before the cutoff and the row is complete:
+        The rule: after the build, every row holds data through the new cutoff
+        and none after it. The rows the build rewrites hold that by
+        construction. A row the build leaves alone (a "survivor") holds it only
+        when its season ended before the cutoff and the row is complete:
 
-        * a survivor already stamped at the cutoff — nothing to check;
-        * a survivor of the cutoff's own season — stale, or it leaks the
-          future; refuse and name the season to add to the run;
-        * a survivor of an earlier season with no stamp (built before the
-          stamps existed, so a live build) or stamped after its season's last
-          game — complete; ``_stamp_one_cutoff`` re-stamps it at the new
-          cutoff, which says the true thing: as of that date, this is the
-          whole season;
-        * a survivor stamped inside its own season, before its last game — a
-          truncated point-in-time build; refuse.
+        * a survivor already stamped at the cutoff: nothing to check;
+        * a survivor of the cutoff's own season: stale, or it leaks the future;
+          refuse, and name the season to add to the run;
+        * a survivor of an earlier season with no stamp (an old live build), or
+          stamped after its season's last game: complete. ``_stamp_one_cutoff``
+          re-stamps it at the new cutoff, which is true: as of that date, this
+          is the whole season;
+        * a survivor stamped inside its own season, before its last game: a
+          truncated point-in-time build; refuse;
+        * a survivor stamped before its season began: refuse.
         """
         if not seasons:
             return
@@ -150,8 +152,11 @@ class ComputorBase:
             )
 
     def _season_last_game_date(self, season: int) -> date | None:
-        """The date of ``season``'s last game in ``raw.pitches``, or None when
-        the source cannot answer (a narrow test fixture with no game_date)."""
+        """Return the date of ``season``'s last game in ``raw.pitches``.
+
+        Return None when the source cannot answer (a narrow test fixture with
+        no game_date).
+        """
         try:
             row = self._conn.execute(
                 f"SELECT MAX(game_date) FROM pg.raw.pitches WHERE season = {int(season)}"
@@ -164,14 +169,12 @@ class ComputorBase:
         return value if isinstance(value, date) else None
 
     def _stamp_one_cutoff(self, table: str, asof_sql: str) -> None:
-        """Stamp every row of ``table`` at the build's cutoff — the whole
-        table, not only the rows with no stamp yet.
+        """Stamp every row of ``table`` at the build's cutoff, not only the rows with no stamp.
 
-        ``_refuse_a_mixed_cutoff`` has already refused any survivor this
-        stamp would misdescribe. Every row here was either rewritten at
-        the cutoff or is a completed season, which is whole as of any later
-        date. Stamping the survivors says that: as of the cutoff, this is
-        what we know.
+        ``_refuse_a_mixed_cutoff`` has already refused any survivor this stamp
+        would misdescribe. Every row here was rewritten at the cutoff, or is a
+        completed season, which is whole as of any later date. The stamp on a
+        survivor says that: as of the cutoff, this is what we know.
         """
         self._conn.execute(f"""
             UPDATE {table}
@@ -187,7 +190,11 @@ class ComputorBase:
 
     @staticmethod
     def _savant_season_sql(col: str, asof: date | None) -> str:
-        """The season an undated Savant board joins: the prior one for the cutoff's own season."""
+        """Return the SQL of the season that an undated Savant board joins on.
+
+        On a cutoff build, the cutoff's own season joins the prior season's
+        board, because the current board holds data from after the cutoff.
+        """
         if asof is None:
             return col
         return f"(CASE WHEN {col} = {asof.year} THEN {col} - 1 ELSE {col} END)"
@@ -205,10 +212,10 @@ class ComputorBase:
     # ------------------------------------------------------------------
 
     def _check_leakage(self, source: str, sql: str, asof: date) -> None:
-        """The shared body of every ``*_have_no_leakage`` check: raise when
-        ``sql``'s newest date passes the cutoff.
+        """Raise RuntimeError when ``sql``'s newest date passes the cutoff.
 
-        Three answers are not evidence of a leak; each is logged, not raised:
+        Every ``*_have_no_leakage`` check calls this body. Three answers are
+        not evidence of a leak; each one is logged, not raised:
 
           * the query cannot run: a narrow test fixture's ``raw.pitches``
             often has no ``game_date`` column, a question of the schema, not

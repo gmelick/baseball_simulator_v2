@@ -1,4 +1,8 @@
-"""The pitcher-by-pitcher similarity matrix the pitch draw weights by."""
+"""Export the pitcher-by-pitcher similarity matrix the pitch draw weights by, and load it.
+
+The export writes ``pitcher_sim.npz``: the profile index and the scores as JSON strings,
+and the same scores as a dense float32 matrix.
+"""
 
 from __future__ import annotations
 
@@ -16,9 +20,12 @@ log = logging.getLogger("engine_artifacts")
 def build_pitcher_sim_matrix(
     duckdb_path: str, out_dir: str, seasons: list[int], limit: int | None = None
 ) -> int:
-    """Export the same-hand pitcher-by-pitcher composite similarity from the
-    pitcher engine. The FULL run is the ~1 h nightly job (~1.2 s/query × ~3k profiles);
-    ``limit`` scores only the first N profiles (verification mode)."""
+    """Score each pitcher profile in ``seasons`` against the same-hand profiles; write the npz.
+
+    The pitcher engine gives the composite similarity. The full run takes about an hour;
+    ``limit`` scores only the first N profiles, for a check. Returns the number of
+    profiles scored.
+    """
     from similarity.engines.pitcher_similarity import PitcherSimilarityEngine
 
     engine = PitcherSimilarityEngine(duckdb_path=duckdb_path)
@@ -31,15 +38,12 @@ def build_pitcher_sim_matrix(
         results = engine.query(pid, s)  # all same-hand profiles, sorted
         sims[f"{pid}:{s}"] = {f"{r.pitcher_id}:{r.season}": float(r.score) for r in results}
     os.makedirs(out_dir, exist_ok=True)
-    # Also store a DENSE (n_prof x n_prof) float32 similarity matrix.
-    # The dict-of-dicts costs ~2 GB resident per process (Python str/float/dict
-    # overhead) and is NOT shareable through multiprocessing.shared_memory, so
-    # every process-pool worker would hold a full private copy (ten workers run
-    # the host out of memory). The dense matrix is ~11 MB for 1677 profiles and
-    # rides the shared-memory seam, so ALL workers attach one read-only view.
-    # Row i is the prof_score vector of query profile i (M[i, j] = sim(i, j),
-    # 0.0 when absent) — exactly what the dict yields, so the draw is the same
-    # either way. The dict stays in the npz for an older loader.
+    # A DENSE (n_prof x n_prof) float32 matrix sits beside the dict. The dict of dicts
+    # costs gigabytes per process, and shared memory cannot hold it, so every worker
+    # would keep a private copy and the host would run out of memory. The dense matrix
+    # is small, and all the workers attach one read-only shared view. Row i holds query
+    # profile i's scores (M[i, j] = sim(i, j), 0.0 when absent): the same values the
+    # dict gives, so the draw is the same either way. The dict stays for an older loader.
     n_prof = len(index)
     sim_matrix = np.zeros((n_prof, n_prof), dtype=np.float32)
     for qk, srow in sims.items():
@@ -63,15 +67,18 @@ def build_pitcher_sim_matrix(
 def load_pitcher_sim(
     art_dir: str, views: dict[str, np.ndarray]
 ) -> tuple[dict[str, int], np.ndarray | None]:
-    """Load the pitcher similarity index and its dense matrix."""
+    """Load the pitcher similarity index and its dense matrix.
+
+    Returns ({}, None) when the bundle has no file. The matrix is None for an npz
+    without it.
+    """
     ps_index: dict[str, int] = {}
     ps_matrix: np.ndarray | None = None
     ps_path = os.path.join(art_dir, "pitcher_sim.npz")
     if os.path.exists(ps_path):
-        # A worker gets the dense matrix as a shared view
-        # (``views["pitcher_sim.matrix"]``); the parent/dev path reads it from
-        # the npz. In EITHER case we read ONLY the tiny ``index`` from disk and
-        # never json-parse the ~2 GB ``sims`` dict.
+        # A worker takes the dense matrix from the shared view; the parent reads it from
+        # the npz. Either way the loader reads only the small ``index`` from disk and
+        # never parses the large ``sims`` JSON.
         mv = views.get("pitcher_sim.matrix")
         # The bundle never carries a pickle. Every load here refuses
         # one, and ``_savez_plain`` keeps the builder from writing one.

@@ -15,21 +15,25 @@ class IbbRatesMixin(ComputorBase):
     """Build the intentional-walk rates."""
 
     def _build_ibb_rates(self, seasons: list[int]) -> None:
-        """The measured intentional-walk rate per hard-filtered cell (the IBB
-        rate table, SIM-515).
+        """Rebuild ``sim.ibb_rates``: the real intentional-walk rate of each hard-filtered cell.
 
-        The loop draws ONCE per plate appearance at ``issued / opportunities``
-        for the PA's entering cell (runners_state, outs, inning>=7,
-        |bat_score-fld_score|<=1).
+        A cell is the state a plate appearance enters: the base state, the outs,
+        a late inning (the 7th or later) and a close score (a margin of 1 run or
+        less). The loop draws once per plate appearance, at ``issued /
+        opportunities`` for the cell it enters.
 
-        The numerator reads ``raw.play_events`` ``intent_walk`` rows (they
-        carry the pre-play cell directly). The denominator is every PA that
-        ENTERED the cell: the pitched PAs (their first pitch's state) plus the
-        no-pitch IBB PAs, which have no ``raw.pitches`` rows at all. A tiny
-        numerator/denominator cell mismatch is possible when a mid-PA steal
-        moved the runners before the IBB — ``GREATEST`` clamps so a rate never
-        exceeds 1. Full recompute every run (the table is ~48 rows and
-        window-scoped, so the per-season watermark machinery does not apply)."""
+        The numerator counts the ``intent_walk`` rows of ``raw.play_events``,
+        which carry the cell before the play. The denominator counts every plate
+        appearance that entered the cell: the pitched ones (the state at the
+        first pitch) and the intentional walks with no pitch, which have no
+        ``raw.pitches`` row. A steal during the plate appearance can put a walk
+        and its opportunity in different cells, so ``GREATEST`` keeps each rate
+        at 1 or less.
+
+        The table holds at most 96 cells, so each run deletes it whole and
+        rebuilds it with no per-season watermark. The rebuild reads only the
+        ``seasons`` of this run: the nightly run passes one season.
+        """
         season_list = sql_seasons(seasons)
         log.info("Building sim.ibb_rates … (seasons=%s)", seasons)
         self._conn.execute("DELETE FROM sim.ibb_rates")

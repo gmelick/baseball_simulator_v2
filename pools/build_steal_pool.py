@@ -1,4 +1,8 @@
-"""Build the steal pools: the stolen-base pool and the steal-opportunity pool the running-game draws sample."""
+"""Build the two steal pools that the running-game draws sample.
+
+``sim.stolen_base_pool`` holds the steal attempts. ``sim.steal_opportunity_pool`` holds
+every pitch where a steal was possible, attempted or not, and the pickoff rows.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ MIGRATION_0031 = "db/migrations/duckdb/0031_sim554_steal_pool_pitch_class.sql"
 
 
 def _require_steal_pool_0031(conn) -> None:
-    """Raise unless sim.steal_opportunity_pool carries migration 0031.
+    """Raise ``RuntimeError`` when sim.steal_opportunity_pool lacks the migration-0031 columns.
 
     The nightly job applies no DuckDB migration. The steal-pool builder deletes
     a season's rows, then runs a positional INSERT. On an un-migrated table the
@@ -50,15 +54,16 @@ def _require_steal_pool_0031(conn) -> None:
 
 
 class StealPoolMixin(ComputorBase):
-    """Build the steal pools: the stolen-base pool and the steal-opportunity pool the running-game draws sample."""
+    """Build the stolen-base pool and the steal-opportunity pool."""
 
     def _build_stolen_base_pool(self, seasons: list[int], incremental: bool = False) -> None:
-        """
-        Builds sim.stolen_base_pool from all SB attempts in raw.pitches.
-        Denormalizes runner/catcher/pitcher metrics from the derived tables
-        so the simulation engine can score similarity without joins at runtime.
-        Adds recency_weight. When ``incremental``, only the seasons whose
-        source changed rebuild.
+        """Rebuild ``sim.stolen_base_pool``: one row per steal attempt in ``raw.pitches``.
+
+        Each row copies the runner's and the catcher's metrics from the
+        ``derived.*`` tables and ``raw.sprint_speed``, so the simulator scores
+        similarity with no join at run time. The pitcher's metric is NULL. Each
+        row also carries the recency weight. With ``incremental``, only the
+        seasons whose source or builder changed rebuild.
         """
         plan = _seasons_to_build(self._conn, "stolen_base_pool", seasons, incremental)
         if plan is None:
@@ -167,41 +172,40 @@ class StealPoolMixin(ComputorBase):
         _record_pool_build(self._conn, "stolen_base_pool", seasons, ref_season)
 
     def _build_steal_opportunity_pool(self, seasons: list[int], incremental: bool = False) -> None:
-        """Rebuild sim.steal_opportunity_pool: one row per pitch where a steal
-        was POSSIBLE, attempted or not.
+        """Rebuild ``sim.steal_opportunity_pool``: one row per pitch where a steal was POSSIBLE.
 
-        `sim.stolen_base_pool` holds only ATTEMPTS, so a draw over it attempts a
-        steal every time: it has no denominator. This pool keeps the
-        `attempted` flag beside `success`, so ONE draw answers both "does the
-        runner go" and "safe or caught", and the catcher affects the DECISION,
-        not only the outcome.
+        ``sim.stolen_base_pool`` holds only ATTEMPTS, so a draw over it attempts
+        a steal every time: it has no denominator. This pool keeps the
+        ``attempted`` flag beside ``success``, so ONE draw answers both "does
+        the runner go" and "safe or caught". The catcher then affects the
+        DECISION, not only the outcome.
 
-        An opportunity is the LEAD open-base pair, matching the live decision:
-          * a runner on 1B with 2B open  -> target_base 2 (the runner on 1B)
-          * a runner on 2B with 3B open  -> target_base 3 (the runner on 2B),
-            including 1B+2B (the lead runner drives a double steal)
+        An opportunity is a pair: the LEAD runner and the open base ahead of
+        him, as in the live decision.
+          * A runner on 1B with 2B open -> target_base 2 (the runner on 1B).
+          * A runner on 2B with 3B open -> target_base 3 (the runner on 2B).
+            This includes 1B+2B, where the lead runner drives a double steal.
         Steals of home are out of scope.
 
-        The pre-pitch situation columns (`outs`, the count, the base state) are
-        trustworthy only on data loaded by the fixed parser (the re-sweep of
-        2026-08-13, SIM-488).
+        Each pitch row carries its pitch class (``pitch_class``, the pitch
+        pool's ``outcome_type``); the steal draw after the pitch filters on it.
 
-        Each pitch row carries the class of its pitch (`pitch_class`,
-        the pitch pool's outcome_type); the steal draw after the pitch filters
-        on it. A pickoff outcome whose plate appearance holds no pitch of its
-        pair (the throw came before the first pitch) becomes a PICKOFF ROW of
-        its own: `is_pickoff_row` TRUE, `pitch_id` the negative of the play
-        record's id, `pitch_number` 0, the count 0-0 (the count at the throw is
-        not stored), the outs and the score before the throw, never attempted,
-        `pitch_class` NULL. An outcome that has a pitch of its pair keeps its
-        tag on that pitch and makes no row, so no outcome counts twice. The
-        catcher is the one on the nearest pitch of the same half-inning (the
-        earlier plate appearance on a tie); with none, he is unknown.
+        A pickoff outcome (an out or an error) whose plate appearance holds no
+        pitch of its pair becomes a PICKOFF ROW of its own: the throw came
+        before the first pitch. A pickoff row has ``is_pickoff_row`` TRUE,
+        ``pitch_id`` the negative of the play record's id, ``pitch_number`` 0
+        and the count 0-0, because the count at the throw is not stored. It
+        holds the outs and the score before the throw, is never attempted, and
+        has a NULL ``pitch_class``. An outcome with a pitch of its pair tags
+        that pitch and makes no row, so no outcome counts twice. A pickoff
+        row's catcher is the one on the nearest pitch of the same half-inning,
+        the earlier plate appearance on a tie. With no such pitch, the catcher
+        is NULL.
 
         ⚠ The INSERT is positional (no column list): the SELECT order MUST match
-        the DDL column order in db/schemas/02_duckdb_schema.sql (migrations
-        0015 + 0017 + 0031). The builder refuses a table without the 0031
-        columns BEFORE it deletes anything.
+        the DDL column order in db/schemas/02_duckdb_schema.sql. The builder
+        refuses a table without the migration-0031 columns BEFORE it deletes
+        anything.
         """
         plan = _seasons_to_build(self._conn, "steal_opportunity_pool", seasons, incremental)
         if plan is None:
@@ -212,8 +216,8 @@ class StealPoolMixin(ComputorBase):
         pickoff_recency_expr = _recency_weight_sql("e.season", ref_season)
         pickoff_cte = self._pickoff_outcomes_cte(season_list)
 
-        # Probe before the DELETE (a failed positional INSERT would leave the
-        # season with no steal rows).
+        # Probe before the DELETE: a positional INSERT that fails after it
+        # leaves the season with no steal rows.
         _require_steal_pool_0031(self._conn)
 
         self._conn.execute(
@@ -426,31 +430,31 @@ class StealPoolMixin(ComputorBase):
         _record_pool_build(self._conn, "steal_opportunity_pool", seasons, ref_season)
 
     def _pickoff_outcomes_cte(self, season_list: str) -> str:
-        """Each pickoff throw, mapped to the steal pool's pair of its held runner.
+        """Return the SQL of each pickoff throw, mapped to the pair of its held runner.
 
-        The runner state entering the play picks the pair:
+        The base state entering the play picks the pair:
 
-          * a runner on 1B with 2B open -> the target-2 pair. An out at base 1
-            is a plain pickoff; an out at base 2 is a picked-off caught
-            stealing (the runner broke for the next base, and MLB scores a CS).
-          * a runner on 2B with 3B open -> the target-3 pair: an out at 2 is
-            plain, an out at 3 advancing.
+          * A runner on 1B with 2B open -> the target-2 pair. An out at base 1
+            is a plain pickoff. An out at base 2 is a picked-off caught
+            stealing: the runner broke for the next base, and MLB scores a
+            caught stealing.
+          * A runner on 2B with 3B open -> the target-3 pair. An out at 2 is
+            plain; an out at 3 is advancing.
 
-        The throws that fit no pair are dropped: a runner held at 3B or thrown
-        out at home (about 26 outs a season, measured on 2023) and a 1B pickoff
-        with 1B and 2B both taken (the pool's row for that pitch belongs to the
-        2B runner). Together they come to about 0.006 a team-game, a residual
-        documented with the steals of home. The relation is empty when the
-        table is absent (a database before Alembic 0018, or a unit-test fixture).
+        The query drops the throws that fit no pair: a runner held at 3B or
+        thrown out at home, and a 1B pickoff with 1B and 2B both taken (the
+        pool's row for that pitch belongs to the 2B runner). They are rare
+        (about 0.006 a team-game), a residual like the steals of home. The
+        relation is empty when ``pg.raw.play_events`` is absent (an old
+        database, or a unit-test fixture).
 
-        Each row also carries the throw's own facts (its id, the runner, the
-        pitcher, the half-inning, the outs and the score before the throw).
+        Each row also carries the throw's own facts: its id, the runner, the
+        pitcher, the half-inning, and the outs and the score before the throw.
         The pool builder tags an outcome to one pitch of its pair in the plate
         appearance. An outcome with no such pitch (the throw came before the
-        first pitch: 394 of 1,788 in 2023-2026, measured 2026-09-30) becomes a
-        pickoff row of its own, built from these columns (the running game on
-        the pitch, SIM-554). Every row is a throw; most have no outcome
-        (``is_out_i`` and ``is_err_i`` both 0).
+        first pitch) becomes a pickoff row built from these columns. Every row
+        is a throw; most throws have no outcome (``is_out_i`` and ``is_err_i``
+        both 0).
         """
         if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (

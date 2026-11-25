@@ -21,9 +21,9 @@ from profiles.sql import (
 
 log = logging.getLogger("player_profile_computor")
 
-#: The got-away label of a ``raw.pitches`` row: the parser's per-pitch passed-ball
-#: or wild-pitch flag, or an uncaught third strike (a strikeout-final pitch whose
-#: description names a wild pitch or a passed ball).
+#: The got-away label of a ``raw.pitches`` row: TRUE on the parser's per-pitch
+#: passed-ball or wild-pitch flag, or on an uncaught third strike (the last pitch
+#: of a strikeout whose description names a wild pitch or a passed ball).
 SQL_GOT_AWAY = """(COALESCE(passed_ball_wild_pitch, FALSE)
                      OR (events IN ('strikeout', 'strikeout_double_play')
                          AND (des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%')))"""
@@ -33,16 +33,22 @@ class PitchPoolMixin(ComputorBase):
     """Build the pitch pool."""
 
     def _build_pitch_pool(self, seasons: list[int], incremental: bool = False) -> None:
-        """
-        Rebuild sim.pitch_pool from raw.pitches.
-        Excludes quality-flagged rows.  Adds:
-          - runners_state bitmask
-          - score_diff
-          - outcome_type classification
-          - prev_pitch_velo / ivb / hb / outcome (LAG window)
-          - pitch_id surrogate key (row_number over natural sort)
-          - recency_weight
-        When ``incremental``, only the seasons whose source changed rebuild.
+        """Rebuild ``sim.pitch_pool`` from ``raw.pitches``, without the quality-flagged rows.
+
+        The build adds to each pitch:
+          - ``pitch_id``, a key made of the game, the at-bat and the pitch number;
+          - the base-state bitmask and the score margin;
+          - the pitch class (``outcome_type``);
+          - the previous pitch's speed, movement and result code (``type``);
+          - the recency weight;
+          - the catcher and the got-away label;
+          - the batting side and the two fatigue columns.
+
+        With ``incremental``, only the seasons whose source or builder changed
+        rebuild.
+
+        ⚠ The INSERT is positional (no column list): the SELECT order MUST match
+        the DDL column order in db/schemas/02_duckdb_schema.sql.
         """
         plan = _seasons_to_build(self._conn, "pitch_pool", seasons, incremental)
         if plan is None:
@@ -53,7 +59,6 @@ class PitchPoolMixin(ComputorBase):
             "CAST(EXTRACT(year FROM game_date) AS SMALLINT)", ref_season
         )
 
-        # Delete existing rows for these seasons, then insert
         self._conn.execute(f"DELETE FROM sim.pitch_pool WHERE season IN ({season_list})")
 
         self._conn.execute(f"""

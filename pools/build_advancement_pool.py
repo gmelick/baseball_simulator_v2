@@ -1,4 +1,7 @@
-"""Build the advancement pool, the rows the runner-advancement draws sample."""
+"""Build the advancement pool, the rows the runner-advancement draws sample.
+
+The table is ``sim.advancement_opportunity_pool``. It reads ``sim.outcome_pool``.
+"""
 
 from __future__ import annotations
 
@@ -21,22 +24,25 @@ class AdvancementPoolMixin(ComputorBase):
     def _build_advancement_opportunity_pool(
         self, seasons: list[int], incremental: bool = False
     ) -> None:
-        """Rebuild sim.advancement_opportunity_pool: one row per discretionary
-        runner-advancement decision, attempted or not.
+        """Rebuild ``sim.advancement_opportunity_pool``: one row per advancement decision.
 
-        The five scenarios are the ONLY discretionary movements the fielding
-        draw normalizes away (the double-count guard); this pool is where those
-        movements become data. The non-attempt rows are the point: one draw
-        answers "does he go" and "safe or out" together, as the steal pool's
-        denominator does.
+        A decision is a runner's choice to try for an extra base, attempted or
+        not. The five scenarios are: (1) first to third on a single, (2) second
+        to home on a single, (3) first to home on a double, (4) a tag-up on a
+        caught ball, and (5) the batter stretching a single or a double.
 
-        Reads the transition columns on sim.outcome_pool, so it must
-        run AFTER ``_build_outcome_pool`` in the same recompute. Rows whose
-        transition failed the outs-accounting guard are excluded.
+        The loop clamps exactly these five movements in the drawn fielding row
+        to station-to-station (each runner moves only as many bases as the
+        hit), so no extra base counts twice; this pool makes them data. The
+        rows with no attempt are the point: one draw answers "does he go" and
+        "safe or out" together, as the steal-opportunity pool does.
+
+        The build reads the transition columns of ``sim.outcome_pool``, so it
+        must run AFTER ``_build_outcome_pool`` in the same recompute. It drops
+        the rows whose transition fails the outs check (``dest_outs_consistent``).
 
         ⚠ The INSERT is positional (no column list): the SELECT order MUST
-        match the DDL column order in db/schemas/02_duckdb_schema.sql
-        (migration 0018).
+        match the DDL column order in db/schemas/02_duckdb_schema.sql.
         """
         plan = _seasons_to_build(self._conn, "advancement_opportunity_pool", seasons, incremental)
         if plan is None:
@@ -51,9 +57,9 @@ class AdvancementPoolMixin(ComputorBase):
             "op.batter_dest = 0 AND op.result_hits = 0 "
             "AND op.bb_type IN ('fly_ball', 'popup', 'line_drive') AND op.outs <= 1"
         )
-        # A runner erased RETURNING to his base (dest 0 without the advancing
-        # flag — a doubled-off runner) never had a tag decision; the fielding
-        # row plays that out, so those rows leave the tag denominators.
+        # A runner put out RETURNING to his base (dest 0 without the advancing
+        # flag: a doubled-off runner) never had a tag decision. The fielding
+        # row plays that out, so those rows leave the tag-up denominators.
         no_double_off = "NOT (op.runner_{b}_dest = 0 AND NOT op.runner_{b}_out_advancing)"
 
         # (scenario, from_base, target_base, runner, where, attempted, safe, error_extra)

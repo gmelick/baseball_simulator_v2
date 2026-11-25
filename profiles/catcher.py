@@ -1,5 +1,11 @@
-"""The catcher metrics: framing, blocking, throwing by base, the season
-aggregate and the uncaught-strike-three slice of the receiving profile.
+"""The catcher season profile: framing, blocking, throwing by base and the uncaught third strike.
+
+Framing is the called strikes a catcher gains beyond what the pitch location
+predicts. Blocking is the wild pitches and passed balls he prevents. Three
+steps read ``raw.pitches`` and write ``_tmp_framing``, ``_tmp_blocking`` and
+``_tmp_catcher_throwing``. The aggregate joins them with two Savant boards into
+``derived.catcher_season_metrics``. The uncaught-third-strike step then
+updates those rows.
 """
 
 from __future__ import annotations
@@ -28,14 +34,13 @@ from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
-#: The three temp tables the catcher aggregator FULL-OUTER-JOINs, each as a
-#: CREATE TABLE IF NOT EXISTS placeholder:
-#:   _tmp_framing            <- created by _compute_catcher_framing
-#:   _tmp_blocking           <- created by _compute_catcher_blocking
-#:   _tmp_catcher_throwing   <- created by _compute_catcher_throwing
-#: Each compute step may early-`return` when the per-season sample size falls
-#: below its guard (typical on partial / small data loads). Empty placeholders
-#: preserve the aggregator's join shape without injecting fake rows.
+#: The three temp tables the catcher aggregate joins (FULL OUTER JOIN), each as
+#: a CREATE TABLE IF NOT EXISTS placeholder:
+#:   _tmp_framing            <- built by _compute_catcher_framing
+#:   _tmp_blocking           <- built by _compute_catcher_blocking
+#:   _tmp_catcher_throwing   <- built by _compute_catcher_throwing
+#: A step returns early, with no table, when its sample is too small. The empty
+#: placeholder keeps the join working and adds no fake row.
 _CATCHER_PLACEHOLDER_DDL = {
     "_tmp_framing": """
         CREATE TABLE IF NOT EXISTS _tmp_framing (
@@ -74,31 +79,27 @@ _CATCHER_PLACEHOLDER_DDL = {
 class CatcherProfilesMixin(ComputorBase):
     """Builds ``derived.catcher_season_metrics`` from per-play temp tables."""
 
-    # ==================================================================
-    # Defensive Metrics Methods
-    # (Catcher framing/blocking/throwing, OF/IF OAA, DP, errors, aggregation)
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # The catcher framing
+    # ------------------------------------------------------------------
 
     def _compute_catcher_framing(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Build a called-strike probability model and compute framing runs.
+        """Fit a called-strike model on the taken pitches and compute each
+        catcher's framing runs.
 
-        Model inputs: pitch location relative to zone edges, count,
-        pitcher/batter handedness.
+        The model reads the pitch's location, its distance outside the zone
+        edges, the count and both hands. Framing skill shows in the shadow
+        zone, just off the edge: a pitch deep in the zone is always a strike,
+        and a pitch far outside never is.
 
-        The 'shadow zone' (~3-6 inches outside the zone boundary) is
-        where framing skill matters. Pitches well inside the zone are
-        always strikes; pitches well outside are never strikes.
-
-        ``asof`` keeps raw.pitches to ``game_date <= asof``. The source is
-        our own data, so a plain date filter is enough
-        (docs/audit/2026-09-10-savant-point-in-time-data.md §6).
+        Writes ``_tmp_framing``. ``asof`` keeps ``raw.pitches`` to
+        ``game_date <= asof``. The source is our own data, so the date filter
+        is enough.
         """
         log.info("Computing catcher framing …")
         season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
-        # Extract all taken pitches (not swung at)
         df = self._conn.execute(f"""
             SELECT
                 game_pk,
@@ -132,14 +133,13 @@ class CatcherProfilesMixin(ComputorBase):
 
         log.info("  Loaded %d taken pitches for framing model", len(df))
 
-        # Compute distance from zone edges (the key framing features)
+        # The distance outside the zone edges, in feet: the key framing feature.
         df["zone_dist_x"] = (df["plate_x"].abs() - ZONE_HALF_WIDTH).clip(lower=0)
         df["zone_dist_z_top"] = (df["plate_z"] - df["sz_top"]).clip(lower=0)
         df["zone_dist_z_bot"] = (df["sz_bot"] - df["plate_z"]).clip(lower=0)
         df["zone_dist_z"] = df[["zone_dist_z_top", "zone_dist_z_bot"]].max(axis=1)
         df["zone_distance"] = np.sqrt(df["zone_dist_x"] ** 2 + df["zone_dist_z"] ** 2)
 
-        # Additional features
         df["in_zone"] = (
             (df["plate_x"].abs() <= ZONE_HALF_WIDTH)
             & (df["plate_z"] >= df["sz_bot"])
@@ -150,19 +150,18 @@ class CatcherProfilesMixin(ComputorBase):
         df["stand_enc"] = (df["stand"] == "R").astype(int)
         df["pitch_side"] = df["plate_x"] * np.where(df["stand"] == "R", 1, -1)
 
-        # Zone location categories for breakdown
+        # The four regions of the framing breakdown.
         df["zone_low"] = (df["plate_z"] < df["sz_bot"] + 0.25).astype(int)
         df["zone_high"] = (df["plate_z"] > df["sz_top"] - 0.25).astype(int)
         df["zone_inside"] = (df["pitch_side"] > 0.4).astype(int)
         df["zone_outside"] = (df["pitch_side"] < -0.4).astype(int)
 
-        # The heart (clearly in the zone) and shadow (just off the edge, where
-        # framing skill lives) buckets for the catcher engine's zone-framing
-        # features (shadow_zone_strike_rate / heart_zone_strike_rate).
+        # The heart (in the zone) and the shadow (within 0.6 ft outside the
+        # edge) feed the catcher engine's shadow_zone_strike_rate and
+        # heart_zone_strike_rate.
         df["zone_heart"] = df["in_zone"]
         df["zone_shadow"] = ((df["in_zone"] == 0) & (df["zone_distance"] <= 0.6)).astype(int)
 
-        # Fit the logistic model: P(called_strike) = f(location, count, handedness)
         feature_cols = [
             "plate_x",
             "plate_z",
@@ -180,17 +179,14 @@ class CatcherProfilesMixin(ComputorBase):
             log.error("  Framing model fit failed — skipping")
             return
 
-        # Predict expected strike probability for each pitch
         df["expected_strike"] = _predict_proba(model, X)
 
-        # Per-catcher aggregation
         framing_agg = (
             df.groupby(["catcher_id", "season"])
             .agg(
                 called_pitches=("is_strike", "count"),
                 called_strikes=("is_strike", "sum"),
                 expected_called_strikes=("expected_strike", "sum"),
-                # Zone breakdowns
                 strikes_low=("is_strike", lambda x: x[df.loc[x.index, "zone_low"] == 1].sum()),
                 expected_low=(
                     "expected_strike",
@@ -217,7 +213,6 @@ class CatcherProfilesMixin(ComputorBase):
                     "expected_strike",
                     lambda x: x[df.loc[x.index, "zone_outside"] == 1].sum(),
                 ),
-                # The heart and shadow called-strike counts (the rates follow below).
                 strikes_heart=("is_strike", lambda x: x[df.loc[x.index, "zone_heart"] == 1].sum()),
                 pitches_heart=(
                     "is_strike",
@@ -249,8 +244,8 @@ class CatcherProfilesMixin(ComputorBase):
         framing_agg["framing_outside"] = (
             framing_agg["strikes_outside"] - framing_agg["expected_outside"]
         )
-        # The zone-framing strike rates (NaN when the bucket is empty; the
-        # engine reads NULL as 0 or falls back to the league average).
+        # NaN for an empty bucket: the engine reads the NULL as 0 or falls back
+        # to the league average.
         framing_agg["heart_zone_strike_rate"] = framing_agg["strikes_heart"] / framing_agg[
             "pitches_heart"
         ].replace(0, np.nan)
@@ -258,7 +253,6 @@ class CatcherProfilesMixin(ComputorBase):
             "pitches_shadow"
         ].replace(0, np.nan)
 
-        # Store framing results in a temp table for later aggregation
         self._conn.register("framing_agg", framing_agg)
         self._conn.execute("""
             DROP TABLE IF EXISTS _tmp_framing;
@@ -269,21 +263,21 @@ class CatcherProfilesMixin(ComputorBase):
         log.info("  Framing computed for %d catcher-seasons", len(framing_agg))
 
     # ------------------------------------------------------------------
-    # CATCHER BLOCKING
+    # The catcher blocking
     # ------------------------------------------------------------------
 
     def _compute_catcher_blocking(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Build a PB/WP probability model and compute blocks above average.
+        """Fit a wild-pitch and passed-ball model and compute each catcher's
+        blocks above average.
 
-        Core model inputs (from Tango's post):
-          - Pitch height at catcher position (primary sigmoid axis)
-          - Whether the pitch bounced before reaching catcher
-          - Horizontal distance from catcher's center
-          - Pitch speed and movement
-          - Pitcher/batter handedness
+        The model follows Tango. It reads the pitch's estimated height at the
+        catcher (the main input), whether it bounced, its distance from the
+        zone centre, its lateral distance, its end speed and its break. Blocks
+        above average are the expected wild pitches and passed balls minus the
+        actual ones.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
+        Writes ``_tmp_blocking``. ``asof`` keeps ``raw.pitches`` to
+        ``game_date <= asof``.
         """
         log.info("Computing catcher blocking …")
         season_list = sql_seasons(seasons)
@@ -323,27 +317,23 @@ class CatcherProfilesMixin(ComputorBase):
 
         log.info("  Loaded %d pitches for blocking model", len(df))
 
-        # Estimate height at catcher position (~3.9 ft behind front of plate)
-        # Using the simple drop approximation from end_speed
+        # The height at the catcher, about 3.9 ft behind the front of the plate:
+        # a simple drop over the extra flight time (mph × 1.467 = ft/s).
         extra_time = 3.9 / (df["end_speed"].clip(lower=50) * 1.467)
         gravity_drop = 0.5 * GRAVITY_FPS2 * extra_time**2
-        # Additional drop from downward pitch velocity (vz0 at 50ft plane is often negative)
+        # A downward velocity (vz0 at the 50 ft plane, often negative) adds drop.
         pitch_drop = df["vz0"].clip(upper=0).abs() * extra_time * 0.3  # partial effect
         df["height_at_catcher"] = df["plate_z"] - gravity_drop - pitch_drop
 
-        # Classify: bounced vs reached
         df["bounced"] = (df["height_at_catcher"] <= 0.3).astype(int)
 
-        # Catcher's effective "radius" — distance from zone center
+        # The distance from the zone centre, taken as 2.0 ft high.
         df["dist_from_center"] = np.sqrt(df["plate_x"] ** 2 + (df["plate_z"] - 2.0) ** 2)
 
-        # Lateral distance from center
         df["lateral_dist"] = df["plate_x"].abs()
 
-        # Target variable
         df["pbwp"] = df["passed_ball_wild_pitch"].astype(int)
 
-        # Features for the blocking model
         feature_cols = [
             "height_at_catcher",
             "bounced",
@@ -364,7 +354,6 @@ class CatcherProfilesMixin(ComputorBase):
 
         df_model["expected_pbwp"] = _predict_proba(model, X)
 
-        # Per-catcher aggregation
         blocking_agg = (
             df_model.groupby(["catcher_id", "season"])
             .agg(
@@ -380,7 +369,7 @@ class CatcherProfilesMixin(ComputorBase):
         )
         blocking_agg["blocking_runs"] = blocking_agg["blocks_above_average"] * RUNS_PER_BLOCK_SAVED
 
-        # Category breakdowns
+        # The breakdown: bounced, high (over 4 ft) and wide (over 1.5 ft from the centre).
         for cat_name in ("bounced", "high", "lateral"):
             if cat_name == "bounced":
                 mask = df_model["bounced"] == 1
@@ -415,17 +404,21 @@ class CatcherProfilesMixin(ComputorBase):
         log.info("  Blocking computed for %d catcher-seasons", len(blocking_agg))
 
     # ------------------------------------------------------------------
-    # CATCHER THROWING (BY BASE)
+    # The catcher throwing, by base
     # ------------------------------------------------------------------
 
     def _compute_catcher_throwing(self, seasons: list[int], asof: date | None = None) -> None:
-        """Compute SB prevention metrics broken down by base attempted.
+        """Compute each catcher's stolen-base prevention, by the base attempted.
 
-        Includes the plate-appearance deterrence rate
-        (steal_attempt_rate_against), the catcher similarity engine's
-        Deterrence sub-score.
+        The step also computes ``steal_attempt_rate_against``, the catcher
+        engine's deterrence sub-score: the steal attempts of second and third
+        base per steal chance. The chances count each distinct (plate
+        appearance, base state) with a runner on first and second base empty,
+        or a runner on second and third base empty. The rate is NULL below 100
+        chances.
 
-        ``asof`` keeps both raw.pitches reads to ``game_date <= asof``.
+        Writes ``_tmp_catcher_throwing``. ``asof`` keeps both ``raw.pitches``
+        reads to ``game_date <= asof``.
         """
         log.info("Computing catcher throwing metrics …")
         season_list = sql_seasons(seasons)
@@ -561,35 +554,26 @@ class CatcherProfilesMixin(ComputorBase):
     def _aggregate_catcher_season_metrics(
         self, seasons: list[int], asof: date | None = None
     ) -> None:
-        """Combine framing, blocking, and throwing into catcher season metrics.
+        """Join the framing, blocking and throwing temp tables and two Savant
+        boards into ``derived.catcher_season_metrics``.
 
-        The three upstream temp tables are already cutoff-filtered
-        by the time this method reads them (they carry no date of their
-        own). The two Savant joins below (pop time, arm strength) have no
-        date column at all — see the season-shift note on those joins.
+        The temp tables carry no date; their builders already cut them at
+        ``asof``. The Savant pop-time and catcher-throwing boards carry only a
+        season number, so each join takes the Savant season shift
+        (``_savant_season_sql``): a season that ended before the cutoff joins
+        its own row, and the season that contains the cutoff joins the prior
+        season's row, because its own row is still growing. Arm strength and
+        pop time repeat from year to year, so the substitute costs little.
         """
         log.info("Aggregating catcher season metrics …")
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
-        # The Savant pop-time and arm-strength boards have no date
-        # column (docs/audit/2026-09-10-savant-point-in-time-data.md §5) —
-        # only a season number. A season that ENDED before the cutoff joins
-        # its own row; the season CONTAINING the cutoff joins the PRIOR
-        # season's row instead, since that season's own row is still
-        # accumulating. Measured year-to-year correlation: arm strength
-        # 0.894, pop time 0.726, so the substitute costs little. A live
-        # build (asof None) joins its own season, unshifted.
         savant_season = self._savant_season_sql("COALESCE(f.season, b.season, t.season)", asof)
 
-        # See _ensure_fielder_temp_tables_exist for the rationale. When a
-        # per-season sample is too thin, the upstream
-        # _compute_catcher_{framing,blocking,throwing} method returns early
-        # without creating its _tmp_* table.  Guarantee the aggregator's
-        # FULL OUTER JOIN inputs all exist (possibly empty) before running.
+        # A builder skips its table on a small sample; the FULL OUTER JOIN
+        # needs all three.
         self._ensure_placeholder_tables(_CATCHER_PLACEHOLDER_DDL)
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.catcher_season_metrics", seasons, asof_date)
 
         self._delete_season_rows("derived.catcher_season_metrics", seasons, asof)
@@ -711,40 +695,39 @@ class CatcherProfilesMixin(ComputorBase):
         """)
         self._stamp_one_cutoff("derived.catcher_season_metrics", asof_sql)
 
-        # Clean up temp tables
+        # The aggregate is the temp tables' only reader.
         for t in _CATCHER_PLACEHOLDER_DDL:
             self._conn.execute(f"DROP TABLE IF EXISTS {t}")
 
         log.info("  Catcher season metrics aggregated.")
 
-    #: The empirical-Bayes prior of the uncaught-strike-3 rate, in strike-3s.
-    #: The event runs ~0.2% of K3s (~80 PAs league-wide per season), so a
-    #: per-catcher-season raw rate is Poisson noise; a catcher needs ~2,000
-    #: received strike-3s (~3 full seasons) to move halfway from league.
+    #: The weight, in third strikes, that shrinks a catcher's uncaught-third-strike
+    #: rate toward the league rate (an empirical-Bayes prior). The event is rare,
+    #: about 0.2% of third strikes (about 80 a season, league-wide), so one
+    #: catcher-season's raw rate is mostly noise. A catcher needs about 2,000
+    #: received third strikes (about three full seasons) to move halfway from
+    #: the league rate.
     _UNCAUGHT_K3_EB_PRIOR_N = 2000.0
 
     def _compute_catcher_uncaught_k3(self, seasons: list[int], asof: date | None = None) -> None:
-        """The strike-3 slice of the catcher receiving profile.
+        """Add the uncaught-third-strike slice to the catcher receiving profile.
 
-        A strikeout PA whose final-pitch description names a wild pitch or a
+        A strikeout whose final-pitch description names a wild pitch or a
         passed ball is an uncaught third strike. The label is exact for this
-        data: mid-PA get-away pitches never leak into the strikeout text
-        (measured 2026-09-03 — 410 strikeout PAs in 2025 contained a mid-PA
-        `passed_ball_wild_pitch` pitch and ZERO of their descriptions mention
-        it; the 78 that do are all terminal uncaught-K3 plays). The catcher
-        is the final pitch's own ``fielder_2``.
+        data: a get-away pitch earlier in the plate appearance never shows in
+        the strikeout's description. The catcher is the final pitch's own
+        ``fielder_2``.
 
-        Updates the freshly aggregated ``derived.catcher_season_metrics``
-        rows: raw counts land in ``sample_``-prefixed columns (excluded from
-        the similarity embedding) and the one embedding-visible column is the
-        EB-shrunk rate toward the SEASON league rate
-        (:data:`_UNCAUGHT_K3_EB_PRIOR_N`).
+        The step updates the rows of ``derived.catcher_season_metrics`` that the
+        aggregate just wrote. The raw counts go to the ``sample_`` columns,
+        which the similarity score leaves out. The one column the score reads,
+        ``uncaught_k3_rate_eb``, is the rate shrunk toward the season's league
+        rate by :data:`_UNCAUGHT_K3_EB_PRIOR_N`.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``, the cutoff of
-        the row this UPDATE targets, so
-        the K3 sample and the framing/blocking/throwing sample it joins stay
-        at one point in time. This is the last catcher step in the nightly
-        chain, so the leakage check for the whole grouping runs here.
+        ``asof`` keeps ``raw.pitches`` to ``game_date <= asof``, the cutoff of
+        the rows the step updates, so the third-strike sample and the rest of
+        the row hold one point in time. This is the last catcher step, so the
+        leakage check of every catcher step runs here.
         """
         log.info("Computing catcher uncaught strike-3 rates (SIM-517) …")
         season_list = sql_seasons(seasons)
@@ -794,13 +777,11 @@ class CatcherProfilesMixin(ComputorBase):
         self._assert_catcher_profiles_have_no_leakage(seasons, asof_date)
 
     def _assert_catcher_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
-        """Prove raw.pitches contributed no row dated after the cutoff.
+        """Run the cutoff leakage check on ``raw.pitches``.
 
-        Covers framing, blocking, throwing, and the uncaught-K3 update —
-        they all read raw.pitches under the identical season+cutoff filter,
-        so one check at the end of the chain covers all four. The Savant
-        pop-time / arm-strength joins have no date of their own to check —
-        they are made safe by the season-shift substitution in the
-        aggregator's query, not by filtering.
+        Framing, blocking, throwing and the uncaught-third-strike step read
+        ``raw.pitches`` under the same season and cutoff filter, so one check
+        covers all four. The two Savant boards carry no date to check; the
+        season shift guards them.
         """
         self._check_pitch_sources_leakage(seasons, asof)

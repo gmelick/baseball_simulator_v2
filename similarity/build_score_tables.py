@@ -1,4 +1,13 @@
-"""Build the actor score tables: each engine's 0-to-1 similarity between the players the draws weigh."""
+"""Build the actor score matrices that the draws look up, and check their concentration.
+
+An actor score matrix holds one engine's 0-to-1 similarity between every two player-seasons
+of one role, for example two catcher-seasons. The nightly bundle build writes each matrix to
+``<out_dir>/actor_sim/<name>.npz``, with a ``manifest.json`` and a ``concentration.json``.
+
+The concentration check measures how much of a draw's weight a matrix puts on rows of the
+live player's own staff (the pitchers he caught or fielded behind that season). No factor
+may put more than its natural share of a draw on the live player's own team.
+"""
 
 from __future__ import annotations
 
@@ -19,8 +28,8 @@ from simulation.constants import FIELD_POSITION_NAMES
 log = logging.getLogger("engine_artifacts")
 
 
-#: Engine class per matrix role. Local (not api.state's registry) so the
-#: pipeline layer never imports the API layer; a test swaps _ENGINE_LOADER.
+#: The engine class of each role, as (module, class). The table lives here, not in
+#: api.state's registry, so this build never imports the API layer.
 _ACTOR_SIM_ENGINES: dict[str, tuple[str, str]] = {
     "batter": ("similarity.engines.batter_similarity", "BatterSimilarityEngine"),
     "catcher": ("similarity.engines.catcher_similarity", "CatcherSimilarityEngine"),
@@ -39,16 +48,16 @@ _ACTOR_SIM_ENGINES: dict[str, tuple[str, str]] = {
 }
 
 
-#: The matrices, each: (engine, the key-tuple -> "a:b[:c]" string, the score
-#: attribute on the engine's SimilarityResult, the result's key attributes).
+#: The matrices by name. Each spec names the engine, the score attribute of the
+#: engine's SimilarityResult, and the result's key attributes. The keys join into
+#: the matrix index's "a:b[:c]" string.
 _ACTOR_SIM_SPECS: dict[str, dict] = {
-    # The manager's USAGE similarity (owner decision 2026-09-13, SIM-427) —
-    # starter pitch counts, pulled-before-100, closer entry leverage, the
-    # high-leverage reliever share, opener and bulk rates, available-reliever
-    # usage — is the weight on the pitching-change draw. The concentration
-    # check does not apply to it by design (the live manager's own rows
-    # carrying more weight is the point); the fit's effective-sample floor is
-    # its guard.
+    # The manager's USAGE similarity weights the pitching-change draw. It reads
+    # the starters' pitch counts, the pulls before 100 pitches, the closer's
+    # entry leverage, the high-leverage reliever share, the opener and bulk
+    # rates, and the use of the available relievers. The concentration check
+    # skips it by design: the live manager's own rows should carry more weight.
+    # The fit's floor on the effective sample size guards it instead.
     "manager_usage": {
         "engine": "manager",
         "score": "usage_score",
@@ -81,39 +90,46 @@ _FIELDER_POSITION_NAMES: dict[int, str] = {
 }
 
 
-#: The engines that score their THIN profiles too, so the matrices cover
-#: every runner-season the pools hold (without them two thirds of the steal
-#: rows and half of the advancement rows would have no score).
+#: The engines that also score their THIN profiles (the ones below the engine's
+#: sample minimum), so the matrices cover every runner-season the pools hold.
+#: Without them, about two thirds of the steal rows and half of the advancement
+#: rows have no score.
 _THIN_PROFILE_ENGINES = frozenset({"baserunner", "baserunner_steal"})
 
 
+#: The largest p90 own-staff ratio a matrix may reach. The ratio is the weighted
+#: own-staff share over the unweighted share; p90 is its 90th percentile over the
+#: live profiles. Above it, a strict build raises and any other build logs a warning.
 CONCENTRATION_MAX_RATIO = 3.0
 
 
 def _default_actor_engine_loader(module_path: str, class_name: str):
+    """Import ``module_path`` and return its class ``class_name``."""
     import importlib
 
     return getattr(importlib.import_module(module_path), class_name)
 
 
+# A test swaps this loader for one that returns a fake engine.
 _ENGINE_LOADER = _default_actor_engine_loader
 
 
 def _key_of(result, key_attrs: tuple[str, ...]) -> str:
-    # A list comprehension, not ``str.join(<generator>)``. The steal-runner
-    # matrix build (6.7 million calls) segfaulted three times out of three
-    # inside the generator on 2026-09-16 and ran clean in this form. The same
-    # generator form then ran clean 8 of 8 that evening, so the fault is
-    # stochastic (the crash class of CLAUDE.md §2a). This form is a precaution,
-    # not a proven fix (scripts/genexpr_crash_probe.py).
+    """The matrix index key of one query result: its key attributes joined by ``:``."""
+    # A list comprehension, not ``str.join(<generator>)``: the generator form
+    # segfaulted in this hot loop, and this form ran clean. The crash is
+    # stochastic (CLAUDE.md §2a), so this form is a precaution, not a proven fix.
     return ":".join([str(getattr(result, a)) for a in key_attrs])
 
 
 def _matrix_from_queries(
     profile_keys: list[tuple], query_fn, key_attrs: tuple[str, ...], score_attr: str
 ) -> tuple[dict[str, int], np.ndarray]:
-    """Score every profile against every other via the engine's own query and
-    pack the results into a dense float32 matrix (diagonal 1.0, unscored NaN)."""
+    """Score each profile against the others with the engine's own query.
+
+    Returns ``(index, matrix)``: the key-to-row index and a dense float32
+    matrix, with 1.0 on the diagonal and NaN for a pair the query does not score.
+    """
     index = {":".join(str(x) for x in k): i for i, k in enumerate(profile_keys)}
     n = len(index)
     mat = np.full((n, n), np.nan, dtype=np.float32)
@@ -127,6 +143,7 @@ def _matrix_from_queries(
 
 
 def _write_actor_sim(out_dir: str, name: str, index: dict[str, int], mat: np.ndarray) -> None:
+    """Save one matrix and its key index as ``<out_dir>/<name>.npz``."""
     _savez_plain(os.path.join(out_dir, f"{name}.npz"), index=json.dumps(index), matrix=mat)
 
 
@@ -139,16 +156,20 @@ def build_actor_sim_matrices(
     strict: bool = False,
     only: set[str] | None = None,
 ) -> dict[str, int]:
-    """Export the actor score matrices for ``seasons`` into
-    ``<out_dir>/actor_sim/`` and write the concentration report. ``limit``
-    scores only the first N profiles per matrix (verification mode). Returns
-    the matrix sizes by name.
+    """Write the actor score matrices of ``seasons`` to ``<out_dir>/actor_sim/``.
 
-    ``only`` (matrix names, e.g. ``{"manager_usage"}``) rebuilds those
-    matrices alone and MERGES their sizes into the existing manifest — one
-    matrix at a time, without paying for the others (a full build segfaulted
-    on the batter engine on 2026-09-13; CLAUDE.md §2a). The concentration
-    report is not re-run in that mode.
+    The build writes one ``.npz`` file per matrix, the ``manifest.json`` and
+    the concentration report (``concentration.json``). Returns the matrix sizes
+    by name. ``limit`` scores only the first N profiles of each matrix, for a
+    quick check. When the worst p90 own-staff ratio exceeds
+    :data:`CONCENTRATION_MAX_RATIO`, ``strict`` raises ``RuntimeError``;
+    otherwise the build logs a warning.
+
+    ``only`` (matrix names, for example ``{"manager_usage"}``) rebuilds those
+    matrices alone and MERGES their sizes into the existing manifest. It
+    rebuilds one matrix without paying for the others, which helps when a
+    full build segfaults (CLAUDE.md §2a). That mode skips the concentration
+    report.
     """
     sim_dir = os.path.join(out_dir, "actor_sim")
     os.makedirs(sim_dir, exist_ok=True)
@@ -226,10 +247,17 @@ def concentration_share(
     staff: set[int],
     power: float = 1.0,
 ) -> tuple[float, float, float]:
-    """For one live profile: (weighted own-staff share, unweighted share, ESS
-    share) over pool rows whose actor has a matrix column (``row_actor_col``
-    >= 0), the matrix row raised to ``power`` (the fitted power; 1.0 = the
-    raw score). Pure arithmetic, unit-tested on a toy pool."""
+    """Return the three concentration shares of one live profile's matrix row.
+
+    The shares are ``(weighted own-staff share, unweighted own-staff share,
+    effective-sample share)``. The effective-sample share is the effective
+    sample size, (sum of w)^2 / (sum of w^2), over the row count. The shares
+    cover the pool rows whose actor has a matrix column (``row_actor_col >=
+    0``). An unscored pair weighs 1.0. ``power`` is the fitted power the row
+    is raised to; 1.0 keeps the raw score. All three shares are NaN when no
+    row has a matrix column. The weighted and effective-sample shares are NaN
+    when the weights sum to 0 or less.
+    """
     valid = row_actor_col >= 0
     if not valid.any():
         return float("nan"), float("nan"), float("nan")
@@ -250,12 +278,17 @@ def concentration_report(
     seasons: list[int],
     powers: dict[str, float] | None = None,
 ) -> dict[str, dict]:
-    """The build-time concentration check for the two actors whose rows carry a
-    staff: catchers (the pitch pool) and fielders (the batted-ball pool). Each
-    entry reports the distribution over live profiles of the ratio (weighted
-    own-staff share / unweighted own-staff share) and of the effective sample
-    share of the actor's matrix row over the pool."""
-    pw = powers or {}  # The fitted powers (1.0 = the raw score)
+    """Run the concentration check on the matrices in ``sim_dir``.
+
+    The check covers the two actors whose rows carry a pitching staff: the
+    catchers over the pitch pool and the fielders over the batted-ball pool.
+    Each matrix's entry summarizes, over its live profiles, the own-staff
+    ratio (the weighted own-staff share over the unweighted share) and the
+    effective-sample share (:func:`concentration_share`). ``powers`` maps a
+    matrix name to its fitted power; the default 1.0 keeps the raw score.
+    Returns the entries by matrix name; a matrix with no file has no entry.
+    """
+    pw = powers or {}
     season_list = sql_seasons(seasons)
     con = duckdb.connect(duckdb_path, read_only=True)
     try:

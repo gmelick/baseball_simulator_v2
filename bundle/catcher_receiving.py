@@ -1,5 +1,19 @@
-"""The catcher receiving document: each catcher's framing and blocking
-multipliers on taken pitches.
+"""Export the catcher receiving document: each catcher-season's framing and blocking weights.
+
+The pitch-result draw's receiving factor acts on TAKEN pitches only (called strikes and
+balls). A called-strike row takes the live catcher's framing multiplier m at the row's
+zone group: his called-strike rate over the group's league rate L. A ball row takes the
+mirror, (1 - L*m) / (1 - L), so the taken group's expected mass stays the same.
+
+Blocking works the same way on the got-away rows among taken pitches. Its ratio is the
+catcher's got-aways over the league's expected got-aways for the pitches he received, by
+pitch height and zone. The raw got-away rate is never used: it measures his staff's
+wildness.
+
+Both rates shrink toward the league: each blends in RECV_FRAME_PRIOR league-average taken
+pitches per group, or RECV_BLOCK_PRIOR expected got-aways. The document comes from the
+pool itself, so the rows' zones and the catchers' rates share one definition. The export
+writes ``receiving.json``.
 """
 
 from __future__ import annotations
@@ -16,27 +30,14 @@ from profiles.sql import sql_seasons
 log = logging.getLogger("engine_artifacts")
 
 
-# ---------------------------------------------------------------------------
-# The catcher RECEIVING ratio (the ball-strike ratio on taken pitches)
-# ---------------------------------------------------------------------------
-#
-# The receiving factor of the pitch-result draw: on TAKEN pitches (called
-# strikes and balls) only, a called-strike row × the live catcher's framing
-# multiplier at the row's zone group — his called-strike rate over the
-# group's league rate — and a ball row × the mirror, (1 − L·m) / (1 − L), so
-# the taken group's expected mass is unchanged; blocking the same way on the
-# got-away rows among taken pitches with the catcher's got-aways ABOVE
-# EXPECTATION (his actual over the league's expected for the pitches he
-# received, by pitch height and zone — never the raw got-away rate, which the
-# 2026-09-08 tests measured as a staff-wildness reading). Both rates are
-# shrunk toward the league (a prior of RECV_FRAME_PRIOR taken pitches per
-# group; RECV_BLOCK_PRIOR expected got-aways). Built from the pool itself, so
-# the rows' zones and the catchers' rates share one definition.
-
+#: The framing prior: league-average taken pitches blended into each zone group.
 RECV_FRAME_PRIOR = 200.0
+#: The blocking prior: league-average expected got-aways blended into each catcher.
 RECV_BLOCK_PRIOR = 5.0
 RECV_FRAME_GROUPS = ("heart", "edge", "outside")
+#: The edges of the pitch-height buckets, in feet above the ground (plate_z).
 RECV_PZ_EDGES = (0.5, 1.0, 1.5)
+#: The blocking cells: four height buckets times in the zone or not.
 RECV_N_BLOCK_CELLS = 8
 
 
@@ -52,9 +53,11 @@ def recv_zone_group(zone: np.ndarray) -> np.ndarray:
 
 
 def recv_block_cell(zone: np.ndarray, plate_z: np.ndarray, valid: np.ndarray) -> np.ndarray:
-    """The blocking cell of every pitch — the pitch-height bucket (below 0.5
-    ft, below 1.0, below 1.5, higher) times in-zone or not — 0..7, or -1 when
-    the pitch's geometry is incomplete or its zone unknown."""
+    """The blocking cell of every pitch, 0 to 7, or -1 when its geometry or zone is unknown.
+
+    The cell is the pitch-height bucket (below 0.5 ft, below 1.0, below 1.5, higher)
+    times in the zone or not.
+    """
     z = np.asarray(zone, dtype=np.int64)
     pz = np.asarray(plate_z, dtype=np.float32)
     bucket = np.digitize(pz, RECV_PZ_EDGES).astype(np.int64)
@@ -67,9 +70,12 @@ def recv_block_cell(zone: np.ndarray, plate_z: np.ndarray, valid: np.ndarray) ->
 def build_receiving_profiles(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict:
-    """Write ``<out_dir>/receiving.json``: the league called-strike rate per
-    zone group and got-away rate per blocking cell over taken pitches, and
-    every catcher-season's framing multipliers and blocking ratio."""
+    """Write ``<out_dir>/receiving.json`` and return the document.
+
+    The document holds, over taken pitches, the league called-strike rate per zone group
+    and the got-away rate per blocking cell, each per season and pooled. It also holds
+    every catcher-season's framing multipliers and blocking ratio.
+    """
     season_list = sql_seasons(seasons)
     pz_case = (
         f"(CASE WHEN plate_z < {RECV_PZ_EDGES[0]} THEN 0 WHEN plate_z < {RECV_PZ_EDGES[1]} THEN 1 "
@@ -90,10 +96,10 @@ def build_receiving_profiles(
         WHERE season IN ({season_list}) AND outcome_type IN ('called_strike', 'ball')
         """
     )
-    # The league rates PER SEASON (the outside called-strike rate fell from
-    # 7.1% in 2023-24 to 4.1-4.5% in 2025-26, so a pooled rate would call every
-    # 2024 catcher a good framer and every 2026 catcher a poor one), plus the
-    # pooled rates as the fallback for a row season the document lacks.
+    # The league rates are PER SEASON, because the called-strike rate outside the zone
+    # moves between seasons. A pooled rate would call one season's catchers good framers
+    # and another season's poor ones. The pooled rates are the fallback for a season the
+    # document lacks.
     league_frame: dict[str, dict[str, float]] = {}
     league_frame_all: dict[str, float] = {}
     for season, g, n, cs in con.execute(

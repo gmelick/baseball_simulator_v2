@@ -1,4 +1,9 @@
-"""The run-expectancy matrix."""
+"""The run-expectancy matrix: the average runs from each state of outs and bases to the end of
+the half-inning.
+
+``build_run_expectancy_matrix`` builds it from ``raw.pitches`` and writes
+``derived.run_expectancy_matrix``. The double-play model reads it for its run values.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,8 @@ from profiles.sql import sql_seasons
 log = logging.getLogger("player_profile_computor")
 
 
+#: Approximate run expectancies for ten (outs, bases) states: the fallback when the
+#: built matrix lacks a state. ``bases`` is a bitmask: bit 0 first, bit 1 second, bit 2 third.
 RE24_APPROX = {
     (0, 0b001): 0.83,
     (0, 0b011): 1.45,
@@ -26,35 +33,28 @@ RE24_APPROX = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Run expectancy matrix builder
-# ---------------------------------------------------------------------------
-
-
 def build_run_expectancy_matrix(
     conn: duckdb.DuckDBPyConnection, seasons: list[int], asof: date | None = None
 ) -> dict:
-    """
-    Build the 24-state run expectancy matrix from play-by-play data.
+    """Build the 24-state run-expectancy matrix from the plate appearances of ``seasons``.
 
-    Returns a dict mapping (outs, runners_state) -> expected_runs
-    that can also be written to derived.run_expectancy_matrix.
+    Returns a dict of (outs, bases) -> the average runs to the end of the
+    half-inning. ``bases`` is a bitmask: bit 0 first, bit 1 second, bit 2 third.
 
-    ``asof`` keeps only the plays with ``game_date <= asof``: the matrix
-    feeds ``dp_run_value`` in ``_compute_dp_metrics``, so an uncut matrix
-    would leak future run scoring into an as-of build. The stored table is
-    keyed by ``season_range`` (a string like "2023-2026"), not by season, so
-    a cutoff build and the live build of the same seasons would share one key
-    and overwrite each other. An as-of build (``asof is not None``) therefore
-    skips the DELETE and INSERT into ``derived.run_expectancy_matrix`` and
-    returns the dict only; no reader of that table needs a cutoff, so the
-    live table stays as it is.
+    ``asof`` keeps the plays with ``game_date <= asof``. The matrix feeds
+    ``dp_run_value`` in ``_compute_dp_metrics``, so an uncut matrix leaks later
+    run scoring into a cutoff build.
+
+    A live build replaces the ``season_range`` rows of
+    ``derived.run_expectancy_matrix``. A cutoff build returns the dict and
+    writes nothing. The table's key is the season range (such as "2023-2026"),
+    not the cutoff, so a cutoff build would overwrite the live rows. No reader
+    of the table needs a cutoff.
     """
     season_list = sql_seasons(seasons)
     log.info("Building run expectancy matrix for seasons %s …", seasons)
     date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
-    # Compute runs scored from each base-out state to end of inning
     df = conn.execute(f"""
         WITH plays AS (
             SELECT
@@ -141,7 +141,6 @@ def build_run_expectancy_matrix(
         re_matrix[key] = float(row["expected_runs"])
 
     if asof is not None:
-        # An as-of build never stores its matrix (see the docstring).
         log.info(
             "  RE matrix built as of %s: %d states (not persisted — a cutoff "
             "build keeps its matrix in memory only).",
@@ -150,7 +149,6 @@ def build_run_expectancy_matrix(
         )
         return re_matrix
 
-    # Write to DuckDB table
     conn.execute("DELETE FROM derived.run_expectancy_matrix WHERE season_range = ?", [season_range])
     for _, row in df.iterrows():
         conn.execute(

@@ -1,4 +1,7 @@
-"""Build ``derived.at_bat_situations``, the plate-appearance situations the situation engine reads."""
+"""Build ``derived.at_bat_situations``, the game state before each plate appearance.
+
+The situation engine (``similarity/engines/situation_similarity.py``) indexes the table.
+"""
 
 from __future__ import annotations
 
@@ -14,16 +17,13 @@ class AtBatSituationsMixin(ComputorBase):
     """Build ``derived.at_bat_situations``."""
 
     def _build_at_bat_situations(self, seasons: list[int]) -> None:
-        """
-        Materialize derived.at_bat_situations: one row per plate appearance,
-        the game state before it, which the situation engine
-        (similarity/engines/situation_similarity.py) indexes.
+        """Write ``derived.at_bat_situations``: one row per plate appearance of ``seasons``.
 
-        One row per (game_pk, at_bat_number), taken at the FIRST pitch of the PA
-        so outs / base-state / score reflect the situation the batter came up to.
-        ``leverage_index`` is a SQL expression (inning × score-diff × runners ×
-        outs factors).  Idempotent
-        via INSERT OR REPLACE on the (game_pk, at_bat_number) PK.
+        Each row holds the state at the plate appearance's FIRST pitch, so the
+        outs, the bases and the score are the ones the batter came up to.
+        ``leverage_index`` is a product of four factors: the inning, the score
+        margin, the runners and the outs. ``INSERT OR REPLACE`` on the key
+        ``(game_pk, at_bat_number)`` makes a rerun safe.
         """
         log.info("Building derived.at_bat_situations …")
         season_list = sql_seasons(seasons)

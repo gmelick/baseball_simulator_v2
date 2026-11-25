@@ -1,4 +1,11 @@
-"""The per-hand batted-ball pool the fielding draw reads."""
+"""Export the batted-ball pool the fielding draw reads, one file set per hand, and load it back.
+
+The export writes ``battedball_pool/{L,R}.geom.npy`` (exit velocity, launch angle and
+pull-relative spray), ``{L,R}.sit.npy`` (the game situation), ``{L,R}.pgeom.npy`` (the
+geometry of the pitch that produced the ball), ``{L,R}.pitch_id.npy``,
+``{L,R}.meta.parquet`` and ``manifest.json``. When the pitch pool's export ran first, it
+also writes the pitch-id join ``pitch_pool/{L,R}.bb_row.npy``.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +34,7 @@ from profiles.sql import sql_seasons
 log = logging.getLogger("engine_artifacts")
 
 
+#: The batted ball's geometry: the columns of the ``geom`` array.
 _BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
 
 #: The batted-ball CLASS vocabulary (``BattedBallPool.bb_class``).
@@ -50,9 +58,11 @@ _BB_CLASS_SELECT = (
 def build_battedball_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
-    """Write the per-hand batted-ball pool over the season window: the
-    geometry (exit velocity, launch angle, spray), the situation and the
-    metadata (batter, event, result deltas)."""
+    """Write both hands' batted-ball pools over ``seasons`` and the manifest.
+
+    The export keeps only the rows with an exit velocity, a launch angle and a spray
+    angle. Returns the row count per hand.
+    """
     pool_dir = os.path.join(out_dir, "battedball_pool")
     os.makedirs(pool_dir, exist_ok=True)
     season_list = sql_seasons(seasons)
@@ -61,23 +71,20 @@ def build_battedball_pool_artifact(
         "AND launch_angle IS NOT NULL AND pull_relative_spray_angle IS NOT NULL"
     )
     counts: dict[str, int] = {}
-    # The transition columns exist only on a 0018-migrated DB. Export
-    # them when present; a pre-0018 DB still exports the legacy shape. The
-    # export keeps EVERY row: the fielding draw's cell index is what excludes
-    # the ``dest_ok = 0`` rows.
+    # Export the runner-transition columns when the pool has them; an older pool
+    # exports without them. The export keeps EVERY row: the fielding draw's cell index
+    # drops the ``dest_ok = 0`` rows.
     op_cols = {str(d[0]) for d in con.execute("SELECT * FROM sim.outcome_pool LIMIT 0").description}
     has_transition = op_cols >= _BB_TRANSITION_SOURCE_COLS
-    # The batting side exists only on a 0019-migrated DB. Same
-    # back-compatible pattern as the transition columns.
+    # The same probe for the batting side.
     bat_home_select = ", bat_home" if "bat_home" in op_cols else ""
     transition_select = (
         ", runner_1b_dest, runner_2b_dest, runner_3b_dest, batter_dest, "
         "COALESCE(dest_outs_consistent, FALSE) AS dest_ok, "
-        # The normalization facts: the thrown-out-advancing flags tell a
-        # discretionary out from a force or doubled-off out; is_air marks the
-        # tag-up shape (the SAME definition as the advancement pool's scenario
-        # 4); the raw spray and distance feed the advancement draw (the
-        # batted-ball geometry carries only the PULL-relative spray).
+        # The thrown-out-advancing flags separate a runner thrown out trying for a base
+        # from a force out or a doubled-off out. is_air marks a tag-up ball, defined as
+        # in the advancement pool's scenario 4. The advancement draw reads the raw spray
+        # and distance, because the geometry array holds only the pull-relative spray.
         "COALESCE(runner_1b_out_advancing, FALSE) AS r1_adv_out, "
         "COALESCE(runner_2b_out_advancing, FALSE) AS r2_adv_out, "
         "COALESCE(runner_3b_out_advancing, FALSE) AS r3_adv_out, "
@@ -91,20 +98,15 @@ def build_battedball_pool_artifact(
             "battedball_pool: sim.outcome_pool has no SIM-510 transition columns "
             "(pre-0018 DB) — exporting the legacy shape."
         )
-    # The ten pitch-feature columns of the pitch that
-    # produced each batted ball, plus its pitcher. The pool build selects
-    # them from the pitch pool, so a production outcome pool always has them;
-    # a reduced synthetic pool may not, hence the probe. The loader treats a
-    # missing pgeom file or pitcher column as None (the pitch-similarity
-    # kernel then stays neutral).
+    # The geometry of the pitch that produced each batted ball, and its pitcher. A
+    # production pool always has them; a reduced test pool may not, hence the probe.
+    # Without them the loader returns None, and the pitch-similarity kernel stays neutral.
     has_pgeom = set(_GEOM_COLS) <= op_cols
     pitcher_select = ", pitcher_id" if "pitcher_id" in op_cols else ""
-    # The batted-ball class (the fielding draw's third
-    # hard filter) — from bb_type when the pool carries it.
+    # The batted-ball class, the fielding draw's third hard filter, read from bb_type.
     class_select = _BB_CLASS_SELECT if "bb_type" in op_cols else ""
-    # The fielding CHAIN — the eight-position alignment and
-    # the positions credited a putout / an assist (migration 0024); absent
-    # on an older pool, and the loader is None without them.
+    # The fielding chain: the fielder at each of the eight positions, and the positions
+    # credited with a putout or an assist. An older pool lacks it.
     has_chain = "putout_pos_mask" in op_cols
     chain_select = (
         ", fielder_2, fielder_3, fielder_4, fielder_5, fielder_6, fielder_7, fielder_8, fielder_9, putout_pos_mask, assist_pos_mask"
@@ -114,8 +116,9 @@ def build_battedball_pool_artifact(
     pitch_join: dict[str, int] = {}
     for hand in ("L", "R"):
         w = where % hand
-        # One query for geom + sit + pgeom so the three arrays share one row
-        # order (the meta COPY below is a second scan of the same filter).
+        # One query reads geom, sit and pgeom, so the three arrays share one row order.
+        # The meta COPY below is a second read with no ORDER BY, so its rows line up
+        # with them only through DuckDB's stored order.
         pgeom_cols = _GEOM_COLS if has_pgeom else []
         d = con.execute(
             f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS + pgeom_cols)}, pitch_id "
@@ -126,11 +129,9 @@ def build_battedball_pool_artifact(
         sit = float_columns(d, _SIT_COLS)
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
-        # The pitch-id JOIN, the reverse of the ``pgeom`` export: for every
-        # PITCH-pool row (its meta parquet,
-        # written by build_pitch_pool_artifact just before), the row of
-        # THIS pool that holds its batted ball, or -1. The pitch-result
-        # draw's in-play row reads its own batted ball through it.
+        # The pitch-id join: for every row of the pitch pool's meta parquet, the row of
+        # this pool that holds its batted ball, or -1. The pitch-result draw reads an
+        # in-play pitch's own batted ball through it.
         bb_pid = np.asarray(np.ma.filled(d["pitch_id"], -1), dtype=np.int64)
         np.save(os.path.join(pool_dir, f"{hand}.pitch_id.npy"), bb_pid)
         pp_meta = os.path.join(out_dir, "pitch_pool", f"{hand}.meta.parquet")
@@ -145,9 +146,8 @@ def build_battedball_pool_artifact(
                 len(bb_row),
             )
         if has_pgeom:
-            # NaN is PRESERVED here (unlike geom/sit): a row whose pitch is
-            # missing a value must be exactly neutral under the kernel, and
-            # a 0.0 stand-in would be a wild outlier instead.
+            # Keep NaN here, unlike geom and sit. The kernel treats a missing value as
+            # neutral; a 0.0 stand-in would be a wild outlier.
             pgeom = np.stack(
                 [np.ma.filled(d[c], np.nan).astype(np.float32) for c in _GEOM_COLS], axis=1
             ).astype(np.float32)
@@ -155,10 +155,8 @@ def build_battedball_pool_artifact(
         con.execute(
             "COPY (SELECT pitch_id, batter_id, season, events, result_hits, result_outs, "
             "result_runs, recency_weight, "
-            # The per-row facts (migration 0012): p_throws (the pitcher's hand),
-            # venue_id (the park), and fielded_by_position with fielder_player_id
-            # (the fielder). The loader reads a pre-0012 artifact without them.
-            # The transition destinations follow, in the same optional way.
+            # p_throws is the pitcher's hand and venue_id the park; the last two name the
+            # fielder. The optional columns follow.
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
             f"{transition_select}{bat_home_select}{pitcher_select}{class_select}"
             f"{chain_select} "
@@ -178,10 +176,10 @@ def build_battedball_pool_artifact(
             "transition": has_transition,
             # The pitch-geometry columns of {hand}.pgeom.npy.
             "pgeom_cols": _GEOM_COLS if has_pgeom else [],
-            # Pitch rows joined to a batted ball, per hand
-            # (the join file lives in pitch_pool/{hand}.bb_row.npy).
+            # The pitch rows joined to a batted ball, per hand (the join file is
+            # pitch_pool/{hand}.bb_row.npy).
             "pitch_join": pitch_join,
-            # The fielding chain columns are in the parquet.
+            # True when the parquet holds the fielding chain.
             "chain": has_chain,
         },
     )
@@ -191,8 +189,10 @@ def build_battedball_pool_artifact(
 def pitch_join_rows(
     con: duckdb.DuckDBPyConnection, meta_path: str, bb_pid: np.ndarray
 ) -> np.ndarray:
-    """For every row of the pitch pool's meta parquet ``meta_path``, the row of
-    the batted-ball pool (pitch ids ``bb_pid``) that holds its batted ball, or -1."""
+    """For every row of the pitch pool's meta parquet, the batted-ball pool row of its ball.
+
+    ``bb_pid`` holds the batted-ball pool's pitch ids. A pitch with no batted ball gets -1.
+    """
     pp_pid = np.asarray(
         np.ma.filled(
             con.execute(f"SELECT pitch_id FROM read_parquet('{meta_path}')").fetchnumpy()[
@@ -205,8 +205,8 @@ def pitch_join_rows(
     return join_rows(pp_pid, bb_pid)
 
 
-#: The outcome-pool columns the transition export needs. Presence of
-#: ALL of them marks a 0018-migrated, sim510.1-rebuilt DB.
+#: The outcome-pool columns the transition export needs. The export writes the
+#: transition columns only when all of them exist.
 _BB_TRANSITION_SOURCE_COLS = frozenset(
     {
         "runner_1b_dest",
@@ -222,8 +222,10 @@ _BB_TRANSITION_SOURCE_COLS = frozenset(
 
 
 def _bb_fielders(views: dict[str, np.ndarray], hand: str, meta: dict) -> np.ndarray | None:
-    """The (N, 8) alignment from fielder_2..fielder_9
-    (a published view first; None on a pre-part-G artifact)."""
+    """The (N, 8) fielder ids at positions 2 to 9: the shared view, else the parquet columns.
+
+    Returns None when the bundle lacks them.
+    """
     v = views.get(f"bb_pool.{hand}.fielders")
     if isinstance(v, np.ndarray):
         return v
@@ -243,8 +245,8 @@ def load_battedball_pools(
     if os.path.exists(os.path.join(bb_dir, "manifest.json")):
         for hand in ("L", "R"):
             meta_path = os.path.join(bb_dir, f"{hand}.meta.parquet")
-            # Select the realism columns only when present,
-            # so a pre-0012 artifact (no venue/hand/fielder columns) still loads.
+            # Select only the optional columns the parquet holds, so an older bundle
+            # still loads.
             avail = {
                 str(d[0])
                 for d in con.execute(
@@ -266,26 +268,24 @@ def load_battedball_pools(
                     "venue_id",
                     "fielded_by_position",
                     "fielder_player_id",
-                    # The transition destinations.
+                    # The runner transitions.
                     "runner_1b_dest",
                     "runner_2b_dest",
                     "runner_3b_dest",
                     "batter_dest",
                     "dest_ok",
-                    # The normalization facts + geometry.
+                    # The thrown-out-advancing flags and the raw geometry.
                     "r1_adv_out",
                     "r2_adv_out",
                     "r3_adv_out",
                     "is_air",
                     "spray_raw",
                     "hit_dist",
-                    # The batting side.
                     "bat_home",
-                    # The producing pitch's pitcher.
+                    # The pitcher of the pitch that produced the ball.
                     "pitcher_id",
-                    # The batted-ball class.
                     "bb_class",
-                    # The alignment + the fielding chain.
+                    # The fielders and the fielding chain.
                     "fielder_2",
                     "fielder_3",
                     "fielder_4",
@@ -301,8 +301,7 @@ def load_battedball_pools(
                 )
                 if c in avail
             ]
-            # The producing pitch's geometry file
-            # (absent on a pre-sim518 export -> None).
+            # The producing pitch's geometry; an older bundle has no file.
             pgeom_path = os.path.join(bb_dir, f"{hand}.pgeom.npy")
             pgeom_view = views.get(f"bb_pool.{hand}.pgeom")
             m = con.execute(
@@ -323,11 +322,9 @@ def load_battedball_pools(
                 result_hits=meta_column(views, f"{p}.result_hits", m, "result_hits", np.int8),
                 result_outs=meta_column(views, f"{p}.result_outs", m, "result_outs", np.int8),
                 recency=recency_column(views, f"{p}.recency", m),
-                # Pitcher hand per row (object 'L'/'R', not shared —
-                # object-dtype like ``event``). None on a legacy artifact.
+                # The pitcher's hand, 'L' or 'R': an object array, so never shared.
+                # None on an older bundle.
                 p_throws=(np.asarray(m["p_throws"], dtype=object) if "p_throws" in m else None),
-                # The numeric per-row facts (shared when published; None on
-                # a pre-0012 bundle).
                 venue_id=optional_meta_column(views, f"{p}.venue_id", m, "venue_id", np.int64),
                 fielder_pos=optional_meta_column(
                     views, f"{p}.fielder_pos", m, "fielded_by_position", np.int8
@@ -335,8 +332,7 @@ def load_battedball_pools(
                 fielder_id=optional_meta_column(
                     views, f"{p}.fielder_id", m, "fielder_player_id", np.int64
                 ),
-                # The transition destinations (-1 = no runner on
-                # that base pre-pitch; None on a pre-0018 bundle).
+                # The runner destinations; -1 means no runner on that base before the pitch.
                 r1_dest=optional_meta_column(
                     views, f"{p}.r1_dest", m, "runner_1b_dest", np.int8, -1
                 ),
@@ -350,16 +346,14 @@ def load_battedball_pools(
                     views, f"{p}.batter_dest", m, "batter_dest", np.int8, -1
                 ),
                 dest_ok=optional_meta_column(views, f"{p}.dest_ok", m, "dest_ok", np.int8),
-                # The normalization facts + geometry.
+                # The thrown-out-advancing flags and the raw geometry.
                 r1_adv_out=optional_meta_column(views, f"{p}.r1_adv_out", m, "r1_adv_out", np.int8),
                 r2_adv_out=optional_meta_column(views, f"{p}.r2_adv_out", m, "r2_adv_out", np.int8),
                 r3_adv_out=optional_meta_column(views, f"{p}.r3_adv_out", m, "r3_adv_out", np.int8),
                 is_air=optional_meta_column(views, f"{p}.is_air", m, "is_air", np.int8),
                 spray_raw=optional_meta_column(views, f"{p}.spray_raw", m, "spray_raw", np.float32),
                 hit_dist=optional_meta_column(views, f"{p}.hit_dist", m, "hit_dist", np.float32),
-                # The batting side (None on a pre-0019 bundle).
                 bat_home=optional_meta_column(views, f"{p}.bat_home", m, "bat_home", np.int8),
-                # The fielding chain (None on an older bundle).
                 fielders=_bb_fielders(views, hand, m),
                 putout_mask=optional_meta_column(
                     views, f"{p}.putout_mask", m, "putout_pos_mask", np.int16
@@ -367,8 +361,7 @@ def load_battedball_pools(
                 assist_mask=optional_meta_column(
                     views, f"{p}.assist_mask", m, "assist_pos_mask", np.int16
                 ),
-                # The producing pitch (None on a
-                # pre-sim518 export).
+                # The producing pitch's geometry: the shared view, else the file, else None.
                 pgeom=(
                     pgeom_view
                     if isinstance(pgeom_view, np.ndarray)
@@ -381,7 +374,6 @@ def load_battedball_pools(
                 pitcher_id=optional_meta_column(
                     views, f"{p}.pitcher_id", m, "pitcher_id", np.int64
                 ),
-                # The batted-ball class (None on an older bundle).
                 bb_class=optional_meta_column(views, f"{p}.bb_class", m, "bb_class", np.int8),
             )
     return bb_pools

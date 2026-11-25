@@ -1,4 +1,8 @@
-"""The manager season profiles."""
+"""The manager season profile: each manager's usage, aggression and platoon tendencies.
+
+``_compute_manager_profiles`` reads ``raw.pitches`` and ``raw.game_bullpen_availability``
+and writes ``derived.manager_season_metrics``.
+"""
 
 from __future__ import annotations
 
@@ -18,8 +22,8 @@ _SQL_FIELDING_MANAGER = (
     "CASE WHEN inning_topbot = 'Top' THEN home_manager_id ELSE away_manager_id END"
 )
 
-#: The simplified leverage tests (the situation engine's LI drivers): a close
-#: late game is high leverage, a lopsided or early one low.
+#: The simple leverage tests, the same as the situation engine's: a close, late
+#: game is high leverage; a lopsided or early game is low.
 _SQL_HIGH_LEVERAGE = "ABS(bat_score - fld_score) <= 1 AND inning >= 7"
 _SQL_LOW_LEVERAGE = "ABS(bat_score - fld_score) >= 4 OR inning <= 5"
 
@@ -36,38 +40,29 @@ class ManagerProfilesMixin(ComputorBase):
     """Builds ``derived.manager_season_metrics``."""
 
     def _compute_manager_profiles(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Compute the manager tendency profiles in the manager engine's
-        vocabulary (usage, aggression, platoon).
+        """Build each manager's season profile in the manager engine's terms:
+        usage, aggression and platoon.
 
-        ``asof`` is the date the profile's data runs through, the rule of the
-        batter and pitcher profiles. Every source here — ``raw.pitches`` and,
-        through the ``staff``
-        join, ``raw.game_bullpen_availability`` — is our own data, so a plain
-        ``game_date <= cutoff`` filter is enough; no Savant fallback applies
-        (design doc: docs/audit/2026-09-10-savant-point-in-time-data.md §6).
-        ``raw.game_bullpen_availability`` needs no cutoff filter of its own:
-        it only ever contributes through an INNER JOIN onto ``staff``, which
-        already carries the cutoff, so a game outside the window is never a
-        match regardless.
+        The batting manager owns the offensive decisions: the pinch hitter, the
+        steal, the sacrifice bunt, the squeeze and the platoon advantage. The
+        fielding manager owns the late defensive substitution and the usage.
+        Six usage metrics come from the pitcher stints in ``raw.pitches`` (the
+        ``staff`` step): the starter's pitch count and early hook, the opener,
+        the bulk arm, the leverage at the closer's entry, and the share of
+        high-leverage pitches thrown by relievers. Statcast flags no hit-and-run
+        and no double switch, so those two columns stay NULL.
 
-        Offensive decisions (pinch-hit, steal order, sac bunt, squeeze, platoon
-        exploitation) are attributed to the BATTING manager; defensive ones
-        (defensive sub) to the FIELDING manager. The USAGE sub-score (the
-        starter's pitch count and quick hook, opener and bulk usage, closer-entry
-        leverage, high-leverage bullpen reliance) is derived from raw.pitches
-        pitcher-STINTS attributed to the fielding manager (see the ``staff`` /
-        ``game_usage`` / ``mgr_usage`` / ``hi_lev`` CTEs); two further tendencies
-        are not flagged in Statcast (hit-and-run, double-switch) and stay NULL.
-        Idempotent via INSERT OR REPLACE on (manager_id, season).
+        The seventh usage metric, ``available_reliever_usage_rate``, divides the
+        relievers used by the relievers used plus the relievers available but
+        held. The held arms come from ``raw.game_bullpen_availability``, the full
+        roster of each game. The rate is NULL for a manager-season with no
+        availability rows, and the engine then keeps its default.
 
-        ``available_reliever_usage_rate`` (the ``bullpen_opp`` CTE) normalizes
-        bullpen usage by OPPORTUNITY — relievers used / (used + available but
-        held) — by joining ``raw.game_bullpen_availability``
-        (the full per-game roster, including arms that were available but never
-        appeared). It degrades to NULL (LEFT JOIN) for a manager-season with no
-        availability rows; the engine's degenerate-sigma guard then keeps the default.
-        The other six USAGE metrics stand on observed raw.pitches usage alone.
+        ``asof`` keeps ``raw.pitches`` to ``game_date <= asof``. Every source is
+        our own data, so the date filter is enough; no Savant season shift
+        applies. ``raw.game_bullpen_availability`` needs no filter of its own: it
+        reaches the output only through a join onto the cut ``staff`` rows. The
+        write is INSERT OR REPLACE on (manager_id, season).
         """
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
@@ -75,15 +70,12 @@ class ManagerProfilesMixin(ComputorBase):
         season_list = sql_seasons(seasons)
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.manager_season_metrics", seasons, asof_date)
 
         if asof is not None:
-            # The removal rule of the batter and pitcher profiles: INSERT OR
-            # REPLACE only overwrites the rows this query produces, so a
-            # season that had not started at the cutoff would otherwise
-            # survive a backtest rebuild from an earlier, full-season run.
+            # INSERT OR REPLACE overwrites only the rows the query produces.
+            # Without the delete, a season that had not started at the cutoff
+            # keeps its rows from an earlier full build.
             self._delete_season_rows("derived.manager_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
@@ -373,19 +365,15 @@ class ManagerProfilesMixin(ComputorBase):
             LEFT JOIN bullpen_opp bo ON bo.manager_id = g.manager_id AND bo.season = g.season
         """)
 
-        # Leave the whole table at ONE cutoff (_compute_batter_profiles says why).
         self._stamp_one_cutoff("derived.manager_season_metrics", asof_sql)
 
         self._assert_manager_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Manager profiles done (as of %s).", asof_sql)
 
     def _assert_manager_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
-        """Prove no source that fed the manager profiles postdates the cutoff.
+        """Run the cutoff leakage check on ``raw.pitches``.
 
-        Mirrors ``_assert_batter_profiles_have_no_leakage``. Only ``raw.pitches``
-        needs checking: ``raw.game_bullpen_availability`` contributes only
-        through a join onto the (already cutoff-filtered) ``staff`` CTE, so a
-        row from it can never reach the output past the cutoff regardless of
-        its own date.
+        ``raw.game_bullpen_availability`` needs no check: it reaches the output
+        only through a join onto the cut ``staff`` rows.
         """
         self._check_pitch_sources_leakage(seasons, asof)

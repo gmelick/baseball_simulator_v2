@@ -1,4 +1,10 @@
-"""The advancement opportunity pools, one per runner decision."""
+"""Export the advancement opportunity pools, one per runner decision, and load them back.
+
+The export writes ``advancement_pool/{key}.feat.npy`` (the kernel features),
+``{key}.meta.parquet`` (the actors and the outcome) and ``manifest.json``. The features and
+the parquet come from two reads with no ORDER BY, so their rows line up only through
+DuckDB's stored order.
+"""
 
 from __future__ import annotations
 
@@ -24,24 +30,24 @@ from profiles.sql import sql_seasons
 log = logging.getLogger("engine_artifacts")
 
 
-#: The eight advancement decisions, keyed "{scenario}_{from_base}_
-#: {target_base}" (see the migration-0018 header for the scenario names).
+#: The eight advancement decisions, keyed "{scenario}_{from_base}_{target_base}".
+#: The header of DuckDB migration 0018 names the scenarios.
 _ADV_KEYS = ("1_1_3", "2_2_4", "3_1_4", "4_1_2", "4_2_3", "4_3_4", "5_0_2", "5_0_3")
 
-#: The advancement draw's kernel features: the batted ball's geometry (the
-#: throw context) + the pre-pitch outs (a two-out contact play runs harder).
+#: The advancement draw's kernel features: the batted ball's geometry (the throw's
+#: context) and the outs before the pitch (with two outs, a runner goes harder on contact).
 _ADV_FEAT_COLS = ["exit_velo", "launch_angle", "spray_angle", "hit_distance", "outs"]
 
 
 def build_advancement_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
-    """Write the per-decision advancement OPPORTUNITY pools the advancement draw reads.
+    """Write the advancement opportunity pools, one per decision, and the manifest.
 
-    One row per discretionary runner-advancement decision,
-    attempted or not — the non-attempt rows are the denominator, exactly the
-    steal-pool pattern. Sub-pools split by (scenario, from_base, target_base)
-    because each is a different decision with different rates.
+    A row is a runner's chance to take an extra base, taken or not; the rows not taken
+    give the draw its denominator. Each (scenario, from_base, target_base) is its own
+    pool, because each decision has its own rates. Returns the row count per decision, or
+    {} when the database has no advancement pool.
     """
     if not duck_table_exists(con, "sim", "advancement_opportunity_pool"):
         log.warning(
@@ -84,10 +90,10 @@ def build_advancement_pool_artifact(
 def load_advancement_pools(
     con: duckdb.DuckDBPyConnection, art_dir: str, views: dict[str, np.ndarray]
 ) -> dict[str, AdvancementPool]:
-    """Load the advancement pools by decision key; {} when the bundle has none."""
-    # The advancement opportunity pools, one per decision key.
-    # Presence-gated like the others: {} on a legacy bundle, and the
-    # advancement draw then stages no discretionary advancement.
+    """Load the advancement pools by decision key; {} when the bundle has none.
+
+    With no advancement pool, the advancement draw stages no extra-base try.
+    """
     adv_pools: dict[str, AdvancementPool] = {}
     ap_dir = os.path.join(art_dir, "advancement_pool")
     if os.path.exists(os.path.join(ap_dir, "manifest.json")):
@@ -98,9 +104,8 @@ def load_advancement_pools(
             m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
             p = f"adv_pool.{key}"
             adv_pools[key] = AdvancementPool(
-                # None on a bundle exported before the date
-                # existed, which the sampler reports rather than
-                # silently drawing from the future.
+                # None on a bundle exported before the date existed. The sampler then
+                # reports it rather than draw from the future.
                 game_ymd=game_ymd_column(m),
                 feat=take_view(
                     views, f"adv_pool.{key}.feat", os.path.join(ap_dir, f"{key}.feat.npy")

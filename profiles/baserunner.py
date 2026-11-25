@@ -1,4 +1,9 @@
-"""The baserunner season profiles and the two steal-engine tables."""
+"""The baserunner season profile and the two steal tables: the runner's and the pitcher's.
+
+The three builders read ``raw.pitches``, ``raw.play_events`` and four Savant
+boards. They write ``derived.baserunner_season_metrics``,
+``derived.baserunner_steal_metrics`` and ``derived.pitcher_steal_metrics``.
+"""
 
 from __future__ import annotations
 
@@ -28,50 +33,38 @@ class BaserunnerProfilesMixin(ComputorBase):
     """
 
     def _compute_baserunner_profiles(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Computes extra-base advancement rates (attempt/success split) and
-        stolen base rates from post-play runner columns, runner-out-advancing
-        flags, and SB columns in raw.pitches.
+        """Build each runner's season profile: the extra-base advancement rates
+        and the stolen-base rates, from the runner columns of ``raw.pitches``.
 
-        Attempt = runner tried to advance (succeeded OR thrown out).
-        Success = runner reached the next base safely.
-        Stop rate = 1 - attempt_rate (held up on advancement opportunity).
+        An attempt is a runner who tried to advance: he was safe or thrown out.
+        A success is a runner who reached the next base safely. The stop rate
+        is 1 minus the attempt rate.
 
-        Sprint speed comes from a join to raw.sprint_speed (Baseball
-        Savant), a season-level leaderboard with no per-row date of its
-        own — only a season number and an unrelated load timestamp.
+        The sprint speed comes from ``raw.sprint_speed`` (Savant). The last
+        four columns come from Savant's baserunning board
+        (``raw.savant_baserunning``, the runner's own side): his extra-base
+        chances, his attempt rate, the rate a typical runner attempts in the
+        same chances, and the difference. Of the four, the extra-base runner
+        engine reads only the difference, because it repeats from year to year
+        better than the raw rate. The INSERT has no column list, so these four stay last, in
+        ``XB_COLUMN_ORDER``. NULL means no Savant row.
 
-        The four trailing columns come from Savant's baserunning
-        board (raw.savant_baserunning, the RUNNER's own side): his extra-base
-        chances, his attempt rate, the rate a typical runner would have
-        attempted in the same chances, and the difference — the one feature
-        the advancement model reads (it repeats year to year at 0.75-0.77
-        against 0.50-0.59 for the raw rate). The join follows the sprint
-        speed season shift. The INSERT is positional, so these four stay
-        LAST, in ``XB_COLUMN_ORDER``; NULL means no Savant row.
-
-        ``asof`` keeps raw.pitches to ``game_date <= asof``, the rule of the
-        batter profiles. The sprint speed join cannot follow that rule (its
-        table has no date to filter on), so it follows the design doc's
-        alternative
-        (docs/audit/2026-09-10-savant-point-in-time-data.md §5): a season
-        that ENDED before the cutoff joins its own row, unchanged; the
-        season CONTAINING the cutoff joins the PRIOR season's row instead,
-        since that season's own row is still accumulating and could leak.
-        Measured year-to-year correlation for sprint speed is 0.910 — the
-        substitute costs almost nothing.
+        ``asof`` keeps ``raw.pitches`` to ``game_date <= asof``. The two Savant
+        boards carry only a season number, no date, so each join takes the
+        Savant season shift (``_savant_season_sql``): a season that ended
+        before the cutoff joins its own row, and the season that contains the
+        cutoff joins the prior season's row. That season's own row is still
+        growing and holds games after the cutoff. Sprint speed repeats closely
+        from year to year, so the substitute costs little. The design is in
+        ``docs/audit/2026-09-10-savant-point-in-time-data.md`` §5.
         """
         log.info("Computing baserunner profiles …")
         season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
-        # The season shift described above; a live build (asof None) joins
-        # `ap.season` itself.
         sprint_speed_season = self._savant_season_sql("ap.season", asof)
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.baserunner_season_metrics", seasons, asof_date)
 
         if asof is not None:
@@ -277,61 +270,53 @@ class BaserunnerProfilesMixin(ComputorBase):
         log.info("  Baserunner profiles done.")
 
     def _assert_baserunner_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
-        """Prove raw.pitches contributed no row dated after the cutoff.
+        """Run the cutoff leakage check on ``raw.pitches``.
 
-        Mirrors ``_assert_pitcher_profiles_have_no_leakage``. The sprint
-        speed join has no date of its own to check — it is made safe by the
-        season-shift substitution in the query itself, not by filtering, so
-        there is nothing to assert here about that source.
+        The two Savant boards carry no date to check; the season shift guards them.
         """
         self._check_pitch_sources_leakage(seasons, asof)
 
     def _build_baserunner_steal_metrics(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Build derived.baserunner_steal_metrics, the table the baserunner-steal
+        """Build ``derived.baserunner_steal_metrics``, the table the steal-runner
         similarity engine reads.
 
-        Per runner-season, from raw.pitches SB flags:
-          * sample_steal_attempts  — SB attempts as the lead runner (2B/3B/home)
-          * sample_first_base_opps — PAs begun on 1B (the steal-2B opportunity)
-          * steal_attempt_rate     — attempts / first_base_opps
-          * steal_attempt_rate_2b  — 2B→3B attempts / PAs begun on 2B
-          * steal_success_rate / _2b — success fractions
+        Per runner-season, from the steal labels of ``raw.pitches``:
+          * sample_steal_attempts   — steal attempts of second, third or home,
+            one per pitch; a pitch with two attempts goes to the trailing runner
+          * sample_first_base_opps  — plate appearances begun on first base
+          * sample_second_base_opps — plate appearances begun on second base
+          * steal_attempt_rate      — attempts / first-base chances
+          * steal_attempt_rate_2b   — attempts of third / second-base chances
+          * steal_success_rate / _2b — the share of those attempts that succeed
 
-        Biomech jump features (reaction_time / burst_distance / break_angle) are
-        NOT computed: Statcast does not publish them. The lead in feet comes
-        from Savant's Basestealing Run Value board
-        (raw.savant_basestealing): the primary lead before the pitch, the
-        secondary lead after the pitcher's first move, and the jump (their
-        difference), plus ``n_init`` — the pitches the lead was measured over.
-        The steal-runner model's Lead sub-score reads them. Idempotent via
-        INSERT OR REPLACE on (player_id, season).
+        The jump timings (reaction time, burst distance, break angle) are not
+        computed: Statcast does not publish them. The lead, in feet, comes from
+        Savant's basestealing board (``raw.savant_basestealing``): the primary
+        lead before the pitch, the secondary lead after the pitcher's first
+        move, the jump (their difference), and ``n_init``, the pitches the lead
+        was measured over. The steal-runner engine's lead sub-score reads them.
 
-        The DRIVER holds a row for every runner who HAD a chance (a plate
-        appearance begun on first or second), not only the runners who went
-        (the lead distance build, SIM-531). A runner who never attempted a
-        steal has attempt rate 0.0 and a NULL success rate (unmeasured), and
-        with a lead he can be compared. The model's confidence basis is his
-        chances for the same reason: ``sample_first_base_opps`` plus
-        ``sample_second_base_opps``, never below his attempts, so no row the
-        driver admits reads confidence 0 (a runner whose chances were all on
-        second, or whose only attempts were of third or home).
+        The driver holds a row for every runner who had a chance (a plate
+        appearance begun on first or second), not only the runners who ran. A
+        runner who never ran has attempt rate 0.0 and a NULL success rate
+        (unmeasured), and his lead still lets the engine compare him. The
+        engine's confidence basis is his chances, ``sample_first_base_opps``
+        plus ``sample_second_base_opps``, never below his attempts. So no row
+        reads confidence 0, not even a runner whose chances were all on second
+        or whose only attempts were of third or home.
 
-        ``asof`` keeps raw.pitches, the only DATED source here, to
-        ``game_date <= asof``. The Savant board carries no date, so it follows
-        the season-shift rule of the sprint speed: the season containing the
-        cutoff joins the PRIOR season's row.
+        ``asof`` keeps ``raw.pitches``, the only dated source, to
+        ``game_date <= asof``. The Savant board takes the season shift: the
+        season that contains the cutoff joins the prior season's row. The
+        write is INSERT OR REPLACE on (player_id, season).
         """
         log.info("Building derived.baserunner_steal_metrics …")
         season_list = sql_seasons(seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
-        # The Savant season shift (no shift on a live build).
         savant_season = self._savant_season_sql("r.season", asof)
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.baserunner_steal_metrics", seasons, asof_date)
 
         if asof is not None:
@@ -463,36 +448,37 @@ class BaserunnerProfilesMixin(ComputorBase):
         self._check_pitch_sources_leakage(seasons, asof)
 
     def _build_pitcher_steal_metrics(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Build derived.pitcher_steal_metrics, the table the pitcher-steal
-        (hold-runner) similarity engine reads.
+        """Build ``derived.pitcher_steal_metrics``, the table the pitcher-hold
+        similarity engine reads.
 
-        OUTCOME-only, per pitcher-season, from raw.pitches:
-          * sample_baserunner_events       — PAs pitched with a runner on base
-          * sample_steal_attempts_against  — SB attempts while this pitcher threw
-          * sb_against_per_9               — SB allowed × 27 / outs recorded
-          * cs_rate_forced                 — (attempts − successes) / attempts
-          * steal_attempt_rate_allowed     — attempts / baserunner_events
-          * pickoff_rate / stepoff_rate    — disengagements per pitch
-            with a runner on 1B/2B, from raw.play_events (the thrower). The
-            feed records stepoffs only from 2023 (the pitch clock), so the
-            rate is a true 0 before then — a coverage zero, not a behaviour.
+        Outcomes only, per pitcher-season, from ``raw.pitches``:
+          * sample_baserunner_events      — plate appearances with a runner on base
+          * sample_steal_attempts_against — steal attempts while he pitched
+          * sb_against_per_9              — steals allowed × 27 / outs, pickoff
+            outs included
+          * cs_rate_forced                — (attempts − successes) / attempts
+          * steal_attempt_rate_allowed    — attempts / baserunner events
+          * pickoff_rate / stepoff_rate   — pickoff throws and stepoffs per
+            pitch with a runner on first or second, from ``raw.play_events``
+            (the pitcher who threw). The feed records stepoffs only from 2023,
+            the first pitch-clock season, so an earlier stepoff rate is 0 for
+            lack of data, not a habit.
 
         The attempt labels use the shared expressions of
-        ingest/statcast_events.py (the columns OR the events: a caught
-        stealing that ends the plate appearance lives only in `events`). The
-        delivery (biomechanical timings) is NOT computed. The lead the pitcher
-        ALLOWS, in feet, comes from Savant's Pitcher Running Game board
-        (raw.savant_pitcher_running_game): the primary lead, the secondary
-        lead and the jump he gives up, plus ``n_init``. The pitcher-hold
-        model's Hold sub-score reads them. Idempotent via INSERT OR REPLACE on
+        ``ingest/statcast_events.py``: the steal columns OR ``events``, because a
+        caught stealing that ends the plate appearance lives only in
+        ``events``. The delivery timings are not computed. The lead the pitcher
+        allows, in feet, comes from Savant's pitcher running-game board
+        (``raw.savant_pitcher_running_game``): the primary lead, the secondary
+        lead, the jump he gives up, and ``n_init``. The pitcher-hold engine's
+        hold sub-score reads them. The write is INSERT OR REPLACE on
         (pitcher_id, season).
 
         ``asof`` keeps both dated sources to ``game_date <= asof``:
-        raw.pitches (this method's own query) and raw.play_events (through the
-        two CTE helpers). The Savant
-        board carries no date, so it follows the season-shift rule: the
-        season containing the cutoff joins the PRIOR season's row.
+        ``raw.pitches`` and ``raw.play_events`` (through
+        ``_play_events_outs_cte`` and ``_play_events_disengagement_cte``). The
+        Savant board takes the season shift: the season that contains the
+        cutoff joins the prior season's row.
         """
         log.info("Building derived.pitcher_steal_metrics …")
         season_list = sql_seasons(seasons)
@@ -503,11 +489,8 @@ class BaserunnerProfilesMixin(ComputorBase):
         disengagement_cte = self._play_events_disengagement_cte(
             asof_sql if asof is not None else None
         )
-        # The Savant season shift (no shift on a live build).
         savant_season = self._savant_season_sql("p.season", asof)
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.pitcher_steal_metrics", seasons, asof_date)
 
         if asof is not None:
@@ -626,16 +609,15 @@ class BaserunnerProfilesMixin(ComputorBase):
     def _assert_pitcher_steal_profiles_have_no_leakage(
         self, seasons: list[int], asof: date
     ) -> None:
-        """Prove no source that fed this grouping postdates the cutoff.
+        """Run the cutoff leakage check on ``raw.pitches`` and ``raw.play_events``.
 
-        Mirrors ``_assert_pitcher_profiles_have_no_leakage``: raw.pitches
-        (this method's own query) and raw.play_events (the two CTE
-        helpers), the latter skipped when the table is absent.
+        The check skips ``raw.play_events`` when the table is absent.
         """
         self._check_pitch_sources_leakage(seasons, asof, play_events=True)
 
     def _play_events_disengagement_cte(self, asof_sql: str | None = None) -> str:
-        """The pickoff throws and stepoffs per (pitcher, season).
+        """The SQL of the pickoff throws and stepoffs per (pitcher, season), from
+        ``raw.play_events``.
 
         These are the pitcher's hold-runner habits: how often he throws over
         and how often he steps off. ``pitcher_id`` is the pitcher who threw.
@@ -643,8 +625,8 @@ class BaserunnerProfilesMixin(ComputorBase):
         empty when the table is absent (a database before Alembic 0018, or a
         unit-test fixture).
 
-        ``asof_sql`` keeps only the plays at or before the cutoff; ``None``
-        keeps every play of the season.
+        ``asof_sql`` (an ISO date) keeps only the plays at or before the
+        cutoff; ``None`` keeps every play of the season.
         """
         if not duck_relation_readable(self._conn, "pg.raw.play_events"):
             return (

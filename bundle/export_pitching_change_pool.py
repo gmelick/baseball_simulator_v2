@@ -1,5 +1,16 @@
-"""The pitching-change opportunity pool the manager draw reads, with the
-relievers' role sidecar.
+"""Export the pitching-change opportunity pool for the manager draw, and load it in a worker.
+
+A row is a plate-appearance boundary while a pitcher is on the mound, changed or not: the
+rows with no change give the draw its denominator. ``derived.at_bat_situations`` gives the
+boundary (the half, the outs, the bases, the score); ``sim.pitch_pool`` gives the pitcher
+of each plate appearance. A row describes the pitcher of the PREVIOUS plate appearance for
+that side. It holds his pitches and batters faced so far in the game, and whether he
+started. It also says whether the boundary opens a half inning, and whether the manager
+replaced him.
+
+The export writes ``manager_pool/change.sit.npy``, ``change.meta.parquet``, the reliever
+role table ``roles.parquet`` and ``manifest.json``. The fielding manager and the incoming
+arm's rest come from one Postgres read.
 """
 
 from __future__ import annotations
@@ -25,27 +36,17 @@ from profiles.sql import sql_seasons
 log = logging.getLogger("engine_artifacts")
 
 
-# ---------------------------------------------------------------------------
-# The pitching-change OPPORTUNITY pool (the manager's step 1)
-# ---------------------------------------------------------------------------
-#
-# One row per plate-appearance boundary while a pitcher is on the mound,
-# changed or not: the denominator, as in the steal opportunity pool. The
-# situation table gives the boundary (the
-# half, the outs, the bases, the scores); the pitch pool gives the pitcher of
-# every plate appearance. A boundary's row describes the pitcher who threw the
-# PREVIOUS plate appearance for that side: his pitches and batters faced so
-# far in the game, whether he is the side's starter, whether the boundary is
-# the first plate appearance of a half inning, and whether he was replaced.
-
+#: The change draw's situation columns: the columns of ``change.sit.npy``.
 _CHANGE_SIT_COLS = ["pitch_count", "batters_faced", "inning", "outs", "runners_state", "score_diff"]
 
 
 def _default_game_context(seasons: list[int]) -> tuple[dict, dict, dict] | None:
-    """The builder's one Postgres read — the game's two managers and
-    every appearance's rest as of its game (``pipeline.bullpen_usage``).
-    None when no DSN is set or the read fails: the pool then carries unknowns
-    (-1) in the manager and rest columns, and the log says so."""
+    """Read each game's two managers and every appearance's rest from Postgres.
+
+    This is the builder's one Postgres read (``pipeline.bullpen_usage``). Returns the
+    ``(managers, usage, throws)`` triple, or None when no DSN is set or the read fails.
+    The pool then holds -1 in the manager and rest columns, and the log says so.
+    """
     dsn = os.environ.get("BASEBALL_DB_DSN", "").strip()
     if not dsn:
         log.warning(
@@ -74,23 +75,21 @@ def build_pitching_change_pool(
     *,
     game_context: tuple[dict, dict, dict] | None | bool = True,
 ) -> dict:
-    """Write ``<out_dir>/manager_pool/change.{sit.npy, meta.parquet}``, the
-    reliever ROLE sidecar ``roles.parquet`` and the manifest (the counts and
-    the pool's own change rates). Returns the manifest.
+    """Write the change pool, the reliever role table and the manifest. Returns the manifest.
 
-    Every row also carries the FIELDING side's manager (``manager_id``;
-    the top of an inning is the home side fielding) and the incoming arm's rest
-    as of the game (``in_days_rest`` capped at five, ``in_pitched_2d``,
-    ``in_pitches_3d`` — ``pipeline.bullpen_usage``'s definitions), read from
-    Postgres through ``game_context`` (``True`` = read it; a ``(managers,
-    usage, throws)`` triple = use it, the test seam; ``None`` / ``False`` = unknowns).
+    The manifest holds the counts and the pool's own change rates. Each row carries the
+    FIELDING side's manager (``manager_id``; in the top of an inning the home side
+    fields). It also carries the incoming arm's rest as of the game: ``in_days_rest``
+    (capped at five), ``in_pitched_2d`` and ``in_pitches_3d``, as
+    ``pipeline.bullpen_usage`` defines them. ``game_context`` picks their source:
+    ``True`` reads Postgres, a ``(managers, usage, throws)`` triple is used as given (the
+    test seam), and ``None`` or ``False`` leaves every row unknown.
     """
     pool_dir = os.path.join(out_dir, "manager_pool")
     os.makedirs(pool_dir, exist_ok=True)
     season_list = sql_seasons(seasons)
-    # The row's game date (a YYYYMMDD integer) so the backtest's
-    # point-in-time cutoff applies to this draw too; an older pitch pool
-    # without the column leaves it NULL (the cutoff then refuses, loudly).
+    # The row's game date (a YYYYMMDD integer) lets the backtest's cutoff apply to this
+    # draw. A pitch pool without dates leaves it NULL, and the cutoff then refuses.
     have_date = "game_date" in duck_columns(con, "sim", "pitch_pool")
     ymd_agg = (
         "CAST(strftime(max(game_date), '%Y%m%d') AS INTEGER)" if have_date else "NULL::INTEGER"
@@ -142,15 +141,15 @@ def build_pitching_change_pool(
         ORDER BY game_pk, at_bat_number
         """
     )
-    # Every read below orders by (game_pk, at_bat_number) so the sit array and
-    # the meta parquet share one row order whatever the scan order.
+    # Every read below orders by (game_pk, at_bat_number), so the sit array and the meta
+    # parquet share one row order whatever the scan order.
     d = con.execute(
         f"SELECT {', '.join(_CHANGE_SIT_COLS)} FROM _change_pool ORDER BY game_pk, at_bat_number"
     ).fetchnumpy()
     n = len(d[_CHANGE_SIT_COLS[0]])
     sit = float_columns(d, _CHANGE_SIT_COLS)
     np.save(os.path.join(pool_dir, "change.sit.npy"), sit)
-    # --- The fielding manager and the incoming arm's rest per row ---
+    # The fielding manager and the incoming arm's rest, per row.
     ctx = _default_game_context(seasons) if game_context is True else game_context
     keys = con.execute(
         "SELECT game_pk, at_bat_number, top_or_bottom, incoming_id FROM _change_pool "
@@ -198,9 +197,9 @@ def build_pitching_change_pool(
         f"TO '{os.path.join(pool_dir, 'change.meta.parquet')}' (FORMAT parquet)"
     )
     con.unregister("_change_ctx")
-    # --- The reliever ROLE sidecar — per incoming arm and season, his
-    # entries, the share in a high-leverage spot (inning >= 7, margin within
-    # two — the manager computor's own bucket) and his mean entry inning.
+    # The reliever role table: per incoming arm and season, his entries, his share of
+    # high-leverage entries and his mean entry inning. High leverage is inning 7 or later
+    # within two runs, the manager computor's own bucket.
     con.execute(
         "COPY (SELECT incoming_id AS pitcher_id, season, count(*) AS n_entries, "
         "avg(CASE WHEN inning >= 7 AND abs(score_diff) <= 2 THEN 1.0 ELSE 0.0 END) "
@@ -232,11 +231,11 @@ def build_pitching_change_pool(
             "changed_reliever": (float(rates[4]) if rates[4] is not None else None),
         },
         "games": int(rates[5] or 0),
-        # The context coverage and the role sidecar's size.
+        # The share of rows with a manager and with a rest, and the role table's size.
         "manager_coverage": float((manager >= 0).mean()) if n else 0.0,
         "rest_coverage": float((rest[:, 0] >= 0).mean()) if n else 0.0,
         "roles": n_roles,
-        # Whether every row carries its game date (the cutoff's input).
+        # Whether the rows carry a game date (the cutoff's input).
         "game_ymd": bool(have_date),
     }
     write_json(os.path.join(pool_dir, "manifest.json"), manifest)
@@ -259,10 +258,11 @@ def build_pitching_change_pool(
 def load_change_pool(
     con: duckdb.DuckDBPyConnection, art_dir: str, views: dict[str, np.ndarray]
 ) -> tuple[ChangePool | None, dict[str, tuple[int, float, float]] | None]:
-    """Load the pitching-change pool and the relievers' role sidecar; (None,
-    None) when the bundle has no manager pool."""
-    # The pitching-change opportunity pool (None on a
-    # bundle without it).
+    """Load the change pool and the reliever role table; (None, None) with no manager pool.
+
+    The role table maps ``"pitcher_id:season"`` to (entries, high-leverage share, mean
+    entry inning); it is None when the bundle has no ``roles.parquet``.
+    """
     change_pool: ChangePool | None = None
     change_roles: dict[str, tuple[int, float, float]] | None = None
     mp_dir = os.path.join(art_dir, "manager_pool")
@@ -300,9 +300,8 @@ def load_change_pool(
                 views, "change_pool.game_ymd", cm, "game_ymd", np.int32, -1
             ),
         )
-        # A date column that is NULL on every row (a pitch pool
-        # without dates) must read as ABSENT, so a cutoff refuses instead
-        # of admitting every row through the -1 fill.
+        # A date column that is NULL on every row (a pitch pool without dates) must read
+        # as ABSENT, so a cutoff refuses instead of admitting every row through the -1 fill.
         if change_pool.game_ymd is not None and not (change_pool.game_ymd > 0).any():
             change_pool.game_ymd = None
         roles_path = os.path.join(mp_dir, "roles.parquet")

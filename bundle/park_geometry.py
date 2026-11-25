@@ -1,5 +1,6 @@
-"""The park geometry document: every park's effective fence by spray sector and
-season group, and the carry model the fence stage reads.
+"""Build and read park_geometry.json: each park's fence by spray sector, and the carry model.
+
+The fence stage reads the document's fence lines, its carry model and its carry offsets.
 """
 
 from __future__ import annotations
@@ -21,54 +22,45 @@ log = logging.getLogger("engine_artifacts")
 # The park geometry and the carry model
 # ---------------------------------------------------------------------------
 #
-# The fence line of every park, as the pool's own batted balls reveal it: per
-# venue and spray SECTOR (``PARK_SECTOR_DEG``-wide bands of the field-side
-# spray angle), the carry a ball needs to leave the park — the meeting point
-# of the lowest home-run carries (their 10th percentile) and the longest
-# carries that stayed in (the 99th percentile of the other air balls). A tall
-# wall shows up as a longer required carry, so one number per sector is the
-# EFFECTIVE fence. The bundle carries ``park_geometry.json`` and merges an
-# optional hand-curated ``park_geometry_overrides.json`` over it at build time.
+# The pool's own batted balls reveal each park's fence. Per venue and spray SECTOR (a band of
+# the field-side spray angle, ``PARK_SECTOR_DEG`` degrees wide), the fence line is the carry a
+# ball needs to leave the park. THE LINE RULE takes the midpoint of the shortest home-run
+# carries (their 10th percentile) and the longest carries that stayed in (the 99th percentile
+# of the other air balls). A tall wall shows up as a longer required carry, so one number per
+# sector is the EFFECTIVE fence. The build merges an optional hand-curated
+# ``park_geometry_overrides.json`` over the built lines.
 #
-# The document is VERSION 2 (the fence certification, SIM-478/479/480; the
-# plan is ``docs/audit/2026-09-20-sim478-480-fence-certification-plan.md``,
-# §4 and §5.1):
+# The document (version 2):
 #
-#   1. The grid runs to +-55 degrees (eleven sectors), so a ball down the line
-#      (about -50) has a sector of its own.
-#   2. A venue's lines come per SEASON GROUP. A CHANGE DETECTOR splits a
-#      venue's seasons where a sector's early line and late line, each on
-#      ``PARK_MOVE_MIN_HR`` home runs or more, differ by ``PARK_MOVE_FT`` or
-#      more (Camden Yards moved its left-field wall in for 2025). The document
-#      keys a group "FIRST-LAST" and records every split under "moves".
-#   3. A thin sector rests on a PUBLISHED-DISTANCE PRIOR, not the league line:
+#   1. The grid runs to +-55 degrees (eleven sectors), so a ball down the line (about -50)
+#      has a sector of its own.
+#   2. A venue's lines come per SEASON GROUP. THE CHANGE DETECTOR splits a venue's seasons
+#      where a sector's early and late lines, each on ``PARK_MOVE_MIN_HR`` home runs or more,
+#      differ by ``PARK_MOVE_FT`` or more (for example, Camden Yards moved its left-field wall
+#      in for 2025). The document keys a group "FIRST-LAST" and records each split in "moves".
+#   3. A thin sector rests on a PUBLISHED-DISTANCE PRIOR, not on the league line. The prior is
 #      the Stats API's five fence distances (``ingest/venues/load_venue_dimensions.py``)
-#      interpolated at the sector's midpoint angle, plus the league's typical
-#      offset between the effective and the published fence at that sector,
-#      blended toward the park's own balls at ``PARK_PRIOR_N`` home runs.
+#      interpolated at the sector's midpoint angle, plus the league's typical offset between
+#      the effective and the published fence there. THE THIN RULE blends the prior toward the
+#      park's own balls, at a weight of ``PARK_PRIOR_N`` home runs.
 #
-# The CARRY model: a home run's reported distance is its landing
-# point, so the pool's home runs fit a quadratic in exit velocity and launch
-# angle (validated on them: mean absolute error ~14 ft) that stands in for a
-# ball whose own distance is missing.
+# THE CARRY MODEL: a home run's reported distance is its landing point. A quadratic in exit
+# velocity and launch angle, fitted on the pool's home runs, stands in for a ball whose own
+# distance is missing.
 #
-# THE CARRY OFFSET (the plan's §11): one number per park, the
-# park's mean home-run carry against the league's for the same exit
-# velocity, launch angle and spray. It is the park term of the carry model
-# refitted with one dummy per park (``carry_offsets``). The fit runs on the
-# window's home runs: every home run counted, none selected by outcome. The
-# offsets are centred on the median park. A park under ``PARK_OFFSET_MIN_HR``
-# home runs gets no offset (the sampler reads an absent park as 0). The
-# sampler brings a born ball's distance into the LIVE park's air with
-# ``offset[venue_live] - offset[venue_row]`` before the fence check and the
-# fielding draw. The candidate rows keep their own distances.
+# THE CARRY OFFSET: one number per park, the park's mean home-run carry against the league's
+# at the same exit velocity, launch angle and spray. It is the park term of the carry model,
+# refitted with one dummy (a 0/1 column) per park (``carry_offsets``). The fit counts every
+# home run of the window, so no ball is selected by its outcome. The offsets centre on the
+# median park. A park under ``PARK_OFFSET_MIN_HR`` home runs gets no offset, and the sampler
+# reads an absent park as 0. The sampler moves a born ball's distance into the LIVE park's air
+# with ``offset[venue_live] - offset[venue_row]`` before the fence check and the fielding
+# draw. The candidate rows keep their own distances.
 #
-# The pieces are pure functions over numpy arrays so the certification script
-# (``scripts/fence_check.py``) can rebuild a line from any subset of
-# the balls: ``load_air_balls`` → ``sector_of`` → ``sector_line`` /
+# The pieces are pure functions over numpy arrays, so ``scripts/fence_check.py`` can rebuild a
+# line from any subset of the balls: ``load_air_balls`` → ``sector_of`` → ``sector_line`` /
 # ``detect_moves`` / ``published_at`` / ``prior_lines`` / ``carry_offsets`` →
-# ``build_geometry_document``; ``build_park_geometry`` strings them together
-# with the carry model and the file write.
+# ``build_geometry_document``. ``build_park_geometry`` adds the carry model and writes the file.
 
 PARK_GEOMETRY_VERSION = 2
 PARK_SECTOR_DEG = 10
@@ -82,8 +74,8 @@ PARK_MIN_KEPT = 10
 #: ``PARK_MOVE_MIN_HR`` home runs or more, differ by ``PARK_MOVE_FT`` or more.
 PARK_MOVE_FT = 10.0
 PARK_MOVE_MIN_HR = 10
-#: The published-distance prior's weight, in home runs, and the venues a
-#: sector's league offset needs before it exists.
+#: The published-distance prior's weight, in home runs, and the fewest venues a sector's
+#: league offset needs.
 PARK_PRIOR_N = 10
 PARK_PRIOR_MIN_PARKS = 5
 #: The five published points and the field-side angle of each.
@@ -97,8 +89,8 @@ PARK_PUBLISHED_POINTS: tuple[tuple[str, float], ...] = (
 #: A kept ball counts toward a sector's support from this distance.
 PARK_KEPT_MIN_FT = 300.0
 CARRY_FEATURES = ("1", "ev", "la", "la^2", "ev*la", "ev^2")
-#: The carry offset's design (the plan's §11.1): the carry model plus the
-#: spray terms; one dummy per park follows these columns.
+#: The carry offset's design: the carry model plus the spray terms. One dummy column per
+#: park follows these columns.
 CARRY_OFFSET_FEATURES = (
     "1",
     "ev",
@@ -110,7 +102,8 @@ CARRY_OFFSET_FEATURES = (
     "spray^2",
     "ev*|spray|",
 )
-#: A park needs this many home runs with the three factors for its own offset.
+#: A park needs this many home runs with an exit velocity, a launch angle and a spray for its
+#: own offset.
 PARK_OFFSET_MIN_HR = 100
 
 
@@ -126,8 +119,8 @@ def sector_of(
     sector_deg: float = PARK_SECTOR_DEG,
     n_sectors: int = PARK_N_SECTORS,
 ) -> np.ndarray:
-    """The clamped sector index of every spray angle (the production rule:
-    ``floor((spray - spray_min) / sector_deg)`` clamped to the grid)."""
+    """The sector index of every spray angle: ``floor((spray - spray_min) / sector_deg)``,
+    clamped to the grid."""
     s = np.floor((np.asarray(spray, dtype=np.float64) - spray_min) / sector_deg)
     return np.clip(s, 0, n_sectors - 1).astype(np.int64)
 
@@ -151,12 +144,12 @@ def carry_predict(coef: list[float] | np.ndarray, ev: float, la: float) -> float
 
 
 def load_air_balls(con: duckdb.DuckDBPyConnection, seasons: list[int]) -> dict[str, np.ndarray]:
-    """The window's fly balls and line drives with a venue, a distance and a
-    spray angle, as numpy arrays: ``venue``, ``season``, ``spray``, ``dist``,
-    ``hr`` (a home run), and ``ev`` / ``la`` (exit velocity and launch angle,
-    NaN where the pool has none — the fence lines keep every ball; the carry
-    offset masks on them).
-    No spray filter: the builder drops a ball outside the grid itself."""
+    """The window's fly balls and line drives that have a venue, a distance and a spray angle.
+
+    Returns numpy arrays: ``venue``, ``season``, ``spray``, ``dist``, ``hr`` (a home run), and
+    ``ev`` / ``la`` (exit velocity and launch angle, NaN where the pool has none). The fence
+    lines keep every ball; the carry offset skips a ball with a NaN. The query applies no
+    spray filter, because the builder drops a ball outside the grid itself."""
     season_list = sql_seasons(seasons)
     d = con.execute(
         f"""
@@ -197,21 +190,20 @@ def carry_offset_design(ev: np.ndarray, la: np.ndarray, spray: np.ndarray) -> np
 def carry_offsets(
     balls: dict[str, np.ndarray], min_hr: int = PARK_OFFSET_MIN_HR
 ) -> tuple[dict[int, float], dict[str, Any]]:
-    """THE CARRY OFFSET per park (the plan's §11): the park term of the
-    home-run carry model refitted with one dummy per park.
+    """THE CARRY OFFSET per park: the park term of the home-run carry model, refitted with
+    one dummy column per park.
 
-    The rows: the home runs with a finite exit velocity, launch angle, spray
-    and distance. A park with fewer than ``min_hr`` such home runs is dropped
-    from the fit and gets no offset. The fit: least squares of distance on
-    ``carry_offset_design`` plus one dummy per fitted park (the first park
-    the reference), then every park's term centred on the MEDIAN of the
-    fitted parks' terms and rounded to 0.1 ft. Returns ``(offsets, fit)``:
-    ``offsets`` maps venue id to feet; ``fit`` records ``n_hr`` (the rows),
-    ``n_parks``, ``min_hr``, ``reference_median_park`` (the fitted park
-    whose term sits nearest the median; the smallest id on a tie),
-    ``centre_ft`` (the median subtracted, against the first park) and
-    ``residual_sd_ft``. Balls without ``ev`` / ``la`` (an older caller's
-    dict) give no offsets: ``({}, {"n_hr": 0, ...})``."""
+    The rows are the home runs with a finite exit velocity, launch angle, spray and distance.
+    A park with fewer than ``min_hr`` such home runs stays out of the fit and gets no offset.
+    The fit regresses distance on ``carry_offset_design`` plus one dummy per fitted park
+    (least squares; the first park is the reference). Each park's term is then centred on
+    the MEDIAN of the fitted parks' terms and rounded to 0.1 ft.
+
+    Returns ``(offsets, fit)``. ``offsets`` maps venue id to feet. ``fit`` records ``n_hr``
+    (the rows), ``n_parks``, ``min_hr``, ``reference_median_park`` (the fitted park whose
+    term sits nearest the median; the smallest id on a tie), ``centre_ft`` (the median
+    subtracted, against the first park) and ``residual_sd_ft``. Balls without ``ev`` /
+    ``la`` give no offsets: ``({}, {"n_hr": 0, ...})``."""
     fit: dict[str, Any] = {
         "features": list(CARRY_OFFSET_FEATURES),
         "min_hr": int(min_hr),
@@ -268,13 +260,14 @@ def carry_offsets(
 def sector_line(
     dist_hr: np.ndarray, dist_kept: np.ndarray
 ) -> tuple[float | None, str | None, int, int]:
-    """THE LINE RULE on one sector's balls. ``dist_hr`` holds the home runs'
-    carries, ``dist_kept`` every other air ball's. Returns ``(line, source,
-    n_hr, n_kept)``: the midpoint of the home runs' 10th percentile (needs
-    ``PARK_MIN_HR``) and the kept balls' 99th percentile (needs
-    ``PARK_MIN_KEPT`` kept balls of ``PARK_KEPT_MIN_FT``+; the quantile over
-    ALL kept balls), rounded to 0.1 ft ("both"); one of the two alone when
-    the other is thin ("hr" / "kept"); ``(None, None, …)`` when both are."""
+    """THE LINE RULE on one sector's balls; returns ``(line, source, n_hr, n_kept)``.
+
+    ``dist_hr`` holds the home runs' carries, ``dist_kept`` every other air ball's. The home
+    runs' 10th percentile needs ``PARK_MIN_HR`` home runs. The kept balls' 99th percentile
+    needs ``PARK_MIN_KEPT`` kept balls of ``PARK_KEPT_MIN_FT`` or more, but the quantile runs
+    over ALL kept balls. The line is the midpoint of the two, rounded to 0.1 ft ("both");
+    one of the two alone when the other is thin ("hr" / "kept"); ``(None, None, …)`` when
+    both are thin."""
     dist_hr = np.asarray(dist_hr, dtype=np.float64)
     dist_kept = np.asarray(dist_kept, dtype=np.float64)
     n_hr = int(dist_hr.size)
@@ -362,9 +355,11 @@ def _thin_rule(
     prior: float | None,
     league_line: float | None,
 ) -> tuple[float | None, str]:
-    """THE THIN RULE for one group and sector: the own estimate at
-    ``PARK_PRIOR_N`` home runs or without a prior; the blend below it; the
-    prior, else the league line, without an own estimate."""
+    """THE THIN RULE for one group and sector; returns ``(line, source)``.
+
+    The park's own estimate stands at ``PARK_PRIOR_N`` home runs or more, or when there is no
+    prior. Below that, the own estimate blends with the prior. Without an own estimate, the
+    prior stands, else the league line."""
     if own is not None and src is not None:
         if n_hr >= PARK_PRIOR_N or prior is None:
             return own, src
@@ -380,19 +375,19 @@ def _thin_rule(
 def detect_moves(
     balls: dict[str, np.ndarray], seasons: list[int]
 ) -> tuple[list[tuple[int, int]], list[dict]]:
-    """THE CHANGE DETECTOR on ONE venue's balls (``balls`` holds ``season``,
-    ``sec``, ``dist``, ``hr``). Over the venue's seasons present in the
-    window, every boundary between consecutive present seasons splits the
-    current group early (before it) / late (from it). A boundary qualifies
-    when some sector's early and late lines each rest on ``PARK_MOVE_MIN_HR``
-    home runs and differ by ``PARK_MOVE_FT``; the qualifying boundary with
-    the largest gap splits the group, and each side is searched again.
-    Returns the groups as ``(first, last)`` season pairs and the moves.
+    """THE CHANGE DETECTOR on ONE venue's balls (``balls`` holds ``season``, ``sec``,
+    ``dist``, ``hr``); returns the groups as ``(first, last)`` season pairs, and the moves.
 
-    A known limit: a wall that moves in the LAST season of the window is
-    detected only once that season holds ``PARK_MOVE_MIN_HR`` home runs at
-    the moved sector. Until then the sector reads the blended line, or the
-    prior-blended line when the season's own support is thin."""
+    Each boundary between consecutive seasons of the venue in the window splits the current
+    group into early (before it) and late (from it). A boundary qualifies when some sector's
+    early and late lines each rest on ``PARK_MOVE_MIN_HR`` home runs and differ by
+    ``PARK_MOVE_FT``. The qualifying boundary with the largest gap splits the group, and the
+    search runs again on each side.
+
+    A known limit: the detector sees a wall that moves in the LAST season of the window only
+    once that season holds ``PARK_MOVE_MIN_HR`` home runs at the moved sector. Until then the
+    sector reads the blended line, or the prior-blended line when the season's own support
+    is thin."""
     window = {int(s) for s in seasons}
     present = sorted(int(y) for y in np.unique(balls["season"]) if int(y) in window)
     groups: list[tuple[int, int]] = []
@@ -411,9 +406,9 @@ def detect_moves(
         ]
 
     def _split(members: list[int]) -> None:
-        # (the largest gap, the gap sum, the boundary index): a tie goes to the
-        # LATER boundary — a late block seeds the 10th percentile of every
-        # earlier boundary's late side, so the ties sit at or before the move.
+        # The key is (the largest gap, the gap sum, the boundary index), so a tie goes to the
+        # LATER boundary. A late block feeds the 10th percentile of every earlier boundary's
+        # late side, so the ties sit at or before the move.
         best: tuple[float, float, int] | None = None
         best_detail: tuple[list[int], list[float], list[float]] | None = None
         in_group = np.isin(season, members)
@@ -498,13 +493,14 @@ def _apply_overrides(
     support_hr: dict[str, dict[str, list[int]]] | None = None,
     support_kept: dict[str, dict[str, list[int]]] | None = None,
 ) -> None:
-    """Hand-curated corrections on top of the built lines. ``{venue: {sector:
-    feet}}`` applies to every group of the venue; ``{venue: {"FIRST-LAST":
-    {sector: feet}}}`` to that group alone. A venue the pool never saw, or a
-    group the builder did not produce, starts from ``default_seed(venue)`` —
-    the seed line and its per-sector sources ("prior" where the venue's
-    prior gave the value, "league" otherwise) — under ``default_key``, with
-    zero support in ``support_hr`` / ``support_kept`` (no ball built it)."""
+    """Apply the hand-curated corrections over the built lines, in place.
+
+    ``{venue: {sector: feet}}`` applies to every group of the venue; ``{venue: {"FIRST-LAST":
+    {sector: feet}}}`` applies to that group alone. A venue the pool never saw, or a group the
+    builder did not produce, starts from ``default_seed(venue)``: the seed line and its
+    per-sector sources ("prior" where the venue's prior gave the value, "league" otherwise).
+    A new venue's group key is ``default_key``. A seeded group gets zero support in
+    ``support_hr`` / ``support_kept``, because no ball built it."""
 
     def _seed(v: str, g: str) -> None:
         line, srcs = default_seed(v)
@@ -542,13 +538,13 @@ def build_geometry_document(
     published_by_venue: dict[int, dict] | None = None,
     overrides: dict | None = None,
 ) -> dict:
-    """The version-2 geometry document WITHOUT the carry block: the sector
-    grid, the league line, every venue's lines per season group with their
-    sources and support, the league offset, the priors, the moves, the
-    overrides, and the carry offset per park (``carry_offset_ft``, str venue
-    to feet, with its fit record ``carry_offset_fit``). ``balls`` is
-    ``load_air_balls``'s dict; a ball outside the grid is dropped and counted
-    under ``dropped_outside_grid``."""
+    """The version-2 geometry document WITHOUT the carry block.
+
+    The document holds the sector grid, the league line, and every venue's lines per season
+    group with their sources and support. It also holds the league offset, the priors, the
+    moves, the overrides, and the carry offset per park (``carry_offset_ft``, str venue to
+    feet, with its fit record ``carry_offset_fit``). ``balls`` is ``load_air_balls``'s dict;
+    the function drops a ball outside the grid and counts it in ``dropped_outside_grid``."""
     published_by_venue = published_by_venue or {}
     overrides = overrides or {}
     n = PARK_N_SECTORS
@@ -559,7 +555,7 @@ def build_geometry_document(
     b["sec"] = sector_of(b["spray"], PARK_SPRAY_MIN, PARK_SECTOR_DEG, n)
     venue_ids = sorted(int(v) for v in np.unique(b["venue"]))
 
-    # The whole-window own lines: the league line and the league offset.
+    # The whole-window own lines feed the league line and the league offset.
     own_lines: dict[int, list[float | None]] = {}
     own_sources: dict[int, list[str | None]] = {}
     for v in venue_ids:
@@ -636,10 +632,9 @@ def build_geometry_document(
         srcs = ["prior" if p is not None else "league" for p in prior_line]
         return line, srcs
 
-    # A published venue the pool has never seen: the prior alone (the plan's
-    # "prior alone at n_hr = 0"), one group over the window. Its first balls
-    # blend it away at the next build; until then the sampler reads this
-    # line instead of the league's.
+    # A published venue the pool has never seen gets the prior alone, as one group over the
+    # window. Its first balls blend the prior away at the next build; until then the sampler
+    # reads this line instead of the league's.
     for key_v in sorted(priors):
         if key_v in venues:
             continue
@@ -677,12 +672,13 @@ def build_geometry_document(
 
 
 def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]) -> dict:
-    """Write ``<out_dir>/park_geometry.json`` (version 2) from the pool
-    window: the fence line per venue, season group and sector, the league
-    line, the published-distance priors, the moves, the support counts, the
-    carry offset per park, the carry model and its home-run validation. Also refreshes
-    ``<out_dir>/venue_dimensions.json`` from the Stats API (the last copy
-    stands when the API is down). Returns the document."""
+    """Write ``<out_dir>/park_geometry.json`` (version 2) from the pool window; return the
+    document.
+
+    The document adds the carry model and its home-run validation to
+    ``build_geometry_document``'s. The function also refreshes
+    ``<out_dir>/venue_dimensions.json`` from the Stats API; the last copy stands when the API
+    is down."""
     from ingest.venues.load_venue_dimensions import write_venue_dimensions
 
     balls = load_air_balls(con, seasons)

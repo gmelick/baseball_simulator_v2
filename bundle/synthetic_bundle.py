@@ -1,41 +1,29 @@
-"""
-synthetic_bundle.py
-===================
-An in-memory engine-artifact bundle for every no-DB path.
+"""The in-memory engine-artifact bundle that every no-database path draws from.
 
-WHY THIS EXISTS
----------------
-Production draws every play from the on-disk engine-artifact bundle through
-:class:`simulation.full_pool_sampler.FullPoolSampler`. The tests and the no-DB
-batch factory draw through the same sampler and the same loop, so the suite
-certifies the code production runs. A separate test-only in-play path once hid
-four production defects for eight weeks (SIM-486).
+The tests and the batch runner's no-database factory draw through the production sampler
+(:class:`simulation.full_pool_sampler.FullPoolSampler`) and the production loop, so the suite
+certifies the code production runs. Do not add a test-only draw path: it hides production
+defects.
 
-This module builds a SMALL :class:`~bundle.load_bundle.EngineArtifacts`
-from a few numpy arrays, in the exact shape the production loader produces
-(a transition bundle, builder sim510.1 or later). The sampler, the loop and the
-in-play path (:meth:`StateMachine._resolve_in_play_transition`) are the
-production code. Only the rows are synthetic.
+This module builds a SMALL :class:`~bundle.load_bundle.EngineArtifacts` from a few numpy
+arrays, in the shape the production loader produces. The sampler, the loop and the in-play
+path (:meth:`StateMachine._resolve_in_play_transition`) are the production code; only the
+rows are synthetic. The three builders:
 
-Three uses:
+  * :func:`league_artifacts`: the league-average outcome mix over every count bucket and
+    every base-out cell, plus the advancement pools, so a no-database game has a realistic
+    run environment.
+  * :func:`fixed_play_artifacts`: ONE event in every base-out cell, so a unit test can drive
+    a deterministic play through the production in-play path.
+  * :func:`synthetic_artifacts`: the general builder the two above wrap.
 
-  * :func:`league_artifacts` -- the league-average outcome mix over every
-    count bucket and every base-out cell, plus the advancement pools, so a
-    no-DB game has a realistic run environment.
-  * :func:`fixed_play_artifacts` -- ONE event in every base-out cell, so a
-    unit test can drive a deterministic play through the production in-play
-    path with no random draw on the batted ball.
-  * :func:`synthetic_artifacts` -- the general builder the two above wrap.
-
-THE ROW SHAPE
--------------
-A batted-ball row carries its transition: where the batter and each pre-pitch
-runner ended up (``-1`` = no runner on that base, ``0`` = retired,
-``1``/``2``/``3`` = the post-play base, ``4`` = scored). The loop normalizes
-the five discretionary movements to station-to-station, and the advancement
+A batted-ball row carries its transition: where the batter and each runner on base before
+the pitch ended up (``-1`` = no runner on that base, ``0`` = retired, ``1``/``2``/``3`` = the
+base after the play, ``4`` = scored). The loop resets the five discretionary advances to
+station-to-station (each runner moves as many bases as the batter), and the advancement
 draws decide them again. So a synthetic row states only the FORCED movement
-(:func:`canonical_transition`). Without advancement pools the game is
-station-to-station -- exactly deterministic for a fixed-play test.
+(:func:`canonical_transition`). Without advancement pools the game stays station-to-station,
+which keeps a fixed-play test deterministic.
 """
 
 from __future__ import annotations
@@ -75,9 +63,8 @@ __all__ = [
     "synthetic_sampler",
 ]
 
-#: A league-average per-pitch mix. Through the count machine it lands near
-#: 8-9% walks, ~22% strikeouts and ~3.85 pitches per plate appearance (the
-#: baseball sniff tests, SIM-324).
+#: A league-average per-pitch mix. Through the count machine it lands near 8-9% walks, ~22%
+#: strikeouts and ~3.85 pitches per plate appearance, the targets of the baseball sniff tests.
 LEAGUE_PITCH_MODEL: dict[str, float] = {
     "ball": 0.332,
     "called_strike": 0.138,
@@ -97,10 +84,10 @@ LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "grounded_into_double_play": 0.026,
 }
 
-#: The advancement decisions: key -> (attempt rate, safe rate).
-#: Keys are ``"{scenario}_{from_base}_{target_base}"``: 1 = first-to-third on
-#: a single, 2 = second-to-home on a single, 3 = first-to-home on a double,
-#: 4 = a tag-up on a caught ball, 5 = the batter's stretch (from_base 0).
+#: The advancement decisions: key -> (attempt rate, safe rate). A key reads
+#: ``"{scenario}_{from_base}_{target_base}"``. The scenarios: 1 = first-to-third on a single,
+#: 2 = second-to-home on a single, 3 = first-to-home on a double, 4 = a tag-up on a caught
+#: ball, 5 = the batter's stretch for an extra base (from_base 0).
 DEFAULT_ADVANCEMENT_RATES: dict[str, tuple[float, float]] = {
     "2_2_4": (0.60, 0.93),
     "1_1_3": (0.28, 0.95),
@@ -118,9 +105,9 @@ _BIT_1B, _BIT_2B, _BIT_3B = 0b001, 0b010, 0b100
 
 @dataclass(slots=True)
 class PlayRow:
-    """One synthetic batted-ball row: the event, the base-out cell it is legal
-    in, and its transition. ``weight`` is the row's draw weight inside its
-    cell (the pool's ``recency`` column)."""
+    """One synthetic batted-ball row: the event, the base-out cell it is legal in, and its
+    transition. ``weight`` is the row's draw weight inside its cell (the pool's ``recency``
+    column)."""
 
     event: str
     outs: int
@@ -138,15 +125,13 @@ class PlayRow:
 def canonical_transition(
     event: str, outs: int, runners_state: int, *, is_air: bool = False
 ) -> PlayRow | None:
-    """The forced movement for ``event`` from a base-out cell, or ``None`` when
-    the event is impossible there (a double play needs a runner on first and
-    fewer than two outs).
+    """The forced movement for ``event`` from a base-out cell, or ``None`` when the event is
+    impossible there (a double play needs a runner on first and fewer than two outs).
 
-    Hits push every runner the hit value; a runner on third scores on any hit.
-    An out holds every runner. An error reaches the batter and pushes the
-    runners one base. A ground-ball double play retires the batter and the
-    runner from first; a runner on second takes third; a runner on third
-    scores only when the play does not end the inning.
+    A hit pushes every runner the hit value; a runner on third scores on any hit. An out
+    holds every runner. An error puts the batter on first and pushes the runners one base. A
+    ground-ball double play retires the batter and the runner from first; a runner on second
+    takes third; a runner on third scores only when the play does not end the inning.
     """
     on1 = bool(runners_state & _BIT_1B)
     on2 = bool(runners_state & _BIT_2B)
@@ -200,9 +185,9 @@ def inplay_rows(
 ) -> list[PlayRow]:
     """One weighted row per (base-out cell, event) over all 24 cells.
 
-    ``field_out`` splits into a ground-ball row and an air-ball row (the
-    air share feeds the tag-up draw). Double-play mass moves to the ground
-    out in cells where a double play is impossible.
+    ``field_out`` splits into a ground-ball row and an air-ball row; the air rows feed the
+    tag-up draw. In a cell where a double play is impossible, its weight moves to the ground
+    out.
     """
     model = dict(model or LEAGUE_INPLAY_MODEL)
     rows: list[PlayRow] = []
@@ -247,10 +232,9 @@ def pitch_pool(
     season: int = 2024,
     got_away: bool = False,
 ) -> HandPool:
-    """A pitch pool with one weighted row per (count bucket, outcome), so
-    every live count draws the same outcome mix. ``got_away`` marks every
-    row as a passed ball / wild pitch (the fact a dropped-third-strike test
-    needs)."""
+    """A pitch pool with one weighted row per (count bucket, outcome), so every live count
+    draws the same outcome mix. ``got_away`` marks every row as a passed ball or wild pitch,
+    the fact a dropped-third-strike test needs."""
     model = dict(model or LEAGUE_PITCH_MODEL)
     rows = [(b, s, o, w) for b in range(4) for s in range(3) for o, w in model.items() if w > 0.0]
     n = len(rows)
@@ -265,9 +249,8 @@ def pitch_pool(
         season=np.full(n, int(season), dtype=np.int64),
         outcome_type=np.asarray([r[2] for r in rows], dtype=object),
         recency=np.asarray([r[3] for r in rows], dtype=np.float32),
-        # A date per row, so a test can exercise the point-in-time cutoff.
-        # The months cycle April to September, so a mid-season date splits
-        # the pool about in half.
+        # A date per row lets a test exercise the date cutoff. The months cycle April to
+        # September, so a mid-season date splits the pool about in half.
         game_ymd=np.asarray(
             [int(f"{int(season)}{4 + (i % 6):02d}15") for i in range(n)], dtype=np.int32
         ),
@@ -280,7 +263,7 @@ def battedball_pool(
     *,
     season: int = 2024,
 ) -> BattedBallPool:
-    """Materialize :class:`PlayRow` rows as a transition-carrying pool."""
+    """Build a batted-ball pool, transitions included, from :class:`PlayRow` rows."""
     n = len(rows)
     if n == 0:
         raise ValueError("a batted-ball pool needs at least one row")
@@ -348,11 +331,10 @@ def advancement_pools(
     return out
 
 
-#: The pitch classes real runners steal on (2023-2026: 64% of attempts ride
-#: a ball, 25% a called strike, 10% a swinging strike, 1% a foul, none a ball
-#: in play or a hit by pitch; the running game on the pitch, SIM-554). The
-#: synthetic pool's default attempt rate applies to these three and is zero on
-#: the other three.
+#: The pitch classes real runners steal on. In the 2023-2026 pool, 64% of attempts ride a
+#: ball, 25% a called strike, 10% a swinging strike, 1% a foul, and none a ball in play or a
+#: hit by pitch. The synthetic pool's default attempt rate applies to these three classes and
+#: is zero on the other three.
 STEALABLE_CLASSES: tuple[str, ...] = ("ball", "called_strike", "swinging_strike")
 
 
@@ -368,27 +350,25 @@ def steal_pools(
     pickoff_kind: str = "out",
     pickoff_counts: tuple[tuple[int, int], ...] | None = None,
 ) -> dict[str, StealPool]:
-    """A steal-opportunity pool per target base.
+    """A steal opportunity pool per target base.
 
     ``by_class=False`` builds the shape of the single pre-pitch steal draw
-    (``SIM_STEAL_PITCH_CLASS=0``): three rows in every (outs, balls, strikes)
-    cell — (went, safe), (went, out), (stayed) — weighted to the attempt and
-    success rates, with no pitch class.
+    (``SIM_STEAL_PITCH_CLASS=0``). Every (outs, balls, strikes) cell gets three rows, (went,
+    safe), (went, out) and (stayed), weighted to the attempt and success rates, with no pitch
+    class.
 
-    The default (``by_class=True``) builds the shape of the steal draw after
-    the pitch: three such rows in every (outs, balls, strikes, class) group,
-    for each of the six pitch classes.
-    The attempt rate applies to :data:`STEALABLE_CLASSES` and is zero on the
-    foul, the ball in play and the hit by pitch; ``class_rates`` overrides
-    it per class. Each class's three rows weigh 1/6 in all, so a count
-    group's pitch rows weigh 1.
+    The default, ``by_class=True``, builds the shape of the steal draw after the pitch: three
+    such rows in every (outs, balls, strikes, class) group, for each of the six pitch classes.
+    The attempt rate applies to :data:`STEALABLE_CLASSES` and is zero on the foul, the ball in
+    play and the hit by pitch; ``class_rates`` overrides it per class. Each class's three rows
+    weigh 1/6 in all, so a count group's pitch rows weigh 1.
 
-    ``pickoff_rows`` adds that many PICKOFF ROWS (no class, never attempted)
-    to every count group named by ``pickoff_counts`` (default: every count),
-    each weighing ``pickoff_weight``; ``pickoff_kind`` is "out", "advancing"
-    (an out scored as a caught stealing) or "error" (a throw that got away).
-    A group then answers "picked off" with probability
-    ``k*w / (1 + k*w)``. Pickoff rows need ``by_class=True``.
+    ``pickoff_rows`` adds that many PICKOFF ROWS (no class, never attempted) to every count
+    group in ``pickoff_counts`` (default: every count), each weighing ``pickoff_weight``.
+    ``pickoff_kind`` is "out", "advancing" (an out scored as a caught stealing) or "error" (a
+    throw that got away). A group then answers "picked off" with probability
+    ``k*w / (1 + k*w)``. Pickoff rows need ``by_class=True``; the function raises ValueError
+    otherwise, and on an unknown ``pickoff_kind`` or class name.
     """
     cells = [(o, b, s) for o in range(3) for b in range(4) for s in range(3)]
     sit_rows: list[tuple[float, float, float]] = []
@@ -470,11 +450,10 @@ def steal_pools(
     return out
 
 
-#: The synthetic change pool's rates per boundary: (a starter, a half-inning
-#: boundary), (a starter, mid-inning), (a reliever, half), (a reliever, mid).
-#: They sit near the live pool's own (2026-09-13: 28.7% at a half boundary,
-#: 3.5% mid-inning; starters 4.5%, relievers 15.4%). The starter's rate rises
-#: with his pitch-count bucket, so a no-DB game pulls him around 85-95 pitches.
+#: The synthetic change pool's rates per boundary: (a starter, a half-inning boundary), (a
+#: starter, mid-inning), (a reliever, half), (a reliever, mid). They sit near the live pool's
+#: own rates. The starter's rate rises with his pitch-count bucket, so a no-database game
+#: pulls him around 85-95 pitches.
 DEFAULT_CHANGE_RATES: dict[str, float] = {
     "starter_half_low": 0.02,  # a starter, a new half inning, under 60 pitches
     "starter_half_mid": 0.25,  # 60-89 pitches
@@ -486,13 +465,13 @@ DEFAULT_CHANGE_RATES: dict[str, float] = {
 
 
 def change_pool(rates: dict[str, float] | None = None, *, season: int = 2024) -> ChangePool:
-    """A pitching-change opportunity pool for the no-DB paths.
+    """A pitching-change opportunity pool for the no-database paths.
 
-    It holds three weighted rows (changed / changed / stayed) in every hard
-    cell the draw reads: (starter, half boundary, pitch-count bucket 0..15,
-    times through 1..4). The rows carry one manager and a rested incoming
-    arm, so the manager weight and the reliever draw's usage weights have
-    something to read (neutral, since every row is alike)."""
+    The pool holds three weighted rows (changed / changed / stayed) in every hard cell the
+    draw reads: (starter, half boundary, pitch-count bucket 0..15, times through 1..4). The
+    rows carry one manager and a rested incoming arm, so the manager weight and the reliever
+    draw's usage weights have something to read. The weights stay neutral, since every row
+    is alike."""
     r = dict(DEFAULT_CHANGE_RATES)
     if rates:
         r.update(rates)
@@ -562,13 +541,12 @@ def synthetic_artifacts(
 ) -> EngineArtifacts:
     """Build an in-memory bundle.
 
-    ``pitch_model`` is the per-pitch mix for every hand; ``pitch_models`` maps
-    a hand to its own mix (a platoon skew). ``inplay_model`` drives
-    :func:`inplay_rows` unless explicit ``bb_rows`` are given. ``advancement``
-    is ``True`` for the default rates, a mapping for custom ones, ``False``
-    for station-to-station. ``steal`` is an ``(attempt, success)`` pair;
-    ``steal_kw`` passes :func:`steal_pools`' keywords (the classes, the
-    class rates, the pickoff rows).
+    ``pitch_model`` is the per-pitch mix for every hand; ``pitch_models`` maps a hand to its
+    own mix (a platoon skew). ``inplay_model`` drives :func:`inplay_rows` unless the caller
+    passes ``bb_rows``. ``advancement`` is ``True`` for the default rates, a mapping for
+    custom ones, or ``False`` for station-to-station. ``steal`` is an ``(attempt, success)``
+    pair; ``steal_kw`` passes :func:`steal_pools`' keywords (the classes, the class rates,
+    the pickoff rows). ``manager=True`` adds the change pool the manager draw reads.
     """
     hands = ("R", "L")
     pools: dict[str, HandPool] = {}
@@ -589,7 +567,6 @@ def synthetic_artifacts(
         bb_pools=bb_pools,
         adv_pools=adv,
         steal_pools=stl,
-        # The change pool the manager draw reads (``manager=True``).
         change_pool=change_pool(season=season) if manager else None,
     )
 
@@ -604,9 +581,8 @@ def league_artifacts(
     season: int = 2024,
     manager: bool = True,
 ) -> EngineArtifacts:
-    """The league-average bundle: every count, every cell, the advancement
-    draws on, the change pool present. A no-DB game drawn from it is
-    realistic baseball."""
+    """The league-average bundle: every count, every cell, the advancement draws on and the
+    change pool present. A no-database game drawn from it plays realistic baseball."""
     return synthetic_artifacts(
         pitch_model=pitch_model or LEAGUE_PITCH_MODEL,
         pitch_models=pitch_models,
@@ -629,14 +605,13 @@ def fixed_play_artifacts(
     steal_kw: dict | None = None,
     **overrides: int,
 ) -> EngineArtifacts:
-    """ONE event in every base-out cell, with its canonical transition, and
-    no advancement pools -- a deterministic play for a unit test.
+    """A bundle with ONE event in every base-out cell, with its canonical transition, and no
+    advancement pools: a deterministic play for a unit test.
 
     ``overrides`` (``batter_dest`` / ``r1_dest`` / ``r2_dest`` / ``r3_dest`` /
-    ``result_hits`` / ``result_outs``) replace the canonical values in every
-    cell. Cells where the event is impossible fall back to a ground out.
-    ``steal`` / ``steal_kw`` add a steal pool, as in
-    :func:`synthetic_artifacts`.
+    ``result_hits`` / ``result_outs``) replace the canonical values in every cell. A cell
+    where the event is impossible gets a ground out instead. ``steal`` / ``steal_kw`` add a
+    steal pool, as in :func:`synthetic_artifacts`.
     """
     rows: list[PlayRow] = []
     for outs in range(3):

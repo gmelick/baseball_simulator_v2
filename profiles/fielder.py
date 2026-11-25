@@ -1,5 +1,10 @@
-"""The fielder season profile: the aggregate of the per-play metrics and the
-outfield arm block.
+"""The fielder season profile: the aggregate of the per-play metrics and the outfield arm.
+
+``_aggregate_fielder_season_metrics`` joins the six per-play temp tables of
+``profiles/fielder_plays.py`` and four Savant boards into
+``derived.fielder_season_metrics``. After the pools are built,
+``_fill_outfield_arm_block`` fills the outfield arm columns from
+``sim.advancement_opportunity_pool``.
 """
 
 from __future__ import annotations
@@ -18,17 +23,17 @@ from profiles.sql import sql_seasons
 
 log = logging.getLogger("player_profile_computor")
 
-#: The outfield test of the fielder aggregate's jump columns. The jump is an
-#: outfield measurement, so an infield row gets NULL, never the player's
-#: figure from an outfield season.
+#: True on an outfield row. The range runs use it to pick the runs per out. The
+#: jump columns use it too: the jump is an outfield measurement, so an infield
+#: row gets NULL, never the player's figure from an outfield season.
 _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 
-#: The six per-play temp tables the fielder aggregator joins, each as a
-#: CREATE TABLE IF NOT EXISTS with the columns the aggregator references.
-#: The statement is idempotent: if the compute step DID create the table, it
-#: no-ops and the real data is preserved.
+#: The six per-play temp tables the fielder aggregate joins, each as a CREATE
+#: TABLE IF NOT EXISTS placeholder with the columns the aggregate reads. A
+#: per-play step skips its table when its sample is too small, and the empty
+#: placeholder keeps the join working. A table the step did create stays as it is.
 _FIELDER_PLACEHOLDER_DDL = {
-    # Outfield catch probability — _compute_outfield_catch_probability
+    # Built by _compute_outfield_catch_probability.
     "_tmp_of_plays": """
         CREATE TABLE IF NOT EXISTS _tmp_of_plays (
             fielder_id INTEGER, position VARCHAR, season SMALLINT,
@@ -36,7 +41,7 @@ _FIELDER_PLACEHOLDER_DDL = {
             oaa_credit FLOAT, direction_cat VARCHAR, star_rating INTEGER
         )
     """,
-    # Infield OAA — _compute_infield_oaa
+    # Built by _compute_infield_oaa.
     "_tmp_if_plays": """
         CREATE TABLE IF NOT EXISTS _tmp_if_plays (
             fielder_id INTEGER, position VARCHAR, season SMALLINT,
@@ -44,7 +49,7 @@ _FIELDER_PLACEHOLDER_DDL = {
             oaa_credit FLOAT, direction_category VARCHAR
         )
     """,
-    # Double-play metrics — _compute_dp_metrics
+    # Built by _compute_dp_metrics.
     "_tmp_dp_plays": """
         CREATE TABLE IF NOT EXISTS _tmp_dp_plays (
             initiator_id INTEGER, initiator_position VARCHAR,
@@ -54,18 +59,9 @@ _FIELDER_PLACEHOLDER_DDL = {
             dp_run_value FLOAT
         )
     """,
-    # Errors — _compute_error_decomposition
-    # Schema follows the SELECT shape inside the aggregator's `err` CTE
-    # (SELECT * FROM _tmp_errors).  Keep the column set minimal but
-    # include the foreign-key columns the outer SELECT joins on.
-    #
-    # These names (fielding_error_count, throwing_error_count,
-    # fielding_error_rate, throwing_error_rate, and the unused
-    # total_plays_fielded) must match _compute_error_decomposition's
-    # output columns exactly. In production that builder always
-    # creates the real table first; the placeholder serves a caller
-    # that runs the aggregator alone, which fails with a Binder Error
-    # on any column this placeholder misnames.
+    # Built by _compute_error_decomposition. The column names must match its
+    # output exactly. A caller that runs the aggregate alone reads this
+    # placeholder, and a misnamed column fails with a Binder Error.
     "_tmp_errors": """
         CREATE TABLE IF NOT EXISTS _tmp_errors (
             fielder_id INTEGER, position VARCHAR, season SMALLINT,
@@ -74,10 +70,8 @@ _FIELDER_PLACEHOLDER_DDL = {
             throwing_error_rate FLOAT, error_rate FLOAT
         )
     """,
-    # Bunt defense — _compute_bunt_defense
-    # The same rule as _tmp_errors above: bunt_outs_recorded and
-    # bunt_fielding_rate are the names _compute_bunt_defense produces
-    # and the aggregator's outer SELECT reads from `b`.
+    # Built by _compute_bunt_defense. The rule of _tmp_errors holds: the names
+    # must match its output.
     "_tmp_bunt_defense": """
         CREATE TABLE IF NOT EXISTS _tmp_bunt_defense (
             fielder_id INTEGER, position VARCHAR, season SMALLINT,
@@ -85,7 +79,7 @@ _FIELDER_PLACEHOLDER_DDL = {
             bunt_fielding_rate FLOAT
         )
     """,
-    # 1B scooping — _compute_first_base_scooping
+    # Built by _compute_first_base_scooping.
     "_tmp_1b_scoop": """
         CREATE TABLE IF NOT EXISTS _tmp_1b_scoop (
             season SMALLINT, fielder_id INTEGER, position VARCHAR,
@@ -99,71 +93,59 @@ class FielderProfilesMixin(ComputorBase):
     """Builds ``derived.fielder_season_metrics``."""
 
     # ------------------------------------------------------------------
-    # AGGREGATE SEASON-LEVEL METRICS
+    # The season aggregate
     # ------------------------------------------------------------------
 
     def _ensure_fielder_temp_tables_exist(self) -> None:
-        """Create empty `_tmp_*` placeholders for any temp table the
-        fielder aggregator JOINs against that hasn't been created yet
-        (e.g. because the upstream compute step returned early on a
-        sample-size guard).
+        """Create an empty placeholder for each per-play temp table that does
+        not exist yet.
 
-        Columns match what the aggregator's CTEs SELECT — the goal is
-        to make the JOIN a no-op when the corresponding compute step
-        was skipped, NOT to substitute real data.
+        A per-play step returns early, with no table, when its sample is too
+        small. The placeholder lets the aggregate's join find no rows; it never
+        stands in for real data.
         """
         self._ensure_placeholder_tables(_FIELDER_PLACEHOLDER_DDL)
 
     def _aggregate_fielder_season_metrics(
         self, seasons: list[int], asof: date | None = None
     ) -> None:
-        """
-        Combine all per-play detail tables into the final
-        derived.fielder_season_metrics rows.
+        """Join the per-play temp tables and four Savant boards into the rows of
+        ``derived.fielder_season_metrics``.
 
-        The six per-play temp tables are already cutoff-filtered
-        by the time this method reads them (they carry no date of their
-        own). Four Savant joins here have no date column at all — sprint
-        speed, arm strength, outs above average and the outfield jump — so
-        each follows the season-shift substitution described on
-        ``_compute_baserunner_profiles``: a season that ENDED before the
-        cutoff joins its own row; the season CONTAINING the cutoff joins
-        the PRIOR season's row. Measured year-to-year correlations: the
-        arm strength 0.857, the jump 0.80 to 0.92, Savant's outs above
-        average per 100 chances 0.38 to 0.61 within an outfield position
-        and 0.34 to 0.63 within an infield position, so the substitute costs
-        little.
+        The six per-play temp tables carry no date; their builders already cut
+        them at ``asof``. The four Savant boards (sprint speed, arm strength,
+        outs above average, the outfield jump) carry only a season number, so
+        each join takes the Savant season shift (``_savant_season_sql``): a
+        season that ended before the cutoff joins its own row, and the season
+        that contains the cutoff joins the prior season's row. Each figure
+        repeats from year to year, so the substitute costs little.
 
-        The shifted numerator takes the shifted denominator. At a cutoff
-        the per-100 figure divides the PRIOR season's outs by the PRIOR
-        season's chances, never by this season's partial count. A cutoff
-        build reads the prior season's chances from the build when that
-        season is in ``seasons``, else from its surviving row in the table
-        (the delete above removes only the run's seasons, and the
-        one-cutoff guard makes a survivor a completed season). With no prior-season
-        chances anywhere the figure is NULL, and the model reads the league
-        mean for it.
+        The per-100 figure of Savant's outs above average divides the outs by
+        the chances of the same season. At a cutoff, the season that contains
+        the cutoff takes the prior season's outs, so it takes the prior
+        season's chances too, never its own partial count. They come from
+        this build when the prior season is in ``seasons``, else from the
+        prior season's surviving row in the table. The one-cutoff guard makes
+        sure a surviving row is a completed season. With no prior-season
+        chances the figure is NULL, and the model reads the league mean.
 
-        The six outfield arm columns and ``of_arm_runs`` are
-        written NULL here. ``_fill_outfield_arm_block`` fills the six from
-        the advancement pool after the pools are built; ``of_arm_runs``
-        stays NULL (the model does not read it).
+        The six outfield arm columns and ``of_arm_runs`` are written NULL.
+        ``_fill_outfield_arm_block`` fills the six after the pools are built.
+        ``of_arm_runs`` stays NULL, because the model does not read it.
 
-        The six Savant columns come LAST, after ``asof_date``, in
-        ``OAA_JUMP_COLUMN_ORDER``. The outs above average join is per
-        position (the board is pulled once per position, so a player's
-        figure differs between his LF and CF rows); the jump join is per
-        player and the jump columns are NULL on an infield row.
+        The INSERT has no column list, so the column order matters. The six
+        Savant columns come last, after ``asof_date``, in
+        ``OAA_JUMP_COLUMN_ORDER``. The outs above average join is per position:
+        Savant publishes the board once per position, so a player's figure
+        differs between his LF and CF rows. The jump join is per player, and an
+        infield row gets NULL jump columns.
         """
         log.info("Aggregating fielder season metrics …")
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         savant_season = self._savant_season_sql("c.season", asof)
-        # The per-100 denominator follows the numerator's season.
-        # For the season that contains the cutoff, the outs come from the
-        # prior season, so the chances must too: from the build (`prev`)
-        # when the prior season is in the run, else from its surviving row
-        # (`stored`). A live build divides by the row's own chances.
+        # The chances of the outs' own season (see the docstring): at a cutoff,
+        # `prev` from this build, else `stored` from the table.
         savant_denominator = (
             f"(CASE WHEN c.season = {asof_date.year} "
             "THEN COALESCE(prev.opportunities, stored.opportunities) "
@@ -172,26 +154,15 @@ class FielderProfilesMixin(ComputorBase):
             else "c.opportunities"
         )
 
-        # ----------------------------------------------------------------
-        # Defensive: ensure every _tmp_* table the aggregator JOINs against
-        # exists, even if the upstream _compute_* step returned early due to
-        # the sample-size guard (e.g. _compute_outfield_catch_probability
-        # bails out when len(df) < 500).  Without this step the aggregator
-        # crashes with "Catalog Error: Table with name _tmp_of_plays does
-        # not exist!" on small / partial data loads.  Creating an empty
-        # placeholder with the right columns is a no-op JOIN target and
-        # preserves the aggregator's shape.
-        # ----------------------------------------------------------------
+        # Without the placeholders, a small data load fails with a DuckDB
+        # "Catalog Error: Table with name _tmp_of_plays does not exist!".
         self._ensure_fielder_temp_tables_exist()
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
         self._refuse_a_mixed_cutoff("derived.fielder_season_metrics", seasons, asof_date)
 
-        # Delete existing rows for these seasons (full rebuild pattern).
-        # A cutoff build also removes a season that had not
-        # started yet — INSERT alone only overwrites rows the new query
-        # produces, so a stale full-season row would otherwise survive.
+        # The INSERT replaces nothing, so the run's seasons go first. A cutoff
+        # build also drops each later season, which would otherwise keep its
+        # rows from a full build.
         self._delete_season_rows("derived.fielder_season_metrics", seasons, asof)
 
         self._conn.execute(f"""
@@ -481,23 +452,20 @@ class FielderProfilesMixin(ComputorBase):
         self._stamp_one_cutoff("derived.fielder_season_metrics", asof_sql)
         self._assert_fielder_profiles_have_no_leakage(seasons, asof_date)
 
-        # The per-play temp tables have served their one reader.
+        # The aggregate is the per-play temp tables' only reader.
         for table in _FIELDER_PLACEHOLDER_DDL:
             self._conn.execute(f"DROP TABLE IF EXISTS {table}")
 
         log.info("  Fielder season metrics aggregated.")
 
     def _assert_fielder_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
-        """Prove raw.pitches contributed no row dated after the cutoff.
+        """Run the cutoff leakage check on ``raw.pitches``.
 
-        Covers all six per-play builders and this aggregator — they all
-        read raw.pitches under the identical season+cutoff filter, so one
-        check at the end of the chain covers all of them. The four Savant
-        joins (sprint speed, arm strength, outs above average, the outfield
-        jump) have no date of their own to check — they are made safe by
-        the season-shift substitution in the query above, not by
-        filtering. The arm block's own dated source, the advancement pool,
-        is checked by ``_fill_outfield_arm_block``.
+        The six per-play builders and the aggregate read ``raw.pitches`` under
+        the same season and cutoff filter, so one check covers them all. The
+        four Savant boards carry no date to check; the season shift guards
+        them. ``_fill_outfield_arm_block`` checks the arm block's own dated
+        source, the advancement pool.
         """
         self._check_pitch_sources_leakage(seasons, asof)
 
@@ -506,30 +474,28 @@ class FielderProfilesMixin(ComputorBase):
     # ------------------------------------------------------------------
 
     def _fill_outfield_arm_block(self, seasons: list[int], asof: date | None = None) -> None:
-        """Fill the outfield arm block from
-        ``sim.advancement_opportunity_pool``, per (fielder, position, season).
+        """Fill the outfield arm columns from ``sim.advancement_opportunity_pool``,
+        per (fielder, position, season).
 
-        The pool holds one row per real chance to take an extra base, with
-        the fielder who fielded the ball and his position. This step counts
-        each outfielder's chances, the attempts against him and the runners
-        he threw out, then writes the six arm columns on his fielder row.
-        The expectation behind ``arm_advancement_prevention`` is the pool's
-        own attempt rate in the same season, decision, out state AND
-        position: runners take the extra base less often against a left
-        fielder for the geometry, not for his arm, so a 0 prevention is
-        average at every position.
+        The pool holds one row per real chance to take an extra base, with the
+        fielder who fielded the ball and his position. The step counts each
+        outfielder's chances, the attempts against him and the runners he threw
+        out, then writes the six arm columns on his fielder row.
+        ``arm_advancement_prevention`` compares his attempts with the pool's own
+        attempt rate in the same season, decision, outs AND position. Runners
+        take the extra base less often against a left fielder because of the
+        geometry, not his arm, so 0 means average at every position.
 
-        The step first resets the seven arm columns on every fielder row of
-        the requested seasons, then writes the block where the pool holds a
-        chance. So the fill is self-contained: a row the pool does not
-        support (a stale block from an earlier source, or a position the
-        player did not field that season) is left NULL, not kept.
+        The step first resets the seven arm columns on every fielder row of the
+        requested seasons, then writes the block where the pool holds a chance.
+        So a row the pool does not support (a stale block from an earlier
+        source, or a position the player did not field that season) ends NULL.
 
-        Runs AFTER the pools. A cutoff filters the pool by ``game_date``, so
-        the block is exact to the day — no season shift. Without the pool (a
-        fresh database) the step logs and leaves the block NULL; the next
-        nightly fills it. ``of_arm_runs`` is written NULL: the model does not
-        read it.
+        Run the step AFTER the pools are built. A cutoff filters the pool by
+        ``game_date``, so the block is exact to the day, with no season shift.
+        With no pool (a fresh database) the step logs a warning and leaves the
+        block NULL; the next nightly fills it. ``of_arm_runs`` stays NULL: the
+        model does not read it.
         """
         if not duck_table_exists(self._conn, "sim", "advancement_opportunity_pool"):
             log.warning("  arm block skipped: sim.advancement_opportunity_pool absent")
@@ -570,11 +536,10 @@ class FielderProfilesMixin(ComputorBase):
             JOIN expected e USING (season, scenario, from_base, target_base, outs, fielder_pos)
             GROUP BY 1, 2, 3
         """)
-        # The reset: the fill alone must leave the table right. The join
-        # UPDATE below touches only rows the pool supports, so a row it
-        # does not (a block from an earlier source, or a position the player
-        # did not field that season) would keep stale figures. The infield
-        # and the catcher never carry a block, so every position is reset.
+        # The join UPDATE below touches only the rows the pool supports. Reset
+        # every row of the run's seasons first, so none keeps a stale block.
+        # The infield and the catcher never carry one, so the reset covers
+        # every position.
         self._conn.execute(f"""
             UPDATE derived.fielder_season_metrics SET
                 arm_opportunities          = NULL,

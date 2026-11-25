@@ -35,21 +35,22 @@ class PitcherProfilesMixin(ComputorBase):
     """Builds ``derived.pitcher_season_metrics`` and ``derived.pitcher_gmm_components``."""
 
     def _compute_pitcher_profiles(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Two-pass approach:
-          Pass 1 (SQL): compute all command metrics and result stats in DuckDB.
-          Pass 2 (Python): fit GMM for each pitcher/season, write model JSON
-                           and component rows.
+        """Rebuild the pitcher profiles of ``seasons`` and their arsenal mixtures.
+
+        Two passes:
+          1. SQL: every command metric and result statistic, in DuckDB.
+          2. Python: one arsenal mixture (GMM, a Gaussian mixture model) per
+             qualifying pitcher-season, fitted in a process pool; then the
+             model JSON and the component rows.
 
         Pass 2 reads each season's pitches in key order (game, at-bat, pitch),
-        because the seeded fit depends on the row order (SIM-580).
+        because the seeded fit depends on the row order.
 
-        ``asof`` is the date the profile's data runs through, the same rule
-        as the batter profiles. Every source here (``raw.pitches`` in both
-        passes and ``raw.play_events`` in the pickoff-out CTE) is our own data,
-        so, unlike the batter profile's Savant boards, no prior-season fallback
-        is needed: a plain ``game_date <= cutoff`` filter is enough (design
-        doc: docs/audit/2026-09-10-savant-point-in-time-data.md §6).
+        ``asof`` is the date the profile's data runs through, as for the batter
+        profiles. Every source here (``raw.pitches`` in both passes,
+        ``raw.play_events`` in the pickoff-out CTE) is our own dated data. So a
+        plain ``game_date <= cutoff`` filter is enough; unlike the batter
+        profile's Savant boards, no prior-season fallback is needed.
         """
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
@@ -58,20 +59,20 @@ class PitcherProfilesMixin(ComputorBase):
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         pickoff_outs_cte = self._play_events_outs_cte(asof_sql if asof is not None else None)
 
-        # Refuse, before any write, a rebuild that would leave the
-        # table at two cutoffs.
+        # The check runs before any write.
         self._refuse_a_mixed_cutoff("derived.pitcher_season_metrics", seasons, asof_date)
 
-        # Delete child rows first so INSERT OR REPLACE on pitcher_season_metrics
-        # can implicitly remove the old parent row without a FK violation.
+        # Delete the child rows first, so that INSERT OR REPLACE on
+        # pitcher_season_metrics can remove the old parent row without a
+        # foreign-key violation.
         self._delete_season_rows("derived.pitcher_gmm_components", seasons, asof)
         if asof is not None:
             # The removal rule of the batter profiles: INSERT OR REPLACE
-            # only overwrites the rows the query below produces, so a
-            # season that had not started at the cutoff (no 2025 pitcher on
-            # 15 April 2024) would otherwise survive a backtest rebuild from
-            # an earlier, full-season run. The child table's delete above
-            # covers the same seasons.
+            # overwrites only the rows the query below produces. A season that
+            # had not started at the cutoff (no 2025 pitcher on 15 April 2024)
+            # would otherwise survive a backtest rebuild from an earlier,
+            # full-season run. The child table's delete above covers the same
+            # seasons.
             self._delete_season_rows("derived.pitcher_season_metrics", seasons, asof)
 
         # --- Pass 1: command + result metrics ----------------------------
@@ -214,14 +215,10 @@ class PitcherProfilesMixin(ComputorBase):
         log.info("  Pitcher command metrics inserted (GMM pending).")
 
         # --- Pass 2: GMM fitting -----------------------------------------
-        # Performance design:
-        #   BEFORE: one pg.raw.pitches query per pitcher/season (~5,600 round-trips
-        #           for 700 pitchers × 8 seasons), all fits sequential.
-        #   AFTER:  one query per season fetches all pitch vectors at once,
-        #           split by pitcher in pandas. Fitting parallelised across
-        #           CPU cores with ProcessPoolExecutor.
-        #
-        # Fetch qualifying (pitcher_id, season) pairs
+        # One query per season fetches every qualifying pitcher's pitch
+        # vectors; one query per pitcher-season would be thousands of round
+        # trips. pandas splits the rows by pitcher, and a process pool fits
+        # the mixtures across the CPU cores.
         qualifying = self._conn.execute(
             f"""
                 SELECT DISTINCT pitcher_id, season
@@ -234,15 +231,13 @@ class PitcherProfilesMixin(ComputorBase):
 
         log.info("  Fitting GMMs for %d pitcher/season pairs …", len(qualifying))
 
-        # Group by season so we issue one bulk fetch per season rather than
-        # one per pitcher. A single season is ~700K rows — well within memory.
+        # One season is about 700,000 rows, well within memory.
         from collections import defaultdict
 
         by_season: dict[int, list[int]] = defaultdict(list)
         for pitcher_id, season in qualifying:
             by_season[season].append(pitcher_id)
 
-        # Collect all (pitcher_id, season, pitches_df) tuples for parallel fitting
         fit_tasks: list[tuple[int, int, pd.DataFrame]] = []
 
         for season, pitcher_ids in sorted(by_season.items()):
@@ -283,10 +278,10 @@ class PitcherProfilesMixin(ComputorBase):
                 )
                 fit_tasks.append((pitcher_id, season, pitcher_df))
 
-        # The mixtures are fitted in parallel, in chunks across the CPU cores.
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
-        # Compact float32 feature arrays (not DataFrames) keep per-task IPC small.
+        # Float32 feature arrays, not DataFrames, keep small the bytes each
+        # task sends to its worker process.
         array_tasks = [
             (df[GMM_FEATURE_NAMES].to_numpy(dtype=np.float32), pid, ssn)
             for pid, ssn, df in fit_tasks
@@ -310,8 +305,8 @@ class PitcherProfilesMixin(ComputorBase):
                 try:
                     chunk_results = future.result()
                 except Exception as exc:
-                    # Whole-chunk crash: flag every pitcher in it as fallback,
-                    # preserving the prior per-pitcher crash semantics.
+                    # A crashed chunk marks every pitcher in it as a fallback,
+                    # as a failed single fit does.
                     log.error("GMM worker chunk crashed: %s", exc)
                     fallbacks.extend((pid, ssn) for _arr, pid, ssn in future_to_chunk[future])
                     continue
@@ -321,8 +316,6 @@ class PitcherProfilesMixin(ComputorBase):
                     else:
                         fitted.append((pitcher_id, season, model_json, component_rows))
 
-        # Batched DuckDB writes: a few set-based statements instead of one
-        # UPDATE or INSERT per pitcher.
         _flush_gmm_results(self._conn, fitted, fallbacks)
 
         gmm_success = len(fitted)
@@ -341,14 +334,11 @@ class PitcherProfilesMixin(ComputorBase):
         log.info("  Pitcher profiles done (as of %s).", asof_sql)
 
     def _assert_pitcher_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
-        """Prove no source that fed the pitcher profiles postdates the cutoff.
+        """Raise RuntimeError when a source of the pitcher profiles postdates the cutoff.
 
-        Mirrors ``_assert_batter_profiles_have_no_leakage``. Two sources feed
-        this grouping: ``raw.pitches`` (both the command-metric pass and the
-        GMM pitch-shape pass read the same table, so one check covers both)
-        and ``raw.play_events`` (the pickoff-out CTE) — wrapped the same way
-        ``_play_events_outs_cte`` already handles a pre-0018 database or a
-        unit-test fixture: a missing table is a schema-availability question,
-        not a leakage question, and skips rather than crashes.
+        Two sources feed the pitcher profiles. ``raw.pitches`` feeds both
+        passes, so one check covers both. ``raw.play_events`` feeds the
+        pickoff-out CTE; when the table is absent, the check skips it, because
+        a missing table is a question of the schema, not a leak.
         """
         self._check_pitch_sources_leakage(seasons, asof, play_events=True)

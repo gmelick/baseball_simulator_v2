@@ -1,29 +1,21 @@
-"""
-bundle/versions.py — the engine-artifact bundle as published versions.
+"""Publish each bundle build as a version behind one link, swapped in one atomic step.
 
-Why: the running app's workers read ``/data/play_pool/engine_artifacts``
-whenever one of them (re)starts. An export that rewrote that folder in place
-would let a worker that respawned during a rebuild read a half-written file, or
-pair the parent's old shared arrays with new files.
+The app's workers read ``/data/play_pool/engine_artifacts`` each time one of them starts.
+A build that rewrote that folder in place could hand a restarting worker a half-written
+file, or pair the parent's old shared arrays with new files.
 
-What this module does:
+* The LINK ``engine_artifacts`` is a symbolic link to one VERSION, a folder under
+  ``engine_artifacts.versions/<build id>/``. Readers keep the old path.
+* A build STAGES a new version: a copy of the current one, so a partial build and the
+  hand-written files (``park_geometry_overrides.json``) carry over.
+* A finished build PUBLISHES the version: ``os.replace`` moves a temporary link onto the
+  link in one atomic step. A reader sees the old version or the new one, never a mix.
+* PRUNE keeps the newest versions and every version a running app marks as in use
+  (``.in_use.<tag>``), so a pinned app never loses its files.
 
-* ``engine_artifacts`` (the LINK) is a symbolic link to one folder under
-  ``engine_artifacts.versions/<build id>/`` (a VERSION). Readers keep the old
-  path; the link resolves it.
-* A build STAGES a new version: a copy of the current one, so a partial build
-  and the hand-written files (``park_geometry_overrides.json``) carry over.
-* A finished build PUBLISHES the version: a temporary link moved onto the link
-  with ``os.replace``, which is atomic. A reader sees the old version or the
-  new one, never a mix.
-* PRUNE keeps the newest versions and every version a running app marks as in
-  use (``.in_use.<tag>``), so a pinned app never loses its files.
-
-The first publish on a host converts a legacy real folder: it moves the folder
-under ``engine_artifacts.versions/legacy-<ts>`` and links to it, so the old
-path keeps resolving to the same files.
-
-Owner: Data Engineer.
+The first publish on a host converts a legacy real folder. It moves the folder to
+``engine_artifacts.versions/legacy-<ts>`` and links to it, so the old path still resolves
+to the same files.
 """
 
 from __future__ import annotations
@@ -41,20 +33,23 @@ VERSIONS_SUFFIX = ".versions"
 #: The prefix of an in-use marker inside a version folder.
 IN_USE_PREFIX = ".in_use."
 
-#: Versions kept by :func:`prune_bundle_versions` (marked versions are kept too).
+#: The versions :func:`prune_bundle_versions` keeps; it keeps the marked versions too.
 KEEP_VERSIONS = 3
 
 #: The prefix of a converted legacy folder. It sorts as the oldest version.
 LEGACY_PREFIX = "legacy-"
 
-#: The file :func:`publish_bundle_version` writes into a version it publishes.
+#: The file :func:`publish_bundle_version` writes into the version it publishes.
 #: A folder without it is a build that never published: one in progress, or one
 #: whose process died (a segfault skips the clean-up).
 PUBLISHED_MARKER = ".published"
 
 
 def bundle_link(pool_dir: str | os.PathLike[str] | None = None) -> str:
-    """The published bundle link ``<pool_dir>/engine_artifacts``; ``pool_dir`` defaults to ``$BASEBALL_PLAY_POOL_DIR``."""
+    """The published bundle link ``<pool_dir>/engine_artifacts``.
+
+    ``pool_dir`` defaults to ``$BASEBALL_PLAY_POOL_DIR``, else ``/data/play_pool``.
+    """
     if pool_dir is None:
         pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
     return os.path.join(pool_dir, "engine_artifacts")
@@ -71,10 +66,12 @@ def resolve_bundle_dir(link: str) -> str:
 
 
 def _build_id(now: datetime | None = None) -> str:
+    """The build id: the UTC time as ``YYYYMMDDTHHMMSSZ``."""
     return (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _unique_dir(root: str, name: str) -> str:
+    """``root/name``, or ``root/name-N`` with the first free N from 2."""
     path = os.path.join(root, name)
     n = 1
     while os.path.lexists(path):
@@ -84,6 +81,10 @@ def _unique_dir(root: str, name: str) -> str:
 
 
 def _ignore_markers(_dir: str, names: list[str]) -> set[str]:
+    """The names a staged copy leaves out: the in-use markers, ``tmp_*`` and the published marker.
+
+    A copied marker would make the new version look in use or published.
+    """
     return {
         n
         for n in names
@@ -94,8 +95,8 @@ def _ignore_markers(_dir: str, names: list[str]) -> set[str]:
 def stage_bundle_version(link: str, *, now: datetime | None = None) -> str:
     """Create a new version folder, seeded with a copy of the current version.
 
-    Returns the new folder. Nothing a reader sees changes until
-    :func:`publish_bundle_version`. With no current bundle, the folder starts empty.
+    Returns the new folder. A reader sees no change until :func:`publish_bundle_version`.
+    With no current bundle, the folder starts empty.
     """
     root = versions_root(link)
     os.makedirs(root, exist_ok=True)
@@ -145,10 +146,12 @@ def discard_bundle_version(version_dir: str) -> None:
 
 
 def _version_order(name: str) -> tuple[int, str]:
+    """The sort key of a version folder: legacy folders first, then by build id."""
     return (0 if name.startswith(LEGACY_PREFIX) else 1, name)
 
 
 def _in_use(version_dir: str) -> bool:
+    """True when the version holds an in-use marker."""
     try:
         return any(n.startswith(IN_USE_PREFIX) for n in os.listdir(version_dir))
     except OSError:
@@ -156,17 +159,18 @@ def _in_use(version_dir: str) -> bool:
 
 
 def _published(name: str, path: str) -> bool:
+    """True for a legacy folder or a version that holds the published marker."""
     return name.startswith(LEGACY_PREFIX) or os.path.exists(os.path.join(path, PUBLISHED_MARKER))
 
 
 def prune_bundle_versions(link: str, keep: int = KEEP_VERSIONS) -> list[str]:
     """Delete old versions and dead builds. Returns the deleted folders.
 
-    * A PUBLISHED version is kept when it is among the newest ``keep``, is the
+    * The prune keeps a PUBLISHED version that is among the newest ``keep``, is the
       current one, or carries an in-use marker.
-    * An UNPUBLISHED folder older than the current version is a build whose
-      process died before it published (a segfault skips the clean-up): it is
-      deleted. One newer than the current version may be a build in progress, so
+    * An UNPUBLISHED folder older than the current version is a build whose process
+      died before it published (a segfault skips the clean-up). The prune deletes it.
+      An unpublished folder newer than the current one may be a build in progress, so
       it stays.
     """
     root = versions_root(link)

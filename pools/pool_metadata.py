@@ -1,6 +1,8 @@
-"""The sim-pool build metadata: the builder version, the recency weights, the
-incremental-rebuild gate, the build-record reader and the situation SQL the pool
-builders share.
+"""The parts the pool builders share: the builder version, the recency weights, the rebuild gate.
+
+The incremental-rebuild gate picks the seasons a build writes, from the build records in
+``sim.pool_build_metadata``. The module also holds the situation SQL (the base state and
+the score margin) that the builders share.
 """
 
 from __future__ import annotations
@@ -17,15 +19,14 @@ log = logging.getLogger("player_profile_computor")
 # The recency weights and the incremental-rebuild gate of the sim pools
 # ---------------------------------------------------------------------------
 
-# Bump on any formula change to a pool SELECT: the incremental-rebuild gate
-# (_seasons_needing_rebuild) treats a season built by another version as stale.
-# sim554.1 adds the steal pool's pitch class and pickoff rows (the running game
-# on the pitch, SIM-554; migration 0031). CHANGES.md records every earlier
-# version.
+# Bump on any formula change to a pool SELECT. The source watermark cannot see a
+# formula change, so the incremental-rebuild gate (_seasons_needing_rebuild)
+# treats a season built by another version as stale. CHANGES.md records what each
+# version changed.
 POOL_BUILDER_VERSION = "sim554.1"
 
 
-RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
+RECENCY_RECENT_SEASONS = 2  # seasons that get the peak weight, the reference included
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
 RECENCY_PEAK = 2.0
@@ -34,9 +35,9 @@ RECENCY_PEAK = 2.0
 def recency_weight(season: int, ref_season: int) -> float:
     """The sampling recency weight of a row from ``season`` against ``ref_season``.
 
-    2.0 for the most-recent two seasons, then x0.75 per additional season,
-    floored at 0.25. This mirrors the SQL emitted into the pool builders so the
-    Python reference and the materialized ``recency_weight`` column never diverge.
+    The weight is 2.0 for the reference season and the season before it, then
+    x0.75 for each older season, with a floor of 0.25. :func:`_recency_weight_sql`
+    writes the same formula into the pool builds' SQL.
     """
     age = ref_season - season
     if age <= RECENCY_RECENT_SEASONS - 1:
@@ -47,7 +48,7 @@ def recency_weight(season: int, ref_season: int) -> float:
 
 
 def _recency_weight_sql(season_expr: str, ref_season: int) -> str:
-    """SQL CASE expression mirroring ``recency_weight()`` for a season column."""
+    """The SQL ``CASE`` form of :func:`recency_weight` for the season column ``season_expr``."""
     age = f"({ref_season} - {season_expr})"
     return (
         f"CASE WHEN {age} <= {RECENCY_RECENT_SEASONS - 1} THEN {RECENCY_PEAK} "
@@ -57,13 +58,14 @@ def _recency_weight_sql(season_expr: str, ref_season: int) -> str:
 
 
 def _canonical_ref_season(conn, seasons: list[int]) -> int:
-    """The one recency reference season every sim pool shares.
+    """The recency reference season of a pool build.
 
     It is the newest of the seasons this run asks for and of every
-    ``recency_ref_season`` already recorded in ``sim.pool_build_metadata``. Once
-    one pool advances the reference, the others adopt it, so a row's
-    ``recency_weight`` agrees between the pitch pool and the outcome pool built
-    from it, across pools and across incremental runs.
+    ``recency_ref_season`` already recorded in ``sim.pool_build_metadata``, so
+    the pools that one run builds share one reference. A season the run does
+    not rebuild keeps the weights of the reference it was built under: a move
+    of the reference does not rewrite its rows. With no metadata table, the
+    reference is the newest season asked for.
     """
     ref = max(seasons)
     try:
@@ -80,7 +82,11 @@ def _canonical_ref_season(conn, seasons: list[int]) -> int:
 def _seasons_to_build(
     conn, pool_name: str, seasons: list[int], incremental: bool
 ) -> tuple[list[int], int] | None:
-    """The seasons a build of ``sim.<pool_name>`` writes and its recency reference; None when all are fresh."""
+    """Return ``(seasons, ref_season)`` for a build of ``sim.<pool_name>``, or None.
+
+    ``seasons`` are the ones the build writes. None means the incremental gate
+    found every season fresh, so the build skips.
+    """
     # The reference reads the FULL season list, before the incremental gate narrows it.
     ref_season = _canonical_ref_season(conn, seasons)
     if incremental:
@@ -147,8 +153,6 @@ def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[i
         if src_max is None or prev_max is None:
             stale.append(s)
             continue
-        # Fresh only when the date has not advanced AND the source row count is
-        # unchanged AND the builder that produced the season is the running one.
         date_advanced = src_max > prev_max
         count_changed = prev_cnt is None or src_cnt != prev_cnt
         builder_changed = prev_builder != POOL_BUILDER_VERSION
@@ -158,12 +162,13 @@ def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[i
 
 
 def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int) -> None:
-    """Upsert the build record of each (pool, season): the source watermark, the
-    source row count and the recency reference.
+    """Insert or replace the build record of each (pool, season) in ``sim.pool_build_metadata``.
 
-    The source watermark (``source_max_game_date``) and row count
-    (``source_row_count``) let the next incremental run detect a late row on a
-    date already seen. ``row_count`` is the pool's own row count, for the logs.
+    The record holds the source watermark (``source_max_game_date``), the source
+    row count, the recency reference and the builder version. The next
+    incremental run compares them to find the stale seasons; the row count
+    catches a late row on a date already seen. ``row_count`` is the pool's own
+    row count, for the logs.
     """
     for s in seasons:
         src_max, src_cnt = _source_state(conn, s)
@@ -187,7 +192,10 @@ def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int
 def read_pool_builds(
     conn: Any, pool_name: str, seasons: Iterable[int], columns: str = "builder_version"
 ) -> dict[int, tuple]:
-    """``season -> (columns...)`` from ``sim.pool_build_metadata`` for one pool's ``seasons``, in season order."""
+    """Return ``season -> (columns...)`` of one pool's build records, in season order.
+
+    ``columns`` is a SQL column list of ``sim.pool_build_metadata``.
+    """
     rows = conn.execute(
         f"SELECT season, {columns} FROM sim.pool_build_metadata "
         f"WHERE pool_name = '{pool_name}' AND season IN ({sql_seasons(seasons)})"

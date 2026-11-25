@@ -1,5 +1,9 @@
-"""What every artifact builder shares: the pool columns, the default paths, the
-season window, the game-date column and the plain-array writer.
+"""The helpers the bundle's exports and loaders share.
+
+The exports share the pool columns, the DuckDB path, the season window, the game-date
+column and the pickle-free npz writer. The loaders share the column readers. Each reader
+takes the shared view (an array the parent process placed in shared memory) when the
+parent published one, and reads the file otherwise.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import numpy as np
 
 from db.introspect import duck_columns
 
+#: The ten pitch geometry columns: the pitch pool's ``geom`` array.
 _GEOM_COLS = [
     "velo",
     "ivb",
@@ -25,48 +30,46 @@ _GEOM_COLS = [
     "plate_x",
     "plate_z",
 ]
+#: The game-situation columns: the ``sit`` array of each hand's pool.
 _SIT_COLS = ["count_balls", "count_strikes", "outs", "runners_state", "inning", "score_diff"]
 
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 
-#: The artifact's season window (owner ruling 2026-08-20, SIM-516): the last
-#: three COMPLETED seasons plus the current one, in practice the 4 newest
-#: seasons in the pool (2023-2026 today). Four seasons against three thicken
-#: the thinnest cell of the fielding draw's hard base-out filter from 323 to
-#: 439 rows (+36% batted balls) at under 0.5% frequency drift (the window
-#: census, `scripts/pool_window_census.py`). They cost about 35% more scoring
-#: per plate appearance.
+#: The season window: the last three COMPLETED seasons plus the current one, so the 4
+#: newest seasons in the pool. The fourth season thickens the thinnest cells of the
+#: fielding draw's base-out filter, with little drift in the frequencies, at a higher
+#: scoring cost per plate appearance (``scripts/pool_window_census.py`` measures both).
+#: ``tests/acceptance/bands.py`` ``POOL_WINDOW`` must name as many seasons.
 RECENCY_FLOOR_SEASONS = 4
 
 
 def ymd_select(con, table: str) -> str:
-    """The game-date column for ``table``, or nothing when it has none.
+    """The SELECT fragment for the game-date column of ``table``, or a blank when it has none.
 
-    Probed rather than assumed, matching how every other optional pool column
-    is exported: a minimal or older ``sim.*`` table still builds, and the
-    loader already treats the column as optional on the way back in.
+    The function probes the table, as the export does for every optional pool column, so
+    an older or reduced ``sim.*`` table still exports. The loaders treat the column as
+    optional too.
     """
     schema, _, name = table.partition(".")
     have = duck_columns(con, schema, name)
     return f", {GAME_YMD_SQL} " if "game_date" in have else " "
 
 
-#: Every pool row's game date as a plain YYYYMMDD integer.
+#: Every pool row's game date as a YYYYMMDD integer.
 #:
-#: The pools hold four seasons of plays and the simulator draws from all of
-#: them. Simulating a game played in April 2025 while the pool still offers
-#: plays from that September is look-ahead (the pool cutoff, SIM-535): the
-#: same defect as a profile built past its cutoff, and a larger one, because it
-#: is the plays themselves.
-#: Carrying the date per row lets the sampler exclude the future at draw time,
-#: which costs one comparison per game instead of one bundle rebuild per date.
+#: The pools hold four seasons of plays, and the simulator draws from all of them. A
+#: simulation of an April 2025 game must not draw a play from that September. That draw
+#: is look-ahead: the future leaks into the simulation, as in a profile built past its
+#: cutoff. The date on each row lets the sampler drop the future at draw time. That costs
+#: one comparison per game instead of one bundle rebuild per date.
 #:
-#: An integer rather than a date: it shares cleanly across worker processes,
-#: compares in one instruction, and sorts the same way the calendar does.
+#: An integer, not a date: it shares across worker processes, compares in one
+#: instruction and sorts in calendar order.
 GAME_YMD_SQL = "CAST(strftime(game_date, '%Y%m%d') AS INTEGER) AS game_ymd"
 
 
 def last_n_seasons(con: duckdb.DuckDBPyConnection, n: int = RECENCY_FLOOR_SEASONS) -> list[int]:
+    """The ``n`` newest seasons in ``sim.pitch_pool``, oldest first."""
     seasons = [
         int(r[0])
         for r in con.execute(
@@ -77,8 +80,10 @@ def last_n_seasons(con: duckdb.DuckDBPyConnection, n: int = RECENCY_FLOOR_SEASON
 
 
 def join_rows(keys: np.ndarray, targets: np.ndarray) -> np.ndarray:
-    """For every ``keys[i]`` the index j with
-    ``targets[j] == keys[i]`` (the first such j), or -1. int32."""
+    """For each ``keys[i]``, the first index j with ``targets[j] == keys[i]``, else -1.
+
+    A negative key never matches. Returns an int32 array as long as ``keys``.
+    """
     keys = np.asarray(keys, dtype=np.int64)
     targets = np.asarray(targets, dtype=np.int64)
     out = np.full(len(keys), -1, dtype=np.int32)
@@ -111,7 +116,7 @@ def _savez_plain(path: str, **arrays: Any) -> None:
 
 
 def take_view(views: dict[str, np.ndarray], key: str, disk_path: str) -> np.ndarray:
-    """Either a shared view (zero-cost) or a fresh ``np.load`` (cold)."""
+    """The shared view ``key`` when the parent published one, else the array at ``disk_path``."""
     v = views.get(key)
     if isinstance(v, np.ndarray):
         return v
@@ -143,7 +148,10 @@ def read_json(art_dir: str, name: str) -> Any:
 def meta_column(
     views: dict[str, np.ndarray], key: str, meta: dict, col: str, dtype: type, fill: float = 0
 ) -> np.ndarray:
-    """The shared view ``key``, else the metadata column ``col`` as ``dtype`` with NULL read as ``fill``."""
+    """The shared view ``key``, else the metadata column ``col`` as ``dtype``.
+
+    A NULL reads as ``fill``.
+    """
     v = views.get(key)
     if isinstance(v, np.ndarray):
         return v
@@ -163,7 +171,10 @@ def optional_meta_column(
 
 
 def recency_column(views: dict[str, np.ndarray], key: str, meta: dict) -> np.ndarray:
-    """The shared view ``key``, else the ``recency_weight`` column as float32 with NULL and NaN read as 1.0."""
+    """The shared view ``key``, else the ``recency_weight`` column as float32.
+
+    A NULL or NaN weight reads as 1.0.
+    """
     v = views.get(key)
     if isinstance(v, np.ndarray):
         return v
@@ -171,7 +182,10 @@ def recency_column(views: dict[str, np.ndarray], key: str, meta: dict) -> np.nda
 
 
 def game_ymd_column(meta: dict) -> np.ndarray | None:
-    """The ``game_ymd`` column as int32 with NULL read as 0, or None on a bundle exported before it existed."""
+    """The ``game_ymd`` column as int32, with NULL read as 0.
+
+    Returns None for a bundle exported before the column existed.
+    """
     if "game_ymd" not in meta:
         return None
     return np.asarray(np.ma.filled(meta["game_ymd"], 0), dtype=np.int32)

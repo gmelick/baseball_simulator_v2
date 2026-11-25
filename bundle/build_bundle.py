@@ -1,4 +1,10 @@
-"""Build the engine-artifact bundle: the nightly entry point that writes and publishes a version."""
+"""Build a bundle version and publish it: the nightly entry point.
+
+Run ``python -m bundle.build_bundle --what all``; ``--what`` picks one part instead. With
+no ``--out-dir``, the build copies the current version into a new folder, writes into it,
+and points the bundle link at it only when every step succeeds. A failed build deletes the
+new folder. ``--out-dir`` writes in place instead.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +46,7 @@ log = logging.getLogger("engine_artifacts")
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the arguments, build the bundle and publish it. Returns 0."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser(description="Build the SIM-422 engine-artifact bundle.")
     ap.add_argument("--duckdb-path", default=DEFAULT_DUCKDB_PATH)
@@ -97,14 +104,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    # With no --out-dir, build a staged version and publish it at the end.
+    # With no --out-dir, build a new version and publish it only when the build succeeds.
     link = bundle_link()
     staged = args.out_dir is None
     if staged:
         args.out_dir = stage_bundle_version(link)
     try:
         _build(args)
-    except BaseException:
+    except BaseException:  # an interrupt also discards the half-built version
         if staged:
             discard_bundle_version(args.out_dir)
         raise
@@ -116,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _build(args: argparse.Namespace) -> None:
+    """Write the parts ``args.what`` names into ``args.out_dir``."""
     con = duckdb.connect(args.duckdb_path, read_only=True)
     try:
         seasons = args.seasons or last_n_seasons(con)
@@ -127,23 +135,21 @@ def _build(args: argparse.Namespace) -> None:
         if args.what in ("actors", "all"):
             build_actor_embeddings(con, args.out_dir)
         if args.what in ("park", "all"):
-            # The park geometry + the carry model.
+            # The park geometry and the carry model.
             build_park_geometry(con, args.out_dir, seasons)
         if args.what in ("manager", "all"):
-            # The pitching-change opportunity pool.
             build_pitching_change_pool(con, args.out_dir, seasons)
         if args.what in ("receiving", "all"):
-            # The catcher receiving ratios.
             build_receiving_profiles(con, args.out_dir, seasons)
         if args.what in ("reference", "all"):
-            # The IBB rates and the venue run factors, for the workers.
+            # The intentional-walk rates and the venue run factors.
             build_reference_tables(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit
             )
         if args.what in ("actors_sim", "all"):
-            # The actor score matrices + the concentration report.
+            # The actor score matrices and the concentration report.
             build_actor_sim_matrices(
                 args.duckdb_path,
                 args.out_dir,

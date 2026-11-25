@@ -1,11 +1,9 @@
-"""The nightly profile build: the player profiles, the defensive metrics and the
-simulation pools.
+"""Run the nightly build: the player profiles, the defensive metrics and the simulation pools.
 
-``PlayerProfileComputor`` reads Postgres ``raw.*`` through DuckDB's postgres
-extension (attached read-only) and writes the ``derived.*`` profile tables and
-the ``sim.*`` pools into the DuckDB file. The builders live in
-``profiles/``, one mixin per group. This module keeps the class,
-the run order, the season delete and the entry point.
+``PlayerProfileComputor`` reads Postgres ``raw.*`` through DuckDB's postgres extension
+(attached read-only as ``pg``). It writes the ``derived.*`` profile tables and the ``sim.*``
+pools into the DuckDB file. The builders are mixins, one per group, in ``profiles/`` and
+``pools/``. This module holds the class, the run order, the season delete and the entry point.
 
 The run order (``PlayerProfileComputor.run``):
 
@@ -19,13 +17,13 @@ The run order (``PlayerProfileComputor.run``):
 7. The simulation pools, then the outfield arm block (it reads the advancement
    pool), the intentional-walk rates and the plate-appearance situations.
 
-The entry point then computes the league averages. Usage::
+The entry point then computes the league averages (``LeagueAverageProfiles``). Usage::
 
     python -m profiles.build_profiles --seasons 2026
     python -m profiles.build_profiles --seasons 2017 ... 2026 --full-rebuild
 
 A partial rebuild must include the season in progress: every engine refuses a
-profile table stamped at two dates (the one-cutoff rule, SIM-551).
+profile table stamped at two dates (the one-cutoff rule).
 """
 
 from __future__ import annotations
@@ -84,28 +82,27 @@ class PlayerProfileComputor(
     AtBatSituationsMixin,
     ComputorBase,
 ):
-    """Runs the profile build: every builder mixin, in dependency order.
+    """Run the profile build: every builder mixin, in dependency order.
 
-    The aggregation runs in DuckDB over the attached Postgres tables. The
-    pitcher arsenal mixtures are fitted in Python (scikit-learn). Every result
-    goes to the DuckDB file at ``duckdb_path``.
+    DuckDB runs the aggregation over the attached Postgres tables. scikit-learn
+    fits the pitcher arsenal mixtures in Python. Every result goes to the DuckDB
+    file at ``duckdb_path``.
     """
 
     def __init__(self, pg_dsn: str, duckdb_path: str) -> None:
-        """
-        Parameters
-        ----------
-        pg_dsn : str
-            PostgreSQL DSN, e.g. "postgresql://user:pass@localhost:5432/baseball"
-        duckdb_path : str
-            Path to the DuckDB file. Created if it does not exist.
+        """Store the two addresses; ``run`` opens the connection.
+
+        ``pg_dsn`` is the Postgres address, e.g.
+        ``postgresql://user:pass@localhost:5432/baseball``. DuckDB creates the
+        file at ``duckdb_path`` when it does not exist.
         """
         self._pg_dsn = pg_dsn
         self._duckdb_path = duckdb_path
         self._conn: duckdb.DuckDBPyConnection | None = None
-        self._re_matrix: dict = {}  # populated before defensive steps
+        self._re_matrix: dict = {}  # run() fills it before the defensive metrics
 
     def _connect(self) -> None:
+        """Open the DuckDB file, attach Postgres as ``pg`` and apply the schema."""
         log.info("Opening DuckDB at %s …", self._duckdb_path)
         self._conn = duckdb.connect(self._duckdb_path)
         attach_pg(self._conn, self._pg_dsn)
@@ -118,10 +115,13 @@ class PlayerProfileComputor(
             self._conn = None
 
     def _run_schema_ddl(self) -> None:
-        """
-        Creates all DuckDB tables via 02_duckdb_schema.sql (the single
-        canonical schema that includes derived, sim, and per-play detail tables).
-        Idempotent — uses CREATE TABLE IF NOT EXISTS throughout.
+        """Create the DuckDB tables from ``db/schemas/02_duckdb_schema.sql`` when absent.
+
+        The file is the one canonical schema: the derived, sim and per-play
+        detail tables. Every statement is ``CREATE ... IF NOT EXISTS``, so a
+        rerun is safe. The path is relative to the working directory, so run
+        from the repository root. Without the file, only the two schemas are
+        created, and the tables must already exist.
         """
         if duck_relation_readable(self._conn, "derived.pitcher_season_metrics"):
             log.info("DuckDB schema already present — skipping DDL.")
@@ -147,15 +147,11 @@ class PlayerProfileComputor(
         full_rebuild: bool = False,
         asof: date | None = None,
     ) -> None:
-        """
-        Run the full nightly pre-computation job.
+        """Run the nightly build for ``seasons`` (default: the current year).
 
-        Parameters
-        ----------
-        seasons : list[int]
-            Seasons to (re)compute. Defaults to current year.
-        full_rebuild : bool
-            If True, deletes and rewrites all derived metrics for the seasons.
+        ``full_rebuild`` deletes the seasons' derived rows first and rebuilds
+        every pool in full. ``asof`` cuts every source off at that date, for a
+        backtest; None means everything known today.
         """
         if seasons is None:
             seasons = [date.today().year]
@@ -166,10 +162,10 @@ class PlayerProfileComputor(
             log.info("=== Player Profile & Defensive Metrics Pre-computation ===")
             log.info("  Seasons: %s | full_rebuild=%s", seasons, full_rebuild)
 
-            # Check every stamped table first, so a run that the batter step
-            # would refuse does not spend an hour per season on the pitcher
-            # fits before it stops. Each builder repeats its own check: the
-            # scripts call the builders one at a time.
+            # Check every stamped table first: a run that the batter step
+            # refuses must not first spend an hour per season on the pitcher
+            # fits. Each builder repeats its own check, because scripts call
+            # the builders one at a time.
             for table in self.STAMPED_TABLES:
                 self._refuse_a_mixed_cutoff(table, seasons, asof or date.today())
 
@@ -185,8 +181,8 @@ class PlayerProfileComputor(
             self._build_baserunner_steal_metrics(seasons, asof=asof)
             self._build_pitcher_steal_metrics(seasons, asof=asof)
             # The per-game bullpen workload is not built here: the
-            # bullpen-availability ingest computes it against the live roster
-            # (ingest/load_bullpen_availability.py compute_bullpen_workload).
+            # bullpen-availability load computes it against the live roster
+            # (compute_bullpen_workload in ingest/load_bullpen_availability.py).
             self._compute_manager_profiles(seasons, asof=asof)
 
             # ── The defensive metrics ────────────────────────────────────────
@@ -219,14 +215,14 @@ class PlayerProfileComputor(
             self._compute_catcher_uncaught_k3(seasons, asof=asof)
 
             # ── The simulation pools ─────────────────────────────────────────
-            # A pool rebuilds only the seasons whose source changed, unless
-            # this is a full rebuild.
+            # A pool rebuilds only the seasons whose source changed, except on
+            # a full rebuild.
             incremental = not full_rebuild
             self._build_pitch_pool(seasons, incremental=incremental)
             self._build_outcome_pool(seasons, incremental=incremental)
             self._build_stolen_base_pool(seasons, incremental=incremental)
             self._build_steal_opportunity_pool(seasons, incremental=incremental)
-            # Reads sim.outcome_pool, so it follows that rebuild.
+            # The advancement pool reads sim.outcome_pool, so it comes after it.
             self._build_advancement_opportunity_pool(seasons, incremental=incremental)
             # The outfield arm block: an UPDATE over the fielder rows
             # aggregated above, from the advancement pool.
@@ -283,12 +279,12 @@ class PlayerProfileComputor(
             "derived.infield_play_detail",
             "derived.dp_play_detail",
         ]
-        # Drop the secondary indexes before the bulk DELETE (a large DELETE on
-        # indexed tables is slow) and recreate them after. The tables are never
-        # left without their indexes:
+        # Drop the secondary indexes before the bulk DELETE, because a large
+        # DELETE on indexed tables is slow, and recreate them after. Three
+        # things keep the indexes from going missing:
         #   * the recreate runs in ``finally``, so a DELETE error still reaches it;
-        #   * the recreate is idempotent (DROP IF EXISTS, then CREATE ... IF NOT
-        #     EXISTS), so a half-applied earlier run cannot fail it;
+        #   * the recreate is DROP IF EXISTS, then CREATE ... IF NOT EXISTS, so
+        #     a half-applied earlier run cannot fail it;
         #   * each recreate is checked against duckdb_indexes(), and a missing
         #     index is logged as an ERROR.
         saved_indexes: list[tuple[str, str]] = []
@@ -336,10 +332,10 @@ class PlayerProfileComputor(
     def _recreate_indexes(self, saved_indexes: list[tuple[str, str]]) -> list[str]:
         """Recreate the dropped secondary indexes; return the names that failed.
 
-        Each recreate is ``DROP INDEX IF EXISTS`` and then ``CREATE INDEX IF NOT
+        Each recreate is ``DROP INDEX IF EXISTS``, then ``CREATE INDEX IF NOT
         EXISTS`` (:func:`_ensure_index_if_not_exists`), so a half-applied
-        earlier run cannot fail it. Each is then checked against
-        ``duckdb_indexes()``, so an index that silently failed is reported.
+        earlier run cannot fail it. A check against ``duckdb_indexes()`` then
+        reports an index that failed silently.
         """
         failed: list[str] = []
         for idx_qualified_name, idx_sql in saved_indexes:
@@ -366,13 +362,12 @@ class PlayerProfileComputor(
 
 
 def _ensure_index_if_not_exists(create_index_sql: str) -> str:
-    """Inject ``IF NOT EXISTS`` into a ``CREATE [UNIQUE] INDEX`` statement.
+    """Return a ``CREATE [UNIQUE] INDEX`` statement with ``IF NOT EXISTS`` added.
 
-    It makes an index recreate idempotent, so a rerun of a profile build (or
-    of a half-applied earlier run) cannot fail on an index that is already
-    there. A statement that already has the clause, or is not a CREATE INDEX
-    form this recognises, comes back unchanged (the caller drops the index IF
-    EXISTS first anyway).
+    The clause lets a rerun, or a half-applied earlier run, recreate an index
+    that is already there. A statement that already has the clause, or is not
+    a CREATE INDEX form this function knows, comes back unchanged; the caller
+    drops the index IF EXISTS first anyway.
     """
     stmt = create_index_sql.strip()
     low = stmt.lower()

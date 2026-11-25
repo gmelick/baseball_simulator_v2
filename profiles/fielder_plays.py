@@ -1,5 +1,12 @@
 """The per-play fielder metrics: outfield catch probability, infield outs
 above average, double plays, bunt defense, first-base scooping and errors.
+
+Outs above average (OAA) are the outs a fielder makes beyond what an average
+fielder makes on the same chances. Each step reads ``raw.pitches``, scores
+each play and writes one temp table: ``_tmp_of_plays``, ``_tmp_if_plays``,
+``_tmp_dp_plays``, ``_tmp_bunt_defense``, ``_tmp_1b_scoop`` or ``_tmp_errors``.
+``_aggregate_fielder_season_metrics`` (``profiles/fielder.py``) reads them. A
+step writes no table when its sample is too small.
 """
 
 from __future__ import annotations
@@ -75,24 +82,25 @@ class FielderPlayMetricsMixin(ComputorBase):
     """Builds the per-play fielder temp tables the season aggregate reads."""
 
     # ------------------------------------------------------------------
-    # OUTFIELD CATCH PROBABILITY + OAA
+    # The outfield catch probability and OAA
     # ------------------------------------------------------------------
 
     def _compute_outfield_catch_probability(
         self, seasons: list[int], asof: date | None = None
     ) -> None:
-        """
-        Build the outfield catch probability model and compute per-play OAA.
+        """Fit the outfield catch-probability model and score each play's OAA.
 
-        Follows the Statcast methodology:
-          1. Estimate hang time from launch conditions
-          2. Estimate distance needed from fielder start position to ball landing
-          3. Compute speed needed = distance / (opportunity_time - buffer)
-          4. Adjust for direction (going back penalty: 1 ft/s per Tango)
-          5. Fit sigmoid: P(catch) = f(speed_needed)
-          6. OAA = sum of (1-P) for catches + (-P) for misses
+        The steps follow Statcast's method:
+          1. Estimate the hang time from the launch speed and angle.
+          2. Measure the distance from the fielder's average start to the ball.
+          3. Divide the distance by the opportunity time (the hang time + 0.4 s):
+             the speed needed.
+          4. Add 1 ft/s to the speed needed when the fielder goes back (Tango).
+          5. Fit a logistic curve: P(catch) from the speed needed.
+          6. Credit 1 - P for a catch and -P for a miss.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
+        Writes ``_tmp_of_plays``. ``asof`` keeps ``raw.pitches`` to
+        ``game_date <= asof``.
         """
         log.info("Computing outfield catch probability …")
         season_list = sql_seasons(seasons)
@@ -142,16 +150,14 @@ class FielderPlayMetricsMixin(ComputorBase):
 
         log.info("  Loaded %d outfield plays", len(df))
 
-        # Determine which outfielder is responsible for each play
         rows = []
         for _, r in df.iterrows():
-            # Assign to closest OF position based on ball landing location
+            # The play belongs to the outfielder whose average start is nearest the ball.
             stand = r["stand"] if r["stand"] in ("L", "R") else "R"
             best_pos, distance_hc = _nearest_position(
                 r["hc_x"], r["hc_y"], stand, ("LF", "CF", "RF")
             )
 
-            # Map position to fielder ID
             pos_to_col = {"LF": "fielder_7", "CF": "fielder_8", "RF": "fielder_9"}
             fielder_id = r[pos_to_col[best_pos]]
             if pd.isna(fielder_id):
@@ -164,26 +170,22 @@ class FielderPlayMetricsMixin(ComputorBase):
             if hang_time is None or hang_time < 1.0:
                 continue
 
-            # Opportunity time ≈ hang time + ~0.4s (pitch release to contact)
+            # Opportunity time ≈ hang time + 0.4 s (pitch release to contact).
             opportunity_time = hang_time + 0.4
 
-            # Speed needed to cover the distance in the available time
             if opportunity_time <= 0.5:
                 continue
             speed_needed = distance_ft / opportunity_time
 
-            # Direction adjustment
             direction_cat, going_back = _classify_direction_of(
                 fx, fy, r["hc_x"], r["hc_y"], best_pos
             )
             if going_back:
                 speed_needed += OF_GOING_BACK_PENALTY_FPS
 
-            # The outcome. Question: did the outfielder CATCH this air
-            # ball? A catch retires the batter, so the label is the events-based
-            # batter-retired set. force_out / fielders_choice_out mean the ball
-            # hit the ground and a runner was forced — an out, but not a catch;
-            # field_error means it dropped; a hit means it fell in.
+            # The label: did the outfielder catch the ball? A catch retires the
+            # batter. A force_out or fielders_choice_out is an out, not a catch:
+            # the ball hit the ground. A field_error dropped; a hit fell in.
             caught = batter_retired(r["events"])
 
             rows.append(
@@ -207,7 +209,6 @@ class FielderPlayMetricsMixin(ComputorBase):
             log.warning("  Too few valid OF plays (%d) after processing", len(plays))
             return
 
-        # Fit the catch probability model: P(catch) = sigmoid(speed_needed)
         X = plays[["speed_needed"]].values
         y = plays["caught"].astype(int).values
 
@@ -218,24 +219,22 @@ class FielderPlayMetricsMixin(ComputorBase):
 
         plays["catch_probability"] = _predict_proba(model, X)
 
-        # Clamp to [0.01, 0.99] to avoid extreme credits
+        # The clip keeps one play from carrying an extreme credit.
         plays["catch_probability"] = plays["catch_probability"].clip(0.01, 0.99)
 
-        # Star ratings
+        # Statcast's star ratings: 5 stars is the hardest catch.
         plays["star_rating"] = pd.cut(
             plays["catch_probability"],
             bins=[0, 0.25, 0.50, 0.75, 0.90, 1.01],
             labels=[5, 4, 3, 2, 1],
         ).astype(int)
 
-        # OAA credit per play
         plays["oaa_credit"] = np.where(
             plays["caught"],
             1.0 - plays["catch_probability"],
             -plays["catch_probability"],
         )
 
-        # Write per-play detail table
         self._conn.register("of_plays", plays)
         self._conn.execute("""
             DROP TABLE IF EXISTS _tmp_of_plays;
@@ -250,26 +249,24 @@ class FielderPlayMetricsMixin(ComputorBase):
         )
 
     # ------------------------------------------------------------------
-    # INFIELD OAA
+    # The infield OAA
     # ------------------------------------------------------------------
 
     def _compute_infield_oaa(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Compute infield OAA using the intercept/time-margin model.
+        """Fit the infield out-probability model and score each play's OAA.
 
-        Model inputs (from the Statcast infield OAA article):
-          1. Distance fielder must travel to reach ball
-          2. Time to get there (from ball speed)
-          3. Throw distance to the base
-          4. Batter-runner speed
-          + Direction adjustments (lateral vs charging)
+        The model reads one number per play, the time margin: the
+        batter-runner's time to first base minus the defense's time. The
+        defense's time is the ball's travel to the fielder, the exchange and
+        the throw to first base. A fielder who moves away from first base
+        loses time. The inputs follow Statcast's infield model: the fielder's
+        distance to the ball, the ball's speed, the throw distance and the
+        batter-runner's speed.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
-        The sprint speed lookup below has no date of its own — it is made
-        safe by a season-shift substitution instead. See
-        ``_compute_baserunner_profiles`` for the same pattern in SQL; here
-        it runs in Python because the lookup is a per-row dict read, not a
-        JOIN.
+        Writes ``_tmp_if_plays``. ``asof`` keeps ``raw.pitches`` to
+        ``game_date <= asof``. The sprint speed board carries no date, so the
+        per-row lookup takes the Savant season shift in Python: the season
+        that contains the cutoff reads the prior season's speed.
         """
         log.info("Computing infield OAA …")
         season_list = sql_seasons(seasons)
@@ -310,9 +307,7 @@ class FielderPlayMetricsMixin(ComputorBase):
 
         log.info("  Loaded %d infield plays", len(df))
 
-        # Look up the batter sprint speeds. With asof set, also pull
-        # the prior season so the per-row lookup below can substitute it for
-        # the season containing the cutoff.
+        # A cutoff build also loads the prior season, for the season shift below.
         lookup_seasons = set(seasons) | ({asof_date.year - 1} if asof is not None else set())
         batter_speeds = self._conn.execute(f"""
             SELECT player_id, season, sprint_speed
@@ -322,9 +317,8 @@ class FielderPlayMetricsMixin(ComputorBase):
         speed_map = _sprint_speed_map(batter_speeds)
 
         def _speed_lookup_season(row_season: int) -> int:
-            """The season shift (as in _compute_baserunner_profiles): the
-            season containing the cutoff reads the PRIOR season's sprint speed,
-            not its own still-accumulating row."""
+            """The season whose sprint speed a row reads: the prior season for
+            the season that contains the cutoff, whose own row is still growing."""
             if asof is not None and row_season == asof_date.year:
                 return asof_date.year - 1
             return row_season
@@ -333,12 +327,11 @@ class FielderPlayMetricsMixin(ComputorBase):
         for _, r in df.iterrows():
             stand = r["stand"] if r["stand"] in ("L", "R") else "R"
 
-            # Determine which infielder is responsible
+            # The play belongs to the infielder whose average start is nearest the ball.
             best_pos, fielder_dist_hc = _nearest_position(
                 r["hc_x"], r["hc_y"], stand, ("1B", "2B", "3B", "SS")
             )
 
-            # Map position to fielder column
             pos_to_col = {
                 "1B": "fielder_3",
                 "2B": "fielder_4",
@@ -352,40 +345,35 @@ class FielderPlayMetricsMixin(ComputorBase):
             fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]["R"])
             fielder_dist_ft = _hc_to_feet(fielder_dist_hc)
 
-            # Throw distance to 1B
             throw_dist_hc = _euclidean_hc(r["hc_x"], r["hc_y"], FIRST_BASE[0], FIRST_BASE[1])
             throw_dist_ft = _hc_to_feet(throw_dist_hc)
 
-            # Time for ball to reach fielder
             ball_travel_time = _estimate_gb_travel_time(
                 r["launch_speed"], r["launch_angle"], fielder_dist_ft
             )
             if ball_travel_time is None:
                 continue
 
-            # Defense time: ball travel + exchange + throw
             throw_velo = AVG_THROW_VELO.get(best_pos, 80.0)
             throw_time = _throw_time(throw_dist_ft, throw_velo)
             defense_time = ball_travel_time + INFIELD_EXCHANGE_TIME + throw_time
 
-            # Batter-runner time to 1B
             batter_speed = speed_map.get(
                 (int(r["batter"]), _speed_lookup_season(int(r["season"]))),
                 DEFAULT_SPRINT_SPEED_FPS,
             )
             runner_time = 90.0 / batter_speed  # seconds from home to first
 
-            # Time margin (positive = defense has time to spare)
+            # A positive margin means the defense has time to spare.
             time_margin = runner_time - defense_time
 
-            # Direction classification
             direction_cat, going_back = _classify_direction_of(
                 fx, fy, r["hc_x"], r["hc_y"], best_pos
             )
             if going_back:
                 time_margin -= IF_AWAY_FROM_BAG_PENALTY_S
 
-            # Lateral movement: moving away from throw target also costs time
+            # A move away from the throw's target also costs time.
             fx_to_ball = (r["hc_x"] - fx, r["hc_y"] - fy)
             fx_to_base = (FIRST_BASE[0] - fx, FIRST_BASE[1] - fy)
             dot = fx_to_ball[0] * fx_to_base[0] + fx_to_ball[1] * fx_to_base[1]
@@ -396,12 +384,11 @@ class FielderPlayMetricsMixin(ComputorBase):
                 if cos_angle < -0.3:  # moving substantially away from 1B
                     time_margin -= 0.10
 
-            # The outcome. Question: did the defense record at least one
-            # out on this ground ball? force_out and fielders_choice_out count —
-            # the defense converted a runner even though the batter reached. A
-            # clean hit, an error, or an all-safe fielders_choice counts zero.
-            # play_outs also counts the hidden runner out (an X-typed single
-            # means a runner was thrown out), matching the DP and pool sites.
+            # The label: did the defense record at least one out? A force_out
+            # or fielders_choice_out counts, though the batter reached. A clean
+            # hit, an error or an all-safe fielders_choice counts zero.
+            # play_outs also counts a runner thrown out on a hit typed X, as
+            # the double-play model and the pools do.
             out_recorded = play_outs(r["events"], r["type"]) > 0
 
             rows.append(
@@ -425,7 +412,6 @@ class FielderPlayMetricsMixin(ComputorBase):
             log.warning("  Too few valid infield plays (%d) after processing", len(plays))
             return
 
-        # Fit the out probability model: P(out) = sigmoid(time_margin)
         X = plays[["time_margin"]].values
         y = plays["out_recorded"].astype(int).values
 
@@ -457,22 +443,23 @@ class FielderPlayMetricsMixin(ComputorBase):
         )
 
     # ------------------------------------------------------------------
-    # DOUBLE PLAY METRICS
+    # The double plays
     # ------------------------------------------------------------------
 
     def _compute_dp_metrics(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Compute DP metrics using Tango's intercept/sigmoid approach.
+        """Fit the double-play model and score each chance (Tango's method).
 
-        Scoped to: runner on 1B only, <2 outs, ground ball.
-        Time-based model: time margin between defense completion and runner arrival.
-        Split credit: initiator (fields ball) vs pivot (turns relay).
+        A chance is a ground ball with a runner on first only and fewer than
+        two outs. The model reads the time margin: each runner's time to his
+        base minus the defense's time to that base, the tighter of the two.
+        The fielder who fields the ball (the initiator) and the fielder who
+        turns the relay (the pivot) each get credit. ``dp_run_value`` is the
+        drop in run expectancy over the play.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
-        The sprint speed lookup uses the same season-shift substitution as
-        ``_compute_infield_oaa`` (no date column on that source). RE24 run
-        values read ``self._re_matrix``, which ``run()`` already builds
-        as-of the same cutoff before this method runs.
+        Writes ``_tmp_dp_plays``. ``asof`` keeps ``raw.pitches`` to
+        ``game_date <= asof``. The sprint speed join takes the Savant season
+        shift. The run values read ``self._re_matrix``, which ``run()`` builds
+        at the same cutoff before this step.
         """
         log.info("Computing double play metrics …")
         season_list = sql_seasons(seasons)
@@ -522,12 +509,9 @@ class FielderPlayMetricsMixin(ComputorBase):
 
         log.info("  Loaded %d DP opportunities", len(df))
 
-        # The batter sprint speed lookup, joined at the season-shift
-        # substitution below (own season shifts to bsm.season - 1 only when
-        # bsm.season is the one containing the cutoff), so `ss` already
-        # answers the shifted question and no per-row Python shift is
-        # needed here (contrast _compute_infield_oaa, whose lookup source
-        # has no bsm-style intermediary to carry the shift in SQL).
+        # The speeds of the players in derived.baserunner_season_metrics. The
+        # SQL join takes the season shift, so the per-row lookup needs none. A
+        # player with no row there reads the default speed.
         sprint_speed_season = self._savant_season_sql("bsm.season", asof)
         batter_speeds = self._conn.execute(f"""
             SELECT bsm.player_id, bsm.season,
@@ -544,7 +528,7 @@ class FielderPlayMetricsMixin(ComputorBase):
         for _, r in df.iterrows():
             stand = r["stand"] if r["stand"] in ("L", "R") else "R"
 
-            # Identify initiator (who fielded the ball)
+            # The initiator is the fielder who fielded the ball.
             fielded_by = r["fielded_by"]
             if pd.isna(fielded_by):
                 continue
@@ -563,67 +547,61 @@ class FielderPlayMetricsMixin(ComputorBase):
             if initiator_pos is None:
                 continue
 
-            # Fielder distance to ball
             fx, fy = AVG_FIELDER_POS.get(initiator_pos, {}).get(stand, (125, 155))
             fielder_dist_ft = _hc_to_feet(_euclidean_hc(r["hc_x"], r["hc_y"], fx, fy))
 
-            # Distance from ball to 2B bag
             dist_to_2b_ft = _hc_to_feet(
                 _euclidean_hc(r["hc_x"], r["hc_y"], SECOND_BASE[0], SECOND_BASE[1])
             )
 
-            # Distance from 2B bag to 1B
             dist_2b_to_1b_ft = _hc_to_feet(
                 _euclidean_hc(SECOND_BASE[0], SECOND_BASE[1], FIRST_BASE[0], FIRST_BASE[1])
             )
 
-            # Ball travel time to fielder
             ball_time = _estimate_gb_travel_time(
                 r["launch_speed"], r["launch_angle"], fielder_dist_ft
             )
             if ball_time is None:
                 continue
 
-            # Defense time: field + throw to 2B + pivot exchange + throw to 1B
+            # The defense's time: the field, the throw to second, the pivot's
+            # exchange and the throw to first.
             throw_velo_to_2b = AVG_THROW_VELO.get(initiator_pos, 80.0)
             time_to_2b = (
                 ball_time + INFIELD_EXCHANGE_TIME + _throw_time(dist_to_2b_ft, throw_velo_to_2b)
             )
 
-            pivot_exchange = 0.60  # pivot man faster exchange than initial fielder
-            throw_to_1b_time = _throw_time(dist_2b_to_1b_ft, 78.0)  # pivot throw ~78mph
+            pivot_exchange = 0.60  # seconds: the pivot's exchange is quicker than the initiator's
+            throw_to_1b_time = _throw_time(dist_2b_to_1b_ft, 78.0)  # the pivot's throw, ~78 mph
             total_defense_time = time_to_2b + pivot_exchange + throw_to_1b_time
 
-            # Runner on 1B time to 2B
             runner_1b_id = int(r["on_1b"]) if pd.notna(r["on_1b"]) else 0
             runner_speed = speed_map.get((runner_1b_id, int(r["season"])), DEFAULT_SPRINT_SPEED_FPS)
             runner_time_to_2b = 90.0 / runner_speed
 
-            # Batter time to 1B
             batter_speed = speed_map.get(
                 (int(r["batter"]), int(r["season"])), DEFAULT_SPRINT_SPEED_FPS
             )
             batter_time_to_1b = 90.0 / batter_speed
 
-            # Combined time margin: both runner must be beaten at 2B AND batter at 1B
-            # The constraint is the tighter of the two
+            # A double play beats the runner at second AND the batter at first,
+            # so the tighter margin counts.
             time_margin_2b = runner_time_to_2b - time_to_2b
             time_margin_1b = batter_time_to_1b - total_defense_time
             time_margin = min(time_margin_2b, time_margin_1b)
 
-            # Direction adjustment: moving toward or away from 2B bag
+            # A corner infielder who moves away from second base loses time.
             toward_2b = r["hc_y"] < fy  # ball is closer to 2B than fielder start
             if not toward_2b and initiator_pos in ("3B", "1B"):
                 time_margin -= 0.15
 
-            # The outcome. Question: did the defense turn two?
+            # The label: did the defense turn two?
             dp_turned = r["events"] in ("grounded_into_double_play", "double_play")
 
-            # Question: how many outs did the play record, and which body was
-            # retired? Both derive from `events` — see ingest/statcast_events.
+            # The outs on the play derive from `events` (ingest/statcast_events.py).
             outs_recorded = play_outs(r["events"], r["type"])
 
-            # Identify pivot man
+            # The pivot is the second assist, when he is one of the four infielders.
             pivot_id = None
             pivot_pos = None
             if pd.notna(r.get("field_assist_2")):
@@ -633,28 +611,28 @@ class FielderPlayMetricsMixin(ComputorBase):
                         pivot_pos = pos
                         break
 
-            # RE24 run value
+            # The run value: the run expectancy before the play minus after it.
             pre_outs = int(r["outs"])
             pre_runners = int(r["runners_state"])
             re_start = self._re_matrix.get(
                 (pre_outs, pre_runners), RE24_APPROX.get((pre_outs, pre_runners), 0.5)
             )
 
-            # The post state derives from `events`, per event kind.
-            # The scope is runner-on-1B-only ground balls with outs < 2, so:
-            #   3+ total outs — the inning is over; run expectancy is 0.
-            #   2 outs on the play (GIDP, lineout DP, bunt DP) — both bodies
-            #     retired: bases empty.
-            #   force_out / fielders_choice_out — the runner is out at 2B and
-            #     the batter reaches: 1B occupied.
-            #   batter retired (field_out, sac_bunt) — the batter is out and
-            #     the runner moves up: 2B occupied.
-            #   hidden runner out (an X-typed single/error: outs_recorded = 1
-            #     on a reach event) — the RUNNER was retired advancing and the
-            #     batter is aboard: 1B occupied.
-            #   nobody out (hit, error, all-safe FC) — both aboard.
-            #     (A deep single can put the runner on 3B instead of 2B;
-            #     RE24 treats 1B+2B as the approximation.)
+            # The state after the play derives from `events`. Every chance has a
+            # runner on first only and fewer than two outs, so:
+            #   3+ total outs: the inning is over; the run expectancy is 0.
+            #   2 outs on the play (a ground-ball, lineout or bunt double
+            #     play): both men are out, and the bases are empty.
+            #   force_out / fielders_choice_out: the runner is out at second
+            #     and the batter reaches; first base is occupied.
+            #   batter retired (field_out, sac_bunt): the runner moves up;
+            #     second base is occupied.
+            #   a runner out on a reach event (a single or an error typed X,
+            #     outs_recorded = 1): the runner is out advancing and the
+            #     batter is aboard; first base is occupied.
+            #   nobody out (a hit, an error, an all-safe fielders' choice):
+            #     both men are aboard. A deep single can put the runner on
+            #     third; the model reads first and second as the approximation.
             post_outs = pre_outs + outs_recorded
             if post_outs >= 3:
                 post_runners = 0
@@ -701,7 +679,6 @@ class FielderPlayMetricsMixin(ComputorBase):
             log.warning("  Too few valid DP plays (%d) after processing", len(dp_plays))
             return
 
-        # Fit DP probability model: P(DP) = sigmoid(time_margin)
         X = dp_plays[["time_margin"]].values
         y = dp_plays["dp_turned"].astype(int).values
 
@@ -710,7 +687,7 @@ class FielderPlayMetricsMixin(ComputorBase):
             dp_plays["dp_probability"] = _predict_proba(model, X)
             dp_plays["dp_probability"] = dp_plays["dp_probability"].clip(0.01, 0.99)
         else:
-            # Fallback: use league average DP rate
+            # With no fit, every chance reads the sample's double-play rate.
             league_dp_rate = y.mean()
             dp_plays["dp_probability"] = league_dp_rate
 
@@ -728,13 +705,14 @@ class FielderPlayMetricsMixin(ComputorBase):
         )
 
     # ------------------------------------------------------------------
-    # BUNT DEFENSE
+    # The bunt defense
     # ------------------------------------------------------------------
 
     def _compute_bunt_defense(self, seasons: list[int], asof: date | None = None) -> None:
-        """Compute bunt fielding rates for corner infielders.
+        """Build the bunt fielding rates of the first and third basemen into
+        ``_tmp_bunt_defense``.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps ``raw.pitches`` to ``game_date <= asof``.
         """
         log.info("Computing bunt defense metrics …")
         season_list = sql_seasons(seasons)
@@ -791,13 +769,14 @@ class FielderPlayMetricsMixin(ComputorBase):
         log.info("  Bunt defense metrics computed.")
 
     # ------------------------------------------------------------------
-    # FIRST BASE SCOOPING
+    # The first-base scooping
     # ------------------------------------------------------------------
 
     def _compute_first_base_scooping(self, seasons: list[int], asof: date | None = None) -> None:
-        """Compute 1B receiving metrics on difficult throws.
+        """Build the first baseman's success rate on long throws into ``_tmp_1b_scoop``.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
+        A scoop chance is a ground ball fielded by the third baseman or the
+        shortstop. ``asof`` keeps ``raw.pitches`` to ``game_date <= asof``.
         """
         log.info("Computing 1B scooping metrics …")
         season_list = sql_seasons(seasons)
@@ -852,13 +831,13 @@ class FielderPlayMetricsMixin(ComputorBase):
         log.info("  1B scooping metrics computed.")
 
     # ------------------------------------------------------------------
-    # ERROR DECOMPOSITION
+    # The errors
     # ------------------------------------------------------------------
 
     def _compute_error_decomposition(self, seasons: list[int], asof: date | None = None) -> None:
-        """Compute fielding error vs throwing error rates by fielder.
+        """Build each fielder's fielding-error and throwing-error rates into ``_tmp_errors``.
 
-        ``asof`` keeps raw.pitches to ``game_date <= asof``.
+        ``asof`` keeps ``raw.pitches`` to ``game_date <= asof``.
         """
         log.info("Computing error decomposition …")
         season_list = sql_seasons(seasons)

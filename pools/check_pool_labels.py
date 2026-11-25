@@ -1,8 +1,4 @@
-"""
-pools/check_pool_labels.py
-============================
-The count chain of the pitch pool, and the label check against real
-plate appearances.
+"""The pitch pool's count chain, and the label check against real plate appearances.
 
 THE COUNT CHAIN
 ===============
@@ -21,24 +17,16 @@ walk, strikeout, in-play and hit-by-pitch shares, and the expected pitches.
 
 WHY THE LABEL CHECK EXISTS
 ==========================
-The pool-totals grade (the ruling of 2026-08-20) certifies the simulator's
-frequencies against this chain. The chain and the simulator read the SAME
-labels, so a labelling defect in the pool build reads green: a faithful
-sampler of a mislabelled pool matches the mislabelled centre. Two defects in
-the pool build's class expression hid that way:
-
-  * hit-by-pitch pitches coded as balls (SIM-509, 2026-08-18), so an HBP could
-    become ball four.
-  * a two-strike foul tip or foul bunt coded as a foul (SIM-553, 2026-09-23),
-    so the count machine pitched on after a real strikeout. The count chain
-    lost 4.4% of its strikeouts (0.2163 per plate appearance against 0.2262
-    on the corrected coding).
+The pool-totals grade certifies the simulator's frequencies against this
+chain. The chain and the simulator read the SAME labels, so a labelling defect
+in the pool build reads green: a faithful sampler of a mislabelled pool matches
+the mislabelled centre. A hit-by-pitch pitch coded as a ball, or a two-strike
+foul tip coded as a foul, hides this way.
 
 :func:`real_pa_rates` counts the same four rates from real plate appearances
 in ``raw.pitches`` (Postgres). :func:`label_check` compares the chain with
 them. The two sources share no label, so a coding defect opens a gap. The
-tolerance is 0.5% (:data:`LABEL_CHECK_TOLERANCE`, owner decision 5 of
-docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
+tolerance is 0.5% (:data:`LABEL_CHECK_TOLERANCE`).
 
 The check cannot see two kinds of mislabel. The count machine treats a called
 and a swinging strike alike, and every in-play sub-type alike, so a swap
@@ -65,32 +53,19 @@ simulator draws every pool row.
 The rule holds only while both stores hold the same pitches. So every caller
 of the label check also compares the counts: :func:`pa_group_count` (the
 groups the ``pa_only`` chain reads, from the same SQL) must equal
-``real_pa_rates(...)['n_pa']``. On the window 2023-2026 both read 708,439
-(2026-09-25). A difference is a FAIL: the two sides no longer read the same
-plate appearances, for example because ``raw.pitches`` gained games the pool
-has not been rebuilt for.
-
-Measured 2026-09-25 on the window 2023-2026 (strikeouts / walks / hit by
-pitch / pitches per plate appearance, the chain's relative gap to real play):
-
-  * the corrected coding, ``pa_only``:  +0.09% / -0.25% / +0.08% / +0.07%;
-  * the corrected coding, all rows:     +0.30% / +0.36% / -0.13% / +0.27%;
-  * the foul-tip defect, ``pa_only``:   -4.29% / +2.31% / +1.12% / +0.90%
-    (FAIL; all rows read -4.08% / +2.94% / +0.91% / +1.11%).
+``real_pa_rates(...)['n_pa']``. A difference is a FAIL: the two sides no
+longer read the same plate appearances, for example because ``raw.pitches``
+gained games the pool has not been rebuilt for.
 
 Two known residuals are not label errors:
 
-  1. The groups cut short (above). In the window they are 4,249 groups and
-     11,923 rows. On all rows they add about +0.6 points to the walk gap, +0.2
-     to strikeouts and pitches, and -0.2 to hit by pitch. 2017-2019 hold about
-     10,000 such groups per season, so an all-rows chain over 2017-2026 FAILS
-     (walks +1.69%) where the ``pa_only`` chain passes. ``pa_only`` removes
-     this residual.
+  1. The groups cut short (above). ``pa_only`` removes this residual. An
+     all-rows chain over 2017-2026 fails on walks, because 2017-2019 hold
+     many more such groups.
   2. The pitch clock's automatic balls. A violation adds a ball with no pitch
-     row, so the chain cannot see that ball, and its walks read low. On
-     ``pa_only`` the walk gap is -0.41% in 2023, -0.22% in 2024, -0.20% in
-     2025 and -0.16% in 2026. It fades as violations fade, and it stays in the
-     ``pa_only`` read.
+     row, so the chain cannot see that ball, and its walks read low by a few
+     tenths of a percent. The gap fades as violations fade, and it stays in
+     the ``pa_only`` read.
 
 WHO USES IT
 ===========
@@ -99,9 +74,6 @@ WHO USES IT
   * ``scripts/rebuild_pitch_pool.py`` — the pool rebuild stops before
     the export when the check fails.
   * ``tests/acceptance/test_pool_label_check.py`` — the standing test.
-
-The chain solver is the one ``scripts/sim429_chain_analysis.py`` carried
-(deleted by commit 6ab341c on 2026-09-06); its logic is unchanged.
 """
 
 from __future__ import annotations
@@ -112,11 +84,9 @@ from ingest.statcast_events import sql_list
 from simulation.game_state import PITCH_OUTCOMES
 
 #: The largest relative gap the label check accepts between the pool's chain
-#: (read with ``pa_only=True``) and real plate appearances; owner decision 5 of
-#: the foul-tip plan (SIM-553). On the window 2023-2026 the corrected pool reads
-#: +0.09% / -0.25% / +0.08% / +0.07% (strikeouts / walks / hit by pitch /
-#: pitches); the foul-tip defect reads -4.29% / +2.31% / +1.12% / +0.90%. A FAIL is a coding
-#: defect to find, never a reason to widen this.
+#: (read with ``pa_only=True``) and real plate appearances. A correct pool reads
+#: within a few tenths of a percent; a coding defect opens a gap of whole
+#: percents. A FAIL is a coding defect to find, never a reason to widen this.
 LABEL_CHECK_TOLERANCE = 0.005
 
 #: The channels the label check compares, in print order.
@@ -124,8 +94,8 @@ LABEL_CHANNELS: tuple[str, ...] = ("k", "walk", "hbp", "pitches")
 
 #: The ``events`` values that are not a plate appearance's end: a runner event
 #: (steal, pickoff, wild pitch, balk) or a feed note. An intentional walk is a
-#: plate appearance, but the pool holds no pitch for it (0 IBB pitch rows since
-#: 2017), so the real count leaves it out too.
+#: plate appearance, but the pool holds no pitch row for it, so the real count
+#: leaves it out too.
 _NON_PA_EVENTS: tuple[str, ...] = (
     "wild_pitch",
     "passed_ball",
@@ -143,7 +113,7 @@ _STRIKEOUT_EVENTS: tuple[str, ...] = ("strikeout", "strikeout_double_play")
 
 
 def _sql_pa_flag(col: str = "events") -> str:
-    """The group aggregate that marks a plate appearance: 1 when a row's ``col`` is a batting event.
+    """The SQL group test of a plate appearance: 1 when a row's ``col`` is a batting event.
 
     A batting event is a non-NULL ``col`` that is not a runner event or a feed
     note. :func:`real_pa_rates` (on ``raw.pitches``) and the ``pa_only``
@@ -174,7 +144,7 @@ def _sql_pa_keys(pred: str) -> str:
 
 
 def pa_group_count(con: Any, pred: str) -> int:
-    """The number of plate appearances the ``pa_only`` chain reads from ``sim.pitch_pool WHERE ({pred})``.
+    """Count the plate appearances the ``pa_only`` chain reads under ``pred``.
 
     A plate appearance is a ``(game_pk, at_bat_number)`` group whose
     rows inside ``pred`` hold a batting event, judged from the pool's own
@@ -194,22 +164,20 @@ def pa_group_count(con: Any, pred: str) -> int:
 
 
 def solve_chain(rates: list[list[float]]) -> dict[str, float]:
-    """Absorption probabilities + expected pitches from (0,0).
+    """Solve the count chain from 0-0: how the plate appearance ends, and its pitches.
 
-    ``rates[b*3+s]`` is the outcome-share row for count (b, s). A foul at two
-    strikes self-loops; the closed form divides the state's other terms by
-    (1 - p_foul).
+    ``rates[b*3+s]`` is the class row of count (b, s), in :data:`PITCH_OUTCOMES`
+    order. The row need not be normalised: counts or weights work. A foul at
+    two strikes loops back to the same count, so the closed form divides the
+    count's other terms by (1 - p_foul). Returns the share of plate
+    appearances that end in each way (``walk``, ``k``, ``in_play``, ``hbp``)
+    and the expected ``pitches``.
 
-    The row is in :data:`PITCH_OUTCOMES` order and need not be normalised (counts or
-    weights work). Returns the keys ``walk``, ``k``, ``in_play``, ``hbp`` and
-    ``pitches``. The logic is the deleted ``scripts/sim429_chain_analysis.py``
-    solver, unchanged; ``tests/unit/pools/test_pool_chain.py`` holds the
-    original as its oracle.
-
-    Two edges the original did not guard. A two-strike row that is all fouls
-    raises ``ValueError`` here (the original divided by zero). An all-zero row
-    still reads as all-zero shares, as in the original, and loses that count's
-    mass; :func:`pool_count_matrix` refuses such a row before it gets here.
+    ``tests/unit/pools/test_pool_chain.py`` holds an earlier copy of this
+    solver as its oracle. A two-strike row of fouls only raises
+    ``ValueError``, because that count never ends. An all-zero row reads as
+    all-zero shares and loses that count's mass; :func:`pool_count_matrix`
+    refuses such a row before it gets here.
     """
     p: dict[tuple[int, int], dict[str, float]] = {}
 
@@ -243,8 +211,8 @@ def solve_chain(rates: list[list[float]]) -> dict[str, float]:
         else:
             denom = 1.0 - sh["foul"]  # the two-strike foul self-loop
             if denom <= 0.0:
-                # The guard: a two-strike count where every pitch is a foul
-                # never ends, and the closed form would divide by zero.
+                # A two-strike count of fouls only never ends, and the closed
+                # form divides by zero.
                 raise ValueError(
                     f"every pitch at count {b}-{s} is a foul: the count chain "
                     "never leaves that count"
@@ -292,8 +260,8 @@ def pool_count_matrix(
     (or a NULL class) or a count outside 0-3 balls / 0-2 strikes. A new class
     must not vanish from the chain silently. It
     also raises when a count holds no volume: :func:`solve_chain` would read
-    that count as all-zero shares and lose its mass without an error. The
-    window's thinnest count holds 28,056 rows, so only a broken pool or a
+    that count as all-zero shares and lose its mass without an error. A
+    season holds thousands of rows at every count, so only a broken pool or a
     narrow predicate trips this.
     """
     volume = "SUM(recency_weight)" if weighted else "COUNT(*)"
@@ -342,7 +310,7 @@ def pool_count_matrix(
 def chain_rates(
     con: Any, pred: str, weighted: bool = False, pa_only: bool = False
 ) -> dict[str, float]:
-    """The count chain of ``sim.pitch_pool WHERE {pred}``: :func:`solve_chain` of the pool's matrix.
+    """Solve the count chain of ``sim.pitch_pool WHERE {pred}`` (:func:`solve_chain`).
 
     ``pa_only`` reads only the rows of real plate appearances (see
     :func:`pool_count_matrix`); the label check passes ``pa_only=True``.
@@ -372,9 +340,9 @@ def real_pa_rates(con: Any, pred: str) -> dict[str, float]:
     the pool, so compare this with ``chain_rates(..., pa_only=True)``.
 
     The definition is an exclusion list: any other non-NULL event counts as a
-    plate appearance. Across 2017-2026 every non-batting value in the feed is
-    on the list (checked 2026-09-25). A new runner-event value would count as
-    a plate appearance with no strikeout, walk or hit by pitch on both sides.
+    plate appearance. Every non-batting value the feed held across 2017-2026
+    is on the list. A new runner-event value counts as a plate appearance with
+    no strikeout, walk or hit by pitch on both sides, so add it to the list.
 
     Returns ``k`` (``strikeout`` / ``strikeout_double_play``), ``walk``
     (``walk``), ``hbp`` (``hit_by_pitch``) per plate appearance, ``pitches``
@@ -485,7 +453,7 @@ def format_label_check(rows: list[tuple[str, float, float, float, bool]]) -> lis
 
 
 def format_pa_count(n_pool: int, n_real: int) -> str:
-    """Render the plate-appearance count check on one line, aligned with :func:`format_label_check`.
+    """Render the plate-appearance count check as one line, aligned with the channel lines.
 
     ``n_pool`` is :func:`pa_group_count`, ``n_real`` is
     ``real_pa_rates(...)['n_pa']``. Equal counts PASS. Unequal counts FAIL,
